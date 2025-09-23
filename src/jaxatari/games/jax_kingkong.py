@@ -22,7 +22,6 @@ class KingKongConstants(NamedTuple):
 	KONG_SIZE: chex.Array = jnp.array([14, 34])
 	PRINCESS_SIZE: chex.Array = jnp.array([8, 17])
 	BOMB_SIZE: chex.Array = jnp.array([8, 14])
-	MAGIC_BOMB_SIZE: chex.Array = jnp.array([6, 14])
 	NUMBER_SIZE: chex.Array = jnp.array([12, 14])
 	
 	### Locations & Bounds
@@ -44,29 +43,29 @@ class KingKongConstants(NamedTuple):
 		[100, 179, 103, 180]
 	])
 	LADDER_LOCATIONS: chex.Array = jnp.array([
-		[76, 41, 83, 60],
-		[20, 61, 27, 85],
-		[132, 61, 139, 84],
-		[76, 85, 83, 108],
-		[12, 109, 19, 132],
-		[140, 109, 147, 132],
-		[76, 133, 83, 156],
-		[12, 157, 19, 180],
-		[140, 157, 147, 180],
-		[76, 181, 83, 204],
-		[12, 205, 19, 228],
-		[140, 205, 147, 228]
+		[76, 41, 84, 60],
+		[20, 61, 28, 85],
+		[132, 61, 140, 84],
+		[76, 85, 84, 108],
+		[12, 109, 20, 132],
+		[140, 109, 148, 132],
+		[76, 133, 84, 156],
+		[12, 157, 20, 180],
+		[140, 157, 148, 180],
+		[76, 181, 84, 204],
+		[12, 205, 20, 228],
+		[140, 205, 148, 228]
 	])
 	FLOOR_BOUNDS: chex.Array = jnp.array([
-		[12, 152], # Ground floor 
-		[12, 152], # First floor
-		[12, 152], # Second floor 
-		[12, 152], # Third floor 
-		[12, 152], # Fourth floor 
-		[12, 152], # Fifth floor 
-		[16, 152], # Sixth floor
-		[20, 144], # Seventh floor 
-		[12, 152], # Princess floor - no bounds required bc goal reached 
+		[12, 150], # Ground floor 
+		[12, 150], # First floor
+		[12, 150], # Second floor 
+		[12, 150], # Third floor 
+		[12, 150], # Fourth floor 
+		[12, 150], # Fifth floor 
+		[16, 150], # Sixth floor
+		[20, 142], # Seventh floor 
+		[12, 150], # Princess floor - no bounds required bc goal reached 
 	]) # floor bounds by floor (min_x, min_y) - y is always the same (see FLOOR_LOCATIONS)
 	FLOOR_LOCATIONS: chex.Array = jnp.array([228, 204, 180, 156, 132, 108, 84, 60, 40]) # y corrdinate
 
@@ -302,7 +301,8 @@ class KingKongState(NamedTuple):
 	# Death state info
 	death_type: chex.Array
 	death_flash_counter: chex.Array
-		
+	death_target_y: chex.Array # when fallling to death 
+
 class KingKongObservation(NamedTuple):
 	pass 
 class KingKongInfo(NamedTuple):
@@ -380,6 +380,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			# Death state
 			death_type=jnp.array(self.consts.DEATH_TYPE_NONE).astype(jnp.int32),
 			death_flash_counter=jnp.array(0).astype(jnp.int32),
+			death_target_y=jnp.array(-1).astype(jnp.int32)
 		)
 		
 		initial_obs = self._get_observation(state)
@@ -604,9 +605,6 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				operand=None
 			)
 
-			jax.debug.print("kong_move: jump_counter={c} x={x} y={y}", 
-				c=state.kong_jump_counter, x=new_x, y=new_y)
-
 			return new_x, new_y, state.kong_jump_counter + 1
 		
 		return jax.lax.cond(
@@ -626,6 +624,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				player_x=self.consts.PLAYER_RESPAWN_LOCATION[0],
 				player_y=self.consts.PLAYER_RESPAWN_LOCATION[1],
 				player_floor=0,
+				death_type=self.consts.DEATH_TYPE_NONE,
 				kong_x=self.consts.KONG_UPPER_LOCATION[0],
 				kong_y=self.consts.KONG_UPPER_LOCATION[1],
 			)
@@ -759,7 +758,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		# Get floor bounds
 		current_floor_bounds = self.consts.FLOOR_BOUNDS[state.player_floor]
 		min_x = current_floor_bounds[0]
-		max_x = current_floor_bounds[1] - self.consts.PLAYER_SIZE[0]
+		max_x = current_floor_bounds[1] - (self.consts.PLAYER_SIZE[0] - 2) # account for sprite offset
 
 		new_player_x = state.player_x
 		new_player_y = state.player_y
@@ -864,7 +863,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		# --- Ladder climbing (disabled if jumping) ---
 		can_climb = jnp.logical_not(is_jumping)
-		on_ladder = self._check_on_ladder(new_player_x, new_player_y)
+		on_ladder = self._check_on_ladder(new_player_x, new_player_y, inset_x=2) #inset 2 seems to be whats used in the original
 		ladder_below = self._check_on_ladder(new_player_x, new_player_y + 2)
 		apply_climb = (state.stage_steps % 8) == 0
 
@@ -1009,7 +1008,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			player_dir=new_player_dir
 		)
 
-	def _check_on_ladder(self, player_x, player_y, inset_x: int = 2, inset_y: int = 0): #inset 2 seems to be whats used in the original
+	def _check_on_ladder(self, player_x, player_y, inset_x: int = 0, inset_y: int = 0):
 		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0] + inset_x
 		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1] + inset_y
 		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2] - inset_x
@@ -1032,19 +1031,30 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		return result
 
-
 	def _update_bombs(self, state: KingKongState) -> KingKongState:
-		should_spawn = jnp.logical_and(
-			state.stage_steps % 60 == 0,
-			state.kong_visible > 0
-		)
-
+		should_spawn = jnp.logical_and(state.stage_steps % self.consts.FPS == 0, state.kong_visible > 0)
+		
 		# Find first inactive bomb slot
 		first_inactive = jnp.argmax(state.bomb_active == 0)
 		can_spawn = state.bomb_active[first_inactive] == 0
-
 		spawn_mask = jnp.logical_and(should_spawn, can_spawn)
-
+		
+		# Determine Kong's position and movement direction
+		kong_floor = self._get_kong_floor(state)
+		
+		# Initialize bomb direction - START WITH HORIZONTAL MOVEMENT
+		key, bomb_key, magic_key = jax.random.split(state.rng_key, 3)
+		
+		initial_dir_x = jax.lax.cond(
+			jax.random.bernoulli(bomb_key, p=0.5),
+			lambda: -1,  # Left
+			lambda: 1    # Right
+		)
+		initial_dir_y = 0  # Start with horizontal movement
+		
+		# 20% chance for magic bomb
+		is_magic_bomb = jax.random.bernoulli(magic_key, p=0.2)
+		
 		# Spawn bomb if allowed
 		new_bomb_active = jax.lax.cond(
 			spawn_mask,
@@ -1061,57 +1071,327 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			lambda: state.bomb_positions_y.at[first_inactive].set(state.kong_y),
 			lambda: state.bomb_positions_y
 		)
+		new_bomb_dir_x = jax.lax.cond(
+			spawn_mask,
+			lambda: state.bomb_directions_x.at[first_inactive].set(initial_dir_x),
+			lambda: state.bomb_directions_x
+		)
+		new_bomb_dir_y = jax.lax.cond(
+			spawn_mask,
+			lambda: state.bomb_directions_y.at[first_inactive].set(initial_dir_y),
+			lambda: state.bomb_directions_y
+		)
+		new_bomb_floor = jax.lax.cond(
+			spawn_mask,
+			lambda: state.bomb_floor.at[first_inactive].set(kong_floor),
+			lambda: state.bomb_floor
+		)
+		# Set magic bomb status
+		new_bomb_is_magic = jax.lax.cond(
+			spawn_mask,
+			lambda: state.bomb_is_magic.at[first_inactive].set(jnp.where(is_magic_bomb, 1, 0)),
+			lambda: state.bomb_is_magic
+		)
 
-		# Vectorized movement
-		is_active = new_bomb_active > 0
-		new_bomb_x = jnp.where(is_active, new_bomb_x + state.bomb_directions_x, new_bomb_x)
-		new_bomb_y = jnp.where(is_active, new_bomb_y + 1, new_bomb_y)  # fall down
+		# Update bomb movement for all active bombs
+		updated_bombs = self._update_all_bomb_movement(
+			new_bomb_x, new_bomb_y, new_bomb_active, new_bomb_dir_x, new_bomb_dir_y, new_bomb_floor, new_bomb_is_magic, bomb_key
+		)
+		
+		new_bomb_x, new_bomb_y, new_bomb_active, new_bomb_dir_x, new_bomb_dir_y, new_bomb_floor = updated_bombs
+		
+		# Determine Kong's current floor
+		kong_floor = self._get_kong_floor(state)
+		kong_at_bottom = kong_floor <= self.consts.FLOOR_KONG_MOVE_DOWN  # Floor 4 or below
+		kong_at_top = kong_floor > self.consts.FLOOR_KONG_MOVE_DOWN     # Floor 5 or above
 
-		# Deactivate bombs off-screen
-		new_bomb_active = jnp.where(new_bomb_y > self.consts.HEIGHT, 0, new_bomb_active)
+		# Deactivate bombs off-screen based on Kong position
+		# If Kong is at bottom (floors 0-4), bombs despawn when going off top (y < 0)
+		# If Kong is at top (floors 5-8), bombs despawn when going off bottom (y > HEIGHT)
+		should_despawn_top = jnp.logical_and(kong_at_bottom, new_bomb_y < 0)
+		should_despawn_bottom = jnp.logical_and(kong_at_top, new_bomb_y > self.consts.HEIGHT)
+		should_despawn = jnp.logical_or(should_despawn_top, should_despawn_bottom)
 
-		jax.debug.print("bombs: active={a} positions=({x},{y})", 
-			a=new_bomb_active, x=new_bomb_x, y=new_bomb_y)
-
+		new_bomb_active = jnp.where(
+			should_despawn,
+			0,  # Deactivate
+			new_bomb_active
+		)
+		
 		return state._replace(
 			bomb_positions_x=new_bomb_x,
 			bomb_positions_y=new_bomb_y,
-			bomb_active=new_bomb_active
+			bomb_active=new_bomb_active,
+			bomb_is_magic=new_bomb_is_magic,
+			bomb_directions_x=new_bomb_dir_x,
+			bomb_directions_y=new_bomb_dir_y,
+			bomb_floor=new_bomb_floor,
+			rng_key=key
+		)
+	
+	def _get_kong_floor(self, state: KingKongState) -> chex.Array:
+		floor_distances = jnp.abs(self.consts.FLOOR_LOCATIONS - state.kong_y)
+		return jnp.argmin(floor_distances)
+
+	def _update_all_bomb_movement(self, bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key):
+		def update_single_bomb(i, carry):
+			bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, key = carry
+			key, subkey = jax.random.split(key)
+			
+			# Only update if bomb is active
+			is_active = bomb_active[i] > 0
+			
+			# Get current bomb state
+			current_x = bomb_x[i]
+			current_y = bomb_y[i]
+			current_dir_x = bomb_dir_x[i]
+			current_dir_y = bomb_dir_y[i]
+			current_floor = bomb_floor[i]
+			current_maigc = bomb_magic[i]
+			
+			# Update bomb position and direction
+			new_x, new_y, new_dir_x, new_dir_y, new_floor = jax.lax.cond(
+				is_active,#only update if active / spawned 
+				lambda: self._move_single_bomb(current_x, current_y, current_dir_x, current_dir_y, current_floor, current_maigc, subkey),
+				lambda: (current_x, current_y, current_dir_x, current_dir_y, current_floor)
+			)
+			
+			# Update arrays
+			bomb_x = bomb_x.at[i].set(new_x)
+			bomb_y = bomb_y.at[i].set(new_y)
+			bomb_dir_x = bomb_dir_x.at[i].set(new_dir_x)
+			bomb_dir_y = bomb_dir_y.at[i].set(new_dir_y)
+			bomb_floor = bomb_floor.at[i].set(new_floor)
+			
+			return (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, key)
+		
+		# Process all bombs
+		carry = (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, rng_key)
+		final_carry = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, update_single_bomb, carry)
+		
+		return final_carry[:6] # only relevant attribs
+
+	def _move_single_bomb(self, x, y, dir_x, dir_y, floor, is_magic, rng_key):
+		key1, key2, key3 = jax.random.split(rng_key, 3)
+		
+		# Basic movement speed
+		move_speed = 1
+		
+		# Get current floor Y position
+		current_floor_y = self.consts.FLOOR_LOCATIONS[floor]
+		
+		# Check if bomb is perfectly on a ladder (more restrictive)
+		ladder_check_y = jax.lax.cond(
+			dir_y > 0,  # Moving down
+			lambda: y + 2,  # Check 2 pixels below
+			lambda: y       # Check current position
+		)
+		on_ladder = self._check_bomb_on_ladder_strict(x, ladder_check_y, is_magic)
+				
+		# If moving horizontally
+		def do_horizontal_movement():
+			# Take ladder if perfectly aligned (75% chance)
+			should_take_ladder = jnp.logical_and(
+				on_ladder,
+				jax.random.bernoulli(key3, p=0.75)
+			)
+			jax.debug.print("on_ladder={y}, should_take_ladder={x}", y=on_ladder, x=should_take_ladder)
+
+			# Horizontal movement only if NOT taking ladder
+			def horizontal_move():
+				move_x = x + dir_x * move_speed
+
+				left_bound = self.consts.FLOOR_BOUNDS[floor, 0] 
+				bomb_width = self.consts.BOMB_SIZE[0]
+				right_bound = self.consts.FLOOR_BOUNDS[floor, 1] - (bomb_width + 2)
+
+				# Bounce off walls
+				hit_wall = jnp.logical_or(move_x <= left_bound, move_x >= right_bound)
+				final_dir_x = jax.lax.cond(hit_wall, lambda: -dir_x, lambda: dir_x)
+				final_x = jnp.clip(move_x, left_bound, right_bound)
+
+				return final_x, final_dir_x
+
+			final_x, final_dir_x = jax.lax.cond(
+				should_take_ladder,
+				lambda: (x, 0),  # No horizontal movement if taking ladder
+				horizontal_move
+			)
+
+			# Determine vertical direction if taking ladder
+			ladder_dir = jax.lax.cond(
+				floor > 4,  # Upper floors go down
+				lambda: 1,   # Positive = down
+				lambda: -1   # Lower floors go up
+			)
+			final_dir_y = jax.lax.cond(should_take_ladder, lambda: ladder_dir, lambda: 0)
+
+			return final_x, current_floor_y, final_dir_x, final_dir_y, floor
+		
+		# If moving vertically (on ladder)
+		def do_vertical_movement():
+			# Move vertically
+			move_y = y + dir_y * move_speed
+			
+			# Check if reached a floor
+			def moving_down():
+				target_floor = jnp.maximum(floor - 1, 0)
+				target_y = self.consts.FLOOR_LOCATIONS[target_floor]
+				reached = move_y >= target_y
+				return target_floor, target_y, reached
+				
+			def moving_up():
+				target_floor = jnp.minimum(floor + 1, 8)
+				target_y = self.consts.FLOOR_LOCATIONS[target_floor]
+				reached = move_y <= target_y
+				return target_floor, target_y, reached
+			
+			target_floor, target_y, reached = jax.lax.cond(
+				dir_y > 0,  # Moving down
+				moving_down,
+				moving_up
+			)
+			
+			# If reached target floor, switch to horizontal
+			def switch_to_horizontal():
+				new_dir_x = jax.lax.cond(
+					jax.random.bernoulli(key2, p=0.5),
+					lambda: -1,
+					lambda: 1
+				)
+				return x, target_y, new_dir_x, 0, target_floor
+			
+			def continue_vertical():
+				return x, move_y, 0, dir_y, floor
+				
+			return jax.lax.cond(reached, switch_to_horizontal, continue_vertical)
+		
+		# If falling through hole (special case)
+		def do_falling_movement():
+			fall_y = y + 2
+			
+			# Check if hit floor below
+			target_floor = jnp.maximum(floor - 1, 0)
+			target_y = self.consts.FLOOR_LOCATIONS[target_floor]
+			hit_floor = fall_y >= target_y
+			
+			def hit_floor_action():
+				# Switch to horizontal movement on new floor
+				new_dir_x = jax.lax.cond(
+					jax.random.bernoulli(key2, p=0.5),
+					lambda: -1,
+					lambda: 1
+				)
+				return x, target_y, new_dir_x, 0, target_floor
+			
+			def continue_falling():
+				return x, fall_y, dir_x, 1, floor  # Keep falling
+			
+			return jax.lax.cond(hit_floor, hit_floor_action, continue_falling)
+		
+		# Main decision logic
+		is_moving_vertically = dir_y != 0
+		is_falling = jnp.logical_and(dir_y > 0, ~on_ladder)  # Falling but not on ladder
+		
+		# Execute appropriate movement
+		new_x, new_y, new_dir_x, new_dir_y, new_floor = jax.lax.cond(
+			is_falling,
+			do_falling_movement,  # Special falling physics
+			lambda: jax.lax.cond(
+				jnp.logical_and(is_moving_vertically, on_ladder),
+				do_vertical_movement,  # Ladder climbing
+				do_horizontal_movement  # Horizontal movement
+			)
 		)
 		
+		# Handle hole falling (only when moving horizontally)
+		over_hole = self._check_bomb_over_hole(new_x, new_y, is_magic)
+		should_start_falling = jnp.logical_and(
+			jnp.logical_and(
+				jnp.logical_and(over_hole, new_dir_y == 0),  # Horizontal movement over hole
+				dir_y >= 0  # Can't fall through holes when moving up
+			),
+			jax.random.bernoulli(key1, p=0.5)  # 50% chance
+		)
+
+		
+		# Start falling through hole
+		final_dir_y, final_floor = jax.lax.cond(
+			should_start_falling,
+			lambda: (1, new_floor),  # Start falling (don't change floor yet)
+			lambda: (new_dir_y, new_floor)
+		)
+		
+		return new_x, new_y, new_dir_x, final_dir_y, final_floor
+	
+	def _check_bomb_on_ladder_strict(self, bomb_x, bomb_y, is_magic):
+		size_x = self.consts.BOMB_SIZE[0]
+		size_y = self.consts.BOMB_SIZE[1]
+
+		ladder_x1 = self.consts.LADDER_LOCATIONS[:, 0]
+		ladder_y1 = self.consts.LADDER_LOCATIONS[:, 1]
+		ladder_x2 = self.consts.LADDER_LOCATIONS[:, 2]
+		ladder_y2 = self.consts.LADDER_LOCATIONS[:, 3]
+
+		bomb_x1 = bomb_x 
+		bomb_x2 = bomb_x + size_x
+		bomb_y1 = bomb_y
+		bomb_y2 = bomb_y - size_y
+
+		on_ladders = jnp.logical_and(
+			jnp.logical_and(bomb_x1 == ladder_x1, bomb_x2 == ladder_x2),
+			jnp.logical_and(bomb_y1 >= ladder_y1, bomb_y2 <= ladder_y2)
+		)
+
+		jax.debug.print(
+			"bomb=({bx1},{bx2},{by1},{by2}), ladders_x1={lx1}, x2={lx2}, y1={ly1}, y2={ly2}, on_ladders={ol}",
+			bx1=bomb_x1, bx2=bomb_x2, by1=bomb_y1, by2=bomb_y2,
+			lx1=ladder_x1, lx2=ladder_x2,
+			ly1=ladder_y1, ly2=ladder_y2,
+			ol=on_ladders
+		)
+
+		return jnp.any(on_ladders)
+	
+	def _check_bomb_over_hole(self, bomb_x, bomb_y, is_magic):
+		size_x = self.consts.BOMB_SIZE[0]
+
+		hole_rects = self.consts.HOLE_LOCATIONS
+		
+		# Use bomb center point for hole detection
+		bomb_x1 = bomb_x + 2
+		bomb_x2 = bomb_x + size_x - 3
+		
+		def point_in_hole(hole_rect):
+			x1, y1, x2, y2 = hole_rect
+			return jnp.logical_and(
+				jnp.logical_and(bomb_x1 >= x1, bomb_x2 <= x2),
+				jnp.logical_and(bomb_y >= y1, bomb_y <= y2)
+			)
+		
+		collisions = jax.vmap(point_in_hole)(hole_rects)
+		return jnp.any(collisions)
+
 	def _rectangles_overlap(self, r1, r2):
 		x1, y1, x2, y2 = r1
 		a1, b1, a2, b2 = r2
 		return jnp.logical_and(x1 < a2, jnp.logical_and(x2 > a1,
 			jnp.logical_and(y1 < b2, y2 > b1)))
 
-	def _check_hole_collision(self, player_x, player_y, player_floor):
+	def _check_hole_collision(self, player_x, player_y):
 		hole_rects = self.consts.HOLE_LOCATIONS
-		player_rect = jnp.array([
-			player_x,
-			player_y,
-			player_x + self.consts.PLAYER_SIZE[0],
-			player_y + self.consts.PLAYER_SIZE[1]
-		])
 
-		floor_y = self.consts.FLOOR_LOCATIONS[player_floor]
+		def point_in_bb(hole_rect):
+			x1, y1, x2, y2 = hole_rect
+			collision = (player_x >= x1) & (player_x <= x2) & (player_y >= y1) & (player_y <= y2)
 
-		# Vectorized check for holes on this floor
-		floor_mask = jnp.isclose(hole_rects[:, 1], floor_y)
-		x1, y1, x2, y2 = player_rect
+			return collision
 
-		def rect_overlap(hole_rect, mask):
-			a1, b1, a2, b2 = hole_rect
-			overlap = jnp.logical_and(x1 < a2,
-					jnp.logical_and(x2 > a1,
-					jnp.logical_and(y1 < b2, y2 > b1)))
-			return overlap & mask
-
-		collisions = jax.vmap(rect_overlap)(hole_rects, floor_mask)
+		collisions = jax.vmap(point_in_bb)(hole_rects)
 		return jnp.any(collisions)
 
+
 	def _check_collisions(self, state: KingKongState) -> KingKongState:
-		"""Check for player-bomb collisions in JAX-friendly vectorized style"""
 		player_rect = jnp.array([
 			state.player_x,
 			state.player_y,
@@ -1131,7 +1411,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		bombs_xy = jnp.stack([state.bomb_positions_x, state.bomb_positions_y], axis=1)
 		collisions = jax.vmap(bomb_collision)(bombs_xy, bomb_active)
 
-		is_jumping = (state.player_state == self.consts.PLAYER_JUMP_LEFT) | (	state.player_state == self.consts.PLAYER_JUMP_RIGHT) 
+		is_jumping = (state.player_state == self.consts.PLAYER_JUMP_LEFT) | (state.player_state == self.consts.PLAYER_JUMP_RIGHT) 
 
 		# Bombs jumped on
 		jumped_bombs = collisions & is_jumping
@@ -1142,12 +1422,15 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		# Bombs hit when not jumping
 		hit_bombs = collisions & (~is_jumping)
-		death_type = jnp.where(jnp.any(hit_bombs), 1, state.death_type)
+		death_type = jnp.where(jnp.any(hit_bombs), self.consts.DEATH_TYPE_BOMB_EXPLODE, state.death_type)
 
-		# Check for falling through holes
-		fell_through_hole = self._check_hole_collision(
-			state.player_x, state.player_y, state.player_floor
+		# Check for falling through holes (only if not already dying)
+		fell_through_hole = jax.lax.cond(
+			state.death_type == self.consts.DEATH_TYPE_NONE,
+			lambda: self._check_hole_collision(state.player_x, state.player_y),
+			lambda: False
 		)
+
 		death_type = jax.lax.cond(
 			fell_through_hole,
 			lambda: self.consts.DEATH_TYPE_FALL,  # Fall death
@@ -1158,7 +1441,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			death_type=death_type,
 			score=new_score
 		)
-	
+		
 	def _update_kong(self, state: KingKongState) -> KingKongState:
 		# Move Kong down when player reaches threshold floor
 		# TODO animate 
@@ -1180,28 +1463,93 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		)
 
 	def _step_death(self, state: KingKongState, action: chex.Array) -> KingKongState:
-		stage_duration = jax.lax.cond(
-			state.death_type == self.consts.DEATH_TYPE_BOMB_EXPLODE,
-			lambda: self.consts.DUR_BOMB_EXPLODE,
-			lambda: self.consts.DUR_FALL
+		return jax.lax.cond(
+			state.death_type == self.consts.DEATH_TYPE_FALL,
+			lambda: self._step_fall_death(state, action),
+			lambda: self._step_bomb_explode_death(state, action)
 		)
-
+	
+	def _step_fall_death(self, state: KingKongState, action: chex.Array) -> KingKongState:
+		stage_duration = self.consts.DUR_FALL
 		should_transition = state.stage_steps >= stage_duration
 
 		def do_transition(_):
 			return state._replace(
 				gamestate=self.consts.GAMESTATE_RESPAWN,
-				stage_steps=0
+				stage_steps=0,
+				death_target_y=-1, # reset death target
+				lives=state.lives - 1  # Decrease life on death
 			)
 
 		def do_normal_step(_):
-			death_flash_counter = jax.lax.cond(
-				state.death_type == self.consts.DEATH_TYPE_BOMB_EXPLODE,
-				lambda: jnp.minimum(state.death_flash_counter + 1, self.consts.CNT_DEATH_FLASHES),
-				lambda: state.death_flash_counter
+			# Get target floor or use stored value
+			target_floor_y = jax.lax.cond(
+				state.death_target_y == -1,
+				lambda: self._get_floor_below(state),  # Calculate on first step
+				lambda: state.death_target_y  # Use stored value from previous steps
+			)
+			
+			# Check if player has already hit the target floor
+			has_hit_floor = state.player_y >= target_floor_y
+			
+			# Only update fall physics every 4 steps
+			should_update_fall = jnp.logical_and(
+				state.stage_steps % 4 == 0,  # Every 4 steps
+				~has_hit_floor  # And haven't hit floor yet
+			)
+			
+			# Calculate falling physics for hole deaths
+			new_player_y = jax.lax.cond(
+				should_update_fall,
+				lambda: self._update_fall_physics(state, target_floor_y),
+				lambda: state.player_y  # Don't move if not updating or hit floor
+			)
+			
+			# Update has_hit_floor after potential Y movement
+			final_has_hit_floor = new_player_y >= target_floor_y
+			
+			# Set player state based on fall progress
+			new_player_state = jax.lax.cond(
+				final_has_hit_floor,
+				lambda: self.consts.PLAYER_DEAD,    # Hit floor = dead
+				lambda: self.consts.PLAYER_FALL     # Still falling
 			)
 
-			jax.debug.print("death: type={t} step={s}/{dur}", t=state.death_type, s=state.stage_steps, dur=stage_duration)
+			jax.debug.print("fall_death: step={s}/{dur} player_state={ps} player_y={py} target_y={ty} hit_floor={hf} should_update={su}", 
+							s=state.stage_steps, dur=stage_duration,
+							ps=new_player_state, py=new_player_y, ty=target_floor_y, 
+							hf=final_has_hit_floor, su=should_update_fall)
+
+			return state._replace(
+				stage_steps=state.stage_steps + 1,
+				player_state=new_player_state,
+				player_y=new_player_y,
+				death_target_y=target_floor_y  # Store the target floor Y
+			)
+
+		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
+
+	def _step_bomb_explode_death(self, state: KingKongState, action: chex.Array) -> KingKongState:
+		stage_duration = self.consts.DUR_BOMB_EXPLODE
+		should_transition = state.stage_steps >= stage_duration
+
+		def do_transition(_):
+			# After bomb explosion, transition to fall death and player should fall off screen
+			return state._replace(
+				gamestate=self.consts.GAMESTATE_DEATH,
+				death_type=self.consts.DEATH_TYPE_FALL,
+				stage_steps=0,
+				player_state=self.consts.PLAYER_FALL,  # Set to falling animation
+				death_target_y=self.consts.HEIGHT + 50,  # Fall off screen (below visible area)
+				# Don't decrease lives yet bc it will be done in fall death
+			)
+
+		def do_normal_step(_):
+			# Handle bomb explode death flashing
+			death_flash_counter = jnp.minimum(state.death_flash_counter + 1, self.consts.CNT_DEATH_FLASHES)
+
+			jax.debug.print("bomb_explode_death: step={s}/{dur} flash_counter={fc}", 
+							s=state.stage_steps, dur=stage_duration, fc=death_flash_counter)
 
 			return state._replace(
 				stage_steps=state.stage_steps + 1,
@@ -1210,6 +1558,20 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 
+	def _get_floor_below(self, state: KingKongState) -> chex.Array:
+		# Find the first floor that is below (higher Y value) than the current player position
+		floor_below_index = jnp.argmax(state.player_y >= self.consts.FLOOR_LOCATIONS) - 1
+		
+		# Clamp to valid floor range (0 to num_floors-1)
+		floor_below_index = jnp.clip(floor_below_index, 0, len(self.consts.FLOOR_LOCATIONS) - 1)
+		
+		return self.consts.FLOOR_LOCATIONS[floor_below_index]
+
+
+	def _update_fall_physics(self, state: KingKongState, max_y: int) -> chex.Array:
+		"""Update player Y position during fall death"""
+		fall_speed = 2  # pixels per step - adjust as needed
+		return jnp.minimum(state.player_y + fall_speed, max_y)
 
 	def _step_success(self, state: KingKongState, action: chex.Array) -> KingKongState:
 		should_transition = state.stage_steps >= self.consts.DUR_SUCCESS
@@ -1353,12 +1715,20 @@ class KingKongRenderer(JAXGameRenderer):
 		# Padding function
 		def pad(sprite, target_h, target_w, side="right"):
 			h, w, c = sprite.shape
-			if side == "right":
-				return jnp.pad(sprite, ((0, target_h - h), (0, target_w - w), (0,0)), mode="constant")
-			if side == "left":
-				return jnp.pad(sprite, ((0, target_h - h), (target_w - w, 0), (0,0)), mode="constant")
+			pad_top = pad_bottom = pad_left = pad_right = 0
 
-				
+			if "bottom" in side:
+				pad_top = target_h - h
+			else:
+				pad_bottom = target_h - h
+
+			if "left" in side:
+				pad_left = target_w - w
+			else:
+				pad_right = target_w - w
+
+			return jnp.pad(sprite, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode="constant")
+
 		# Compute target dimensions for player sprites
 		all_player_sprites = [
 			player_idle_right, player_idle_left,
@@ -1376,7 +1746,7 @@ class KingKongRenderer(JAXGameRenderer):
 		player_move1_left  = pad(player_move1_left,  player_target_height, player_target_width, side="left")
 		player_move2_right = pad(player_move2_right, player_target_height, player_target_width)
 		player_move2_left  = pad(player_move2_left,  player_target_height, player_target_width, side="left")
-		player_dead        = pad(player_dead,        player_target_height, player_target_width)
+		player_dead        = pad(player_dead,        player_target_height, player_target_width, side="bottom-left")
 		player_jump        = pad(player_jump,        player_target_height, player_target_width)
 		player_fall        = pad(player_fall,        player_target_height, player_target_width)
 		player_climb1      = pad(player_climb1,      player_target_height, player_target_width, side="left")
@@ -1450,11 +1820,11 @@ class KingKongRenderer(JAXGameRenderer):
 					state.player_state == self.consts.PLAYER_JUMP_RIGHT
 				)
 
-			def is_dead_or_fall():
-				return jnp.logical_or(
-					state.player_state == self.consts.PLAYER_FALL,
-					state.player_state == self.consts.PLAYER_DEAD
-				)
+			def is_falling():
+				return state.player_state == self.consts.PLAYER_FALL
+
+			def is_dead():
+				return state.player_state == self.consts.PLAYER_DEAD
 
 			def is_climbing():
 				return jnp.logical_or(
@@ -1519,25 +1889,29 @@ class KingKongRenderer(JAXGameRenderer):
 					lambda: self.SPRITE_PLAYER_JUMP_RIGHT
 				),  # Jump sprite takes priority
 				lambda: jax.lax.cond(
-					is_idle_state(),
+					is_falling(),
+					lambda: self.SPRITE_PLAYER_FALL,  # Show fall animation when falling
 					lambda: jax.lax.cond(
-						state.player_state == self.consts.PLAYER_IDLE_LEFT,
-						lambda: self.SPRITE_PLAYER_IDLE_LEFT,
-						lambda: self.SPRITE_PLAYER_IDLE_RIGHT
-					),
-					lambda: jax.lax.cond(
-						is_dead_or_fall(),
-						lambda: self.SPRITE_PLAYER_DEAD,
+						is_dead(),
+						lambda: self.SPRITE_PLAYER_DEAD,  # Show dead sprite when dead
 						lambda: jax.lax.cond(
-							is_climb_idle(),
-							lambda: self.SPRITE_PLAYER_CLIMB2, # freeze on last climb frame
+							is_idle_state(),
 							lambda: jax.lax.cond(
-								is_climbing(),
-								climb_cycle,
+								state.player_state == self.consts.PLAYER_IDLE_LEFT,
+								lambda: self.SPRITE_PLAYER_IDLE_LEFT,
+								lambda: self.SPRITE_PLAYER_IDLE_RIGHT
+							),
+							lambda: jax.lax.cond(
+								is_climb_idle(),
+								lambda: self.SPRITE_PLAYER_CLIMB2, # freeze on last climb frame
 								lambda: jax.lax.cond(
-									is_moving(),
-									walk_cycle,
-									lambda: self.SPRITE_PLAYER_IDLE_RIGHT  # fallback
+									is_climbing(),
+									climb_cycle,
+									lambda: jax.lax.cond(
+										is_moving(),
+										walk_cycle,
+										lambda: self.SPRITE_PLAYER_IDLE_RIGHT  # fallback
+									)
 								)
 							)
 						)
@@ -1546,17 +1920,31 @@ class KingKongRenderer(JAXGameRenderer):
 			)
 
 			return sprite
+
+		
 		# Render player
 		player_sprite = get_player_sprite()
 
 		def render_player(raster_in):
 			def offset():
+				# climbing states: climb idle or climbing up/down
+				is_climbing_state = jnp.logical_or(
+					state.player_state == self.consts.PLAYER_CLIMB_IDLE,
+					jnp.logical_or(
+						state.player_state == self.consts.PLAYER_CLIMB_UP,
+						state.player_state == self.consts.PLAYER_CLIMB_DOWN
+					)
+				)
 				return jax.lax.cond(
-					(state.player_state == self.consts.PLAYER_IDLE_RIGHT) |
-					(state.player_state == self.consts.PLAYER_MOVE_RIGHT) |
-					(state.player_state == self.consts.PLAYER_JUMP_RIGHT),
-					lambda: -2,
-					lambda: -5
+					is_climbing_state,
+					lambda: -3,  # climbing offset right
+					lambda: jax.lax.cond(
+						(state.player_state == self.consts.PLAYER_IDLE_RIGHT) |
+						(state.player_state == self.consts.PLAYER_MOVE_RIGHT) |
+						(state.player_state == self.consts.PLAYER_JUMP_RIGHT),
+						lambda: -2,
+						lambda: -5
+					)
 				)
 
 			return jr.render_at(
@@ -1565,7 +1953,8 @@ class KingKongRenderer(JAXGameRenderer):
 				state.player_y - self.consts.PLAYER_SIZE[1],
 				jr.get_sprite_frame(player_sprite, 0)
 			)
-		
+
+				
 		raster = jax.lax.cond(
 			(state.gamestate == self.consts.GAMESTATE_GAMEPLAY) |
 			(state.gamestate == self.consts.GAMESTATE_DEATH) |
@@ -1618,22 +2007,29 @@ class KingKongRenderer(JAXGameRenderer):
 		# Render active bombs
 		def render_single_bomb(i, raster_in):
 			is_active = state.bomb_active[i] > 0
-			
+
 			def draw_bomb(raster_bomb):
 				bomb_sprite = jax.lax.cond(
 					state.bomb_is_magic[i] > 0,
 					lambda: self.SPRITE_MAGIC_BOMB,
 					lambda: self.SPRITE_BOMB
 				)
+
+				offset_x = jax.lax.cond(
+					state.bomb_is_magic[i] > 0,
+					lambda: 1,
+					lambda: 0
+				)
+
 				return jr.render_at(
 					raster_bomb,
-					state.bomb_positions_x[i],
+					state.bomb_positions_x[i] + offset_x,
 					state.bomb_positions_y[i] - self.consts.BOMB_SIZE[1],
 					jr.get_sprite_frame(bomb_sprite, 0)
 				)
-			
+
 			return jax.lax.cond(is_active, draw_bomb, lambda r: r, operand=raster_in)
-		
+
 		# Render all bombs
 		for i in range(self.consts.MAX_BOMBS):
 			raster = render_single_bomb(i, raster)
@@ -1714,6 +2110,7 @@ class KingKongRenderer(JAXGameRenderer):
 			red_pixel = jnp.array([[[255, 0, 0, 255]]], dtype=jnp.uint8)
 			blue_pixel = jnp.array([[[0, 0, 255, 255]]], dtype=jnp.uint8)
 			white_pixel = jnp.array([[[255, 255, 255, 255]]], dtype=jnp.uint8)
+			green_pixel = jnp.array([[[0, 255, 0, 255]]], dtype=jnp.uint8)
 
 			def render_bbox_points(raster, bbox, pixel):
 				x1, y1, x2, y2 = bbox
@@ -1728,12 +2125,12 @@ class KingKongRenderer(JAXGameRenderer):
 					return jr.render_at(r, x, y, pixel)
 				return jax.lax.fori_loop(0, points.shape[0], body, raster)
 
-			def render_all_ladder_points(raster, ladder_locations, pixel):
+			def render_all_bbox(raster, ladder_locations, pixel):
 				def body(i, r):
 					return render_bbox_points(r, ladder_locations[i], pixel)
 				return jax.lax.fori_loop(0, ladder_locations.shape[0], body, raster)
 
-			raster = render_all_ladder_points(raster, self.consts.LADDER_LOCATIONS, red_pixel)
+			raster = render_all_bbox(raster, self.consts.LADDER_LOCATIONS, red_pixel)
 
 			# Compute player bounding box
 			player_width, player_height = self.consts.PLAYER_SIZE
@@ -1755,5 +2152,29 @@ class KingKongRenderer(JAXGameRenderer):
 				return jax.lax.fori_loop(0, floor_locations.shape[0], body, raster)
 
 			raster = render_floor_points(raster, self.consts.FLOOR_LOCATIONS, blue_pixel)
+			
+			raster = render_all_bbox(raster, self.consts.HOLE_LOCATIONS, green_pixel)
+			
+			active_mask = state.bomb_active > 0
+			def draw_bomb_box(i, r):
+				is_active = active_mask[i]
 				
+				def draw_box(r):
+					x = state.bomb_positions_x[i]
+					y = state.bomb_positions_y[i]
+					w, h = self.consts.BOMB_SIZE
+					
+					r = render_bbox_points(r, [x, y, x+w, y-h], white_pixel)
+					
+					return r
+				
+				return jax.lax.cond(is_active, lambda r: draw_box(r), lambda r: r, r)
+			
+			# Draw all bomb boxes
+			raster = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, draw_bomb_box, raster)
+
+			raster = jr.render_at(raster, 0, 0, jr.get_sprite_frame(self.SPRITE_NUMBERS[0], 0))
+			raster = render_bbox_points(raster, [0, 0, 0+self.consts.NUMBER_SIZE[0], 0-self.consts.PLAYER_SIZE[1]], white_pixel)
+
+					
 		return raster
