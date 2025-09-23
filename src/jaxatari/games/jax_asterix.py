@@ -124,9 +124,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.state = self.reset()
+        # self.state = self.reset() OLD
         self.renderer = AsterixRenderer()
         self.obs_type = "rgb"  # "rgb", "ram", "grayscale"
+        _, self.state = self.reset()  # Initial state
 
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
@@ -614,15 +615,26 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsterixState):
-        # create player
-        player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
-            width=jnp.array(self.consts.player_width, dtype=jnp.int32),
-            height=jnp.array(self.consts.player_height, dtype=jnp.int32),
-        )
-
-        return AsterixObservation(player=player)
+        # Liefere bei RGB direkt das gerenderte Bild (uint8, HWC)
+        if self.obs_type == "rgb":
+            return self.renderer.render(state)
+        elif self.obs_type == "grayscale":
+            rgb = self.renderer.render(state)
+            # einfache Luma-Approximation: Mittelwert -> uint8
+            gray = jnp.mean(rgb.astype(jnp.float32), axis=2).astype(jnp.uint8)
+            return gray
+        elif self.obs_type == "ram":
+            # Platzhalter-RAM; optional anpassen, falls benötigt
+            return jnp.zeros((128,), dtype=jnp.uint8)
+        else:
+            # Fallback: alte strukturierte Beobachtung (wird in den aktuellen Tests nicht verwendet)
+            player = EntityPosition(
+                x=state.player_x,
+                y=state.player_y,
+                width=jnp.array(self.consts.player_width, dtype=jnp.int32),
+                height=jnp.array(self.consts.player_height, dtype=jnp.int32),
+            )
+            return AsterixObservation(player=player) # TODO ggf. entfernen
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AsterixState, all_rewards: chex.Array = None) -> AsterixInfo:
@@ -706,12 +718,15 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
         """Convert the observation to a flat array."""
+        return jnp.reshape(obs, (-1,))
+        """ OLD
         return jnp.array([
             obs.player.x,
             obs.player.y,
             obs.player.width,
             obs.player.height,
         ], dtype=jnp.int32)
+    """
 
 class AsterixRenderer(JAXGameRenderer):
     def __init__(self, consts: AsterixConstants = None):
