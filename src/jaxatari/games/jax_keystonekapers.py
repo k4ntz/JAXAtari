@@ -172,10 +172,11 @@ class KeystoneKapersConstants(NamedTuple):
     MAX_ITEMS: int = 4
 
     # Colors (RGB)
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 128)  # Dark blue
+    BACKGROUND_COLOR: Tuple[int, int, int] = (50, 152, 82)  # Green
     PLAYER_COLOR: Tuple[int, int, int] = (0, 255, 0)      # Green
     THIEF_COLOR: Tuple[int, int, int] = (255, 255, 0)     # Yellow
-    FLOOR_COLOR: Tuple[int, int, int] = (139, 69, 19)     # Brown
+    FLOOR_TAN_COLOR: Tuple[int, int, int] = (190, 156, 72)  # Tan (#be9c48)
+    FLOOR_YELLOW_COLOR: Tuple[int, int, int] = (207, 175, 92)  # Yellow (#cfaf5c)
     ESCALATOR_COLOR: Tuple[int, int, int] = (128, 128, 128)  # Gray
     ELEVATOR_COLOR: Tuple[int, int, int] = (64, 64, 64)   # Dark gray
     CART_COLOR: Tuple[int, int, int] = (255, 0, 0)        # Red
@@ -1477,32 +1478,50 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Apply color where mask is True
             return jnp.where(mask[:, :, None], color, game_area)
 
-        # Draw floors (simplified - just draw visible game area width)
-        floor_color = jnp.array(self.consts.FLOOR_COLOR, dtype=jnp.uint8)
-        floor_thickness = 4
+        # Draw floors with tan and yellow layers (like minimap)
+        floor_tan_color = jnp.array(self.consts.FLOOR_TAN_COLOR, dtype=jnp.uint8)
+        floor_yellow_color = jnp.array(self.consts.FLOOR_YELLOW_COLOR, dtype=jnp.uint8)
+        floor_thickness = 6
+        layer_thickness = 3
 
-        # Floor 1
+        # Floor 1 - yellow bottom, tan top
         game_area = draw_rectangle_simple(
             game_area, 0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_yellow_color
+        )
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT - layer_thickness,
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
-        # Floor 2
+        # Floor 2 - yellow bottom, tan top
         game_area = draw_rectangle_simple(
             game_area, 0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_yellow_color
+        )
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - layer_thickness,
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
-        # Floor 3
+        # Floor 3 - yellow bottom, tan top
         game_area = draw_rectangle_simple(
             game_area, 0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_yellow_color
+        )
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT - layer_thickness,
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
-        # Roof (4th level)
+        # Roof (4th level) - yellow bottom, tan top
         game_area = draw_rectangle_simple(
             game_area, 0, self.consts.ROOF_Y + self.consts.FLOOR_HEIGHT - floor_thickness,
-            self.consts.GAME_AREA_WIDTH, floor_thickness, floor_color
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_yellow_color
+        )
+        game_area = draw_rectangle_simple(
+            game_area, 0, self.consts.ROOF_Y + self.consts.FLOOR_HEIGHT - layer_thickness,
+            self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
         # Draw escalators as diagonal purple lines (not ladder-style)
