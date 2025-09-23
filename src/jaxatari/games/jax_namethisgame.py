@@ -32,7 +32,7 @@ class NameThisGameConfig:
     bars_gap_px: int = 0
     bars_bottom_margin_px: int = 25
     # Kraken location
-    kraken_x: int = 16
+    kraken_x: int = 20
     kraken_y: int = 63
     # Boat (at the surface)
     boat_width: int = 16             # used for bounds and oxygen drop alignment
@@ -72,10 +72,10 @@ class NameThisGameConfig:
     oxygen_line_width: int = 1
     oxygen_y: int = 57
     oxygen_line_ttl_frames: int = 100
-    oxygen_contact_every_n_frames: int = 3
+    oxygen_contact_every_n_frames: int = 8
     oxygen_contact_points: int = 10
     # Round progression
-    speed_progression_start_lane_for_2: int = 3  # wave 1: lanes >=3 are 2px/frame
+    speed_progression_start_lane_for_2: int = 4
     round_clear_shark_resets: int = 3
     oxy_frames_speedup_per_round: int = 30
     oxy_min_shrink_interval: int = 20
@@ -487,7 +487,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
         state = NameThisGameState(
             score=jnp.array(0, dtype=jnp.int32),
-            reward=jnp.array(0, dtype=jnp.int32),
+            reward=jnp.array(0.0, dtype=jnp.float32),
             round=jnp.array(0, dtype=jnp.int32),
             shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
 
@@ -706,8 +706,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
                 resting=jnp.array(False, jnp.bool_),
                 wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
                 bar_frame_counter=jnp.array(0, jnp.int32),
-                # Optional: bump difficulty using your built-in round scaling.
-                round=s.round + 1,
+                # NOTE: no round increment here anymore
             )
 
         state = jax.lax.cond(state.resting & just_pressed, _exit_rest, lambda q: q, state)
@@ -722,7 +721,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             wave_tick = wave_cnt >= jnp.array(cfg.hud_bar_step_frames, jnp.int32)
 
             # --- oxygen bar cadence (speeds up per wave) ---
-            r_eff = jnp.maximum(s.round, jnp.array(1, jnp.int32))  # wave 1 => 250, wave 2 => 220, ...
+            r_eff = jnp.maximum(s.round, jnp.array(1, jnp.int32))
             oxy_interval = (
                     jnp.array(cfg.hud_bar_step_frames, jnp.int32)
                     - jnp.array(cfg.oxy_frames_speedup_per_round, jnp.int32) * (r_eff - 1)
@@ -743,11 +742,12 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
                 oxy_frame_counter=jnp.where(oxy_tick, jnp.array(0, jnp.int32), oxy_cnt),
             )
 
-            # If wave bar hits 0 -> enter REST (as before)
+            # If wave bar hits 0 -> enter REST and **increment round here**
             def _enter_rest(st: NameThisGameState) -> NameThisGameState:
                 zeros_T = jnp.zeros_like(st.tentacle_len)
                 return st._replace(
                     resting=jnp.array(True, jnp.bool_),
+                    round=st.round + jnp.array(1, jnp.int32),  # <-- round +1 happens on wave timeout
                     tentacle_len=zeros_T,
                     tentacle_active=zeros_T.astype(jnp.bool_),
                     oxygen_line_active=jnp.array(False, jnp.bool_),
@@ -811,33 +811,32 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _move_shark(self, state: NameThisGameState) -> NameThisGameState:
         cfg = self.config
-        x = state.shark_x + state.shark_dx
+        x_next = state.shark_x + state.shark_dx
 
         def _resting_move(s: NameThisGameState) -> NameThisGameState:
-            # Keep shark on lane 0, wrap horizontally instead of dropping lanes
-            off_right = (s.shark_dx > 0) & (x >= cfg.screen_width)
-            off_left  = (s.shark_dx < 0) & ((x + cfg.shark_width) <= 0)
+            hit_left = x_next <= 0
+            hit_right = (x_next + cfg.shark_width) >= cfg.screen_width
+            hit_edge = hit_left | hit_right
 
-            def _wrap_right(st):  # moving right, wrap to left
-                return st._replace(shark_x=jnp.array(-cfg.shark_width, jnp.int32))
-            def _wrap_left(st):   # moving left, wrap to right
-                return st._replace(shark_x=jnp.array(cfg.screen_width, jnp.int32))
+            new_dx = jnp.where(hit_edge, -s.shark_dx, s.shark_dx)
+            clamped_x = jnp.where(
+                hit_left, 0,
+                jnp.where(hit_right, cfg.screen_width - cfg.shark_width, x_next)
+            )
 
-            st = s._replace(
-                shark_x=x,
+            return s._replace(
+                shark_x=clamped_x,
+                shark_dx=new_dx,
                 shark_lane=jnp.array(0, jnp.int32),
                 shark_y=cfg.shark_lanes_y[0],
                 shark_alive=jnp.array(True, jnp.bool_),
             )
-            st = jax.lax.cond(off_right, _wrap_right, lambda q: q, st)
-            st = jax.lax.cond(off_left,  _wrap_left,  lambda q: q, st)
-            return st
 
         def _normal_move(s: NameThisGameState) -> NameThisGameState:
-            new_x = x
+            new_x = x_next
             dx = s.shark_dx
             off_right = (dx > 0) & (new_x >= cfg.screen_width)
-            off_left  = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
+            off_left = (dx < 0) & ((new_x + cfg.shark_width) <= 0)
 
             def _drop_lane(st: NameThisGameState, going_left: bool) -> NameThisGameState:
                 new_lane = st.shark_lane + 1
@@ -859,7 +858,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
             st = s._replace(shark_x=new_x)
             st = jax.lax.cond(off_right, lambda u: _drop_lane(u, going_left=False), lambda u: u, st)
-            st = jax.lax.cond(off_left,  lambda u: _drop_lane(u, going_left=True),  lambda u: u, st)
+            st = jax.lax.cond(off_left, lambda u: _drop_lane(u, going_left=True), lambda u: u, st)
             return st
 
         return jax.lax.cond(state.resting, _resting_move, _normal_move, state)
@@ -1142,47 +1141,59 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _spawn_or_update_oxygen_line(self, state: NameThisGameState) -> NameThisGameState:
-        """Spawn under the boat when timer hits 0; keep it for TTL frames, following the boat;
-        when TTL expires, despawn and schedule the next drop."""
         cfg = self.config
-        rng_line, rng_interval, rng_after = jax.random.split(state.rng, 3)
-        def _no_line(s: NameThisGameState) -> NameThisGameState:
-            new_timer = jnp.maximum(s.oxygen_drop_timer - 1, 0)
-            def _spawn_line(st: NameThisGameState) -> NameThisGameState:
-                new_x = s.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
+
+        def _rest(s: NameThisGameState) -> NameThisGameState:
+            # Freeze everything; the REST entry already disabled the line.
+            return s
+
+        def _active(s: NameThisGameState) -> NameThisGameState:
+            rng_line, rng_interval, rng_after = jax.random.split(s.rng, 3)
+
+            def _no_line(st: NameThisGameState) -> NameThisGameState:
+                new_timer = jnp.maximum(st.oxygen_drop_timer - 1, 0)
+
+                def _spawn_line(ss: NameThisGameState) -> NameThisGameState:
+                    new_x = st.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
+                    new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
+                    return ss._replace(
+                        oxygen_line_active=jnp.array(True, dtype=jnp.bool_),
+                        oxygen_line_x=new_x,
+                        oxygen_drop_timer=jnp.array(0, dtype=jnp.int32),
+                        oxygen_line_ttl=jnp.array(cfg.oxygen_line_ttl_frames, dtype=jnp.int32),
+                        oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
+                    )
+
+                def _no_spawn(ss: NameThisGameState) -> NameThisGameState:
+                    return ss._replace(oxygen_drop_timer=new_timer)
+
+                return jax.lax.cond(new_timer <= 0, _spawn_line, _no_spawn, st)
+
+            def _line_active(st: NameThisGameState) -> NameThisGameState:
+                new_x = st.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
                 new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
-                return st._replace(
-                    oxygen_line_active=jnp.array(True, dtype=jnp.bool_),
-                    oxygen_line_x=new_x,
-                    oxygen_drop_timer=jnp.array(0, dtype=jnp.int32),
-                    oxygen_line_ttl=jnp.array(cfg.oxygen_line_ttl_frames, dtype=jnp.int32),
-                    oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
-                )
-            def _no_spawn(st: NameThisGameState) -> NameThisGameState:
-                return st._replace(oxygen_drop_timer=new_timer)
-            return jax.lax.cond(new_timer <= 0, _spawn_line, _no_spawn, s)
-        def _line_active(s: NameThisGameState) -> NameThisGameState:
-            # Follow boat horizontally and age TTL
-            new_x = s.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
-            new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
-            new_ttl = jnp.maximum(s.oxygen_line_ttl - 1, 0)
-            def _expire(st: NameThisGameState) -> NameThisGameState:
-                # Schedule next random interval on expiry
-                min_int = cfg.oxygen_drop_min_interval
-                max_int = cfg.oxygen_drop_max_interval
-                next_timer = jax.random.randint(rng_interval, (), min_int, max_int + 1, dtype=jnp.int32)
-                return st._replace(
-                    oxygen_line_active=jnp.array(False, dtype=jnp.bool_),
-                    oxygen_line_x=jnp.array(-1, dtype=jnp.int32),
-                    oxygen_drop_timer=next_timer,
-                    oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),
-                    oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
-                )
-            def _still(st: NameThisGameState) -> NameThisGameState:
-                return st._replace(oxygen_line_x=new_x, oxygen_line_ttl=new_ttl)
-            return jax.lax.cond(new_ttl <= 0, _expire, _still, s)
-        state = jax.lax.cond(state.oxygen_line_active, _line_active, _no_line, state)
-        return state._replace(rng=rng_after)
+                new_ttl = jnp.maximum(st.oxygen_line_ttl - 1, 0)
+
+                def _expire(ss: NameThisGameState) -> NameThisGameState:
+                    next_timer = jax.random.randint(rng_interval, (), cfg.oxygen_drop_min_interval,
+                                                    cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32)
+                    return ss._replace(
+                        oxygen_line_active=jnp.array(False, dtype=jnp.bool_),
+                        oxygen_line_x=jnp.array(-1, dtype=jnp.int32),
+                        oxygen_drop_timer=next_timer,
+                        oxygen_line_ttl=jnp.array(0, dtype=jnp.int32),
+                        oxygen_contact_counter=jnp.array(0, dtype=jnp.int32),
+                    )
+
+                def _still(ss: NameThisGameState) -> NameThisGameState:
+                    return ss._replace(oxygen_line_x=new_x, oxygen_line_ttl=new_ttl)
+
+                return jax.lax.cond(new_ttl <= 0, _expire, _still, st)
+
+            out = jax.lax.cond(s.oxygen_line_active, _line_active, _no_line, s)
+            return out._replace(rng=rng_after)
+
+        return jax.lax.cond(state.resting, _rest, _active, state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_oxygen(self, state: NameThisGameState) -> NameThisGameState:
@@ -1193,26 +1204,31 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
             return s._replace(oxygen_frames_remaining=s.oxy_bar_px)  # keep coherent
 
         def _active(s: NameThisGameState) -> NameThisGameState:
+            cfg = self.config
+            # Are we under the oxygen line?
             diver_center = s.diver_x + (cfg.diver_width // 2)
             line_center = s.oxygen_line_x + (cfg.oxygen_line_width // 2)
             under = s.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
 
-            # every K contact frames we receive one "unit" of air
-            contact_frames_needed = cfg.oxygen_contact_every_n_frames
+            # Count ONLY consecutive contact frames
             cnt_next = jnp.where(under, s.oxygen_contact_counter + 1, jnp.array(0, jnp.int32))
-            tick = under & (cnt_next % contact_frames_needed == 0) & (cnt_next > 0)
+
+            # One "unit" every 8 frames (or cfg.oxygen_contact_every_n_frames)
+            k = jnp.array(cfg.oxygen_contact_every_n_frames, jnp.int32)  # = 8
+            tick = under & (cnt_next % k == 0) & (cnt_next > 0)
 
             max_px = jnp.array(cfg.hud_bar_initial_px, jnp.int32)
             full_before = s.oxy_bar_px >= max_px
 
-            # if not full, increase bar; if full, add points
+            # Refill by one unit on tick if not yet full
             inc_bar = jnp.where(tick & (~full_before),
                                 jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32),
                                 jnp.array(0, jnp.int32))
             new_oxy_bar = jnp.minimum(s.oxy_bar_px + inc_bar, max_px)
 
+            # Once FULL, award points on each tick (every 8 frames of continued contact)
             add_points = jnp.where(tick & full_before,
-                                   jnp.array(cfg.oxygen_contact_points, jnp.int32),
+                                   jnp.array(cfg.oxygen_contact_points, jnp.int32),  # = 10
                                    jnp.array(0, jnp.int32))
             new_score = s.score + add_points
 
@@ -1302,24 +1318,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _update_round(self, state: NameThisGameState) -> NameThisGameState:
-        """Check conditions to advance to the next round and apply difficulty scaling."""
-        cfg = self.config
-        # Round clears when all tentacles are destroyed and shark has been reset required times
-        round_clear = (~jnp.any(state.tentacle_active)) & (state.shark_resets_this_round >= cfg.round_clear_shark_resets)
-        def _new_round(s: NameThisGameState) -> NameThisGameState:
-            new_round_idx = s.round + 1
-            T = self.config.max_tentacles
-            zeros_T = jnp.zeros((T,), dtype=jnp.int32)
-            # keep dirs positive; stacks empty
-            return s._replace(
-                round=new_round_idx,
-                shark_resets_this_round=jnp.array(0, dtype=jnp.int32),
-                tentacle_len=zeros_T,
-                tentacle_active=zeros_T.astype(jnp.bool_),
-                tentacle_edge_wait=zeros_T,
-                tentacle_dir=jnp.ones_like(zeros_T),
-            )
-        state = jax.lax.cond(round_clear, _new_round, lambda s: s, state)
+        # Round advancement handled when the wave bar times out (entering REST).
         return state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1338,7 +1337,7 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         cfg = self.config
         # ints for JAX
         nlanes_i = jnp.array(cfg.shark_lanes_y.shape[0], jnp.int32)
-        r = jnp.maximum(round_idx, jnp.array(0, jnp.int32))
+        r = jnp.maximum(round_idx + jnp.array(1, jnp.int32), jnp.array(0, jnp.int32))
         lane_i = lane.astype(jnp.int32)
 
         # Rank from bottom: b=0 bottom lane, b=nlanes-1 top lane
@@ -1379,8 +1378,9 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         return state.lives_remaining <= 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: NameThisGameState, action: chex.Array) -> Tuple[NameThisGameObservation, NameThisGameState, float, bool, NameThisGameInfo]:
-        """Run one time-step of the game given an action. Returns (observation, new_state, reward, done, info)."""
+    def _step_once(self, state: NameThisGameState, action: chex.Array) -> Tuple[
+        NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo
+    ]:
         prev_state = state
         # Interpret action into move direction and fire press
         move_dir, fire_pressed = self._interpret_action(state, action)
@@ -1393,13 +1393,13 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         state = jax.lax.cond(can_shoot, lambda s: self._spawn_spear(s), lambda s: s, state)
         # Move boat (every N frames, bounce at edges)
         state = self._move_boat(state)
-        # Update the HUD bars
+        # Update the HUD bars / rest lifecycle (your fixed version)
         state = self._update_bars_and_rest(state, just_pressed)
-        # Handle oxygen line spawns
+        # Handle oxygen line spawns/updates (your fixed version)
         state = self._spawn_or_update_oxygen_line(state)
         # Move spear
         state = self._move_spear(state)
-        # Move shark and possibly drop lane or mark escaped
+        # Move shark (your fixed REST bounce, normal drop when active)
         state = self._move_shark(state)
         # Move tentacles (discrete update: grow or move exactly one tentacle)
         state = self._update_one_tentacle(state)
@@ -1409,22 +1409,52 @@ class JaxNameThisGame(JaxEnvironment[NameThisGameState, NameThisGameObservation,
         state = self._check_diver_hazard(state)
         # Update oxygen status (decrement or refill if diver picks line)
         state = self._update_oxygen(state)
-        # Check round progression and update difficulty if needed
+        # Round progression handled by bars timeout now; keep no-op here
         state = self._update_round(state)
         # Handle life loss & soft reset if we died this frame
-        state, game_over = self._check_and_consume_life(state)
-        # Compute observation, reward, done, and info
-        observation = self._get_observation(state)
-        done = game_over
-        # Compute observation, reward, done, and info
+        state, _ = self._check_and_consume_life(state)
+
+        # Calculate per-step reward as score gain this frame
+        step_reward = (state.score - prev_state.score).astype(jnp.float32)
+        state = state._replace(reward=step_reward, fire_button_prev=fire_pressed)
+
+        # Build outputs
         observation = self._get_observation(state)
         done = self._get_done(state)
-        # Calculate reward as score gain in this step
-        new_reward = (state.score - prev_state.score).astype(jnp.float32)
-        state = state._replace(reward=new_reward, fire_button_prev=fire_pressed)
         all_rewards = self._get_all_reward(prev_state, state)
         info = self._get_info(state, all_rewards)
-        return observation, state, state.reward.astype(jnp.float32), done, info
+        return observation, state, step_reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: NameThisGameState, action: chex.Array) -> Tuple[
+        NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo
+    ]:
+        # carry = (state, total_reward, done_flag)
+        def body(i, carry):
+            st, total_r, done_flag = carry
+
+            def do_step(c):
+                st0, tr0, df0 = c
+                _obs_i, st1, r_i, done_i, _info_i = self._step_once(st0, action)
+                return (st1, tr0 + r_i, jnp.logical_or(df0, done_i))
+
+            # If already done, skip further updates (NOP)
+            return jax.lax.cond(done_flag, lambda c: c, do_step, (st, total_r, done_flag))
+
+        # run for exactly self.frameskip iterations, early-stopping via the cond above
+        init_carry = (state, jnp.array(0.0, jnp.float32), jnp.array(False, jnp.bool_))
+        state_fs, total_reward, _ = jax.lax.fori_loop(0, int(self.frameskip), body, init_carry)
+
+        # finalize outputs from the last state
+        obs_final = self._get_observation(state_fs)
+        done_final = self._get_done(state_fs)
+        # overwrite state's per-step reward field with the frameskipped sum
+        state_fs = state_fs._replace(reward=total_reward)
+        # compute custom rewards between original and final state (keeps your API)
+        all_rewards = self._get_all_reward(state, state_fs)
+        info_final = self._get_info(state_fs, all_rewards)
+        return obs_final, state_fs, total_reward, done_final, info_final
+
 
 # Keyboard control for manual play (optional utility functions)
 def get_human_action() -> chex.Array:
@@ -1454,7 +1484,7 @@ def main():
     game = JaxNameThisGame(config=config)
     renderer = Renderer_NameThisGame(config=config)
     jitted_reset = jax.jit(game.reset)
-    jitted_step = jax.jit(game.step)
+    jitted_step = game.step
     obs, state = jitted_reset()
     running = True
     frame_by_frame = False
