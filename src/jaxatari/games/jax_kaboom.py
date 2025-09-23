@@ -648,8 +648,24 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         """Take a step in the environment."""
         step_key = jax.random.PRNGKey(state.step_counter)
         step_key, next_state, reward, done, info = self.step_env(step_key, state, action)
+        
+        # Calculate all rewards for multi-reward logging
+        all_rewards = self._get_all_reward(state, next_state)
+        
+        # Update info with proper all_rewards
+        updated_info = KaboomInfo(
+            time=info.time,
+            all_rewards=all_rewards,
+            lives=info.lives,
+            score=info.score,
+            level=info.level,
+            bombs_caught=info.bombs_caught,
+            bomb_group=info.bomb_group,
+            bombs_in_group=info.bombs_in_group,
+        )
+        
         obs = self._get_observation(next_state)
-        return obs, next_state, reward, done, info
+        return obs, next_state, reward, done, updated_info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KaboomState) -> KaboomObservation:
@@ -768,6 +784,13 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: KaboomState, state: KaboomState) -> float:
         return (state.score - previous_state.score).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_all_reward(self, previous_state: KaboomState, state: KaboomState) -> jnp.ndarray:
+        """Return array of rewards for multi-reward logging."""
+        # Kaboom only has a single reward (score delta), so return a 1-element array
+        base_reward = (state.score - previous_state.score).astype(jnp.float32)
+        return jnp.array([base_reward])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: KaboomState) -> bool:
