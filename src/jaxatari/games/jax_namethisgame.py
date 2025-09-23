@@ -1495,6 +1495,18 @@ class JaxNameThisGame(
         """Episode ends only when `lives_remaining` reaches zero."""
         return state.lives_remaining <= 0
 
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: NameThisGameState) -> chex.Array:
+        """Render the given state to an HxWx3 uint8 RGB image.
+
+        Notes
+        -----
+        - Delegates to `Renderer_NameThisGame`.
+        - Marked as JIT with a static `self` arg so it can be composed in wrappers.
+        """
+        return self.renderer.render(state)
+
+
     # -------------------------- Step API -----------------------------------
 
     @partial(jax.jit, static_argnums=(0,))
