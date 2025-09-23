@@ -735,7 +735,7 @@ class AsterixRenderer(JAXGameRenderer):
         sprite_names = [
             'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT',
             'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT',
-            'OBELIX_LEFT', 'OBELIX_RIGHT', 'OBELIX_LEFT_HIT',
+            'OBELIX_LEFT', 'OBELIX_RIGHT', 'OBELIX_LEFT_HIT', 'OBELIX_RIGHT_HIT',
             'OBELIX_WAVE_SCREEN',
         ]
         asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
@@ -761,7 +761,7 @@ class AsterixRenderer(JAXGameRenderer):
         ]
         obelix_sprites_list = [
             sprites['OBELIX_LEFT'], sprites['OBELIX_RIGHT'],
-            sprites['OBELIX_LEFT_HIT'], sprites['OBELIX_LEFT']
+            sprites['OBELIX_LEFT_HIT'], sprites['OBELIX_RIGHT_HIT']
         ]
 
         # Gemeinsames Padding für beide Sprite-Listen
@@ -847,11 +847,10 @@ class AsterixRenderer(JAXGameRenderer):
         )
 
 
-        # ----------- LYRES -------------
+        # ----------- LYRES (Enemies) -------------
         lyre_left_sprite = jr.get_sprite_frame(self.sprites['LYRE_LEFT'], 0)
         lyre_right_sprite = jr.get_sprite_frame(self.sprites['LYRE_RIGHT'], 0)
 
-        # ----------- LYRES (Feinde) -------------
         def render_lyres(raster_to_update):
             def render_single_lyre(i, raster_inner):
                 is_alive = state.enemies.alive[i]
@@ -1091,14 +1090,15 @@ class AsterixRenderer(JAXGameRenderer):
         life_sprite = jax.lax.switch(
             state.player_direction - 1,
             [
-                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_LEFT'], 0),  # links
-                lambda _: jr.get_sprite_frame(self.sprites['ASTERIX_RIGHT'], 0),  # rechts
+                lambda _: player_sprites[0],  # LEFT (gepaddet)
+                lambda _: player_sprites[1],  # RIGHT (gepaddet)
             ],
             None
         )
-        life_width = life_sprite.shape[1]
-        life_height = life_sprite.shape[0]
-        lives_spacing = 8  # Abstand zwischen den Leben
+
+        life_width = jnp.int32(self.consts.player_width)
+        lives_spacing = jnp.int32(8)  # Abstand zwischen den Leben
+
         total_lives_width = jnp.where(
             num_lives_to_draw > 0,
             num_lives_to_draw * life_width + (num_lives_to_draw - 1) * lives_spacing,
