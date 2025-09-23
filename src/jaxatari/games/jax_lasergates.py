@@ -352,12 +352,31 @@ class EntityPosition(NamedTuple):
     active: jnp.ndarray
 
 class LaserGatesObservation(NamedTuple):
+    # Player + Player Missile
     player: EntityPosition
-    # enemy1
-    # enemy2: EntityPosition
-    # ...: EntityPosition
-    # ...: EntityPosition
-    # TODO: fill
+    player_missile: EntityPosition
+
+    # Single-entity enemies (+ missiles)
+    radar_mortar: EntityPosition
+    radar_mortar_missile: EntityPosition
+    byte_bat: EntityPosition
+    rock_muncher: EntityPosition
+    rock_muncher_missile: EntityPosition
+    homing_missile: EntityPosition
+
+    # Forcefields: up to 3 Pairs (upper/lower)
+    forcefield_0_upper: EntityPosition
+    forcefield_0_lower: EntityPosition
+    forcefield_1_upper: EntityPosition
+    forcefield_1_lower: EntityPosition
+    forcefield_2_upper: EntityPosition
+    forcefield_2_lower: EntityPosition
+
+    # Densepack, Detonator, Energy Pod
+    densepack: EntityPosition
+    detonator: EntityPosition
+    energy_pod: EntityPosition
+
 
 class LaserGatesInfo(NamedTuple):
     # difficulty: jnp.ndarray # add if necessary
@@ -574,11 +593,6 @@ def load_sprites():
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
 
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: LaserGatesState) -> jnp.ndarray:
-        """Render the game state to a raster image."""
-        return self.renderer.render(state)
-
     def __init__(self, consts: LaserGatesConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
         consts = consts or LaserGatesConstants()
         super().__init__(consts)
@@ -607,8 +621,16 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 5 * 5 * 5 * 5 # TODO
+        self.num_obs_slots = 17
+        self.features_per_slot = 5  # x, y, w, h, active
+        self.obs_size = self.num_obs_slots * self.features_per_slot
         self.renderer = LaserGatesRenderer()
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: LaserGatesState) -> jnp.ndarray:
+        img = self.renderer.render(state)
+        img = jnp.clip(img, 0, 255)
+        return img.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def maybe_initialize_random_entity(self, entities, state):
@@ -1988,31 +2010,162 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    @partial(jax.jit, static_argnums=(0, ))
-    def _get_observation(self, state: LaserGatesState) -> LaserGatesObservation:
-        # TODO: fill
-        player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
-            width=jnp.array(0),
-            height=jnp.array(0), # TODO: Import sizes
-            active=jnp.array(1),
+    @staticmethod
+    @jax.jit
+    def _f32(x):
+        return jnp.asarray(x, jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _make_ep(self, x, y, w, h, active_bool):
+        """EntityPosition with float32 und active ∈ {0.0, 1.0}."""
+        active = jnp.where(active_bool, jnp.float32(1.0), jnp.float32(0.0))
+        return EntityPosition(
+            x=self._f32(x),
+            y=self._f32(y),
+            width=self._f32(w),
+            height=self._f32(h),
+            active=active,
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _masked_ep(self, x, y, w, h, active_bool):
+        """Like _make_ep, but null values if inactive."""
+        ep = self._make_ep(x, y, w, h, active_bool)
+        ax = ep.active
+        return EntityPosition(
+            x=ep.x * ax, y=ep.y * ax, width=ep.width * ax, height=ep.height * ax, active=ax
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: LaserGatesState) -> LaserGatesObservation:
+        c = self.consts
+
+        # --- Player ---
+        player = self._masked_ep(
+            state.player_x, state.player_y,
+            c.PLAYER_SIZE[0], c.PLAYER_SIZE[1],
+            jnp.bool_(True)
+        )
+
+        # --- Player missile ---
+        pm_alive = state.player_missile.direction != 0
+        player_missile = self._masked_ep(
+            state.player_missile.x, state.player_missile.y,
+            c.PLAYER_MISSILE_SIZE[0], c.PLAYER_MISSILE_SIZE[1],
+            pm_alive
+        )
+
+        # --- Radar mortar (+ missile) ---
+        rm = state.entities.radar_mortar_state
+        rm_active = jnp.logical_and(rm.is_in_current_event, rm.is_alive)
+        radar_mortar = self._masked_ep(
+            rm.x, rm.y, c.RADAR_MORTAR_SIZE[0], c.RADAR_MORTAR_SIZE[1], rm_active
+        )
+        rm_missile_active = jnp.logical_and(
+            rm.is_in_current_event,
+            jnp.logical_and(rm.missile_x != 0, rm.missile_y != 0)
+        )
+        radar_mortar_missile = self._masked_ep(
+            rm.missile_x, rm.missile_y, c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], rm_missile_active
+        )
+
+        # --- Byte bat ---
+        bb = state.entities.byte_bat_state
+        bb_active = jnp.logical_and(bb.is_in_current_event, bb.is_alive)
+        byte_bat = self._masked_ep(
+            bb.x, bb.y, c.BYTE_BAT_SIZE[0], c.BYTE_BAT_SIZE[1], bb_active
+        )
+
+        # --- Rock muncher (+ missile) ---
+        rmu = state.entities.rock_muncher_state
+        rmu_active = jnp.logical_and(rmu.is_in_current_event, rmu.is_alive)
+        rock_muncher = self._masked_ep(
+            rmu.x, rmu.y, c.ROCK_MUNCHER_SIZE[0], c.ROCK_MUNCHER_SIZE[1], rmu_active
+        )
+        rmu_missile_active = jnp.logical_and(
+            rmu.is_in_current_event,
+            jnp.logical_and(rmu.missile_x != 0, rmu.missile_y != 0)
+        )
+        rock_muncher_missile = self._masked_ep(
+            rmu.missile_x, rmu.missile_y, c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], rmu_missile_active
+        )
+
+        # --- Homing missile ---
+        hm = state.entities.homing_missile_state
+        hm_active = jnp.logical_and(hm.is_in_current_event, hm.is_alive)
+        homing_missile = self._masked_ep(
+            hm.x, hm.y, c.HOMING_MISSILE_SIZE[0], c.HOMING_MISSILE_SIZE[1], hm_active
+        )
+
+        # --- Forcefields (bis zu 3 Paare upper/lower) ---
+        ff = state.entities.forcefield_state
+        ff_base_active = jnp.logical_and(ff.is_in_current_event, ff.is_alive)
+        is_flashing = jnp.logical_and(jnp.logical_not(ff.is_flexing), jnp.logical_not(ff.is_fixed))
+        ff_visible = jnp.logical_or(jnp.logical_not(is_flashing), ff.flash_on)
+        ff_col_active = lambda idx_lt_num: jnp.logical_and(ff_base_active, jnp.logical_and(ff_visible, idx_lt_num))
+        ff_w = jnp.where(ff.is_wide, c.FORCEFIELD_WIDE_SIZE[0], c.FORCEFIELD_SIZE[0])
+        ff_h = c.FORCEFIELD_SIZE[1]
+
+        # column 0 (x0/y0 upper, x1/y1 lower)
+        ff0_u = self._masked_ep(ff.x0, ff.y0, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 0))
+        ff0_l = self._masked_ep(ff.x1, ff.y1, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 0))
+
+        # column 1 (x2/y2 upper, x3/y3 lower)
+        ff1_u = self._masked_ep(ff.x2, ff.y2, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 1))
+        ff1_l = self._masked_ep(ff.x3, ff.y3, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 1))
+
+        # column 2 (x4/y4 upper, x5/y5 lower)
+        ff2_u = self._masked_ep(ff.x4, ff.y4, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
+        ff2_l = self._masked_ep(ff.x5, ff.y5, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
+
+        # --- Densepack ---
+        dp = state.entities.dense_pack_state
+        dp_active = jnp.logical_and(dp.is_in_current_event, dp.is_alive)
+        dp_w = jnp.where(dp.is_wide, c.DENSEPACK_WIDE_PART_SIZE[0], c.DENSEPACK_NORMAL_PART_SIZE[0])
+        dp_h = dp.number_of_parts * c.DENSEPACK_NORMAL_PART_SIZE[1]
+        densepack = self._masked_ep(dp.x, dp.upmost_y, dp_w, dp_h, dp_active)
+
+        # --- Detonator ---
+        dn = state.entities.detonator_state
+        dn_active = jnp.logical_and(dn.is_in_current_event, dn.is_alive)
+        detonator = self._masked_ep(dn.x, dn.y, c.DETONATOR_SIZE[0], c.DETONATOR_SIZE[1], dn_active)
+
+        # --- Energy pod ---
+        ep = state.entities.energy_pod_state
+        ep_active = jnp.logical_and(ep.is_in_current_event, ep.is_alive)
+        energy_pod = self._masked_ep(ep.x, ep.y, c.ENERGY_POD_SIZE[0], c.ENERGY_POD_SIZE[1], ep_active)
 
         return LaserGatesObservation(
             player=player,
+            player_missile=player_missile,
+            radar_mortar=radar_mortar,
+            radar_mortar_missile=radar_mortar_missile,
+            byte_bat=byte_bat,
+            rock_muncher=rock_muncher,
+            rock_muncher_missile=rock_muncher_missile,
+            homing_missile=homing_missile,
+            forcefield_0_upper=ff0_u,
+            forcefield_0_lower=ff0_l,
+            forcefield_1_upper=ff1_u,
+            forcefield_1_lower=ff1_l,
+            forcefield_2_upper=ff2_u,
+            forcefield_2_lower=ff2_l,
+            densepack=densepack,
+            detonator=detonator,
+            energy_pod=energy_pod,
         )
 
-    @partial(jax.jit, static_argnums=(0, ))
-    def _get_info(self, state: LaserGatesState, all_rewards: jnp.ndarray) -> LaserGatesInfo:
-        # TODO: fill
+    def _get_info(self, state: LaserGatesState, all_rewards: jnp.ndarray | None = None) -> LaserGatesInfo:
+        if all_rewards is None:
+            n = 0 if self.reward_funcs is None else len(self.reward_funcs)
+            all_rewards = jnp.zeros((n,), dtype=jnp.float32)
         return LaserGatesInfo(
             step_counter=state.step_counter,
             all_rewards=all_rewards,
         )
 
-    @jax.jit
-    def _get_env_reward(self, previous_state: LaserGatesState, state: LaserGatesState) -> jnp.ndarray:
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: LaserGatesState, state: LaserGatesState) -> jnp.ndarray:
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2022,9 +2175,90 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
         return rewards
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: LaserGatesState) -> bool:
         return state.shields <= 0
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
+            dtype=jnp.uint8,
+        )
+
+    def _scalar_box(self, low, high):
+        # Skalar-Box (shape=()) für Dict-Blätter, float32
+        return spaces.Box(
+            low=jnp.array(low, dtype=jnp.float32),
+            high=jnp.array(high, dtype=jnp.float32),
+            shape=(),
+            dtype=jnp.float32,
+        )
+
+    def _entity_space(self) -> spaces.Dict:
+        # Grenzen großzügig wählen: x,y dürfen <0 sein (Offscreen), active ∈ [0,1]
+        x_box = self._scalar_box(-self.consts.WIDTH, 2 * self.consts.WIDTH)
+        y_box = self._scalar_box(-self.consts.HEIGHT, 2 * self.consts.HEIGHT)
+        w_box = self._scalar_box(0.0, float(self.consts.WIDTH))
+        h_box = self._scalar_box(0.0, float(self.consts.HEIGHT))
+        a_box = self._scalar_box(0.0, 1.0)
+        return spaces.Dict({
+            "x": x_box, "y": y_box, "width": w_box, "height": h_box, "active": a_box
+        })
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "player": self._entity_space(),
+            "player_missile": self._entity_space(),
+            "radar_mortar": self._entity_space(),
+            "radar_mortar_missile": self._entity_space(),
+            "byte_bat": self._entity_space(),
+            "rock_muncher": self._entity_space(),
+            "rock_muncher_missile": self._entity_space(),
+            "homing_missile": self._entity_space(),
+            "forcefield_0_upper": self._entity_space(),
+            "forcefield_0_lower": self._entity_space(),
+            "forcefield_1_upper": self._entity_space(),
+            "forcefield_1_lower": self._entity_space(),
+            "forcefield_2_upper": self._entity_space(),
+            "forcefield_2_lower": self._entity_space(),
+            "densepack": self._entity_space(),
+            "detonator": self._entity_space(),
+            "energy_pod": self._entity_space(),
+        })
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
+        def row(ep: EntityPosition):
+            # Alle Felder sind bereits float32 in _make_ep/_masked_ep
+            return jnp.array([ep.x, ep.y, ep.width, ep.height, ep.active], dtype=jnp.float32)
+
+        rows = jnp.stack([
+            row(obs.player),
+            row(obs.player_missile),
+            row(obs.radar_mortar),
+            row(obs.radar_mortar_missile),
+            row(obs.byte_bat),
+            row(obs.rock_muncher),
+            row(obs.rock_muncher_missile),
+            row(obs.homing_missile),
+            row(obs.forcefield_0_upper),
+            row(obs.forcefield_0_lower),
+            row(obs.forcefield_1_upper),
+            row(obs.forcefield_1_lower),
+            row(obs.forcefield_2_upper),
+            row(obs.forcefield_2_lower),
+            row(obs.densepack),
+            row(obs.detonator),
+            row(obs.energy_pod),
+        ], axis=0)  # (num_slots, 5)
+        return rows
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
+        mat = self.obs_to_array(obs)  # (num_slots, 5)
+        return jnp.reshape(mat, (self.obs_size,))  # float32-Vektor
 
     @partial(jax.jit, static_argnums=(0, ))
     def reset(self, key = jax.random.PRNGKey(42)) -> Tuple[LaserGatesObservation, LaserGatesState]:
