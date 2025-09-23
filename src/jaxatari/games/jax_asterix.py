@@ -32,10 +32,12 @@ class AsterixConstants(NamedTuple):
     cooldown_frames: int = 8 # Cooldown frames for lane changes
     hit_frames: int = 100 # Anzahl Frames, die das Hit-Sprite angezeigt wird
     respawn_frames: int = 240 # Anzahl Frames, bis der Spieler nach einem hit respawned wird.
+    character_transition_frames:int = 240 # Anzahl Frames in denen Obelix wave angezeigt wird
     num_lives: int = 3 # Anzahl der Leben
     max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
     entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
-    entity_character_speed_factor : float = 0.7 # Speed-Faktor pro Charakterstufe (Asterix=0, Obelix=1)
+    entity_character_speed_factor : float = 0.7 # Speed-Faktor der Gegner und Collectibles pro Charakterstufe (Asterix=0, Obelix=1)
+    player_character_speed_factor : float = 0.5 # Speed-Faktor des Spielers pro Charakterstufe (Asterix=0, Obelix=1)
     ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
     OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
@@ -94,6 +96,7 @@ class AsterixState(NamedTuple):
     hit_timer: chex.Array # Zählt Frames herunter, in denen Hit-Sprite angezeigt wird
     respawn_timer: chex.Array # Zählt Frames herunter, bis Respawn nach Hit erfolgt
     score_popups: ScorePopup # Score Popups nach einsammeln eines Collectibles
+    character_transition_timer: chex.Array # Timer für Charakterwechsel Animation
 
 
 class EntityPosition(NamedTuple):
@@ -165,7 +168,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(0, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(32400, dtype=jnp.int32), # Start with 0 points
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -182,7 +185,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             collect_spawn_timer=collect_spawn_timer,
             hit_timer=jnp.array(0, dtype=jnp.int32),
             respawn_timer = jnp.array(0, dtype=jnp.int32),
-            score_popups = score_popups
+            score_popups = score_popups,
+            character_transition_timer = jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -211,8 +215,19 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         dy = dy_table[mapped]
         action = mapped
 
+        speed_multiplier = 1.0 + state.character_id.astype(jnp.float32) * jnp.float32(
+            self.consts.player_character_speed_factor)
+        # Skaliertes dx als Float
+        float_dx = dx.astype(jnp.float32) * speed_multiplier
+        # Symmetrisch runden und mind. 1 Pixel bewegen, wenn dx != 0
+        int_dx = jnp.where(
+            dx == 0,
+            jnp.int32(0),
+            jnp.int32(jnp.sign(float_dx) * jnp.maximum(1.0, jnp.floor(jnp.abs(float_dx) + 0.5)))
+        )
+
         # Pause-Status
-        paused = state.respawn_timer > 0
+        paused = (state.respawn_timer > 0) | (state.character_transition_timer > 0)
 
         # Lane-Wechsel nur wenn nicht pausiert
         stage_move = jnp.where(dy < 0, -1, jnp.where(dy > 0, 1, 0))
@@ -223,8 +238,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         # Seitliche Begrenzung
         stage_left_x = (self.consts.screen_width - self.renderer.sprites['STAGE'][0].shape[1]) // 2
         stage_right_x = stage_left_x + self.renderer.sprites['STAGE'][0].shape[1]
+
+        # Seitliche Bewegung nur wenn nicht pausiert
         computed_player_x = jnp.clip(
-            state.player_x + jnp.where(paused, 0, dx),
+            state.player_x + jnp.where(paused, jnp.int32(0), int_dx),
             stage_left_x,
             stage_right_x - self.consts.player_width,
         ).astype(jnp.int32)
@@ -449,6 +466,37 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         new_collect_type_index = jnp.where(paused, state.collect_type_index, jnp.where(switch_to_obelix, jnp.int32(0), end_type_idx))
         new_collect_type_count = jnp.where(paused, state.collect_type_count, jnp.where(switch_to_obelix, jnp.int32(0), end_type_count))
 
+        # Übergangs-Timer setzen bzw. herunterzählen
+        transition_frames = jnp.int32(self.consts.character_transition_frames)
+        new_transition_timer = jnp.where(
+            switch_to_obelix,
+            transition_frames,
+            jnp.maximum(state.character_transition_timer - 1, 0)
+        )
+
+        # Alle Entitäten beim Start der Obelix-Wave entfernen
+        def _clear_entities(_):
+            cleared_enemies = enemies._replace(
+                x=jnp.full_like(enemies.x, -9999.0),
+                y=jnp.full_like(enemies.y, -9999.0),
+                vx=jnp.zeros_like(enemies.vx),
+                alive=jnp.zeros_like(enemies.alive),
+            )
+            cleared_collectibles = collectibles._replace(
+                x=jnp.full_like(collectibles.x, -9999.0),
+                y=jnp.full_like(collectibles.y, -9999.0),
+                vx=jnp.zeros_like(collectibles.vx),
+                alive=jnp.zeros_like(collectibles.alive),
+            )
+            return cleared_enemies, cleared_collectibles
+
+        enemies, collectibles = jax.lax.cond(
+            switch_to_obelix,
+            _clear_entities,
+            lambda _: (enemies, collectibles),
+            operand=None
+        )
+
         # Bonus/Leben
         bonus_thresholds = jnp.array([10_000, 30_000, 50_000, 80_000, 110_000], dtype=jnp.int32)
         bonus_interval = 40_000
@@ -553,6 +601,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             hit_timer=new_hit_timer,
             respawn_timer=new_respawn_timer,
             score_popups=score_popups,
+            character_transition_timer =new_transition_timer,
         )
 
         done = self._get_done(new_state)
@@ -687,6 +736,7 @@ class AsterixRenderer(JAXGameRenderer):
             'ASTERIX_LEFT', 'ASTERIX_RIGHT', 'ASTERIX_LEFT_HIT', 'ASTERIX_RIGHT_HIT',
             'STAGE', 'TOP', 'BOTTOM', 'LYRE_LEFT', 'LYRE_RIGHT',
             'OBELIX_LEFT', 'OBELIX_RIGHT', 'OBELIX_LEFT_HIT',
+            'OBELIX_WAVE_SCREEN',
         ]
         asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
         obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG', 'CAULDRON']
@@ -1076,6 +1126,22 @@ class AsterixRenderer(JAXGameRenderer):
             render_lives,
             lambda r: r,
             raster
+        )
+
+        # ----------- CHARACTER TRANSITION -------------
+        # Übergangsbild berechnen und ggf. auswählen
+        def draw_obelix_wave(_):
+            base = jnp.zeros((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8)
+            wave = jr.get_sprite_frame(self.sprites['OBELIX_WAVE_SCREEN'], 0)
+            x = (self.consts.screen_width - wave.shape[1]) // 2
+            y = (self.consts.screen_height - wave.shape[0]) // 2
+            return jr.render_at(base, x, y, wave)
+
+        raster = jax.lax.cond(
+            state.character_transition_timer > 0,
+            draw_obelix_wave,
+            lambda _: raster,
+            operand=None
         )
 
 
