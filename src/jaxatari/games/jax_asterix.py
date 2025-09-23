@@ -117,7 +117,7 @@ class AsterixInfo(NamedTuple):
 
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
-    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None, obts_type: str = "rgb"):
         if consts is None:
             consts = AsterixConstants()
         super().__init__(consts)
@@ -125,8 +125,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         # self.state = self.reset() OLD
+
         self.renderer = AsterixRenderer()
-        self.obs_type = "rgb"  # "rgb", "ram", "grayscale"
+        self.obs_type = obs_type  # "rgb", "ram", "grayscale", 'object'
+
         _, self.state = self.reset()  # Initial state
 
 
@@ -615,26 +617,27 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsterixState):
-        # Liefere bei RGB direkt das gerenderte Bild (uint8, HWC)
+        if self.obs_type == "object":
+            player = EntityPosition(
+                x=state.player_x.astype(jnp.int32),
+                y=state.player_y.astype(jnp.int32),
+                width=jnp.array(self.consts.player_width, dtype=jnp.int32),
+                height=jnp.array(self.consts.player_height, dtype=jnp.int32),
+            )
+            return AsterixObservation(player=player)
+
+        # Pixelvarianten
         if self.obs_type == "rgb":
             return self.renderer.render(state)
         elif self.obs_type == "grayscale":
             rgb = self.renderer.render(state)
-            # einfache Luma-Approximation: Mittelwert -> uint8
             gray = jnp.mean(rgb.astype(jnp.float32), axis=2).astype(jnp.uint8)
             return gray
         elif self.obs_type == "ram":
-            # Platzhalter-RAM; optional anpassen, falls benötigt
             return jnp.zeros((128,), dtype=jnp.uint8)
         else:
-            # Fallback: alte strukturierte Beobachtung (wird in den aktuellen Tests nicht verwendet)
-            player = EntityPosition(
-                x=state.player_x,
-                y=state.player_y,
-                width=jnp.array(self.consts.player_width, dtype=jnp.int32),
-                height=jnp.array(self.consts.player_height, dtype=jnp.int32),
-            )
-            return AsterixObservation(player=player) # TODO ggf. entfernen
+            # Fallback: wie rgb
+            return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AsterixState, all_rewards: chex.Array = None) -> AsterixInfo:
@@ -673,15 +676,26 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return spaces.Discrete(9)
 
     def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        #Returns the observation space for Asterix.
+        # Objektzentrierter Space als Dict
+        if self.obs_type == "object":
+            return spaces.Dict({
+                "player": spaces.Dict({
+                    "x": spaces.Box(low=0, high=self.consts.screen_width - 1, shape=(), dtype=jnp.int32),
+                    "y": spaces.Box(low=0, high=self.consts.screen_height - 1, shape=(), dtype=jnp.int32),
+                    "width": spaces.Box(low=0, high=self.consts.player_width, shape=(), dtype=jnp.int32),
+                    "height": spaces.Box(low=0, high=self.consts.player_height, shape=(), dtype=jnp.int32),
+                })
+            })
+
+        # Pixelräume
         if self.obs_type == "rgb":
             return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
-        elif self.obs_type == "ram":
-            return spaces.Box(low=0, high=255, shape=(128,), dtype=jnp.uint8)
         elif self.obs_type == "grayscale":
             return spaces.Box(low=0, high=255, shape=(210, 160), dtype=jnp.uint8)
+        elif self.obs_type == "ram":
+            return spaces.Box(low=0, high=255, shape=(128,), dtype=jnp.uint8)
         else:
-            raise ValueError(f"Unknown obs_type: {self.obs_type}")
+            return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
 
     """
         def observation_space(self) -> spaces.Dict: # TODO kann entfernt werden? wird nicht verwendet / benötigt
@@ -717,8 +731,17 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return self.renderer.render(state)
 
     def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray: # TODO kann entfernt werden? wird nicht verwendet / benötigt
-        """Convert the observation to a flat array."""
-        return jnp.reshape(obs, (-1,))
+        # Flacht Pixelbeobachtungen ab; bei objektzentriert auf Vektor der Player-Attribute abbilden
+        if isinstance(obs, jnp.ndarray):
+            return jnp.reshape(obs, (-1,))
+        if isinstance(obs, AsterixObservation):
+            return jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height], dtype=jnp.int32)
+        # Fallback: best effort
+        try:
+            return jnp.reshape(jnp.asarray(obs), (-1,))
+        except Exception:
+            return jnp.zeros((0,), dtype=jnp.int32)
+
         """ OLD
         return jnp.array([
             obs.player.x,
