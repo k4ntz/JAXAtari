@@ -43,16 +43,16 @@ class GalaxianConstants():
     SHOOTING_COOLDOWN: int = 0 #TODO set back to 80 before merge
     BULLET_MOVE_SPEED: int = 5
     LIVES: int = 2
-    PLAYER_DEATH_DELAY: int = 50
+    PLAYER_RESPAWN_TIME: int = 16
     PLAYER_BULLET_Y_OFFSET: int = 3
     PLAYER_BULLET_X_OFFSET: int = 3
     # -------- Grid constants --------
     GRID_ROWS: int = 6
     GRID_COLS: int = 7
-    ENEMY_SPACING_X: int = 14
+    ENEMY_SPACING_X: int = 16
     ENEMY_SPACING_Y: int = 11
     ENEMY_GRID_Y: int = 80
-    ENEMY_MOVE_SPEED: int = 0.5
+    ENEMY_MOVE_FRAMES: int = 16
     PURPLE_ROW: int = 3
     RED_ROW: int = 4
     WHITE_ROW: int = 5
@@ -74,6 +74,13 @@ class GalaxianConstants():
     MAX_SHOTS_PER_VOLLEY: int = 4
     VOLLEY_SHOT_DELAY: int = 10
     VOLLEY_PROBABILITIES: chex.Array = jnp.array([0.4, 0.3, 0.2, 0.1])
+    # -------- Sprite sizes --------
+    ENEMY_HEIGHT: int = 9
+    ENEMY_WIDTH: int = 6
+    ENEMY_ATTACK_HEIGHT: int = 10
+    ENEMY_ATTACK_WIDTH: int = 8
+    PLAYER_HEIGHT: int = 14
+    PLAYER_WIDTH: int = 8
     # -------- SCORE constants --------
     SCORES: chex.Array = jnp.array([30]*3+[40,50,60])
     DIVE_MULTIPLIER: int = 2
@@ -102,7 +109,7 @@ class GalaxianConstants():
         [1,1,1,1,1,1,1],
         [1,1,1,1,1,1,1],
         [1,1,1,1,1,1,1],
-        [1,1,1,1,1,1,1],
+        [0,1,1,1,1,1,0],
         [0,0,1,0,1,0,0],
     ]).astype(jnp.float32)
 
@@ -111,7 +118,7 @@ class GalaxianConstants():
         [0,0,0,0,0,0,0],
         [0,0,0,0,0,0,0],
         [0,0,0,0,0,0,0],
-        [1,1,1,1,1,1,1],
+        [0,1,1,1,1,1,0],
         [0,0,1,0,1,0,0],
     ]).astype(jnp.float32)
 
@@ -143,11 +150,13 @@ class GalaxianState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_shooting_cooldown: chex.Array
+    player_respawn_timer: chex.Array
     bullet_x: chex.Array
     bullet_y: chex.Array
     enemy_grid_x: chex.Array
     enemy_grid_y: chex.Array
     enemy_grid_state: chex.Array   # 0: dead, 1: alive, 2: attacking, 3: supporting
+    enemy_grid_move_frames: chex.Array
     enemy_death_frame_grid: chex.Array
     enemy_death_frame_attack: chex.Array
     enemy_death_frame_support: chex.Array # 0 = not-dying, 1–5 = which death sprite to show
@@ -200,7 +209,7 @@ def update_player_position(state: GalaxianState, action) -> GalaxianState:
     # rohe neue X-Position
     new_x = jnp.where(
         state.player_alive == True,
-        state.player_x + (press_right * 5) - (press_left * 5),
+        state.player_x + (press_right) - (press_left),
         state.player_x
     )
 
@@ -211,7 +220,17 @@ def update_player_position(state: GalaxianState, action) -> GalaxianState:
 @jax.jit
 def update_enemy_positions(state: GalaxianState) -> GalaxianState:
 
-    new_x = state.enemy_grid_x + GalaxianConstants.ENEMY_MOVE_SPEED * state.enemy_grid_direction
+    new_move_frames = jnp.where(
+        state.enemy_grid_move_frames < GalaxianConstants.ENEMY_MOVE_FRAMES,
+        state.enemy_grid_move_frames+1,
+        0,
+    )
+
+    new_x = jnp.where(
+        new_move_frames == GalaxianConstants.ENEMY_MOVE_FRAMES,
+        state.enemy_grid_x + 1 * state.enemy_grid_direction,
+        state.enemy_grid_x,
+    )
 
     # clamp auf [LEFT, RIGHT]
     new_x = jnp.clip(new_x, GalaxianConstants.ENEMY_LEFT_BOUND, GalaxianConstants.ENEMY_RIGHT_BOUND)
@@ -223,6 +242,7 @@ def update_enemy_positions(state: GalaxianState) -> GalaxianState:
                         jnp.where(hit_right, -1, state.enemy_grid_direction))
 
     return state._replace(
+        enemy_grid_move_frames=new_move_frames,
         enemy_grid_x=new_x,
         enemy_grid_direction=new_dir
     )
@@ -869,43 +889,6 @@ def update_player_bullet(state: GalaxianState, action: chex.Array) -> GalaxianSt
         state
     )
 
-
-@jax.jit
-def bullet_collision(state: GalaxianState) -> GalaxianState:
-    x_diff = jnp.abs(state.bullet_x - state.enemy_grid_x)
-    y_diff = jnp.abs(state.bullet_y - state.enemy_grid_y)
-
-    mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_grid_state == 1)
-    hit  = jnp.any(mask)
-
-    def process_hit(s_and_idx):
-        s, (rows, cols) = s_and_idx
-        hit_rows = rows[0] # first hit
-        hit_cols = cols[0]
-        # setze alle getroffenen auf dead
-        new_death = s.enemy_death_frame_grid.at[hit_rows, hit_cols].set(1)
-
-        new_alive = s.enemy_grid_state.at[hit_rows, hit_cols].set(GalaxianConstants.DEAD)
-        return s._replace(
-            enemy_grid_state=new_alive,
-            enemy_death_frame_grid=new_death,
-            bullet_x=-1.0, bullet_y=-1.0,
-            score=s.score + GalaxianConstants.SCORES[hit_rows]
-        )
-
-    def no_hit(state_and_idx):
-        state, _ = state_and_idx
-        return state
-
-    max_size = state.enemy_grid_state.size
-    collision_indices = jnp.where(mask, size=max_size, fill_value=-1)
-    hit_rows = collision_indices[0]
-    hit_cols = collision_indices[1]
-
-    return lax.cond(hit,
-                    process_hit,
-                    no_hit,
-                    (state, (hit_rows, hit_cols)))
 @jax.jit
 def update_enemy_death_frames(state: GalaxianState) -> GalaxianState:
     def advance_cell(frame):
@@ -945,76 +928,99 @@ def update_player_death_frames(state: GalaxianState) -> GalaxianState:
     return state
 
 @jax.jit
-def bullet_collision_attack(state: GalaxianState) -> GalaxianState:
-    # Abstände
-    x_diff = jnp.abs(state.bullet_x - state.enemy_attack_x)
-    y_diff = jnp.abs(state.bullet_y - state.enemy_attack_y)
-    # Kollisionsmaske: innerhalb 10px und aktuell angreifend (state 1)
-    mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_states == 1)
-    hit = jnp.any(mask) & state.player_alive
+def bullet_collision(state: GalaxianState) -> GalaxianState:
+    # Kollision mit Feinden im Gitter
+    x_diff_grid = jnp.abs(state.bullet_x - (state.enemy_grid_x+GalaxianConstants.ENEMY_WIDTH/2))
+    y_diff_grid = jnp.abs(state.bullet_y - (state.enemy_grid_y+GalaxianConstants.ENEMY_HEIGHT/2))
+    mask_grid = (x_diff_grid <= GalaxianConstants.ENEMY_WIDTH/2) & (y_diff_grid <= GalaxianConstants.ENEMY_HEIGHT/2) & (state.enemy_grid_state == GalaxianConstants.GRID)
+    hit_grid = jnp.any(mask_grid)
 
-    def process_hit(state: GalaxianState) -> GalaxianState:
-        hit_indices = jnp.where(mask, size=GalaxianConstants.MAX_DIVERS, fill_value=-1)[0]
+    # Kollision mit angreifenden Feinden
+    x_diff_attack = jnp.abs(state.bullet_x - (state.enemy_attack_x+GalaxianConstants.ENEMY_ATTACK_WIDTH/2))
+    y_diff_attack = jnp.abs(state.bullet_y - (state.enemy_attack_y+GalaxianConstants.ENEMY_ATTACK_HEIGHT/2))
+    mask_attack = (x_diff_attack <= GalaxianConstants.ENEMY_ATTACK_WIDTH/2) & (y_diff_attack <= GalaxianConstants.ENEMY_ATTACK_HEIGHT/2) & (state.enemy_attack_states == GalaxianConstants.ATTACK)
+    hit_attack = jnp.any(mask_attack) & state.player_alive
+
+    # Kollision mit Unterstützern
+    x_diff_support = jnp.abs(state.bullet_x - (state.enemy_support_x+GalaxianConstants.ENEMY_ATTACK_WIDTH/2))
+    y_diff_support = jnp.abs(state.bullet_y - (state.enemy_support_y+GalaxianConstants.ENEMY_ATTACK_HEIGHT/2))
+    mask_support = (x_diff_support <= GalaxianConstants.ENEMY_ATTACK_WIDTH/2) & (y_diff_support <= GalaxianConstants.ENEMY_ATTACK_HEIGHT/2) & (state.enemy_support_states == GalaxianConstants.ATTACK)
+    hit_support = jnp.any(mask_support) & state.player_alive
+
+    # Treffer-Verarbeitung für Gitter-Feinde
+    def process_hit_grid(state):
+        collision_indices = jnp.where(mask_grid, size=state.enemy_grid_state.size, fill_value=-1)
+        hit_rows = collision_indices[0]
+        hit_cols = collision_indices[1]
+        hit_row = hit_rows[0]  # erster Treffer
+        hit_col = hit_cols[0]
+
+        new_death = state.enemy_death_frame_grid.at[hit_row, hit_col].set(1)
+        new_alive = state.enemy_grid_state.at[hit_row, hit_col].set(GalaxianConstants.DEAD)
+
+        return state._replace(
+            enemy_grid_state=new_alive,
+            enemy_death_frame_grid=new_death,
+            bullet_x=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
+            bullet_y=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
+            score=state.score + GalaxianConstants.SCORES[hit_row]
+        )
+
+    # Treffer-Verarbeitung für angreifende Feinde
+    def process_hit_attack(state):
+        hit_indices = jnp.where(mask_attack, size=GalaxianConstants.MAX_DIVERS, fill_value=GalaxianConstants.ERROR_VALUE)[0]
         hit_idx = hit_indices[0]
         pos = state.enemy_attack_pos[hit_idx]
         new_grid = state.enemy_grid_state.at[tuple(pos)].set(GalaxianConstants.DEAD)
         new_death = state.enemy_death_frame_attack.at[hit_idx].set(1)
-
         new_attack_states = state.enemy_attack_states.at[hit_idx].set(GalaxianConstants.DYING)
+
+        score_row = pos[0]
+        score_multiplier = jnp.where(state.enemy_attack_states[hit_idx] == GalaxianConstants.ATTACK,
+                                    GalaxianConstants.DIVE_MULTIPLIER, 1)
 
         return state._replace(
             enemy_grid_state=new_grid,
             enemy_death_frame_attack=new_death,
-            bullet_x=jnp.array(-1.0, dtype=state.bullet_x.dtype),
-            bullet_y=jnp.array(-1.0, dtype=state.bullet_y.dtype),
+            bullet_x=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
+            bullet_y=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
             enemy_attack_states=new_attack_states,
-            score=state.score + GalaxianConstants.SCORES[pos[0]] * GalaxianConstants.DIVE_MULTIPLIER
+            score=state.score + GalaxianConstants.SCORES[score_row] * score_multiplier
         )
 
-    def no_hit(state: GalaxianState) -> GalaxianState:
-        return state
-
-    return lax.cond(hit, process_hit, no_hit, state)
-
-def bullet_collision_support(state: GalaxianState) -> GalaxianState:
-    # Abstände
-    x_diff = jnp.abs(state.bullet_x - state.enemy_support_x)
-    y_diff = jnp.abs(state.bullet_y - state.enemy_support_y)
-    # Kollisionsmaske: innerhalb 10px und aktuell angreifend (state 1)
-    mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_support_states == 1)
-    hit = jnp.any(mask) & state.player_alive
-
-    def process_hit(state: GalaxianState) -> GalaxianState:
-        hit_indices = jnp.where(mask, size=GalaxianConstants.MAX_DIVERS, fill_value=-1)[0]
+    # Treffer-Verarbeitung für Unterstützer
+    def process_hit_support(state):
+        hit_indices = jnp.where(mask_support, size=GalaxianConstants.MAX_SUPPORTERS, fill_value=GalaxianConstants.ERROR_VALUE)[0]
         hit_idx = hit_indices[0]
         pos = state.enemy_support_pos[hit_idx]
         new_grid = state.enemy_grid_state.at[tuple(pos)].set(GalaxianConstants.DEAD)
         new_death = state.enemy_death_frame_support.at[hit_idx].set(1)
-
         new_support_states = state.enemy_support_states.at[hit_idx].set(GalaxianConstants.DYING)
 
         return state._replace(
             enemy_grid_state=new_grid,
             enemy_death_frame_support=new_death,
-            bullet_x=jnp.array(-1.0, dtype=state.bullet_x.dtype),
-            bullet_y=jnp.array(-1.0, dtype=state.bullet_y.dtype),
+            bullet_x=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
+            bullet_y=jnp.array(GalaxianConstants.ERROR_VALUE, dtype=state.bullet_y.dtype),
             enemy_support_states=new_support_states,
-            score=state.score + GalaxianConstants.SCORES[pos[0]] * GalaxianConstants.DIVE_MULTIPLIER
+            score=state.score + GalaxianConstants.SCORES[GalaxianConstants.RED_ROW] * GalaxianConstants.DIVE_MULTIPLIER
         )
 
-    def no_hit(state: GalaxianState) -> GalaxianState:
-        return state
+    # Verarbeite Treffer in prioritätsreihenfolge
+    state = lax.cond(hit_grid, process_hit_grid, lambda s: s, state)
+    state = lax.cond(hit_attack & (state.bullet_y > 0), process_hit_attack, lambda s: s, state)
+    state = lax.cond(hit_support & (state.bullet_y > 0), process_hit_support, lambda s: s, state)
 
-    return lax.cond(hit, process_hit, no_hit, state)
+    return state
 
 @jax.jit
 def check_player_death_by_enemy(state: GalaxianState) -> GalaxianState:
-    x_diff = jnp.abs(state.player_x - state.enemy_attack_x)
-    y_diff = jnp.abs(state.player_y - state.enemy_attack_y)
+    x_diff = jnp.abs(state.player_x+GalaxianConstants.PLAYER_WIDTH/2 - (state.enemy_attack_x+GalaxianConstants.ENEMY_ATTACK_WIDTH/2))
+    y_diff = jnp.abs(state.player_y+GalaxianConstants.PLAYER_HEIGHT/2 - (state.enemy_attack_y+GalaxianConstants.ENEMY_ATTACK_HEIGHT/2))
     is_active = (state.enemy_attack_states == 1)
     grid_state = state.enemy_grid_state[tuple(state.enemy_attack_pos.T)] != 0
 
-    collision = (x_diff <= 10) & (y_diff <= 10) & is_active & grid_state
+    collision = (x_diff <= GalaxianConstants.PLAYER_WIDTH/2) & (y_diff <= GalaxianConstants.PLAYER_HEIGHT/2) & is_active & grid_state
     hit = jnp.any(collision) & state.player_alive
 
     def process_hit(current_state):
@@ -1025,24 +1031,29 @@ def check_player_death_by_enemy(state: GalaxianState) -> GalaxianState:
         new_death = state.enemy_death_frame_attack.at[hit_idx].set(1)
         new_attack_states = state.enemy_attack_states.at[hit_idx].set(GalaxianConstants.DYING)
 
+        score_row = pos[0]
+        score_multiplier = jnp.where(state.enemy_attack_states[hit_idx] == GalaxianConstants.ATTACK,
+                                     GalaxianConstants.DIVE_MULTIPLIER, 1)
+
 
         return current_state._replace(
             player_alive = jnp.array(False),
             enemy_grid_state=new_enemy_grid_state,
             enemy_attack_states=new_attack_states,
             enemy_death_frame_attack=new_death,
+            score=state.score + GalaxianConstants.SCORES[score_row] * score_multiplier,
         )
 
     return lax.cond(hit, process_hit, lambda s: s, state)
 
 @jax.jit
 def check_player_death_by_support(state: GalaxianState) -> GalaxianState:
-    x_diff = jnp.abs(state.player_x - state.enemy_support_x)
-    y_diff = jnp.abs(state.player_y - state.enemy_support_y)
+    x_diff = jnp.abs(state.player_x+GalaxianConstants.PLAYER_WIDTH/2 - (state.enemy_support_x+GalaxianConstants.ENEMY_ATTACK_WIDTH/2))
+    y_diff = jnp.abs(state.player_y+GalaxianConstants.PLAYER_HEIGHT/2 - (state.enemy_support_y+GalaxianConstants.ENEMY_ATTACK_HEIGHT/2))
     is_active = (state.enemy_support_states == 1)
     grid_state = state.enemy_grid_state[tuple(state.enemy_support_pos.T)] != 0
 
-    collision = (x_diff <= 10) & (y_diff <= 10) & is_active & grid_state
+    collision = (x_diff <= GalaxianConstants.PLAYER_WIDTH/2) & (y_diff <= GalaxianConstants.PLAYER_HEIGHT/2) & is_active & grid_state
     hit = jnp.any(collision) & state.player_alive
 
     def process_hit(current_state):
@@ -1058,16 +1069,17 @@ def check_player_death_by_support(state: GalaxianState) -> GalaxianState:
             enemy_grid_state=new_enemy_grid_state,
             enemy_support_states=new_support_states,
             enemy_death_frame_support=new_death,
+            score=state.score + GalaxianConstants.SCORES[GalaxianConstants.RED_ROW] * GalaxianConstants.DIVE_MULTIPLIER,
         )
 
     return lax.cond(hit, process_hit, lambda s: s, state)
 
 @jax.jit
 def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
-    x_diff = jnp.abs(state.player_x - state.enemy_attack_bullet_x)
-    y_diff = jnp.abs(state.player_y - state.enemy_attack_bullet_y)
+    x_diff = jnp.abs(state.player_x+GalaxianConstants.PLAYER_WIDTH/2 - state.enemy_attack_bullet_x)
+    y_diff = jnp.abs(state.player_y+GalaxianConstants.PLAYER_HEIGHT/2 - state.enemy_attack_bullet_y)
 
-    collision_mask = (x_diff <= 10) & (y_diff <= 10) & (state.enemy_attack_bullet_y >= 0)
+    collision_mask = (x_diff <= GalaxianConstants.PLAYER_WIDTH/2) & (y_diff <= GalaxianConstants.PLAYER_HEIGHT/2) & (state.enemy_attack_bullet_y >= 0)
     hit = jnp.any(collision_mask) & state.player_alive
 
     def process_hit(current_state):
@@ -1084,10 +1096,28 @@ def check_player_death_by_bullet(state: GalaxianState) -> GalaxianState:
 
     return lax.cond(hit, process_hit, lambda s: s, state)
 
-def respawn_player(state: GalaxianState) -> GalaxianState:
+def increase_player_respawn_timer(state: GalaxianState) -> GalaxianState:
+    timer = jnp.where(
+        state.player_alive,
+        0,
+        state.player_respawn_timer +1,
+    )
     return state._replace(
-        player_alive=jnp.array(True),
-        lives = state.lives -1)
+        player_respawn_timer=timer,
+    )
+
+@jax.jit
+def try_respawn_player(state: GalaxianState) -> GalaxianState:
+    return jax.lax.cond(
+        state.player_respawn_timer>=GalaxianConstants.PLAYER_RESPAWN_TIME,
+        lambda s: s._replace(
+            player_alive=jnp.array(True),
+            lives = state.lives -1
+        ),
+        lambda s: s,
+        state
+    )
+
 
 @jax.jit
 def enter_new_wave(state: GalaxianState) -> GalaxianState:
@@ -1159,6 +1189,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         state = GalaxianState(player_x=jnp.array(GalaxianConstants.NATIVE_GAME_WIDTH / 2.0),
                               player_y=jnp.array(GalaxianConstants.NATIVE_GAME_HEIGHT - 40.0),
                               player_shooting_cooldown=jnp.array(0),
+                              player_respawn_timer=jnp.array(0),
                               bullet_x=jnp.array(-1.0,dtype=jnp.float32),
                               bullet_y=jnp.array(-1.0,dtype=jnp.float32),
                               enemy_grid_x=enemy_grid.astype(jnp.float32),
@@ -1168,6 +1199,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_death_frame_attack=jnp.zeros(GalaxianConstants.MAX_DIVERS, dtype=jnp.int32),
                               enemy_death_frame_support=jnp.zeros(GalaxianConstants.MAX_SUPPORTERS, dtype=jnp.int32),
                               enemy_grid_direction=jnp.array(1),
+                              enemy_grid_move_frames=jnp.array(0),
                               enemy_attack_states=jnp.zeros(GalaxianConstants.MAX_DIVERS),
                               enemy_attack_pos=jnp.full((GalaxianConstants.MAX_DIVERS, 2), GalaxianConstants.ERROR_VALUE, dtype=jnp.int32),
                               enemy_attack_direction=jnp.zeros(GalaxianConstants.MAX_DIVERS),
@@ -1294,19 +1326,17 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = update_player_bullet(new_state, action)
         new_state = update_enemy_positions(new_state)
         new_state = bullet_collision(new_state)
-        new_state = bullet_collision_attack(new_state)
-        new_state = bullet_collision_support(new_state)
         new_state = update_enemy_death_frames(new_state)
         new_state = update_enemy_attack(new_state)
         new_state = update_enemy_bullets(new_state)
         new_state = check_player_death_by_enemy(new_state)
         new_state = check_player_death_by_support(new_state)
         new_state = check_player_death_by_bullet(new_state)
+        new_state = increase_player_respawn_timer(new_state)
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == GalaxianConstants.ACTIVE)), state.player_alive == False), lambda new_state: try_respawn_player(new_state), lambda s: s, new_state)
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == GalaxianConstants.GRID)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
+
         new_state = new_state._replace(turn_step=new_state.turn_step + 1)
-
-        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == 2)), state.player_alive == False), lambda new_state: respawn_player(new_state), lambda s: s, new_state)
-        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == 1)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: enter_new_wave(new_state), lambda s: s, new_state)
-
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
@@ -1401,13 +1431,13 @@ def load_sprites():
     enemy_attacking_facing_down_red = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_red.npy"))
     enemy_attacking_facing_down_white = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_down_white.npy"))
     enemy_attacking_facing_left_red = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_left_red.npy"))
-    enemy_attacking_facing_right_red = enemy_attacking_facing_left_red[::-1,:]
+    enemy_attacking_facing_right_red = enemy_attacking_facing_left_red[:,::-1]
     enemy_attacking_facing_left_white = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_left_white.npy"))
-    enemy_attacking_facing_right_white = enemy_attacking_facing_left_white[::-1,:]
+    enemy_attacking_facing_right_white = enemy_attacking_facing_left_white[:,::-1]
     enemy_attacking_facing_right_green = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_right_green.npy"))
-    enemy_attacking_facing_left_green = enemy_attacking_facing_right_green[::-1,:]
+    enemy_attacking_facing_left_green = enemy_attacking_facing_right_green[:,::-1]
     enemy_attacking_facing_right_purple = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/enemy_attacking_facing_right_purple.npy"))
-    enemy_attacking_facing_left_purple = enemy_attacking_facing_right_purple[::-1,:]
+    enemy_attacking_facing_left_purple = enemy_attacking_facing_right_purple[:,::-1]
     score_0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/score_0.npy"),)
     score_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/score_1.npy"),)
     score_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/galaxian/score_2.npy"),)
@@ -1502,6 +1532,15 @@ class GalaxianRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GalaxianState):
         # Hintergrund
+        jax.debug.print("Enemy: height"+ str(jr.get_sprite_frame(self.SPRITE_ENEMY, 0).shape[0]))
+        jax.debug.print("PLayer height"+str(jr.get_sprite_frame(self.SPRITE_PLAYER, 0).shape[0]))
+        jax.debug.print("Player width"+str(jr.get_sprite_frame(self.SPRITE_PLAYER, 0).shape[1]))
+        jax.debug.print("Bullet height"+str(jr.get_sprite_frame(self.SPRITE_BULLET, 0).shape[0]))
+        jax.debug.print("Bullet width"+str(jr.get_sprite_frame(self.SPRITE_BULLET, 0).shape[1]))
+        jax.debug.print("enemybullet width"+str(jr.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0).shape[1]))
+        jax.debug.print("enemybullet height"+str(jr.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0).shape[0]))
+        jax.debug.print("enemyattack height"+str(jr.get_sprite_frame(self.SPRITE_ENEMY_LEFT, 0).shape[0]))
+        jax.debug.print("enemyattack width"+str(jr.get_sprite_frame(self.SPRITE_ENEMY_LEFT, 0).shape[1]))
         raster = jnp.zeros((GalaxianConstants.NATIVE_GAME_HEIGHT, GalaxianConstants.NATIVE_GAME_WIDTH, 3), dtype=jnp.uint8)
         bg_frame = jr.get_sprite_frame(self.SPRITE_BG, 0)
         raster = jr.render_at(raster, 0, 0, bg_frame)
