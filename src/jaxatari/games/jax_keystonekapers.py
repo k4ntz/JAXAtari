@@ -440,13 +440,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Update X position - simple boundary checking
         new_x = player.x + vel_x
-        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.PLAYER_WIDTH)
+        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.PLAYER_WIDTH).astype(jnp.int32)
 
         # Jumping mechanics with gravity
         start_jump = jnp.logical_and(jump, jnp.logical_not(player.is_jumping))
         continue_jump = jnp.logical_and(player.is_jumping, player.jump_timer > 0)
 
-        # Jump physics - parabolic arc
+        # Jump physics - parabolic arc (keep internal calculations in float, but cast final Y to int32)
         jump_progress = (self.consts.JUMP_DURATION - player.jump_timer) / self.consts.JUMP_DURATION
         jump_height = self.consts.JUMP_HEIGHT * jnp.sin(jnp.pi * jump_progress)
 
@@ -461,13 +461,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             player.jump_start_y
         )
 
-        # Y position with jumping
+        # Y position with jumping (cast to int32 to maintain dtype consistency)
         floor_y = self._floor_y_position(player.floor)
         jump_y = jnp.where(
             new_is_jumping,
-            new_jump_start_y - jump_height,
+            (new_jump_start_y - jump_height).astype(jnp.int32),
             floor_y
-        )
+        ).astype(jnp.int32)
 
         # Crouching (only when not jumping and not in elevator)
         can_crouch = jnp.logical_and(
@@ -569,7 +569,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         final_x = jnp.where(
             new_in_elevator, elevator_x,
             jnp.where(escalator_active, escalator_x, new_x)
-        )
+        ).astype(jnp.int32)
 
         # Calculate escalator movement
         escalator_start_floor = jnp.where(
@@ -618,7 +618,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         final_y = jnp.where(
             new_is_jumping, jump_y,
             jnp.where(escalator_active, escalator_y, self._floor_y_position(new_floor))
-        )
+        ).astype(jnp.int32)
 
         return PlayerState(
             x=final_x,
@@ -682,8 +682,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_y = self._floor_y_position(new_floor)
 
         return PlayerState(
-            x=new_x,
-            y=new_y,
+            x=new_x.astype(jnp.int32),
+            y=new_y.astype(jnp.int32),
             floor=new_floor,
             vel_x=vel_x,
             vel_y=0,  # Simplified for now
@@ -736,9 +736,11 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             thief.direction
         )
 
-        # Clamp position within building boundaries
-        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH)        # Update Y position based on floor
-        new_y = self._floor_y_position(new_floor)
+        # Clamp position within building boundaries  
+        new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH).astype(jnp.int32)
+        
+        # Update Y position based on floor
+        new_y = self._floor_y_position(new_floor).astype(jnp.int32)
 
         return ThiefState(
             x=new_x,
@@ -881,9 +883,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             should_spawn = inactive_mask[spawn_idx]
 
             # Random spawn parameters
-            spawn_x = jrandom.uniform(key, (), minval=0, maxval=self.consts.SCREEN_WIDTH - self.consts.CART_WIDTH)
+            spawn_x = jrandom.uniform(key, (), minval=0, maxval=self.consts.SCREEN_WIDTH - self.consts.CART_WIDTH).astype(jnp.int32)
             spawn_floor = jrandom.randint(key, (), 0, 3)  # Floors 1-3
-            spawn_y = self._floor_y_position(spawn_floor)
+            spawn_y = self._floor_y_position(spawn_floor).astype(jnp.int32)
             spawn_speed = self.consts.CART_BASE_SPEED * (1.0 + self.consts.CART_SPEED_SCALE * state.level)
 
             new_cart_x = obstacles.cart_x.at[spawn_idx].set(
@@ -915,7 +917,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         obstacles = state.obstacles
 
         # Update shopping carts
-        new_cart_x = obstacles.cart_x + obstacles.cart_speed * obstacles.cart_active
+        new_cart_x = (obstacles.cart_x + obstacles.cart_speed * obstacles.cart_active).astype(jnp.int32)
         cart_out_of_bounds = jnp.logical_or(
             new_cart_x < -self.consts.CART_WIDTH,
             new_cart_x > self.consts.SCREEN_WIDTH
@@ -923,15 +925,15 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_cart_active = jnp.logical_and(obstacles.cart_active, jnp.logical_not(cart_out_of_bounds))
 
         # Update bouncing balls
-        new_ball_x = obstacles.ball_x + obstacles.ball_vel_x * obstacles.ball_active
-        new_ball_y = obstacles.ball_y + obstacles.ball_vel_y * obstacles.ball_active
+        new_ball_x = (obstacles.ball_x + obstacles.ball_vel_x * obstacles.ball_active).astype(jnp.int32)
+        new_ball_y = (obstacles.ball_y + obstacles.ball_vel_y * obstacles.ball_active).astype(jnp.int32)
 
         # Ball bouncing logic
         ball_hit_floor = new_ball_y >= self._floor_y_position(0) + self.consts.FLOOR_HEIGHT
         new_ball_vel_y = jnp.where(
             ball_hit_floor,
             -jnp.abs(obstacles.ball_vel_y),
-            obstacles.ball_vel_y + 0.5  # Gravity
+            (obstacles.ball_vel_y + 0.5).astype(jnp.int32)  # Gravity, cast to maintain int32
         )
 
         ball_out_of_bounds = jnp.logical_or(
@@ -941,7 +943,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_ball_active = jnp.logical_and(obstacles.ball_active, jnp.logical_not(ball_out_of_bounds))
 
         # Update toy planes
-        new_plane_x = obstacles.plane_x + obstacles.plane_speed * obstacles.plane_active
+        new_plane_x = (obstacles.plane_x + obstacles.plane_speed * obstacles.plane_active).astype(jnp.int32)
         plane_out_of_bounds = jnp.logical_or(
             new_plane_x < -self.consts.PLANE_WIDTH,
             new_plane_x > self.consts.SCREEN_WIDTH
@@ -1093,23 +1095,23 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Initialize empty obstacles
         obstacles = ObstacleState(
-            cart_x=jnp.zeros(self.consts.MAX_OBSTACLES),
-            cart_y=jnp.zeros(self.consts.MAX_OBSTACLES),
+            cart_x=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
+            cart_y=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
             cart_active=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=bool),
-            cart_speed=jnp.zeros(self.consts.MAX_OBSTACLES),
+            cart_speed=jnp.zeros(self.consts.MAX_OBSTACLES),  # Keep speed as float
             cart_spawn_timer=jnp.array(60),  # 1 second
 
-            ball_x=jnp.zeros(self.consts.MAX_OBSTACLES),
-            ball_y=jnp.zeros(self.consts.MAX_OBSTACLES),
+            ball_x=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
+            ball_y=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
             ball_active=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=bool),
-            ball_vel_x=jnp.zeros(self.consts.MAX_OBSTACLES),
-            ball_vel_y=jnp.zeros(self.consts.MAX_OBSTACLES),
+            ball_vel_x=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
+            ball_vel_y=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
             ball_spawn_timer=jnp.array(120),  # 2 seconds
 
-            plane_x=jnp.zeros(self.consts.MAX_OBSTACLES),
-            plane_y=jnp.zeros(self.consts.MAX_OBSTACLES),
+            plane_x=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
+            plane_y=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
             plane_active=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=bool),
-            plane_speed=jnp.zeros(self.consts.MAX_OBSTACLES),
+            plane_speed=jnp.zeros(self.consts.MAX_OBSTACLES),  # Keep speed as float
             plane_spawn_timer=jnp.array(180)  # 3 seconds
         )
 
@@ -1124,7 +1126,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Initialize camera to show player's current section
         player_section = player_start_x // self.consts.SECTION_WIDTH
-        camera_x = player_section * self.consts.SECTION_WIDTH
+        camera_x = jnp.array(player_section * self.consts.SECTION_WIDTH, dtype=jnp.int32)
 
         # Initialize game state
         state = GameState(
@@ -1143,10 +1145,10 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             step_counter=jnp.array(0),
             escalator_frame=jnp.array(0),  # Animation frame for escalator steps
 
-            item_x=jnp.zeros(self.consts.MAX_ITEMS),
-            item_y=jnp.zeros(self.consts.MAX_ITEMS),
+            item_x=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
+            item_y=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
             item_active=jnp.zeros(self.consts.MAX_ITEMS, dtype=bool),
-            item_type=jnp.zeros(self.consts.MAX_ITEMS),
+            item_type=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
 
             game_over=jnp.array(False),
             thief_caught=jnp.array(False),
@@ -1176,11 +1178,11 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         player_section = new_player.x // self.consts.SECTION_WIDTH
 
         # Camera always shows the player's current section (no thresholds, no delays)
-        new_camera_x = player_section * self.consts.SECTION_WIDTH
+        new_camera_x = jnp.array(player_section * self.consts.SECTION_WIDTH, dtype=jnp.int32)
 
         # Clamp camera to valid building bounds
         max_camera_x = self.consts.TOTAL_BUILDING_WIDTH - self.consts.SECTION_WIDTH
-        new_camera_x = jnp.clip(new_camera_x, 0, max_camera_x)
+        new_camera_x = jnp.clip(new_camera_x, 0, max_camera_x).astype(jnp.int32)
 
         # Check collisions
         obstacle_hit, thief_caught, items_collected = self._check_collisions(state._replace(
@@ -1315,7 +1317,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             obs.level.flatten(),
             obs.lives.flatten(),
             obs.elevator_position.flatten(),
-            obs.elevator_is_open.astype(jnp.float32).flatten()
+            obs.elevator_is_open.flatten()
         ])
 
     def action_space(self) -> spaces.Discrete:
@@ -1325,18 +1327,18 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
     def observation_space(self) -> spaces.Dict:
         """Return the observation space."""
         return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.int32),
+            "player_x": spaces.Box(low=0, high=self.consts.TOTAL_BUILDING_WIDTH, shape=(), dtype=jnp.int32),
             "player_y": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.int32),
             "player_floor": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
-            "thief_x": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.int32),
+            "thief_x": spaces.Box(low=0, high=self.consts.TOTAL_BUILDING_WIDTH, shape=(), dtype=jnp.int32),
             "thief_y": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.int32),
             "thief_floor": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
             "obstacle_positions": spaces.Box(
-                low=-1, high=max(self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT),
+                low=-1, high=max(self.consts.TOTAL_BUILDING_WIDTH, self.consts.SCREEN_HEIGHT),
                 shape=(self.consts.MAX_OBSTACLES * 3, 3), dtype=jnp.int32
             ),
             "item_positions": spaces.Box(
-                low=-1, high=max(self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT),
+                low=-1, high=max(self.consts.TOTAL_BUILDING_WIDTH, self.consts.SCREEN_HEIGHT),
                 shape=(self.consts.MAX_ITEMS, 3), dtype=jnp.int32
             ),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
@@ -1344,7 +1346,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             "level": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
             "elevator_position": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
-            "elevator_is_open": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_)
+            "elevator_is_open": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32)
         })
 
     def image_space(self) -> spaces.Box:
