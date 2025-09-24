@@ -22,7 +22,7 @@ HEIGHT: int = 210
 # Player
 PLAYER_WIDTH: int = 14
 PLAYER_HEIGHT: int = 12
-PLAYER_SPEED: int = 5
+PLAYER_SPEED: int = 3
 PLAYER_INITIAL_X: int = 80
 PLAYER_INITIAL_Y: int = 140
 
@@ -64,7 +64,7 @@ class AirRaidConstants(NamedTuple):
     # Player
     PLAYER_WIDTH: int = 14
     PLAYER_HEIGHT: int = 12
-    PLAYER_SPEED: int = 5
+    PLAYER_SPEED: int = 3
     PLAYER_INITIAL_X: int = 80
     PLAYER_INITIAL_Y: int = 140
 
