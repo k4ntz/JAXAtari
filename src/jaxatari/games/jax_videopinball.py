@@ -3300,7 +3300,7 @@ class JaxVideoPinball(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _reset_stuff_and_handle_lives(self, lives_lost, atari_symbols):
+    def _reset_targets_atari_symbols_and_lives(self, lives_lost, atari_symbols):
         lives_lost = jax.lax.cond(
             atari_symbols < 4,
             lambda x: x + 1,
