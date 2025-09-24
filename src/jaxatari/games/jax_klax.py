@@ -297,30 +297,26 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         }
 
     @partial(jax.jit, static_argnums=(0,))
-    def _conv2d_valid(self, x_2d: chex.Array, k_2d: chex.Array) -> chex.Array:
-        x4 = x_2d[None, None, ...].astype(jnp.int32)
-        k4 = k_2d[None, None, ...].astype(jnp.int32)
+    def _conv2d_valid(self, x_2d, k_2d):
+        x4 = x_2d[None, None, ...].astype(jnp.float32)
+        k4 = k_2d[None, None, ...].astype(jnp.float32)
         y4 = jax.lax.conv_general_dilated(
-            x4, k4,
-            window_strides=(1, 1),
-            padding='VALID',
+            x4, k4, (1, 1), 'VALID',
             dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
         )
-        return y4[0, 0]
+        return y4[0, 0].astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _conv2d_full(self, x_valid: chex.Array, k_2d: chex.Array) -> chex.Array:
+    def _conv2d_full(self, x_valid, k_2d):
         Kh, Kw = int(k_2d.shape[0]), int(k_2d.shape[1])
-        x4 = x_valid[None, None, ...].astype(jnp.int32)
-        k4 = k_2d[None, None, ...].astype(jnp.int32)
+        x4 = x_valid[None, None, ...].astype(jnp.float32)
+        k4 = k_2d[None, None, ...].astype(jnp.float32)
         pad = ((Kh - 1, Kh - 1), (Kw - 1, Kw - 1))
         y4 = jax.lax.conv_general_dilated(
-            x4, k4,
-            window_strides=(1, 1),
-            padding=pad,
+            x4, k4, (1, 1), pad,
             dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
         )
-        return y4[0, 0]
+        return y4[0, 0].astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0, 2))
     def _match_one_orientation_conv(
