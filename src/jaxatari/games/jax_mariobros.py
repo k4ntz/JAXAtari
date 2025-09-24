@@ -1890,10 +1890,6 @@ class JaxMarioBros(JaxEnvironment[
     def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
         game = self.reset_game()
         obs = self._get_observation(game)
-        def show_shapes(tree):
-            return jax.tree_map(lambda x: (x.shape, x.dtype), tree)
-
-        obs_info = show_shapes(obs)
         return obs, game
 
     def reset_game(self) -> MarioBrosState:
