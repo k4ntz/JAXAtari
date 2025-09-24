@@ -384,6 +384,17 @@ class SANTAH():
         cls.registered_room_nt.append(room)
         
         
+    @classmethod
+    def find_registered_room(cls, room: Type[NamedTuple]) -> Type[NamedTuple]|None:
+        """Check if we have already registered a room with the same set of fields, 
+        so we don't repeatedly generate the same infrastructure.
+        """
+        my_fields = set(room._fields)
+        for r in cls.registered_room_nt:
+            if set(r._fields).__eq__(my_fields):
+                return r
+        return None
+        
         
     
     @classmethod
@@ -420,6 +431,9 @@ class SANTAH():
         for f in room_nt_fields:
             enum_declr[f] = f
         my_room_named_tuple: Type[NamedTuple] = namedtuple(room_name, room_nt_fields)
+        existing_room: type[NamedTuple] = cls.find_registered_room(my_room_named_tuple)
+        if not existing_room is None:
+            return existing_room
         my_room_enum: Type[Enum] = Enum(room_name, enum_declr)
         cls.register_room(room=my_room_named_tuple, 
                           field_enum=my_room_enum, 
@@ -980,7 +994,7 @@ class Room:
             return tuple_class(**content)
         return jax.jit(partial(jittable_initialisation, content=content_dict, tuple_class=self.underlyingTupleClass))
     
-    def get_serialisation_function(self) -> Tuple[Callable[[NamedTuple], jArray], Callable[[NamedTuple, jArray], NamedTuple], int]:
+    def get_serialisation_function(self, generate_writer: bool = True) -> Tuple[Callable[[NamedTuple], jArray], Callable[[NamedTuple, jArray], NamedTuple], int]:
         """Generates a function that takes in a NamedTuple representing a room 
            and returns a serialised array version of the persistant fields in the named tuple, 
            i.e. the fields that need to be stored to the global store. 
@@ -1103,17 +1117,17 @@ class Room:
             ret = _tuple_class(**field_contents)
             return ret
         
-        
-        wrapped_persistence_writer: Callable[[NamedTuple], jArray] = partial(
-            _write_self_to_persistence, 
-                _int_fields = singleton_integer_fields, _named_tup_fields = named_tuple_fields, 
-                _named_tup_deserialisation_function = named_tuple_full_deserialise, 
-                _named_tup_partial_serialisation_fun = named_tuple_partial_serialisation, 
-                _named_tuple_sizes = named_tuple_sizes, 
-                _named_tuple_stack_heights = named_tuple_stack_heights, 
-                _full_size = size
-        )
-        wrapped_persistence_writer = jax.jit(wrapped_persistence_writer)
+        if generate_writer:
+            wrapped_persistence_writer: Callable[[NamedTuple], jArray] = partial(
+                _write_self_to_persistence, 
+                    _int_fields = singleton_integer_fields, _named_tup_fields = named_tuple_fields, 
+                    _named_tup_deserialisation_function = named_tuple_full_deserialise, 
+                    _named_tup_partial_serialisation_fun = named_tuple_partial_serialisation, 
+                    _named_tuple_sizes = named_tuple_sizes, 
+                    _named_tuple_stack_heights = named_tuple_stack_heights, 
+                    _full_size = size
+            )
+            wrapped_persistence_writer = jax.jit(wrapped_persistence_writer)
         
         jitted_persistence_loader: Callable[[NamedTuple, jArray], NamedTuple] = partial(
             _load_self_from_persistence, 
@@ -1129,8 +1143,10 @@ class Room:
         )
         jitted_persistence_loader = jax.jit(jitted_persistence_loader)
         
-        return wrapped_persistence_writer, jitted_persistence_loader, size
-        
+        if generate_writer:
+            return wrapped_persistence_writer, jitted_persistence_loader, size
+        else:
+            return jitted_persistence_loader, size
         
     def connect_to(self, my_location: RoomConnectionDirections, other_room: Room, other_location: RoomConnectionDirections):
         # 
@@ -1598,6 +1614,217 @@ class PyramidLayout:
         return ret_func
         
 
+
+
+class RendererLayout(PyramidLayout):
+    """
+    PyramidLayout is basically the main manager class for the Room infrastructure. 
+    It keeps track of all created rooms and is in charge of generating the necessary wrappers 
+    for functions that need to handle rooms of different shape & feature set.
+    """
+    def __init__(self):
+        super().__init__()
+    
+         
+    
+    
+    
+    def _wrap_lowered_render(self, lowered_function: Callable[[NamedTuple, NamedTuple, Type[NamedTuple]], jArray], 
+                                    montezuma_state_type: Type ) -> Callable[[NamedTuple], str]: 
+        
+        """This function generates wrapped versions of render functions. 
+           The main difference is, that render functions are assumed to return a canvas of static shape. 
+           This means, we can avoid one half of the wrapping process, and directly return the raw function output. 
+           
+           
+           As we can't share layouts between renderer & game object via global variables, 
+           we need to re-initialize a fresh layout in the renderer. The Renderer layout 
+           is missing some parts of the persistence infrastructure necessary for general wrapping to reduce computational demands.
+
+        Raises:
+            Exception: _description_
+            Exception: _description_
+
+        Returns:
+            _type_: _description_
+        """
+        # Check the function signature of the function to be wrapped.
+        if set(self.room_persistence_loaders.keys()) != set(self.rooms.keys()):
+            raise Exception("Persistence writers & loaders for all rooms have not been created yet. This is likely because you haven't called the 'create_proto_room_specific_persistence_infrastructure' function yet.")
+        arg_names = inspect.getfullargspec(lowered_function)[0]
+        if set(arg_names) != set(["montezuma_state", "room_state", "room_type", "tags"]) and set(arg_names) != set(["montezuma_state", "room_state", "room_type", "tags", "self"]):
+            raise Exception('The wrapped function may only receive the attributes ["montezuma_state", "room_state", "room_type", "tags"]')
+
+        
+        def wrapped_call_function(montezuma_state: NamedTuple, call_function: Callable[[MontezumaNamedTuple, RoomNamedTuple, Type[RoomNamedTuple], Tuple[TagEnum]], Tuple[MontezumaNamedTuple, RoomNamedTuple]],
+                                                        room_id: int, raising_function: Callable[[NamedTuple, jArray, int], NamedTuple], 
+                                                        _single_room_proto_loader: Callable[[jArray, jArray], NamedTuple],
+                                                        room_named_tuple_retriever: Callable[[int], Type[NamedTuple]],
+                                                        montezuma_state_type: Type, 
+                                                        tags: Tuple[TagEnum]) -> NamedTuple:
+            """Internal function that wraps arount the function to be actually called. Takes in a montezumastate, applies 
+                    the call_function operating on the raised RoomState, writes the raised room state back onto the persistence 
+                    state, converts back to ProtoRoom and updates the proto_room held by the montezuma_state.
+
+            Args:
+                montezuma_state (NamedTuple): Input1: Montezuma state
+                call_function (Callable[[NamedTuple, NamedTuple, int], Tuple[NamedTuple, NamedTuple]]):  
+                    Call function: Receives & returns a Tuple consisting of (MontezumaState, RaisedRoomState
+                room_id (int): (basically static) ID of the room for which this function is called.
+                raising_function (Callable[[NamedTuple, jArray, int], NamedTuple]): A general raising function, 
+                    that takes in a regular proto_room, the persistenc storage and a (static) room id and returns the raised room.
+                _single_room_persistence_writer (Callable[[jArray, NamedTuple, jArray], jArray]): Transforms the raised room into it's 
+                    storage row.
+                _single_room_proto_loader (Callable[[jArray, jArray], NamedTuple]): Takes in the room_id (non-static), and the persistence state
+                    and returns the loaded proto room
+                montezuma_state_type (Type): Type of the montezumastate. Basically just used 
+                    in order to access some utility functions.
+
+            Returns:
+                NamedTuple: Returns the montezumastate with updated proto-room & storage.
+            """
+            # raise the give proto room to the actual room-state using the persistence state
+            proto_room: NamedTuple = getattr(montezuma_state, MONTEZUMA_STATE_ROOM_FIELD)
+            persistence_storage: jArray = getattr(montezuma_state, MONTEZUMA_PERSISTENCE_STORAGE)
+            raised_room: NamedTuple = raising_function(proto_room, persistence_storage, room_id)
+            room_type: Type[NamedTuple] = room_named_tuple_retriever(room_id)
+            # Call the wrapped function
+            return_canvas: jArray = call_function(montezuma_state, raised_room, room_type, tags)
+            
+            return return_canvas
+        
+        wrapped_functions = []
+        room_ids = list(self.rooms.keys())
+        room_ids = sorted(room_ids)
+        room_type_getter: Callable[[int], Type[NamedTuple]] = self._get_non_jittable_room_ID_type_mapping()
+        for id in room_ids:
+            room_type: Type[RoomNamedTuple] = self.rooms[id].underlyingTupleClass
+            room_tags: Tuple[TagEnum] = SANTAH.room_tags[room_type]
+            w_func = partial(wrapped_call_function, 
+                    call_function = lowered_function,
+                    room_id=id, 
+                    raising_function = self.static_jitted_raising_function, 
+                    _single_room_proto_loader = self.single_room_proto_loader[id],
+                    room_named_tuple_retriever = room_type_getter,
+                    montezuma_state_type = montezuma_state_type, 
+                    tags=room_tags)
+            wrapped_functions.append(w_func)
+        
+        # The final wrapper function. 
+        # Handle the case distinction between different rooms via a single, large switch-case statement.
+        def wrapper_function(montezuma_state: NamedTuple, wrapped_functions: List[Callable[[NamedTuple], NamedTuple]]) -> NamedTuple:
+            room_state = getattr(montezuma_state, MONTEZUMA_STATE_ROOM_FIELD)
+            room_id: jnp.ndarray = getattr(room_state, ROOM_ID_FIELD)
+            montezuma_state = jax.lax.switch(room_id[0], wrapped_functions, montezuma_state)
+            return montezuma_state
+        
+        final_ret_function = partial(wrapper_function, wrapped_functions=wrapped_functions)
+        final_ret_function = jax.jit(final_ret_function)
+        return final_ret_function
+        
+        
+        
+    def create_proto_room_specific_persistence_infrastructure(self) -> Any:
+        #
+        # Generates all the persistence infrastructure necessary to write & load proto rooms
+        # to/ from storage.
+        #
+        
+        # Again, collect all necessary writers/ readers to genereate proto room infrastructure.
+        room_ids: List[int] = []
+        room_persistence_loaders: List[Callable[[NamedTuple, jArray], NamedTuple]] = []
+        raising_function: List[Callable[[NamedTuple, NamedTuple], NamedTuple]] = []
+        lowering_functions: List[Callable[[NamedTuple], NamedTuple]] = []
+        room_constructors: List[Callable[[], jArray]] = []
+        persistence_lenghts: List[int] = []
+        room_ids = list(self.rooms.keys())
+        room_ids = sorted(room_ids)
+        for id in room_ids:
+            lowering_functions.append(self.lower_specific_room_to_proto_room[id])
+            raising_function.append(self.raise_proto_room_to_specific[id])
+            my_room: Room = self.rooms[id]
+            initial_constructor = my_room.get_jitted_room_constructor()
+            room_constructors.append(initial_constructor)
+            persistence_loader, persistence_length = my_room.get_serialisation_function(generate_writer=False)
+            room_persistence_loaders.append(persistence_loader)
+            # Stash them as well for later use
+            self.room_persistence_loaders[id] = persistence_loader
+            persistence_lenghts.append(persistence_length)
+        num_rooms: int = len(room_ids)
+
+
+
+        # Function that loads the PROTO_ROOM version of a given room from storage.
+        # This is mainly needed in the game_reset.        
+        def _jittable_singleton_load_proto_from_persistence(room_id: jArray, storage: jArray,  room_creation_function: Callable[[], NamedTuple],  
+                                             room_reload_function: Callable[[NamedTuple, jArray], NamedTuple], 
+                                             proto_lowering_function: Callable[[NamedTuple], NamedTuple]) -> NamedTuple:
+            initial_room: NamedTuple = room_creation_function()
+            correct_row: jArray = jax.lax.dynamic_index_in_dim(operand=storage, index=room_id[0], axis=0, keepdims=False)
+            reloaded_room = room_reload_function(initial_room, correct_row)
+            # Lower to proto room and only return proto room.
+            reloaded_room = proto_lowering_function(reloaded_room)
+            return reloaded_room
+        
+        def _jittable_univ_proto_loader(room_id: jArray, storage: jArray, singleton_proto_loaders: List[Callable[[jArray, jArray], jArray]]) -> NamedTuple:
+            proto_room: NamedTuple = jax.lax.switch(room_id[0], singleton_proto_loaders, room_id, storage)
+            return proto_room
+        
+        
+        # Only for internal use, best not touch.
+        #
+        def _jittable_raise_proto_with_persistance(proto_room: NamedTuple, storage: jArray, 
+                                                
+                                            static_room_id: int,
+                                            room_creation_functions: List[Callable[[], NamedTuple]],  
+                                            room_reload_functions: List[Callable[[NamedTuple, jArray], NamedTuple]], 
+                                            proto_raising_functions: Callable[[jArray], jArray] 
+                                ):
+            initial_room: NamedTuple = room_creation_functions[static_room_id]()
+            correct_row: jArray = jax.lax.dynamic_index_in_dim(operand=storage, index=static_room_id, axis=0, keepdims=False)
+            reloaded_room = room_reload_functions[static_room_id](initial_room, correct_row)
+            raised_room = proto_raising_functions[static_room_id](reloaded_room, proto_room)
+            return raised_room
+        
+        raise_proto_function_with_persistence = partial(_jittable_raise_proto_with_persistance, 
+                                                        room_creation_functions = room_constructors, 
+                                            room_reload_functions = room_persistence_loaders, 
+                                            proto_raising_functions = raising_function 
+                                            )
+        raise_proto_function_with_persistence = jax.jit(raise_proto_function_with_persistence, static_argnames=["static_room_id"])
+        self.static_jitted_raising_function = raise_proto_function_with_persistence
+        
+        
+        
+        
+        persistence_lenghts = jnp.array(persistence_lenghts)   
+        
+        # Construct the Proto Loaders:
+        singleton_loaders = []
+        for count, r_id in enumerate(room_ids):
+            _loader = partial(_jittable_singleton_load_proto_from_persistence, 
+                            room_creation_function = room_constructors[count],  
+                            room_reload_function = room_persistence_loaders[count], 
+                            proto_lowering_function=lowering_functions[count])
+            jitted_loader = jax.jit(_loader)
+            self.single_room_proto_loader[r_id] = jitted_loader
+            singleton_loaders.append(_loader)
+        load_proto_from_persistence = partial(_jittable_univ_proto_loader, 
+                                singleton_proto_loaders = singleton_loaders
+                                              )
+        load_proto_from_persistence = jax.jit(load_proto_from_persistence)
+        
+        
+        
+        
+       
+               
+        return load_proto_from_persistence
+        
+
+    
+    
+    
 
 
 def loadFrameAddAlpha(fileName, transpose=True, add_alpha: bool = False, add_black_as_transparent: bool = False):

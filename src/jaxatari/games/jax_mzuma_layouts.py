@@ -917,6 +917,8 @@ def make_demo_layout(LAYOUT: PyramidLayout, consts) -> PyramidLayout:
                         other_room=ROOM_3_0, other_location=RoomConnectionDirections.RIGHT)
     ROOM_0_0.connect_to(my_location=RoomConnectionDirections.LEFT,
                       other_room=ROOM_2_0, other_location=RoomConnectionDirections.RIGHT)
+    ROOM_3_0.connect_to(my_location=RoomConnectionDirections.DOWN, other_room=ROOM_0_1, 
+                        other_location=RoomConnectionDirections.UP)
     return LAYOUT
 
 

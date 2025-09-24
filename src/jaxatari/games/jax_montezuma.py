@@ -12,6 +12,7 @@ import numpy as np
 import os
 import gc
 import array
+import pickle
 
 from functools import partial
 from typing import NamedTuple, Tuple, Any, Callable
@@ -41,6 +42,7 @@ from jax import random, Array
 from jaxatari.games.jax_mzuma_utils import SANTAH, Room, PyramidLayout, RoomConnectionDirections, NamedTupleFieldType, loadFrameAddAlpha, load_collision_map
 from jaxatari.games.jax_mzuma_enums_and_nts import *
 from jaxatari.games.jax_mzuma_layouts import *
+
 
 
 # Named Tuple defining behavior for all enemies of type "rolling skull"
@@ -327,6 +329,9 @@ class MontezumaConstants(NamedTuple):
     
     LASER_BARRIER_COLOR = jnp.array([101, 111, 228, 255], dtype=jnp.int16)
     LAYOUT = Layouts.test_layout.value
+    RENDERLESS = False
+    LOAD_STATE = None
+    INIT_LIVES = 5
 
 @jax.jit
 def JAXATARI_ACTION_TO_MOVEMENT_DIRECTION(action: jnp.ndarray) -> jnp.ndarray:
@@ -449,6 +454,138 @@ def colorize_sprite(sprite: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
     
     return jnp.concatenate([new_rgb, alpha], axis=-1).astype(jnp.uint8)
 
+# ░▒▓████████▓▒░▒▓████████▓▒░▒▓██████████████▓▒░░▒▓███████▓▒░     
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░   
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░  
+#    ░▒▓█▓▒░   ░▒▓██████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░   
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░         
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
+#    ░▒▓█▓▒░   ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
+
+def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
+    """
+    Get human action from keyboard with support for diagonal movement and combined fire,
+    using Action constants.
+    Returns a JAX array containing a single integer action.
+    """
+    # Important: Process Pygame events to allow window to close, etc.
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            raise SystemExit("Pygame window closed by user.")
+        # You could handle other events here if needed (e.g., KEYDOWN for one-shot actions)
+
+    keys = pygame.key.get_pressed()
+
+    # Consolidate key checks
+    up = keys[pygame.K_UP] or keys[pygame.K_w]
+    down = keys[pygame.K_DOWN] or keys[pygame.K_s]
+    left = keys[pygame.K_LEFT] or keys[pygame.K_a]
+    right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
+    fire = keys[pygame.K_SPACE]
+
+    action_to_take: int # Explicitly declare the type for clarity
+
+    # The order of these checks is crucial for prioritizing actions
+    # (e.g., UPRIGHTFIRE before UPFIRE or UPRIGHT)
+
+    # Diagonal movements with fire (3 keys)
+    if up and right and fire:
+        action_to_take = JAXAtariAction.UPRIGHTFIRE
+    elif up and left and fire:
+        action_to_take = JAXAtariAction.UPLEFTFIRE
+    elif down and right and fire:
+        action_to_take = JAXAtariAction.DOWNRIGHTFIRE
+    elif down and left and fire:
+        action_to_take = JAXAtariAction.DOWNLEFTFIRE
+
+    # Cardinal directions with fire (2 keys)
+    elif up and fire:
+        action_to_take = JAXAtariAction.UPFIRE
+    elif down and fire:
+        action_to_take = JAXAtariAction.DOWNFIRE
+    elif left and fire:
+        action_to_take = JAXAtariAction.LEFTFIRE
+    elif right and fire:
+        action_to_take = JAXAtariAction.RIGHTFIRE
+
+    # Diagonal movements (2 keys)
+    elif up and right:
+        action_to_take = JAXAtariAction.UPRIGHT
+    elif up and left:
+        action_to_take = JAXAtariAction.UPLEFT
+    elif down and right:
+        action_to_take = JAXAtariAction.DOWNRIGHT
+    elif down and left:
+        action_to_take = JAXAtariAction.DOWNLEFT
+
+    # Cardinal directions (1 key for movement)
+    elif up:
+        action_to_take = JAXAtariAction.UP
+    elif down:
+        action_to_take = JAXAtariAction.DOWN
+    elif left:
+        action_to_take = JAXAtariAction.LEFT
+    elif right:
+        action_to_take = JAXAtariAction.RIGHT
+    # Fire alone (1 key)
+    elif fire:
+        action_to_take = JAXAtariAction.FIRE
+    # No relevant keys pressed
+    else:
+        action_to_take = JAXAtariAction.NOOP
+
+    return jax.numpy.array(action_to_take, dtype=jax.numpy.int32)
+
+    
+def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
+    """Updates the Pygame display with the rendered raster.
+
+    Args:
+        pygame_screen: The Pygame screen surface.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
+        SCALING_FACTOR: Factor to scale the raster for display.
+        WIDTH: Expected width of the input raster (used for scaling calculation).
+        HEIGHT: Expected height of the input raster (used for scaling calculation).
+    """
+    pygame_screen.fill((0, 0, 0))
+
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
+    raster_np = np.array(raster)
+    raster_np = raster_np.astype(np.uint8)
+
+    # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
+
+    # Pygame scale expects target (width, height)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
+
+
+    frame_surface_scaled = pygame.transform.scale(
+        frame_surface, (target_width_px, target_height_px)
+    )
+
+    pygame_screen.blit(frame_surface_scaled, (0, 0))
+    pygame.display.flip()    
+
+# ░▒▓████████▓▒░▒▓████████▓▒░▒▓██████████████▓▒░░▒▓███████▓▒░       ░▒▓████████▓▒░▒▓███████▓▒░░▒▓███████▓▒░  
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+#    ░▒▓█▓▒░   ░▒▓██████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░       ░▒▓██████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░             ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+#    ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░             ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+#    ░▒▓█▓▒░   ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░             ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░ 
+    
+#########################################################                                                 ####################################################################### 
+#########################################################                                                 ####################################################################### 
+######################################################### Create the initial Configuration of rooms here  #######################################################################  
+#########################################################                                                 #######################################################################  
+#########################################################                                                 #######################################################################
+
+        
         
         
 
@@ -545,7 +682,8 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         self.initial_persistence_state: jnp.ndarray = None
         self.__make_room_infra_ready()
         self.__init_room()
-        self.renderer = MontezumaRenderer(consts=self.consts)
+        if not self.consts.RENDERLESS:
+            self.renderer = MontezumaRenderer(consts=self.consts)
         # Vmap functions for enemy movement & animation to increase efficiency
         self.vmapped_single_enemy_movement = jax.vmap(self.handle_single_enemy_movement, in_axes=0, out_axes=0)
         self.vmapped_single_enemy_animation = jax.vmap(self._handle_single_enemy_animation, in_axes=0, out_axes=0)
@@ -1013,16 +1151,69 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         # We register the proto & vanilla room, as well as constructors for all fields that are precomputed on startup.
         #
         #
-        SANTAH.register_proto_room(room_field_enum=ConstantShapeRoomFields, proto_room_nt=Room, 
-                fields_that_are_shared_but_have_different_shape=FieldsThatAreSharedByAllRoomsButHaveDifferentShape, 
-                vanilla_room_type=VanillaRoom, 
-                vanilla_room_enum=VanillaRoomFields)
+        if self.consts.RENDERLESS:
+            SANTAH.register_proto_room(room_field_enum=ConstantShapeRoomFields, proto_room_nt=Room, 
+                    fields_that_are_shared_but_have_different_shape=FieldsThatAreSharedByAllRoomsButHaveDifferentShape, 
+                    vanilla_room_type=VanillaRoom, 
+                    vanilla_room_enum=VanillaRoomFields, 
+                    constructed_fields={
+                        VanillaRoomFields.sprite.value: lambda x: None
+                    })
+        else:
+            SANTAH.register_proto_room(room_field_enum=ConstantShapeRoomFields, proto_room_nt=Room, 
+                    fields_that_are_shared_but_have_different_shape=FieldsThatAreSharedByAllRoomsButHaveDifferentShape, 
+                    vanilla_room_type=VanillaRoom, 
+                    vanilla_room_enum=VanillaRoomFields)
         #
         # Default values are registered per-room tag, so that no further work is necessary
         # when adding more features to a room. 
         # all precomputed fields will be automatically generated.
         #
-        SANTAH.register_room_tags(room_tags=RoomTags, room_tags_descriptor=RoomTagsNames, 
+        if self.consts.RENDERLESS:
+            SANTAH.register_room_tags(room_tags=RoomTags, room_tags_descriptor=RoomTagsNames, 
+                                                                  constructed_fields={
+                                                                      RoomTags.LAZER_BARRIER: {
+                                                                          RoomTagsNames.LAZER_BARRIER.value.global_barrier_map.value: self._make_barrier_activation_map
+                                                                      },
+                                                                      RoomTags.DOORS: {
+                                                                          RoomTagsNames.DOORS.value.global_collision_map.value: self._make_door_collision_map
+                                                                      },
+                                                                      RoomTags.ROPES: {
+                                                                          RoomTagsNames.ROPES.value.rope_render_map.value: lambda x, y: None,
+                                                                          RoomTagsNames.ROPES.value.rope_colision_map.value: self._make_rope_collision_map, 
+                                                                          RoomTagsNames.ROPES.value.room_surfaces.value: self._make_room_surface_map, 
+                                                                          RoomTagsNames.ROPES.value.room_rope_top_pixels.value: self._make_rope_top_map
+                                                                      },
+                                                                      RoomTags.DROPOUTFLOORS: {
+                                                                         RoomTagsNames.DROPOUTFLOORS.value.dropout_floor_colision_map.value: self._make_dropout_floor_collision_map,
+                                                                         RoomTagsNames.DROPOUTFLOORS.value.dropout_floor_render_maps.value: lambda x, y: None
+                                                                      },
+                                                                      RoomTags.PIT: {
+                                                                          RoomTagsNames.PIT.value.pit_render_maps.value: lambda x, y: None
+                                                                      },
+                                                                      RoomTags.SIDEWALLS: {
+                                                                          RoomTagsNames.SIDEWALLS.value.side_walls_collision_map.value: self._make_side_walls_collision_map,
+                                                                          RoomTagsNames.SIDEWALLS.value.side_walls_render_map.value: lambda x, y: None
+                                                                          }, 
+                                                                      RoomTags.LADDERS: {
+                                                                          RoomTagsNames.LADDERS.value.ladders_sprite.value: lambda x, y: None, 
+                                                                          RoomTagsNames.LADDERS.value.ladder_tops.value: self._make_ladder_tops_map,
+                                                                          RoomTagsNames.LADDERS.value.ladder_bottoms.value: self._make_ladder_bottom_map,
+                                                                          RoomTagsNames.LADDERS.value.ladder_room_surface_pixels.value: self._make_room_surface_map
+                                                                      },
+                                                                      RoomTags.CONVEYORBELTS: {
+                                                                          RoomTagsNames.CONVEYORBELTS.value.global_conveyor_movement_collision_map.value: self._make_conveyor_belts_movement_collision_map,
+                                                                          RoomTagsNames.CONVEYORBELTS.value.global_conveyor_collision_map.value: self._make_conveyor_belts_collision_map,
+                                                                          RoomTagsNames.CONVEYORBELTS.value.global_conveyor_render_map.value: lambda x, y: None
+                                                                      },
+                                                                      RoomTags.BONUSROOM: {
+                                                                          RoomTagsNames.BONUSROOM.value.bonus_room_floor_collison_map.value: self._make_bonus_room_floor_collision_map
+                                                                      }
+                                                                  })
+        
+        else:
+            
+            SANTAH.register_room_tags(room_tags=RoomTags, room_tags_descriptor=RoomTagsNames, 
                                                                   constructed_fields={
                                                                       RoomTags.LAZER_BARRIER: {
                                                                           RoomTagsNames.LAZER_BARRIER.value.global_barrier_map.value: self._make_barrier_activation_map
@@ -1066,7 +1257,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
     
     def __init_room(self):
         
-        global LAYOUT 
+        
         LAYOUT = PyramidLayout()
         
         # Decide which layout to build
@@ -1086,10 +1277,16 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             LAYOUT = make_layout_test(LAYOUT, self.consts)
         
     
-
+        self.initial_load_state: MontezumaState = None
         self.room_connection_map = LAYOUT.get_jitted_room_connection_map()
         self.initial_persistence_state = LAYOUT._create_initial_persistence_state()
-        
+        if not self.consts.LOAD_STATE is None:
+                with open(self.consts.LOAD_STATE, 'rb') as f:
+                    restored_state: MontezumaState = pickle.load(f)
+                restored_state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.lifes.value](restored_state, jnp.array([self.consts.INIT_LIVES], jnp.int32))
+                self.initial_load_state = restored_state
+                self.initial_persistence_state = restored_state.persistence_state
+            
         self.PROTO_ROOM_LOADER, self.WRITE_PROTO_ROOM_TO_PERSISTENCE = LAYOUT.create_proto_room_specific_persistence_infrastructure()
         self.WRAPPED_AUGMENT_COLLISION_MAP = LAYOUT._wrap_lowered_function(lowered_function=self.augment_collision_map, 
                                                        montezuma_state_type=MontezumaState)
@@ -2391,7 +2588,10 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
     
     @partial(jax.jit, static_argnames=["self"])      
     def render(self, state: MontezumaState) -> jnp.ndarray:
-        return self.renderer.render(state)
+        if self.consts.RENDERLESS:
+            return None
+        else:
+            return self.renderer.render(state)
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(18)
     @partial(jax.jit, static_argnums=(0))   
@@ -2399,6 +2599,9 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         """
         Resets the game state to the initial state.
         """
+        if not self.initial_load_state is None:
+            game_state: MontezumaState = self.initial_load_state
+            return game_state.observation, game_state
         init_room: Room = self.PROTO_ROOM_LOADER(jnp.array([0]), self.initial_persistence_state)
         game_state = MontezumaState(room_state=init_room, 
                                persistence_state=self.initial_persistence_state, 
@@ -2424,7 +2627,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
                                is_climbing=jnp.array([0], jnp.int32),
                                is_laddering=jnp.array([0], jnp.int32),
                                score=jnp.array([0], jnp.int32),
-                               lifes=jnp.array([5],jnp.int32),
+                               lifes=jnp.array([self.consts.INIT_LIVES],jnp.int32),
                                itembar_items=jnp.zeros(shape=(5),dtype=jnp.int32), 
                                is_on_rope=jnp.array([0],jnp.int32), 
                                last_key_press=jnp.array([-200], jnp.int32), # Doesnt really matter
@@ -4092,7 +4295,8 @@ class MontezumaRenderer(JAXGameRenderer):
         super().__init__()
         gc.collect()
         self.consts = consts or MontezumaConstants()
-
+        if self.consts.RENDERLESS:
+            raise Exception("Cannot initialize render in 'renderless' mode.")
         SPRITE_PATH: str = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma")
         PLAYER_SPRITE_PATH: str = os.path.join(SPRITE_PATH, "player")
         DIGIT_SPRITE_PATH: str = os.path.join(SPRITE_PATH, "digits")
@@ -4258,33 +4462,54 @@ class MontezumaRenderer(JAXGameRenderer):
         # A writer that writes the fields from the proto room to persistence. 
         # Again, save to be used in non-static functions
         
+        LAYOUT = RendererLayout()
         
+        # Decide which layout to build
+        if self.consts.LAYOUT == Layouts.demo_layout.value:
+            LAYOUT = make_demo_layout(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_1.value:
+            LAYOUT = make_difficulty_1(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_2.value:
+            LAYOUT = make_difficulty_2(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_3.value:
+            LAYOUT = make_difficulty_3(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_1_2.value:
+            LAYOUT = make_difficulty_1_2(LAYOUT, self.consts)
+        elif self.consts.LAYOUT == Layouts.difficulty_1_2_3.value:
+            LAYOUT = make_difficulty_1_2_3(LAYOUT, self.consts)
+        else:
+            LAYOUT = make_layout_test(LAYOUT, self.consts)
+        
+        LAYOUT: RendererLayout = LAYOUT
+
+        
+        _ = LAYOUT.create_proto_room_specific_persistence_infrastructure()
         
         # All wrapped render functions.
-        self.RENDER_LAZER_WALLS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_lazer_walls, 
+        self.RENDER_LAZER_WALLS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_lazer_walls, 
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED:Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_items_onto_canvas,
+        self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED:Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_items_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_ROPES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ropez,
+        self.RENDER_ROPES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_ropez,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_DOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_doors_onto_canvas,
+        self.RENDER_DOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_doors_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_dropout_floors_onto_canvas,
+        self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_dropout_floors_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_sarlacc_pit_onto_canvas,
+        self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_sarlacc_pit_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_side_walls_onto_canvas,
+        self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_side_walls_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_ladders_onto_canvas, 
+        self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_ladders_onto_canvas, 
                                                                                                                                       montezuma_state_type=MontezumaState)
-        self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_enemies_onto_canva, 
+        self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_enemies_onto_canva, 
                                                                                                                                       montezuma_state_type=MontezumaState)
-        self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_function(lowered_function=self.render_conveyor_belts_onto_canvas,
+        self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED: Callable[[MontezumaState], MontezumaState] = LAYOUT._wrap_lowered_render(lowered_function=self.render_conveyor_belts_onto_canvas,
                                                                             montezuma_state_type=MontezumaState)
-        self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_room_sprite_onto_canvas, 
+        self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS = LAYOUT._wrap_lowered_render(lowered_function=self.render_room_sprite_onto_canvas, 
                                                                         montezuma_state_type=MontezumaState)
         
-        self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS = LAYOUT._wrap_lowered_function(lowered_function=self.render_initial_blank_canvas, 
+        self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS = LAYOUT._wrap_lowered_render(lowered_function=self.render_initial_blank_canvas, 
                                                                         montezuma_state_type=MontezumaState)
         self.lazer_wall_background: jArray = self.generate_lazer_wall_background()
         
@@ -4343,8 +4568,7 @@ class MontezumaRenderer(JAXGameRenderer):
     def render_initial_blank_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple],  tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         # Used for rendering dark-rooms
         canvas = jnp.zeros(shape=(self.consts.WIDTH, self.consts.HEIGHT, 3), dtype=jnp.uint8)
-        state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-        return state, room_state   
+        return canvas
 
     def render_items_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         # Renders all items onto the canvas
@@ -4382,10 +4606,9 @@ class MontezumaRenderer(JAXGameRenderer):
                 return canvas, 0
             canvas, _ = jax.lax.scan(single_sprite_onto_canvas,montezuma_state.canvas, items)
             
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     def render_room_sprite_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple],  tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         #
@@ -4397,8 +4620,7 @@ class MontezumaRenderer(JAXGameRenderer):
         canvas = jax.lax.dynamic_update_slice(operand=canvas, 
                                      update=room_sprite, 
                                      start_indices=(0, vert_offset[0], 0))
-        state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-        return state, room_state
+        return canvas
 
         
     # Render functions for the enemies.
@@ -4491,10 +4713,9 @@ class MontezumaRenderer(JAXGameRenderer):
             enemy_fields: RoomTags.ENEMIES.value = SANTAH.extract_tag_from_rooms[RoomTags.ENEMIES](room_state)
             tp, _ = jax.lax.scan(self._render_single_enemy_onto_canvas, (montezuma_state.canvas, room_state.vertical_offset), enemy_fields.enemies)
             canvas, _ = tp
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     
     def render_side_walls_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
@@ -4502,10 +4723,9 @@ class MontezumaRenderer(JAXGameRenderer):
             side_walls: RoomTags.SIDEWALLS.value = SANTAH.extract_tag_from_rooms[RoomTags.SIDEWALLS](room_state)
             canvas = montezuma_state.canvas
             canvas = jr.render_at(canvas,room_state.vertical_offset[0],0,side_walls.side_walls_render_map)
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     def render_dropout_floors_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         if RoomTags.DROPOUTFLOORS in tags:
@@ -4521,10 +4741,9 @@ class MontezumaRenderer(JAXGameRenderer):
                          lambda x: jr.render_at(x,0,0,dropout_floor.dropout_floor_render_maps[animation_index[0]]),
                          lambda x: x,
                          operand= canvas)
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     def render_conveyor_belts_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         if RoomTags.CONVEYORBELTS in tags:
@@ -4532,10 +4751,9 @@ class MontezumaRenderer(JAXGameRenderer):
             canvas = montezuma_state.canvas
             animation_index = jnp.less(jnp.mod(montezuma_state.frame_count,self.consts.ANIMATION_CYCLE_DURATION*2),self.consts.ANIMATION_CYCLE_DURATION).astype(jnp.int32)
             canvas = jr.render_at(canvas,0,0,conveyor_belts.global_conveyor_render_map[animation_index[0]])
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     def render_sarlacc_pit_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         if RoomTags.PIT in tags:   
@@ -4544,10 +4762,9 @@ class MontezumaRenderer(JAXGameRenderer):
             animation_index = (jnp.mod(montezuma_state.frame_count,self.consts.ANIMATION_CYCLE_DURATION*pit.pit_render_maps.shape[0])/self.consts.ANIMATION_CYCLE_DURATION).astype(jnp.int32)
             
             canvas = jr.render_at(canvas,room_state.vertical_offset, 0, pit.pit_render_maps[animation_index[0]])
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
         
         
@@ -4572,10 +4789,9 @@ class MontezumaRenderer(JAXGameRenderer):
                 return canvas, 0
             canvas, _ = jax.lax.scan(single_door_onto_canvas,montezuma_state.canvas, doors.doors)
             
-            state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
     
     def generate_lazer_wall_background(self) -> None:
         """Generates a static striped background over which the Lazer wall mask is slid to generate the moving illusion
@@ -4605,10 +4821,9 @@ class MontezumaRenderer(JAXGameRenderer):
             
             t_canvas = jr.render_at(t_canvas, 0, 0, rope_render)
             canvas = jnp.transpose(t_canvas, axes=(1, 0, 2))
-            montezuma_state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return montezuma_state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
         
     def render_ladders_onto_canvas(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]):
@@ -4623,10 +4838,9 @@ class MontezumaRenderer(JAXGameRenderer):
             
             canvas = jr.render_at(canvas, 0, 0, render_sprite)
             canvas = jnp.transpose(canvas, axes=(1, 0, 2))
-            montezuma_state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return montezuma_state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
         
     def render_lazer_walls(self, montezuma_state: MontezumaState, room_state: Room, room_type: Type[NamedTuple], tags: Tuple[RoomTags]) -> Tuple[MontezumaState, Room]:
         # Render the global lazer wall map onto the canvas
@@ -4662,10 +4876,9 @@ class MontezumaRenderer(JAXGameRenderer):
             
             t_canvas = jr.render_at(t_canvas, 0, 0, masked_barrier_sprite)
             canvas = jnp.transpose(t_canvas, axes=(1, 0, 2))
-            montezuma_state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.canvas.value](montezuma_state, canvas)
-            return montezuma_state, room_state
+            return canvas
         else:
-            return montezuma_state, room_state
+            return montezuma_state.canvas
        
     #
     # All the functions used for rendering the player.
@@ -4859,25 +5072,36 @@ class MontezumaRenderer(JAXGameRenderer):
             return canvas
         
         def render_everything_affected_by_darkness(state:MontezumaState):
-            state = self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS(state)
-            state = self.RENDER_LAZER_WALLS_WRAPPED(state)
-            state = self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED(state)
-            state = self.RENDER_DOORS_ONTO_CANVAS_WRAPPED(state)
-            state = self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED(state)
-            state = self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED(state)
-            state = self.RENDER_ROPES_ONTO_CANVAS_WRAPPED(state)
-            state = self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED(state)
+            canvas = self.WRAPPED_RENDER_ROOM_SPRITE_ONTO_CANVAS(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_LAZER_WALLS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_ITEMS_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_DOORS_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_CONVEYOR_BELTS_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_SIDE_WALLS_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_ROPES_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
+            canvas = self.RENDER_LADDERS_ONTO_CANVAS_WRAPPED(state)
+            state = state._replace(canvas=canvas)
             return state
 
-        state = self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS(state)
+        canvas = self.WRAPPED_RENDER_INITIAL_BLANK_CANVAS(state)
+        state = state._replace(canvas=canvas)
         state = jax.lax.cond(state.darkness[0],
                              lambda x : x,
                              render_everything_affected_by_darkness,
                              state)
-        state = self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED(state)
-        state = self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED(state)
-        state = self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED(state)
-        
+        canvas = self.RENDER_DROPOUT_FLOORS_ONTO_CANVAS_WRAPPED(state)
+        state = state._replace(canvas=canvas)
+        canvas = self.RENDER_SARLACC_PIT_ONTO_CANVAS_WRAPPED(state)
+        state = state._replace(canvas=canvas)
+        canvas = self.RENDER_ENEMIES_ONTO_CANVAS_WRAPPED(state)
+        state = state._replace(canvas=canvas)
         canvas: jArray = state.canvas
         canvas = jnp.transpose(canvas, (1, 0, 2))
         
@@ -4889,3 +5113,100 @@ class MontezumaRenderer(JAXGameRenderer):
         return canvas[..., 0:3]
         
 
+if __name__ == "__main__":
+    # Initialize Pygamepython
+    
+    game = JaxMontezuma()	
+    renderer = MontezumaRenderer()
+    
+    ob, state = game.reset()
+    ob: MontezumaObservation = ob
+    ob_0 = jnp.min(ob.annotated_collision_map)
+    ob_1 = jnp.max(ob.annotated_collision_map)
+    arr = jnp.array([ob.has_dropout_floors, ob.is_falling, ob.is_jumping], jnp.int32)
+    state: MontezumaState = state
+    obs: MontezumaObservation = state.observation
+    flops = game.obs_to_flat_array(obs)
+    
+    pygame.init()
+    pygame.display.set_caption(f"JAXAtari Game MontezumaRevenge")
+    env_render_shape = game.render(state).shape[:2]
+    consts = MontezumaConstants()
+    window = pygame.display.set_mode((consts.WIDTH * consts.RENDER_SCALE_FACTOR, consts.HEIGHT * consts.RENDER_SCALE_FACTOR))
+    clock = pygame.time.Clock()
+     
+    
+    
+    action_space = game.action_space()
+
+    save_keys = {}
+    running = True
+    pause = False
+    frame_by_frame = False
+    frame_rate = 30
+    next_frame_asked = False
+    total_return = 0
+
+    
+     
+    # display the first frame (reset frame) -> purely for aesthetics
+    image = game.render(state)
+    update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
+    clock.tick(frame_rate) 
+
+
+    # Game loop
+    while running:
+        # check for external actions
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                continue
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_p:  # pause
+                    pause = not pause
+                elif event.key == pygame.K_r:  # reset
+                    obs, state = game.reset()
+                elif event.key == pygame.K_f:
+                    frame_by_frame = not frame_by_frame
+                elif event.key == pygame.K_n:
+                    next_frame_asked = True
+                elif event.key == pygame.K_o:
+                    fname: str = "room_" + str(state.room_state.ROOM_ID[0]) + ".pkl"
+                    fldr = os.path.join("/home/ahfrfed_hrubters/workspace/Uni/master_3/reinforcement_learning_internship/alien_jax/the_alien/states_folder", fname)
+                    with open(fldr, 'wb') as f:
+                        pickle.dump(state, f)
+                    
+                    
+        if pause or (frame_by_frame and not next_frame_asked):
+            image = game.render(state)
+            update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
+            clock.tick(frame_rate)
+            continue
+        
+        action = get_human_action()
+
+        if not frame_by_frame or next_frame_asked:
+            action = get_human_action()
+            obs, state, reward, done, info = game.step(state, action)
+            
+            total_return += reward
+            if next_frame_asked:
+                next_frame_asked = False
+
+        if done:
+            print(f"Done. Total return {total_return}")
+            total_return = 0
+            obs, state = game.reset()
+
+        # Render the environment
+        
+        image = game.render(state)
+
+        update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
+
+        clock.tick(frame_rate)
+
+    pygame.quit()
+
+# All tests pass now :)
