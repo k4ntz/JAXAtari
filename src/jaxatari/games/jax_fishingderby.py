@@ -27,9 +27,10 @@ class GameConfig:
     """All static configuration parameters for the game."""
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
-    SKY_COLOR: Tuple[int, int, int] = (100, 149, 237)
+    SKY_COLOR: Tuple[int, int, int] = (117, 128, 240)
     WATER_COLOR: Tuple[int, int, int] = (24, 26, 167)
-    WATER_Y_START: int = 64
+    WATER_Y_START: int = 60
+    WATER_SHIMMER_HEIGHT: int = 16
     RESET: int = 18
 
     # Player and Rod/Hook
@@ -1281,9 +1282,53 @@ class FishingDerbyRenderer(JAXGameRenderer):
         cfg = self.config
         raster = jnp.zeros((cfg.SCREEN_HEIGHT, cfg.SCREEN_WIDTH, 3), dtype=jnp.uint8)
 
-        # Draw sky and water
+        # Draw sky
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
-        raster = raster.at[cfg.WATER_Y_START:, :, :].set(jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8))
+
+        # Water shimmer effect with varying band thickness (JAX-compatible version)
+        SHIMMER_HEIGHT = 16  # Total height of shimmer region
+        shimmer_end = cfg.WATER_Y_START + SHIMMER_HEIGHT
+
+        # Slow down the shimmer animation (update every 8 frames)
+        shimmer_time = state.time // 8
+
+        # Generate pseudo-random band pattern with varying thickness
+        base_water = jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8)
+
+        # Create bands using a vectorized approach instead of a while loop
+        y_indices = jnp.arange(cfg.WATER_Y_START, shimmer_end)
+
+        def compute_shimmer_color(y):
+            # Determine color for this scanline
+            color_hash = (shimmer_time * 17 + y * 11) & 255
+            use_light = (color_hash & 3) > 1  # 50% chance for light/dark
+
+            # Create shimmer color variation
+            light_color = jnp.array([
+                jnp.minimum(cfg.SKY_COLOR[0] + 8, 255),
+                jnp.minimum(cfg.SKY_COLOR[1] + 10, 255),
+                jnp.minimum(cfg.SKY_COLOR[2] + 8, 255)
+            ], dtype=jnp.uint8)
+
+            dark_color = jnp.array([
+                jnp.maximum(cfg.WATER_COLOR[0] - 6, 0),
+                jnp.maximum(cfg.WATER_COLOR[1] - 6, 0),
+                jnp.maximum(cfg.WATER_COLOR[2] - 4, 0)
+            ], dtype=jnp.uint8)
+
+            return jnp.where(use_light, light_color, dark_color)
+
+        # Apply shimmer colors to each scanline
+        def apply_shimmer_line(carry, y):
+            r = carry
+            shimmer_color = compute_shimmer_color(y)
+            r = r.at[y, :, :].set(shimmer_color)
+            return r, None
+
+        raster, _ = jax.lax.scan(apply_shimmer_line, raster, y_indices)
+
+        # Draw rest of water (below shimmer)
+        raster = raster.at[shimmer_end:, :, :].set(base_water)
 
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
@@ -1295,7 +1340,6 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         # Draw horizontal part of Player 1 rod
         raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y, (0, 0, 0))
-
 
         # Player 1 line rendering logic
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
@@ -1320,8 +1364,10 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw Player 2 fishing line
         p2_rod_end_x = cfg.P2_START_X - state.p2.rod_length
         p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, state.p2)
+
         # Draw horizontal part of Player 2 rod (extends leftward)
         raster = self._render_line(raster, cfg.P2_START_X + 8, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
+
         # Player 2 line rendering logic
         p2_in_water = state.p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         p2_is_reeling = state.p2.hook_state > 0
@@ -1332,6 +1378,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
         p2_sag_amount = jnp.where(p2_apply_sag, 3.0 + p2_water_depth_ratio * 3.0, 0.0)
         p2_line_start = jnp.array([p2_rod_end_x, cfg.ROD_Y])
         p2_line_end = jnp.array([p2_hook_x, p2_hook_y])
+
         raster = jax.lax.cond(
             p2_apply_sag,
             lambda r: self._render_saggy_line(r, p2_line_start, p2_line_end, p2_sag_amount, (0, 0, 0)),
