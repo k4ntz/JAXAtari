@@ -49,13 +49,13 @@ class GameConfig:
     START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
     MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
 
-    ROD_SPEED: float = 1.8
+    ROD_SPEED: float = 1
     # Fish death line - how far below the rod the fish must be brought to score
     FISH_DEATH_LINE_OFFSET: int = 20  # Increase this to lower the death line
 
     HOOK_WIDTH: int = 3
     HOOK_HEIGHT: int = 5
-    HOOK_SPEED_V: float = 1.0
+    HOOK_SPEED_V: float = 10
     REEL_SLOW_SPEED: float = 1
     REEL_FAST_SPEED: float = 2
     LINE_Y_START: int = 48
@@ -80,7 +80,7 @@ class GameConfig:
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
-    FISH_SPEED: float = 0.8
+    FISH_SPEED: float = 0.4
     NUM_FISH: int = 6
     FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
     FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
@@ -100,11 +100,11 @@ class GameConfig:
     # Shark
     SHARK_WIDTH: int = 16
     SHARK_HEIGHT: int = 7
-    SHARK_SPEED: float = 0.7
+    SHARK_SPEED: float = 0.3
     SHARK_Y: int = 78
-    SHARK_BURST_SPEED: float = 1.8
-    SHARK_BURST_DURATION: int = 150 # Frames
-    SHARK_BURST_CHANCE: float = 0.005 # percentage
+    SHARK_BURST_SPEED: float = 1.5
+    SHARK_BURST_DURATION: int = 300 # Frames
+    SHARK_BURST_CHANCE: float = 0.001 # percentage
 
 class PlayerState(NamedTuple):
     rod_length: chex.Array  # Length of horizontal rod extension
