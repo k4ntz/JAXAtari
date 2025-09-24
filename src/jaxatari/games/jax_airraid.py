@@ -177,19 +177,23 @@ def player_step(player_x: chex.Array, action: chex.Array) -> chex.Array:
     Returns:
         New player x position
     """
+    # 20px boundary on each side to prevent hiding at edges
+    LEFT_BOUNDARY = 10
+    RIGHT_BOUNDARY = WIDTH - PLAYER_WIDTH - 10
+
     # Check if left or right button was pressed
     move_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
     move_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
     player_x = jnp.where(
         move_left,
-        jnp.maximum(player_x - PLAYER_SPEED, 0),
+        jnp.maximum(player_x - PLAYER_SPEED, LEFT_BOUNDARY),
         player_x
     )
 
     player_x = jnp.where(
         move_right,
-        jnp.minimum(player_x + PLAYER_SPEED, WIDTH - PLAYER_WIDTH),
+        jnp.minimum(player_x + PLAYER_SPEED, RIGHT_BOUNDARY),
         player_x
     )
 
@@ -780,7 +784,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
 
         # Check if game should be over (but not counting flash animation)
         should_be_game_over = self._should_be_game_over(new_state)
-        
+
         # Check if any building was completely destroyed (reached MAX_BUILDING_DAMAGE)
         building_was_destroyed = jnp.any(
             jnp.logical_and(
@@ -788,17 +792,17 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
                 state.building_damage < MAX_BUILDING_DAMAGE    # Old damage was less than max
             )
         )
-        
+
         # Start flash sequence if building was destroyed OR game is over
         should_start_flash = jnp.logical_or(building_was_destroyed, should_be_game_over)
-        
+
         # Flash for 20 frames (4 flashes: each flash is 5 frames, alternating on/off)
         flash_counter = jnp.where(
             should_start_flash,
             jnp.where(new_state.flash_counter == 0, 1, new_state.flash_counter + 1),  # Start or continue flashing
             jnp.where(new_state.flash_counter > 0, new_state.flash_counter + 1, 0)   # Continue countdown if already flashing
         )
-        
+
         # Reset flash counter when done (after 20 frames)
         flash_counter = jnp.where(flash_counter > 20, 0, flash_counter)
 
@@ -984,11 +988,11 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
     def _get_done(self, state: AirRaidState) -> bool:
         # Game over conditions are met
         game_over_conditions = self._should_be_game_over(state)
-        
+
         # If game over conditions are met, wait for flash animation to complete
         # Flash 4 times (20 frames total)
         flash_complete = state.flash_counter == 0  # Flash counter resets to 0 when done
-        
+
         # Game is done when game over conditions are met AND flash animation is complete
         return jnp.logical_and(game_over_conditions, flash_complete)
 
