@@ -1285,50 +1285,51 @@ class FishingDerbyRenderer(JAXGameRenderer):
         # Draw sky
         raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
 
-        # Water shimmer effect with varying band thickness (JAX-compatible version)
-        SHIMMER_HEIGHT = 16  # Total height of shimmer region
-        shimmer_end = cfg.WATER_Y_START + SHIMMER_HEIGHT
-
-        # Slow down the shimmer animation (update every 8 frames)
-        shimmer_time = state.time // 8
-
-        # Generate pseudo-random band pattern with varying thickness
+        # Draw base water color first
         base_water = jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8)
+        raster = raster.at[cfg.WATER_Y_START:, :, :].set(base_water)
 
-        # Create bands using a vectorized approach instead of a while loop
-        y_indices = jnp.arange(cfg.WATER_Y_START, shimmer_end)
+        # Draw background shimmer (top 10 pixels of shimmer region)
+        SHIMMER_HEIGHT = 16
+        BACKGROUND_SHIMMER_HEIGHT = 10
+        shimmer_start = cfg.WATER_Y_START
+        background_shimmer_end = shimmer_start + BACKGROUND_SHIMMER_HEIGHT
 
-        def compute_shimmer_color(y):
-            # Determine color for this scanline
+        # Generate background shimmer
+        shimmer_time = state.time // 8
+        y_indices_bg = jnp.arange(BACKGROUND_SHIMMER_HEIGHT)
+
+        def compute_shimmer_color(y_offset):
+            y = shimmer_start + y_offset
             color_hash = (shimmer_time * 17 + y * 11) & 255
-            use_light = (color_hash & 3) > 1  # 50% chance for light/dark
+            use_light = (color_hash & 3) > 1
 
-            # Create shimmer color variation
             light_color = jnp.array([
-                jnp.minimum(cfg.SKY_COLOR[0] + 8, 255),
-                jnp.minimum(cfg.SKY_COLOR[1] + 10, 255),
-                jnp.minimum(cfg.SKY_COLOR[2] + 8, 255)
-            ], dtype=jnp.uint8)
+                base_water[0] + 6,
+                base_water[1] + 8,
+                base_water[2] + 6
+            ], dtype=jnp.int16)
 
             dark_color = jnp.array([
-                jnp.maximum(cfg.WATER_COLOR[0] - 6, 0),
-                jnp.maximum(cfg.WATER_COLOR[1] - 6, 0),
-                jnp.maximum(cfg.WATER_COLOR[2] - 4, 0)
-            ], dtype=jnp.uint8)
+                base_water[0] - 4,
+                base_water[1] - 4,
+                base_water[2] - 2
+            ], dtype=jnp.int16)
 
-            return jnp.where(use_light, light_color, dark_color)
+            shimmer_color = jnp.where(use_light, light_color, dark_color)
+            return jnp.clip(shimmer_color, 0, 255).astype(jnp.uint8)
 
-        # Apply shimmer colors to each scanline
-        def apply_shimmer_line(carry, y):
+        # Apply background shimmer
+        def apply_background_shimmer(carry, y_offset):
             r = carry
-            shimmer_color = compute_shimmer_color(y)
+            y = shimmer_start + y_offset
+            shimmer_color = compute_shimmer_color(y_offset)
             r = r.at[y, :, :].set(shimmer_color)
             return r, None
 
-        raster, _ = jax.lax.scan(apply_shimmer_line, raster, y_indices)
+        raster, _ = jax.lax.scan(apply_background_shimmer, raster, y_indices_bg)
 
-        # Draw rest of water (below shimmer)
-        raster = raster.at[shimmer_end:, :, :].set(base_water)
+
 
         # Draw players
         raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
@@ -1448,13 +1449,34 @@ class FishingDerbyRenderer(JAXGameRenderer):
                                  jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
         raster = self._render_at(raster, p2_hook_x - cfg.HOOK_WIDTH // 2, p2_hook_y - cfg.HOOK_HEIGHT // 2,
                                  jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
-
+        # Draw pier on top
+        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
         # Draw scores
         raster = self._render_score(raster, state.p1.display_score, 50, 10)
         raster = self._render_score(raster, state.p2.display_score, 100, 10)
 
-        # Draw pier on top
-        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
+        # This renders ABOVE all sprites for realistic water surface effect
+        FOREGROUND_SHIMMER_HEIGHT = 6
+        foreground_shimmer_start = background_shimmer_end
+        foreground_shimmer_end = shimmer_start + SHIMMER_HEIGHT
+
+        y_indices_fg = jnp.arange(FOREGROUND_SHIMMER_HEIGHT)
+
+        def apply_foreground_shimmer(carry, y_offset):
+            r = carry
+            y = foreground_shimmer_start + y_offset
+            # Use same shimmer calculation but with different y offset
+            shimmer_color = compute_shimmer_color(BACKGROUND_SHIMMER_HEIGHT + y_offset)
+
+            # Apply shimmer with some transparency effect by blending with existing pixels
+            existing_color = r[y, :, :]
+            blended_color = (shimmer_color.astype(jnp.int16) + existing_color.astype(jnp.int16)) // 2
+            blended_color = jnp.clip(blended_color, 0, 255).astype(jnp.uint8)
+
+            r = r.at[y, :, :].set(blended_color)
+            return r, None
+
+        raster, _ = jax.lax.scan(apply_foreground_shimmer, raster, y_indices_fg)
 
         return raster
 
