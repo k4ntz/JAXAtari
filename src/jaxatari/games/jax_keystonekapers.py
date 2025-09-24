@@ -1500,54 +1500,75 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Fallback to simple colored rectangle if sprite loading fails
             sprites['activision_logo'] = jnp.ones((10, 40, 3), dtype=jnp.uint8) * jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
 
-        # Load escalator right-facing sprites (4 animation frames)
-        escalator_sprites = []
-        max_height = 0
-        max_width = 0
+        # Load escalator sprites (4 animation frames for both directions)
+        # First, collect all sprites from all sets to find global max dimensions
+        all_sprite_sets = []
+        global_max_height = 0
+        global_max_width = 0
+        
+        sprite_prefixes = [
+            'escalator_right_facing',
+            'escalator_left_facing_floor_1', 
+            'escalator_left_facing_floor_3'
+        ]
+        
+        # Load all sprites and find global maximum dimensions
+        for sprite_prefix in sprite_prefixes:
+            sprite_set = []
+            for frame in range(1, 5):  # Load frames 1, 2, 3, 4
+                try:
+                    escalator_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'{sprite_prefix}_{frame}.npy')
+                    escalator_sprite_rgba = jr.loadFrame(escalator_sprite_path)
 
-        # First pass: find maximum dimensions
-        temp_sprites = []
-        for frame in range(1, 5):  # Load frames 1, 2, 3, 4
-            try:
-                escalator_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'escalator_right_facing_{frame}.npy')
-                escalator_sprite_rgba = jr.loadFrame(escalator_sprite_path)
+                    # Handle RGBA properly with alpha blending
+                    rgb_data = escalator_sprite_rgba[:, :, :3]
+                    alpha_data = escalator_sprite_rgba[:, :, 3:4]
+                    alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                    white_background = jnp.ones_like(rgb_data) * 255
 
-                # Handle RGBA properly with alpha blending
-                rgb_data = escalator_sprite_rgba[:, :, :3]
-                alpha_data = escalator_sprite_rgba[:, :, 3:4]
-                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
-                white_background = jnp.ones_like(rgb_data) * 255
+                    escalator_frame_sprite = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                            white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                    sprite_set.append(escalator_frame_sprite)
+                    global_max_height = max(global_max_height, escalator_frame_sprite.shape[0])
+                    global_max_width = max(global_max_width, escalator_frame_sprite.shape[1])
 
-                escalator_frame_sprite = (rgb_data.astype(jnp.float32) * alpha_normalized +
-                                        white_background * (1 - alpha_normalized)).astype(jnp.uint8)
-                temp_sprites.append(escalator_frame_sprite)
-                max_height = max(max_height, escalator_frame_sprite.shape[0])
-                max_width = max(max_width, escalator_frame_sprite.shape[1])
+                    # Debug: Log dimensions of each sprite
+                    print(f"Loaded sprite from {escalator_sprite_path}: {escalator_frame_sprite.shape}")
+                except Exception as e:
+                    # Fallback to simple purple rectangle for missing sprites
+                    fallback_sprite = jnp.ones((25, 16, 3), dtype=jnp.uint8) * jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
+                    sprite_set.append(fallback_sprite)
+                    global_max_height = max(global_max_height, 25)
+                    global_max_width = max(global_max_width, 16)
+            
+            all_sprite_sets.append(sprite_set)
+        
+        # Now pad all sprites to the global maximum dimensions
+        def pad_sprite_set_to_global_size(sprite_set):
+            padded_set = []
+            for sprite in sprite_set:
+                height_diff = global_max_height - sprite.shape[0]
+                width_diff = global_max_width - sprite.shape[1]
 
-            except Exception as e:
-                # Fallback to simple purple rectangle for missing sprites
-                fallback_sprite = jnp.ones((25, 16, 3), dtype=jnp.uint8) * jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
-                temp_sprites.append(fallback_sprite)
-                max_height = max(max_height, 25)
-                max_width = max(max_width, 16)
+                # Pad with white (255, 255, 255)
+                padded_sprite = jnp.pad(
+                    sprite,
+                    ((0, height_diff), (0, width_diff), (0, 0)),
+                    mode='constant',
+                    constant_values=255
+                )
+                padded_set.append(padded_sprite)
+            return padded_set
 
-        # Second pass: pad all sprites to max dimensions
-        for sprite in temp_sprites:
-            # Pad sprite to max dimensions with white background
-            height_diff = max_height - sprite.shape[0]
-            width_diff = max_width - sprite.shape[1]
-
-            # Pad with white (255, 255, 255)
-            padded_sprite = jnp.pad(
-                sprite,
-                ((0, height_diff), (0, width_diff), (0, 0)),
-                mode='constant',
-                constant_values=255
-            )
-            escalator_sprites.append(padded_sprite)
+        # Pad all sprite sets to global dimensions
+        escalator_right_sprites = pad_sprite_set_to_global_size(all_sprite_sets[0])
+        escalator_left_floor_1_sprites = pad_sprite_set_to_global_size(all_sprite_sets[1])
+        escalator_left_floor_3_sprites = pad_sprite_set_to_global_size(all_sprite_sets[2])
 
         # Stack escalator sprites for JAX-compatible indexing
-        sprites['escalator_frames'] = jnp.stack(escalator_sprites, axis=0)
+        sprites['escalator_right_frames'] = jnp.stack(escalator_right_sprites, axis=0)
+        sprites['escalator_left_floor_1_frames'] = jnp.stack(escalator_left_floor_1_sprites, axis=0)
+        sprites['escalator_left_floor_3_frames'] = jnp.stack(escalator_left_floor_3_sprites, axis=0)
 
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
@@ -1565,6 +1586,20 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Use escalator_frame (which increments every step) to determine sprite frame
         # Animation cycles every 2 frames (slower animation)
         return (state.escalator_frame // 8) % 4
+        
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_escalator_sprite_for_floor(self, floor_num: int, sprite_frame: chex.Array) -> chex.Array:
+        """Get the appropriate escalator sprite based on floor number."""
+        # Floor 1 (index 0): left-facing floor 1 sprites
+        # Floor 2 (index 1): right-facing sprites  
+        # Floor 3 (index 2): left-facing floor 3 sprites
+        return jnp.where(
+            floor_num == 0, self.sprites['escalator_left_floor_1_frames'][sprite_frame],
+            jnp.where(
+                floor_num == 1, self.sprites['escalator_right_frames'][sprite_frame],
+                self.sprites['escalator_left_floor_3_frames'][sprite_frame]
+            )
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> jnp.ndarray:
@@ -1718,34 +1753,51 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
-        # Draw escalators using animated sprites (right-facing, full floor section)
+        # Draw escalators using animated sprites for all floors
         sprite_frame = self._get_escalator_sprite_frame(state)
 
-        # Get the current escalator sprite frame from the pre-stacked array
-        current_escalator_sprite = self.sprites['escalator_frames'][sprite_frame]
+        # Draw escalator 1 (Floor 1 - left-facing)
+        escalator_1_building_x = self.consts.ESCALATOR_FLOOR1_X
+        escalator_1_screen_x = building_to_screen_x(escalator_1_building_x)
+        escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.GAME_AREA_WIDTH)
+        
+        current_escalator_1_sprite = self._get_escalator_sprite_for_floor(0, sprite_frame)
+        escalator_1_sprite_height = current_escalator_1_sprite.shape[0]
+        escalator_1_sprite_y = self.consts.FLOOR_1_Y - (escalator_1_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        
+        game_area = jnp.where(
+            escalator_1_visible,
+            draw_sprite(game_area, current_escalator_1_sprite, 0, escalator_1_sprite_y),
+            game_area
+        )
 
-        # Only draw the escalator sprite when viewing the section that contains escalator 2
-        # Escalator 2 is at building position ESCALATOR_FLOOR2_X (988), which is in the rightmost section
+        # Draw escalator 2 (Floor 2 - right-facing)
         escalator_2_building_x = self.consts.ESCALATOR_FLOOR2_X
         escalator_2_screen_x = building_to_screen_x(escalator_2_building_x)
-
-        # Check if the escalator section is visible (if any part of the escalator position is on screen)
-        escalator_section_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
-
-        # Position the escalator sprite higher on the second floor
-        # The sprite is 152 pixels wide (full game area width) and 61 pixels tall
-        escalator_sprite_height = current_escalator_sprite.shape[0]  # Should be 61
-
-        # Position it at the top of the second floor area (higher up)
-        sprite_y = self.consts.FLOOR_2_Y - (escalator_sprite_height - self.consts.FLOOR_HEIGHT) - 3
-
-        # The sprite covers the full width, so x position is 0
-        sprite_x = 0
-
-        # Draw the escalator sprite only when the escalator section is visible
+        escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
+        
+        current_escalator_2_sprite = self._get_escalator_sprite_for_floor(1, sprite_frame)
+        escalator_2_sprite_height = current_escalator_2_sprite.shape[0]
+        escalator_2_sprite_y = self.consts.FLOOR_2_Y - (escalator_2_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        
         game_area = jnp.where(
-            escalator_section_visible,
-            draw_sprite(game_area, current_escalator_sprite, sprite_x, sprite_y),
+            escalator_2_visible,
+            draw_sprite(game_area, current_escalator_2_sprite, 0, escalator_2_sprite_y),
+            game_area
+        )
+
+        # Draw escalator 3 (Floor 3 - left-facing)
+        escalator_3_building_x = self.consts.ESCALATOR_FLOOR3_X
+        escalator_3_screen_x = building_to_screen_x(escalator_3_building_x)
+        escalator_3_visible = (escalator_3_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_3_screen_x < self.consts.GAME_AREA_WIDTH)
+        
+        current_escalator_3_sprite = self._get_escalator_sprite_for_floor(2, sprite_frame)
+        escalator_3_sprite_height = current_escalator_3_sprite.shape[0]
+        escalator_3_sprite_y = self.consts.FLOOR_3_Y - (escalator_3_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        
+        game_area = jnp.where(
+            escalator_3_visible,
+            draw_sprite(game_area, current_escalator_3_sprite, 0, escalator_3_sprite_y),
             game_area
         )
 
