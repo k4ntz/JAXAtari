@@ -32,7 +32,7 @@ BRAKE_TOTAL_DISTANCE = 7.0 * 2# in Pixels
 BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
 
 # --- Player params ---------------
-PLAYER_SIZE = (9, 23)  # w, h
+PLAYER_SIZE = (9, 21)  # w, h
 PLAYER_START_X, PLAYER_START_Y = 15, 140
 PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
 PALETTE = jnp.array([
@@ -394,10 +394,21 @@ FIREBALL_INIT_XY = jnp.array([FIREBALL_X[1], FIREBALL_Y[1]])
 FIREBALL_DIR = jnp.array([1, -1])
 FIREBALL_HOLD = jnp.int32(4)  # change to taste
 
+
+# --- Reward params ---
+REWARD_SIZE = (8, 8)  # w, h
+REWARD_MOVE_SPEED = 0.5  # Faster than enemies
+
+# --- Coin params ---
+COIN_RADIUS = 5
+COIN_COLOR = jnp.array([200, 100, 200], dtype=jnp.uint8)  # Light purple
+COIN_PHASE_DURATION = 900  # 15 seconds at 60 FPS
+COIN_PHASE_SCORE_THRESHOLD = 4000
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
 ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
 FIREBALL_COLOR = jnp.array([255, 255, 0], dtype=jnp.uint8)
+REWARD_COLOR = jnp.array([128, 0, 128], dtype=jnp.uint8)  
 PLATFORM_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
 GROUND_COLOR = jnp.array([181, 83, 40], dtype=jnp.uint8)
 POW_COLOR = jnp.array([201, 164, 74], dtype=jnp.uint8)
@@ -413,6 +424,18 @@ PLATFORMS = jnp.array([
     [0, 135, 48, 3],  # 1.Floor Left
     [112, 135, 48, 3]  # 1.Floor Right
 ])
+
+# Fixed coin positions 
+COIN_POSITIONS = jnp.array([
+    [20, 175 - COIN_RADIUS],      # Ground left
+    [140, 175 - COIN_RADIUS],     # Ground right
+    [50, 95 - COIN_RADIUS],       # First level left
+    [110, 95 - COIN_RADIUS],      # First level right
+    [20, 135 - COIN_RADIUS],      # Second level left
+    [140, 135 - COIN_RADIUS],     # Second level right
+    [20, 57 - COIN_RADIUS],       # Third level left
+    [140, 57 - COIN_RADIUS]       # Third level right
+], dtype=jnp.float32)
 
 # --- Pow_Block params ---
 POW_BLOCK = jnp.array([[72, 141, 16, 7]])  # x, y, w, h
@@ -453,6 +476,15 @@ class Enemy(NamedTuple):
     enemy_init_positions: chex.Array  # shape (N,2): prototype spawn positions for enemies (use [0]=right, [1]=left)
     enemy_status: chex.Array  # shape (N,)
 
+class Reward(NamedTuple):
+    reward_pos: chex.Array  # shape (N,2): x/y positions
+    reward_vel: chex.Array  # shape (N,2): x/y velocities
+    reward_platform_idx: chex.Array  # shape (N,): index of current platform
+    reward_timer: chex.Array  # shape (N,): frame count until next decision
+    reward_initial_sides: chex.Array  # shape (N,): 0=spawned on left, 1=spawned on right
+    reward_active: chex.Array  # shape (N,): 1=active, 0=inactive
+    reward_init_positions: chex.Array  # shape (N,2): prototype spawn positions
+
 class GameState(NamedTuple):  # Enemy movement + global game fields
     enemy: chex.Array
     pow_block_counter: chex.Array
@@ -460,6 +492,10 @@ class GameState(NamedTuple):  # Enemy movement + global game fields
     fireball: Fireball
     game_over: chex.Array
     next_spawn_side: chex.Array  # 1 = right next, 0 = left next
+    reward: Reward
+    coin_phase_active: chex.Array  # 0 = inactive, 1 = active
+    coin_phase_timer: chex.Array   # frames remaining
+    coins_collected: chex.Array  # which coins have been collected (boolean array)
 
 class PlayerState(NamedTuple):  # Player movement
     pos: chex.Array
@@ -502,6 +538,8 @@ class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-16
     pow_block_counter: chex.Array
     pow_block_pos: chex.Array
     plattforms_pos: chex.Array
+    coin_pos: chex.Array
+    coin_active: chex.Array
 
 
 class MarioBrosInfo(NamedTuple):  # Copied from jax_kangaroo.py ln.186-187
@@ -599,6 +637,40 @@ def check_enemy_collision(player_pos, enemy_pos):
     overlap_y = (py < ey + eh) & (py + ph > ey)
     return jnp.any(overlap_x & overlap_y)
 
+def check_reward_collision(player_pos, reward_pos, reward_active):
+    px, py = player_pos
+    pw, ph = PLAYER_SIZE
+    rx, ry = reward_pos[:, 0], reward_pos[:, 1]
+    rw, rh = REWARD_SIZE
+
+    overlap_x = (px < rx + rw) & (px + pw > rx)
+    overlap_y = (py < ry + rh) & (py + ph > ry)
+    return overlap_x & overlap_y & reward_active
+
+def check_if_on_ground(player_pos, platforms):
+    x, y = player_pos
+    w, h = PLAYER_SIZE
+    
+    # Check if player is on any platform
+    px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
+    p_top = py
+    
+    # Player's bottom position
+    player_bottom = y + h
+    
+    # Check if player is on any platform
+    on_platform = jnp.any(
+        (player_bottom >= p_top) & 
+        (player_bottom <= p_top + 5) &  # Small tolerance
+        (x + w > px) & 
+        (x < px + pw)
+    )
+    
+    # Check if player is on ground (lowest platform)
+    on_ground = (player_bottom >= PLATFORMS[0, 1]) | on_platform
+    
+    return on_ground
+
 def fireball_new_start_pos(rng):
     rng, subkey1 = jax.random.split(rng)
     height = jax.random.randint(subkey1, (), 0, 4)
@@ -679,7 +751,20 @@ def fireball_step(fb:Fireball):
             ani= ff.ani
         )
         return lax.cond(f.count > 0, stay, end, f)
-    return lax.switch(fb.state, [start, move, wait], fb)
+    def inactive(f: Fireball):
+        # Inactive state - fireball doesn't move during coin phase
+        return Fireball(
+            pos=f.pos,
+            start_pat=f.start_pat,
+            move_pat=f.move_pat,
+            count=f.count,
+            state=f.state,  # Stay in inactive state
+            dir=f.dir,
+            rnd=f.rnd,
+            ani= f.ani
+        )
+    
+    return lax.switch(fb.state, [start, move, wait, inactive], fb)
 
 @jax.jit
 def enemy_step(
@@ -851,6 +936,109 @@ def enemy_step(
 
     return new_pos, new_vel, new_idx, new_timer, new_sides, new_status
 
+@jax.jit
+def reward_step(
+    reward_pos,
+    reward_vel,
+    reward_platform_idx,
+    reward_timer,
+    platforms,
+    initial_sides,
+    active_mask,
+    init_positions,
+):
+    # Implementation similar to enemy_step but simpler
+    rw, rh = REWARD_SIZE
+    pw = platforms[:, 2]
+
+    def step_reward(pos, vel, p_idx, timer, side, i, active):
+        x, y = pos
+        vx, vy = vel
+        
+        # Only process if active
+        def active_step(_):
+            plat = platforms[p_idx]
+            plat_x, plat_y, plat_w, plat_h = plat
+            plat_left = plat_x
+            plat_right = plat_x + plat_w
+
+            EPS = 0.5
+            at_left_edge = x <= plat_left + EPS
+            at_right_edge = x + rw >= plat_right - EPS
+            at_edge = at_left_edge | at_right_edge
+
+            # Check platform below at next x position (x + vx)
+            def platform_below_y(pos_x):
+                px, py, pw, ph = platforms[:, 0], platforms[:, 1], platforms[:, 2], platforms[:, 3]
+                left = px
+                right = px + pw
+                supported_x = (pos_x + rw > left) & (pos_x < right)
+                below_y = py > y
+                candidates = jnp.where(supported_x & below_y, py, jnp.inf)
+                return jnp.min(candidates)
+
+            min_platform_below_y = platform_below_y(x + vx)
+            has_platform_below = min_platform_below_y != jnp.inf
+
+            def teleport_down(pos_x, vx, side, rw, rh, platforms, min_platform_below_y):
+                same_y_mask = platforms[:, 1] == min_platform_below_y
+                plat_lefts = platforms[:, 0]
+                plat_rights = platforms[:, 0] + platforms[:, 2]
+                inside_x_mask = (pos_x + rw > plat_lefts) & (pos_x < plat_rights)
+                valid_mask = same_y_mask & inside_x_mask
+
+                idx_below = jnp.argmax(valid_mask.astype(jnp.int32))
+                new_pos_x = jnp.array(pos_x, dtype=jnp.float32)
+                new_pos_y = jnp.array(platforms[idx_below, 1] - rh, dtype=jnp.float32)
+                new_vx_down = vx
+                new_timer = jnp.array(0, dtype=jnp.int32)
+                new_side = jnp.array(side, dtype=jnp.int32)
+                return (
+                    jnp.array([new_pos_x, new_pos_y]),
+                    jnp.array([new_vx_down, vy]),
+                    idx_below,
+                    new_timer,
+                    new_side,
+                )
+
+            def stay_on():
+                new_x = x + vx
+
+                # Wrap around screen
+                new_x = jnp.where(new_x < 0, SCREEN_WIDTH - rw, new_x)
+                new_x = jnp.where(new_x + rw > SCREEN_WIDTH, 0.0, new_x)
+
+                return (
+                    jnp.array([new_x, y]),
+                    jnp.array([vx, vy]),
+                    p_idx,
+                    timer + 1,
+                    side,
+                )
+
+            # If at edge and has platform below, teleport down, else stay on
+            return jax.lax.cond(
+                at_edge & has_platform_below,
+                lambda: teleport_down(x + vx, vx, side, rw, rh, platforms, min_platform_below_y),
+                stay_on
+            )
+
+        def inactive_step(_):
+            return pos, vel, p_idx, timer, side
+
+        return jax.lax.cond(active, active_step, inactive_step, operand=None)
+
+    def conditional_step(pos, vel, idx, timer, side, i, active):
+        return step_reward(pos, vel, idx, timer, side, i, active)
+
+    indices = jnp.arange(reward_pos.shape[0], dtype=jnp.int32)
+
+    new_pos, new_vel, new_idx, new_timer, new_sides = jax.vmap(
+        conditional_step,
+        in_axes=(0, 0, 0, 0, 0, 0, 0)
+    )(reward_pos, reward_vel, reward_platform_idx, reward_timer, initial_sides, indices, active_mask)
+
+    return new_pos, new_vel, new_idx, new_timer, new_sides
 
 @jax.jit
 def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calculates movement of Player based on given state and action taken
@@ -927,6 +1115,7 @@ def movement(state: PlayerState, game_state:GameState) -> PlayerState:    # Calc
             safe= state.safe
         )
     return lax.cond(state.safe, lambda x: x, normal , state)
+
 
 
 
@@ -1083,6 +1272,24 @@ def draw_rect(image, x, y, w, h, color):
     mask_x = (jnp.arange(SCREEN_WIDTH) >= x0) & (jnp.arange(SCREEN_WIDTH) < x1)
     mask = jnp.outer(mask_y, mask_x)
 
+    color_arr = jnp.array(color, dtype=image.dtype).reshape(1, 1, 3)
+    new_image = jnp.where(mask[:, :, None], color_arr, image)
+    return new_image
+
+def draw_circle(image, x, y, radius, color):
+    y_center = jnp.clip(jnp.floor(y), 0, SCREEN_HEIGHT - 1).astype(jnp.int32)
+    x_center = jnp.clip(jnp.floor(x), 0, SCREEN_WIDTH - 1).astype(jnp.int32)
+    
+    # Create a grid of coordinates
+    y_coords, x_coords = jnp.mgrid[0:SCREEN_HEIGHT, 0:SCREEN_WIDTH]
+    
+    # Calculate distance from center for each pixel
+    distances = jnp.sqrt((x_coords - x_center)**2 + (y_coords - y_center)**2)
+    
+    # Create a mask for pixels within the circle
+    mask = distances <= radius
+    
+    # Apply the color to the masked pixels
     color_arr = jnp.array(color, dtype=image.dtype).reshape(1, 1, 3)
     new_image = jnp.where(mask[:, :, None], color_arr, image)
     return new_image
@@ -1353,9 +1560,32 @@ class MarioBrosRenderer(JAXGameRenderer):
 
             image = lax.fori_loop(0, state.game.enemy.enemy_pos.shape[0], draw_enemy, image)
 
+            def draw_reward(i, img):
+                active_i = state.game.reward.reward_active[i]
+                def do_draw(_):
+                    rx, ry = state.game.reward.reward_pos[i]
+                    return draw_rect(img, rx, ry, *REWARD_SIZE, REWARD_COLOR)
+                def skip_draw(_):
+                    return img
+                return lax.cond(active_i == 1, do_draw, skip_draw, operand=None)
+
+            image = lax.fori_loop(0, state.game.reward.reward_pos.shape[0], draw_reward, image)
+
             # --- Draw fireball ---
-            fx, fy = state.game.fireball.pos
-            image = draw_fireball(image, state.game.fireball, fx, fy)
+            def fireball_active(img):
+                fx, fy = state.game.fireball.pos
+                image = draw_fireball(img, state.game.fireball, fx, fy)
+                return image
+            def skip_fireball(img):
+                return img
+            
+            fireball_visible = (state.game.fireball.state != 3) & (state.game.coin_phase_active == 0)
+            image = lax.cond(
+                fireball_visible,
+                fireball_active,
+                skip_fireball,
+                image
+            )
             # --- Draw platforms ---
             def draw_platform(i, img):
                 plat = PLATFORMS[i]
@@ -1370,6 +1600,48 @@ class MarioBrosRenderer(JAXGameRenderer):
                 return draw_rect(img, x, y, w, h, POW_COLOR)
 
             image = lax.cond(state.game.pow_block_counter > 0, draw_pow, lambda img: img, image)
+
+            def draw_coin(i, img):
+                # SIMPLIFIED: Only check coin_phase_active, not timer
+                coin_should_draw = (state.game.coin_phase_active == 1) & (state.game.coins_collected[i] == 0)
+                return lax.cond(
+                    coin_should_draw,
+                    lambda _: draw_circle(img, COIN_POSITIONS[i][0], COIN_POSITIONS[i][1], COIN_RADIUS, COIN_COLOR),
+                    lambda _: img,
+                    operand=None
+                )
+
+            image = lax.fori_loop(0, 8, draw_coin, image)
+
+            # --- Draw timer during coin phase ---
+            def draw_timer_func(current_img):
+                timer_seconds = state.game.coin_phase_timer // 60
+                timer_x = (SCREEN_WIDTH/2)   # Right side with some margin
+                timer_y = SCREEN_HEIGHT - 20  # Top with some margin
+                
+                # Draw timer background
+                img = draw_rect(current_img, timer_x - 25, timer_y - 10, 50, 20, jnp.array([0, 0, 0]))
+                
+                # Draw timer text
+                digit1 = timer_seconds // 10
+                digit2 = timer_seconds % 10
+                
+                img = draw_digit(img, digit1, timer_x - 10, timer_y)
+                img = draw_digit(img, digit2, timer_x + 5, timer_y)
+                
+                return img
+
+            def keep_image_func(current_img):
+                return current_img
+
+            # Only draw timer during active coin phase
+            timer_should_draw = (state.game.coin_phase_active == 1)
+            image = lax.cond(
+                timer_should_draw,
+                lambda img: draw_timer_func(img),
+                lambda img: img,
+                image
+            )
 
             # --- Draw lives ---
             def draw_life(i, img):
@@ -1434,20 +1706,22 @@ class JaxMarioBros(JaxEnvironment[
     def _get_observation(self, state: MarioBrosState) -> MarioBrosObservation:
         obs = MarioBrosObservation(
             player_pos = jnp.array(state.player.pos, dtype=jnp.float32),
-            player_on_ground = jnp.array([state.player.on_ground], dtype=jnp.int32),
-            player_brake_frames_left = jnp.array([state.player.brake_frames_left], dtype=jnp.int32),
-            player_lives = jnp.array([state.lives], dtype=jnp.int32),
+            player_on_ground = jnp.array([state.player.on_ground], dtype=jnp.float32),
+            player_brake_frames_left = jnp.array([state.player.brake_frames_left], dtype=jnp.float32),
+            player_lives = jnp.array([state.lives], dtype=jnp.float32),
 
-            enemy_active = jnp.array(state.game.enemy.enemy_active, dtype=jnp.int32),
+            enemy_active = jnp.array(state.game.enemy.enemy_active, dtype=jnp.float32),
             enemy_pos = jnp.array(state.game.enemy.enemy_pos, dtype=jnp.float32),
-            enemy_state = jnp.array(state.game.enemy.enemy_status, dtype=jnp.int32),
+            enemy_state = jnp.array(state.game.enemy.enemy_status, dtype=jnp.float32),
 
             fireball_pos = jnp.array(state.game.fireball.pos, dtype=jnp.float32),
-            fireball_dir = jnp.array([state.game.fireball.dir], dtype=jnp.int32),
+            fireball_dir = jnp.array([state.game.fireball.dir], dtype=jnp.float32),
 
-            pow_block_counter = jnp.array([state.game.pow_block_counter], dtype=jnp.int32),
-            pow_block_pos = jnp.array(POW_BLOCK, dtype=jnp.int32),
-            plattforms_pos = jnp.array(PLATFORMS, dtype=jnp.int32)
+            pow_block_counter = jnp.array([state.game.pow_block_counter], dtype=jnp.float32),
+            pow_block_pos = jnp.array(POW_BLOCK, dtype=jnp.float32),
+            plattforms_pos = jnp.array(PLATFORMS, dtype=jnp.float32),
+            coin_pos= jnp.array(COIN_POSITIONS, dtype=jnp.float32),
+            coin_active= jnp.array(state.game.coin_phase_active, dtype=jnp.float32)
         )
         return obs
 
@@ -1466,6 +1740,8 @@ class JaxMarioBros(JaxEnvironment[
             obs.pow_block_counter.flatten(),
             obs.pow_block_pos.flatten(),
             obs.plattforms_pos.flatten(),
+            obs.coin_pos.flatten(),
+            obs.coin_active.flatten()
             ]
         )
 
@@ -1558,6 +1834,21 @@ class JaxMarioBros(JaxEnvironment[
                 shape=(PLATFORMS.shape[0], 4),
                 dtype=jnp.float32,
             ),
+            "coin_pos": spaces.Box(
+                low=jnp.zeros((COIN_POSITIONS.shape[0], 2), dtype=jnp.float32),
+                high=jnp.broadcast_to(
+                    jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
+                    (COIN_POSITIONS.shape[0], 2)
+                ),
+                shape=(COIN_POSITIONS.shape[0], 2),
+                dtype=jnp.float32,
+            ),
+            "coin_active": spaces.Box(
+                low=0,
+                high=1,
+                shape=(),
+                dtype=jnp.float32
+            ),
         })
 
 
@@ -1599,11 +1890,6 @@ class JaxMarioBros(JaxEnvironment[
     def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
         game = self.reset_game()
         obs = self._get_observation(game)
-        def show_shapes(tree):
-            return jax.tree_map(lambda x: (x.shape, x.dtype), tree)
-
-        obs_info = show_shapes(obs)
-        jax.debug.print("={}",obs_info)
         return obs, game
 
     def reset_game(self) -> MarioBrosState:
@@ -1614,7 +1900,7 @@ class JaxMarioBros(JaxEnvironment[
         # Enemy 1 position (used also for enemy 3)
         enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
         enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
-
+        reward_init_pos = jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         new_state = MarioBrosState(
             player=PlayerState(
                 pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
@@ -1660,8 +1946,20 @@ class JaxMarioBros(JaxEnvironment[
                     rnd= jax.random.PRNGKey(0),
                     ani= 1
                 ),
+                coin_phase_active=jnp.int32(0),
+                coin_phase_timer=jnp.int32(0),
+                coins_collected=jnp.zeros(8, dtype=jnp.int32),  # 8 coins, all uncollected
                 game_over= False,
                 next_spawn_side=jnp.int32(1),
+                reward=Reward(
+                    reward_pos=reward_init_pos,
+                    reward_vel=jnp.zeros((3, 2)),
+                    reward_platform_idx=jnp.array([0, 0, 0]),
+                    reward_timer=jnp.array([0, 0, 0]),
+                    reward_initial_sides=jnp.array([0, 0, 0]),
+                    reward_active=jnp.array([0, 0, 0]),
+                    reward_init_positions=reward_init_pos
+                ),  
         ),
             lives=jnp.int32(4)
         )
@@ -1718,281 +2016,608 @@ class JaxMarioBros(JaxEnvironment[
            
 
         def step(_) -> MarioBrosState:
-            # 1) Advance player state given action
-            new_player = player_step(state.player, action, state.game)
-            bumped_idx = new_player.bumped_idx
-            pow_bumped = new_player.pow_bumped
-            # 2) Detect collisions between player and enemies
-            def check_enemy_collision_per_enemy(player_pos, enemy_positions):
-                px, py = player_pos
-                pw, ph = PLAYER_SIZE
-                ex, ey = enemy_positions[:, 0], enemy_positions[:, 1]
-                ew, eh = ENEMY_SIZE
-
-                overlap_x = (px < ex + ew) & (px + pw > ex)
-                overlap_y = (py < ey + eh) & (py + ph > ey)
-                return overlap_x & overlap_y  # bool array per enemy
-
-            def check_fireball_collision(fb: Fireball, player_pos) -> bool:
-                px, py = player_pos
-                pw, ph = PLAYER_SIZE
-                fx, fy = fb.pos
-                fw, fh = FIREBALL_SIZE
-                
-                overlap_x = (px < fx + fw) & (px + pw > fx)
-                overlap_y = (py < fy + fh) & (py + ph > fy)
-                
-                return overlap_x & overlap_y
-
-            collided_mask = check_enemy_collision_per_enemy(new_player.pos, state.game.enemy.enemy_pos) & (state.game.enemy.enemy_active != 0)
-
-            fireball_hit = check_fireball_collision(state.game.fireball, new_player.pos)
-            # Check if any collided enemy is strong (status==2)
-            strong_enemy_hit = jnp.any(collided_mask & (state.game.enemy.enemy_status == 2))
-
-            # --- Handling collision with strong enemy: reset Mario position only ---
-            def on_hit(_):
-                # Spielerleben um 1 reduzieren
-                new_lives = state.lives - 1
-                
-                # Mario an Respawn-Position setzen, falls Leben >= 0
-                new_player_updated = new_player._replace(safe= True, jump_phase= jnp.int32(0))
-                
-                # Neuer Zustand mit reduziertem Leben und neuer Position
-                new_game = state.game._replace(game_over=jnp.where(state.lives > 0, False, True))
-
-                new_state = MarioBrosState(
-                    player=new_player_updated,
-                    game=new_game,
-                    lives=new_lives
+            # 1) Check if we should start a coin phase
+            should_start_coin_phase = jnp.logical_and(
+                state.game.score >= COIN_PHASE_SCORE_THRESHOLD,
+                state.game.score % COIN_PHASE_SCORE_THRESHOLD == 0
+            )
+            should_start_coin_phase = jnp.logical_and(
+                should_start_coin_phase,
+                state.game.coin_phase_active == 0
+            )
+            
+            
+            def handle_coin_phase(_):
+                # Update player movement during coin phase - use the actual game state
+                temp_game_state = state.game._replace(
+                    coin_phase_active=1,  # Mark as coin phase for any special handling
+                    coin_phase_timer=state.game.coin_phase_timer
                 )
                 
+                new_player = player_step(state.player, action, temp_game_state)
                 
-                # Beobachtung und Info aus dem endgültigen Zustand holen
-                obs = self._get_observation(new_state)
-                all_rewards = self._get_all_rewards(state, new_state)
-                info = self._get_info(new_state, all_rewards)
-                reward = self._get_reward(state, new_state)
-                done = self._get_done(new_state)
-                return obs, new_state, reward, done, info
+                # Decrement timer
+                new_timer = state.game.coin_phase_timer - 1
+                
+                # Initialize coins_collected from current state
+                coins_collected = state.game.coins_collected
+                coin_score_gain = 0
 
-            # --- No strong enemy collision: normal game progress ---
-            def on_no_hit(_):
-                # 3) Update enemy patrol movements & dynamic spawn logic (pending spawn state)
-                enemy = state.game.enemy
+                def check_coin_collision(i):
+                    coin_pos = COIN_POSITIONS[i]
+                    px, py = new_player.pos
+                    pw, ph = PLAYER_SIZE
+                    
+                    # Simple rectangle collision check
+                    overlap_x = (px < coin_pos[0] + COIN_RADIUS*2) & (px + pw > coin_pos[0])
+                    overlap_y = (py < coin_pos[1] + COIN_RADIUS*2) & (py + ph > coin_pos[1])
+                    
+                    return overlap_x & overlap_y & (coins_collected[i] == 0)
 
-                # active==1 means fully active; 2 means pending (spawned this frame, not yet occupying for checks); 0 means free
-                active_now = (enemy.enemy_active == 1)
+                # Check all coins for collision
+                for i in range(8):
+                    collected = check_coin_collision(i)
+                    coins_collected = coins_collected.at[i].set(jnp.where(collected, 1, coins_collected[i]))
+                    coin_score_gain += collected * 800
+                
+                # Update score
+                new_score = state.game.score + coin_score_gain
+                
+                # Force coin phase to end when timer reaches 0
+                timer_expired = new_timer <= 0
+                coin_phase_active = jnp.where(timer_expired, 0, 1)  # Force to 0 when expired
+                # Add an extra condition: if timer is 0, coin phase must be 0
+                coin_phase_active = jnp.where(new_timer == 0, 0, coin_phase_active)
 
-                TOP_PLATFORM_IDX = jnp.array([1, 2], dtype=jnp.int32)
-                is_on_top = jnp.logical_and(
-                    jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
-                    active_now
+                # Reset coins when phase ends
+                coins_collected = jnp.where(timer_expired, jnp.zeros(8, dtype=jnp.int32), coins_collected)
+
+                # Force timer to 0 when it reaches 0
+                new_timer = jnp.where(new_timer <= 0, 0, new_timer)
+                return new_timer, coin_phase_active, coins_collected, new_score, new_player
+
+            def handle_normal_phase(_):
+                return state.game.coin_phase_timer, state.game.coin_phase_active, state.game.coins_collected, state.game.score, state.player
+
+            # Initialize new_player before the cond to avoid UnboundLocalError
+            new_player = state.player
+
+            # Apply coin phase logic if active, otherwise normal logic
+            new_timer, coin_phase_active, coins_collected, new_score, new_player = jax.lax.cond(
+                state.game.coin_phase_active == 1,
+                handle_coin_phase,
+                handle_normal_phase,
+                operand=None
+            )
+            
+            
+            # 3) Start coin phase if needed
+            coin_phase_active = jnp.where(should_start_coin_phase, 1, coin_phase_active)
+            new_timer = jnp.where(should_start_coin_phase, COIN_PHASE_DURATION, new_timer)
+            coins_collected = jnp.where(should_start_coin_phase, jnp.zeros(8, dtype=jnp.int32), coins_collected)
+
+            # Reset player movement state when coin phase starts
+            def reset_player_movement(player):
+                return player._replace(
+                    pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
+                    move=0.0,
+                    jump=0,
+                    jumpL=False,
+                    jumpR=False,
+                    last_dir=0,
+                    brake_frames_left=0,
+                    idx_right=0,
+                    idx_left=0
                 )
-                top_present = jnp.any(is_on_top)
 
-                # find first free slot (enemy_active == 0)
-                free_mask = (enemy.enemy_active == 0)
-                any_free = jnp.any(free_mask)
-                idx_to_spawn = jnp.argmax(free_mask.astype(jnp.int32))
+            new_player = jax.lax.cond(
+                should_start_coin_phase,
+                lambda p: reset_player_movement(p),
+                lambda p: new_player,  # Use the player from the cond branch
+                new_player
+            )
 
-                right_proto = enemy.enemy_init_positions[0]
-                left_proto = enemy.enemy_init_positions[1]
-
-                spawn_side = state.game.next_spawn_side
-                spawn_pos = jnp.where(spawn_side == 1, right_proto, left_proto)
-                spawn_vel = jnp.where(spawn_side == 1,
-                                      jnp.array([ENEMY_MOVE_SPEED, 0.0]),
-                                      jnp.array([-ENEMY_MOVE_SPEED, 0.0]))
-
-                def do_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
-                    ep2 = ep.at[idx_to_spawn].set(spawn_pos)
-                    ev2 = ev.at[idx_to_spawn].set(spawn_vel)
-                    pidx2 = pidx.at[idx_to_spawn].set(1)
-                    timer2 = timer.at[idx_to_spawn].set(0)
-                    init_sides2 = init_sides.at[idx_to_spawn].set(spawn_side)
-                    # mark pending (2) — not drawn / not counted as occupying top
-                    active2 = active_arr.at[idx_to_spawn].set(jnp.int32(2))
-                    status2 = status.at[idx_to_spawn].set(jnp.int32(2))
-                    next_side2 = jnp.where(next_side == 1, jnp.int32(0), jnp.int32(1))
-                    return ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_side2
-
-                def no_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
-                    return ep, ev, pidx, timer, init_sides, active_arr, status, next_side
-
-                # don't spawn if there's any active or pending enemy on top
-                pending_mask = (enemy.enemy_active == 2)
-                top_pending = jnp.any(
-                    jnp.logical_and(
-                        jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
-                        pending_mask
+            # 5) Skip enemy and fireball logic during coin phase
+            def coin_phase_logic(_):
+                # During coin phase, use empty/reset entities
+                p1_y = PLATFORMS[1, 1]
+                p2_y = PLATFORMS[2, 1]
+                enemy_status = jnp.array([2, 2, 2])
+                enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+                enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
+                reward_init_pos = jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+                
+                # Create empty/reset entities
+                enemy = Enemy(
+                    enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                    enemy_vel=jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]),  # Zero velocity
+                    enemy_platform_idx=jnp.array([1, 2, 1]),
+                    enemy_timer=jnp.array([0, 0, 0]),
+                    enemy_weak_timer=jnp.array([0, 0, 0]),
+                    enemy_initial_sides=jnp.array([0, 1, 0]),
+                    enemy_active=jnp.array([0, 0, 0], dtype=jnp.int32),  # All inactive
+                    enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                    enemy_status=enemy_status
+                )
+                                
+                # Reset rewards to empty
+                reward = Reward(
+                    reward_pos=reward_init_pos,
+                    reward_vel=jnp.zeros((3, 2)),
+                    reward_platform_idx=jnp.array([0, 0, 0]),
+                    reward_timer=jnp.array([0, 0, 0]),
+                    reward_initial_sides=jnp.array([0, 0, 0]),
+                    reward_active=jnp.array([0, 0, 0]),
+                    reward_init_positions=reward_init_pos
+                )
+                
+                # After coin phase ends, spawn fresh enemies and fireball
+                def get_fresh_enemy(_):
+                    enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+                    enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
+                    return Enemy(
+                        enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                        enemy_vel=jnp.array([[ENEMY_MOVE_SPEED, 0.0], [-ENEMY_MOVE_SPEED, 0.0], [ENEMY_MOVE_SPEED, 0.0]]),
+                        enemy_platform_idx=jnp.array([1, 2, 1]),
+                        enemy_timer=jnp.array([0, 0, 0]),
+                        enemy_weak_timer=jnp.array([0, 0, 0]),
+                        enemy_initial_sides=jnp.array([0, 1, 0]),
+                        enemy_active=jnp.array([1, 0, 0], dtype=jnp.int32),
+                        enemy_init_positions=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
+                        enemy_status=enemy_status
                     )
-                )
-                spawn_cond = jnp.logical_and(jnp.logical_not(jnp.logical_or(top_present, top_pending)), any_free)
 
-                (ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_spawn_side) = jax.lax.cond(
-                    spawn_cond,
-                    do_spawn,
-                    no_spawn,
-                    enemy.enemy_pos, enemy.enemy_vel, enemy.enemy_platform_idx,
-                    enemy.enemy_timer, enemy.enemy_initial_sides,
-                    enemy.enemy_active, enemy.enemy_status,
-                    state.game.next_spawn_side
-                )
+                def keep_current_enemy(_):
+                    return enemy
 
-                # enemy_step expects mask==True for INACTIVE slots (legacy). Pass True where slot is inactive (active2 == 0).
-                mask_for_step = (active2 == 1)
-
-                ep, ev, idx, timer, sides, status = enemy_step(
-                    ep2, ev2, pidx2, timer2,
-                    PLATFORMS,
-                    init_sides2,
-                    mask_for_step,
-                    enemy.enemy_init_positions,
-                    status2
+                # During coin phase, keep fireball inactive
+                fireball = Fireball(
+                    pos=jnp.array([-100.0, -100.0], dtype=jnp.int32),  # Off-screen
+                    start_pat=state.game.fireball.start_pat,
+                    move_pat=state.game.fireball.move_pat,
+                    count=state.game.fireball.count,
+                    state=3,  # Inactive state
+                    dir=state.game.fireball.dir,
+                    rnd=state.game.fireball.rnd,
+                    ani=state.game.fireball.ani
                 )
 
-                # If we spawned this frame, preserve spawn position/platform for this frame (prevent repeated spawning)
-                idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(1), lambda arr: arr, idx)
 
-
-                # Maintain 0=free,1=active,2=pending semantics
-                new_enemy_active = active2
-
-                # Promote pending (2) -> active (1) only when no *other* enemy (active or pending) is on top.
-                idx_top_mask = jnp.logical_and(
-                    jnp.isin(idx, TOP_PLATFORM_IDX),
-                    new_enemy_active != 0
+                enemy = jax.lax.cond(
+                    coin_phase_active == 0,  # Use the updated coin_phase_active value
+                    get_fresh_enemy,
+                    keep_current_enemy,
+                    operand=None
                 )
-                total_top = jnp.sum(idx_top_mask.astype(jnp.int32))
-                self_on_top = idx_top_mask.astype(jnp.int32)
-                others_on_top = total_top - self_on_top
-                promote_mask = jnp.logical_and(new_enemy_active == 2, others_on_top == 0)
-                new_enemy_active = jnp.where(promote_mask, jnp.int32(1), new_enemy_active)
-
-                # Deactivate permanently-dead enemies (status == 3)
-                new_enemy_active = jnp.where(status == 3, jnp.int32(0), new_enemy_active)
-
-                # 4) Update fireball AFTER enemy_step
-                new_fireball = fireball_step(state.game.fireball)
-
-
-                # 5) POW hit logic and platform bump detection (unchanged)
-                pow_hit = pow_bumped & (state.game.pow_block_counter > 0)
-                new_pow_block_counter = jnp.maximum(state.game.pow_block_counter - pow_hit, 0)
-                bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
-
-                # 6) Toggle enemy status for bumped platforms/POW (strong <-> weak)
-                def toggle_status(old_status):
-                    return jnp.where(old_status == 2, 1,
-                                     jnp.where(old_status == 1, 2, old_status))
-
-                TOGGLE_RANGE = 10
-                player_x = new_player.pos[0]
-                enemy_x = ep[:, 0]
-                nearby_mask = jnp.abs(enemy_x - player_x) <= TOGGLE_RANGE
-                toggle_mask = (idx == bumped_idx_final) & nearby_mask
-
-                new_enemy_status = jax.lax.cond(
-                    bumped_idx_final >= 0,
-                    lambda old_status: jnp.where(toggle_mask, toggle_status(old_status), old_status),
-                    lambda old_status: old_status,
-                    status
-                )
-
-                new_enemy_status = jax.lax.cond(
-                    bumped_idx_final == -2,
-                    lambda old_status: toggle_status(old_status),
-                    lambda old_status: old_status,
-                    new_enemy_status
-                )
-
-                # --- Collision logic with enemies after enemy step ---
-                # Use fully-active check (==1) so pending enemies are not hittable/drawn
-                collided_mask = check_enemy_collision_per_enemy(new_player.pos, ep) & (new_enemy_active == 1)
-                fireball_hit = check_fireball_collision(new_fireball, new_player.pos)
-
-                enemy_status_after_hit = jnp.where(
-                    (collided_mask) & (new_enemy_status == 1),
-                    3,
-                    new_enemy_status
-                )
-
-                # --- Weak-state countdown logic (start/reset when enemy becomes weak, count down while weak) ---
-                # prev_weak / prev_status are from the previous frame (before this frame's toggles/hits)
-                prev_weak = enemy.enemy_weak_timer
-                prev_status = enemy.enemy_status
-
-                # Use the *final* status for this frame (after bump/toggle/hit) to decide timer behavior.
-                final_status = enemy_status_after_hit
-
-                # If an enemy just became weak this frame (was not 1, now 1), set timer to 776.
-                start_weak_mask = (prev_status != 1) & (final_status == 1)
-                weak_timer = jnp.where(start_weak_mask, jnp.array(776, dtype=jnp.int32), prev_weak)
-
-                # For enemies already weak, decrement timer each frame (clamp at 0).
-                weak_timer = jnp.where(final_status == 1, jnp.maximum(weak_timer - 1, 0), weak_timer)
-
-                # If timer reached 0 while still weak, revert to strong (status==2).
-                revert_mask = (final_status == 1) & (weak_timer == 0)
-                final_status = jnp.where(revert_mask, jnp.array(2, dtype=jnp.int32), final_status)
-
-                # Replace enemy_status_after_hit with the possibly-updated final_status
-                enemy_status_after_hit = final_status
-                # -------------------------------------------------------------------------------
-
-                # --- Score tracking: reward for defeating weak enemies ---
-                was_weak = (collided_mask) & (new_enemy_status == 1)
-                now_dead = (collided_mask) & (enemy_status_after_hit == 3)
-                newly_killed = was_weak & now_dead
-
-                num_killed = jnp.sum(newly_killed.astype(jnp.int32))
-                score_gain = num_killed * 800
-                new_score = state.game.score + score_gain
-
-                # If collided enemy is strong (status==2), reset Mario position locally (extra safety)
-                mario_pos_reset = jnp.any(((collided_mask) & (new_enemy_status == 2)) | fireball_hit)
-                ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
-
-                # Build updated enemy and game state (store active mask as enemy_active)
-                new_enemy = Enemy(
-                    enemy_pos=ep,
-                    enemy_vel=ev,
-                    enemy_platform_idx=idx,
-                    enemy_timer=timer,
-                    enemy_weak_timer=weak_timer,
-                    enemy_initial_sides=sides,
-                    enemy_active=new_enemy_active,
-                    enemy_init_positions=state.game.enemy.enemy_init_positions,
-                    enemy_status=enemy_status_after_hit,
-                )
-
+                
+                # Build the game state
                 new_game = GameState(
-                    enemy=new_enemy,
-                    pow_block_counter=new_pow_block_counter,
+                    enemy=enemy,
+                    pow_block_counter=state.game.pow_block_counter,
                     score=new_score,
-                    fireball=new_fireball,
+                    fireball=fireball,
                     game_over=state.game.game_over,
-                    next_spawn_side=next_spawn_side,
+                    next_spawn_side=state.game.next_spawn_side,
+                    reward=reward,
+                    coin_phase_active=coin_phase_active,
+                    coin_phase_timer=new_timer,
+                    coins_collected=coins_collected
                 )
-
-                # Final state and observation
-                new_state = MarioBrosState(
+                
+                new_state_obj = MarioBrosState(
                     player=new_player,
                     game=new_game,
                     lives=state.lives
                 )
 
-                obs = self._get_observation(new_state)
-                reward = self._get_reward(state, new_state)
-                done = self._get_done(new_state)
-                all_rewards = self._get_all_rewards(state, new_state)
-                info = self._get_info(new_state, all_rewards)
-                return obs, new_state, reward, done, info
+                obs = self._get_observation(new_state_obj)
+                all_rewards = self._get_all_rewards(state, new_state_obj)
+                info = self._get_info(new_state_obj, all_rewards)
+                reward = self._get_reward(state, new_state_obj)
+                done = self._get_done(new_state_obj)
+                return obs, new_state_obj, reward, done, info
+            
+            def normal_game_logic(_):
+                
+                # 1) Advance player state given action
+                new_player = player_step(state.player, action, state.game)
+                bumped_idx = new_player.bumped_idx
+                pow_bumped = new_player.pow_bumped
+                
+                # Check if we just exited coin phase (transition from active to inactive)
+                just_exited_coin_phase = (state.game.coin_phase_active == 1) & (coin_phase_active == 0)
+                # Reactivate fireball if we just exited coin phase
+                def reactivate_fireball_on_exit(_):
+                    new_rng = jax.random.split(state.game.fireball.rnd)[0]
+                    new_pos, new_dir, new_rnd = fireball_new_start_pos(new_rng)
+                    
+                    
+                    return Fireball(
+                        pos=new_pos,
+                        start_pat=FIREBALL_MOVEMENT_Start,
+                        move_pat=FIREBALL_MOVEMENT,
+                        count=FIREBALL_RESTART,
+                        state=0,  # Active state
+                        dir=new_dir,
+                        rnd=new_rnd,
+                        ani= 1
+                    )
 
-            # 10) Return based on whether strong enemy was hit
-            cond = (strong_enemy_hit | fireball_hit) & jnp.logical_not(new_player.safe)
-            return jax.lax.cond(cond, on_hit, on_no_hit, new_player)
+                def keep_current_fireball(_):
+                    return state.game.fireball
+
+                # Only reactivate if we just exited coin phase
+                fireball_after_reactivation = jax.lax.cond(
+                    just_exited_coin_phase,
+                    reactivate_fireball_on_exit,
+                    keep_current_fireball,
+                    operand=None
+                )
+                
+                new_fireball = jax.lax.cond(
+                    just_exited_coin_phase,
+                    lambda fb: fb,  # If just reactivated, return as-is (don't step)
+                    lambda fb: fireball_step(fb),  # Otherwise, step normally
+                    fireball_after_reactivation
+                )
+                
+                # 2) Detect collisions between player and enemies
+                def check_enemy_collision_per_enemy(player_pos, enemy_positions):
+                    px, py = player_pos
+                    pw, ph = PLAYER_SIZE
+                    ex, ey = enemy_positions[:, 0], enemy_positions[:, 1]
+                    ew, eh = ENEMY_SIZE
+
+                    overlap_x = (px < ex + ew) & (px + pw > ex)
+                    overlap_y = (py < ey + eh) & (py + ph > ey)
+                    return overlap_x & overlap_y  # bool array per enemy
+
+                def check_fireball_collision(fb: Fireball, player_pos) -> bool:
+                    px, py = player_pos
+                    pw, ph = PLAYER_SIZE
+                    fx, fy = fb.pos
+                    fw, fh = FIREBALL_SIZE
+                    
+                    overlap_x = (px < fx + fw) & (px + pw > fx)
+                    overlap_y = (py < fy + fh) & (py + ph > fy)
+                    
+                    return overlap_x & overlap_y
+
+                collided_mask = check_enemy_collision_per_enemy(new_player.pos, state.game.enemy.enemy_pos) & (state.game.enemy.enemy_active != 0)
+
+                fireball_hit = check_fireball_collision(state.game.fireball, new_player.pos)
+                # Check if any collided enemy is strong (status==2)
+                strong_enemy_hit = jnp.any(collided_mask & (state.game.enemy.enemy_status == 2))
+                
+                # --- Handling collision with strong enemy: reset Mario position only ---
+                def on_hit(_):
+                    # Spielerleben um 1 reduzieren
+                    new_lives = state.lives - 1
+                    # Mario an Respawn-Position setzen, falls Leben >= 0
+                    new_player_updated = new_player._replace(safe= True, jump_phase= jnp.int32(0))
+                    
+                    # Neuer Zustand mit reduziertem Leben und neuer Position
+                    new_game = state.game._replace(game_over=jnp.where(state.lives > 0, False, True))
+
+                    new_state = MarioBrosState(
+                        player=new_player_updated,
+                        game=new_game,
+                        lives=new_lives
+                    )
+                    
+                    
+                    # Beobachtung und Info aus dem endgültigen Zustand holen
+                    obs = self._get_observation(new_state)
+                    all_rewards = self._get_all_rewards(state, new_state)
+                    info = self._get_info(new_state, all_rewards)
+                    reward = self._get_reward(state, new_state)
+                    done = self._get_done(new_state)
+                    return obs, new_state, reward, done, info
+
+                # --- No strong enemy collision: normal game progress ---
+                def on_no_hit(fireball_to_step):
+                    # 3) Update enemy patrol movements & dynamic spawn logic (pending spawn state)
+                    enemy = state.game.enemy
+
+                    # active==1 means fully active; 2 means pending (spawned this frame, not yet occupying for checks); 0 means free
+                    active_now = (enemy.enemy_active == 1)
+
+                    TOP_PLATFORM_IDX = jnp.array([1, 2], dtype=jnp.int32)
+                    is_on_top = jnp.logical_and(
+                        jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                        active_now
+                    )
+                    top_present = jnp.any(is_on_top)
+
+                    # find first free slot (enemy_active == 0)
+                    free_mask = (enemy.enemy_active == 0)
+                    any_free = jnp.any(free_mask)
+                    idx_to_spawn = jnp.argmax(free_mask.astype(jnp.int32))
+
+                    right_proto = enemy.enemy_init_positions[0]
+                    left_proto = enemy.enemy_init_positions[1]
+
+                    spawn_side = state.game.next_spawn_side
+                    spawn_pos = jnp.where(spawn_side == 1, right_proto, left_proto)
+                    spawn_vel = jnp.where(spawn_side == 1,
+                                        jnp.array([ENEMY_MOVE_SPEED, 0.0]),
+                                        jnp.array([-ENEMY_MOVE_SPEED, 0.0]))
+
+                    def do_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
+                        ep2 = ep.at[idx_to_spawn].set(spawn_pos)
+                        ev2 = ev.at[idx_to_spawn].set(spawn_vel)
+                        pidx2 = pidx.at[idx_to_spawn].set(1)
+                        timer2 = timer.at[idx_to_spawn].set(0)
+                        init_sides2 = init_sides.at[idx_to_spawn].set(spawn_side)
+                        # mark pending (2) — not drawn / not counted as occupying top
+                        active2 = active_arr.at[idx_to_spawn].set(jnp.int32(2))
+                        status2 = status.at[idx_to_spawn].set(jnp.int32(2))
+                        next_side2 = jnp.where(next_side == 1, jnp.int32(0), jnp.int32(1))
+                        return ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_side2
+
+                    def no_spawn(ep, ev, pidx, timer, init_sides, active_arr, status, next_side):
+                        return ep, ev, pidx, timer, init_sides, active_arr, status, next_side
+
+                    # don't spawn if there's any active or pending enemy on top
+                    pending_mask = (enemy.enemy_active == 2)
+                    top_pending = jnp.any(
+                        jnp.logical_and(
+                            jnp.isin(enemy.enemy_platform_idx, TOP_PLATFORM_IDX),
+                            pending_mask
+                        )
+                    )
+                    spawn_cond = jnp.logical_and(jnp.logical_not(jnp.logical_or(top_present, top_pending)), any_free)
+
+                    (ep2, ev2, pidx2, timer2, init_sides2, active2, status2, next_spawn_side) = jax.lax.cond(
+                        spawn_cond,
+                        do_spawn,
+                        no_spawn,
+                        enemy.enemy_pos, enemy.enemy_vel, enemy.enemy_platform_idx,
+                        enemy.enemy_timer, enemy.enemy_initial_sides,
+                        enemy.enemy_active, enemy.enemy_status,
+                        state.game.next_spawn_side
+                    )
+
+                    # enemy_step expects mask==True for INACTIVE slots (legacy). Pass True where slot is inactive (active2 == 0).
+                    mask_for_step = (active2 == 1)
+
+                    ep, ev, idx, timer, sides, status = enemy_step(
+                        ep2, ev2, pidx2, timer2,
+                        PLATFORMS,
+                        init_sides2,
+                        mask_for_step,
+                        enemy.enemy_init_positions,
+                        status2
+                    )
+
+                    # If we spawned this frame, preserve spawn position/platform for this frame (prevent repeated spawning)
+                    idx = jax.lax.cond(spawn_cond, lambda arr: arr.at[idx_to_spawn].set(1), lambda arr: arr, idx)
+
+
+                    # Maintain 0=free,1=active,2=pending semantics
+                    new_enemy_active = active2
+
+                    # Promote pending (2) -> active (1) only when no *other* enemy (active or pending) is on top.
+                    idx_top_mask = jnp.logical_and(
+                        jnp.isin(idx, TOP_PLATFORM_IDX),
+                        new_enemy_active != 0
+                    )
+                    total_top = jnp.sum(idx_top_mask.astype(jnp.int32))
+                    self_on_top = idx_top_mask.astype(jnp.int32)
+                    others_on_top = total_top - self_on_top
+                    promote_mask = jnp.logical_and(new_enemy_active == 2, others_on_top == 0)
+                    new_enemy_active = jnp.where(promote_mask, jnp.int32(1), new_enemy_active)
+
+                    # Deactivate permanently-dead enemies (status == 3)
+                    new_enemy_active = jnp.where(status == 3, jnp.int32(0), new_enemy_active)
+
+                    # 4) Update fireball AFTER enemy_step
+                    new_fireball = fireball_step(fireball_to_step)  # Use the updated fireball, not the old one
+                    # 5) POW hit logic and platform bump detection (unchanged)
+                    pow_hit = pow_bumped & (state.game.pow_block_counter > 0)
+                    new_pow_block_counter = jnp.maximum(state.game.pow_block_counter - pow_hit, 0)
+                    bumped_idx_final = jnp.where(pow_hit, -2, bumped_idx)
+
+                    # 6) Toggle enemy status for bumped platforms/POW (strong <-> weak)
+                    def toggle_status(old_status):
+                        return jnp.where(old_status == 2, 1,
+                                        jnp.where(old_status == 1, 2, old_status))
+
+                    TOGGLE_RANGE = 10
+                    player_x = new_player.pos[0]
+                    enemy_x = ep[:, 0]
+                    nearby_mask = jnp.abs(enemy_x - player_x) <= TOGGLE_RANGE
+                    toggle_mask = (idx == bumped_idx_final) & nearby_mask
+
+                    new_enemy_status = jax.lax.cond(
+                        bumped_idx_final >= 0,
+                        lambda old_status: jnp.where(toggle_mask, toggle_status(old_status), old_status),
+                        lambda old_status: old_status,
+                        status
+                    )
+
+                    new_enemy_status = jax.lax.cond(
+                        bumped_idx_final == -2,
+                        lambda old_status: toggle_status(old_status),
+                        lambda old_status: old_status,
+                        new_enemy_status
+                    )
+
+                    # --- Collision logic with enemies after enemy step ---
+                    # Use fully-active check (==1) so pending enemies are not hittable/drawn
+                    collided_mask = check_enemy_collision_per_enemy(new_player.pos, ep) & (new_enemy_active == 1)
+                    fireball_hit = check_fireball_collision(new_fireball, new_player.pos)
+
+                    enemy_status_after_hit = jnp.where(
+                        (collided_mask) & (new_enemy_status == 1),
+                        3,
+                        new_enemy_status
+                    )
+
+                    # --- Weak-state countdown logic (start/reset when enemy becomes weak, count down while weak) ---
+                    # prev_weak / prev_status are from the previous frame (before this frame's toggles/hits)
+                    prev_weak = enemy.enemy_weak_timer
+                    prev_status = enemy.enemy_status
+
+                    # Use the *final* status for this frame (after bump/toggle/hit) to decide timer behavior.
+                    final_status = enemy_status_after_hit
+
+                    # If an enemy just became weak this frame (was not 1, now 1), set timer to 776.
+                    start_weak_mask = (prev_status != 1) & (final_status == 1)
+                    weak_timer = jnp.where(start_weak_mask, jnp.array(776, dtype=jnp.int32), prev_weak)
+
+                    # For enemies already weak, decrement timer each frame (clamp at 0).
+                    weak_timer = jnp.where(final_status == 1, jnp.maximum(weak_timer - 1, 0), weak_timer)
+
+                    # If timer reached 0 while still weak, revert to strong (status==2).
+                    revert_mask = (final_status == 1) & (weak_timer == 0)
+                    final_status = jnp.where(revert_mask, jnp.array(2, dtype=jnp.int32), final_status)
+
+                    # Replace enemy_status_after_hit with the possibly-updated final_status
+                    enemy_status_after_hit = final_status
+                    # -------------------------------------------------------------------------------
+                    # --- Reward spawning for defeated enemies ---
+                    def spawn_reward(enemy_index, enemy_initial_side):
+                        # Find free reward slot
+                        free_mask = (state.game.reward.reward_active == 0)
+                        free_index = jnp.argmax(free_mask.astype(jnp.int32))
+                        
+                        # Set reward properties based on defeated enemy
+                        spawn_pos = state.game.enemy.enemy_init_positions[enemy_index]
+                        
+                        # Use jnp.where instead of ternary operator for JAX compatibility
+                        spawn_vel_x = jnp.where(enemy_initial_side == 1, REWARD_MOVE_SPEED, -REWARD_MOVE_SPEED)
+                        spawn_vel = jnp.array([spawn_vel_x, 0.0])
+                        
+                        # Update reward state
+                        new_reward_pos = state.game.reward.reward_pos.at[free_index].set(spawn_pos)
+                        new_reward_vel = state.game.reward.reward_vel.at[free_index].set(spawn_vel)
+                        new_reward_active = state.game.reward.reward_active.at[free_index].set(1)
+                        new_reward_initial_sides = state.game.reward.reward_initial_sides.at[free_index].set(enemy_initial_side)
+                        new_reward_platform_idx = state.game.reward.reward_platform_idx.at[free_index].set(
+                            state.game.enemy.enemy_platform_idx[enemy_index]
+                        )
+                        
+                        return Reward(
+                            reward_pos=new_reward_pos,
+                            reward_vel=new_reward_vel,
+                            reward_platform_idx=new_reward_platform_idx,
+                            reward_timer=state.game.reward.reward_timer,
+                            reward_initial_sides=new_reward_initial_sides,
+                            reward_active=new_reward_active,
+                            reward_init_positions=state.game.reward.reward_init_positions
+                        )
+                    # --- Score tracking: reward for defeating weak enemies ---
+                    was_weak = (collided_mask) & (new_enemy_status == 1)
+                    now_dead = (collided_mask) & (enemy_status_after_hit == 3)
+                    newly_killed = was_weak & now_dead
+
+                    num_killed = jnp.sum(newly_killed.astype(jnp.int32))
+                    score_gain = num_killed * 800
+                    new_score = state.game.score + score_gain
+
+                    # Spawn rewards for defeated enemies
+                    def spawn_for_defeated_enemy(i, current_reward_state):
+                        # Only spawn reward if enemy was killed by player (was weak and now dead due to collision)
+                        enemy_defeated = newly_killed[i]  # Use the newly_killed array which tracks player kills
+                        return jax.lax.cond(
+                            enemy_defeated,
+                            lambda rs: spawn_reward(i, state.game.enemy.enemy_initial_sides[i]),
+                            lambda rs: rs,
+                            current_reward_state
+                        )
+
+                    # Update rewards for all enemies
+                    new_reward_state = lax.fori_loop(0, 3, spawn_for_defeated_enemy, state.game.reward)
+
+                    # Update reward movement
+                    new_reward_pos, new_reward_vel, new_reward_idx, new_reward_timer, new_reward_sides = reward_step(
+                        new_reward_state.reward_pos,
+                        new_reward_state.reward_vel,
+                        new_reward_state.reward_platform_idx,
+                        new_reward_state.reward_timer,
+                        PLATFORMS,
+                        new_reward_state.reward_initial_sides,
+                        new_reward_state.reward_active,
+                        new_reward_state.reward_init_positions,
+                    )
+
+                    # Check for collision between player and rewards
+                    reward_collided = check_reward_collision(new_player.pos, new_reward_pos, new_reward_state.reward_active)
+                    reward_score_gain = jnp.sum(reward_collided.astype(jnp.int32)) * 800
+
+                    # Deactivate collected rewards
+                    new_reward_active = jnp.where(reward_collided, 0, new_reward_state.reward_active)
+
+                    # Update the reward state
+                    updated_reward_state = Reward(
+                        reward_pos=new_reward_pos,
+                        reward_vel=new_reward_vel,
+                        reward_platform_idx=new_reward_idx,
+                        reward_timer=new_reward_timer,
+                        reward_initial_sides=new_reward_sides,
+                        reward_active=new_reward_active,
+                        reward_init_positions=new_reward_state.reward_init_positions
+                    )
+
+                    # If collided enemy is strong (status==2), reset Mario position locally (extra safety)
+                    mario_pos_reset = jnp.any(((collided_mask) & (new_enemy_status == 2)) | fireball_hit)
+                    ORIGINAL_MARIO_POS = jnp.array([100, 100], dtype=jnp.float32)
+
+                    # Build updated enemy and game state (store active mask as enemy_active)
+                    new_enemy = Enemy(
+                        enemy_pos=ep,
+                        enemy_vel=ev,
+                        enemy_platform_idx=idx,
+                        enemy_timer=timer,
+                        enemy_weak_timer=weak_timer,
+                        enemy_initial_sides=sides,
+                        enemy_active=new_enemy_active,
+                        enemy_init_positions=state.game.enemy.enemy_init_positions,
+                        enemy_status=enemy_status_after_hit,
+                    )
+
+                    new_game = GameState(
+                        enemy=new_enemy,
+                        pow_block_counter=new_pow_block_counter,
+                        score=new_score + reward_score_gain,
+                        fireball=new_fireball,
+                        game_over=state.game.game_over,
+                        next_spawn_side=next_spawn_side,
+                        reward=updated_reward_state,
+                        coin_phase_active=coin_phase_active,  # Use the updated value
+                        coin_phase_timer=new_timer,           # Use the updated timer
+                        coins_collected=coins_collected       # Use the updated coins
+                    )
+
+                    # Final state and observation
+                    new_state = MarioBrosState(
+                        player=new_player,
+                        game=new_game,
+                        lives=state.lives
+                    )
+
+                    obs = self._get_observation(new_state)
+                    reward = self._get_reward(state, new_state)
+                    done = self._get_done(new_state)
+                    all_rewards = self._get_all_rewards(state, new_state)
+                    info = self._get_info(new_state, all_rewards)
+                    return obs, new_state, reward, done, info
+
+                # 10) Return based on whether strong enemy was hit
+                cond = (strong_enemy_hit | fireball_hit) & jnp.logical_not(new_player.safe)
+                return jax.lax.cond(cond, on_hit, lambda p: on_no_hit(new_fireball), new_player)
+            
+            # Use the cond to select which logic to execute
+            result = jax.lax.cond(
+                coin_phase_active == 1,
+                coin_phase_logic,
+                normal_game_logic,
+                operand=None
+            )
+            
+            return result
+        
         return lax.cond(self._get_done(state), game_over, step, state)
 
 
