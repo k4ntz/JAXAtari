@@ -1026,13 +1026,33 @@ class AirRaidRenderer(JAXGameRenderer):
         # Load sprites
         player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/player.npy"))
         building = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/building.npy"))
-        enemy25 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy25.npy"))
-        enemy50 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy50.npy"))
-        enemy75 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy75.npy"))
-        enemy100 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy100.npy"))
+        enemy25 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy_25_mono.npy"))
+        enemy50 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy_50_mono.npy"))
+        enemy75 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy_75_mono.npy"))
+        enemy100 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/enemy_100_mono.npy"))
         missile = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/missile.npy"))
         bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/background.npy"))
         life = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/airraid/life.npy"))
+
+        # Pad enemy sprites to consistent dimensions (18, 16, 4) for JAX compatibility
+        def pad_enemy_sprite(sprite, target_height=18, target_width=16):
+            h, w, c = sprite.shape
+            pad_h = target_height - h
+            pad_w = target_width - w
+            # Pad symmetrically when possible, otherwise pad more at the bottom/right
+            pad_h_top = pad_h // 2
+            pad_h_bottom = pad_h - pad_h_top
+            pad_w_left = pad_w // 2
+            pad_w_right = pad_w - pad_w_left
+            
+            return jnp.pad(sprite, ((pad_h_top, pad_h_bottom), (pad_w_left, pad_w_right), (0, 0)), 
+                          mode='constant', constant_values=0)
+
+        # Apply padding to enemy sprites to ensure consistent dimensions
+        enemy25 = pad_enemy_sprite(enemy25)
+        enemy50 = pad_enemy_sprite(enemy50)
+        enemy75 = pad_enemy_sprite(enemy75)
+        enemy100 = pad_enemy_sprite(enemy100)
 
         # Convert all sprites to the expected format (add frame dimension)
         SPRITE_BG = jnp.expand_dims(bg, axis=0)
