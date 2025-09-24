@@ -91,7 +91,7 @@ class KeystoneKapersConstants(NamedTuple):
     ESCALATOR_HEIGHT: int = 25     # Diagonal length
     ESCALATOR_COLOR: Tuple[int, int, int] = (52, 0, 128)  # Purple #340080
     ESCALATOR_STEP_COLOR: Tuple[int, int, int] = (255, 255, 255)  # White steps
-    ESCALATOR_ANIMATION_SPEED: int = 8  # Frames per step animation cycle
+    ESCALATOR_ANIMATION_SPEED: int = 32  # Frames per step animation cycle
 
     # Three specific escalators in the middle of the last section (absolute positions)
     # ESCALATOR_FLOOR1_X: int = 988   # Floor 1: middle of last section (6*152 + 76 = 988)
@@ -100,7 +100,7 @@ class KeystoneKapersConstants(NamedTuple):
 
     # Three specific escalators in the middle of first and last sections (absolute positions)
     ESCALATOR_FLOOR1_X: int = 76    # Floor 1: middle of first section (0 + 76 = 76)
-    ESCALATOR_FLOOR2_X: int = 988   # Floor 2: middle of last section (6*152 + 76 = 988)
+    ESCALATOR_FLOOR2_X: int = 968   # Floor 2: middle of last section (6*152 + 76 = 988)
     ESCALATOR_FLOOR3_X: int = 76    # Floor 3: middle of first section (0 + 76 = 76)
 
     # Elevator configuration (positioned in middle of entire building)
@@ -1563,8 +1563,8 @@ class KeystoneKapersRenderer(JAXGameRenderer):
     def _get_escalator_sprite_frame(self, state: GameState) -> chex.Array:
         """Get the current escalator sprite frame (0-3) based on animation counter."""
         # Use escalator_frame (which increments every step) to determine sprite frame
-        # Animation cycles every 4 frames
-        return state.escalator_frame % 4
+        # Animation cycles every 2 frames (slower animation)
+        return (state.escalator_frame // 8) % 4
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> jnp.ndarray:
