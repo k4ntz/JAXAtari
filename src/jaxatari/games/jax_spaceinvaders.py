@@ -634,6 +634,33 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
         new_destroyed, new_score, final_bullet_active, new_ufo_state = self._check_bullet_enemy_collisions(new_bullet_state)
 
+        # Recalculating Bounding Rect
+        def find_bounds(arr, axis, limit):
+            # Berechne Zeilensummen
+            sums = jnp.sum(arr, axis=axis)
+
+            # Maske: Zeilen mit Summe == 0
+            mask = sums < 6
+
+            first = jnp.where(jnp.any(mask), jnp.argmax(mask), -1)
+            last = jnp.where(jnp.any(mask), mask.shape[0] - 1 - jnp.argmax(mask[::-1]), -1)
+
+            return first, last
+
+        dest = new_destroyed.reshape(self.consts.ENEMY_ROWS, self.consts.ENEMY_COLS)
+        row_top, row_bottom = find_bounds(dest, 1, self.consts.ENEMY_ROWS)
+        col_left, col_right = find_bounds(dest, 0, self.consts.ENEMY_COLS)
+
+        jax.debug.print("Top: {l}, Bottom: {r}", l=row_top, r=row_bottom)
+
+        col_count = col_right - col_left
+        row_count = row_bottom - row_top
+
+        new_rect_width = self.consts.OPPONENT_SIZE[0] * col_count + self.consts.OFFSET_OPPONENT[0] * (col_count - 1)
+        new_rect_height = self.consts.OPPONENT_SIZE[1] * row_count + self.consts.OFFSET_OPPONENT[1] * (row_count - 1)
+
+        # jax.debug.print("Rect: {w}x{h}, Rows: {r1} & {r2}, Cols: {c1} & {c2}", w=new_rect_width, h=new_rect_height, r1=row_top, r2=row_bottom, c1=col_left, c2=col_right)
+
         enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = self._update_enemy_bullets(
             state._replace(
                 destroyed=new_destroyed,
@@ -750,7 +777,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             destroyed=new_destroyed,
             opponent_current_x=new_position_x,
             opponent_current_y=new_position_y,
-            opponent_bounding_rect=state.opponent_bounding_rect,
+            opponent_bounding_rect=(new_rect_width, new_rect_height),
             opponent_direction=direction,
             ufo_x = new_ufo_x,
             ufo_state = new_ufo_state,
