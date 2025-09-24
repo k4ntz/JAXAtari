@@ -64,7 +64,7 @@ class KeystoneKapersConstants(NamedTuple):
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
     FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
     FLOOR_2_Y: int = 105   # Middle floor (was 100, shifted up by 5)
-    FLOOR_3_Y: int = 73   # Top floor (adjusted down by 3 pixels)
+    FLOOR_3_Y: int = 73   # Top floor (was 60, shifted up by 5)
     ROOF_Y: int = 40      # Roof (was 19, shifted up by 4)
     FLOOR_HEIGHT: int = 20
 
@@ -1505,13 +1505,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         all_sprite_sets = []
         global_max_height = 0
         global_max_width = 0
-        
+
         sprite_prefixes = [
             'escalator_right_facing',
-            'escalator_left_facing_floor_1', 
+            'escalator_left_facing_floor_1',
             'escalator_left_facing_floor_3'
         ]
-        
+
         # Load all sprites and find global maximum dimensions
         for sprite_prefix in sprite_prefixes:
             sprite_set = []
@@ -1540,9 +1540,9 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                     sprite_set.append(fallback_sprite)
                     global_max_height = max(global_max_height, 25)
                     global_max_width = max(global_max_width, 16)
-            
+
             all_sprite_sets.append(sprite_set)
-        
+
         # Now pad all sprites to the global maximum dimensions
         def pad_sprite_set_to_global_size(sprite_set):
             padded_set = []
@@ -1578,6 +1578,90 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         sprites['plane'] = jnp.ones((self.consts.PLANE_HEIGHT, self.consts.PLANE_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLANE_COLOR, dtype=jnp.uint8)
         sprites['item'] = jnp.ones((self.consts.ITEM_HEIGHT, self.consts.ITEM_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.ITEM_COLOR, dtype=jnp.uint8)
 
+        # Load Kop sprites (standing and running animations)
+        kop_sprites = {}
+
+        # Load standing sprite and convert RGBA to RGB
+        try:
+            kop_standing_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'kop_standing.npy')
+            kop_standing_rgba = jr.loadFrame(kop_standing_path)
+            
+            # Handle RGBA properly with alpha blending
+            rgb_data = kop_standing_rgba[:, :, :3]
+            alpha_data = kop_standing_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+            
+            kop_sprites['standing'] = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                     white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+            print(f"Loaded Kop standing sprite: {kop_sprites['standing'].shape}")
+        except Exception as e:
+            print(f"Failed to load Kop standing sprite: {e}")
+            # Fallback to simple blue rectangle if sprite loading fails
+            kop_sprites['standing'] = jnp.ones((23, 11, 3), dtype=jnp.uint8) * jnp.array([0, 0, 255], dtype=jnp.uint8)
+
+        # Load running left sprites and convert RGBA to RGB
+        kop_running_left_sprites = []
+        for frame in range(1, 5):
+            try:
+                kop_running_left_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'kop_facing_left_run_frame_{frame}.npy')
+                sprite_rgba = jr.loadFrame(kop_running_left_path)
+                
+                # Handle RGBA properly with alpha blending
+                rgb_data = sprite_rgba[:, :, :3]
+                alpha_data = sprite_rgba[:, :, 3:4]
+                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                white_background = jnp.ones_like(rgb_data) * 255
+                
+                sprite_rgb = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                            white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                kop_running_left_sprites.append(sprite_rgb)
+                print(f"Loaded Kop running left sprite frame {frame}: {sprite_rgb.shape}")
+            except Exception as e:
+                print(f"Failed to load Kop running left sprite frame {frame}: {e}")
+                # Fallback to simple blue rectangle
+                fallback_sprite = jnp.ones((20, 8, 3), dtype=jnp.uint8) * jnp.array([0, 0, 255], dtype=jnp.uint8)
+                kop_running_left_sprites.append(fallback_sprite)
+
+        # Determine the maximum height and width among ALL Kop sprites (standing + running)
+        all_kop_sprites = kop_running_left_sprites + [kop_sprites['standing']]
+        global_max_height = max(sprite.shape[0] for sprite in all_kop_sprites)
+        global_max_width = max(sprite.shape[1] for sprite in all_kop_sprites)
+        
+        print(f"Global Kop sprite dimensions: {global_max_height}x{global_max_width}")
+
+        # Pad standing sprite to global dimensions
+        standing_height_diff = global_max_height - kop_sprites['standing'].shape[0]
+        standing_width_diff = global_max_width - kop_sprites['standing'].shape[1]
+        kop_sprites['standing'] = jnp.pad(
+            kop_sprites['standing'],
+            ((0, standing_height_diff), (0, standing_width_diff), (0, 0)),
+            mode='constant',
+            constant_values=255  # Use white padding to match background
+        )
+
+        # Pad all running left sprites to the same global dimensions
+        kop_running_left_sprites = [
+            jnp.pad(
+                sprite,
+                ((0, global_max_height - sprite.shape[0]), (0, global_max_width - sprite.shape[1]), (0, 0)),
+                mode='constant',
+                constant_values=255  # Use white padding to match background
+            )
+            for sprite in kop_running_left_sprites
+        ]
+
+        # Mirror running left sprites to create running right sprites (integer-based logic)
+        kop_running_right_sprites = [sprite[:, ::-1, :] for sprite in kop_running_left_sprites]
+        print("Mirrored Kop running left sprites to create running right sprites using integer-based logic.")
+
+        # Store running animations in the dictionary
+        kop_sprites['running_left'] = jnp.stack(kop_running_left_sprites, axis=0)
+        kop_sprites['running_right'] = jnp.stack(kop_running_right_sprites, axis=0)
+
+        # Add Kop sprites to the main sprite dictionary
+        sprites['kop'] = kop_sprites
+
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1586,12 +1670,12 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Use escalator_frame (which increments every step) to determine sprite frame
         # Animation cycles every 2 frames (slower animation)
         return (state.escalator_frame // 8) % 4
-        
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_escalator_sprite_for_floor(self, floor_num: int, sprite_frame: chex.Array) -> chex.Array:
         """Get the appropriate escalator sprite based on floor number."""
         # Floor 1 (index 0): left-facing floor 1 sprites
-        # Floor 2 (index 1): right-facing sprites  
+        # Floor 2 (index 1): right-facing sprites
         # Floor 3 (index 2): left-facing floor 3 sprites
         return jnp.where(
             floor_num == 0, self.sprites['escalator_left_floor_1_frames'][sprite_frame],
@@ -1760,11 +1844,11 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         escalator_1_building_x = self.consts.ESCALATOR_FLOOR1_X
         escalator_1_screen_x = building_to_screen_x(escalator_1_building_x)
         escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.GAME_AREA_WIDTH)
-        
+
         current_escalator_1_sprite = self._get_escalator_sprite_for_floor(0, sprite_frame)
         escalator_1_sprite_height = current_escalator_1_sprite.shape[0]
         escalator_1_sprite_y = self.consts.FLOOR_1_Y - (escalator_1_sprite_height - self.consts.FLOOR_HEIGHT) - 3
-        
+
         game_area = jnp.where(
             escalator_1_visible,
             draw_sprite(game_area, current_escalator_1_sprite, 0, escalator_1_sprite_y),
@@ -1775,11 +1859,11 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         escalator_2_building_x = self.consts.ESCALATOR_FLOOR2_X
         escalator_2_screen_x = building_to_screen_x(escalator_2_building_x)
         escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
-        
+
         current_escalator_2_sprite = self._get_escalator_sprite_for_floor(1, sprite_frame)
         escalator_2_sprite_height = current_escalator_2_sprite.shape[0]
         escalator_2_sprite_y = self.consts.FLOOR_2_Y - (escalator_2_sprite_height - self.consts.FLOOR_HEIGHT) - 3
-        
+
         game_area = jnp.where(
             escalator_2_visible,
             draw_sprite(game_area, current_escalator_2_sprite, 0, escalator_2_sprite_y),
@@ -1790,11 +1874,11 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         escalator_3_building_x = self.consts.ESCALATOR_FLOOR3_X
         escalator_3_screen_x = building_to_screen_x(escalator_3_building_x)
         escalator_3_visible = (escalator_3_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_3_screen_x < self.consts.GAME_AREA_WIDTH)
-        
+
         current_escalator_3_sprite = self._get_escalator_sprite_for_floor(2, sprite_frame)
         escalator_3_sprite_height = current_escalator_3_sprite.shape[0]
         escalator_3_sprite_y = self.consts.FLOOR_3_Y - (escalator_3_sprite_height - self.consts.FLOOR_HEIGHT) - 3
-        
+
         game_area = jnp.where(
             escalator_3_visible,
             draw_sprite(game_area, current_escalator_3_sprite, 0, escalator_3_sprite_y),
@@ -1852,17 +1936,16 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             game_area
         )
 
-        # Draw player with camera adjustment
-        player_screen_x = building_to_screen_x(state.player.x)
-        player_visible = (player_screen_x >= 0) & (player_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH)
-
-        player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
-        game_area = jnp.where(
-            player_visible,
-            draw_rectangle_simple(game_area, player_screen_x, state.player.y,
-                                self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT, player_color),
-            game_area
-        )
+        # Old player rendering (now replaced by Kop sprite above)
+        # player_screen_x = building_to_screen_x(state.player.x)
+        # player_visible = (player_screen_x >= 0) & (player_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH)
+        # player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
+        # game_area = jnp.where(
+        #     player_visible,
+        #     draw_rectangle_simple(game_area, player_screen_x, state.player.y,
+        #                         self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT, player_color),
+        #     game_area
+        # )
 
         # Draw thief with camera adjustment (only if not escaped)
         thief_screen_x = building_to_screen_x(state.thief.x)
@@ -1875,6 +1958,34 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                                 self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT, thief_color),
             game_area
         )
+
+        # Draw the Kop sprite (representing the player character)
+        # Determine if player is moving and select appropriate sprite
+        is_moving = jnp.abs(state.player.vel_x) > 0.1
+        is_facing_left = state.player.vel_x < 0
+        
+        # Select sprite based on movement
+        kop_sprite = jnp.where(
+            is_moving,
+            # Running animation - cycle through 4 frames based on step counter
+            jnp.where(
+                is_facing_left,
+                self.sprites['kop']['running_left'][(state.step_counter // 4) % 4],
+                self.sprites['kop']['running_right'][(state.step_counter // 4) % 4]
+            ),
+            # Standing sprite
+            self.sprites['kop']['standing']
+        )
+
+        # Calculate player's position on the screen
+        player_screen_x = building_to_screen_x(state.player.x)
+        
+        # Position sprite so its bottom aligns with the floor
+        kop_sprite_height = kop_sprite.shape[0]
+        player_screen_y = state.player.y - kop_sprite_height + self.consts.PLAYER_HEIGHT
+
+        # Draw the Kop sprite at the player's position
+        game_area = draw_sprite(game_area, kop_sprite, player_screen_x, player_screen_y)
 
         # Draw simple UI elements on game area
         ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
