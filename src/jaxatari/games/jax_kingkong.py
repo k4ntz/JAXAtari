@@ -30,10 +30,6 @@ class KingKongConstants(NamedTuple):
 	PLAYER_RESPAWN_LOCATION: chex.Array = jnp.array([77, 228])
 	PLAYER_SUCCESS_LOCATION: chex.Array = jnp.array([87, 37])
 	
-	BOMB_SPAWN_TOP_LOCATION: chex.Array = jnp.array([31, 84])  # Kong's upper location
-	BOMB_SPAWN_BOTTOM_LOCATION: chex.Array = jnp.array([31, 228])  # Kong's lower location
-	BOMB_OFFSCREEN_BUFFER: int = 4 # 4 additional pixels before despawn
-
 	# Level 
 	LEVEL_LOCATION: chex.Array = jnp.array([8, 39])
 	
@@ -91,6 +87,9 @@ class KingKongConstants(NamedTuple):
 	PRINCESS_START_LOCATION: chex.Array = jnp.array([93, 37])
 	PRINCESS_RESPAWN_LOCATION: chex.Array = jnp.array([77, 37]) # at the start the princess teleports to the left, this al 
 	PRINCESS_SUCCESS_LOCATION: chex.Array = jnp.array([95, 37]) 
+	BOMB_SPAWN_TOP_LOCATION: chex.Array = jnp.array([20, 60]) #top left top floor
+	BOMB_SPAWN_BOTTOM_LOCATION: chex.Array = KONG_LOWER_LOCATION  # Kong's lower location
+	BOMB_OFFSCREEN_BUFFER: int = 4 # 4 additional pixels before despawn
 
 	### Gameplay 
 	# There's six seperate stages: 
@@ -388,8 +387,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			player_dir=jnp.array(0).astype(jnp.int32),
 			
 			# Kong state
-			kong_x=jnp.array(self.consts.KONG_UPPER_LOCATION[0]).astype(jnp.int32),
-			kong_y=jnp.array(self.consts.KONG_UPPER_LOCATION[1]).astype(jnp.int32),
+			kong_x=jnp.array(self.consts.KONG_LOWER_LOCATION[0]).astype(jnp.int32),
+			kong_y=jnp.array(self.consts.KONG_LOWER_LOCATION[1]).astype(jnp.int32),
 			kong_visible=jnp.array(1).astype(jnp.int32),
 			kong_jump_counter=jnp.array(0).astype(jnp.int32),
 			
@@ -2283,7 +2282,8 @@ class KingKongRenderer(JAXGameRenderer):
 						lambda: jax.lax.cond(
 							(state.player_state == self.consts.PLAYER_IDLE_RIGHT) |
 							(state.player_state == self.consts.PLAYER_MOVE_RIGHT) |
-							(state.player_state == self.consts.PLAYER_JUMP_RIGHT),
+							(state.player_state == self.consts.PLAYER_JUMP_RIGHT) |
+							(state.player_state == self.consts.PLAYER_CATAPULT_RIGHT),
 							lambda: -2,
 							lambda: -5
 						)
