@@ -1662,6 +1662,60 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Add Kop sprites to the main sprite dictionary
         sprites['kop'] = kop_sprites
 
+        # Load Thief running sprites (right-facing frames, then mirror for left)
+        thief_sprites = {}
+        
+        # Load running right sprites and convert RGBA to RGB
+        thief_running_right_sprites = []
+        for frame in range(1, 5):
+            try:
+                thief_running_right_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'thief_run_right_{frame}.npy')
+                sprite_rgba = jr.loadFrame(thief_running_right_path)
+                
+                # Handle RGBA properly with alpha blending
+                rgb_data = sprite_rgba[:, :, :3]
+                alpha_data = sprite_rgba[:, :, 3:4]
+                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                white_background = jnp.ones_like(rgb_data) * 255
+                
+                sprite_rgb = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                            white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                thief_running_right_sprites.append(sprite_rgb)
+                print(f"Loaded Thief running right sprite frame {frame}: {sprite_rgb.shape}")
+            except Exception as e:
+                print(f"Failed to load Thief running right sprite frame {frame}: {e}")
+                # Fallback to simple red rectangle
+                fallback_sprite = jnp.ones((20, 8, 3), dtype=jnp.uint8) * jnp.array([255, 0, 0], dtype=jnp.uint8)
+                thief_running_right_sprites.append(fallback_sprite)
+
+        # Determine the maximum height and width among the thief running sprites
+        thief_max_height = max(sprite.shape[0] for sprite in thief_running_right_sprites)
+        thief_max_width = max(sprite.shape[1] for sprite in thief_running_right_sprites)
+        
+        print(f"Thief sprite dimensions: {thief_max_height}x{thief_max_width}")
+
+        # Pad all running right sprites to the same dimensions
+        thief_running_right_sprites = [
+            jnp.pad(
+                sprite,
+                ((0, thief_max_height - sprite.shape[0]), (0, thief_max_width - sprite.shape[1]), (0, 0)),
+                mode='constant',
+                constant_values=255  # Use white padding to match background
+            )
+            for sprite in thief_running_right_sprites
+        ]
+
+        # Mirror running right sprites to create running left sprites (integer-based logic)
+        thief_running_left_sprites = [sprite[:, ::-1, :] for sprite in thief_running_right_sprites]
+        print("Mirrored Thief running right sprites to create running left sprites using integer-based logic.")
+
+        # Store running animations in the dictionary
+        thief_sprites['running_left'] = jnp.stack(thief_running_left_sprites, axis=0)
+        thief_sprites['running_right'] = jnp.stack(thief_running_right_sprites, axis=0)
+
+        # Add Thief sprites to the main sprite dictionary
+        sprites['thief'] = thief_sprites
+
         return sprites
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1982,15 +2036,33 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         #     game_area
         # )
 
-        # Draw thief with camera adjustment (only if not escaped)
+        # Draw thief with animated sprites and transparency (only if not escaped)
         thief_screen_x = building_to_screen_x(state.thief.x)
         thief_visible = (thief_screen_x >= 0) & (thief_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.THIEF_WIDTH) & jnp.logical_not(state.thief.escaped)
 
-        thief_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red thief
+        # Only render thief if visible and not escaped
+        def render_thief():
+            # Thief is always moving (running) when not escaped
+            # Use thief direction: 1 for right, -1 for left
+            thief_is_facing_left = state.thief.direction < 0
+            
+            # Select sprite based on direction (thief is always running)
+            thief_sprite = jnp.where(
+                thief_is_facing_left,
+                self.sprites['thief']['running_left'][(state.step_counter // 4) % 4],
+                self.sprites['thief']['running_right'][(state.step_counter // 4) % 4]
+            )
+            
+            # Position sprite so its bottom aligns with the floor
+            thief_sprite_height = thief_sprite.shape[0]
+            thief_screen_y = state.thief.y - thief_sprite_height + self.consts.THIEF_HEIGHT
+            
+            return draw_sprite_with_transparency(game_area, thief_sprite, thief_screen_x, thief_screen_y)
+        
+        # Render thief only if visible and not escaped
         game_area = jnp.where(
             thief_visible,
-            draw_rectangle_simple(game_area, thief_screen_x, state.thief.y,
-                                self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT, thief_color),
+            render_thief(),
             game_area
         )
 
