@@ -20,7 +20,7 @@ SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 200
 DEFAULT_RIVER_WIDTH = 80
 MIN_RIVER_WIDTH = 40
-MAX_RIVER_WIDTH = 120
+MAX_RIVER_WIDTH = 160
 MAX_ENEMIES = 10
 MINIMUM_SPAWN_COOLDOWN = 20
 MAX_FUEL = 30
@@ -31,6 +31,13 @@ PLAYER_WIDTH = 7
 PLAYER_HEIGHT = 14
 DEATH_COOLDOWN = 50 # longer in real game
 BUFFER = 50
+ISLAND_SPAWN_PROB = 0.99
+STRAIGHT_PROP = 0.4
+EXPANSE_PROP = 0.4
+SHRINK_PROP = 0.2
+MIN_ALTERNATION_LENGTH = 8
+MAX_ALTERNATION_LENGTH = 10
+
 
 
 class RiverraidState(NamedTuple):
@@ -145,9 +152,9 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
     # later checked and change potentially REVERSED if cooldown is active
     # determine IF the river is to be altered
     new_river_state = jax.lax.cond(
-        state.river_alternation_length <= 0,
+        jnp.logical_and(state.river_alternation_length <= 0, state.alternation_cooldown <= 0),
         lambda state: (jax.random.choice(
-            alter_select_key, jnp.array([0, 1, 2]), p=jnp.array([0.60, 0.20, 0.20])
+            alter_select_key, jnp.array([0, 1, 2]), p=jnp.array([STRAIGHT_PROP, EXPANSE_PROP, SHRINK_PROP])
         )),
         lambda state: state.river_state,
         operand=state
@@ -155,7 +162,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
 
     # alternation length is set here AND whenever an island spawns or despawns (due to the need for hard coding the segment)
     new_alternation_length = jax.lax.cond(state.river_alternation_length <= 0,
-                                          lambda state: jax.random.randint(alter_length_key, (), 1, 8),
+                                          lambda state: jax.random.randint(alter_length_key, (), MIN_ALTERNATION_LENGTH, MAX_ALTERNATION_LENGTH),
                                           lambda state: state.river_alternation_length - 1,
                                           operand=state
                                           )
@@ -189,7 +196,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
             new_river_right = state.river_right.at[0].set(state.river_right[1] + 3)
 
             key, subkey = jax.random.split(state.master_key)
-            should_set_island = jnp.logical_and(jax.random.bernoulli(subkey, 0.1),
+            should_set_island = jnp.logical_and(jax.random.bernoulli(subkey, ISLAND_SPAWN_PROB),
                                                 new_river_right[0] - new_river_left[0] > 50)
             new_island_present = jax.lax.select(should_set_island, jnp.array(2), state.river_island_present)
 
@@ -429,8 +436,8 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         return state._replace(
             river_left=new_left,
             river_right=new_right,
-            river_alternation_length=new_alternation_length,
-            alternation_cooldown=new_alternation_cooldown
+            #river_alternation_length=new_alternation_length,
+            #alternation_cooldown=new_alternation_cooldown
         )
 
     def yes_island_clamping(state: RiverraidState) -> RiverraidState:
@@ -462,8 +469,8 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         return state._replace(
             river_inner_left=new_inner_left,
             river_inner_right=new_inner_right,
-            river_alternation_length=new_alternation_length,
-            alternation_cooldown=new_alternation_cooldown
+            #river_alternation_length=new_alternation_length,
+            #alternation_cooldown=new_alternation_cooldown
         )
 
     state = jax.lax.cond(state.river_island_present == 0,
@@ -927,7 +934,7 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
         enemy_hitboxes = jnp.array([
             12,  # boat
-            6,  # helicopter
+            7,  # helicopter
             6  # plane
         ])
         active_enemy_mask = state.enemy_state == 1
@@ -935,7 +942,7 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
         hitboxes = enemy_hitboxes[state.enemy_type]
 
         x_collision_mask = ((state.player_bullet_x < state.enemy_x + hitboxes) & (state.player_bullet_x + hitboxes > state.enemy_x))
-        y_collision_mask = ((state.player_bullet_y < state.enemy_y + 8) & (state.player_bullet_y + 1 > state.enemy_y))
+        y_collision_mask = ((state.player_bullet_y < state.enemy_y + 6) & (state.player_bullet_y + 1 > state.enemy_y))
 
         collision_mask = active_enemy_mask & x_collision_mask & y_collision_mask
         collision_present = jnp.any(collision_mask)
@@ -1045,7 +1052,7 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
     player_collision_present = jnp.any(player_collision_mask)
 
     # bullet collision
-    bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 8) & (state.player_bullet_x + 8 > state.fuel_x)
+    bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 12) & (state.player_bullet_x + 0 > state.fuel_x)
     bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 24) & (state.player_bullet_y > state.fuel_y)
     bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask
     bullet_collision_present = jnp.any(bullet_collision_mask)
@@ -1126,26 +1133,44 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
 @jax.jit
 def enemy_movement(state: RiverraidState) -> RiverraidState:
     new_enemy_x = state.enemy_x.copy()
+    # Masks for enemies that are alive and set to a moving direction
     move_left_mask = (state.enemy_state == 1) & (state.enemy_direction == 2)
     move_right_mask = (state.enemy_state == 1) & (state.enemy_direction == 3)
 
-
+    # Update positions based on direction
     new_enemy_x = jnp.where(move_left_mask, new_enemy_x - 0.5, new_enemy_x)
     new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 0.5, new_enemy_x)
 
     enemy_y = state.enemy_y.astype(jnp.int32)
+    enemy_width = 8  # Approximate width of the enemy sprite for collision
 
-    hit_left_bank = new_enemy_x <= state.river_left[enemy_y]
-    hit_right_bank = new_enemy_x >= state.river_right[enemy_y] - 8
+    # --- Define all potential collision surfaces ---
+    # Collision with the outer river banks
+    collides_with_outer_left = new_enemy_x <= state.river_left[enemy_y]
+    collides_with_outer_right = new_enemy_x + enemy_width >= state.river_right[enemy_y]
 
-    hit_inner_left = (state.river_inner_left[enemy_y] >= 0) & (new_enemy_x <= state.river_inner_left[enemy_y])
-    hit_inner_right = (state.river_inner_right[enemy_y] >= 0) & (new_enemy_x >= state.river_inner_right[enemy_y] - 8)
+    # Collision with the inner island shores
+    island_present_at_y = state.river_inner_left[enemy_y] >= 0
+    # A right-moving enemy hits the island's left shore
+    collides_with_inner_left_shore = island_present_at_y & (new_enemy_x + enemy_width >= state.river_inner_left[enemy_y])
+    # A left-moving enemy hits the island's right shore
+    collides_with_inner_right_shore = island_present_at_y & (new_enemy_x <= state.river_inner_right[enemy_y])
 
-    change_direction_mask = hit_left_bank | hit_right_bank | hit_inner_left | hit_inner_right
+    # --- Directional Collision Check ---
+    # For enemies moving left, only check for collisions on their left-hand side.
+    # This can be the outer left bank OR the island's right shore.
+    left_side_collision = move_left_mask & (collides_with_outer_left | collides_with_inner_right_shore)
+
+    # For enemies moving right, only check for collisions on their right-hand side.
+    # This can be the outer right bank OR the island's left shore.
+    right_side_collision = move_right_mask & (collides_with_outer_right | collides_with_inner_left_shore)
+
+    # Combine the masks to find all enemies that need to change direction
+    change_direction_mask = left_side_collision | right_side_collision
 
     new_enemy_direction = jnp.where(
-        change_direction_mask & (state.enemy_type != 2),
-        jnp.where(state.enemy_direction == 2, 3, 2),
+        change_direction_mask & (state.enemy_type != 2),  # Planes (type 2) fly off-screen and don't turn
+        jnp.where(state.enemy_direction == 2, 3, 2),      # Flip direction from left (2) to right (3) or vice-versa
         state.enemy_direction
     )
     return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
@@ -1326,6 +1351,9 @@ class JaxRiverraid(JaxEnvironment):
             new_state = enemy_movement(new_state)
             new_state = handle_fuel(new_state)
             new_state = handle_housetree(new_state)
+            #jax.debug.print("river island present : {}", new_state.river_island_present)
+            jax.debug.print("alternation cooldown : {}", new_state.alternation_cooldown)
+            jax.debug.print("alternation LENGTH : {}", new_state.river_alternation_length)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -1913,7 +1941,7 @@ class RiverraidRenderer(JAXGameRenderer):
             digit_place = num_digits - 1 - i
             digit_to_draw = get_digit(digit_place, state.player_score)
 
-            x0 = jnp.int32(fuel_display_x + (i * 12) + 30)
+            x0 = jnp.int32(fuel_display_x + (i * 12))
             y0 = jnp.int32(fuel_display_y - 10)
 
             sprite_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, digit_to_draw)
