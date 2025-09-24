@@ -43,7 +43,7 @@ class TronConstants(NamedTuple):
         4,
         2,
     )  # size for the outbound discs: width 4, height 2
-    disc_size_ret: Tuple[int, int] = (3, 3)  # size for the returning discs
+    disc_size_ret: Tuple[int, int] = (2, 4)  # size for the returning discs
     disc_speed: int = 2  # outbound (thrown) speed
     enemy_disc_speed: int = 2  # 1px/step
     inbound_disc_speed: int = 3
@@ -1671,12 +1671,19 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
             return jax.lax.cond(has, do_spawn, no_spawn, s)
 
-        def loop_body(i, carry_state: TronState):
-            # Guard keeps the loop static-sized but only does work while i < to_spawn
-            return jax.lax.cond(i < to_spawn, place_one, lambda s: s, carry_state)
+        def scan_body(carry_state: TronState, i: Array):
+            # only attempt a placement while i < to_spawn (keeps semantics)
+            carry_state = jax.lax.cond(
+                i < to_spawn, place_one, lambda s: s, carry_state
+            )
+            return carry_state, None
 
-        # Upper bound = max_enemies is safe and static. Prevents overwork
-        return jax.lax.fori_loop(0, self.consts.max_enemies, loop_body, state)
+        state, _ = jax.lax.scan(
+            scan_body,
+            state,
+            jnp.arange(self.consts.max_enemies, dtype=jnp.int32),
+        )
+        return state
 
     @partial(jit, static_argnums=(0,))
     def _move_enemies(self, state: TronState) -> TronState:
