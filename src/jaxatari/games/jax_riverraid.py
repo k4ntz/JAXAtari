@@ -644,94 +644,58 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
         player_state=new_player_state)
 
 def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
-    press_right = jnp.any(
-        jnp.array([action == Action.RIGHT, action == Action.RIGHTFIRE])
-    )
+    #input
+    press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
+    press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
 
-    press_left = jnp.any(
-        jnp.array([action == Action.LEFT, action == Action.LEFTFIRE])
-    )
-
-    new_direction = jax.lax.cond(
-            press_left,
-            lambda _: jnp.array(0),  # left
-            lambda _: jax.lax.cond(
-                press_right,
-                lambda _: jnp.array(2),  # right
-                lambda _: jnp.array(1),  # center
-                operand=None
-            ),
-            operand=None
-        )
-
-    new_velocity = jax.lax.cond(
+    new_direction = 1 + press_right - press_left
+    velocity_change = (press_right * 0.01) - (press_left * 0.01)
+    current_velocity = jnp.where(
         (press_left == 0) & (press_right == 0),
-        lambda state: jnp.array(0, dtype=state.player_velocity.dtype),
-        lambda state: state.player_velocity + (press_right * 0.01) - (press_left * 0.01),
-        operand=state
+        0.0,
+        state.player_velocity + velocity_change
     )
 
-    new_velocity = jax.lax.cond(press_right == 0,
-        lambda state: jnp.clip(new_velocity, -3, 0),
-        lambda state: jnp.clip(new_velocity, 0, 3),
-        operand=state
-    )
+    min_vel = jnp.where(press_right, 0.0, -3.0)
+    max_vel = jnp.where(press_left, 0.0, 3.0)
+    new_velocity = jnp.clip(current_velocity, min_vel, max_vel)
 
+    # move
     new_x = state.player_x + new_velocity
 
-    # Define hitboxes
+    # check collisions
     hitbox_left = new_x
     hitbox_right = new_x + PLAYER_WIDTH
-    hitbox_top_y = jnp.round(state.player_y).astype(jnp.int32)
-    hitbox_bottom_y = jnp.round(state.player_y + PLAYER_HEIGHT).astype(jnp.int32)
+    hitbox_top_y = jnp.clip(jnp.round(state.player_y).astype(jnp.int32), 0, SCREEN_HEIGHT - 1)
+    hitbox_bottom_y = jnp.clip(jnp.round(state.player_y + PLAYER_HEIGHT).astype(jnp.int32), 0, SCREEN_HEIGHT - 1)
 
-    # Collision check with outer river banks
-    bank_left_top = state.river_left[hitbox_top_y]
-    bank_right_top = state.river_right[hitbox_top_y]
-    bank_left_bottom = state.river_left[hitbox_bottom_y]
-    bank_right_bottom = state.river_right[hitbox_bottom_y]
+    collision_top_banks = (hitbox_left <= state.river_left[hitbox_top_y]) | \
+                          (hitbox_right >= state.river_right[hitbox_top_y])
+    collision_bottom_banks = (hitbox_left <= state.river_left[hitbox_bottom_y]) | \
+                             (hitbox_right >= state.river_right[hitbox_bottom_y])
 
-    collision_top_banks = jnp.logical_or(hitbox_left <= bank_left_top, hitbox_right >= bank_right_top)
-    collision_bottom_banks = jnp.logical_or(hitbox_left <= bank_left_bottom, hitbox_right >= bank_right_bottom)
-    collision_with_banks = jnp.logical_or(collision_top_banks, collision_bottom_banks)
+    island_present_top = state.river_inner_left[hitbox_top_y] >= 0
+    collision_with_island_top = island_present_top & \
+                                (hitbox_right >= state.river_inner_left[hitbox_top_y]) & \
+                                (hitbox_left <= state.river_inner_right[hitbox_top_y])
 
-    player_state = jax.lax.cond(
-        collision_with_banks,
-        lambda: jnp.array(1),  # Player dies
-        lambda: state.player_state
+    island_present_bottom = state.river_inner_left[hitbox_bottom_y] >= 0
+    collision_with_island_bottom = island_present_bottom & \
+                                   (hitbox_right >= state.river_inner_left[hitbox_bottom_y]) & \
+                                   (hitbox_left <= state.river_inner_right[hitbox_bottom_y])
+
+    any_collision = collision_top_banks | collision_bottom_banks | \
+                    collision_with_island_top | collision_with_island_bottom
+
+    # kill player if collision
+    new_player_state = jnp.where(any_collision, 1, state.player_state)
+
+    return state._replace(
+        player_x=new_x,
+        player_velocity=new_velocity,
+        player_state=new_player_state,
+        player_direction=new_direction
     )
-
-    # Collision check with island
-    island_left_top = state.river_inner_left[hitbox_top_y]
-    island_right_top = state.river_inner_right[hitbox_top_y]
-    island_present_top = island_left_top >= 0
-
-    island_left_bottom = state.river_inner_left[hitbox_bottom_y]
-    island_right_bottom = state.river_inner_right[hitbox_bottom_y]
-    island_present_bottom = island_left_bottom >= 0
-
-    collision_with_island_top = jnp.logical_and(
-        island_present_top,
-        jnp.logical_and(hitbox_right >= island_left_top, hitbox_left <= island_right_top)
-    )
-
-    collision_with_island_bottom = jnp.logical_and(
-        island_present_bottom,
-        jnp.logical_and(hitbox_right >= island_left_bottom, hitbox_left <= island_right_bottom)
-    )
-    collision_with_island = jnp.logical_or(collision_with_island_top, collision_with_island_bottom)
-
-    player_state = jax.lax.cond(
-        collision_with_island,
-        lambda: jnp.array(1),  # Player dies
-        lambda: player_state
-    )
-
-
-    return state._replace(player_x=new_x,
-                          player_velocity=new_velocity,
-                          player_state=player_state,
-                          player_direction=new_direction)
 
 @jax.jit
 def get_action_from_keyboard(state: RiverraidState) -> Action:
@@ -1028,103 +992,45 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def handle_animations(state: RiverraidState) -> RiverraidState:
-    def body_fun(i, state):
-        # Existing enemy animation handling logic
-        current_enemy_state = state.enemy_state[i]
-        current_enemy_cooldown = state.enemy_animation_cooldowns[i]
+    # enemies
+    enemy_animation_mask = state.enemy_state > 1
+    enemy_cooldown_positive_mask = state.enemy_animation_cooldowns > 0
 
-        def update_enemy_state_and_cooldown(state):
-            new_cooldown = jax.lax.cond(
-                current_enemy_cooldown > 0,
-                lambda: current_enemy_cooldown - 1,
-                lambda: 0
-            )
-            new_enemy_state = jax.lax.cond(
-                current_enemy_cooldown <= 0,
-                lambda: jax.lax.switch(
-                    current_enemy_state,
-                    [
-                        lambda _: current_enemy_state,  # Not used
-                        lambda _: current_enemy_state,  # Not used
-                        lambda _: jnp.array(3),  # Transition from 2 to 3
-                        lambda _: jnp.array(4),  # Transition from 3 to 4
-                        lambda _: jnp.array(0),  # Transition from 4 to 0 (dead)
-                    ],
-                    operand=None
-                ),
-                lambda: current_enemy_state
-            )
-            new_cooldown = jax.lax.cond(
-                new_enemy_state != current_enemy_state,
-                lambda: 10,
-                lambda: new_cooldown
-            )
-            state = state._replace(
-                enemy_state=state.enemy_state.at[i].set(new_enemy_state),
-                enemy_animation_cooldowns=state.enemy_animation_cooldowns.at[i].set(new_cooldown)
-            )
-            return state
+    new_enemy_cooldowns = state.enemy_animation_cooldowns - 1
 
-        state = jax.lax.cond(
-            current_enemy_state > 1,
-            update_enemy_state_and_cooldown,
-            lambda state: state,
-            operand=state
-        )
+    enemy_state_change_mask = enemy_animation_mask & (new_enemy_cooldowns <= 0)
 
-        # New logic for handling fuel animations
-        current_fuel_state = state.fuel_state[i]
-        current_fuel_cooldown = state.fuel_animation_cooldowns[i]
+    new_enemy_state = jnp.where(enemy_state_change_mask & (state.enemy_state == 2), 3, state.enemy_state)
+    new_enemy_state = jnp.where(enemy_state_change_mask & (state.enemy_state == 3), 4, new_enemy_state)
+    new_enemy_state = jnp.where(enemy_state_change_mask & (state.enemy_state == 4), 0, new_enemy_state)
 
-        def update_fuel_state_and_cooldown(state):
-            new_cooldown = jax.lax.cond(
-                current_fuel_cooldown > 0,
-                lambda: current_fuel_cooldown - 1,
-                lambda: 0
-            )
-            new_fuel_state = jax.lax.cond(
-                current_fuel_cooldown <= 0,
-                lambda: jax.lax.switch(
-                    current_fuel_state,
-                    [
-                        lambda _: current_fuel_state,  # Not used
-                        lambda _: current_fuel_state,  # Not used
-                        lambda _: jnp.array(3),  # Transition from 2 to 3
-                        lambda _: jnp.array(4),  # Transition from 3 to 4
-                        lambda _: jnp.array(0),  # Transition from 4 to 0 (dead)
-                    ],
-                    operand=None
-                ),
-                lambda: current_fuel_state
-            )
-            new_cooldown = jax.lax.cond(
-                new_fuel_state != current_fuel_state,
-                lambda: 10,
-                lambda: new_cooldown
-            )
-            state = state._replace(
-                fuel_state=state.fuel_state.at[i].set(new_fuel_state),
-                fuel_animation_cooldowns=state.fuel_animation_cooldowns.at[i].set(new_cooldown)
-            )
-            return state
+    new_enemy_cooldowns = jnp.where(enemy_state_change_mask, 10, new_enemy_cooldowns)
 
-        state = jax.lax.cond(
-            current_fuel_state > 1,
-            update_fuel_state_and_cooldown,
-            lambda state: state,
-            operand=state
-        )
+    # fuel
+    fuel_animation_mask = state.fuel_state > 1
+    new_fuel_cooldowns = state.fuel_animation_cooldowns - 1
+    fuel_state_change_mask = fuel_animation_mask & (new_fuel_cooldowns <= 0)
 
-        return state
+    new_fuel_state = jnp.where(fuel_state_change_mask & (state.fuel_state == 2), 3, state.fuel_state)
+    new_fuel_state = jnp.where(fuel_state_change_mask & (state.fuel_state == 3), 4, new_fuel_state)
+    new_fuel_state = jnp.where(fuel_state_change_mask & (state.fuel_state == 4), 0, new_fuel_state)
 
-    state = jax.lax.fori_loop(0, MAX_ENEMIES, body_fun, state)
+    new_fuel_cooldowns = jnp.where(fuel_state_change_mask, 10, new_fuel_cooldowns)
 
+    # dam
     new_dam_explosion_cooldown = jax.lax.cond(
         jnp.any(state.dam_position == 2) & (state.dam_explosion_cooldown > 0),
         lambda: state.dam_explosion_cooldown - 1,
         lambda: state.dam_explosion_cooldown
     )
-    return state._replace(dam_explosion_cooldown=new_dam_explosion_cooldown)
+
+    return state._replace(
+        enemy_state=new_enemy_state,
+        enemy_animation_cooldowns=new_enemy_cooldowns,
+        fuel_state=new_fuel_state,
+        fuel_animation_cooldowns=new_fuel_cooldowns,
+        dam_explosion_cooldown=new_dam_explosion_cooldown
+    )
 
 
 
@@ -1423,7 +1329,6 @@ class JaxRiverraid(JaxEnvironment):
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
-            jax.debug.print("YOU DIED GIT GUD")
             river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
             river_end_x = river_start_x + DEFAULT_RIVER_WIDTH
             initial_key = jax.random.PRNGKey(1)
@@ -1483,7 +1388,6 @@ class JaxRiverraid(JaxEnvironment):
                 operand=state
             )
 
-        jax.debug.print("new step \n")
         new_state = state._replace(turn_step=state.turn_step + 1,
                                    turn_step_linear=state.turn_step_linear + 1)
 
@@ -1510,7 +1414,6 @@ class JaxRiverraid(JaxEnvironment):
         env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
-        jax.debug.print("done: {done}\n", done=done)
         info = self._get_info(new_state, all_rewards)
 
         return observation, new_state, env_reward, done, info
