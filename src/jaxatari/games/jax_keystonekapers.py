@@ -64,7 +64,7 @@ class KeystoneKapersConstants(NamedTuple):
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
     FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
     FLOOR_2_Y: int = 105   # Middle floor (was 100, shifted up by 5)
-    FLOOR_3_Y: int = 70   # Top floor (was 60, shifted up by 5)
+    FLOOR_3_Y: int = 73   # Top floor (adjusted down by 3 pixels)
     ROOF_Y: int = 40      # Roof (was 19, shifted up by 4)
     FLOOR_HEIGHT: int = 20
 
@@ -736,9 +736,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             thief.direction
         )
 
-        # Clamp position within building boundaries  
+        # Clamp position within building boundaries
         new_x = jnp.clip(new_x, 0, self.consts.TOTAL_BUILDING_WIDTH - self.consts.THIEF_WIDTH).astype(jnp.int32)
-        
+
         # Update Y position based on floor
         new_y = self._floor_y_position(new_floor).astype(jnp.int32)
 
@@ -1463,42 +1463,91 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Load black digit sprites for countdown timer (all digits 0-9)
         black_digits = {}
-        
+
         for digit in range(10):  # Load all digits 0-9
             try:
                 digit_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'black_{digit}.npy')
                 digit_sprite_rgba = jr.loadFrame(digit_sprite_path)
-                
+
                 # Handle RGBA properly with alpha blending
                 rgb_data = digit_sprite_rgba[:, :, :3]
                 alpha_data = digit_sprite_rgba[:, :, 3:4]
                 alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
                 white_background = jnp.ones_like(rgb_data) * 255
-                
+
                 black_digits[digit] = (rgb_data.astype(jnp.float32) * alpha_normalized +
                                      white_background * (1 - alpha_normalized)).astype(jnp.uint8)
             except:
                 # Fallback to simple black rectangle for missing digits
                 black_digits[digit] = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([0, 0, 0], dtype=jnp.uint8)
-        
+
         sprites['black_digits'] = black_digits
 
         # Load the Activision logo sprite
         try:
             activision_logo_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'activision logo.npy')
             activision_logo_rgba = jr.loadFrame(activision_logo_path)
-            
+
             # Handle RGBA properly with alpha blending
             rgb_data = activision_logo_rgba[:, :, :3]
             alpha_data = activision_logo_rgba[:, :, 3:4]
             alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
             white_background = jnp.ones_like(rgb_data) * 255
-            
+
             sprites['activision_logo'] = (rgb_data.astype(jnp.float32) * alpha_normalized +
                                         white_background * (1 - alpha_normalized)).astype(jnp.uint8)
         except:
             # Fallback to simple colored rectangle if sprite loading fails
             sprites['activision_logo'] = jnp.ones((10, 40, 3), dtype=jnp.uint8) * jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+
+        # Load escalator right-facing sprites (4 animation frames)
+        escalator_sprites = []
+        max_height = 0
+        max_width = 0
+
+        # First pass: find maximum dimensions
+        temp_sprites = []
+        for frame in range(1, 5):  # Load frames 1, 2, 3, 4
+            try:
+                escalator_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'escalator_right_facing_{frame}.npy')
+                escalator_sprite_rgba = jr.loadFrame(escalator_sprite_path)
+
+                # Handle RGBA properly with alpha blending
+                rgb_data = escalator_sprite_rgba[:, :, :3]
+                alpha_data = escalator_sprite_rgba[:, :, 3:4]
+                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                white_background = jnp.ones_like(rgb_data) * 255
+
+                escalator_frame_sprite = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                        white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                temp_sprites.append(escalator_frame_sprite)
+                max_height = max(max_height, escalator_frame_sprite.shape[0])
+                max_width = max(max_width, escalator_frame_sprite.shape[1])
+
+            except Exception as e:
+                # Fallback to simple purple rectangle for missing sprites
+                fallback_sprite = jnp.ones((25, 16, 3), dtype=jnp.uint8) * jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
+                temp_sprites.append(fallback_sprite)
+                max_height = max(max_height, 25)
+                max_width = max(max_width, 16)
+
+        # Second pass: pad all sprites to max dimensions
+        for sprite in temp_sprites:
+            # Pad sprite to max dimensions with white background
+            height_diff = max_height - sprite.shape[0]
+            width_diff = max_width - sprite.shape[1]
+
+            # Pad with white (255, 255, 255)
+            padded_sprite = jnp.pad(
+                sprite,
+                ((0, height_diff), (0, width_diff), (0, 0)),
+                mode='constant',
+                constant_values=255
+            )
+            escalator_sprites.append(padded_sprite)
+
+        # Stack escalator sprites for JAX-compatible indexing
+        sprites['escalator_frames'] = jnp.stack(escalator_sprites, axis=0)
 
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
@@ -1509,6 +1558,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         sprites['item'] = jnp.ones((self.consts.ITEM_HEIGHT, self.consts.ITEM_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.ITEM_COLOR, dtype=jnp.uint8)
 
         return sprites
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_escalator_sprite_frame(self, state: GameState) -> chex.Array:
+        """Get the current escalator sprite frame (0-3) based on animation counter."""
+        # Use escalator_frame (which increments every step) to determine sprite frame
+        # Animation cycles every 4 frames
+        return state.escalator_frame % 4
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> jnp.ndarray:
@@ -1662,53 +1718,36 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             self.consts.GAME_AREA_WIDTH, layer_thickness, floor_tan_color
         )
 
-        # Draw escalators as diagonal purple lines (not ladder-style)
-        escalator_color = jnp.array(self.consts.ESCALATOR_COLOR, dtype=jnp.uint8)
+        # Draw escalators using animated sprites (right-facing, full floor section)
+        sprite_frame = self._get_escalator_sprite_frame(state)
 
-        # Escalator 1: Floor 1 diagonal going down-left to Floor 2 (leftmost, flipped)
-        escalator_1_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR1_X)
-        escalator_1_visible = (escalator_1_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_1_screen_x < self.consts.GAME_AREA_WIDTH)
+        # Get the current escalator sprite frame from the pre-stacked array
+        current_escalator_sprite = self.sprites['escalator_frames'][sprite_frame]
 
-        # Draw escalator 1 as diagonal line if visible (flipped vertically)
-        for i in range(self.consts.ESCALATOR_WIDTH):
-            step_x = escalator_1_screen_x + i
-            step_y = self.consts.FLOOR_1_Y + (i * 2)  # Diagonal down-left (flipped)
-            pixel_visible = escalator_1_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_1_Y) & (step_y < self.consts.FLOOR_1_Y + self.consts.FLOOR_HEIGHT)
-            game_area = jnp.where(
-                pixel_visible,
-                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
-                game_area
-            )
+        # Only draw the escalator sprite when viewing the section that contains escalator 2
+        # Escalator 2 is at building position ESCALATOR_FLOOR2_X (988), which is in the rightmost section
+        escalator_2_building_x = self.consts.ESCALATOR_FLOOR2_X
+        escalator_2_screen_x = building_to_screen_x(escalator_2_building_x)
 
-        # Escalator 2: Floor 2 diagonal going up-right to Floor 3
-        escalator_2_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR2_X)
-        escalator_2_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
+        # Check if the escalator section is visible (if any part of the escalator position is on screen)
+        escalator_section_visible = (escalator_2_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_2_screen_x < self.consts.GAME_AREA_WIDTH)
 
-        # Draw escalator 2 as diagonal line if visible
-        for i in range(self.consts.ESCALATOR_WIDTH):
-            step_x = escalator_2_screen_x + i
-            step_y = self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT - (i * 2)  # Diagonal up-right
-            pixel_visible = escalator_2_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_2_Y) & (step_y < self.consts.FLOOR_2_Y + self.consts.FLOOR_HEIGHT)
-            game_area = jnp.where(
-                pixel_visible,
-                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
-                game_area
-            )
+        # Position the escalator sprite higher on the second floor
+        # The sprite is 152 pixels wide (full game area width) and 61 pixels tall
+        escalator_sprite_height = current_escalator_sprite.shape[0]  # Should be 61
 
-        # Escalator 3: Floor 3 diagonal going down-left to Roof (leftmost, flipped)
-        escalator_3_screen_x = building_to_screen_x(self.consts.ESCALATOR_FLOOR3_X)
-        escalator_3_visible = (escalator_3_screen_x >= -self.consts.ESCALATOR_WIDTH) & (escalator_3_screen_x < self.consts.GAME_AREA_WIDTH)
+        # Position it at the top of the second floor area (higher up)
+        sprite_y = self.consts.FLOOR_2_Y - (escalator_sprite_height - self.consts.FLOOR_HEIGHT) - 3
 
-        # Draw escalator 3 as diagonal line if visible (flipped vertically)
-        for i in range(self.consts.ESCALATOR_WIDTH):
-            step_x = escalator_3_screen_x + i
-            step_y = self.consts.FLOOR_3_Y + (i * 2)  # Diagonal down-left (flipped)
-            pixel_visible = escalator_3_visible & (step_x >= 0) & (step_x < self.consts.GAME_AREA_WIDTH) & (step_y >= self.consts.FLOOR_3_Y) & (step_y < self.consts.FLOOR_3_Y + self.consts.FLOOR_HEIGHT)
-            game_area = jnp.where(
-                pixel_visible,
-                draw_rectangle_simple(game_area, step_x, step_y, 2, 2, escalator_color),
-                game_area
-            )
+        # The sprite covers the full width, so x position is 0
+        sprite_x = 0
+
+        # Draw the escalator sprite only when the escalator section is visible
+        game_area = jnp.where(
+            escalator_section_visible,
+            draw_sprite(game_area, current_escalator_sprite, sprite_x, sprite_y),
+            game_area
+        )
 
         # Draw elevator shaft and doors on all floors
         elevator_building_x = self.consts.ELEVATOR_BUILDING_X
@@ -1983,15 +2022,15 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Add Activision logo to the bottom black border area (left side)
         activision_logo = self.sprites['activision_logo']
         logo_height, logo_width = activision_logo.shape[:2]
-        
+
         # Position logo on the left side of the bottom black border
         bottom_border_start_y = self.consts.GAME_AREA_OFFSET_Y + self.consts.GAME_AREA_HEIGHT
         bottom_border_height = self.consts.TOTAL_SCREEN_HEIGHT - bottom_border_start_y
-        
+
         # Position logo on the left side with some margin, near the top of bottom border
         logo_x = 10  # Small margin from left edge
         logo_y = bottom_border_start_y + 5  # Small margin from top of bottom border
-        
+
         # Apply logo to frame
         frame = frame.at[
             logo_y:logo_y + logo_height,
