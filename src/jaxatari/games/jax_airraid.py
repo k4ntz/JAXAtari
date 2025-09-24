@@ -41,11 +41,11 @@ BUILDING_Y_POSITIONS: chex.Array = jnp.array([160, 164, 168, 172, 176, 180, 190]
 
 # Enemies
 NUM_ENEMIES_PER_TYPE: int = 3
-TOTAL_ENEMIES: int = 12  # NUM_ENEMIES_PER_TYPE * 4
+TOTAL_ENEMIES: int = 9  # NUM_ENEMIES_PER_TYPE * 4
 ENEMY_INITIAL_Y: int = 69
 ENEMY_SPEED: float = 1.5
 ENEMY_SPAWN_Y: int = 30
-ENEMY_SPAWN_PROB: float = 0.03
+ENEMY_SPAWN_PROB: float = 0.02
 
 # Missiles
 MISSILE_WIDTH: int = 2
@@ -83,7 +83,7 @@ class AirRaidConstants(NamedTuple):
 
     # Enemies
     NUM_ENEMIES_PER_TYPE: int = 3
-    TOTAL_ENEMIES: int = 12  # NUM_ENEMIES_PER_TYPE * 4
+    TOTAL_ENEMIES: int = 9  # NUM_ENEMIES_PER_TYPE * 4
     ENEMY_INITIAL_Y: int = 69
     ENEMY_SPEED: float = 1.5
     ENEMY_SPAWN_Y: int = 30
