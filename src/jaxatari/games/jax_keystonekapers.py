@@ -1585,13 +1585,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         try:
             kop_standing_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'kop_standing.npy')
             kop_standing_rgba = jr.loadFrame(kop_standing_path)
-            
+
             # Handle RGBA properly with alpha blending
             rgb_data = kop_standing_rgba[:, :, :3]
             alpha_data = kop_standing_rgba[:, :, 3:4]
             alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
             white_background = jnp.ones_like(rgb_data) * 255
-            
+
             kop_sprites['standing'] = (rgb_data.astype(jnp.float32) * alpha_normalized +
                                      white_background * (1 - alpha_normalized)).astype(jnp.uint8)
             print(f"Loaded Kop standing sprite: {kop_sprites['standing'].shape}")
@@ -1606,13 +1606,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             try:
                 kop_running_left_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'kop_facing_left_run_frame_{frame}.npy')
                 sprite_rgba = jr.loadFrame(kop_running_left_path)
-                
+
                 # Handle RGBA properly with alpha blending
                 rgb_data = sprite_rgba[:, :, :3]
                 alpha_data = sprite_rgba[:, :, 3:4]
                 alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
                 white_background = jnp.ones_like(rgb_data) * 255
-                
+
                 sprite_rgb = (rgb_data.astype(jnp.float32) * alpha_normalized +
                             white_background * (1 - alpha_normalized)).astype(jnp.uint8)
                 kop_running_left_sprites.append(sprite_rgb)
@@ -1627,7 +1627,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         all_kop_sprites = kop_running_left_sprites + [kop_sprites['standing']]
         global_max_height = max(sprite.shape[0] for sprite in all_kop_sprites)
         global_max_width = max(sprite.shape[1] for sprite in all_kop_sprites)
-        
+
         print(f"Global Kop sprite dimensions: {global_max_height}x{global_max_width}")
 
         # Pad standing sprite to global dimensions
@@ -1664,20 +1664,20 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Load Thief running sprites (right-facing frames, then mirror for left)
         thief_sprites = {}
-        
+
         # Load running right sprites and convert RGBA to RGB
         thief_running_right_sprites = []
         for frame in range(1, 5):
             try:
                 thief_running_right_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'thief_run_right_{frame}.npy')
                 sprite_rgba = jr.loadFrame(thief_running_right_path)
-                
+
                 # Handle RGBA properly with alpha blending
                 rgb_data = sprite_rgba[:, :, :3]
                 alpha_data = sprite_rgba[:, :, 3:4]
                 alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
                 white_background = jnp.ones_like(rgb_data) * 255
-                
+
                 sprite_rgb = (rgb_data.astype(jnp.float32) * alpha_normalized +
                             white_background * (1 - alpha_normalized)).astype(jnp.uint8)
                 thief_running_right_sprites.append(sprite_rgb)
@@ -1691,7 +1691,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Determine the maximum height and width among the thief running sprites
         thief_max_height = max(sprite.shape[0] for sprite in thief_running_right_sprites)
         thief_max_width = max(sprite.shape[1] for sprite in thief_running_right_sprites)
-        
+
         print(f"Thief sprite dimensions: {thief_max_height}x{thief_max_width}")
 
         # Pad all running right sprites to the same dimensions
@@ -1951,7 +1951,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         current_escalator_2_sprite = self._get_escalator_sprite_for_floor(1, sprite_frame)
         escalator_2_sprite_height = current_escalator_2_sprite.shape[0]
-        escalator_2_sprite_y = self.consts.FLOOR_2_Y - (escalator_2_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        escalator_2_sprite_y = self.consts.FLOOR_2_Y - (escalator_2_sprite_height - self.consts.FLOOR_HEIGHT) - 0
 
         game_area = jnp.where(
             escalator_2_visible,
@@ -2045,20 +2045,20 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Thief is always moving (running) when not escaped
             # Use thief direction: 1 for right, -1 for left
             thief_is_facing_left = state.thief.direction < 0
-            
+
             # Select sprite based on direction (thief is always running)
             thief_sprite = jnp.where(
                 thief_is_facing_left,
                 self.sprites['thief']['running_left'][(state.step_counter // 4) % 4],
                 self.sprites['thief']['running_right'][(state.step_counter // 4) % 4]
             )
-            
+
             # Position sprite so its bottom aligns with the floor
             thief_sprite_height = thief_sprite.shape[0]
             thief_screen_y = state.thief.y - thief_sprite_height + self.consts.THIEF_HEIGHT
-            
+
             return draw_sprite_with_transparency(game_area, thief_sprite, thief_screen_x, thief_screen_y)
-        
+
         # Render thief only if visible and not escaped
         game_area = jnp.where(
             thief_visible,
@@ -2070,7 +2070,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Determine if player is moving and select appropriate sprite
         is_moving = jnp.abs(state.player.vel_x) > 0.1
         is_facing_left = state.player.vel_x < 0
-        
+
         # Select sprite based on movement
         kop_sprite = jnp.where(
             is_moving,
@@ -2086,7 +2086,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Calculate player's position on the screen
         player_screen_x = building_to_screen_x(state.player.x)
-        
+
         # Position sprite so its bottom aligns with the floor
         kop_sprite_height = kop_sprite.shape[0]
         player_screen_y = state.player.y - kop_sprite_height + self.consts.PLAYER_HEIGHT
