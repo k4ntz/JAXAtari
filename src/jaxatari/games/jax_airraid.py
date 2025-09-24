@@ -964,6 +964,11 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         return score_reward - life_penalty
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: AirRaidState, state: AirRaidState) -> float:
+        """Required by the gymnasium wrapper - same as _get_env_reward"""
+        return self._get_env_reward(previous_state, state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: AirRaidState, state: AirRaidState) -> chex.Array:
 
         if self.reward_funcs is None:
