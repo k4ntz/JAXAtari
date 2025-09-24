@@ -143,6 +143,7 @@ class AirRaidState(NamedTuple):
 
     score: chex.Array
     step_counter: chex.Array
+    game_over_flash_counter: chex.Array  # Counter for game over screen flashing animation
     rng: chex.Array  # Random key for stochastic game elements
 
 class EntityPosition(NamedTuple):
@@ -644,6 +645,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             enemy_missile_active=enemy_missile_active,
             score=jnp.array(0),
             step_counter=jnp.array(0),
+            game_over_flash_counter=jnp.array(0),  # Initialize flash counter
             rng=rng,
         )
 
@@ -737,23 +739,23 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
 
         # Detect and handle collisions
         final_enemy_active, final_player_missile_active, final_enemy_missile_active, new_score, new_player_lives, final_building_damage = detect_collisions(
-        state._replace(
-            player_x=new_player_x,
-            enemy_x=new_enemy_x,
-            enemy_y=updated_enemy_y,
-            enemy_type=new_enemy_type,
-            enemy_active=updated_enemy_active,
-            building_damage=updated_building_damage,
-            player_missile_y=updated_player_missile_y,
-            player_missile_active=updated_player_missile_active,
-            enemy_missile_x=new_enemy_missile_x,
-            enemy_missile_y=updated_enemy_missile_y,
-            enemy_missile_active=updated_enemy_missile_active  # Fixed: use updated_enemy_missile_active instead of new_enemy_missile_active
-        )
+            state._replace(
+                player_x=new_player_x,
+                enemy_x=new_enemy_x,
+                enemy_y=updated_enemy_y,
+                enemy_type=new_enemy_type,
+                enemy_active=updated_enemy_active,
+                building_damage=updated_building_damage,
+                player_missile_y=updated_player_missile_y,
+                player_missile_active=updated_player_missile_active,
+                enemy_missile_x=new_enemy_missile_x,
+                enemy_missile_y=updated_enemy_missile_y,
+                enemy_missile_active=updated_enemy_missile_active  # Fixed: use updated_enemy_missile_active instead of new_enemy_missile_active
+            )
         )
 
-        # Create the new state
-        new_state = AirRaidState(
+        # Create the new state first
+        new_state = state._replace(
             player_x=new_player_x,
             player_y=state.player_y,
             player_lives=new_player_lives,
@@ -775,6 +777,19 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             step_counter=state.step_counter + 1,
             rng=newer_rng,
         )
+
+        # Check if game should be over (but not counting flash animation) 
+        should_be_game_over = self._should_be_game_over(new_state)
+        
+        # Update flash counter if game over condition is met
+        flash_counter = jnp.where(
+            should_be_game_over,
+            new_state.game_over_flash_counter + 1,
+            new_state.game_over_flash_counter
+        )
+
+        # Update the state with the new flash counter
+        new_state = new_state._replace(game_over_flash_counter=flash_counter)
 
 
         done = self._get_done(new_state)
@@ -941,7 +956,8 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         return rewards
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: AirRaidState) -> bool:
+    def _should_be_game_over(self, state: AirRaidState) -> bool:
+        """Check if game over conditions are met (ignoring flash animation)"""
         # Game is over if player has no lives left
         player_dead = jnp.less_equal(state.player_lives, 0)
         
@@ -949,6 +965,20 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         buildings_destroyed = jnp.all(state.building_damage >= MAX_BUILDING_DAMAGE)
         
         return jnp.logical_or(player_dead, buildings_destroyed)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: AirRaidState) -> bool:
+        # Game over conditions are met
+        game_over_conditions = self._should_be_game_over(state)
+        
+        # If game over conditions are met, wait for flash animation to complete
+        # Flash twice (each flash lasts about 8 frames, so 16 frames total)
+        flash_complete = state.game_over_flash_counter >= 16
+        
+        # Game is done when either:
+        # 1. Game over conditions met AND flash animation is complete, OR
+        # 2. Game over conditions NOT met (normal gameplay)
+        return jnp.logical_and(game_over_conditions, flash_complete)
 
 class AirRaidRenderer(JAXGameRenderer):
     def __init__(self, consts: AirRaidConstants = None):
@@ -1192,6 +1222,20 @@ class AirRaidRenderer(JAXGameRenderer):
             return jnp.where(i < lives, result, raster_in)
 
         raster = jax.lax.fori_loop(0, 5, render_life, raster)
+
+        # Apply simple white flash effect during game over sequence
+        if not is_observation:  # Only apply flash to state rendering
+            # Check if we should be flashing (flash counter > 0)
+            should_flash = state_or_obs.game_over_flash_counter > 0
+            
+            # Flash every 8 frames (white for 8, normal for 8)
+            flash_on = (state_or_obs.game_over_flash_counter % 16) < 8
+            
+            # Create white screen
+            white_raster = jnp.full_like(raster, 255)
+            
+            # Show white screen when flashing
+            raster = jnp.where(jnp.logical_and(should_flash, flash_on), white_raster, raster)
 
         # return raster.transpose(1, 0, 2)  # Convert to (H, W, C) format
         return raster
