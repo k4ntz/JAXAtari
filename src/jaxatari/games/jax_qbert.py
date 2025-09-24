@@ -32,7 +32,8 @@ class QbertConstants(NamedTuple):
     """ Changes the difficulty of the game: 0 = no red balls will spawn, 1 = red balls will spawn """
     ENEMY_MOVE_TICK = jnp.array([65, 60, 55, 50, 45]).astype(jnp.int32)
     """ The number of ticks it take to move an enemy according to the current level """
-    #TODO
+    ENEMY_SPAWN = jnp.array([300, 600, 2000, 2600]).astype(jnp.int32)
+    """" The probability that an enemy (green ball, sam, red ball, purple ball) is beeing spawned. Values can be from 0 to 4000 """
 
 class QbertState(NamedTuple):
     player_score: chex.Numeric
@@ -111,16 +112,21 @@ class QbertState(NamedTuple):
     """
     step_counter: chex.Numeric
     """ Counts the number of steps """
+    next_round_animation_counter: chex.Numeric
+    """ The current step of the next round animation """
+    dead_animation_counter: chex.Numeric
+    """ The current step of the dead animation """
 
     just_spawned: chex.Numeric
+    """whether the player has just spawned or moved already 1=just spawned 0=moved already"""
 
     snake_lock: chex.Array
-    #TODO
+    """the target of the snake [-1,-1] = target player"""
 
     #action_mapping: chex.Array
 
-    #the state used for the random number generator
     prng_state: chex.Numeric
+    """the state used for the random number generator"""
 
 class QbertObservation(NamedTuple):
     player_score: jnp.ndarray
@@ -134,7 +140,6 @@ class QbertObservation(NamedTuple):
     snake_position: jnp.ndarray
     green_ball_position: jnp.ndarray
     sam_position: jnp.ndarray
-    #TODO
 
 class QbertInfo(NamedTuple):
     time: jnp.ndarray
@@ -154,7 +159,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             Action.LEFT,
             Action.RIGHT
         ]
-        self.obs_size = 11 #TODO
+        self.obs_size = 11
         self.consts = consts or QbertConstants()
         self.renderer = QbertRenderer(consts)
         self.action_mapping = jnp.array([[0, 0],[0,0],[0,-1],[1,1],[-1,-1],[0,1]]).astype(jnp.int32)
@@ -202,17 +207,24 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             prng_state=jax.random.uniform(key, (), minval=1, maxval=256).astype(jnp.uint8),
             just_spawned=jnp.array(1).astype(jnp.int32),
             snake_lock=jnp.array([-1,-1]).astype(jnp.int32),
+            next_round_animation_counter=jnp.array(0).astype(jnp.int32),
+            dead_animation_counter=jnp.array(0).astype(jnp.int32),
         )
 
         initial_obs = self._get_observation(state)
 
-        #TODO
         return initial_obs, state
     
 
-
     @partial(jax.jit, static_argnums=(0,))
     def checkField(self, state: QbertState, character: chex.Numeric, number: chex.Numeric, position: chex.Array):
+        """ checks if a charcter stepped outside the map or on a disk
+
+            :param state: the state of the game
+            :param character: the character to check 0=player, 1=red, 2=purple, 3=snake, 4=green, 5=sam
+            :param number: if the character is red, which index of red should be used otherwise arbitrary
+            :param position: the position of the character
+            """
         pyra, pos, lives, points = jax.lax.cond(
             pred=jnp.logical_and(state.pyramid[position[1]][position[0]] == -2, character == 0),
             true_fun=lambda vals: self.stepped_on_disk(vals[0]),
@@ -227,7 +239,16 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         return pyra, pos, lives, points
 
     @partial(jax.jit, static_argnums=(0,))
-    def changeColors(self, playerPos: chex.Array, samPos: chex.Array, pyramid: chex.Array, level: chex.Numeric, spawned: chex.Numeric):
+    def changeColors(self,state: QbertState, playerPos: chex.Array, samPos: chex.Array, pyramid: chex.Array, level: chex.Numeric, spawned: chex.Numeric):
+        """ changes to colors of the pyramid to the appropiate values
+
+            :param state: the state of the game
+            :param playerPos: the position of the player
+            :param samPos: the position of sam
+            :param pyramid: the pyramid to change
+            :param level: the new level
+            :param spawned: whether the player just spawned or if he moved already
+            """
         old_color=pyramid[playerPos[1]][playerPos[0]]
         pyramid=jax.lax.cond(
             pred=jnp.logical_and(samPos[0]!= -1, samPos[1] != -1),
@@ -236,21 +257,21 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             operand=(pyramid,samPos)
         )
         pyramid=jax.lax.cond(
-            pred=jnp.logical_or(jnp.logical_or(playerPos[0] != 1, playerPos[1] != 1), spawned != 1),
+            pred=jnp.logical_and(jnp.logical_or(jnp.logical_or(playerPos[0] != 1, playerPos[1] != 1), spawned != 1), jnp.logical_or(playerPos[0] != state.player_position[0], playerPos[1] != state.player_position[1])),
             true_fun=lambda val:
                 val[0].at[val[1][1],val[1][0]].set(jax.lax.switch(
                 index=level - 1,
                 branches=[
                     lambda vals: 2,
-                    lambda vals: jnp.minimum(vals[0][vals[1][1]][vals[1][0]] + 1, 2),
-                    lambda vals: vals[0][vals[1][1]][vals[1][0]] + 2 % 4,
+                    lambda vals: jnp.minimum(vals[0][vals[1][1]][vals[1][0]] + 1, jnp.array(2).astype(jnp.int32)),
+                    lambda vals: jnp.mod(vals[0][vals[1][1]][vals[1][0]] + 2, 4),
                     lambda vals: jax.lax.cond(
                         pred=vals[0][vals[1][1]][vals[1][0]] == 2,
                         true_fun=lambda vals2: 1,
                         false_fun=lambda vals2: jnp.minimum(vals2 + 1, 2),
                         operand=vals[0][vals[1][1]][vals[1][0]]
                     ),
-                    lambda vals: vals[0][vals[1][1]][vals[1][0]] + 1 % 3,
+                    lambda vals: jnp.mod(vals[0][vals[1][1]][vals[1][0]] + 1 , 3),
                 ],
                 operand=val)),
             false_fun=lambda val: val[0],
@@ -265,11 +286,21 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
 
         return pyramid,points
+
     @partial(jax.jit, static_argnums=(0,))
     def checkCollisions(self, lives: chex.Numeric, playerPos: chex.Array,
                             redPos: chex.Array, purplePos: chex.Array,
                             greenPos: chex.Array, snakePos: chex.Array,
                             samPos: chex.Array, green_ball_freeze_step: chex.Numeric):
+            """ checks whether a snake hit the bottom row or whether the player has collided with one of the other characters and adjusts the values accordingly
+            :param lives: the new lives value
+            :param playerPos: the position of the player
+            :param redPos: the position of red
+            :param purplePos: the position of purple
+            :param greenPos: the position of green
+            :param snakePos: the position of the snake
+            :param green_ball_freeze_step: the steps until which the enemies are frozen
+            """
             # Build enemies as an (8, 2) int32 array; last row is a sentinel.
             enemies = jnp.stack(
                 [
@@ -353,12 +384,15 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 green_ball_freeze_step
             )
 
-
     @partial(jax.jit, static_argnums=(0,))
     def stepped_out_map(self, state: QbertState, character : chex.Numeric):
+        """ function used to update the values if a character stepped out of the map
+            :param state: the state of the game
+            :param character: the character that stepped out of map (number correspond the same way as checkField())
+            """
         pos,player_lives,points=jax.lax.cond(
             pred=character == 0,
-            true_fun=lambda state2: (jnp.array([1,1]).astype(jnp.int32), state2[0].lives - 1, jnp.array(0).astype(jnp.int32)),
+            true_fun=lambda state2: (jnp.array([1,1]).astype(jnp.int32), jnp.array(state2[0].lives - 1).astype(jnp.int32), jnp.array(0).astype(jnp.int32)),
             false_fun=lambda state2: jax.lax.cond(
                 pred=state[1] == 3,
                 true_fun=lambda vals: (jnp.array([-1,-1]).astype(jnp.int32), 0, jnp.array(500).astype(jnp.int32)),
@@ -369,9 +403,11 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         )
         return state.pyramid, pos,player_lives, points
 
-
     @partial(jax.jit, static_argnums=(0,))
     def stepped_on_disk(self, state: QbertState):
+        """ function used to update the values if a player stepped on a disk
+            :param state: the state of the game
+            """
         pyramid=jax.lax.cond(
             pred=state.player_position[0] > 1,
             true_fun=lambda state2: state2.pyramid.at[state2.player_position[1] - 1,state2.player_position[0]].set(-1),
@@ -380,9 +416,13 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         )
         return pyramid, jnp.array([1,1]).astype(jnp.int32), state.lives, jnp.array(0).astype(jnp.int32)
 
-
     @partial(jax.jit, static_argnums=(0,))
     def move(self, state: QbertState, action: chex.Array, position: chex.Array):
+        """ universal function to move a character
+            :param state: the state of the game
+            :param action: the action to execute
+            :param position: the position of the character
+            """
         new_pos = jax.lax.cond(
             pred=jnp.logical_and(position[0]!=-1, action > 1),
             true_fun=lambda vals: jnp.array([vals[2][0] + vals[0][vals[1]][0], vals[2][1] + vals[0][vals[1]][1]]).astype(jnp.int32),
@@ -394,6 +434,9 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def move_purple_ball(self,state: QbertState):
+        """ function used to move the purple balls
+            :param state: the state of the game
+            """
         pos = jax.lax.cond(
             pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 1), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.purple_ball_position),
@@ -405,6 +448,9 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def move_green_ball(self,state: QbertState):
+        """ function used to move the green balls
+            :param state: the state of the game
+            """
         pos = jax.lax.cond(
             pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 2), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.green_ball_position),
@@ -416,6 +462,9 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def move_sam(self,state: QbertState):
+        """ function used to move the sams
+            :param state: the state of the game
+            """
         pos = jax.lax.cond(
             pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 3), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.sam_position),
@@ -427,6 +476,9 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def move_red_balls(self,state: QbertState):
+        """ function used to move the red balls
+            :param state: the state of the game
+            """
         pos1 = jax.lax.cond(
             pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 4), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.red_ball_positions[0]),
@@ -450,52 +502,82 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def move_snake(self, state: QbertState, target: chex.Array):
-        distances=(target[0] - state.snake_position[0], target[1] - state.snake_position[1])
-        direction=self.closest_direction(distances, state.prng_state + 7, directions=jnp.array([[0,-1],[1,1],[-1,-1],[0,1]]))
-        direction=jax.lax.cond(
-            pred=jnp.logical_or(state.pyramid[state.snake_position[1] + direction[1]][state.snake_position[0] + direction[0]] >= 0, jnp.logical_and(state.snake_position[0] + direction[0] == target[0], state.snake_position[1] + direction[1] == target[1])),
-            true_fun=lambda d: d,
-            false_fun=lambda d: jnp.array([0,0]),
-            operand=direction
+        """ function used to move the snake towards the target
+            :param state: the current state
+            :param target: what the snake should target
+        """
+        snake_pos = state.snake_position
+        directions = jnp.array([[0, 1], [0, -1], [1, 1], [-1, -1]])
+        # 1. Determine all four potential next positions
+        candidate_positions = snake_pos + directions
+        rows, cols = candidate_positions[:, 0], candidate_positions[:, 1]
+        # 2. Build a validity mask to filter moves
+        # Get values from the pyramid at the potential new positions
+        pyramid_values = state.pyramid[cols, rows]
+        # A tile is invalid if its value is -1
+        tile_mask = (pyramid_values != -1)
+        # Exception: The move is ALWAYS valid if the destination is the target
+        is_target_mask = (rows == target[0]) & (cols == target[1])
+        # Combine the logic: A move is valid if it's in-bounds AND (the tile is ok OR it's the target)
+        valid_mask = (tile_mask | is_target_mask)
+
+        directions = jax.lax.fori_loop(
+            lower=0,
+            upper=4,
+            body_fun=lambda i, d: d.at[i].set(jnp.where(valid_mask[i] == 1, d[i], jnp.array([100, 100]))),
+            init_val=directions
         )
-        return jnp.array([state.snake_position[0] + direction[0], state.snake_position[1] + direction[1]])
+
+        direction=self.closest_direction(state.snake_position, directions, target)
+
+        result = jnp.array([state.snake_position[0] + direction[0], state.snake_position[1] + direction[1]])
+
+        return result
 
     @partial(jax.jit, static_argnums=(0,))
-    def closest_direction(self, vec, key, directions, tol=1e-6):
-        v = jnp.asarray(vec, jnp.float32)
-        d = jnp.asarray(directions, jnp.float32)
+    def closest_direction(self, pos, directions, target):
+        """ Uses the euclidean distance to find the best direction
+            :param pos: the current position
+            :param directions: the array of vectors
+            :param target: the target position
+        """
 
-        eps = 1e-12
-        v_hat = v / jnp.maximum(jnp.linalg.norm(v), eps)
-        d_hat = d / jnp.maximum(jnp.linalg.norm(d, axis=1, keepdims=True), eps)
+        next_positions = pos + directions
+        distance_vector_next_positions_target = target - next_positions[:]
 
-        sims = d_hat @ v_hat                      # cosine similarities
-        m = sims.max()
-        tied_mask = jnp.isclose(sims, m, atol=tol)
+        sim = jnp.linalg.norm(distance_vector_next_positions_target, axis=1)
 
-        # fixed-size indices for JIT using size=number_of_dirs
-        idxs = jnp.flatnonzero(tied_mask, size=d.shape[0], fill_value=0)
-        count = tied_mask.sum()
+        index= jnp.argmin(sim)
 
-        choice = jax.random.randint(jax.random.PRNGKey(key), (), 0, jnp.maximum(count, 1))
-        idx = idxs[choice]
-
-        return directions[idx]
+        return directions[index]
 
     @partial(jax.jit, static_argnums=(0,))
     def spawnCreatures(self, seed : chex.Numeric, red_pos: chex.Array, purple_pos: chex.Array, green_pos: chex.Array, sam_pos: chex.Array, snake_pos:chex.Array, difficulty:chex.Numeric):
+        """ function used to spawn all characters except the player with a hardcoded probability
+            :param seed: a seed for the random number generator
+            :param red_pos: the position of red
+            :param purple_pos: the position of purple
+            :param green_pos: the position of green
+            :param sam_pos: the position of sam
+            :param snake_pos: the position of the snake
+            :param difficulty: the difficulty value of the current game
+            """
         random = jax.random.uniform(jax.random.PRNGKey(seed + 8), (), minval=1, maxval=4000).astype(jnp.uint16)
         creatureIndex=jax.lax.cond(
-            pred=random < 2,
+            pred=random < self.consts.ENEMY_SPAWN[0],
+            # Green Ball
             true_fun=lambda i: 2,
             false_fun=lambda i: jax.lax.cond(
-                pred=i < 4,
+                pred=i < self.consts.ENEMY_SPAWN[1],
+                # Sam
                 true_fun=lambda j: 3,
                 false_fun=lambda j: jax.lax.cond(
-                    pred=j < 8,
+                    pred=j < self.consts.ENEMY_SPAWN[2],
+                    # Red Ball
                     true_fun=lambda k: 0,
                     false_fun=lambda k: jax.lax.cond(
-                        pred=k < 15,
+                        pred=k < self.consts.ENEMY_SPAWN[3],
+                        # Snake
                         true_fun=lambda l: 1,
                         false_fun=lambda l: 4,
                         operand=k
@@ -549,28 +631,40 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def redSpawn(self, location: chex.Array, redPos: chex.Array):
+        """ subroutine used to spawn the red balls
+            :param location: the location where to spawn the ball
+            :param redPos: the position of the red balls
+            """
         redPos=jax.lax.cond(
             pred=jnp.logical_and(redPos[0][0] == -1, redPos[0][1] == -1),
             true_fun=lambda red: jnp.array([location,red[0][1],red[0][2]]),
-            false_fun=lambda red: red[0],
+            false_fun=lambda red: jax.lax.cond(
+                pred=jnp.logical_and(redPos[1][0] == -1, redPos[1][1] == -1),
+                true_fun=lambda red: jnp.array([red[0][0],location,red[0][2]]),
+                false_fun=lambda red: jax.lax.cond(
+                    pred=jnp.logical_and(redPos[2][0] == -1, redPos[2][1] == -1),
+                    true_fun=lambda red: jnp.array([red[0][0],red[0][1],location]),
+                    false_fun=lambda red: red[0],
+                    operand=(redPos,location)
+                ),
+                operand=(redPos,location)
+            ),
             operand=(redPos,location)
         )
-        redPos=jax.lax.cond(
-            pred=jnp.logical_and(redPos[1][0] == -1, redPos[1][1] == -1),
-            true_fun=lambda red: jnp.array([red[0][0],location,red[0][2]]),
-            false_fun=lambda red: red[0],
-            operand=(redPos,location)
-        )
-        redPos=jax.lax.cond(
-            pred=jnp.logical_and(redPos[2][0] == -1, redPos[2][1] == -1),
-            true_fun=lambda red: jnp.array([red[0][0],red[0][1],location]),
-            false_fun=lambda red: red[0],
-            operand=(redPos,location)
-        )
+
         return jnp.array(redPos)
 
     @partial(jax.jit, static_argnums=(0,))
     def nextRound(self, state: QbertState, pyramid: chex.Array, round: chex.Numeric, level: chex.Numeric, player_position: chex.Array, spawned: chex.Numeric, green_ball_freeze_step: chex.Numeric):
+        """ function used to start the next round and adjust all values accordingly if all fields are colored with D
+            :param state: the state of the game
+            :param pyramid: the new pyramid
+            :param round: the new round
+            :param level: the new level
+            :param player_position: the new player position
+            :param spawned: whether the player just spawned
+            :param green_ball_freeze_step: until which step to freeze the green ball
+            """
         complete=jnp.all(jnp.isin(pyramid, jnp.array([-2, -1, 2], dtype=pyramid.dtype)))
         return jax.lax.cond(
             pred=complete,
@@ -578,33 +672,38 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 pred=jax.random.uniform(jax.random.PRNGKey(vals[3] + 10), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
                 true_fun=lambda vals2: jnp.array([
                     [-1, -1, -1, -1, -1, -1, -1, -1],
-                    [-1,  0, -1, -1, -1, -1, -1, -1],
-                    [-1,  0,  0, -1, -1, -1, -1, -1],
-                    [-1,  0,  0,  0, -1, -1, -1, -1],
-                    [-2,  0,  0,  0,  0, -2, -1, -1],
-                    [-1,  0,  0,  0,  0,  0, -1, -1],
-                    [-1,  0,  0,  0,  0,  0,  0, -1],
+                    [-1, 0, -1, -1, -1, -1, -1, -1],
+                    [-1, 0, 0, -1, -1, -1, -1, -1],
+                    [-1, 0, 0, 0, -1, -1, -1, -1],
+                    [-2, 0, 0, 0, 0, -2, -1, -1],
+                    [-1, 0, 0, 0, 0, 0, -1, -1],
+                    [-1, 0, 0, 0, 0, 0, 0, -1],
                     [-1, -1, -1, -1, -1, -1, -1, -1]
                 ]).astype(jnp.int32),
                 false_fun=lambda vals2: jnp.array([
                     [-1, -1, -1, -1, -1, -1, -1, -1],
-                    [-1,  0, -1, -1, -1, -1, -1, -1],
-                    [-2,  0,  0, -2, -1, -1, -1, -1],
-                    [-1,  0,  0,  0, -1, -1, -1, -1],
-                    [-1,  0,  0,  0,  0, -1, -1, -1],
-                    [-1,  0,  0,  0,  0,  0, -1, -1],
-                    [-1,  0,  0,  0,  0,  0,  0, -1],
+                    [-1, 0, -1, -1, -1, -1, -1, -1],
+                    [-2, 0, 0, -2, -1, -1, -1, -1],
+                    [-1, 0, 0, 0, -1, -1, -1, -1],
+                    [-1, 0, 0, 0, 0, -1, -1, -1],
+                    [-1, 0, 0, 0, 0, 0, -1, -1],
+                    [-1, 0, 0, 0, 0, 0, 0, -1],
                     [-1, -1, -1, -1, -1, -1, -1, -1]
 
                 ]),
                 operand=None
-            ),jnp.array(vals[1] % 5 + 1).astype(jnp.int32) , jnp.minimum(5, vals[2] + jnp.floor(vals[1]/4)).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
+            ),jnp.array(jnp.mod(vals[1], 5) + 1).astype(jnp.int32) , jnp.minimum(5, vals[2] + jnp.floor(vals[1]/4)).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
             false_fun=lambda vals: (vals[0],vals[1],vals[2], jnp.array(0).astype(jnp.int32), player_position, vals[4], vals[6]),
             operand=(pyramid,round,level,state.prng_state,spawned, state.step_counter, green_ball_freeze_step)
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def extraLives(self, round: chex.Numeric, level: chex.Numeric, lives: chex.Numeric):
+        """ function called at the start of a new round to get an extra live if the round is 2 (except for in level 1)
+            :param round: the new round
+            :param level: the new level
+            :param lives: the amount of lives
+            """
         return jax.lax.cond(
             pred=jnp.logical_and(level >= 2, round == 2),
             true_fun=lambda live: live + 1,
@@ -614,19 +713,19 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: QbertState, action: chex.Array) -> Tuple[QbertObservation, QbertState, float, bool, QbertInfo]:
-        tick_counter_reset = jnp.array([31, 227, 144, 124, 110, 95, 81, 66, 52]).astype(jnp.int32)
 
         # Handle player movement
-        is_player_moving = jnp.where(jnp.logical_or(jnp.logical_and(state.player_moving_counter == 0, action != Action.NOOP), (state.player_moving_counter + 1) % tick_counter_reset[state.player_position_category] > 1), 1, 0)
+        tick_counter_reset = jnp.array([31, 227, 144, 124, 110, 95, 81, 66, 52]).astype(jnp.int32)
+        is_player_moving = jnp.where(jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_or(jnp.logical_and(state.player_moving_counter == 0, action != Action.NOOP), (state.player_moving_counter + 1) % tick_counter_reset[state.player_position_category] > 1))), 1, 0)
         player_moving_counter = jnp.where(state.is_player_moving == 1, (state.player_moving_counter + 1) % tick_counter_reset[state.player_position_category], state.player_moving_counter)
-        player_last_position = jnp.where(player_moving_counter != 0, state.player_last_position, state.player_position)
-        player_position = jnp.where(jnp.logical_and(state.is_player_moving == 0, action != Action.NOOP), self.move(state, action, state.player_position), state.player_position)
+        player_last_position = jnp.where(jnp.logical_or(state.dead_animation_counter != 0, jnp.logical_or(state.next_round_animation_counter != 0, player_moving_counter != 0)), state.player_last_position, state.player_position)
+        player_position = jnp.where(jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_and(state.is_player_moving == 0, action != Action.NOOP))), self.move(state, action, state.player_position), state.player_position)
         player_direction = jnp.select(
             condlist=[
-                jnp.logical_and(state.is_player_moving == 0, action == Action.RIGHT),
-                jnp.logical_and(state.is_player_moving == 0, action == Action.LEFT),
-                jnp.logical_and(state.is_player_moving == 0, action == Action.UP),
-                jnp.logical_and(state.is_player_moving == 0, action == Action.DOWN),
+                jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_and(state.is_player_moving == 0, action == Action.RIGHT))),
+                jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_and(state.is_player_moving == 0, action == Action.LEFT))),
+                jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_and(state.is_player_moving == 0, action == Action.UP))),
+                jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, jnp.logical_and(state.is_player_moving == 0, action == Action.DOWN)))
             ],
             choicelist=[2, 0, 3, 1],
             default=state.player_direction
@@ -657,25 +756,26 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             false_fun=lambda i: i,
             operand=state.just_spawned
         )
+
         # Increase enemy moving counter depending on current level
-        enemy_moving_counter = jnp.where(state.step_counter == state.green_ball_freeze_step, (state.enemy_moving_counter + 1) % self.consts.ENEMY_MOVE_TICK[state.level_number], state.enemy_moving_counter)
+        enemy_moving_counter = jnp.where(jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, state.step_counter == state.green_ball_freeze_step)), (state.enemy_moving_counter + 1) % self.consts.ENEMY_MOVE_TICK[state.level_number], state.enemy_moving_counter)
 
         # Handle red ball movement
-        red_pos = jnp.where(enemy_moving_counter == 0, self.move_red_balls(state), state.red_ball_positions)
+        red_pos = jnp.where(jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)), self.move_red_balls(state), state.red_ball_positions)
         trash1, red0_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 1, 0, red_pos[0]),
             false_fun=lambda s: (state.pyramid, state.red_ball_positions[0], state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
         )
         trash1, red1_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 1, 1, red_pos[1]),
             false_fun=lambda s: (state.pyramid, state.red_ball_positions[1], state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
         )
         trash1, red2_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 1, 2, red_pos[2]),
             false_fun=lambda s: (state.pyramid, state.red_ball_positions[2], state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
@@ -683,14 +783,15 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
         # Handle purple ball movement
         trash1, purple_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 2, 0, self.move_purple_ball(s)),
             false_fun=lambda s: (state.pyramid, state.purple_ball_position, state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
         )
         temp = jnp.abs(player_position[0] - player_last_position[0]) + jnp.abs(player_position[1] - player_last_position[1])
+
         snake_lock=jax.lax.cond(
-            pred=jnp.logical_and(jnp.logical_and(temp > 2, jnp.abs(state.snake_position[0] - player_last_position[0]) + jnp.abs(state.snake_position[1] - player_last_position[1]) < 4) , state.snake_lock[0] == -1),
+            pred=jnp.logical_and(jnp.logical_and(jnp.logical_and(temp > 2, jnp.abs(state.snake_position[0] - player_last_position[0]) + jnp.abs(state.snake_position[1] - player_last_position[1]) < 4) , state.snake_lock[0] == -1), state.snake_position[0] != -1),
             true_fun=lambda i: jax.lax.cond(
                 pred=i.player_last_position[0] > 1,
                 true_fun=lambda j: jnp.array([j.player_last_position[0], j.player_last_position[1] - 1]),
@@ -708,11 +809,10 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             operand=(player_position,snake_lock)
 
         )
-        jax.debug.print("{a}", a=target)
 
         # Handle snake movement
         trash1, snake_pos, trash2, points4 = jax.lax.cond(
-            pred=jnp.logical_and(enemy_moving_counter == 0, state.snake_position[0] != -1),
+            pred=jnp.logical_and(jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)), state.snake_position[0] != -1),
             true_fun=lambda s: self.checkField(s[0], 3, 0, self.move_snake(s[0], s[1])),
             false_fun=lambda s: ((s[0].pyramid, s[0].snake_position, s[0].lives, jnp.array(0).astype(jnp.int32))),
             operand=(state, target),
@@ -721,7 +821,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
         # Handle green ball movement
         trash1, green_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 4, 0, self.move_green_ball(s)),
             false_fun=lambda s: (state.pyramid, state.green_ball_position, state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
@@ -729,7 +829,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
         # Handle sam movement
         trash1, sam_pos, trash2, trash3 = jax.lax.cond(
-            pred=enemy_moving_counter == 0,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda s: self.checkField(s, 5, 0, self.move_sam(s)),
             false_fun=lambda s: (state.pyramid, state.sam_position, state.lives, jnp.array(0).astype(jnp.int32)),
             operand=state
@@ -742,16 +842,26 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             operand=snake_lock
         )
 
-        lives,red_pos,purple_pos,green_pos,snake_pos,sam_pos,points1, green_ball_freeze_step=self.checkCollisions(lives,player_last_position,jnp.array([red0_pos,red1_pos,red2_pos]),purple_pos,green_pos,snake_pos,sam_pos, state.green_ball_freeze_step)
-        pyramid,points2=self.changeColors(player_position,sam_pos,pyramid,state.level_number, spawned)
+        tmp_lives = lives
 
+        # Checks for collisions of the player with the enemies
+        lives,red_pos,purple_pos,green_pos,snake_pos,sam_pos,points1, green_ball_freeze_step=self.checkCollisions(lives,jnp.where(jnp.logical_and(player_position_category != 1, player_position_category != 2), player_last_position, player_position),jnp.array([red0_pos,red1_pos,red2_pos]),purple_pos,green_pos,snake_pos,sam_pos, state.green_ball_freeze_step)
+
+        # Increase dead_animation_counter if player lost a live
+        dead_animation_counter = jnp.where(jnp.logical_or(state.dead_animation_counter != 0, tmp_lives != lives), (state.dead_animation_counter + 1) % 128, state.dead_animation_counter)
+
+        # Changes the colors of the pyramid depending on the player position and the position of sam
+        pyramid,points2=self.changeColors(state,player_position,sam_pos,pyramid,state.level_number, spawned)
+
+        # Spawn new enemies
         red_pos, purple_pos, green_pos, sam_pos = jax.lax.cond(
-            pred=state.step_counter == green_ball_freeze_step,
+            pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda op: self.spawnCreatures(op[0], op[1], op[2], op[3], op[4], op[5], op[6]),
             false_fun=lambda op: (op[1], op[2], op[3], op[4]),
             operand=(state.prng_state, jnp.array(red_pos), jnp.array(purple_pos) , jnp.array(green_pos), jnp.array(sam_pos), jnp.array(snake_pos), QbertConstants.DIFFICULTY)
         )
 
+        # Calculates values at the end of the round
         pyramid, round, level, points3, player_position, spawned, green_ball_freeze_step = jax.lax.cond(
             pred=jnp.logical_and(is_player_moving == 0, player_moving_counter == 0),
             true_fun=lambda op: self.nextRound(op[0], op[1], op[2], op[3], op[4], op[5], op[6]),
@@ -759,12 +869,14 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             operand=(state, pyramid, state.round_number, state.level_number, player_position, spawned, green_ball_freeze_step)
         )
 
-        lives=jnp.where(jnp.logical_and(is_player_moving == 0, player_moving_counter == 0), self.extraLives(round,level,lives), state.lives)
+        # Increases next_round_animation_counter if end of round is reached
+        next_round_animation_counter = jnp.where(jnp.logical_or(state.next_round_animation_counter != 0, round != state.round_number), (state.next_round_animation_counter + 1) % 160, state.next_round_animation_counter)
+
+        # Gains an extra live at the end of a round
+        lives=jnp.where(jnp.logical_and(jnp.logical_and(is_player_moving == 0, player_moving_counter == 0), round != state.round_number), self.extraLives(round,level,lives), lives)
 
         # Updates last pyramid
-        last_pyramid = jnp.where(jnp.logical_or(jnp.logical_and(jnp.logical_or(player_position_category == 1, player_position_category == 2), player_moving_counter == 45), jnp.logical_and(jnp.logical_and(player_position_category != 1, player_position_category != 2), player_moving_counter == 27)), state.pyramid, state.last_pyramid)
-
-        jax.debug.print("is_player_moving: {a}, player_moving_counter: {b}, player_last_position: {c}, player_position: {d}, player_direction: {e}, lives: {f}, step_counter: {g}, freeze: {h}", a=is_player_moving, b=player_moving_counter, c=player_last_position, d = player_position, e=player_direction, f=state.lives, g = state.step_counter, h=green_ball_freeze_step)
+        last_pyramid = jnp.where(jnp.logical_or(state.next_round_animation_counter != 0, jnp.logical_or(jnp.logical_and(jnp.logical_or(player_position_category == 1, player_position_category == 2), player_moving_counter == 45), jnp.logical_and(jnp.logical_and(player_position_category != 1, player_position_category != 2), player_moving_counter == 27))), state.pyramid, state.last_pyramid)
 
         red_pos, purple_pos, green_pos, snake_pos, sam_pos=jax.lax.cond(
             pred=jnp.logical_or(round != state.round_number, lives < state.lives),
@@ -797,9 +909,10 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             prng_state=state.prng_state + 15,
             just_spawned=spawned,
             snake_lock=jnp.array([snake_lock[0], snake_lock[1]]),
+            next_round_animation_counter=next_round_animation_counter,
+            dead_animation_counter=dead_animation_counter
         )
 
-        #TODO
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
@@ -824,7 +937,6 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: QbertState) -> jnp.ndarray:
-        # TODO
         return self.renderer.render(state)
 
     def action_space(self) -> Space:
@@ -838,14 +950,14 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             "player_score": Box(0, 99999, (), jnp.int32),
             "lives": Box(-1, 9, (), jnp.int32),
             "pyramid": Box(-2, 3, (8, 8), jnp.int32),
-            "player_position": Box(0, 7, (2,), jnp.int32),
+            "player_position": Box(-1, 7, (2,), jnp.int32),
             "level_number": Box(1, 5, (), jnp.int32),
             "round_number": Box(1, 6, (), jnp.int32),
-            "red_ball_positions": Box(0, 7, (2,), jnp.int32),
-            "purple_ball_position": Box(0, 7, (2,), jnp.int32),
-            "snake_position": Box(0, 7, (2,), jnp.int32),
-            "green_ball_position": Box(0, 7, (2,), jnp.int32),
-            "sam_position": Box(0, 7, (2,), jnp.int32)
+            "red_ball_positions": Box(-1, 7, (3, 2), jnp.int32),
+            "purple_ball_position": Box(-1, 7, (2,), jnp.int32),
+            "snake_position": Box(-1, 7, (2,), jnp.int32),
+            "green_ball_position": Box(-1, 7, (2,), jnp.int32),
+            "sam_position": Box(-1, 7, (2,), jnp.int32)
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -866,7 +978,6 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: QbertState):
-        #TODO
         return QbertObservation(
             player_score=state.player_score,
             lives=state.lives,
@@ -912,6 +1023,7 @@ def load_sprites():
         aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/cube/cube_shadow_left_4.npy"), transpose=False), axis=0), 0),
         aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/cube/cube_shadow_left_5.npy"), transpose=False), axis=0), 0),
     ]).astype(jnp.int32)
+
     CUBE_SHADOW_RIGHT = jnp.array([
         aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/cube/cube_shadow_right_1.npy"), transpose=False), axis=0), 0),
         aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/cube/cube_shadow_right_2.npy"), transpose=False), axis=0), 0),
@@ -923,6 +1035,12 @@ def load_sprites():
     DESTINATION_COLOR = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/color/color_destination.npy"), transpose=False), axis=0), 0)
     INTERMEDIATE_COLOR = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/color/color_intermediate.npy"), transpose=False), axis=0), 0)
     START_COLOR = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/color/color_start.npy"), transpose=False), axis=0), 0)
+
+    WIN_ANIMATION = []
+    for i in range(0, 32):
+        path = "".join(["sprites/qbert/win_animation/win_animation_",  str(i).zfill(2), ".npy"])
+        WIN_ANIMATION.append(aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, path), transpose=False), axis=0), 0))
+    WIN_ANIMATION = jnp.array(WIN_ANIMATION).astype(jnp.int32)
 
     QBERT_LIVE = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/qbert_live.npy"), transpose=False), axis=0), 0)
     DISC = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/disc.npy"), transpose=False), axis=0), 0)
@@ -948,6 +1066,8 @@ def load_sprites():
         aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/enemies/snake_1.npy"), transpose=False), axis=0), 0),
     ]).astype(jnp.int32)
 
+    DEAD = aj.get_sprite_frame(jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "sprites/qbert/death.npy"), transpose=False), axis=0), 0)
+
     return (
         BACKGROUND,
         FREEZE,
@@ -961,13 +1081,15 @@ def load_sprites():
         DESTINATION_COLOR,
         INTERMEDIATE_COLOR,
         START_COLOR,
+        WIN_ANIMATION,
         QBERT_LIVE,
         DISC,
         SAM,
         GREEN_BALL,
         PURPLE_BALL,
         RED_BALL,
-        SNAKE
+        SNAKE,
+        DEAD
     )
 
 
@@ -988,74 +1110,94 @@ class QbertRenderer(JAXGameRenderer):
             self.DESTINATION_COLOR,
             self.INTERMEDIATE_COLOR,
             self.START_COLOR,
+            self.WIN_ANIMATION,
             self.QBERT_LIVE,
             self.DISC,
             self.SAM,
             self.GREEN_BALL,
             self.PURPLE_BALL,
             self.RED_BALL,
-            self.SNAKE
+            self.SNAKE,
+            self.DEAD
         ) = load_sprites()
 
+        # Positions for the sprites on top of the cubes
         self.COLOR_POSITIONS = jnp.array([[68, 33], [56, 62], [80, 62], [44, 91], [68, 91], [92, 91], [32, 120], [56, 120], [80, 120], [104, 120], [20, 149], [44, 149], [68, 149], [92, 149], [116, 149], [8, 178], [32, 178], [56, 178], [80, 178], [104, 178], [128, 178]]).astype(jnp.int32)
+        # Positions for the live representation
         self.LIVE_POSITIONS = jnp.array([[33, 16], [41, 16], [49, 16], [57, 16], [65, 16], [73, 16], [81, 16], [89, 16], [97, 16]]).astype(jnp.int32)
+        # Positions for qbert
         self.QBERT_POSITIONS = jnp.array([[74, 18], [62, 47], [86, 47], [50, 76], [74, 76], [98, 76], [38, 105], [62, 105], [86, 105], [110, 105], [26, 134], [50, 134], [74, 134], [98, 134], [122, 134], [14, 163], [38, 163], [62, 163], [86, 163], [110, 163], [134, 163]]).astype(jnp.int32)
+        # Positions for the animation of qbert moving down on the right side
         self.QBERT_MOVE_RIGHT_DOWN = jnp.array([[0, 0], [1, -1], [2, -2], [3, -3], [4, -4], [5, -5], [6, -6], [7, -5], [8, -4], [9, -3], [10, -2], [11, -1], [12, -0], [12, 1], [12, 3], [12, 5], [12, 8], [12, 10], [12, 12], [12, 14], [12, 17], [12, 19], [12, 21], [12, 23], [12, 25], [12, 27], [12, 29], [12, 29], [12, 29], [12, 29]]).astype(jnp.int32)
+        # Positions for the animation of qbert moving up on the right side
         self.QBERT_MOVE_RIGHT_UP = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -15], [0, -17], [0, -19], [0, -21], [0, -24], [0, -26], [0, -28], [0, -29], [1, -30], [2, -31], [3, -32], [4, -33], [5, -34], [6, -35], [7, -34], [8, -33], [9, -32], [10, -31], [11, -30], [12, -29], [12, -29], [12, -29], [12, -29]]).astype(jnp.int32)
+        # Positions for the animation of qbert moving down on the left side
         self.QBERT_MOVE_LEFT_DOWN = jnp.array([[0, 0], [-1, -1], [-2, -2], [-3, -3], [-4, -4], [-5, -5], [-6, -6], [-7, -5], [-8, -4], [-9, -3], [-10, -2], [-11, -1], [-12, -0], [-12, 1], [-12, 3], [-12, 5], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 17], [-12, 19], [-12, 21], [-12, 23], [-12, 25], [-12, 27], [-12, 29], [-12, 29], [-12, 29], [-12, 29]]).astype(jnp.int32)
+        # Positions for the animation of qbert moving up on the left side
         self.QBERT_MOVE_LEFT_UP = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -15], [0, -17], [0, -19], [0, -21], [0, -24], [0, -26], [0, -28], [0, -29], [-1, -30], [-2, -31], [-3, -32], [-4, -33], [-5, -34], [-6, -35], [-7, -34], [-8, -33], [-9, -32], [-10, -31], [-11, -30], [-12, -29], [-12, -29], [-12, -29], [-12, -29]]).astype(jnp.int32)
+        # Positions for qbert moving on the disc at the bottom on the left side
         self.QBERT_MOVE_DISC_LEFT_BOTTOM = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -14], [0, -16], [0, -18], [0, -20], [0, -22], [0, -24], [0, -26], [0, -28], [-1, -29], [-2, -30], [-3, -31], [-4, -32], [-5, -33], [-6, -34], [-7, -33], [-8, -32], [-9, -31], [-10, -30], [-11, -29], [-12, -28], [-12, -27], [-12, -26], [-12, -25], [-12, -24], [-12, -23], [-12, -22], [-12, -21], [-12, -20], [-12, -19], [-12, -18], [-12, -17], [-12, -16], [-12, -15], [-12, -14], [-12, -13], [-12, -12], [-12, -11], [-12, -10], [-12, -10], [-12, -11], [-12, -12], [-12, -13], [-12, -14], [-12, -15], [-12, -16], [-12, -17], [-12, -18], [-12, -19], [-12, -20], [-12, -21], [-12, -22], [-12, -23], [-12, -24], [-12, -25], [-12, -26], [-12, -27], [-12, -28], [-12, -29], [-12, -30], [-12, -31], [-12, -32], [-12, -33], [-12, -34], [-12, -35], [-12, -36], [-12, -37], [-12, -38], [-12, -39], [-12, -40], [-12, -41], [-12, -42], [-12, -43], [-12, -44], [-12, -45], [-12, -46], [-12, -47], [-12, -48], [-12, -49], [-12, -50], [-12, -51], [-12, -52], [-12, -53], [-12, -54], [-12, -55], [-12, -56], [-12, -57], [-12, -58], [-12, -59], [-12, -60], [-12, -61], [-12, -62], [-12, -63], [-12, -64], [-12, -65], [-12, -66], [-12, -67], [-12, -68], [-12, -69], [-12, -70], [-12, -71], [-12, -72], [-12, -73], [-12, -74], [-12, -75], [-12, -76], [-12, -77], [-12, -78], [-12, -79], [-12, -80], [-12, -81], [-12, -82], [-12, -83], [-12, -84], [-12, -85], [-12, -86], [-12, -87], [-12, -88], [-12, -89], [-12, -90], [-12, -91], [-12, -92], [-12, -93], [-12, -94], [-12, -95], [-12, -96], [-12, -97], [-12, -98], [-12, -99], [-12, -100], [-12, -101], [-12, -102], [-12, -103], [-12, -104], [-12, -105], [-12, -106], [-12, -107], [-12, -108], [-12, -109], [-12, -110], [-12, -111], [-12, -112], [-12, -113], [-12, -114], [-12, -115], [-12, -116], [-12, -117], [-12, -118], [-12, -119], [-12, -120], [-12, -121], [-12, -122], [-12, -123], [-12, -124], [-11, -124], [-10, -124], [-9, -124], [-8, -124], [-7, -124], [-6, -124], [-5, -124], [-4, -124], [-3, -124], [-2, -124], [-1, -124], [0, -124], [1, -124], [2, -124], [3, -124], [4, -124], [5, -124], [6, -124], [7, -124], [8, -124], [9, -124], [10, -124], [11, -124], [12, -124], [13, -124], [14, -124], [15, -124], [16, -124], [17, -124], [18, -124], [19, -124], [20, -124], [21, -124], [22, -124], [23, -124], [24, -124], [25, -124], [26, -124], [27, -124], [28, -124], [29, -124], [30, -124], [31, -124], [32, -124], [33, -124], [34, -124], [35, -124], [36, -124], [37, -124], [38, -124], [39, -124], [40, -124], [41, -124], [42, -124], [43, -124], [44, -124], [45, -124], [46, -124], [47, -124], [48, -124], [48, -123], [48, -122], [48, -121], [48, -120], [48, -119], [48, -118], [48, -117]]).astype(jnp.int32)
+        # Positions for qbert moving on the disc at the bottom on the right side
         self.QBERT_MOVE_DISC_RIGHT_BOTTOM = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -14], [0, -16], [0, -18], [0, -20], [0, -22], [0, -24], [0, -26], [0, -28], [1, -29], [2, -30], [3, -31], [4, -32], [5, -33], [6, -34], [7, -33], [8, -32], [9, -31], [10, -30], [11, -29], [12, -28], [12, -27], [12, -26], [12, -25], [12, -24], [12, -23], [12, -22], [12, -21], [12, -20], [12, -19], [12, -18], [12, -17], [12, -16], [12, -15], [12, -14], [12, -13], [12, -12], [12, -11], [12, -10], [12, -10], [12, -11], [12, -12], [12, -13], [12, -14], [12, -15], [12, -16], [12, -17], [12, -18], [12, -19], [12, -20], [12, -21], [12, -22], [12, -23], [12, -24], [12, -25], [12, -26], [12, -27], [12, -28], [12, -29], [12, -30], [12, -31], [12, -32], [12, -33], [12, -34], [12, -35], [12, -36], [12, -37], [12, -38], [12, -39], [12, -40], [12, -41], [12, -42], [12, -43], [12, -44], [12, -45], [12, -46], [12, -47], [12, -48], [12, -49], [12, -50], [12, -51], [12, -52], [12, -53], [12, -54], [12, -55], [12, -56], [12, -57], [12, -58], [12, -59], [12, -60], [12, -61], [12, -62], [12, -63], [12, -64], [12, -65], [12, -66], [12, -67], [12, -68], [12, -69], [12, -70], [12, -71], [12, -72], [12, -73], [12, -74], [12, -75], [12, -76], [12, -77], [12, -78], [12, -79], [12, -80], [12, -81], [12, -82], [12, -83], [12, -84], [12, -85], [12, -86], [12, -87], [12, -88], [12, -89], [12, -90], [12, -91], [12, -92], [12, -93], [12, -94], [12, -95], [12, -96], [12, -97], [12, -98], [12, -99], [12, -100], [12, -101], [12, -102], [12, -103], [12, -104], [12, -105], [12, -106], [12, -107], [12, -108], [12, -109], [12, -110], [12, -111], [12, -112], [12, -113], [12, -114], [12, -115], [12, -116], [12, -117], [12, -118], [12, -119], [12, -120], [12, -121], [12, -122], [12, -123], [12, -124], [11, -124], [10, -124], [9, -124], [8, -124], [7, -124], [6, -124], [5, -124], [4, -124], [3, -124], [2, -124], [1, -124], [0, -124], [-0, -124], [-1, -124], [-2, -124], [-3, -124], [-4, -124], [-5, -124], [-6, -124], [-7, -124], [-8, -124], [-9, -124], [-10, -124], [-11, -124], [-12, -124], [-13, -124], [-14, -124], [-15, -124], [-16, -124], [-17, -124], [-18, -124], [-19, -124], [-20, -124], [-21, -124], [-22, -124], [-23, -124], [-24, -124], [-25, -124], [-26, -124], [-27, -124], [-28, -124], [-29, -124], [-30, -124], [-31, -124], [-32, -124], [-33, -124], [-34, -124], [-35, -124], [-36, -124], [-37, -124], [-38, -124], [-39, -124], [-40, -124], [-41, -124], [-42, -124], [-43, -124], [-44, -124], [-45, -124], [-46, -124], [-47, -124], [-48, -124], [-48, -123], [-48, -122], [-48, -121], [-48, -120], [-48, -119], [-48, -118], [-48, -117]]).astype(jnp.int32)
+        # Positions for qbert moving on the disc at the top on the left side
         self.QBERT_MOVE_DISC_LEFT_TOP = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -14], [0, -16], [0, -18], [0, -20], [0, -22], [0, -24], [0, -26], [0, -28], [-1, -29], [-2, -30], [-3, -31], [-4, -32], [-5, -33], [-6, -34], [-7, -33], [-8, -32], [-9, -31], [-10, -30], [-11, -29], [-12, -28], [-12, -27], [-12, -26], [-12, -25], [-12, -24], [-12, -23], [-12, -22], [-12, -21], [-12, -20], [-12, -19], [-12, -18], [-12, -17], [-12, -16], [-12, -15], [-12, -14], [-12, -13], [-12, -12], [-12, -11], [-12, -10], [-12, -10], [-12, -11], [-12, -12], [-12, -13], [-12, -14], [-12, -15], [-12, -16], [-12, -17], [-12, -18], [-12, -19], [-12, -20], [-12, -21], [-12, -22], [-12, -23], [-12, -24], [-12, -25], [-12, -26], [-12, -27], [-12, -28], [-12, -29], [-12, -30], [-12, -31], [-12, -32], [-12, -33], [-12, -34], [-12, -35], [-12, -36], [-12, -37], [-12, -38], [-12, -39], [-12, -40], [-12, -41], [-12, -42], [-12, -43], [-12, -44], [-12, -45], [-12, -46], [-12, -47], [-12, -48], [-12, -49], [-12, -50], [-12, -51], [-12, -52], [-12, -53], [-12, -54], [-12, -55], [-12, -56], [-12, -57], [-12, -58], [-12, -59], [-12, -60], [-12, -61], [-12, -62], [-12, -63], [-12, -64], [-12, -65], [-12, -66], [-12, -66], [-11, -66], [-10, -66], [-9, -66], [-8, -66], [-7, -66], [-6, -66], [-5, -66], [-4, -66], [-3, -66], [-2, -66], [-1, -66], [0, -66], [1, -66], [2, -66], [3, -66], [4, -66], [5, -66], [6, -66], [7, -66], [8, -66], [9, -66], [10, -66], [11, -66], [12, -66], [13, -66], [14, -66], [15, -66], [16, -66], [17, -66], [18, -66], [19, -66], [20, -66], [21, -66], [22, -66], [23, -66], [24, -66], [24, -65], [24, -64], [24, -63], [24, -62], [24, -61], [24, -60], [24, -59]]).astype(jnp.int32)
+        # Positions for qbert moving on the disc at the top on the right side
         self.QBERT_MOVE_DISC_RIGHT_TOP = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -14], [0, -16], [0, -18], [0, -20], [0, -22], [0, -24], [0, -26], [0, -28], [1, -29], [2, -30], [3, -31], [4, -32], [5, -33], [6, -34], [7, -33], [8, -32], [9, -31], [10, -30], [11, -29], [12, -28], [12, -27], [12, -26], [12, -25], [12, -24], [12, -23], [12, -22], [12, -21], [12, -20], [12, -19], [12, -18], [12, -17], [12, -16], [12, -15], [12, -14], [12, -13], [12, -12], [12, -11], [12, -10], [12, -10], [12, -11], [12, -12], [12, -13], [12, -14], [12, -15], [12, -16], [12, -17], [12, -18], [12, -19], [12, -20], [12, -21], [12, -22], [12, -23], [12, -24], [12, -25], [12, -26], [12, -27], [12, -28], [12, -29], [12, -30], [12, -31], [12, -32], [12, -33], [12, -34], [12, -35], [12, -36], [12, -37], [12, -38], [12, -39], [12, -40], [12, -41], [12, -42], [12, -43], [12, -44], [12, -45], [12, -46], [12, -47], [12, -48], [12, -49], [12, -50], [12, -51], [12, -52], [12, -53], [12, -54], [12, -55], [12, -56], [12, -57], [12, -58], [12, -59], [12, -60], [12, -61], [12, -62], [12, -63], [12, -64], [12, -65], [12, -66], [12, -66], [11, -66], [10, -66], [9, -66], [8, -66], [7, -66], [6, -66], [5, -66], [4, -66], [3, -66], [2, -66], [1, -66], [0, -66], [-1, -66], [-2, -66], [-3, -66], [-4, -66], [-5, -66], [-6, -66], [-7, -66], [-8, -66], [-9, -66], [-10, -66], [-11, -66], [-12, -66], [-13, -66], [-14, -66], [-15, -66], [-16, -66], [-17, -66], [-18, -66], [-19, -66], [-20, -66], [-21, -66], [-22, -66], [-23, -66], [-24, -66], [-24, -65], [-24, -64], [-24, -63], [-24, -62], [-24, -61], [-24, -60], [-24, -59]]).astype(jnp.int32)
+        # Positions for the animation of a ball
         self.BALL_MOVE = jnp.array([[1, 2], [1, 12]])
+        # Positions for the snake animation
         self.SNAKE_MOVE = jnp.array([[0, -3], [0, -1], [0, 2], [0, -1], [0, -3]])
+        # Positions for the animation of qbert jumping from the pyramid at height 1
         self.QBERT_MOVE_OUT_PYRAMID_1 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46], [-12, 48], [-12, 50], [-12, 52], [-12, 54], [-12, 56], [-12, 58], [-12, 60], [-12, 62], [-12, 64], [-12, 66], [-12, 68], [-12, 70], [-12, 72], [-12, 74], [-12, 76], [-12, 78], [-12, 80], [-12, 82], [-12, 84], [-12, 86], [-12, 88], [-12, 90], [-12, 92], [-12, 94], [-12, 96], [-12, 98], [-12, 100], [-12, 102], [-12, 104], [-12, 106], [-12, 108], [-12, 110], [-12, 112], [-12, 114], [-12, 116], [-12, 118], [-12, 120], [-12, 122], [-12, 124], [-12, 126], [-12, 128], [-12, 130], [-12, 132], [-12, 134], [-12, 136], [-12, 138], [-12, 140], [-12, 142], [-12, 144], [-12, 146], [-12, 148], [-12, 150], [-12, 152], [-12, 154], [-12, 156], [-12, 158], [-12, 160], [-12, 162], [-12, 164], [-12, 166], [-12, 168], [-12, 170], [-12, 172], [-12, 174], [-12, 176], [-12, 178], [-12, 180], [-12, 182], [-12, 184], [-12, 186], [-12, 188], [-12, 190], [-12, 192]]).astype(jnp.int32)
+        # Positions for the animation of qbert jumping from the pyramid at height 2
         self.QBERT_MOVE_OUT_PYRAMID_2 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46], [-12, 48], [-12, 50], [-12, 52], [-12, 54], [-12, 56], [-12, 58], [-12, 60], [-12, 62], [-12, 64], [-12, 66], [-12, 68], [-12, 70], [-12, 72], [-12, 74], [-12, 76], [-12, 78], [-12, 80], [-12, 82], [-12, 84], [-12, 86], [-12, 88], [-12, 90], [-12, 92], [-12, 94], [-12, 96], [-12, 98], [-12, 100], [-12, 102], [-12, 104], [-12, 106], [-12, 108], [-12, 110], [-12, 112], [-12, 114], [-12, 116], [-12, 118], [-12, 120], [-12, 122], [-12, 124], [-12, 126], [-12, 128], [-12, 130], [-12, 132], [-12, 134], [-12, 136], [-12, 138], [-12, 140], [-12, 142], [-12, 144], [-12, 146], [-12, 148], [-12, 150], [-12, 152], [-12, 154], [-12, 156], [-12, 158], [-12, 160], [-12, 162], [-12, 164]]).astype(jnp.int32)
+        # Positions for the animation of qbert jumping from the pyramid at height 3
         self.QBERT_MOVE_OUT_PYRAMID_3 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46], [-12, 48], [-12, 50], [-12, 52], [-12, 54], [-12, 56], [-12, 58], [-12, 60], [-12, 62], [-12, 64], [-12, 66], [-12, 68], [-12, 70], [-12, 72], [-12, 74], [-12, 76], [-12, 78], [-12, 80], [-12, 82], [-12, 84], [-12, 86], [-12, 88], [-12, 90], [-12, 92], [-12, 94], [-12, 96], [-12, 98], [-12, 100], [-12, 102], [-12, 104], [-12, 106], [-12, 108], [-12, 110], [-12, 112], [-12, 114], [-12, 116], [-12, 118], [-12, 120], [-12, 122], [-12, 124], [-12, 126], [-12, 128], [-12, 130], [-12, 132]]).astype(jnp.int32)
+        # Positions for the animation of qbert jumping from the pyramid at height 4
         self.QBERT_MOVE_OUT_PYRAMID_4 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46], [-12, 48], [-12, 50], [-12, 52], [-12, 54], [-12, 56], [-12, 58], [-12, 60], [-12, 62], [-12, 64], [-12, 66], [-12, 68], [-12, 70], [-12, 72], [-12, 74], [-12, 76], [-12, 78], [-12, 80], [-12, 82], [-12, 84], [-12, 86], [-12, 88], [-12, 90], [-12, 92], [-12, 94], [-12, 96], [-12, 98], [-12, 100], [-12, 102], [-12, 104], [-12, 106]]).astype(jnp.int32)
+        # Positions for the animation of qbert jumping from the pyramid at height 5
         self.QBERT_MOVE_OUT_PYRAMID_5 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46], [-12, 48], [-12, 50], [-12, 52], [-12, 54], [-12, 56], [-12, 58], [-12, 60], [-12, 62], [-12, 64], [-12, 66], [-12, 68], [-12, 70], [-12, 72], [-12, 74], [-12, 76]]).astype(jnp.int32)
+        # Positions for the animation of qbert jumping from the pyramid at height 6
         self.QBERT_MOVE_OUT_PYRAMID_6 = jnp.array([[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5], [0, -6], [0, -7], [0, -8], [-1, -9], [-2, -10], [-3, -11], [-4, -12], [-5, -13], [-6, -14], [-7, -13], [-8, -12], [-9, -11], [-10, -10], [-11, -9], [-12, -8], [-12, -7], [-12, -6], [-12, -5], [-12, -4], [-12, -3], [-12, -2], [-12, -1], [-12, 0], [-12, 2], [-12, 4], [-12, 6], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 16], [-12, 18], [-12, 20], [-12, 22], [-12, 24], [-12, 26], [-12, 28], [-12, 30], [-12, 32], [-12, 34], [-12, 36], [-12, 38], [-12, 40], [-12, 42], [-12, 44], [-12, 46]]).astype(jnp.int32)
 
-        #TODO
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: QbertState) -> jnp.ndarray:
         """ Responsible for the graphical representation of the game """
-
+        # Initialization
         raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
 
         # Render background
         raster = aj.render_at(raster, 0, 0, jnp.where(state.step_counter == state.green_ball_freeze_step, self.BACKGROUND, self.FREEZE))
 
 
-        # Render cubes in pyramid
-        raster = aj.render_at(raster, 68, 40, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
+        # Render cubes in pyramid. If end of round then keep color of last round
+        raster = aj.render_at(raster, 68, 40, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
-        raster = aj.render_at(raster, 56, 69, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 80, 69, self.CUBE_SHADOW_LEFT[state.round_number - 1])
+        raster = aj.render_at(raster, 56, 69, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 80, 69, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
-        raster = aj.render_at(raster, 44, 98, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 68, 98, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 92, 98, self.CUBE_SHADOW_LEFT[state.round_number - 1])
+        raster = aj.render_at(raster, 44, 98, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 68, 98, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 92, 98, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
-        raster = aj.render_at(raster, 32, 127, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 56, 127, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 80, 127, self.CUBE_SHADOW_LEFT[state.round_number - 1])
-        raster = aj.render_at(raster, 104, 127, self.CUBE_SHADOW_LEFT[state.round_number - 1])
+        raster = aj.render_at(raster, 32, 127, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 56, 127, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 80, 127, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 104, 127, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
-        raster = aj.render_at(raster, 20, 156, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 44, 156, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 68, 156, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 92, 156, self.CUBE_SHADOW_LEFT[state.round_number - 1])
-        raster = aj.render_at(raster, 116, 156, self.CUBE_SHADOW_LEFT[state.round_number - 1])
+        raster = aj.render_at(raster, 20, 156, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 44, 156, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 68, 156, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 92, 156, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 116, 156, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
-        raster = aj.render_at(raster, 8, 185, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 32, 185, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 56, 185, self.CUBE_SHADOW_RIGHT[state.round_number - 1])
-        raster = aj.render_at(raster, 80, 185, self.CUBE_SHADOW_LEFT[state.round_number - 1])
-        raster = aj.render_at(raster, 104, 185, self.CUBE_SHADOW_LEFT[state.round_number - 1])
-        raster = aj.render_at(raster, 128, 185, self.CUBE_SHADOW_LEFT[state.round_number - 1])
+        raster = aj.render_at(raster, 8, 185, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 32, 185, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 56, 185, self.CUBE_SHADOW_RIGHT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 80, 185, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 104, 185, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
+        raster = aj.render_at(raster, 128, 185, self.CUBE_SHADOW_LEFT[jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)])
 
         # Render flying discs
         raster = jnp.where(state.last_pyramid[2][0] == -2, aj.render_at(raster, 38, 84, self.DISC), raster)
@@ -1063,7 +1205,7 @@ class QbertRenderer(JAXGameRenderer):
         raster = jnp.where(state.last_pyramid[4][0] == -2, aj.render_at(raster, 14, 142, self.DISC), raster)
         raster = jnp.where(state.last_pyramid[4][5] == -2, aj.render_at(raster, 134, 142, self.DISC), raster)
 
-        # Render the color on top of the cubes
+        # Render the color on top of the cubes. If end of round next_round_animation is shown
         pyra = state.pyramid.at[state.player_position[1], state.player_position[0]].set(state.last_pyramid[state.player_position[1]][state.player_position[0]])
         raster = jax.lax.fori_loop(
             lower = 1,
@@ -1073,11 +1215,13 @@ class QbertRenderer(JAXGameRenderer):
                 upper = i + 1,
                 body_fun = lambda j, val2: jnp.select(
                     condlist=[
+                        state.next_round_animation_counter != 0,
                         pyra[i, j] == 0,
                         pyra[i, j] == 1,
                         pyra[i, j] == 2
                     ],
                     choicelist=[
+                        aj.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, self.WIN_ANIMATION[jnp.floor(state.next_round_animation_counter / 32).astype(jnp.int32)]),
                         aj.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, self.START_COLOR),
                         aj.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, self.INTERMEDIATE_COLOR),
                         aj.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, self.DESTINATION_COLOR)
@@ -1196,7 +1340,7 @@ class QbertRenderer(JAXGameRenderer):
             red_ball_j = state.red_ball_positions[i][0]
             red_ball_i = state.red_ball_positions[i][1]
             red_ball_index = jnp.floor(state.enemy_moving_counter / jnp.ceil(self.consts.ENEMY_MOVE_TICK[state.level_number] / 2).astype(jnp.int32)).astype(jnp.int32)
-            r = jnp.where(jnp.logical_and(state.red_ball_positions[0][0] == -1, state.red_ball_positions[0][1] == -1), raster, aj.render_at(r,
+            r = jnp.where(jnp.logical_and(state.red_ball_positions[i][0] == -1, state.red_ball_positions[i][1] == -1), r, aj.render_at(r,
                                                                                                                                             self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[red_ball_index][0],
                                                                                                                                             self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[red_ball_index][1],
                                                                                                                                             self.RED_BALL[red_ball_index]))
@@ -1209,5 +1353,11 @@ class QbertRenderer(JAXGameRenderer):
             init_val=raster
         )
 
-        #TODO
+
+        # Render dead sprite
+        raster = jnp.where(state.dead_animation_counter != 0, aj.render_at(raster,
+                                                                           self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][0] + 15,
+                                                                           self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][1] - 9,
+                                                                           self.DEAD), raster)
+
         return raster
