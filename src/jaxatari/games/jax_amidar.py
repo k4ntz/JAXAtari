@@ -198,6 +198,7 @@ class AmidarConstants(NamedTuple):
     MAX_LIVES: int = 3
     FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
     CHICKEN_MODE_DURATION: int = 640
+    DONE_ON_LEVEL_COMPLETION = False
 
     # Deterministic mode 
     DETERMINISTIC_MODE: bool = True
@@ -755,6 +756,10 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AmidarState) -> bool:
+        # since DONE_ON_LEVEL_COMPLETION is constant, normal if just chooses the correct compilation path
+        if self.constants.DONE_ON_LEVEL_COMPLETION: 
+            initial_level = jax.lax.cond(self.constants.DIFFICULTY_SETTING == 3, lambda: jnp.array(1).astype(jnp.int32), lambda: jnp.array(3).astype(jnp.int32))
+            return state.level > initial_level
         return state.lives <= 0
     
     @partial(jax.jit, static_argnums=(0,))
