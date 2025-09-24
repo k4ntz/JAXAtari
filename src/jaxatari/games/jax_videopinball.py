@@ -2241,64 +2241,83 @@ class JaxVideoPinball(
         no_addition = 0.0
         acceleration_value = self.consts.VELOCITY_ACCELERATION_VALUE
         no_factor = 1.0
-        return jax.lax.switch(
-            scene_object[5],
-            [
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 0
-                lambda: (
-                    no_factor,
-                    acceleration_value,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 1
-                lambda: self._calc_spinner_hit_point(
-                    ball_movement, scene_object, action
-                ),  # 2
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 3
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 4
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 5
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 6
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 7
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 8
-                lambda: self._calc_flipper_hit_point(
-                    ball_movement, scene_object, action
-                ),  # 9
-                lambda: self._calc_flipper_hit_point(
-                    ball_movement, scene_object, action
-                ),  # 10
-                lambda: (
-                    dampening_value,
-                    no_addition,
-                    self._calc_slab_hit_point(ball_movement, scene_object, action),
-                ),  # 11
-            ],
+        scene_object_center_x = scene_object[2] + scene_object[0] / 2
+        scene_object_center_y = scene_object[3] + scene_object[1] / 2
+        distance_to_center = jnp.sqrt(
+            (scene_object_center_x - ball_movement.old_ball_x) ** 2
+            + (scene_object_center_y - ball_movement.old_ball_y) ** 2
+        )
+        
+        return jax.lax.cond(
+            scene_object[5] == 0,
+            lambda: (
+                dampening_value,
+                no_addition,
+                self._calc_slab_hit_point(ball_movement, scene_object, action),
+            ),
+            lambda: jax.lax.cond(
+                distance_to_center > 30,
+                lambda: self._dummy_calc_hit_point(scene_object),
+                lambda: jax.lax.switch(
+                    scene_object[5],
+                    [
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 0
+                        lambda: (
+                            no_factor,
+                            acceleration_value,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 1
+                        lambda: self._calc_spinner_hit_point(
+                            ball_movement, scene_object, action
+                        ),  # 2
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 3
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 4
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 5
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 6
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 7
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 8
+                        lambda: self._calc_flipper_hit_point(
+                            ball_movement, scene_object, action
+                        ),  # 9
+                        lambda: self._calc_flipper_hit_point(
+                            ball_movement, scene_object, action
+                        ),  # 10
+                        lambda: (
+                            dampening_value,
+                            no_addition,
+                            self._calc_slab_hit_point(ball_movement, scene_object, action),
+                        ),  # 11
+                    ],
+                )
+            )
         )
 
     @partial(jax.jit, static_argnums=(0,))
