@@ -54,7 +54,7 @@ NUM_PLAYER_MISSILES: int = 1
 NUM_ENEMY_MISSILES: int = 1
 PLAYER_MISSILE_SPEED: int = -6
 ENEMY_MISSILE_SPEED: int = 4
-ENEMY_FIRE_PROB: float = 0.15  # Increased from 0.05
+ENEMY_FIRE_PROB: float = 0.05
 
 class AirRaidConstants(NamedTuple):
     # Game environment
@@ -87,7 +87,7 @@ class AirRaidConstants(NamedTuple):
     ENEMY_INITIAL_Y: int = 69
     ENEMY_SPEED: float = 1.5
     ENEMY_SPAWN_Y: int = 30
-    ENEMY_SPAWN_PROB: float = 0.03
+    ENEMY_SPAWN_PROB: float = 0.02
 
     # Missiles
     MISSILE_WIDTH: int = 2
@@ -96,7 +96,7 @@ class AirRaidConstants(NamedTuple):
     NUM_ENEMY_MISSILES: int = 1
     PLAYER_MISSILE_SPEED: int = -6
     ENEMY_MISSILE_SPEED: int = 4
-    ENEMY_FIRE_PROB: float = 0.15  # Increased from 0.05
+    ENEMY_FIRE_PROB: float = 0.05
 
 def get_human_action() -> chex.Array:
     """
@@ -262,7 +262,7 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     # Deactivate enemies that reach the bottom
     reached_player = enemy_y > jnp.int32(PLAYER_INITIAL_Y - 20)  # Changed from HEIGHT to PLAYER_INITIAL_Y
     enemy_active = jnp.where(reached_player, jnp.int32(0), enemy_active)
-    
+
     # Reset firing status for deactivated enemies
     enemy_has_fired = jnp.where(reached_player, jnp.int32(0), enemy_has_fired)
 
@@ -352,7 +352,7 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
 
         # For each index, check if it's active AND hasn't fired yet
         can_fire = jnp.logical_and(enemy_active[indices] == 1, enemy_has_fired[indices] == 0)
-        
+
         # Compute scores - unfired active enemies get high scores
         scores = jnp.where(
             can_fire,
@@ -410,7 +410,7 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     enemy_missile_active = enemy_missile_active.at[first_inactive].set(
         jnp.where(can_fire, 1, enemy_missile_active[first_inactive])
     )
-    
+
     # Mark the enemy as having fired
     enemy_has_fired = state.enemy_has_fired.at[firing_enemy_idx].set(
         jnp.where(can_fire, 1, state.enemy_has_fired[firing_enemy_idx])
