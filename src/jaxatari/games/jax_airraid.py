@@ -54,7 +54,7 @@ NUM_PLAYER_MISSILES: int = 1
 NUM_ENEMY_MISSILES: int = 1
 PLAYER_MISSILE_SPEED: int = -6
 ENEMY_MISSILE_SPEED: int = 4
-ENEMY_FIRE_PROB: float = 0.05
+ENEMY_FIRE_PROB: float = 0.15  # Increased from 0.05
 
 class AirRaidConstants(NamedTuple):
     # Game environment
@@ -96,7 +96,7 @@ class AirRaidConstants(NamedTuple):
     NUM_ENEMY_MISSILES: int = 1
     PLAYER_MISSILE_SPEED: int = -6
     ENEMY_MISSILE_SPEED: int = 4
-    ENEMY_FIRE_PROB: float = 0.05
+    ENEMY_FIRE_PROB: float = 0.15  # Increased from 0.05
 
 def get_human_action() -> chex.Array:
     """
@@ -131,6 +131,7 @@ class AirRaidState(NamedTuple):
     enemy_y: chex.Array
     enemy_type: chex.Array
     enemy_active: chex.Array
+    enemy_has_fired: chex.Array  # Track which enemies have already fired
 
     player_missile_x: chex.Array
     player_missile_y: chex.Array
@@ -194,11 +195,11 @@ def player_step(player_x: chex.Array, action: chex.Array) -> chex.Array:
     return player_x
 
 @jax.jit
-def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Spawns a new enemy if conditions are met and position doesn't overlap with existing enemies.
     Args: state: Current game state
-    Returns: Updated enemy arrays
+    Returns: Updated enemy arrays including has_fired status
     """
     rng, spawn_key, type_key, pos_key1, pos_key2 = random.split(state.rng, 5)
     spawn_prob = random.uniform(spawn_key)
@@ -242,15 +243,17 @@ def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array
     enemy_y = state.enemy_y.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(ENEMY_SPAWN_Y), state.enemy_y[first_inactive]))
     enemy_type = state.enemy_type.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(new_type), state.enemy_type[first_inactive]))
     enemy_active = state.enemy_active.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(1), state.enemy_active[first_inactive]))
+    enemy_has_fired = state.enemy_has_fired.at[first_inactive].set(jnp.where(should_spawn, jnp.int32(0), state.enemy_has_fired[first_inactive]))  # Reset firing status
 
-    return enemy_x, enemy_y, enemy_type, enemy_active, rng
+    return enemy_x, enemy_y, enemy_type, enemy_active, enemy_has_fired, rng
 
 @jax.jit
-def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array]:
+def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """Updates all enemy positions. Enemies move down the screen."""
     # Extract state components
     enemy_y = state.enemy_y
     enemy_active = state.enemy_active
+    enemy_has_fired = state.enemy_has_fired
     building_damage = state.building_damage
 
     # Move active enemies down
@@ -259,8 +262,11 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     # Deactivate enemies that reach the bottom
     reached_player = enemy_y > jnp.int32(PLAYER_INITIAL_Y - 20)  # Changed from HEIGHT to PLAYER_INITIAL_Y
     enemy_active = jnp.where(reached_player, jnp.int32(0), enemy_active)
+    
+    # Reset firing status for deactivated enemies
+    enemy_has_fired = jnp.where(reached_player, jnp.int32(0), enemy_has_fired)
 
-    return enemy_y, enemy_active, building_damage
+    return enemy_y, enemy_active, enemy_has_fired, building_damage
 
 
 @jax.jit
@@ -306,15 +312,15 @@ def fire_player_missile(state: AirRaidState, action: chex.Array) -> Tuple[chex.A
     return player_missile_x, player_missile_y, player_missile_active
 
 @jax.jit
-def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """
-    Randomly generates enemy missiles from active enemies.
+    Randomly generates enemy missiles from active enemies that haven't fired yet.
 
     Args:
         state: Current game state
 
     Returns:
-        Updated enemy missile positions, active flags, and RNG
+        Updated enemy missile positions, active flags, enemy_has_fired status, and RNG
     """
     rng = state.rng
     enemy_missile_x = state.enemy_missile_x
@@ -339,33 +345,41 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     # We'll iterate through the enemies and select the first active one after our random index
     # This is a workaround since we can't use jnp.nonzero in jitted code
 
-    # This function finds a valid active enemy starting from random_idx
-    def find_active_enemy(random_idx, enemy_active):
+    # This function finds a valid active enemy that hasn't fired yet
+    def find_active_unfired_enemy(random_idx, enemy_active, enemy_has_fired):
         # Create a shifted array where we start checking from random_idx
         indices = (random_idx + jnp.arange(TOTAL_ENEMIES)) % TOTAL_ENEMIES
 
-        # For each index, check if it's active and compute a score
-        # The first active enemy will have the highest score
+        # For each index, check if it's active AND hasn't fired yet
+        can_fire = jnp.logical_and(enemy_active[indices] == 1, enemy_has_fired[indices] == 0)
+        
+        # Compute scores - unfired active enemies get high scores
         scores = jnp.where(
-            enemy_active[indices] == 1,
+            can_fire,
             TOTAL_ENEMIES - jnp.arange(TOTAL_ENEMIES),
             -1
         )
 
-        # Find the index with the highest score (first active enemy)
+        # Find the index with the highest score (first active unfired enemy)
         best_idx = indices[jnp.argmax(scores)]
 
         # Return the best enemy index, or 0 if none found
         return jnp.where(jnp.max(scores) >= 0, best_idx, 0)
 
-    # Find a valid active enemy
-    firing_enemy_idx = find_active_enemy(random_enemy_idx, state.enemy_active)
+    # Find a valid active enemy that hasn't fired
+    firing_enemy_idx = find_active_unfired_enemy(random_enemy_idx, state.enemy_active, state.enemy_has_fired)
 
-    # Only fire if probability is met, enemy is available and there's an inactive missile slot
+    # Only fire if probability is met, enemy is available, there's an inactive missile slot,
+    # there are no currently active enemy missiles, AND the selected enemy hasn't fired yet
     enemy_available = active_enemy_count > 0
+    enemy_hasnt_fired = state.enemy_has_fired[firing_enemy_idx] == 0
+    no_active_missiles = jnp.sum(enemy_missile_active) == 0  # Ensure no missiles are currently active
     can_fire = jnp.logical_and(
-        jnp.logical_and(fire_prob < ENEMY_FIRE_PROB, first_inactive >= 0),
-        enemy_available
+        jnp.logical_and(
+            jnp.logical_and(fire_prob < ENEMY_FIRE_PROB, first_inactive >= 0),
+            jnp.logical_and(enemy_available, enemy_hasnt_fired)
+        ),
+        no_active_missiles
     )
 
     enemy_width = jnp.where(
@@ -396,8 +410,13 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     enemy_missile_active = enemy_missile_active.at[first_inactive].set(
         jnp.where(can_fire, 1, enemy_missile_active[first_inactive])
     )
+    
+    # Mark the enemy as having fired
+    enemy_has_fired = state.enemy_has_fired.at[firing_enemy_idx].set(
+        jnp.where(can_fire, 1, state.enemy_has_fired[firing_enemy_idx])
+    )
 
-    return enemy_missile_x, enemy_missile_y, enemy_missile_active, rng
+    return enemy_missile_x, enemy_missile_y, enemy_missile_active, enemy_has_fired, rng
 
 @jax.jit
 def update_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
@@ -589,6 +608,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         enemy_y = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
         enemy_type = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
         enemy_active = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)
+        enemy_has_fired = jnp.zeros(TOTAL_ENEMIES, dtype=jnp.int32)  # Track firing status
 
         # Initialize missile arrays (all inactive initially)
         player_missile_x = jnp.zeros(NUM_PLAYER_MISSILES, dtype=jnp.int32)
@@ -615,6 +635,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             enemy_y=enemy_y,
             enemy_type=enemy_type,
             enemy_active=enemy_active,
+            enemy_has_fired=enemy_has_fired,
             player_missile_x=player_missile_x,
             player_missile_y=player_missile_y,
             player_missile_active=player_missile_active,
@@ -650,16 +671,17 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         new_player_x = player_step(state.player_x, action)
 
         # Spawn new enemies
-        new_enemy_x, new_enemy_y, new_enemy_type, new_enemy_active, new_rng = spawn_enemy(state._replace(player_x=new_player_x))
+        new_enemy_x, new_enemy_y, new_enemy_type, new_enemy_active, new_enemy_has_fired, new_rng = spawn_enemy(state._replace(player_x=new_player_x))
 
         # Update existing enemies
-        updated_enemy_y, updated_enemy_active, updated_building_damage = update_enemies(
+        updated_enemy_y, updated_enemy_active, updated_enemy_has_fired, updated_building_damage = update_enemies(
             state._replace(
                 player_x=new_player_x,
                 enemy_x=new_enemy_x,
                 enemy_y=new_enemy_y,
                 enemy_type=new_enemy_type,
                 enemy_active=new_enemy_active,
+                enemy_has_fired=new_enemy_has_fired,
                 rng=new_rng
             )
         )
@@ -678,13 +700,14 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         )
 
         # Handle enemy firing missiles
-        new_enemy_missile_x, new_enemy_missile_y, new_enemy_missile_active, newer_rng = fire_enemy_missiles(
+        new_enemy_missile_x, new_enemy_missile_y, new_enemy_missile_active, updated_enemy_has_fired, newer_rng = fire_enemy_missiles(
             state._replace(
                 player_x=new_player_x,
                 enemy_x=new_enemy_x,
                 enemy_y=updated_enemy_y,
                 enemy_type=new_enemy_type,
                 enemy_active=updated_enemy_active,
+                enemy_has_fired=updated_enemy_has_fired,
                 building_damage=updated_building_damage,
                 player_missile_x=new_player_missile_x,
                 player_missile_y=new_player_missile_y,
@@ -725,7 +748,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             player_missile_active=updated_player_missile_active,
             enemy_missile_x=new_enemy_missile_x,
             enemy_missile_y=updated_enemy_missile_y,
-            enemy_missile_active=new_enemy_missile_active
+            enemy_missile_active=updated_enemy_missile_active  # Fixed: use updated_enemy_missile_active instead of new_enemy_missile_active
         )
         )
 
@@ -741,6 +764,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             enemy_y=updated_enemy_y,
             enemy_type=new_enemy_type,
             enemy_active=final_enemy_active,
+            enemy_has_fired=updated_enemy_has_fired,
             player_missile_x=new_player_missile_x,
             player_missile_y=updated_player_missile_y,
             player_missile_active=final_player_missile_active,
