@@ -889,6 +889,8 @@ class FishingDerby(JaxEnvironment):
                 return new_fish_pos[p1_hooked_fish_idx, 0], new_fish_pos[p1_hooked_fish_idx, 1]
 
             fish_x_p1, fish_y_p1 = jax.lax.cond(has_hooked_fish, p1_fpos, lambda: (0.0, 0.0))
+
+            # Shark collision logic (unchanged)
             collision_padding = 2.0
             fish_half_w = (cfg.FISH_WIDTH + collision_padding) / 2
             fish_half_h = (cfg.FISH_HEIGHT + collision_padding) / 2
@@ -902,7 +904,13 @@ class FishingDerby(JaxEnvironment):
             collides_y = jnp.abs(fish_center_y - shark_center_y) < (fish_half_h + shark_half_h)
             shark_collides_p1 = has_hooked_fish & collides_x & collides_y
 
-            scored_fish_p1 = (p1_hook_state > 0) & (hook_y <= cfg.FISH_SCORING_Y)
+            scoring_tolerance = 5.0  # pixels above the scoring line where fish still count as scored
+            hook_at_surface = hook_y <= (cfg.FISH_SCORING_Y + scoring_tolerance)
+            fish_at_surface = fish_y_p1 <= (cfg.FISH_SCORING_Y + scoring_tolerance)
+
+            # Score if either hook OR fish is at/above the scoring line (with tolerance)
+            scored_fish_p1 = (p1_hook_state > 0) & (p1_hooked_fish_idx >= 0) & (hook_at_surface | fish_at_surface)
+
             reset_hook_p1 = shark_collides_p1 | scored_fish_p1
 
             prev_idx_p1 = p1_hooked_fish_idx
@@ -1090,7 +1098,9 @@ class FishingDerby(JaxEnvironment):
             collides_y_2 = jnp.abs(fish_center_y_2 - shark_center_y) < (fish_half_h + shark_half_h)
             shark_collides_p2 = p2_has_hooked_fish & collides_x_2 & collides_y_2
 
-            scored_fish_p2 = (p2_hook_state > 0) & (p2_hook_y <= cfg.FISH_SCORING_Y)
+            p2_hook_at_surface = p2_hook_y <= (cfg.FISH_SCORING_Y + scoring_tolerance)
+            p2_fish_at_surface = fish_y_p2 <= (cfg.FISH_SCORING_Y + scoring_tolerance)
+            scored_fish_p2 = (p2_hook_state > 0) & (p2_hooked_fish_idx >= 0) & (p2_hook_at_surface | p2_fish_at_surface)
             reset_hook_p2 = shark_collides_p2 | scored_fish_p2
 
             prev_idx_p2 = p2_hooked_fish_idx
