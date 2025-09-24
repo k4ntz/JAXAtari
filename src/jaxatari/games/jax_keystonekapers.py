@@ -1752,6 +1752,41 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 game_area
             )
 
+        # Helper function to draw a sprite with transparency (white pixels = transparent)
+        def draw_sprite_with_transparency(game_area, sprite, x, y, transparent_color=jnp.array([255, 255, 255], dtype=jnp.uint8)):
+            """Draw a sprite at the given position treating specified color as transparent."""
+            sprite_height, sprite_width = sprite.shape[:2]
+
+            # Ensure coordinates are within bounds
+            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width)
+            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height)
+
+            # Create indices for positioning
+            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
+            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
+
+            # Create mask for sprite placement
+            sprite_mask = ((y_indices >= y) & (y_indices < y + sprite_height) &
+                          (x_indices >= x) & (x_indices < x + sprite_width))
+
+            # Get sprite pixel values
+            sprite_indices_y = jnp.clip(y_indices - y, 0, sprite_height - 1)
+            sprite_indices_x = jnp.clip(x_indices - x, 0, sprite_width - 1)
+            sprite_pixels = sprite[sprite_indices_y, sprite_indices_x, :]
+
+            # Create transparency mask - pixels that are NOT the transparent color
+            is_transparent = jnp.all(sprite_pixels == transparent_color, axis=-1, keepdims=True)
+            is_opaque = jnp.logical_not(is_transparent)
+
+            # Only draw non-transparent pixels within the sprite area
+            final_mask = sprite_mask[:, :, None] & is_opaque
+
+            return jnp.where(
+                final_mask,
+                sprite_pixels,
+                game_area
+            )
+
         # Draw sky and buildings sprite above the roof level (covering all green background)
         sky_sprite = self.sprites['sky']
         sky_height, sky_width = sky_sprite.shape[:2]
@@ -1984,8 +2019,8 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         kop_sprite_height = kop_sprite.shape[0]
         player_screen_y = state.player.y - kop_sprite_height + self.consts.PLAYER_HEIGHT
 
-        # Draw the Kop sprite at the player's position
-        game_area = draw_sprite(game_area, kop_sprite, player_screen_x, player_screen_y)
+        # Draw the Kop sprite at the player's position with transparency (white pixels = transparent)
+        game_area = draw_sprite_with_transparency(game_area, kop_sprite, player_screen_x, player_screen_y)
 
         # Draw simple UI elements on game area
         ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
