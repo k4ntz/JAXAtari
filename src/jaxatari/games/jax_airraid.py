@@ -1236,9 +1236,10 @@ class AirRaidRenderer(JAXGameRenderer):
 
             result = jr.render_at(raster_in, icon_x, life_y, life_sprite)
 
-            return jnp.where(i < lives, result, raster_in)
+            # Show life indicator if we have more than i+1 lives (so 3 lives shows 2 indicators)
+            return jnp.where(i < lives - 1, result, raster_in)
 
-        raster = jax.lax.fori_loop(0, 5, render_life, raster)
+        raster = jax.lax.fori_loop(0, 2, render_life, raster)  # Only render 2 life indicators (0, 1)
 
         # Apply simple white flash effect for building damage and game over
         if not is_observation:  # Only apply flash to state rendering
