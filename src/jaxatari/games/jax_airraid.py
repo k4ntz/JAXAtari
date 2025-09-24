@@ -943,7 +943,12 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AirRaidState) -> bool:
         # Game is over if player has no lives left
-        return jnp.less_equal(state.player_lives, 0)
+        player_dead = jnp.less_equal(state.player_lives, 0)
+        
+        # Game is over if both buildings are completely destroyed (damage >= MAX_BUILDING_DAMAGE)
+        buildings_destroyed = jnp.all(state.building_damage >= MAX_BUILDING_DAMAGE)
+        
+        return jnp.logical_or(player_dead, buildings_destroyed)
 
 class AirRaidRenderer(JAXGameRenderer):
     def __init__(self, consts: AirRaidConstants = None):
