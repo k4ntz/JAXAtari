@@ -287,87 +287,184 @@ class FishingDerby(JaxEnvironment):
         key, p2_key = jax.random.split(state.key)
 
         def strategic_p2_ai():
+            """
+            Improved P2 AI that mimics 1980s-style game AI behavior:
+            - Simple state machine with clear priorities
+            - Proximity-based targeting rather than always going for bottom fish
+            - Reactive to current game state
+            - Efficient patterns that would work within 6502 constraints
+            """
             cfg = self.config
             p2_state = state.p2
             fish_pos = state.fish_positions
             fish_active = state.fish_active
 
-            # Target the last row fish (index 5, y=175)
-            target_fish_idx = 5
-            target_fish_y = cfg.FISH_ROW_YS[target_fish_idx]  # y=175
-            target_fish_x = fish_pos[target_fish_idx, 0]
+            # Get current hook position
+            p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, p2_state)
 
-            _, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, p2_state)
+            # Current rod and hook state
+            rod_length = p2_state.rod_length
+            hook_state = p2_state.hook_state
+            hooked_fish = p2_state.hooked_fish_idx
 
-            # Rod position relative to P2 start
-            current_rod_length = p2_state.rod_length
+            # Simple state machine based on hook state
 
-            # Define phases based on hook depth and rod position
-            is_going_down = p2_hook_y < target_fish_y  # Still need to go deeper
-            is_at_target_depth = jnp.abs(p2_hook_y - target_fish_y) <= 5  # Near target depth
+            # STATE 1: Fish is hooked - reel it in
+            def reeling_behavior():
+                """When fish is hooked, reel with simple shark avoidance"""
+                # Simple shark avoidance: if shark is nearby, use fast reel
+                shark_distance = jnp.abs(state.shark_x - p2_hook_x)
+                shark_nearby = (shark_distance < 40) & (jnp.abs(cfg.SHARK_Y - p2_hook_y) < 20)
 
-            # Check if rod needs more extension to reach fish
-            rod_end_x = cfg.P2_START_X - current_rod_length
-            fish_distance_from_p2_start = jnp.abs(target_fish_x - cfg.P2_START_X)
-            needed_rod_length = fish_distance_from_p2_start  # Extra margin
-            needs_more_extension = current_rod_length < jnp.minimum(needed_rod_length, cfg.P2_MAX_ROD_LENGTH_X - 2)
+                # Fast reel when shark is near or we're close to scoring
+                use_fast_reel = shark_nearby | (p2_hook_y < cfg.FISH_SCORING_Y + 20)
 
-            is_rod_fully_extended = current_rod_length >= cfg.P2_MAX_ROD_LENGTH_X - 3
-            is_rod_retracted = current_rod_length <= cfg.P2_MIN_ROD_LENGTH_X + 5
+                # Simple directional logic: move rod toward center while reeling
+                rod_at_center = jnp.abs(rod_length - cfg.START_ROD_LENGTH_X) < 3
 
-            def fishing_action():
-                # Phase 1: Going down and extending rod to reach fish
-                phase1_action = jnp.where(
-                    is_going_down & needs_more_extension,
-                    Action.DOWNRIGHT,
-                # Go down and extend rod
+                return jnp.where(
+                    use_fast_reel,
+                    jnp.where(rod_at_center, Action.UPFIRE, Action.UPRIGHTFIRE),
+                    jnp.where(rod_at_center, Action.UP, Action.UPRIGHT)
+                )
+
+            # STATE 2: Hook is free - find nearest catchable fish
+            def fishing_behavior():
+                """Simple proximity-based fish targeting"""
+
+                # Calculate distances to all active fish
+                # Use Manhattan distance for simplicity (6502-friendly)
+                fish_distances = jnp.abs(fish_pos[:, 0] - p2_hook_x) + jnp.abs(fish_pos[:, 1] - p2_hook_y)
+
+                # Mask out inactive fish (set their distance to infinity)
+                fish_distances = jnp.where(fish_active, fish_distances, jnp.inf)
+
+                # Find nearest fish
+                nearest_fish_idx = jnp.argmin(fish_distances)
+                nearest_fish_x = fish_pos[nearest_fish_idx, 0]
+                nearest_fish_y = fish_pos[nearest_fish_idx, 1]
+                nearest_distance = fish_distances[nearest_fish_idx]
+
+                # Simple targeting thresholds
+                CLOSE_ENOUGH_X = 8.0  # Horizontal proximity to attempt catch
+                CLOSE_ENOUGH_Y = 8.0  # Vertical proximity to attempt catch
+
+                # Calculate position deltas
+                dx = nearest_fish_x - p2_hook_x
+                dy = nearest_fish_y - p2_hook_y
+
+                # Determine if we're close enough to try catching
+                close_x = jnp.abs(dx) < CLOSE_ENOUGH_X
+                close_y = jnp.abs(dy) < CLOSE_ENOUGH_Y
+                in_catch_zone = close_x & close_y
+
+                # Rod control logic (P2's rod extends leftward)
+                # Need to extend rod (increase length) to move hook left
+                # Need to retract rod (decrease length) to move hook right
+                need_left = dx < -CLOSE_ENOUGH_X  # Fish is to the left
+                need_right = dx > CLOSE_ENOUGH_X  # Fish is to the right
+                need_down = dy > CLOSE_ENOUGH_Y
+                need_up = dy < -CLOSE_ENOUGH_Y
+
+                # Simple priority system: horizontal first, then vertical
+                # This mimics simple 1980s AI decision trees
+
+                # If we're in the catch zone, just go down slowly to hook
+                action_in_zone = jnp.where(
+                    dy > 2,  # If slightly below, go down
+                    Action.DOWN,
+                    Action.NOOP  # Otherwise wait for fish
+                )
+
+                # Horizontal + Vertical combinations (8-directional movement)
+                action_diagonal = jnp.where(
+                    need_left & need_down,
+                    Action.DOWNLEFT,  # Down + extend rod (left for P2)
                     jnp.where(
-                        is_going_down & ~needs_more_extension,
-                        Action.DOWN,  # Just go down when rod is positioned
+                        need_left & need_up,
+                        Action.UPLEFT,  # Up + extend rod
                         jnp.where(
-                            ~is_going_down & needs_more_extension,
-                            Action.UPRIGHT,  # Just extend rod if not going down
-                            Action.NOOP
+                            need_right & need_down,
+                            Action.DOWNRIGHT,  # Down + retract rod (right for P2)
+                            jnp.where(
+                                need_right & need_up,
+                                Action.UPRIGHT,  # Up + retract rod
+                                Action.NOOP
+                            )
                         )
                     )
                 )
 
-                # Phase 2: At target depth - retract rod and immediately go back up
-                phase2_action = jnp.where(
-                    is_at_target_depth & ~is_rod_retracted,
-                    Action.UPRIGHT,  # Go up and retract rod simultaneously
+                # Pure horizontal movement
+                action_horizontal = jnp.where(
+                    need_left,
+                    Action.LEFT,  # Extend rod left
                     jnp.where(
-                        is_at_target_depth & is_rod_retracted,
-                        Action.UP,  # Just go up when rod is retracted
+                        need_right,
+                        Action.RIGHT,  # Retract rod right
                         Action.NOOP
                     )
                 )
 
-                # Phase 3: Continue going up until back at surface, then restart cycle
-                phase3_action = jnp.where(
-                    p2_hook_y <= cfg.WATER_Y_START - cfg.ROD_Y + 5,  # Near surface
-                    Action.NOOP,  # Brief pause at surface before restarting
-                    Action.UP  # Continue going up
-                )
-
-                # Priority: Phase 1 > Phase 2 > Phase 3
-                return jnp.where(
-                    is_going_down | needs_more_extension,
-                    phase1_action,
+                # Pure vertical movement
+                action_vertical = jnp.where(
+                    need_down,
+                    Action.DOWN,
                     jnp.where(
-                        is_at_target_depth,
-                        phase2_action,
-                        phase3_action
+                        need_up,
+                        Action.UP,
+                        Action.NOOP
                     )
                 )
 
-            def reeling_action():
-                # When fish is hooked - move right and use fire for fast reeling
-                is_shark_on_left = state.shark_x < (cfg.SCREEN_WIDTH / 2)
-                return jnp.where(is_shark_on_left, Action.RIGHTFIRE, Action.RIGHT)
+                # Decision priority (simpler for 1980s hardware):
+                # 1. If in catch zone, try to hook
+                # 2. If need diagonal movement, use it
+                # 3. If need horizontal only, do that
+                # 4. If need vertical only, do that
+                # 5. Otherwise, NOOP
 
-            # Choose action based on whether a fish is hooked
-            ai_action = jnp.where(p2_state.hooked_fish_idx >= 0, reeling_action(), fishing_action())
+                return jnp.where(
+                    in_catch_zone,
+                    action_in_zone,
+                    jnp.where(
+                        (need_left | need_right) & (need_up | need_down),
+                        action_diagonal,
+                        jnp.where(
+                            need_left | need_right,
+                            action_horizontal,
+                            action_vertical
+                        )
+                    )
+                )
+
+            # STATE 3: Auto-lowering after catch - wait
+            def auto_lower_behavior():
+                """During auto-lower, position rod for next catch"""
+                # Simple behavior: return rod to neutral position
+                rod_is_neutral = jnp.abs(rod_length - cfg.START_ROD_LENGTH_X) < 5
+
+                return jnp.where(
+                    rod_length > cfg.START_ROD_LENGTH_X + 5,
+                    Action.RIGHT,  # Retract if extended
+                    jnp.where(
+                        rod_length < cfg.START_ROD_LENGTH_X - 5,
+                        Action.LEFT,  # Extend if retracted
+                        Action.NOOP
+                    )
+                )
+
+            # Main state machine dispatcher
+            ai_action = jnp.where(
+                hook_state == 3,  # Auto-lowering
+                auto_lower_behavior(),
+                jnp.where(
+                    hooked_fish >= 0,  # Has a fish hooked
+                    reeling_behavior(),
+                    fishing_behavior()  # Looking for fish
+                )
+            )
+
             return ai_action
         # Player 2 is always controlled by the AI.
         p2_action = strategic_p2_ai()
