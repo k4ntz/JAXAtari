@@ -1712,7 +1712,14 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             zapped_letters & (state.letters_char == self.consts.SPECIAL_CHAR_INDEX)
         ).astype(jnp.int32)
 
-        level_cleared = ((now_waiting_for_special & special_was_zapped) & allow_progress).astype(jnp.int32)
+
+        # Special wasn't used early as wildcard (special_shot_early[0] == 0)
+        # OR special was used early but has been revived (shot 5 enemies)
+        special_available = jnp.logical_or(
+            new_special_shot_early[0] == 0,  
+            new_special_shot_early[1] >= 5   
+        )
+        level_cleared = ((now_waiting_for_special & special_was_zapped & special_available) & allow_progress).astype(jnp.int32)
         early_special = jnp.logical_and(jnp.logical_not(now_waiting_for_special), special_was_zapped)
 
         # special char behaviour
