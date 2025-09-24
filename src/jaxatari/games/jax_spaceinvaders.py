@@ -82,6 +82,8 @@ class SpaceInvadersConstants(NamedTuple):
 
     PLAYER_Y: int = HEIGHT - PLAYER_SIZE[1] - BACKGROUND_SIZE[1]
 
+    BULLET_DAMAGE: int = 6
+
 C = SpaceInvadersConstants()
 default_mask = jnp.array([
     jnp.array([0, 0, 1, 1, 1, 1, 0, 0]),
@@ -324,24 +326,74 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         init = (state.player_lives, state.enemy_bullets_active)
         return jax.lax.fori_loop(0, self.consts.MAX_ENEMY_BULLETS, check_bullet, init)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _check_barricade_collision(self, index, input):
-        state, result = input
+        """
+        Calculates the collision on the barricades and masks pixels depending on the hit position.
+        is_player_bullet is used to differentiate between player and enemy bullets.
+        """
+        active, bullets_x, bullets_y, masks, is_player_bullet = input
 
-        mask = state.barricade_masks[index]
+        mask = masks[index]
+        H, W = mask.shape
         start_x = self.consts.BARRICADE_POS[0][index]
         start_y = self.consts.BARRICADE_POS[1]
-
+        bullet_w = self.consts.BULLET_SIZE[0]
 
         def check_bullet(i, carry):
-            pot_hit_x = (state.enemy_bullets_x[i] + self.consts.BULLET_SIZE[0]) - start_x
-            collision = self._check_collision(state.enemy_bullets_x[i], state.enemy_bullets_y[i], start_x, start_y, 8, 18)
+            mask_a, active_a = carry
 
-            return collision, pot_hit_x
+            bx = bullets_x[i]
+            by = bullets_y[i]
+            bullet_active = active_a[i]
 
-        collision, pot_hit_x = False, -1
-        collision, pot_hit_x = jax.lax.fori_loop(0, state.enemy_bullets_active.size, check_bullet, (collision, pot_hit_x))
+            # simplified collision detection with rectangle
+            collision = (
+                (bx >= start_x) &
+                (bx < (start_x + W)) &
+                (by >= start_y) &
+                (by < (start_y + H))
+            )
 
-        return (state, None)
+            pot_hit_x = jnp.floor(bx + bullet_w / 2.0) - start_x
+            mask_x = jnp.clip(pot_hit_x.astype(jnp.int32), 0, W - 1)
+
+            collumn = mask[:, mask_x]
+            col_collision = jnp.any(collumn != 0)
+
+            def on_collision(carry_b):
+                mask_b, active_b = carry_b
+                final_active = active_b.at[i].set(False)
+
+                # find and mask first n visible Pixel
+                idxs = jnp.arange(H)
+                valid_idxs = jnp.where(collumn != 0, idxs, H)
+                sorted_idxs = jax.lax.cond(is_player_bullet, lambda s: s[::-1], lambda s: s, jnp.sort(valid_idxs))
+                remove = sorted_idxs[:self.consts.BULLET_DAMAGE]
+
+                def remove_pixel(j, carry_c):
+                    mask_c = carry_c
+                    y = remove[j]
+                    return jax.lax.cond(y < H, lambda: mask_c.at[y, mask_x].set(0), lambda: mask_c)
+                
+                masked = jax.lax.fori_loop(0, self.consts.BULLET_DAMAGE, remove_pixel, mask_b)
+
+                return masked, final_active
+
+            return jax.lax.cond(
+                jnp.all(jnp.array([bullet_active, collision, col_collision]), axis=0),
+                on_collision,
+                lambda c: c,
+                (mask_a, active_a)
+            )
+
+        # looping all bullets
+        mask_final, active_final = jax.lax.fori_loop(0, active.size, check_bullet, (mask, active))
+
+        # updating barricade mask
+        new_masks = masks.at[index].set(mask_final)
+
+        return active_final, bullets_x, bullets_y, new_masks, is_player_bullet
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_bottom_enemies(self, state: SpaceInvadersState):
@@ -642,10 +694,11 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
 
         # Check Barricade Collision
-        result = None
-        init = (state, result)
-        state, result = jax.lax.fori_loop(0, 3, self._check_barricade_collision, init)
-        # jax.debug.print("Result 2: {x}", x=result)
+        final_enemy_bullets_active, ignore_x, ignore_y, new_barricade_masks, ignore_p = jax.lax.fori_loop(0, 3, self._check_barricade_collision, (final_enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, state.barricade_masks, False))
+
+        t_active, t_x, t_y, new_barricade_masks, ignore_p = jax.lax.fori_loop(0, 3, self._check_barricade_collision, (jnp.array([final_bullet_active]), jnp.array([new_bullet_x]), jnp.array([new_bullet_y]), new_barricade_masks, True))
+        final_bullet_active = t_active[0]
+
 
         # Ufo Controlling
         dir_random = jax.random.choice(key, jnp.array([1, -1]))
@@ -703,7 +756,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             enemy_bullets_x=enemy_bullets_x,
             enemy_bullets_y=enemy_bullets_y,
             enemy_fire_cooldown=enemy_fire_cooldown,
-            barricade_masks=state.barricade_masks
+            barricade_masks=new_barricade_masks
         )
 
         return new_state
