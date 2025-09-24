@@ -2612,7 +2612,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             state,
         )
 
-        return state._replace(enemy_disc_active_prev=enemy_active_now)
+        enemy_active_final = jnp.any(
+            (state.discs.owner == jnp.int32(1)) & (state.discs.phase == jnp.int32(1))
+        )
+        return state._replace(enemy_disc_active_prev=enemy_active_final)
 
     @partial(jit, static_argnums=(0,))
     def step(
