@@ -1481,6 +1481,23 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         
         sprites['black_digits'] = black_digits
 
+        # Load the Activision logo sprite
+        try:
+            activision_logo_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'activision logo.npy')
+            activision_logo_rgba = jr.loadFrame(activision_logo_path)
+            
+            # Handle RGBA properly with alpha blending
+            rgb_data = activision_logo_rgba[:, :, :3]
+            alpha_data = activision_logo_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+            
+            sprites['activision_logo'] = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                        white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+        except:
+            # Fallback to simple colored rectangle if sprite loading fails
+            sprites['activision_logo'] = jnp.ones((10, 40, 3), dtype=jnp.uint8) * jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+
         # Create simple colored rectangles for each entity
         sprites['player'] = jnp.ones((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
         sprites['thief'] = jnp.ones((self.consts.THIEF_HEIGHT, self.consts.THIEF_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.THIEF_COLOR, dtype=jnp.uint8)
@@ -1960,5 +1977,23 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             self.consts.GAME_AREA_OFFSET_Y:self.consts.GAME_AREA_OFFSET_Y + self.consts.GAME_AREA_HEIGHT,
             self.consts.GAME_AREA_OFFSET_X:self.consts.GAME_AREA_OFFSET_X + self.consts.GAME_AREA_WIDTH
         ].set(game_area)
+
+        # Add Activision logo to the bottom black border area (left side)
+        activision_logo = self.sprites['activision_logo']
+        logo_height, logo_width = activision_logo.shape[:2]
+        
+        # Position logo on the left side of the bottom black border
+        bottom_border_start_y = self.consts.GAME_AREA_OFFSET_Y + self.consts.GAME_AREA_HEIGHT
+        bottom_border_height = self.consts.TOTAL_SCREEN_HEIGHT - bottom_border_start_y
+        
+        # Position logo on the left side with some margin, near the top of bottom border
+        logo_x = 10  # Small margin from left edge
+        logo_y = bottom_border_start_y + 5  # Small margin from top of bottom border
+        
+        # Apply logo to frame
+        frame = frame.at[
+            logo_y:logo_y + logo_height,
+            logo_x:logo_x + logo_width
+        ].set(activision_logo)
 
         return frame
