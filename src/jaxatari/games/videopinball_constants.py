@@ -80,7 +80,7 @@ class VideoPinballState(NamedTuple):
     )  # 2 * plunger_position, only set to non-zero value once fired, reset after hitting invisible block
 
     score: chex.Array
-    lives: chex.Array
+    lives_lost: chex.Array
     bumper_multiplier: chex.Array
     active_targets: (
         chex.Array
@@ -119,7 +119,7 @@ class VideoPinballObservation(NamedTuple):
     rollovers: jnp.ndarray
     tilt_mode_hole_plugs: jnp.ndarray
     score: jnp.ndarray
-    lives: jnp.ndarray
+    lives_lost: jnp.ndarray
     atari_symbols: jnp.ndarray
     bumper_multiplier: jnp.ndarray
     rollover_counter: jnp.ndarray
@@ -156,7 +156,7 @@ class VideoPinballConstants(NamedTuple):
     BALL_MIN_SPEED = jnp.array(0.3)
     NUDGE_EFFECT_INTERVAL = jnp.array(2)  # Num steps in between nudge changing
     NUDGE_EFFECT_AMOUNT = jnp.array(
-        0.3
+        0.75
     )  # Amount of nudge effect applied to the ball's velocity
     TILT_COUNT_INCREASE_INTERVAL = jnp.array(
         4

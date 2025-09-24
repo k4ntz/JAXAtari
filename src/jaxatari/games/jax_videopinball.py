@@ -110,7 +110,7 @@ class JaxVideoPinball(
             plunger_position=jnp.array(0, dtype=jnp.int32),
             plunger_power=jnp.array(0, dtype=jnp.float32),
             score=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(1, dtype=jnp.int32),
+            lives_lost=jnp.array(1, dtype=jnp.int32),
             bumper_multiplier=jnp.array(1, dtype=jnp.int32),
             active_targets=jnp.array([True, True, True, False], dtype=jnp.bool_),
             target_cooldown=jnp.array(-1, dtype=jnp.int32),
@@ -278,7 +278,7 @@ class JaxVideoPinball(
             rollover_counter,
             score,
             atari_symbols,
-            lives,
+            lives_lost,
             active_targets,
             special_target_cooldown,
             tilt_mode_active,
@@ -303,7 +303,7 @@ class JaxVideoPinball(
             rollover_counter,
             score,
             atari_symbols,
-            state.lives,
+            state.lives_lost,
             active_targets,
             special_target_cooldown,
             tilt_mode_active,
@@ -334,7 +334,7 @@ class JaxVideoPinball(
             plunger_position=plunger_position,
             plunger_power=plunger_power,
             score=score,
-            lives=lives,
+            lives_lost=lives_lost,
             bumper_multiplier=bumper_multiplier,
             active_targets=active_targets,
             target_cooldown=target_cooldown,
@@ -710,7 +710,7 @@ class JaxVideoPinball(
             rollovers=rollovers.astype(jnp.int32),
             tilt_mode_hole_plugs=tilt_mode_hole_plugs.astype(jnp.int32),
             score=state.score.astype(jnp.int32),
-            lives=state.lives.astype(jnp.int32),
+            lives_lost=state.lives_lost.astype(jnp.int32),
             atari_symbols=state.atari_symbols.astype(jnp.int32),
             bumper_multiplier=state.bumper_multiplier.astype(jnp.int32),
             rollover_counter=state.rollover_counter.astype(jnp.int32),
@@ -732,7 +732,7 @@ class JaxVideoPinball(
                 obs.rollovers.flatten(),
                 obs.tilt_mode_hole_plugs.flatten(),
                 obs.score.flatten(),
-                obs.lives.flatten(),
+                obs.lives_lost.flatten(),
                 obs.atari_symbols.flatten(),
                 obs.bumper_multiplier.flatten(),
                 obs.rollover_counter.flatten(),
@@ -784,7 +784,7 @@ class JaxVideoPinball(
                     low=0, high=210, shape=(2, 5), dtype=jnp.int32
                 ),  # 2 hole plugs
                 "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-                "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+                "lives_lost": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
                 "atari_symbols": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
                 "bumper_multiplier": spaces.Box(
                     low=0, high=9, shape=(), dtype=jnp.int32
@@ -838,8 +838,7 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
-        """Returns True if the game is over (i.e. lives used > 3 and ball not in play)."""
-        return jnp.logical_and(state.lives > 3, state.ball_in_play == False)
+        return jnp.logical_and(state.lives_lost > 3, state.ball_in_play == False)
 
     def render(self, state) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -1250,7 +1249,7 @@ class JaxVideoPinball(
         traj_to_hit_x = hit_x - ball_movement.old_ball_x
         traj_to_hit_y = hit_y - ball_movement.old_ball_y
         d_hit = jnp.sqrt(traj_to_hit_x * traj_to_hit_x + traj_to_hit_y * traj_to_hit_y)
-        r = (d_traj - d_hit) / d_traj
+        r = jnp.clip((d_traj - d_hit) / d_traj, min=1e-2)
         reflected_x = r * reflected_x
         reflected_y = r * reflected_y
 
@@ -1488,7 +1487,7 @@ class JaxVideoPinball(
             + jnp.square(trajectory_to_hit_point_y)
         )
 
-        r = 1 - d_hit_point / d_trajectory
+        r = jnp.clip(1 - d_hit_point / d_trajectory, min=1e-2)
 
         reflected_velocity_x = r * reflected_velocity_x
         reflected_velocity_y = r * reflected_velocity_y
@@ -1741,9 +1740,9 @@ class JaxVideoPinball(
         rvy = rv_rel_y + u_y
 
         # New ball position after reflection
-        travel_remaining = 1.0 - t_entry
-        new_ball_x = hit_x + travel_remaining * rvx
-        new_ball_y = hit_y + travel_remaining * rvy
+        r = jnp.clip(1.0 - t_entry, min=1e-2)
+        new_ball_x = hit_x + r * rvx
+        new_ball_y = hit_y + r * rvy
 
         # Hit point info
         hit_point = jnp.concatenate(
@@ -3014,9 +3013,7 @@ class JaxVideoPinball(
             invisible_block_hit_data[HitPointSelector.Y] - ball_movement.old_ball_y
         )
         d_hit = jnp.sqrt(to_invis_block_hit_x**2 + to_invis_block_hit_y**2)
-        r = 1 - d_hit / d_traj
-
-        # Reflect the ball and add a small random vertical velocity
+        r = jnp.clip(1 - d_hit / d_traj, min=1e-2)
         ball_vel_x, ball_vel_y = jax.lax.cond(
             is_invisible_block_hit,
             lambda: (
@@ -3252,7 +3249,7 @@ class JaxVideoPinball(
         rollover_counter,
         score,
         atari_symbols,
-        lives,
+        lives_lost,
         active_targets,
         special_target_cooldown,
         tilt_mode_active,
@@ -3271,11 +3268,11 @@ class JaxVideoPinball(
         )
         respawn_timer = jnp.where(respawn_timer > 0, respawn_timer - 1, respawn_timer)
 
-        lives, active_targets, atari_symbols, special_target_cooldown = jax.lax.cond(
+        lives_lost, active_targets, atari_symbols, special_target_cooldown = jax.lax.cond(
             respawn_timer == 0,
             lambda l, asym: self._reset_targets_atari_symbols_and_lives(l, asym),
             lambda l, asym: (l, active_targets, asym, special_target_cooldown),
-            lives,
+            lives_lost,
             atari_symbols,
         )
 
@@ -3287,7 +3284,7 @@ class JaxVideoPinball(
             rollover_counter,
             score,
             atari_symbols,
-            lives,
+            lives_lost,
             active_targets,
             special_target_cooldown,
             tilt_mode_active,
@@ -3295,19 +3292,19 @@ class JaxVideoPinball(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _reset_targets_atari_symbols_and_lives(self, lives, atari_symbols):
-        lives = jax.lax.cond(
+    def _reset_stuff_and_handle_lives(self, lives_lost, atari_symbols):
+        lives_lost = jax.lax.cond(
             atari_symbols < 4,
             lambda x: x + 1,
             lambda x: x,
-            operand=lives,
+            operand=lives_lost,
         )
 
         active_targets = jnp.array([True, True, True, False]).astype(jnp.bool)
         atari_symbols = jnp.array(0).astype(jnp.int32)
         special_target_cooldown = jnp.array(0).astype(jnp.int32)
 
-        return lives, active_targets, atari_symbols, special_target_cooldown
+        return lives_lost, active_targets, atari_symbols, special_target_cooldown
 
     @partial(jax.jit, static_argnums=(0,))
     def _process_objects_hit(self, state: VideoPinballState, objects_hit):
@@ -4032,7 +4029,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         frame_unknown = jr.get_sprite_frame(self.sprites["score_number_digits"], 1)
         raster = jr.render_at(raster, 4, 3, frame_unknown)
 
-        displayed_lives = jnp.clip(state.lives, max=3)
+        displayed_lives = jnp.clip(state.lives_lost, max=3)
         frame_ball_count = jr.get_sprite_frame(
             self.sprites["score_number_digits"], displayed_lives
         )
