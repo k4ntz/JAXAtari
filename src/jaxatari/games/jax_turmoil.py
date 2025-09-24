@@ -64,9 +64,9 @@ class TurmoilConstants(NamedTuple):
 
     # probability of spawning when there is slot available
     ENEMY_SPAWN_PROBABILITY = 0.6
-    PRIZE_SPAWN_PROBABILITY = 0.5
+    PRIZE_SPAWN_PROBABILITY = 0.1
 
-    PRIZE_TO_BOOM_TIME = 20
+    PRIZE_TO_BOOM_TIME = 40
     
 # Game state container
 class TurmoilState(NamedTuple):
@@ -412,11 +412,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         anything with right in it, add 2 to the x position
         anything with up in it, add -2 to the y position
         anything with down in it, add 2 to the y position
-        '''
-
-        def can_move_horizontal(state: TurmoilState) :
-            return False
-        
+        '''        
         up = jnp.any(
             jnp.array(
                 [
@@ -466,6 +462,9 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
         )
 
+        def can_move_horizontal(state: TurmoilState) :
+            return state.prize[3] == 1
+        
         # cooldown so player does not go too fast
         player_step_cooldown = jnp.where(
             state.player_step_cooldown > 0,
@@ -684,7 +683,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         spawn_prob [0,1] controls probability of spawning when slots are available.
         """
         inactive_mask = (state.enemy[:, 3] == 0) & (
-            (state.prize[3] == 0)# | (state.enemy[:, 0] != state.prize[0])
+            (state.prize[3] == 0) | (state.enemy[:, 0] != state.prize[0])
         )
 
         num_inactive = jnp.sum(inactive_mask)
@@ -933,7 +932,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         # if any enemy hit then update score (assumption only 1 enemy shot at a time)
         new_score = jax.lax.cond(
             jnp.any(hit),
-            lambda : self.update_score(state, 0),
+            lambda : self.update_score(state, 0), # TODO only type 0???
             lambda : state.score,
         )
 
