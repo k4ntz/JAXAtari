@@ -673,7 +673,7 @@ def special_char_step(
             jnp.where(
                 jnp.logical_and(
                     new_special_shot_early[0] == 0,
-                    jnp.logical_and(
+                    jnp.logical_or(
                         new_letters_x[consts.SPECIAL_CHAR_INDEX] > consts.LETTER_VISIBLE_MAX_X,
                         new_letters_x[consts.SPECIAL_CHAR_INDEX] + consts.LETTER_SIZE[0] < consts.LETTER_VISIBLE_MIN_X,
                     )    
