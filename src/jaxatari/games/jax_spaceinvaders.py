@@ -694,11 +694,17 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
 
         # Check Barricade Collision
-        final_enemy_bullets_active, ignore_x, ignore_y, new_barricade_masks, ignore_p = jax.lax.fori_loop(0, 3, self._check_barricade_collision, (final_enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, state.barricade_masks, False))
+            # Check Lowest Enemy Row
+        barricade_state = new_position_y + state.opponent_bounding_rect[1] > self.consts.BARRICADE_POS[1]
 
+        new_barricade_masks = jax.lax.cond(barricade_state, lambda ms: jnp.zeros_like(ms), lambda ms: ms, state.barricade_masks)
+
+            # Check Enemy Bullets
+        final_enemy_bullets_active, ignore_x, ignore_y, new_barricade_masks, ignore_p = jax.lax.fori_loop(0, 3, self._check_barricade_collision, (final_enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, new_barricade_masks, False))
+
+            # Check Player Bullet
         t_active, t_x, t_y, new_barricade_masks, ignore_p = jax.lax.fori_loop(0, 3, self._check_barricade_collision, (jnp.array([final_bullet_active]), jnp.array([new_bullet_x]), jnp.array([new_bullet_y]), new_barricade_masks, True))
         final_bullet_active = t_active[0]
-
 
         # Ufo Controlling
         dir_random = jax.random.choice(key, jnp.array([1, -1]))
