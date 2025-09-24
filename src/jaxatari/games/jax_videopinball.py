@@ -165,10 +165,18 @@ class JaxVideoPinball(
         # Check if action is LEFT_FIRE or RIGHT_FIRE
         action_is_left_fire = action == Action.LEFTFIRE
         action_is_right_fire = action == Action.RIGHTFIRE
-        action_is_fire = jnp.logical_or(action_is_left_fire, action_is_right_fire)
+        action_is_tilt = jnp.logical_or(action_is_left_fire, action_is_right_fire)
 
+        # If tilt mode is active, only allow LEFT_FIRE or RIGHT_FIRE (nudging)
         action = jax.lax.cond(
-            jnp.logical_and(jnp.logical_not(action_is_fire), state.tilt_mode_active),
+            jnp.logical_and(jnp.logical_not(action_is_tilt), state.tilt_mode_active),
+            lambda a: Action.NOOP,
+            lambda a: a,
+            action,
+        )
+        # if respawn timer is still going, discard all actions
+        action = jax.lax.cond(
+            state.respawn_timer > 0,
             lambda a: Action.NOOP,
             lambda a: a,
             action,
@@ -838,7 +846,7 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoPinballState) -> bool:
-        return jnp.logical_and(state.lives_lost > 3, state.ball_in_play == False)
+        return jnp.logical_and(state.lives_lost > 3, state.respawn_timer <= 0)
 
     def render(self, state) -> jnp.ndarray:
         return self.renderer.render(state)
