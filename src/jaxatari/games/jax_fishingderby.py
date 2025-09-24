@@ -289,9 +289,9 @@ class FishingDerby(JaxEnvironment):
         def strategic_p2_ai():
             """
             Improved P2 AI that mimics 1980s-style game AI behavior:
-            - Simple state machine with clear priorities
-            - Proximity-based targeting rather than always going for bottom fish
-            - Reactive to current game state
+            - Only targets bottom 3 fish rows (worth 4-6 points each)
+            - Fast reels when shark is on the left side
+            - Properly retracts rod when reeling in fish
             - Efficient patterns that would work within 6502 constraints
             """
             cfg = self.config
@@ -311,26 +311,34 @@ class FishingDerby(JaxEnvironment):
 
             # STATE 1: Fish is hooked - reel it in
             def reeling_behavior():
-                """When fish is hooked, reel with simple shark avoidance"""
-                # Simple shark avoidance: if shark is nearby, use fast reel
-                shark_distance = jnp.abs(state.shark_x - p2_hook_x)
-                shark_nearby = (shark_distance < 40) & (jnp.abs(cfg.SHARK_Y - p2_hook_y) < 20)
+                """When fish is hooked, retract rod and fast reel when shark is on left"""
+                # Fast reel when shark is on the left side of the screen
+                # This gives P2 advantage since P2 is on the right
+                shark_on_left = state.shark_x < (cfg.SCREEN_WIDTH / 2)
 
-                # Fast reel when shark is near or we're close to scoring
-                use_fast_reel = shark_nearby | (p2_hook_y < cfg.FISH_SCORING_Y + 20)
+                # Also fast reel when very close to scoring
+                close_to_scoring = p2_hook_y < cfg.FISH_SCORING_Y + 10
 
-                # Simple directional logic: move rod toward center while reeling
-                rod_at_center = jnp.abs(rod_length - cfg.START_ROD_LENGTH_X) < 3
+                # Use fast reel (FIRE button) when shark is on left or near scoring
+                use_fast_reel = shark_on_left | close_to_scoring
+
+                # For P2: RIGHT = retract rod (decrease length, pulls toward player)
+                # Combine with UP for reeling and FIRE for fast reel
+                # Note: UPRIGHT would extend rod (wrong!), we need UP then RIGHT separately
+                # But since we can only send one action, prioritize reeling up with occasional retract
+
+                # Alternate between pure UP and RIGHTFIRE/RIGHT to achieve both reeling and retracting
+                should_retract = (state.time % 3) == 0  # Retract every 3rd frame
 
                 return jnp.where(
                     use_fast_reel,
-                    jnp.where(rod_at_center, Action.UPFIRE, Action.UPRIGHTFIRE),
-                    jnp.where(rod_at_center, Action.UP, Action.UPRIGHT)
+                    jnp.where(should_retract, Action.RIGHTFIRE, Action.UPFIRE),  # Fast reel + retract
+                    jnp.where(should_retract, Action.RIGHT, Action.UP)  # Normal reel + retract
                 )
 
             # STATE 2: Hook is free - find nearest catchable fish
             def fishing_behavior():
-                """Simple proximity-based fish targeting"""
+                """Targets bottom 3 fish, but switches to top 3 if all bottom fish are far left"""
 
                 # Calculate distances to all active fish
                 # Use Manhattan distance for simplicity (6502-friendly)
@@ -339,11 +347,30 @@ class FishingDerby(JaxEnvironment):
                 # Mask out inactive fish (set their distance to infinity)
                 fish_distances = jnp.where(fish_active, fish_distances, jnp.inf)
 
-                # Find nearest fish
+                # Check if P2's hook is deep (at bottom area) and all bottom 3 fish are on left side
+                hook_at_bottom = p2_hook_y > 140  # Hook is in bottom third of water
+
+                # Check positions of bottom 3 fish (indices 3, 4, 5)
+                bottom_fish_x = fish_pos[3:6, 0]  # X positions of bottom 3 fish
+                all_bottom_fish_left = jnp.all(bottom_fish_x < 60)  # All on left half
+
+                # If at bottom and all bottom fish are far left, target top 3 instead
+                should_target_top = hook_at_bottom & all_bottom_fish_left & fish_active[3] & fish_active[4] & \
+                                    fish_active[5]
+
+                # Set infinite distance for fish we're not targeting
+                fish_distances = jnp.where(
+                    should_target_top,
+                    # Target top 3 (0,1,2), ignore bottom 3 (3,4,5)
+                    fish_distances.at[3].set(jnp.inf).at[4].set(jnp.inf).at[5].set(jnp.inf),
+                    # Normal: target bottom 3 (3,4,5), ignore top 3 (0,1,2)
+                    fish_distances.at[0].set(jnp.inf).at[1].set(jnp.inf).at[2].set(jnp.inf)
+                )
+
+                # Find best target
                 nearest_fish_idx = jnp.argmin(fish_distances)
                 nearest_fish_x = fish_pos[nearest_fish_idx, 0]
                 nearest_fish_y = fish_pos[nearest_fish_idx, 1]
-                nearest_distance = fish_distances[nearest_fish_idx]
 
                 # Simple targeting thresholds
                 CLOSE_ENOUGH_X = 8.0  # Horizontal proximity to attempt catch
