@@ -58,7 +58,6 @@ class GameConfig:
     HOOK_HEIGHT: int = 5
     HOOK_SPEED_V: float = 10
     REEL_SLOW_SPEED: float = 1
-    REEL_FAST_SPEED: float = 2
     LINE_Y_START: int = 48
     LINE_Y_END: int = 180
     AUTO_LOWER_SPEED: float = 2.0
@@ -805,7 +804,7 @@ class FishingDerby(JaxEnvironment):
             is_reeling_fast_p1 = (p1_hook_state == 1) & is_fire_pressed_p1
 
             # Fast reel is every frame, slow reel is every cfg.SLOW_REEL_PERIOD frames
-            tick_slow = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 1) == 0)
+            tick_slow = (jnp.bitwise_and(state.time, cfg.SLOW_REEL_PERIOD - 3) == 0)
             reel_tick = jnp.where(is_reeling_fast_p1, True, tick_slow)
 
             reel_step = jnp.where(p1_hook_state > 0, 1.0, 0.0)  # 1 px per tick
