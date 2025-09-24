@@ -85,10 +85,8 @@ class WordZapperConstants(NamedTuple) :
     # scores
     SCORE_CORRECT_LETTER = 10
     SCORE_LVL_CLEARED = 100
-    SCORE_EARLY_SPECIAL_PENALTY = -10000
-
-
-
+    SCORE_EARLY_SPECIAL = 20
+    SCORE_SHOOT_ASTEROIDS = 5
 
 WORD_LIST = (
     ("WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"),
@@ -142,7 +140,7 @@ class WordZapperState(NamedTuple):
     letter_explosion_pos: chex.Array  # shape (27, 2)
     level_word_len: chex.Array       # 4/5/6 letters
     waiting_for_special: chex.Array  # 1 once all letters collected; then require shooting special
-    special_shot_early: chex.Array # if 1 special shot while letters remained
+    special_shot_early: chex.Array # (2,) if 1 special shot while letters remained, amount of asteroids
 
     finised_level_count: chex.Array 
 
@@ -504,15 +502,6 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
             new_letters_alive[:, 0]
         )
     )
-    
-    # if special char was shot early, set it back to disabled so it does not reappear
-    new_letters_alive = new_letters_alive.at[consts.SPECIAL_CHAR_INDEX, 0].set(
-        jnp.where(
-            state.special_shot_early,
-            0,
-            new_letters_alive[consts.SPECIAL_CHAR_INDEX, 0]
-        )
-    )
 
     # Actually reset the x position for letters that scrolled off
     new_letters_x = jnp.where(
@@ -566,20 +555,12 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         pos = pos.at[target_letter_id].set(jnp.array([state.letters_x[target_letter_id], state.letters_y[target_letter_id]]))
         return l, frame, timer, frame_timer, pos
 
-    def no_zap(args):
-        l, frame, timer, frame_timer, pos = args
-        return l, frame, timer, frame_timer, pos
-
-
     # Only allow zapping if the letter is alive
     is_letter_alive = jnp.where(target_letter_id != -1, state.letters_alive[target_letter_id, 0] == 1, False)
     zap_condition = jnp.logical_and(state.player_zapper_position[2], jnp.logical_and(target_letter_id != -1, is_letter_alive))
+    already_exploding = state.letter_explosion_frame[target_letter_id] > 0
+    safe_zap_condition = jnp.logical_and(zap_condition, jnp.logical_not(already_exploding))
 
-    def safe_zap_letter(args):
-        l, frame, timer, frame_timer, pos = args
-        already_exploding = frame[target_letter_id] > 0
-        return jax.lax.cond(already_exploding, no_zap, zap_letter, (l, frame, timer, frame_timer, pos))
-    
     (
         new_letters_alive,
         letter_explosion_frame,
@@ -587,8 +568,8 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
         letter_explosion_frame_timer,
         letter_explosion_pos
     ) = jax.lax.cond(
-        zap_condition,
-        safe_zap_letter,
+        safe_zap_condition,
+        zap_letter,
         lambda args: args,
         (
             new_letters_alive,
@@ -638,9 +619,78 @@ def scrolling_letters(state: WordZapperState, consts: WordZapperConstants) -> ch
 
 
 @jax.jit
+def special_char_step(
+    state: WordZapperState,
+    consts: WordZapperConstants,
+    new_special_shot_early,
+    new_current_letter_index,
+    new_letters_alive,
+    new_letters_x,
+    early_special
+    ) :
+    """
+    special char appear/disappear, next letter unlock as wildcard
+    """
+    # !!! order matters here
+    # early_special as wildcard unlocks next letter
+    new_current_letter_index = jnp.where(
+        jnp.logical_and(early_special, new_special_shot_early[0] == 0),
+        new_current_letter_index + 1,
+        new_current_letter_index
+    )
+                
+    # check if special char was shot early
+    new_special_shot_early = new_special_shot_early.at[0].set(
+        jnp.where(
+            early_special,
+            1,
+            new_special_shot_early[0]
+        )
+    )
+
+    # if 5 bonker/zonkers shot, special char reappears
+    new_special_shot_early = new_special_shot_early.at[0].set(
+        jnp.where(
+            new_special_shot_early[1] >= 5,
+            0,
+            new_special_shot_early[0]
+        )
+    )
+
+    new_special_shot_early = new_special_shot_early.at[1].set(
+        jnp.where(
+            new_special_shot_early[1] >= 5,
+            0,
+            new_special_shot_early[1]
+        )
+    )
+
+    # if special char was shot early, set it back to disabled so it does not reappear
+    new_letters_alive = new_letters_alive.at[consts.SPECIAL_CHAR_INDEX, 0].set(
+        jnp.where(
+            new_special_shot_early[0] == 1,
+            0,
+            jnp.where(
+                jnp.logical_and(
+                    new_special_shot_early[0] == 0,
+                    jnp.logical_or(
+                        new_letters_x[consts.SPECIAL_CHAR_INDEX] > consts.LETTER_VISIBLE_MAX_X,
+                        new_letters_x[consts.SPECIAL_CHAR_INDEX] + consts.LETTER_SIZE[0] < consts.LETTER_VISIBLE_MIN_X,
+                    )    
+                ),
+                1,
+                new_letters_alive[consts.SPECIAL_CHAR_INDEX, 0]
+            )
+        )
+    )
+
+    return new_special_shot_early, new_current_letter_index, new_letters_alive
+
+
+@jax.jit
 def player_missile_step(
     state: WordZapperState, action: chex.Array, consts: WordZapperConstants
-) -> chex.Array:
+    ) -> chex.Array:
     left = jnp.any(
         jnp.array(
             [
@@ -766,7 +816,7 @@ def enemy_spawn_step(
 @jax.jit
 def player_zapper_step(
     state: WordZapperState, action: chex.Array, consts: WordZapperConstants
-) -> chex.Array:
+    ) -> chex.Array:
     fire = jnp.any(
         jnp.array(
             [
@@ -897,6 +947,16 @@ def handle_missile_enemy_explosions(
         player_missile_position
     )
 
+
+    # increment early special char counter if asteroid shot
+    new_special_shot_early = state.special_shot_early.at[1].set(
+        jnp.where(
+            jnp.logical_and(jnp.any(missile_collisions), state.special_shot_early[0] == 1),
+            state.special_shot_early[1] + 1,
+            state.special_shot_early[1]
+        )
+    )
+
     return (
         new_enemy_explosion_frame,
         new_enemy_explosion_timer,
@@ -904,6 +964,8 @@ def handle_missile_enemy_explosions(
         enemy_explosion_pos,
         new_enemy_active,
         player_missile_position,
+        new_special_shot_early,
+        jnp.any(missile_collisions),
     )
 
 def handle_player_enemy_collisions(
@@ -1027,7 +1089,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
             level_word_len=level_len_init,
             waiting_for_special=jnp.array(0, dtype=jnp.int32),
-            special_shot_early=jnp.array(0),
+            special_shot_early=jnp.zeros((2,)),
 
             timer=jnp.array(self.consts.TIME),
             target_word=encoded,
@@ -1455,6 +1517,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             letters_speed=jnp.ones((27,)) * self.consts.LETTER_SCROLLING_SPEED,
             letters_positions=jnp.stack([letters_x, letters_y], axis=1),
             current_letter_index=jnp.array(0),
+            special_shot_early=jnp.zeros((2,)),
 
             level_word_len=next_lvl_word_len,
             waiting_for_special=jnp.array(0, dtype=jnp.int32),
@@ -1479,7 +1542,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def update_score(self, state: WordZapperState, new_current_letter_index, level_cleared, new_special_shot_early):
+    def update_score(self, state: WordZapperState, new_current_letter_index, level_cleared, new_special_shot_early, any_enemy_shot):
         """
         update score based on changes
         """
@@ -1497,12 +1560,19 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             new_score
         )         
 
-        # penalty for shooting special early
+        # shooting special early as wildcard
         new_score = jnp.where(
-            new_special_shot_early,
-            new_score + self.consts.SCORE_EARLY_SPECIAL_PENALTY,
+            new_special_shot_early[0],
+            new_score + self.consts.SCORE_EARLY_SPECIAL,
             new_score
-        )   
+        )
+
+        # shooting asteroids while special char disabled
+        new_score = jnp.where(
+            jnp.logical_and(new_special_shot_early[0] == 1, any_enemy_shot),
+            new_score + self.consts.SCORE_SHOOT_ASTEROIDS,
+            new_score
+        )
 
         return new_score
     
@@ -1587,6 +1657,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             enemy_explosion_pos,
             new_enemy_active,
             player_missile_position,
+            new_special_shot_early,
+            any_enemy_shot,
         ) = handle_missile_enemy_explosions(
             state,
             new_enemy_positions,
@@ -1613,27 +1685,52 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
 
         new_current_letter_index = state.current_letter_index
-        for i in range(27):
-            new_current_letter_index = update_letter_index(
-                i, zapped_letters[i], state.letters_char, new_current_letter_index, target_word
+
+        def compute_new_current_letter_index(state, zapped_letters, target_word):
+            def body_fun(i, new_current_letter_index):
+                return update_letter_index(
+                    i,
+                    zapped_letters[i],
+                    state.letters_char,
+                    new_current_letter_index,
+                    target_word,
+                )
+
+            return jax.lax.fori_loop(
+                0, 27, body_fun, state.current_letter_index
             )
+
+        new_current_letter_index = compute_new_current_letter_index(
+            state, zapped_letters, target_word
+        )
 
         # Word length and special-gate logic
         word_len = jnp.sum(target_word >= 0).astype(jnp.int32)
         now_waiting_for_special = (new_current_letter_index >= word_len).astype(jnp.int32)
 
-        special_idx = jnp.array(self.consts.SPECIAL_CHAR_INDEX, dtype=jnp.int32)
         special_was_zapped = jnp.any(
-            zapped_letters & (state.letters_char == special_idx)
+            zapped_letters & (state.letters_char == self.consts.SPECIAL_CHAR_INDEX)
         ).astype(jnp.int32)
 
-        level_cleared = ((now_waiting_for_special & special_was_zapped) & allow_progress).astype(jnp.int32)
 
-        # check if special char was shot early
-        new_special_shot_early = jnp.where(
-            jnp.logical_and(jnp.logical_not(now_waiting_for_special), special_was_zapped),
-            1,
-            state.special_shot_early
+        # Special wasn't used early as wildcard (special_shot_early[0] == 0)
+        # OR special was used early but has been revived (shot 5 enemies)
+        special_available = jnp.logical_or(
+            new_special_shot_early[0] == 0,  
+            new_special_shot_early[1] >= 5   
+        )
+        level_cleared = ((now_waiting_for_special & special_was_zapped & special_available) & allow_progress).astype(jnp.int32)
+        early_special = jnp.logical_and(jnp.logical_not(now_waiting_for_special), special_was_zapped)
+
+        # special char behaviour
+        new_special_shot_early, new_current_letter_index, new_letters_alive = special_char_step(
+            state,
+            self.consts,
+            new_special_shot_early,
+            new_current_letter_index,
+            new_letters_alive,
+            new_letters_x,
+            early_special
         )
 
         # increment finished level count
@@ -1648,7 +1745,8 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             state,
             new_current_letter_index,
             level_cleared,
-            new_special_shot_early
+            new_special_shot_early,
+            any_enemy_shot,
         )
 
         # activate animation and set timer
