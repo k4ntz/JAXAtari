@@ -20,8 +20,8 @@ class LaserGatesConstants:
     HEIGHT = 250
     SCALING_FACTOR = 5
 
-    SCROLL_SPEED = 1  # Normal scroll speed
-    SCROLL_MULTIPLIER = 1.5  # When at the right player bound, multiply scroll speed by this constant
+    SCROLL_SPEED = 0.8 # Normal scroll speed
+    SCROLL_MULTIPLIER = 2 # When at the right player bound, multiply scroll speed by this constant
 
     # -------- Mountains constants --------
     PLAYING_FIELD_BG_COLLISION_COLOR = (255, 255, 255, 255)
@@ -51,25 +51,15 @@ class LaserGatesConstants:
     PLAYER_START_X = 20  # X Spawn position of player
     PLAYER_START_Y = 52  # Y Spawn position of player
 
-    PLAYER_VELOCITY_Y = 1.5  # Y Velocity of player
-    PLAYER_VELOCITY_X = 1.3  # X Velocity of player
-
-    MAX_ENERGY = 5100  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100)
-    MAX_SHIELDS = 24  # As the manual says, the Dante Dart starts with 24 shield units
-    MAX_DTIME = 10200  # Same idea as energy.
-
-    ALLOW_ENERGY_POD_PERCENTAGE = 0.3  # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
-    ALLOW_DETONATOR_PERCENTAGE = 0.3  # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
-
-    ENERGY_POD_SPAWN_PROBABILITY = 0.4  # If energy pod spawning is allowed, this is the probability for the energy pod to be the next entity spawned.
-    DETONATOR_SPAWN_PROBABILITY = 0.4  # If detonator spawning is allowed, this is the probability for the detonator to be the next entity spawned.
+    PLAYER_VELOCITY_Y = 2  # Y Velocity of player
+    PLAYER_VELOCITY_X = 2  # X Velocity of player
 
     # -------- Player missile constants --------
     PLAYER_MISSILE_SIZE = (16, 1)  # Width, Height
     PLAYER_MISSILE_BASE_COLOR = (140, 79, 24, 255)  # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
     PLAYER_MISSILE_COLOR_CHANGE_SPEED = 10  # Defines how fast the player missile changes its color towards white.
 
-    PLAYER_MISSILE_INITIAL_VELOCITY = 4  # Starting speed of player missile
+    PLAYER_MISSILE_INITIAL_VELOCITY = 9  # Starting speed of player missile
     PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1  # Multiply the current speed at a given moment of the player missile by this number
 
     # -------- Entity constants (constants that apply to all entity types --------
@@ -149,7 +139,7 @@ class LaserGatesConstants:
     FORCEFIELD_FLEXING_SPACING = 64  # x spacing between the forcefields when in flexing mode
     FORCEFIELD_FLEXING_SPEED = 0.6  # Flexing (Crushing motion) speed
     FORCEFIELD_FLEXING_MINIMUM_DISTANCE = 2  # Minimum y distance between the upper and lower forcefields when flexing
-    FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 25  # Maximum y distance between the upper and lower forcefields when flexing
+    FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 32  # Maximum y distance between the upper and lower forcefields when flexing
 
     FORCEFIELD_FIXED_SPACING = 64  # x spacing between the forcefields when in fixed mode
     FORCEFIELD_FIXED_SPEED = 0.3  # Fixed (up and down movement) speed
@@ -175,7 +165,30 @@ class LaserGatesConstants:
 
     ENERGY_POD_ANIMATION_SPEED = 16  # Higher is slower
 
-    # -------- GUI/instrument panel constants --------
+    # -------- Probability constants --------
+
+    ALLOW_ENERGY_POD_PERCENTAGE = 0.3  # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
+    ALLOW_DETONATOR_PERCENTAGE = 0.3  # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
+
+    ENERGY_POD_SPAWN_PROBABILITY = 0.4  # If energy pod spawning is allowed, this is the probability for the energy pod to be the next entity spawned.
+    DETONATOR_SPAWN_PROBABILITY = 0.4  # If detonator spawning is allowed, this is the probability for the detonator to be the next entity spawned.
+
+    ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
+    SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
+    DTIME_START_BLINKING_PERCENTAGE = 0.2 # The Field in the instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
+
+    # -------- Instrument panel constants --------
+
+    INSTRUMENT_PANEL_ANIMATION_SPEED = 14 # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
+
+    MAX_ENERGY = 5100  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100)
+    MAX_SHIELDS = 24  # As the manual says, the Dante Dart starts with 24 shield units
+    MAX_DTIME = 10200  # Same idea as energy.
+
+    SHIELD_LOSS_COL_SMALL = 1  # See is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
+    SHIELD_LOSS_COL_BIG = 6
+
+    # -------- GUI constants --------
     GUI_COLORED_BACKGROUND_SIZE = (128, 12)  # Width, Height of colored background of black rectangle background
     GUI_BLACK_BACKGROUND_SIZE = (56, 10)  # Width, Height of black background of the text
     GUI_TEXT_SCORE_SIZE = (21, 7)  # Width, Height of "Score" text
@@ -194,15 +207,6 @@ class LaserGatesConstants:
     GUI_Y_BASE = 117
     GUI_X_BASE = 16
     GUI_Y_SPACE_BETWEEN_PANELS = 21
-
-    INSTRUMENT_PANEL_ANIMATION_SPEED = 14 # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
-
-    ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
-    SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
-    DTIME_START_BLINKING_PERCENTAGE = 0.2 # The Field in the instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
-
-    SHIELD_LOSS_COL_SMALL = 1 # See is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
-    SHIELD_LOSS_COL_BIG = 6
 
     # -------- Debug constants --------
     DEBUG_ACTIVATE_MOUNTAINS_SCROLL = jnp.bool(True)
@@ -798,7 +802,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             key_normal_index, key_energy_pod, key_detonator, key_edge_case = jax.random.split(key_pick_type, 4)
 
             # Randomly choose one of the entities, except for the energy pod and detonator (see below)
-            picked_index = jax.random.randint(key_normal_index, shape=(), minval=0, maxval=6) # Default: minval=0, maxval=6
+            picked_index = jax.random.randint(key_normal_index, shape=(), minval=4, maxval=5) # Default: minval=0, maxval=6
             # If you want only one specific entity to spawn, change minval, maxval to:
             # Radar Mortar:     minval=0, maxval=1
             # Byte Bat:         minval=1, maxval=2
@@ -853,7 +857,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_x2 = jnp.where(new_x2 < 0 - self.consts.MOUNTAIN_SIZE[0], new_x1 + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE, new_x2)
         new_x3 = jnp.where(new_x3 < 0 - self.consts.MOUNTAIN_SIZE[0], new_x2 + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE, new_x3)
 
-        return MountainState(x1=new_x1, x2=new_x2, x3=new_x3, y=mountain_state.y)
+        return MountainState(x1=new_x1.astype(jnp.int32), x2=new_x2.astype(jnp.int32), x3=new_x3.astype(jnp.int32), y=mountain_state.y.astype(jnp.int32))
 
     @partial(jax.jit, static_argnums=(0,))
     def all_entities_step(self, game_state: LaserGatesState) -> EntitiesState:
@@ -2306,17 +2310,17 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         """Initialize game state"""
 
         initial_lower_mountains = MountainState(
-            x1=jnp.array(self.consts.LOWER_MOUNTAINS_START_X),
-            x2=jnp.array(self.consts.LOWER_MOUNTAINS_START_X + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE),
-            x3=jnp.array(self.consts.LOWER_MOUNTAINS_START_X + 2 * self.consts.MOUNTAIN_SIZE[0] + 2 * self.consts.MOUNTAINS_DISTANCE),
-            y=jnp.array(self.consts.LOWER_MOUNTAINS_Y)
+            x1=jnp.array(self.consts.LOWER_MOUNTAINS_START_X).astype(jnp.int32),
+            x2=jnp.array(self.consts.LOWER_MOUNTAINS_START_X + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE).astype(jnp.int32),
+            x3=jnp.array(self.consts.LOWER_MOUNTAINS_START_X + 2 * self.consts.MOUNTAIN_SIZE[0] + 2 * self.consts.MOUNTAINS_DISTANCE).astype(jnp.int32),
+            y=jnp.array(self.consts.LOWER_MOUNTAINS_Y).astype(jnp.int32)
         )
 
         initial_upper_mountains = MountainState(
-            x1=jnp.array(self.consts.UPPER_MOUNTAINS_START_X),
-            x2=jnp.array(self.consts.UPPER_MOUNTAINS_START_X + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE),
-            x3=jnp.array(self.consts.UPPER_MOUNTAINS_START_X + 2 * self.consts.MOUNTAIN_SIZE[0] + 2 * self.consts.MOUNTAINS_DISTANCE),
-            y=jnp.array(self.consts.UPPER_MOUNTAINS_Y)
+            x1=jnp.array(self.consts.UPPER_MOUNTAINS_START_X).astype(jnp.int32),
+            x2=jnp.array(self.consts.UPPER_MOUNTAINS_START_X + self.consts.MOUNTAIN_SIZE[0] + self.consts.MOUNTAINS_DISTANCE).astype(jnp.int32),
+            x3=jnp.array(self.consts.UPPER_MOUNTAINS_START_X + 2 * self.consts.MOUNTAIN_SIZE[0] + 2 * self.consts.MOUNTAINS_DISTANCE).astype(jnp.int32),
+            y=jnp.array(self.consts.UPPER_MOUNTAINS_Y).astype(jnp.int32)
         )
 
         initial_player_missile = PlayerMissileState(
@@ -2471,19 +2475,19 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         """
 
         reset_state = LaserGatesState(
-            player_x=jnp.array(self.consts.PLAYER_START_X).astype(jnp.float32),
-            player_y=jnp.array(self.consts.PLAYER_START_Y).astype(jnp.float32),
-            player_facing_direction=jnp.array(1),
+            player_x=jnp.array(self.consts.PLAYER_START_X).astype(jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y).astype(jnp.int32),
+            player_facing_direction=jnp.array(1, dtype=jnp.int32),
             player_missile=initial_player_missile,
-            animation_timer=jnp.array(0).astype(jnp.uint8),
+            animation_timer=jnp.array(0).astype(jnp.int32),
             entities=initial_entities,
             lower_mountains=initial_lower_mountains,
             upper_mountains=initial_upper_mountains,
-            score=jnp.array(0), # Start with no initial score
-            energy=jnp.array(self.consts.MAX_ENERGY), # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100
-            shields=jnp.array(self.consts.MAX_SHIELDS), # As the manual says, the Dante Dart starts with 24 shield units
-            dtime=jnp.array(self.consts.MAX_DTIME), # Same idea as energy.
-            scroll_speed=jnp.array(self.consts.SCROLL_SPEED),
+            scroll_speed=jnp.array(self.consts.SCROLL_SPEED).astype(jnp.float32),
+            score=jnp.array(0).astype(jnp.int32), # Start with no initial score
+            energy=jnp.array(self.consts.MAX_ENERGY).astype(jnp.int32), # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100
+            shields=jnp.array(self.consts.MAX_SHIELDS).astype(jnp.int32), # As the manual says, the Dante Dart starts with 24 shield units
+            dtime=jnp.array(self.consts.MAX_DTIME).astype(jnp.int32), # Same idea as energy.
             rng_key=key, # Pseudo random number generator seed key, based on current time and initial key used.
             step_counter=jnp.array(0),
         )
@@ -2584,19 +2588,19 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         new_rng_key, new_key = jax.random.split(state.rng_key)
 
         return_state = state._replace(
-            player_x=new_player_x.astype(jnp.float32),
-            player_y=new_player_y.astype(jnp.float32),
-            player_facing_direction=new_player_facing_direction,
-            animation_timer=new_player_animation_timer,
+            player_x=new_player_x.astype(jnp.int32),
+            player_y=new_player_y.astype(jnp.int32),
+            player_facing_direction=new_player_facing_direction.astype(jnp.int32),
             player_missile=new_player_missile_state,
+            animation_timer=new_player_animation_timer.astype(jnp.int32),
             entities=new_entities,
             lower_mountains=new_lower_mountains_state,
             upper_mountains=new_upper_mountains_state,
-            scroll_speed=new_scroll_speed.astype(jnp.int32),
-            score=new_score,
-            energy=new_energy,
-            shields=new_shields,
-            dtime=new_dtime,
+            scroll_speed=new_scroll_speed.astype(jnp.float32),
+            score=new_score.astype(jnp.int32),
+            energy=new_energy.astype(jnp.int32),
+            shields=new_shields.astype(jnp.int32),
+            dtime=new_dtime.astype(jnp.int32),
             rng_key=new_rng_key,
             step_counter=state.step_counter + 1
         )
@@ -2972,46 +2976,52 @@ class LaserGatesRenderer(JAXGameRenderer):
                 flipped: jnp.ndarray
         ) -> jnp.ndarray:
             W, H, C = sprite.shape
-            seed = jnp.asarray(x_position, dtype=jnp.int32)
 
-            # Indices over columns (x-axis)
+            # Column indices (x) and their corresponding y-positions
             xs = jnp.arange(W, dtype=jnp.int32)
-            # Generate ys starting from y_position incrementing by 1 per column
-            ys = xs + y_position.astype(jnp.int32)  # (W,) → y_position .. y_position+W-1
-            # If flipped, reverse ys array, otherwise keep it as is
+            ys = xs + jnp.asarray(y_position, jnp.int32)
             ys = jnp.where(flipped, ys[::-1], ys)
 
-            def sample_color(x):
-                # Create PRNG key based on seed + column index for deterministic color
-                key = jax.random.PRNGKey(seed + x)
-                # Sample random RGB color values between 0 and 255
-                rgb = jax.random.randint(key, (3,), 0, 256, dtype=jnp.int32)
-                alpha = jnp.array([255], dtype=jnp.int32)  # Fully opaque alpha channel
-                # Concatenate RGB with alpha channel (shape: (4,))
-                return jnp.concatenate([rgb, alpha], axis=0)
+            # Using hashes instead of PRNG key for better performance
+            def _splitmix32(u32):
+                x = u32.astype(jnp.uint32)
+                x = (x + jnp.uint32(0x9E3779B9)) & jnp.uint32(0xFFFFFFFF)
+                x = (x ^ (x >> 16)) * jnp.uint32(0x85EBCA6B) & jnp.uint32(0xFFFFFFFF)
+                x = (x ^ (x >> 13)) * jnp.uint32(0xC2B2AE35) & jnp.uint32(0xFFFFFFFF)
+                x = x ^ (x >> 16)
+                return x
 
-            # Generate colors for each column using vmap for vectorization
-            col_colors = jax.vmap(sample_color)(xs)  # shape: (W, C)
+            seed = jnp.asarray(x_position, jnp.uint32)
+            ux = (seed + xs.astype(jnp.uint32)) & jnp.uint32(0xFFFFFFFF)
 
-            # Freeze color boundaries (y positions) where color should not change
-            freeze_lower_border = 32
-            freeze_upper_border = 80  # Colors outside this range are frozen
+            r = (_splitmix32(ux) >> 24).astype(jnp.int32)
+            g = (_splitmix32(ux + jnp.uint32(0x9E37)) >> 24).astype(jnp.int32)
+            b = (_splitmix32(ux + jnp.uint32(0x2C1B)) >> 24).astype(jnp.int32)
 
-            # Choose freeze color depending on whether ys >= freeze_lower_border
-            frozen_color = col_colors[jnp.where(ys >= freeze_lower_border, freeze_upper_border, freeze_lower_border)]
+            rgb = jnp.stack([r, g, b], axis=1)  # (W, 3)
+            # rgb: (W, 3)
+            alpha = jnp.full((W, 1), 255, jnp.int32)  # always build
+            col_colors4 = jnp.concatenate([rgb, alpha], axis=1)  # (W, 4)
+            col_colors = col_colors4[:, :C]  # (W, C) with C∈{3,4}
 
-            # Create mask for columns where y is within freeze bounds (inclusive)
-            mask = jnp.logical_and(ys >= freeze_lower_border, ys <= freeze_upper_border)  # shape: (W,)
-            # Use dynamic color where mask is True, else use frozen_color
-            final_cols = jnp.where(
-                mask[:, None],  # broadcast mask to (W, 1)
-                col_colors,  # dynamic colors
-                frozen_color  # frozen color for columns outside mask
-            )
+            # Freeze logic (y positions where colors remain constant)
+            lower = jnp.int32(32)
+            upper = jnp.int32(80)
 
-            # Broadcast final colors over height dimension to get full (H, W, C) image
-            color_grid = jnp.broadcast_to(final_cols[:, None, :], (W, H, C))
+            # Anchor colors from column 32 and 80 (no clamping/mods)
+            anchor_low = col_colors[lower]  # (C,)
+            anchor_up = col_colors[upper]  # (C,)
 
+            above_lower = ys >= lower
+            within_band = jnp.logical_and(ys >= lower, ys <= upper)
+
+            # For columns outside the band: if y >= 32 -> anchor 80, else anchor 32
+            frozen_color = jnp.where(above_lower[:, None], anchor_up[None, :], anchor_low[None, :])  # (W, C)
+            # Inside the band: dynamic column color
+            final_cols = jnp.where(within_band[:, None], col_colors, frozen_color)  # (W, C)
+
+            # Broadcast correctly to (H, W, C) and cast to sprite.dtype
+            color_grid = jnp.broadcast_to(final_cols[:, None, :], (W, H, C)).astype(sprite.dtype)
             return color_grid
 
         # Despawn earlier
@@ -3147,11 +3157,15 @@ class LaserGatesRenderer(JAXGameRenderer):
         )
 
         def render_densepack_parts(raster):
-            def body(i, r):
-                part_y = dp_upmost_y + i * dp_height
-                return jru.render_at(r, dp_x, part_y, all_sprites[i])
+            idx = jnp.arange(self.consts.DENSEPACK_NUMBER_OF_PARTS, dtype=jnp.int32)
+            ys = dp_upmost_y + idx * dp_height
 
-            return jax.lax.fori_loop(0, self.consts.DENSEPACK_NUMBER_OF_PARTS, body, raster)
+            def step(r, args):
+                i, y = args
+                return jru.render_at(r, dp_x, y, all_sprites[i]), None
+
+            raster_out, _ = jax.lax.scan(step, raster, (idx, ys))
+            return raster_out
 
         raster = jnp.where(
             jnp.logical_and(dp_state.is_in_current_event, dp_state.is_alive),
