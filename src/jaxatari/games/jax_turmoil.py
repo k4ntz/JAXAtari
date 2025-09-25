@@ -14,20 +14,47 @@ import jaxatari.rendering.jax_rendering_utils as jr
 class TurmoilConstants(NamedTuple):
     # pre-defined movement lanes
     VERTICAL_LANE = 76 # x value
-    HORIZONTAL_LANES = [40, 61, 82, 103, 124, 145, 166] # y values
+    HORIZONTAL_LANES = [37, 58, 79, 100, 121, 142, 163] # y values
     ENEMY_LEFT_SPAWN_X = 2
     ENEMY_RIGHT_SPAWN_X = 150
 
-    # player
-    PLAYER_SPEED = 10
-    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[3]) # (starting_x_pos, starting_y_pos)
-    PLAYER_STEP_COOLDOWN = (0, 20) # (x cooldown, y cooldown)
-    PLAYER_STEP = (1, 21) # (x_step_size, y_step_size)
-
     # sizes
+    VERTICAL_LANE_GAP_SIZE = 17
     PLAYER_SIZE = (8, 11) # (width, height)
     BULLET_SIZE = (8, 3)
-    ENEMY_SIZE = (8, 8)
+    ENEMY_SIZE = (
+        (8, 5), # lines
+        (8, 10), # arrow
+        (8, 13), # tank
+        (8, 11), # L
+        (7, 13), # T
+        (8, 7), # rocket
+        (8, 13), # triangle_hollow
+        (8, 11), # x_shape
+        (4, 5), # sonic boom
+    )
+    PRIZE_SIZE = (8, 9)
+
+    # y offsets for finding the middle of the lane for each sprite
+    Y_OFFSET_PLAYER = (VERTICAL_LANE_GAP_SIZE - PLAYER_SIZE[1]) // 2
+    Y_OFFSET_PRIZE = (VERTICAL_LANE_GAP_SIZE - PRIZE_SIZE[1]) // 2
+    Y_OFFSET_ENEMY = (
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[0][1]) // 2, # lines
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[1][1]) // 2, # arrow
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[2][1]) // 2, # tank
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[3][1]) // 2, # L
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[4][1]) // 2, # T
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[5][1]) // 2, # rocket
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[6][1]) // 2, # triangle_hollow
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[7][1]) // 2, # x_shape
+        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[8][1]) // 2, # sonic boom
+    )
+
+    # player
+    PLAYER_SPEED = 10
+    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[3] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
+    PLAYER_STEP_COOLDOWN = (0, 20) # (x cooldown, y cooldown)
+    PLAYER_STEP = (1, 21) # (x_step_size, y_step_size)
 
     # directions
     FACE_LEFT = -1
@@ -56,7 +83,7 @@ class TurmoilConstants(NamedTuple):
         1, # tank
         1,  # L
         1, # T
-        1, # rockey
+        1, # rocket
         1, # triangle_hollow
         1, # x_shape
         5, # sonic boom
@@ -648,7 +675,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                         self.consts.ENEMY_LEFT_SPAWN_X,
                         self.consts.ENEMY_RIGHT_SPAWN_X
                     ), # X
-                    jnp.take(jnp.array(self.consts.HORIZONTAL_LANES), lane), #Y
+                    jnp.take(jnp.array(self.consts.HORIZONTAL_LANES), lane) + self.consts.Y_OFFSET_PRIZE, #Y
                     1, # active
                     self.consts.PRIZE_TO_BOOM_TIME, # boom_timer
                     direction
@@ -755,9 +782,17 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 enemy[:, 5]
             )
 
+            # update x
+            new_y = jnp.where(
+                change_to_tank, # remove arrow offset and add tank offset
+                enemy[:, 2] - jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), 1) + jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), 2),
+                enemy[:, 2]
+            )
+
             # update enemy
             new_enemy = enemy.at[:, 0].set(new_type)
             new_enemy = new_enemy.at[:, 5].set(new_direction)
+            new_enemy = new_enemy.at[:, 2].set(new_y)
 
             return new_enemy
 
@@ -781,7 +816,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                     jnp.array([
                         8, # type sonic boom
                         state.prize[1], # x
-                        state.prize[2], # y
+                        state.prize[2] - self.consts.Y_OFFSET_PRIZE + jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), 8), # y
                         1, # active
                         jnp.take(jnp.array(self.consts.ENEMY_SPEED), 8), # speed
                         state.prize[5], # direction
@@ -825,7 +860,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                         self.consts.ENEMY_LEFT_SPAWN_X,
                         self.consts.ENEMY_RIGHT_SPAWN_X
                     ), # X
-                    jnp.take(jnp.array(self.consts.HORIZONTAL_LANES), lane), #Y
+                    jnp.take(jnp.array(self.consts.HORIZONTAL_LANES), lane) + jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), enemy_type), #Y
                     1, # active
                     jnp.take(jnp.array(self.consts.ENEMY_SPEED), enemy_type), # speed
                     direction,
@@ -907,7 +942,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         ey = state.enemy[:, 2]
         active = state.enemy[:, 3]
 
-        w, h = self.consts.ENEMY_SIZE
+        w, h = (8, 13) # max values from self.consts.ENEMY_SIZE
 
         hit = (
             (active == 1) &
