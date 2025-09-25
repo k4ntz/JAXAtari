@@ -126,9 +126,9 @@ class KeystoneKapersConstants(NamedTuple):
     # Thief configuration
     THIEF_WIDTH: int = 8
     THIEF_HEIGHT: int = 16
-    THIEF_BASE_SPEED: float = 1.0
-    THIEF_SPEED_SCALE: float = 0.10
-    THIEF_MAX_SPEED: float = 3.0
+    THIEF_BASE_SPEED: float = 0.75  # Slower than player (player speed is 2.0)
+    THIEF_SPEED_SCALE: float = 0.08  # 8% increase per level
+    THIEF_MAX_SPEED: float = 1.8  # Slightly less than player's max speed
 
     # Obstacle configurations
     CART_WIDTH: int = 12
@@ -160,11 +160,11 @@ class KeystoneKapersConstants(NamedTuple):
     BASE_TIMER: int = 3600  # 60 seconds at 60fps
     TIMER_REDUCTION_PER_LEVEL: int = 300  # 5 seconds
     COLLISION_PENALTY: int = 300  # 5 seconds
-    CATCH_THIEF_POINTS: int = 3000
-    TIME_BONUS_MULTIPLIER: int = 50
-    ITEM_POINTS: int = 100
-    JUMP_POINTS: int = 50
-    EXTRA_LIFE_THRESHOLD: int = 10000
+    CATCH_THIEF_POINTS: int = 0  # Base points, actual calculation is time left * 100
+    TIME_BONUS_MULTIPLIER: int = 100  # Updated to match spec (time left * 100)
+    ITEM_POINTS: int = 50  # Updated to match spec (50 points per collectible)
+    JUMP_POINTS: int = 0  # No points for jumping according to spec
+    EXTRA_LIFE_THRESHOLD: int = 10000  # Extra life every 10,000 points
 
     # Difficulty scaling
     OBSTACLE_SPAWN_SCALE: float = 0.12
@@ -702,17 +702,33 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         """Update thief state with AI behavior for building traversal."""
         thief = state.thief
 
-        # Level-scaled speed
-        level_speed = self.consts.THIEF_BASE_SPEED * (
+        # Level-scaled speed (use integer speed to ensure movement)
+        # Convert to integer pixels per frame for consistent movement
+        level_speed_float = self.consts.THIEF_BASE_SPEED * (
             1.0 + self.consts.THIEF_SPEED_SCALE * state.level
         )
-        level_speed = jnp.minimum(level_speed, self.consts.THIEF_MAX_SPEED)
+        level_speed_float = jnp.minimum(level_speed_float, self.consts.THIEF_MAX_SPEED)
+
+        # Use a counter to accumulate fractional movement
+        # For every frame, add the float speed to an accumulator
+        # When accumulator reaches 1.0 or more, move 1 pixel
+        # Store fractional part for next frame
+        pixel_move = jnp.floor(level_speed_float).astype(jnp.int32)
+
+        # Always move at least 1 pixel every few frames
+        # For very slow speeds below 1, move 1 pixel every N frames
+        # where N is inverse of speed
+        move_this_frame = ((state.step_counter % jnp.maximum(1, jnp.floor(1.0/level_speed_float))) == 0)
+        final_move = jnp.maximum(pixel_move, jnp.where(move_this_frame, 1, 0))
+
+        # For debugging
+        level_speed = level_speed_float
 
         # Thief AI: Real game behavior - moves horizontally, teleports up at building edges
         # Pattern: right->up->left->up->repeat (no escalator usage)
 
-        # Move horizontally in current direction
-        new_x = thief.x + level_speed * thief.direction
+        # Move horizontally in current direction - use integer movement
+        new_x = thief.x + final_move * thief.direction
 
         # Check if reached building edges
         hit_left_edge = new_x <= 0
@@ -746,7 +762,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             x=new_x,
             y=new_y,
             floor=new_floor,
-            speed=level_speed,
+            speed=level_speed_float,  # Store the float speed for next frame calculation
             direction=new_direction,
             escaped=escaped
         )
@@ -1196,41 +1212,100 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_timer = jnp.maximum(state.timer - 1 - timer_penalty, 0)
 
         # Update score
-        thief_points = jax.lax.select(thief_caught, self.consts.CATCH_THIEF_POINTS, 0)
+        # Calculate time bonus: remaining time * 100 when thief is caught
         time_bonus = jax.lax.select(
             thief_caught,
-            new_timer * self.consts.TIME_BONUS_MULTIPLIER // 60,  # Convert to time bonus
+            (new_timer // 60) * self.consts.TIME_BONUS_MULTIPLIER,  # Convert frames to seconds, then multiply by 100
             0
         )
+        # Item points: 50 points per collected item
         item_points = items_collected * self.consts.ITEM_POINTS
-        jump_points = jax.lax.select(
-            jnp.logical_and(new_player.is_jumping, jnp.logical_not(state.player.is_jumping)),
-            self.consts.JUMP_POINTS,
-            0
-        )
+        # No jump points according to the specification
+        jump_points = 0
 
-        score_increase = thief_points + time_bonus + item_points + jump_points
+        score_increase = time_bonus + item_points + jump_points
         new_score = state.score + score_increase
+
+        # Check if player earned extra life (every 10,000 points)
+        # Calculate how many thresholds were crossed with this score increase
+        old_thresholds_crossed = state.score // self.consts.EXTRA_LIFE_THRESHOLD
+        new_thresholds_crossed = new_score // self.consts.EXTRA_LIFE_THRESHOLD
+        extra_lives_earned = jnp.maximum(0, new_thresholds_crossed - old_thresholds_crossed)
+
+        # Award extra lives
+        lives_with_bonus = jnp.minimum(9, state.lives + extra_lives_earned)
 
         # Check game end conditions
         time_up = new_timer <= 0
         thief_escaped = new_thief.escaped
         level_complete = thief_caught
 
-        # Update lives
+        # Update lives - subtract life if lost, but also include any earned bonus lives
         life_lost = jnp.logical_or(time_up, thief_escaped)
-        new_lives = jax.lax.select(life_lost, state.lives - 1, state.lives)
+        lives_after_penalty = jax.lax.select(life_lost, state.lives - 1, state.lives)
 
-        # Game over condition
-        game_over = jnp.logical_or(new_lives <= 0, level_complete)
+        # Final lives value considers both bonuses and penalties
+        new_lives = jax.lax.select(life_lost,
+                                  jnp.minimum(9, lives_after_penalty + extra_lives_earned),
+                                  lives_with_bonus)
+
+        # Level progression when thief is caught
+        new_level = jax.lax.select(thief_caught, state.level + 1, state.level)
+        
+        # Reset level when ANY of these conditions occur:
+        # 1. Thief is caught (advance to next level)
+        # 2. Life is lost (time up or thief escaped) - restart current level
+        should_reset_level = jnp.logical_or(thief_caught, life_lost)
+        
+        # When thief is caught, reset thief to starting position and reset timer
+        thief_reset_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
+        thief_reset_y = self.consts.FLOOR_2_Y
+        thief_reset_floor = 1  # Middle floor
+        
+        # Reset thief state when level resets (either caught or life lost)
+        final_thief = ThiefState(
+            x=jax.lax.select(should_reset_level, jnp.array(thief_reset_x), new_thief.x),
+            y=jax.lax.select(should_reset_level, jnp.array(thief_reset_y), new_thief.y),
+            floor=jax.lax.select(should_reset_level, jnp.array(thief_reset_floor), new_thief.floor),
+            speed=jax.lax.select(should_reset_level, 
+                                jnp.array(self.consts.THIEF_BASE_SPEED * (1.0 + new_level * self.consts.THIEF_SPEED_SCALE)), 
+                                new_thief.speed),
+            direction=jax.lax.select(should_reset_level, jnp.array(1), new_thief.direction),
+            escaped=jax.lax.select(should_reset_level, jnp.array(False), new_thief.escaped)
+        )
+        
+        # Reset timer when level resets
+        final_timer = jax.lax.select(should_reset_level, self.consts.BASE_TIMER, new_timer)
+        
+        # Reset player position when level resets
+        player_reset_x = self.consts.TOTAL_BUILDING_WIDTH - 78  # Near right edge
+        final_player = PlayerState(
+            x=jax.lax.select(should_reset_level, jnp.array(player_reset_x), new_player.x),
+            y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y), new_player.y),
+            floor=jax.lax.select(should_reset_level, jnp.array(0), new_player.floor),
+            vel_x=jax.lax.select(should_reset_level, jnp.array(0), new_player.vel_x),
+            vel_y=jax.lax.select(should_reset_level, jnp.array(0), new_player.vel_y),
+            is_jumping=jax.lax.select(should_reset_level, jnp.array(False), new_player.is_jumping),
+            is_crouching=jax.lax.select(should_reset_level, jnp.array(False), new_player.is_crouching),
+            jump_timer=jax.lax.select(should_reset_level, jnp.array(0), new_player.jump_timer),
+            jump_start_y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y), new_player.jump_start_y),
+            on_escalator=jax.lax.select(should_reset_level, jnp.array(0), new_player.on_escalator),
+            escalator_progress=jax.lax.select(should_reset_level, jnp.array(0.0), new_player.escalator_progress),
+            is_on_elevator=jax.lax.select(should_reset_level, jnp.array(False), new_player.is_on_elevator),
+            in_elevator=jax.lax.select(should_reset_level, jnp.array(False), new_player.in_elevator)
+        )
+
+        # Game over condition - only end game when lives are depleted, not when level is complete
+        # In Keystone Kapers, catching the thief should advance to next level, not end the game
+        game_over = new_lives <= 0  # Only end game when no lives left
 
         # Deactivate collected items
         new_item_active = state.item_active  # TODO: Implement item collection logic
 
         # Create new state with camera update
         new_state = GameState(
-            player=new_player,
-            thief=new_thief,
+            player=final_player,
+            thief=final_thief,
             obstacles=new_obstacles,
             elevator=new_elevator,
 
@@ -1239,8 +1314,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
             score=new_score,
             lives=new_lives,
-            level=state.level,  # Level progression happens in reset for next level
-            timer=new_timer,
+            level=new_level,  # Level increases when thief is caught
+            timer=final_timer,
             step_counter=state.step_counter + 1,
 
             item_x=state.item_x,
@@ -1409,10 +1484,9 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: GameState) -> bool:
         """Check if the episode is finished."""
-        return jnp.logical_or(
-            state.game_over,
-            jnp.logical_or(state.timer <= 0, state.thief.escaped)
-        )
+        # Only end when all lives are depleted
+        # Don't end when thief is caught or escapes - that should just reset the level
+        return state.game_over  # game_over is True only when lives <= 0
 
     def render(self, state: GameState) -> jnp.ndarray:
         """Render the current game state."""
@@ -1482,6 +1556,31 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 black_digits[digit] = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([0, 0, 0], dtype=jnp.uint8)
 
         sprites['black_digits'] = black_digits
+
+        # Load white digit sprites for score display (all digits 0-9)
+        # Use exactly the same approach as the black digits
+        white_digits = {}
+
+        for digit in range(10):  # Load all digits 0-9
+            try:
+                digit_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'white_{digit}.npy')
+                digit_sprite_rgba = jr.loadFrame(digit_sprite_path)
+
+                # Handle RGBA exactly the same way as black digits
+                rgb_data = digit_sprite_rgba[:, :, :3]
+                alpha_data = digit_sprite_rgba[:, :, 3:4]
+                alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+                white_background = jnp.ones_like(rgb_data) * 255
+
+                white_digits[digit] = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                                     white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                print(f"Loaded white digit {digit}: {white_digits[digit].shape}")
+            except Exception as e:
+                print(f"Failed to load white digit {digit}: {e}")
+                # Fallback to simple white rectangle for missing digits
+                white_digits[digit] = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([255, 255, 255], dtype=jnp.uint8)
+
+        sprites['white_digits'] = white_digits
 
         # Load the Activision logo sprite
         try:
@@ -2121,6 +2220,53 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 draw_sprite(game_area, kop_life_sprite, life_x, life_y),
                 game_area
             )
+
+        # Position timer to the right of lives - move this calculation earlier
+        timer_start_x = life_start_x + (3 * (life_sprite_width + 2)) + 10
+        timer_y = life_y
+        
+        # Score display above the timer - white digits showing current score
+        white_digits = self.sprites['white_digits']
+        
+        # Use the actual score from state
+        score_value = jnp.minimum(999999, state.score)  # Cap at 999,999 for display
+        
+        # Extract digits from actual score - let's show 4 digits for better visibility
+        score_thousands = (score_value // 1000) % 10
+        score_hundreds = (score_value // 100) % 10
+        score_tens = (score_value // 10) % 10
+        score_units = score_value % 10
+        
+        # Position score directly above the timer
+        score_start_x = timer_start_x - 10  # Offset a bit to the left
+        score_y = timer_y - 10  # Position above timer
+        
+        # Helper function to draw score digit - exact same pattern as the timer function
+        def draw_score_digit(game_area, digit_value, x, y):
+            # Use JAX select to choose appropriate sprite for each digit 0-9
+            result_game_area = game_area
+
+            # Check each digit 0-9 and draw if it matches - exact same as timer
+            for digit in range(10):
+                digit_matches = digit_value == digit
+                digit_sprite = white_digits[digit]
+                result_game_area = jnp.where(
+                    digit_matches,
+                    draw_sprite(result_game_area, digit_sprite, x, y),
+                    result_game_area
+                )
+
+            return result_game_area
+
+        # Draw score digits - show 4 digits
+        digit_width = 6  # Approximate digit width
+        digit_spacing = 1  # Space between digits
+        
+        # Draw all 4 digits (thousands, hundreds, tens, units)
+        game_area = draw_score_digit(game_area, score_thousands, score_start_x, score_y)
+        game_area = draw_score_digit(game_area, score_hundreds, score_start_x + (digit_width + digit_spacing), score_y)
+        game_area = draw_score_digit(game_area, score_tens, score_start_x + 2 * (digit_width + digit_spacing), score_y)
+        game_area = draw_score_digit(game_area, score_units, score_start_x + 3 * (digit_width + digit_spacing), score_y)
 
         # Countdown timer (to the right of lives) - black digits counting down from 50 to 0
         black_digits = self.sprites['black_digits']
