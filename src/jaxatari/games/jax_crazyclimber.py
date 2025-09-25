@@ -635,16 +635,15 @@ class JaxCrazyClimber(JaxEnvironment):
         lvl2_cam_after = jnp.clip(lvl2_start_y - (self.consts.HEIGHT // 2), 0, self.consts.BUILDING_HEIGHT - self.consts.HEIGHT)
         base_cam_after = jnp.where(transition_to_level2, lvl2_cam_after, new_camera_y)
 
-        # Recompute death timer and respawn based on merged collision flags
+        # Immediate respawn on hazard contact: if life_lost and not in respawn grace, go to start now
+        should_respawn = life_lost
+        new_lives = jnp.where(should_respawn, state.player_lives - 1, state.player_lives)
+        # Keep a visual "crushed" flash using death_timer while already respawned
         new_death_timer = jnp.where(
-            death_started,
+            should_respawn,
             jnp.array(60, dtype=jnp.int32),
             jnp.maximum(state.death_timer - 1, 0)
         )
-
-        # Respawn only when the death timer expires
-        should_respawn = jnp.logical_and(state.death_timer == 1, life_lost)
-        new_lives = jnp.where(should_respawn, state.player_lives - 1, state.player_lives)
 
         center_x = jnp.array(self.consts.WIDTH // 2, dtype=jnp.int32)
         respawn_x = jnp.where(should_respawn, center_x, base_x_after)
@@ -820,6 +819,86 @@ class CrazyClimberRenderer(JAXGameRenderer):
         # Pre-generate backgrounds for both levels
         self.background_level1 = self._generate_background(level=1)
         self.background_level2 = self._generate_background(level=2)
+        # Optional: load actor sprites if provided as RGBA .npy frames
+        self.actor_frames = None  # jnp.ndarray of shape (N, H, W, 4)
+        self.actor_flip_offset = jnp.array([0, 0])
+        self._try_load_actor_sprites()
+
+        # HUD digit sprites for score rendering (reuse existing digits assets)
+        self.hud_digits = None  # (10, H, W, 4) colored to HUD color
+        self._try_load_hud_digits()
+
+    def _try_load_actor_sprites(self):
+        """Attempt to load actor sprites from sprites/crazyclimber directory.
+
+        Expected layout (mirrors other games in this repo):
+          src/jaxatari/games/sprites/crazyclimber/
+            0.npy, 1.npy, ... each an (H, W, 4) RGBA numpy array
+        """
+        try:
+            base_dir = os.path.dirname(__file__)
+            sprites_dir = os.path.join(base_dir, "sprites", "crazyclimber")
+            if not os.path.isdir(sprites_dir):
+                return
+            frames = []
+            # Load sequentially numbered frames while they exist
+            for i in range(256):
+                path = os.path.join(sprites_dir, f"{i}.npy")
+                if not os.path.exists(path):
+                    if i == 0:
+                        # No frames at all
+                        return
+                    break
+                arr = jnp.load(path)
+                # Ensure RGBA
+                if arr.ndim != 3 or arr.shape[2] != 4:
+                    # Try to upgrade RGB to RGBA by adding full alpha
+                    if arr.ndim == 3 and arr.shape[2] == 3:
+                        alpha = jnp.full(arr.shape[:2] + (1,), 255, dtype=arr.dtype)
+                        arr = jnp.concatenate([arr, alpha], axis=2)
+                    else:
+                        continue
+                frames.append(arr.astype(jnp.uint8))
+
+            if not frames:
+                return
+            # Pad to uniform size and compute flip offsets
+            padded, flip_offsets = jr.pad_to_match(frames)
+            # Use the first flip offset (they are equalised by pad_to_match)
+            self.actor_flip_offset = flip_offsets[0] if flip_offsets else jnp.array([0, 0])
+            self.actor_frames = jnp.stack(padded, axis=0)
+        except Exception:
+            # Fail silently and keep procedural fallback
+            self.actor_frames = None
+
+    def _try_load_hud_digits(self):
+        """Load digit sprites and tint them to HUD color for score display.
+
+        Tries common locations under sprites/*/digits/{0..9}.npy; falls back silently if missing.
+        """
+        try:
+            base_dir = os.path.dirname(__file__)
+            candidate_paths = [
+                os.path.join(base_dir, "sprites", "crazyclimber", "digits", "{}" + ".npy"),
+                os.path.join(base_dir, "sprites", "seaquest", "digits", "{}" + ".npy"),
+                os.path.join(base_dir, "sprites", "pong", "digits", "{}" + ".npy"),
+            ]
+            digits = None
+            for pat in candidate_paths:
+                try:
+                    d = jr.load_and_pad_digits(pat, num_chars=10)
+                    digits = d
+                    break
+                except Exception:
+                    continue
+            if digits is None:
+                return
+            hud_color = jnp.array([128, 255, 128], dtype=jnp.uint8)
+            # Tint digits by setting rgb where alpha>0
+            colored = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, hud_color, 0))
+            self.hud_digits = colored
+        except Exception:
+            self.hud_digits = None
     
     def _generate_background(self, level=1):
         WIDTH = self.consts.WIDTH
@@ -962,51 +1041,163 @@ class CrazyClimberRenderer(JAXGameRenderer):
             0,
             self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
         )
-        
-        skin_color = jnp.array([220, 180, 140], dtype=jnp.uint8)
-        face_color = jnp.array([230, 190, 150], dtype=jnp.uint8)
-        shirt_color = jnp.array([200, 50, 50], dtype=jnp.uint8)
-        pants_color = jnp.array([80, 80, 160], dtype=jnp.uint8)
-        hair_color = jnp.array([100, 70, 40], dtype=jnp.uint8)
-        shoe_color = jnp.array([60, 40, 20], dtype=jnp.uint8)
-        eye_color = jnp.array([50, 50, 50], dtype=jnp.uint8)
-        
-        player_patch = jnp.full((self.consts.PLAYER_SIZE[1], self.consts.PLAYER_SIZE[0], 3), 
-                               skin_color, dtype=jnp.uint8)
-        
-        if self.consts.PLAYER_SIZE[1] >= 3 and self.consts.PLAYER_SIZE[0] >= 6:
-            player_patch = player_patch.at[0:2, 1:-1].set(hair_color)
-            player_patch = player_patch.at[1:3, 0].set(hair_color)
-            player_patch = player_patch.at[1:3, -1].set(hair_color)
-        
-        if self.consts.PLAYER_SIZE[1] >= 4 and self.consts.PLAYER_SIZE[0] >= 6:
-            player_patch = player_patch.at[1:4, 1:-1].set(face_color)
-            
-        if self.consts.PLAYER_SIZE[1] >= 3 and self.consts.PLAYER_SIZE[0] >= 8:
-            player_patch = player_patch.at[2:3, 2:3].set(eye_color)
-            player_patch = player_patch.at[2:3, -3:-2].set(eye_color)
-        
-        shirt_start_y = 4
-        shirt_end_y = 9
-        if shirt_end_y <= self.consts.PLAYER_SIZE[1]:
-            player_patch = player_patch.at[shirt_start_y:shirt_end_y, 1:-1].set(shirt_color)
-        
-        if self.consts.PLAYER_SIZE[0] >= 6 and shirt_end_y <= self.consts.PLAYER_SIZE[1]:
-            player_patch = player_patch.at[shirt_start_y:shirt_end_y, 0].set(skin_color)
-            player_patch = player_patch.at[shirt_start_y:shirt_end_y, -1].set(skin_color)
-        
-        pants_start_y = 9
-        pants_end_y = self.consts.PLAYER_SIZE[1] - 2
-        if pants_start_y < pants_end_y:
-            player_patch = player_patch.at[pants_start_y:pants_end_y, 1:-1].set(pants_color)
-            player_patch = player_patch.at[pants_start_y:pants_end_y, 0].set(pants_color)
-            player_patch = player_patch.at[pants_start_y:pants_end_y, -1].set(pants_color)
-        
-        if self.consts.PLAYER_SIZE[1] >= 2:
-            shoe_start_y = self.consts.PLAYER_SIZE[1] - 2
-            player_patch = player_patch.at[shoe_start_y:, :].set(shoe_color)
-        
-        raster = jax.lax.dynamic_update_slice(raster, player_patch, (safe_y, safe_x, 0))
+        # If actor sprites are available, render them with alpha blending; otherwise fallback to procedural patch
+        if self.actor_frames is not None:
+            # Pick a simple animation frame based on step_counter
+            idx = (state.step_counter // 8) % self.actor_frames.shape[0]
+            sprite_frame = jr.get_sprite_frame(self.actor_frames, idx, loop=True)
+            raster = jr.render_at(raster, safe_x, safe_y, sprite_frame, flip_offset=self.actor_flip_offset)
+        else:
+            # Procedural fallback
+            skin_color = jnp.array([220, 180, 140], dtype=jnp.uint8)
+            face_color = jnp.array([230, 190, 150], dtype=jnp.uint8)
+            shirt_color = jnp.array([200, 50, 50], dtype=jnp.uint8)
+            pants_color = jnp.array([80, 80, 160], dtype=jnp.uint8)
+            hair_color = jnp.array([100, 70, 40], dtype=jnp.uint8)
+            shoe_color = jnp.array([60, 40, 20], dtype=jnp.uint8)
+            eye_color = jnp.array([50, 50, 50], dtype=jnp.uint8)
+            player_patch = jnp.full((self.consts.PLAYER_SIZE[1], self.consts.PLAYER_SIZE[0], 3), 
+                                   skin_color, dtype=jnp.uint8)
+            if self.consts.PLAYER_SIZE[1] >= 3 and self.consts.PLAYER_SIZE[0] >= 6:
+                player_patch = player_patch.at[0:2, 1:-1].set(hair_color)
+                player_patch = player_patch.at[1:3, 0].set(hair_color)
+                player_patch = player_patch.at[1:3, -1].set(hair_color)
+            if self.consts.PLAYER_SIZE[1] >= 4 and self.consts.PLAYER_SIZE[0] >= 6:
+                player_patch = player_patch.at[1:4, 1:-1].set(face_color)
+            if self.consts.PLAYER_SIZE[1] >= 3 and self.consts.PLAYER_SIZE[0] >= 8:
+                player_patch = player_patch.at[2:3, 2:3].set(eye_color)
+                player_patch = player_patch.at[2:3, -3:-2].set(eye_color)
+            shirt_start_y = 4
+            shirt_end_y = 9
+            if shirt_end_y <= self.consts.PLAYER_SIZE[1]:
+                player_patch = player_patch.at[shirt_start_y:shirt_end_y, 1:-1].set(shirt_color)
+            if self.consts.PLAYER_SIZE[0] >= 6 and shirt_end_y <= self.consts.PLAYER_SIZE[1]:
+                player_patch = player_patch.at[shirt_start_y:shirt_end_y, 0].set(skin_color)
+                player_patch = player_patch.at[shirt_start_y:shirt_end_y, -1].set(skin_color)
+            pants_start_y = 9
+            pants_end_y = self.consts.PLAYER_SIZE[1] - 2
+            if pants_start_y < pants_end_y:
+                player_patch = player_patch.at[pants_start_y:pants_end_y, 1:-1].set(pants_color)
+                player_patch = player_patch.at[pants_start_y:pants_end_y, 0].set(pants_color)
+                player_patch = player_patch.at[pants_start_y:pants_end_y, -1].set(pants_color)
+            if self.consts.PLAYER_SIZE[1] >= 2:
+                shoe_start_y = self.consts.PLAYER_SIZE[1] - 2
+                player_patch = player_patch.at[shoe_start_y:, :].set(shoe_color)
+            raster = jax.lax.dynamic_update_slice(raster, player_patch, (safe_y, safe_x, 0))
+
+        # --- JAX overlays: animated window shutters and falling objects ---
+        H = self.consts.HEIGHT
+        W = self.consts.WIDTH
+        # grid for mask-based drawing
+        xx, yy = jnp.meshgrid(jnp.arange(W), jnp.arange(H), indexing='xy')
+
+        # Animated shutters
+        interval = jnp.array(self.consts.WINDOW_ANIM_INTERVAL, dtype=jnp.int32)
+        duration = jnp.array(self.consts.WINDOW_ANIM_DURATION, dtype=jnp.int32)
+        max_active = int(self.consts.WINDOW_ANIM_MAX_ACTIVE)
+        rows = jnp.array(self.consts.BUILDING_ROWS, dtype=jnp.int32)
+        cols_per = jnp.array(self.consts.BUILDING_COLS, dtype=jnp.int32)
+        margin = jnp.array(self.consts.MARGINS, dtype=jnp.int32)
+        b_width = jnp.array(self.consts.BUILDING_WIDTH, dtype=jnp.int32)
+        gap = jnp.array(self.consts.GAP_WIDTH, dtype=jnp.int32)
+        bottom_margin = jnp.array(self.consts.BOTTOM_MARGIN, dtype=jnp.int32)
+        row_h = jnp.array(self.consts.ROW_HEIGHT, dtype=jnp.int32)
+        w_w = jnp.array(self.consts.WINDOW_WIDTH, dtype=jnp.int32)
+        w_h = jnp.array(self.consts.WINDOW_HEIGHT, dtype=jnp.int32)
+        spacing = jnp.array(4, dtype=jnp.int32)
+        total_w_width = cols_per * w_w + (cols_per - 1) * spacing
+        left_pad = (b_width - total_w_width) // 2
+        building1_start = margin
+        building2_start = building1_start + b_width + gap
+        single_start = (jnp.array(self.consts.WIDTH, dtype=jnp.int32) - b_width) // 2
+
+        bcolor_level1 = jnp.array(list(self.consts.BUILDING_COLOR), dtype=jnp.uint8)
+        bcolor_level2 = jnp.array(list(self.consts.SINGLE_BUILDING_COLOR), dtype=jnp.uint8)
+        bcolor = jnp.where((state.level == 1)[... , None], bcolor_level1, bcolor_level2)
+
+        def draw_rect_mask(r, x0, y0, ww, hh, color):
+            # Masks in viewport coords
+            mx = (xx >= x0) & (xx < (x0 + ww))
+            my = (yy >= y0) & (yy < (y0 + hh))
+            mask = (mx & my)[..., None]
+            color_b = jnp.broadcast_to(color, (H, W, 3))
+            return jnp.where(mask, color_b, r)
+
+        # For each active group, compute window rect and shutter height
+        for k in range(max_active):
+            ag = (state.step_counter // interval) - jnp.array(k, dtype=jnp.int32)
+            phase = state.step_counter - (ag * interval)
+            active = (ag >= 0) & (phase >= 0) & (phase < (2 * duration))
+            # f in [0,1] then [1,0]
+            f_closing = phase.astype(jnp.float32) / duration.astype(jnp.float32)
+            f_opening = 1.0 - ((phase - duration).astype(jnp.float32) / duration.astype(jnp.float32))
+            f = jnp.where(phase < duration, f_closing, f_opening)
+            # height in pixels
+            h = (w_h.astype(jnp.float32) * f).astype(jnp.int32)
+            # choose row/col/building
+            row_idx = (ag * 37 + 11) % rows
+            building_idx_lvl1 = (ag * 53 + 7) % jnp.array(2, dtype=jnp.int32)
+            building_idx = jnp.where(state.level == 1, building_idx_lvl1, jnp.array(0, dtype=jnp.int32))
+            col_idx = (ag * 97 + 3) % cols_per
+            base_x_lvl1 = jnp.where(building_idx == 0, building1_start, building2_start)
+            base_x = jnp.where(state.level == 1, base_x_lvl1, single_start)
+            win_x = base_x + left_pad + col_idx * (w_w + spacing)
+            win_y_world = jnp.array(self.consts.BUILDING_HEIGHT, dtype=jnp.int32) - bottom_margin - (row_idx * row_h) - w_h
+            view_x = win_x
+            view_y = win_y_world - camera_y
+
+            # Top shutter rect
+            raster = jax.lax.cond(
+                active & (h > 0),
+                lambda r: draw_rect_mask(r, view_x, view_y, w_w, h, bcolor),
+                lambda r: r,
+                raster,
+            )
+            # Bottom shutter rect
+            bottom_y = view_y + (w_w * 0).astype(jnp.int32)  # dummy to keep type
+            bottom_y = view_y + (w_h - h)
+            raster = jax.lax.cond(
+                active & (h > 0),
+                lambda r: draw_rect_mask(r, view_x, bottom_y, w_w, h, bcolor),
+                lambda r: r,
+                raster,
+            )
+
+        # Falling objects on level 2
+        def draw_object_loop(r, i):
+            active_i = state.obj_active[i]
+            ox = state.obj_x[i]
+            oy_view = state.obj_y[i] - camera_y
+            size_w = jnp.array(self.consts.FALLING_OBJECT_SIZE[0], dtype=jnp.int32)
+            size_h = jnp.array(self.consts.FALLING_OBJECT_SIZE[1], dtype=jnp.int32)
+            color = jnp.array(list(self.consts.FALLING_OBJECT_COLOR), dtype=jnp.uint8)
+            return jax.lax.cond(
+                active_i,
+                lambda r_: draw_rect_mask(r_, ox, oy_view, size_w, size_h, color),
+                lambda r_: r_,
+                r,
+            )
+
+        def draw_objects_all(r):
+            n = int(self.consts.MAX_FALLING_OBJECTS)
+            for i in range(n):
+                r = draw_object_loop(r, i)
+            return r
+
+        raster = jax.lax.cond(state.level == 2, draw_objects_all, lambda r: r, raster)
+
+        # --- HUD: render score at top center if digit sprites available ---
+        if self.hud_digits is not None:
+            max_digits = 6
+            digits_idx = jr.int_to_digits(state.player_score, max_digits=max_digits)
+            # monospaced spacing = sprite width
+            sprite_w = self.hud_digits.shape[2]
+            spacing = int(sprite_w)
+            total_width = max_digits * spacing
+            start_x = (self.consts.WIDTH - total_width) // 2
+            start_y = 4  # within HUD band
+            # render_label expects the whole digits array and the indices
+            raster = jr.render_label(raster, start_x, start_y, digits_idx, self.hud_digits, spacing=spacing)
 
         return raster
 
