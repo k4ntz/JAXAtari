@@ -249,7 +249,7 @@ class KingKongConstants(NamedTuple):
 
 	###################################################################
 	# Define the success stage q	
-	DUR_SUCCESS: int = 232 # TODO couldn't test exact frames yet , assuming ~ death time 
+	DUR_SUCCESS: int = 232 # ~ death time 
 	###################################################################
 		
 	### Game logic constants 
@@ -346,8 +346,32 @@ class KingKongState(NamedTuple):
 	death_flash_counter: chex.Array
 	death_target_y: chex.Array # when fallling to death 
 
+class EntityPosition(NamedTuple):
+	x: jnp.ndarray
+	y: jnp.ndarray
+	width: jnp.ndarray
+	height: jnp.ndarray
+	visible: jnp.ndarray
+class BombInfo(NamedTuple):
+	positions_x: jnp.ndarray
+	positions_y: jnp.ndarray  
+	active: jnp.ndarray
+	is_magic: jnp.ndarray
+	directions_x: jnp.ndarray
+	directions_y: jnp.ndarray
+
 class KingKongObservation(NamedTuple):
-	pass 
+	player: EntityPosition
+	kong: EntityPosition
+	princess: EntityPosition
+	bombs: BombInfo
+	score: jnp.ndarray
+	lives: jnp.ndarray
+	bonus_timer: jnp.ndarray
+	level: jnp.ndarray
+	gamestate: jnp.ndarray
+	player_floor: jnp.ndarray
+
 class KingKongInfo(NamedTuple):
 	time: chex.Array
 	all_rewards: chex.Array
@@ -370,7 +394,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			Action.LEFTFIRE, # running jumps, this is missing in the reference game 
 			Action.RIGHTFIRE
 		]
-		self.obs_size = 5 + 3 * 5 + 1 + 1 #TODO
+		self.obs_size = 5 + 5 + 5 + (6 * self.consts.MAX_BOMBS) + 6  # player + kong + princess + bombs + game_info
 
 	def reset(self, key=None) -> Tuple[KingKongObservation, KingKongState]:
 		if key is None:
@@ -460,13 +484,14 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		# Update global step counter
 		new_state = new_state._replace(step_counter=state.step_counter + 1)
 		
-		reward = self._get_reward(state, new_state)
 		done = self._get_done(new_state)
-		info = self._get_info(new_state)
+		env_reward = self._get_reward(state, new_state)
+		all_rewards = self._get_all_reward(state, new_state)
+		info = self._get_info(new_state, all_rewards)
 		observation = self._get_observation(new_state)
-		
-		return observation, new_state, reward, done, info
 	
+		return observation, new_state, env_reward, done, info
+
 	def _update_princess_movement(self, state: KingKongState) -> KingKongState:
 		key, subkey1, subkey2, subkey3 = jax.random.split(state.rng_key, 4)
 
@@ -636,18 +661,18 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		should_continue = state.kong_jump_counter < max_jump_counter
 		
 		def do_jump(state: KingKongState):
-			# Determine which full zigzag phase we are in
+			# check which full zigzag phase we are in
 			phase = state.kong_jump_counter // total_jumps_per_cycle
-			dir_lr = jnp.where(phase % 2 == 0, 1, -1)  # even phase: right, odd: left
+			dir_lr = jnp.where(phase % 2 == 0, 1, -1) # even phase: right, odd: left
 			step_in_phase = state.kong_jump_counter % total_jumps_per_cycle
 			
 			new_x, new_y = jax.lax.cond(
-				step_in_phase < self.consts.KONG_JUMPS_UP,  # diagonal up
+				step_in_phase < self.consts.KONG_JUMPS_UP,# diagonal up
 				lambda _: (state.kong_x + dir_lr, state.kong_y - 2),
 				lambda _: jax.lax.cond(
-					step_in_phase < self.consts.KONG_JUMPS_UP + self.consts.KONG_JUMPS_SIDE,  # side step
+					step_in_phase < self.consts.KONG_JUMPS_UP + self.consts.KONG_JUMPS_SIDE,# side step
 					lambda _: (state.kong_x + dir_lr, state.kong_y),
-					lambda _: (state.kong_x + dir_lr, state.kong_y + 2),  # diagonal down
+					lambda _: (state.kong_x + dir_lr, state.kong_y + 2),# diagonal down
 					operand=None
 				),
 				operand=None
@@ -658,7 +683,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return jax.lax.cond(
 			should_continue,
 			do_jump,
-			lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter),  # Don't increment counter when stopped
+			lambda _: (state.kong_x, state.kong_y, state.kong_jump_counter),# Don't increment counter when stopped
 			operand=state
 		)
 		
@@ -1031,10 +1056,10 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				lambda: jax.lax.cond(
 					action == Action.RIGHTFIRE,
 					lambda: 1,
-					lambda: 0  # Vertical jump for regular FIRE
+					lambda: 0
 				)
 			),
-			lambda: new_player_dir  # Keep current direction if not jumping
+			lambda: new_player_dir # Keep current direction if not jumping
 		)
 
 		new_player_jump_counter = jax.lax.cond(
@@ -1223,92 +1248,66 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		)	
 		
 	def _can_spawn_bomb(self, state: KingKongState, spawn_floor: int) -> chex.Array:
-		active_mask = state.bomb_active > 0
-		
-		def check_bomb_on_floor(i, any_on_floor):
-			bomb_is_active = active_mask[i]
-			bomb_floor = state.bomb_floor[i]
-			
+		def check_bomb_on_floor(bomb_active, bomb_floor):
 			# Check if this active bomb is on the spawn floor
-			on_spawn_floor = jnp.logical_and(bomb_is_active, bomb_floor == spawn_floor)
-			
-			return jnp.logical_or(any_on_floor, on_spawn_floor)
+			return jnp.logical_and(bomb_active > 0, bomb_floor == spawn_floor)
+		
+		# Use vmap to check all bombs at once
+		bombs_on_spawn_floor = jax.vmap(check_bomb_on_floor)(state.bomb_active, state.bomb_floor)
 		
 		# Check if any bomb is currently on the spawn floor
-		any_bomb_on_spawn_floor = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, check_bomb_on_floor, False)
+		any_bomb_on_spawn_floor = jnp.any(bombs_on_spawn_floor)
 		
 		# Can spawn if no bombs are on spawn floor
 		return ~any_bomb_on_spawn_floor
 
 	def _check_bomb_despawn(self, bomb_x, bomb_floor, bomb_active, opposite_floor):
-		should_despawn = jnp.zeros_like(bomb_active, dtype=bool)
-		
-		def check_single_bomb(i, despawn_mask):
-			is_active = bomb_active[i] > 0
-			on_opposite_floor = bomb_floor[i] == opposite_floor
+		def check_single_bomb(x, floor, active):
+			is_active = active > 0
+			on_opposite_floor = floor == opposite_floor
 			
 			# Check if bomb went off-screen (beyond bounds + buffer)
-			def check_offscreen():
-				floor_bounds = self.consts.FLOOR_BOUNDS[opposite_floor]
-				min_x, max_x = floor_bounds[0], floor_bounds[1]
-				bomb_width = self.consts.BOMB_SIZE[0]
-				buffer = self.consts.BOMB_OFFSCREEN_BUFFER
-				
-				# Allow bombs to go further off-screen before despawning
-				off_left_edge = bomb_x[i] < (min_x - buffer)
-				off_right_edge = bomb_x[i] > (max_x - bomb_width + buffer)
-				
-				return jnp.logical_or(off_left_edge, off_right_edge)
+			floor_bounds = self.consts.FLOOR_BOUNDS[opposite_floor]
+			min_x, max_x = floor_bounds[0], floor_bounds[1]
+			bomb_width = self.consts.BOMB_SIZE[0]
+			buffer = self.consts.BOMB_OFFSCREEN_BUFFER
+			
+			# Allow bombs to go further off-screen before despawning
+			off_left_edge = x < (min_x - buffer)
+			off_right_edge = x > (max_x - bomb_width + buffer)
+			offscreen = jnp.logical_or(off_left_edge, off_right_edge)
 			
 			should_despawn_this = jnp.logical_and(
 				jnp.logical_and(is_active, on_opposite_floor),
-				check_offscreen()
+				offscreen
 			)
 			
-			return despawn_mask.at[i].set(should_despawn_this)
+			return should_despawn_this
 		
-		return jax.lax.fori_loop(0, self.consts.MAX_BOMBS, check_single_bomb, should_despawn)
+		# Apply the check to all bombs simultaneously
+		return jax.vmap(check_single_bomb)(bomb_x, bomb_floor, bomb_active)
 
 	def _get_kong_floor(self, state: KingKongState) -> chex.Array:
 		floor_distances = jnp.abs(self.consts.FLOOR_LOCATIONS - state.kong_y)
 		return jnp.argmin(floor_distances)
 
 	def _update_all_bomb_movement(self, state, bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, opposite_floor):
-		def update_single_bomb(i, carry):
-			bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, opposite_floor = carry
-			
-			# Only update if bomb is active
-			is_active = bomb_active[i] > 0
-			
-			# Get current bomb state
-			current_x = bomb_x[i]
-			current_y = bomb_y[i]
-			current_dir_x = bomb_dir_x[i]
-			current_dir_y = bomb_dir_y[i]
-			current_floor = bomb_floor[i]
-			current_maigc = bomb_magic[i]
-			
-			# Update bomb position and direction
+		def update_single_bomb(current_x, current_y, is_active, current_dir_x, current_dir_y, current_floor, current_magic):
+			# Update bomb position and direction only if active
 			new_x, new_y, new_dir_x, new_dir_y, new_floor = jax.lax.cond(
-				is_active,#only update if active / spawned 
-				lambda: self._move_single_bomb(state, current_x, current_y, current_dir_x, current_dir_y, current_floor, current_maigc, opposite_floor),
+				is_active > 0,  # only update if active/spawned 
+				lambda: self._move_single_bomb(state, current_x, current_y, current_dir_x, current_dir_y, current_floor, current_magic, opposite_floor),
 				lambda: (current_x, current_y, current_dir_x, current_dir_y, current_floor)
 			)
 			
-			# Update arrays
-			bomb_x = bomb_x.at[i].set(new_x)
-			bomb_y = bomb_y.at[i].set(new_y)
-			bomb_dir_x = bomb_dir_x.at[i].set(new_dir_x)
-			bomb_dir_y = bomb_dir_y.at[i].set(new_dir_y)
-			bomb_floor = bomb_floor.at[i].set(new_floor)
-			
-			return (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, opposite_floor)
+			return new_x, new_y, new_dir_x, new_dir_y, new_floor
 		
-		# Process all bombs
-		carry = (bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic, opposite_floor)
-		final_carry = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, update_single_bomb, carry)
+		# Apply the update function to all bombs simultaneously
+		new_x, new_y, new_dir_x, new_dir_y, new_floor = jax.vmap(update_single_bomb)(
+			bomb_x, bomb_y, bomb_active, bomb_dir_x, bomb_dir_y, bomb_floor, bomb_magic
+		)
 		
-		return final_carry[:6] # only relevant attribs
+		return new_x, new_y, bomb_active, new_dir_x, new_dir_y, new_floor
 
 	def _move_single_bomb(self, state: KingKongState, x, y, dir_x, dir_y, floor, is_magic, opposite_floor):
 		key1, key2, key3 = jax.random.split(state.rng_key, 3)
@@ -1490,7 +1489,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			# Start falling through hole
 			final_dir_y, final_floor = jax.lax.cond(
 				should_start_falling,
-				lambda: (1, new_floor),  # Start falling (don't change floor yet)
+				lambda: (1, new_floor),  # Start falling (dont change floor yet)
 				lambda: (new_dir_y, new_floor)
 			)
 			
@@ -1499,22 +1498,19 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		def no_movement():
 			return x, y, dir_x, dir_y, floor
 		
-		# Only move if it's the right frame
+		# Only move if its the right frame
 		return jax.lax.cond(should_move, do_movement, no_movement)
 	
 	def _floor_has_bomb(self, state: KingKongState, target_floor: int) -> chex.Array:
-		active_mask = state.bomb_active > 0
-		
-		def check_bomb_on_target_floor(i, any_on_target):
-			bomb_is_active = active_mask[i]
-			bomb_floor = state.bomb_floor[i]
-			
+		def check_bomb_on_target_floor(bomb_active, bomb_floor):
 			# Check if this active bomb is on target floor
-			on_target_floor = jnp.logical_and(bomb_is_active, bomb_floor == target_floor)
-			
-			return jnp.logical_or(any_on_target, on_target_floor)
+			return jnp.logical_and(bomb_active > 0, bomb_floor == target_floor)
 		
-		return jax.lax.fori_loop(0, self.consts.MAX_BOMBS, check_bomb_on_target_floor, False)
+		# Use vmap to check all bombs at once
+		bombs_on_target_floor = jax.vmap(check_bomb_on_target_floor)(state.bomb_active, state.bomb_floor)
+		
+		# Check if any bomb is on the target floor
+		return jnp.any(bombs_on_target_floor)
 		
 	def _check_bomb_on_ladder_strict(self, bomb_x, bomb_y):
 		size_x = self.consts.BOMB_SIZE[0]
@@ -1823,14 +1819,14 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			# Only update fall physics every 4 steps
 			should_update_fall = jnp.logical_and(
 				state.stage_steps % 4 == 0,  # Every 4 steps
-				~has_hit_floor  # And haven't hit floor yet
+				~has_hit_floor  # And havent hit floor yet
 			)
 			
 			# Calculate falling physics for hole deaths
 			new_player_y = jax.lax.cond(
 				should_update_fall,
 				lambda: self._update_fall_physics(state, target_floor_y),
-				lambda: state.player_y  # Don't move if not updating or hit floor
+				lambda: state.player_y  # Dont move if not updating or hit floor
 			)
 			
 			# Update has_hit_floor after potential Y movement
@@ -2005,24 +2001,131 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 	@partial(jax.jit, static_argnums=(0,))
 	def _get_observation(self, state: KingKongState):
-		return KingKongObservation()
-
+		player = EntityPosition(
+			x=state.player_x,
+			y=state.player_y,
+			width=jnp.array(self.consts.PLAYER_SIZE[0]),
+			height=jnp.array(self.consts.PLAYER_SIZE[1]),
+			visible=jnp.array(1)  # Player is always visible
+		)
+		
+		kong = EntityPosition(
+			x=state.kong_x,
+			y=state.kong_y,
+			width=jnp.array(self.consts.KONG_SIZE[0]),
+			height=jnp.array(self.consts.KONG_SIZE[1]),
+			visible=state.kong_visible
+		)
+		
+		princess = EntityPosition(
+			x=state.princess_x,
+			y=state.princess_y,
+			width=jnp.array(self.consts.PRINCESS_SIZE[0]),
+			height=jnp.array(self.consts.PRINCESS_SIZE[1]),
+			visible=state.princess_visible
+		)
+		
+		bombs = BombInfo(
+			positions_x=state.bomb_positions_x,
+			positions_y=state.bomb_positions_y,
+			active=state.bomb_active,
+			is_magic=state.bomb_is_magic,
+			directions_x=state.bomb_directions_x,
+			directions_y=state.bomb_directions_y
+		)
+		
+		return KingKongObservation(
+			player=player,
+			kong=kong,
+			princess=princess,
+			bombs=bombs,
+			score=state.score,
+			lives=state.lives,
+			bonus_timer=state.bonus_timer,
+			level=state.level,
+			gamestate=state.gamestate,
+			player_floor=state.player_floor
+		)
 
 	@partial(jax.jit, static_argnums=(0,))
 	def obs_to_flat_array(self, obs: KingKongObservation) -> jnp.ndarray:
-		return jnp.array([])
+		return jnp.concatenate([
+			obs.player.x.flatten(),
+			obs.player.y.flatten(),
+			obs.player.width.flatten(),
+			obs.player.height.flatten(),
+			obs.player.visible.flatten(),
+			obs.kong.x.flatten(),
+			obs.kong.y.flatten(),
+			obs.kong.width.flatten(),
+			obs.kong.height.flatten(),
+			obs.kong.visible.flatten(),
+			obs.princess.x.flatten(),
+			obs.princess.y.flatten(),
+			obs.princess.width.flatten(),
+			obs.princess.height.flatten(),
+			obs.princess.visible.flatten(),
+			obs.bombs.positions_x.flatten(),
+			obs.bombs.positions_y.flatten(),
+			obs.bombs.active.flatten(),
+			obs.bombs.is_magic.flatten(),
+			obs.bombs.directions_x.flatten(),
+			obs.bombs.directions_y.flatten(),
+			obs.score.flatten(),
+			obs.lives.flatten(),
+			obs.bonus_timer.flatten(),
+			obs.level.flatten(),
+			obs.gamestate.flatten(),
+			obs.player_floor.flatten()
+		])
 
 	def action_space(self) -> spaces.Discrete:
 		return spaces.Discrete(len(self.action_set))
 
 	def observation_space(self) -> spaces:
-		return spaces.Dict({})
+		return spaces.Dict({
+			"player": spaces.Dict({
+				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+			}),
+			"kong": spaces.Dict({
+				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+			}),
+			"princess": spaces.Dict({
+				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
+				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
+				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+			}),
+			"bombs": spaces.Dict({
+				"positions_x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+				"positions_y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+				"active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+				"is_magic": spaces.Box(low=0, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+				"directions_x": spaces.Box(low=-1, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+				"directions_y": spaces.Box(low=-1, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
+			}),
+			"score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
+			"lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
+			"bonus_timer": spaces.Box(low=0, high=self.consts.BONUS_START, shape=(), dtype=jnp.int32),
+			"level": spaces.Box(low=1, high=100, shape=(), dtype=jnp.int32),
+			"gamestate": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+			"player_floor": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
+		})
 
 	def image_space(self) -> spaces.Box:
 		return spaces.Box(
 			low=0,
 			high=255,
-			shape=(self.consts.WIDTH, self.consts.HEIGHT, 3),
+			shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
 			dtype=jnp.uint8
 		)
 
@@ -2032,7 +2135,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 	@partial(jax.jit, static_argnums=(0,))
 	def _get_reward(self, previous_state: KingKongState, state: KingKongState):
-		return state.score - previous_state.score
+		return state.score - previous_state.score # could be changed to also account for bonus timer e.g. 
 
 	@partial(jax.jit, static_argnums=(0,))
 	def _get_all_reward(self, previous_state: KingKongState, state: KingKongState):
