@@ -1779,131 +1779,129 @@ class RiverraidRenderer(JAXGameRenderer):
         by = jnp.round(state.player_bullet_y).astype(jnp.int32)
         raster = aj.render_at(raster, bx, by, bullet_frame)
 
-        def render_enemy_at_idx(raster, i):
-            ex = jnp.round(state.enemy_x[i]).astype(jnp.int32)
-            ey = jnp.round(state.enemy_y[i]).astype(jnp.int32)
-            boat_frame = aj.get_sprite_frame(self.ENEMY_BOAT, 0)
-            helicopter_frame = jax.lax.cond(
-                state.turn_step % 2 == 0,
-                lambda _: aj.get_sprite_frame(self.ENEMY_HELICOPTER, 0),
-                lambda _: aj.get_sprite_frame(self.ENEMY_HELICOPTER_2, 0),
-                operand=None
-            )
-            airplane_frame = aj.get_sprite_frame(self.ENEMY_AIRPLANE, 0)
-            frame_to_render = jax.lax.switch(
-                state.enemy_type[i],
-                [
-                    lambda: boat_frame,
-                    lambda: helicopter_frame,
-                    lambda: airplane_frame,
-                ]
-            )
-            frame_to_render = jax.lax.cond(
-                (state.enemy_direction[i] == 0) | (state.enemy_direction[i] == 2),
-                lambda _: jnp.flip(frame_to_render, axis=1),
-                lambda _: frame_to_render,
-                operand=None
+        def render_single_enemy_on_raster(raster, enemy_idx):
+            enemy_state = state.enemy_state[enemy_idx]
+            enemy_type = state.enemy_type[enemy_idx]
+            enemy_direction = state.enemy_direction[enemy_idx]
+            enemy_x = state.enemy_x[enemy_idx].astype(jnp.int32)
+            enemy_y = state.enemy_y[enemy_idx].astype(jnp.int32)
+
+            # heli wing animation
+            helicopter_sprite = jax.lax.cond(
+                (state.turn_step % 20) < 10,
+                lambda: self.ENEMY_HELICOPTER,
+                lambda: self.ENEMY_HELICOPTER_2
             )
 
-            frame_to_render = jax.lax.cond(
-                state.enemy_state[i] == 1,
-                lambda _: frame_to_render,
-                lambda _: jax.lax.cond(
-                    state.enemy_state[i] == 2,
-                    lambda _: explosion_1,
-                    lambda _: jax.lax.cond(
-                        state.enemy_state[i] == 3,
-                        lambda _: explosion_2,
-                        lambda _: explosion_1,
-                        operand=None
-                    ),
+            sprite = jax.lax.switch(enemy_type, [
+                lambda: self.ENEMY_BOAT,
+                lambda: helicopter_sprite,  #
+                lambda: self.ENEMY_AIRPLANE
+            ])
+
+            # Death animation: state 2 -> explosion_1, state 3 -> explosion_2, state 4 -> explosion_1
+            sprite = jax.lax.cond(
+                enemy_state == 2, lambda: self.EXPLOSION_1,
+                lambda: jax.lax.cond(
+                    enemy_state == 3, lambda: self.EXPLOSION_2,
+                    lambda: jax.lax.cond(
+                        enemy_state == 4, lambda: self.EXPLOSION_1,
+                        lambda: sprite
+                    )
+                )
+            )
+
+            frame = aj.get_sprite_frame(sprite, 0)
+
+            # Flip frame based on direction (0=left static, 1=right static, 2=left moving, 3=right moving)
+            frame = jax.lax.cond(
+                jnp.logical_and(enemy_state <= 1, jnp.logical_or(enemy_direction == 0, enemy_direction == 2)),
+                lambda: jnp.flip(frame, axis=1),
+                lambda: frame
+            )
+
+            return jax.lax.cond(
+                enemy_state > 0,
+                lambda: aj.render_at(raster, enemy_x, enemy_y, frame),
+                lambda: raster
+            )
+
+        raster = jax.lax.scan(
+            lambda acc, idx: (render_single_enemy_on_raster(acc, idx), None),
+            raster,
+            jnp.arange(MAX_ENEMIES)
+        )[0]
+
+        def render_fuel(raster, fuel_idx):
+            fuel_state = state.fuel_state[fuel_idx]
+            fuel_x = state.fuel_x[fuel_idx].astype(jnp.int32)
+            fuel_y = state.fuel_y[fuel_idx].astype(jnp.int32)
+
+            # Fuel animation: state 2 -> explosion_1, state 3 -> explosion_2, state 4 -> explosion_1
+            sprite = jax.lax.cond(
+                fuel_state == 2, lambda: self.EXPLOSION_1,
+                lambda: jax.lax.cond(
+                    fuel_state == 3, lambda: self.EXPLOSION_2,
+                    lambda: jax.lax.cond(
+                        fuel_state == 4, lambda: self.EXPLOSION_1,
+                        lambda: self.FUEL
+                    )
+                )
+            )
+
+            frame = aj.get_sprite_frame(sprite, 0)
+
+            new_raster = jax.lax.cond(
+                fuel_state > 0,
+                lambda: aj.render_at(raster, fuel_x, fuel_y, frame),
+                lambda: raster
+            )
+
+            return new_raster, None
+        raster = jax.lax.scan(
+            render_fuel,
+            raster,
+            jnp.arange(MAX_ENEMIES)
+        )[0]
+
+        def render_alive_housetree(raster, i):
+            def render_housetree_at_idx(raster, i):
+                hy = i
+                hx = jax.lax.cond(
+                    state.housetree_side[i] == 1,
+                    lambda _: 5,
+                    lambda _: SCREEN_WIDTH - 20,
                     operand=None
-                ),
-                operand=None
-            )
-            return aj.render_at(raster, ex, ey, frame_to_render)
+                )
 
-        def render_alive_enemies(i, raster):
-            raster = jax.lax.cond(
-                state.enemy_state[i] > 0,
-                lambda raster: render_enemy_at_idx(raster, i),
-                lambda raster: raster,
-                operand=raster
-            )
-            return raster
-
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_enemies, raster)
-
-        def render_fuel_at_idx(raster, i):
-            fx = jnp.round(state.fuel_x[i]).astype(jnp.int32)
-            fy = jnp.round(state.fuel_y[i]).astype(jnp.int32)
-            fuel_frame = aj.get_sprite_frame(self.FUEL, 0)
-
-            # Determine which frame to render based on the fuel state
-            frame_to_render = jax.lax.cond(
-                state.fuel_state[i] == 1,
-                lambda _: fuel_frame,
-                lambda _: jax.lax.cond(
-                    state.fuel_state[i] == 2,
-                    lambda _: explosion_1,
-                    lambda _: jax.lax.cond(
-                        state.fuel_state[i] == 3,
-                        lambda _: explosion_2,
-                        lambda _: explosion_1,
-                        operand=None
-                    ),
+                housetree_sprite = aj.get_sprite_frame(self.HOUSE_TREE, 0)
+                housetree_sprite = jax.lax.cond(
+                    state.housetree_direction[i] == 1,
+                    lambda _: jnp.flip(housetree_sprite, axis=1),
+                    lambda _: housetree_sprite,
                     operand=None
-                ),
-                operand=None
-            )
+                )
+                raster = jax.lax.cond(
+                    jnp.abs(hy - dam_y) > 20,
+                    lambda raster: aj.render_at(raster, hx, hy, housetree_sprite),
+                    lambda raster: raster,
+                    operand=raster
+                )
+                return raster
 
-            return aj.render_at(raster, fx, fy, frame_to_render)
-
-        def render_alive_fuel(i, raster):
-            raster = jax.lax.cond(
-                state.fuel_state[i] > 0,
-                lambda raster: render_fuel_at_idx(raster, i),
-                lambda raster: raster,
-                operand=raster
-            )
-            return raster
-
-        raster = jax.lax.fori_loop(0, MAX_ENEMIES, render_alive_fuel, raster)
-
-        def render_housetree_at_idx(raster, i):
-            hy = i
-            hx = jax.lax.cond(
-                state.housetree_side[i] == 1,
-                lambda _: 5,
-                lambda _: SCREEN_WIDTH - 20,
-                operand=None
-            )
-
-            housetree_sprite = aj.get_sprite_frame(self.HOUSE_TREE, 0)
-            housetree_sprite = jax.lax.cond(
-                state.housetree_direction[i] == 2,
-                lambda _: jnp.flip(housetree_sprite, axis=1),
-                lambda _: housetree_sprite,
-                operand=None
-            )
-            raster = jax.lax.cond(
-                jnp.abs(hy - dam_y) > 20,
-                lambda raster: aj.render_at(raster, hx, hy, housetree_sprite),
-                lambda raster: raster,
-                operand=raster
-            )
-            return raster
-
-        def render_alive_housetree(i, raster):
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 state.housetree_position[i] >= 0,
                 lambda raster: render_housetree_at_idx(raster, i),
                 lambda raster: raster,
                 operand=raster
             )
-            return raster
+            return new_raster, None
 
-        raster = jax.lax.fori_loop(0, state.housetree_position.shape[0], render_alive_housetree, raster)
+        raster = jax.lax.scan(
+            render_alive_housetree,
+            raster,
+            jnp.arange(SCREEN_HEIGHT)  # Assuming housetree uses screen height range
+        )[0]
 
         # UI mask
         y_coords = jnp.arange(SCREEN_HEIGHT)
@@ -1933,17 +1931,31 @@ class RiverraidRenderer(JAXGameRenderer):
             digit = (score // jnp.power(10, digit_place)) % 10
             return digit.astype(jnp.int32)
 
-        def score_loop_body(i, r_acc):
-            # i is the position from the left (0 = leftmost digit, 1 = next, etc.).
+        def score_loop_body(raster, i):
+            # Prüfe ob diese Ziffer gerendert werden soll
             digit_place = num_digits - 1 - i
+            should_render = i < num_digits
+
             digit_to_draw = get_digit(digit_place, state.player_score)
 
             x0 = jnp.int32(fuel_display_x + (i * 12))
             y0 = jnp.int32(fuel_display_y - 10)
 
             sprite_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, digit_to_draw)
-            return aj.render_at(r_acc, x0, y0, sprite_frame)
-        raster = lax.fori_loop(0, num_digits, score_loop_body, raster)
+            new_raster = jax.lax.cond(
+                should_render,
+                lambda: aj.render_at(raster, x0, y0, sprite_frame),
+                lambda: raster
+            )
+
+            return new_raster, None
+
+        MAX_SCORE_DIGITS = 8
+        raster = jax.lax.scan(
+            score_loop_body,
+            raster,
+            jnp.arange(MAX_SCORE_DIGITS)
+        )[0]
 
         lives_frame = aj.get_sprite_frame(self.SPRITE_DIGIT, state.player_lives)
         lives_x = fuel_display_x - 8
