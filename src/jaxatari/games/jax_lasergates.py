@@ -802,7 +802,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             key_normal_index, key_energy_pod, key_detonator, key_edge_case = jax.random.split(key_pick_type, 4)
 
             # Randomly choose one of the entities, except for the energy pod and detonator (see below)
-            picked_index = jax.random.randint(key_normal_index, shape=(), minval=4, maxval=5) # Default: minval=0, maxval=6
+            picked_index = jax.random.randint(key_normal_index, shape=(), minval=0, maxval=6) # Default: minval=0, maxval=6
             # If you want only one specific entity to spawn, change minval, maxval to:
             # Radar Mortar:     minval=0, maxval=1
             # Byte Bat:         minval=1, maxval=2
