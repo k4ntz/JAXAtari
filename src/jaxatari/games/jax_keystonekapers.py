@@ -62,10 +62,10 @@ class KeystoneKapersConstants(NamedTuple):
     TOTAL_BUILDING_WIDTH: int = 7 * 152  # 1064 pixels total width
 
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
-    FLOOR_1_Y: int = 135  # Ground floor (was 140, shifted up by 5 more to close gap)
-    FLOOR_2_Y: int = 105   # Middle floor (was 100, shifted up by 5)
+    FLOOR_1_Y: int = 139  # Ground floor (was 140, shifted up by 5 more to close gap)
+    FLOOR_2_Y: int = 107   # Middle floor (was 100, shifted up by 5)
     FLOOR_3_Y: int = 73   # Top floor (was 60, shifted up by 5)
-    ROOF_Y: int = 40      # Roof (was 19, shifted up by 4)
+    ROOF_Y: int = 41      # Roof
     FLOOR_HEIGHT: int = 20
 
     # Minimap area configuration (at bottom of game area)
@@ -1526,7 +1526,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                     alpha_data = escalator_sprite_rgba[:, :, 3:4]
                     alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
                     white_background = jnp.ones_like(rgb_data) * 255
-                    
+
                     # For pixels with low alpha (below 0.5), use white (will be treated as transparent)
                     # For pixels with high alpha, use the original RGB color
                     escalator_frame_sprite = jnp.where(
@@ -1942,7 +1942,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         current_escalator_1_sprite = self._get_escalator_sprite_for_floor(0, sprite_frame)
         escalator_1_sprite_height = current_escalator_1_sprite.shape[0]
-        escalator_1_sprite_y = self.consts.FLOOR_1_Y - (escalator_1_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        escalator_1_sprite_y = self.consts.FLOOR_1_Y - (escalator_1_sprite_height - self.consts.FLOOR_HEIGHT) - 0
 
         game_area = jnp.where(
             escalator_1_visible,
@@ -1972,7 +1972,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         current_escalator_3_sprite = self._get_escalator_sprite_for_floor(2, sprite_frame)
         escalator_3_sprite_height = current_escalator_3_sprite.shape[0]
-        escalator_3_sprite_y = self.consts.FLOOR_3_Y - (escalator_3_sprite_height - self.consts.FLOOR_HEIGHT) - 3
+        escalator_3_sprite_y = self.consts.FLOOR_3_Y - (escalator_3_sprite_height - self.consts.FLOOR_HEIGHT) - 0
 
         game_area = jnp.where(
             escalator_3_visible,
