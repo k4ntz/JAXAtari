@@ -36,13 +36,23 @@ PLAYER_SIZE = (9, 21)  # w, h
 PLAYER_START_X, PLAYER_START_Y = 15, 140
 PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
 PALETTE = jnp.array([
-    [0, 0, 0],        # 0: transparent
-    [104, 72, 198],   # 1: blue, mario hat
+    [0,   0,   0],    # 0: transparent
+    [104, 72,  198],  # 1: blue/purple (mario hat)
     [252, 188, 116],  # 2: skin
-    [181, 83, 40],    # 3: brown, mario overalls
-    [134, 106, 38],   # 4: green mario shoes
+    [181, 83,  40],   # 3: brown (mario overalls)
+    [134, 106, 38],   # 4: greenish-brown (mario shoes)
     [152, 163, 74],   # 5: enemy olive
     [227, 151, 89],   # 6: fireball orange
+
+    [181, 83,  40],   # 7: orange   (same RGB as idx 3, used by reward1–4 top band)
+    [104, 72,  198],  # 8: purple   (same RGB as idx 1, used by reward1–4 middle band)
+    [134, 106, 38],   # 9: brown/olive (same RGB as idx 4, used by reward1–4 bottom band)
+
+    [132, 200, 252],  # 10: light blue   (reward5–8 top band)
+    [80,  0,   132],  # 11: deep purple  (reward5–8 second band)
+    [162, 162, 42],   # 12: olive        (reward5–8 mid & fifth band)
+    [20,  60,  0],    # 13: dark green   (reward5–8 fourth band)
+    [128, 232, 128],  # 14: light green  (reward5–8 bottom band)
 ], dtype=jnp.uint8)
 
 PLAYER_STANDING_RIGHT= jnp.array([
@@ -301,6 +311,133 @@ FIREBALL_4 = jnp.array([
     [0,0,0,6,6,6,0],
 ], dtype=jnp.uint8)
 
+# ---------- REWARDS 1–4 (3-color stack: 7→8→9) ----------
+# rows: top 3=7, middle 7=8, bottom 2=9
+
+REWARD1 = jnp.array([  # width 1 centered
+    [0,0,0,0,7,0,0,0,0],
+    [0,0,0,0,7,0,0,0,0],
+    [0,0,0,0,7,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,8,0,0,0,0],
+    [0,0,0,0,9,0,0,0,0],
+    [0,0,0,0,9,0,0,0,0],
+], dtype=jnp.uint8)
+
+REWARD2 = jnp.array([  # width 3 centered
+    [0,0,0,7,7,7,0,0,0],
+    [0,0,0,7,7,7,0,0,0],
+    [0,0,0,7,7,7,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,9,9,9,0,0,0],
+    [0,0,0,9,9,9,0,0,0],
+], dtype=jnp.uint8)
+
+REWARD3 = jnp.array([  # width 5 centered
+    [0,0,7,7,7,7,7,0,0],
+    [0,0,7,7,7,7,7,0,0],
+    [0,0,7,7,7,7,7,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,9,9,9,9,9,0,0],
+    [0,0,9,9,9,9,9,0,0],
+], dtype=jnp.uint8)
+
+REWARD4 = jnp.array([  # width 9 (no padding)
+    [7,7,7,7,7,7,7,7,7],
+    [7,7,7,7,7,7,7,7,7],
+    [7,7,7,7,7,7,7,7,7],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [8,8,8,8,8,8,8,8,8],
+    [9,9,9,9,9,9,9,9,9],
+    [9,9,9,9,9,9,9,9,9],
+], dtype=jnp.uint8)
+
+# ---------- REWARDS 5–8 
+
+REWARD5 = jnp.array([  # width 1 centered
+    [0,0,0,0,10,0,0,0,0],
+    [0,0,0,0,10,0,0,0,0],
+    [0,0,0,0,11,0,0,0,0],
+    [0,0,0,0,11,0,0,0,0],
+    [0,0,0,0,12,0,0,0,0],
+    [0,0,0,0,12,0,0,0,0],
+    [0,0,0,0,13,0,0,0,0],
+    [0,0,0,0,13,0,0,0,0],
+    [0,0,0,0,12,0,0,0,0],
+    [0,0,0,0,12,0,0,0,0],
+    [0,0,0,0,14,0,0,0,0],
+    [0,0,0,0,14,0,0,0,0],
+], dtype=jnp.uint8)
+
+REWARD6 = jnp.array([  # width 3 centered
+    [0,0,0,10,10,10,0,0,0],
+    [0,0,0,10,10,10,0,0,0],
+    [0,0,0,11,11,11,0,0,0],
+    [0,0,0,11,11,11,0,0,0],
+    [0,0,0,12,12,12,0,0,0],
+    [0,0,0,12,12,12,0,0,0],
+    [0,0,0,13,13,13,0,0,0],
+    [0,0,0,13,13,13,0,0,0],
+    [0,0,0,12,12,12,0,0,0],
+    [0,0,0,12,12,12,0,0,0],
+    [0,0,0,14,14,14,0,0,0],
+    [0,0,0,14,14,14,0,0,0],
+], dtype=jnp.uint8)
+
+REWARD7 = jnp.array([  # width 5 centered
+    [0,0,10,10,10,10,10,0,0],
+    [0,0,10,10,10,10,10,0,0],
+    [0,0,11,11,11,11,11,0,0],
+    [0,0,11,11,11,11,11,0,0],
+    [0,0,12,12,12,12,12,0,0],
+    [0,0,12,12,12,12,12,0,0],
+    [0,0,13,13,13,13,13,0,0],
+    [0,0,13,13,13,13,13,0,0],
+    [0,0,12,12,12,12,12,0,0],
+    [0,0,12,12,12,12,12,0,0],
+    [0,0,14,14,14,14,14,0,0],
+    [0,0,14,14,14,14,14,0,0],
+], dtype=jnp.uint8)
+
+REWARD8 = jnp.array([  # width 9 (no padding)
+    [10,10,10,10,10,10,10,10,10],
+    [10,10,10,10,10,10,10,10,10],
+    [11,11,11,11,11,11,11,11,11],
+    [11,11,11,11,11,11,11,11,11],
+    [12,12,12,12,12,12,12,12,12],
+    [12,12,12,12,12,12,12,12,12],
+    [13,13,13,13,13,13,13,13,13],
+    [13,13,13,13,13,13,13,13,13],
+    [12,12,12,12,12,12,12,12,12],
+    [12,12,12,12,12,12,12,12,12],
+    [14,14,14,14,14,14,14,14,14],
+    [14,14,14,14,14,14,14,14,14],
+], dtype=jnp.uint8)
+
+
+
 
 # --- Enemies params ---
 ENEMY_SIZE = (8, 8)  # w, h
@@ -398,12 +535,28 @@ FIREBALL_HOLD = jnp.int32(4)  # change to taste
 # --- Reward params ---
 REWARD_SIZE = (8, 8)  # w, h
 REWARD_MOVE_SPEED = 0.5  # Faster than enemies
+REWARD_HOLD = jnp.int32(4)
 
 # --- Coin params ---
 COIN_RADIUS = 5
 COIN_COLOR = jnp.array([200, 100, 200], dtype=jnp.uint8)  # Light purple
 COIN_PHASE_DURATION = 900  # 15 seconds at 60 FPS
 COIN_PHASE_SCORE_THRESHOLD = 4000
+COIN = jnp.array([
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,8,8,8,8,8,8,8,0],
+    [0,0,8,8,8,8,8,0,0],
+    [0,0,0,8,8,8,0,0,0],
+    [0,0,0,0,0,0,0,0,0],
+], dtype=jnp.uint8)
+
 # --- Object Colors ---
 PLAYER_COLOR = jnp.array([0, 255, 0], dtype=jnp.uint8)
 ENEMY_COLOR = jnp.array([255, 0, 0], dtype=jnp.uint8)
@@ -1388,6 +1541,15 @@ ENEMY_WALK_LEFT_1_RGB, ENEMY_WALK_LEFT_1_MASK = indices_to_rgb_and_mask(ENEMY_WA
 ENEMY_WALK_LEFT_2_RGB, ENEMY_WALK_LEFT_2_MASK = indices_to_rgb_and_mask(ENEMY_WALK_LEFT_2, PALETTE)
 ENEMY_STUNNED_1_RGB, ENEMY_STUNNED_1_MASK = indices_to_rgb_and_mask(ENEMY_STUNNED_1, PALETTE)
 ENEMY_STUNNED_2_RGB, ENEMY_STUNNED_2_MASK = indices_to_rgb_and_mask(ENEMY_STUNNED_2, PALETTE)
+REWARD1_RGB, REWARD1_MASK = indices_to_rgb_and_mask(REWARD1, PALETTE)
+REWARD2_RGB, REWARD2_MASK = indices_to_rgb_and_mask(REWARD2, PALETTE)
+REWARD3_RGB, REWARD3_MASK = indices_to_rgb_and_mask(REWARD3, PALETTE)
+REWARD4_RGB, REWARD4_MASK = indices_to_rgb_and_mask(REWARD4, PALETTE)
+REWARD5_RGB, REWARD5_MASK = indices_to_rgb_and_mask(REWARD5, PALETTE)
+REWARD6_RGB, REWARD6_MASK = indices_to_rgb_and_mask(REWARD6, PALETTE)
+REWARD7_RGB, REWARD7_MASK = indices_to_rgb_and_mask(REWARD7, PALETTE)
+REWARD8_RGB, REWARD8_MASK = indices_to_rgb_and_mask(REWARD8, PALETTE)
+COIN_RGB, COIN_MASK = indices_to_rgb_and_mask(COIN, PALETTE)
 
 
 
@@ -1519,6 +1681,27 @@ def draw_fireball(image, f, fx, fy):
     def fireball_4(im): return draw_sprite_rgb(im, fx, fy, FIREBALL_4_RGB, FIREBALL_4_MASK)
     return lax.switch(f.ani - 1, [fireball_1, fireball_2, fireball_3, fireball_4], image)
 
+def draw_reward_by_timer(image, rx, ry, timer):
+    """Cycles reward frames 1..8, holding each for 4 frames."""
+    frame = (timer // REWARD_HOLD) % 8 
+
+    def f1(im): return draw_sprite_rgb(im, rx, ry, REWARD1_RGB, REWARD1_MASK)
+    def f2(im): return draw_sprite_rgb(im, rx, ry, REWARD2_RGB, REWARD2_MASK)
+    def f3(im): return draw_sprite_rgb(im, rx, ry, REWARD3_RGB, REWARD3_MASK)
+    def f4(im): return draw_sprite_rgb(im, rx, ry, REWARD4_RGB, REWARD4_MASK)
+    def f5(im): return draw_sprite_rgb(im, rx, ry, REWARD5_RGB, REWARD5_MASK)
+    def f6(im): return draw_sprite_rgb(im, rx, ry, REWARD6_RGB, REWARD6_MASK)
+    def f7(im): return draw_sprite_rgb(im, rx, ry, REWARD7_RGB, REWARD7_MASK)
+    def f8(im): return draw_sprite_rgb(im, rx, ry, REWARD8_RGB, REWARD8_MASK)
+
+    return lax.switch(frame, [f1, f2, f3, f4, f5, f6, f7, f8], image)
+
+def draw_coin(image, cx, cy):
+    # cx, cy are top-left pixel coords (same convention as your other draw_* helpers)
+    return draw_sprite_rgb(image, cx, cy, COIN_RGB, COIN_MASK)
+
+
+
 class MarioBrosRenderer(JAXGameRenderer):
     def __init__(self):
         pass
@@ -1560,14 +1743,14 @@ class MarioBrosRenderer(JAXGameRenderer):
 
             image = lax.fori_loop(0, state.game.enemy.enemy_pos.shape[0], draw_enemy, image)
 
+            # --- Draw rewards ---
             def draw_reward(i, img):
-                active_i = state.game.reward.reward_active[i]
+                is_active = state.game.reward.reward_active[i]
                 def do_draw(_):
                     rx, ry = state.game.reward.reward_pos[i]
-                    return draw_rect(img, rx, ry, *REWARD_SIZE, REWARD_COLOR)
-                def skip_draw(_):
-                    return img
-                return lax.cond(active_i == 1, do_draw, skip_draw, operand=None)
+                    timer  = state.game.reward.reward_timer[i]
+                    return draw_reward_by_timer(img, rx, ry-4, timer)
+                return lax.cond(is_active == 1, do_draw, lambda _: img, operand=None)
 
             image = lax.fori_loop(0, state.game.reward.reward_pos.shape[0], draw_reward, image)
 
@@ -1601,17 +1784,38 @@ class MarioBrosRenderer(JAXGameRenderer):
 
             image = lax.cond(state.game.pow_block_counter > 0, draw_pow, lambda img: img, image)
 
-            def draw_coin(i, img):
-                # SIMPLIFIED: Only check coin_phase_active, not timer
-                coin_should_draw = (state.game.coin_phase_active == 1) & (state.game.coins_collected[i] == 0)
-                return lax.cond(
-                    coin_should_draw,
-                    lambda _: draw_circle(img, COIN_POSITIONS[i][0], COIN_POSITIONS[i][1], COIN_RADIUS, COIN_COLOR),
-                    lambda _: img,
-                    operand=None
-                )
+            # def draw_coin(i, img):
+            #     # SIMPLIFIED: Only check coin_phase_active, not timer
+            #     coin_should_draw = (state.game.coin_phase_active == 1) & (state.game.coins_collected[i] == 0)
+            #     return lax.cond(
+            #         coin_should_draw,
+            #         lambda _: draw_circle(img, COIN_POSITIONS[i][0], COIN_POSITIONS[i][1], COIN_RADIUS, COIN_COLOR),
+            #         lambda _: img,
+            #         operand=None
+            #     )
 
+            # image = lax.fori_loop(0, 8, draw_coin, image)
+
+            def draw_coin(i, img):
+                coin_should_draw = (state.game.coin_phase_active == 1) & (state.game.coins_collected[i] == 0)
+
+                def do_draw(_):
+                    cx, cy = COIN_POSITIONS[i]
+
+                    # convert to top-left for sprite blit
+                    x0 = cx - (9 // 2)
+                    y0 = cy - (12 // 2)
+
+                    return draw_sprite_rgb(img, x0, y0-5, COIN_RGB, COIN_MASK)
+
+                return lax.cond(coin_should_draw, do_draw, lambda _: img, operand=None)
+
+            # unchanged loop count (you used 8)
             image = lax.fori_loop(0, 8, draw_coin, image)
+
+
+            
+            
 
             # --- Draw timer during coin phase ---
             def draw_timer_func(current_img):
