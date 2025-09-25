@@ -1233,7 +1233,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         extra_lives_earned = jnp.maximum(0, new_thresholds_crossed - old_thresholds_crossed)
 
         # Award extra lives
-        lives_with_bonus = jnp.minimum(9, state.lives + extra_lives_earned)
+        lives_with_bonus = jnp.minimum(3, state.lives + extra_lives_earned)
 
         # Check game end conditions
         time_up = new_timer <= 0
@@ -1251,32 +1251,32 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Level progression when thief is caught
         new_level = jax.lax.select(thief_caught, state.level + 1, state.level)
-        
+
         # Reset level when ANY of these conditions occur:
         # 1. Thief is caught (advance to next level)
         # 2. Life is lost (time up or thief escaped) - restart current level
         should_reset_level = jnp.logical_or(thief_caught, life_lost)
-        
+
         # When thief is caught, reset thief to starting position and reset timer
         thief_reset_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
         thief_reset_y = self.consts.FLOOR_2_Y
         thief_reset_floor = 1  # Middle floor
-        
+
         # Reset thief state when level resets (either caught or life lost)
         final_thief = ThiefState(
             x=jax.lax.select(should_reset_level, jnp.array(thief_reset_x), new_thief.x),
             y=jax.lax.select(should_reset_level, jnp.array(thief_reset_y), new_thief.y),
             floor=jax.lax.select(should_reset_level, jnp.array(thief_reset_floor), new_thief.floor),
-            speed=jax.lax.select(should_reset_level, 
-                                jnp.array(self.consts.THIEF_BASE_SPEED * (1.0 + new_level * self.consts.THIEF_SPEED_SCALE)), 
+            speed=jax.lax.select(should_reset_level,
+                                jnp.array(self.consts.THIEF_BASE_SPEED * (1.0 + new_level * self.consts.THIEF_SPEED_SCALE)),
                                 new_thief.speed),
             direction=jax.lax.select(should_reset_level, jnp.array(1), new_thief.direction),
             escaped=jax.lax.select(should_reset_level, jnp.array(False), new_thief.escaped)
         )
-        
+
         # Reset timer when level resets
         final_timer = jax.lax.select(should_reset_level, self.consts.BASE_TIMER, new_timer)
-        
+
         # Reset player position when level resets
         player_reset_x = self.consts.TOTAL_BUILDING_WIDTH - 78  # Near right edge
         final_player = PlayerState(
@@ -1581,6 +1581,11 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 white_digits[digit] = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([255, 255, 255], dtype=jnp.uint8)
 
         sprites['white_digits'] = white_digits
+
+        # Create an invisible placeholder sprite for leading zeros
+        # Same size as other digits but matching background color #578bc9
+        invisible_sprite = jnp.ones((8, 6, 3), dtype=jnp.uint8) * jnp.array([87, 139, 201], dtype=jnp.uint8)  # #578bc9 background color
+        sprites['invisible_digit'] = invisible_sprite
 
         # Load the Activision logo sprite
         try:
@@ -2224,31 +2229,35 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Position timer to the right of lives - move this calculation earlier
         timer_start_x = life_start_x + (3 * (life_sprite_width + 2)) + 10
         timer_y = life_y
-        
+
         # Score display above the timer - white digits showing current score
         white_digits = self.sprites['white_digits']
-        
+        invisible_digit = self.sprites['invisible_digit']
+
         # Use the actual score from state
         score_value = jnp.minimum(999999, state.score)  # Cap at 999,999 for display
-        
-        # Extract digits from actual score - let's show 4 digits for better visibility
+
+        # Extract all 6 digits for scores up to 999,999
+        score_hundred_thousands = (score_value // 100000) % 10
+        score_ten_thousands = (score_value // 10000) % 10
         score_thousands = (score_value // 1000) % 10
         score_hundreds = (score_value // 100) % 10
         score_tens = (score_value // 10) % 10
         score_units = score_value % 10
-        
+
         # Position score directly above the timer
-        score_start_x = timer_start_x - 10  # Offset a bit to the left
+        score_start_x = timer_start_x - 28  # Shifted further to the left
         score_y = timer_y - 10  # Position above timer
-        
-        # Helper function to draw score digit - exact same pattern as the timer function
-        def draw_score_digit(game_area, digit_value, x, y):
+
+        # Helper function to draw score digit or invisible placeholder
+        def draw_score_digit_or_invisible(game_area, digit_value, x, y, should_show_digit):
             # Use JAX select to choose appropriate sprite for each digit 0-9
             result_game_area = game_area
 
-            # Check each digit 0-9 and draw if it matches - exact same as timer
+            # If we should show the digit, draw the actual digit sprite
+            # If not, draw the invisible sprite
             for digit in range(10):
-                digit_matches = digit_value == digit
+                digit_matches = jnp.logical_and(digit_value == digit, should_show_digit)
                 digit_sprite = white_digits[digit]
                 result_game_area = jnp.where(
                     digit_matches,
@@ -2256,17 +2265,41 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                     result_game_area
                 )
 
+            # Draw invisible sprite when we shouldn't show the digit
+            result_game_area = jnp.where(
+                jnp.logical_not(should_show_digit),
+                draw_sprite(result_game_area, invisible_digit, x, y),
+                result_game_area
+            )
+
             return result_game_area
 
-        # Draw score digits - show 4 digits
+        # Determine which digits should be visible (suppress leading zeros)
+        # A digit is visible if it's non-zero OR any digit to its left is non-zero OR it's the units digit
+        has_hundred_thousands = score_hundred_thousands > 0
+        has_ten_thousands = jnp.logical_or(has_hundred_thousands, score_ten_thousands > 0)
+        has_thousands = jnp.logical_or(has_ten_thousands, score_thousands > 0)
+        has_hundreds = jnp.logical_or(has_thousands, score_hundreds > 0)
+        has_tens = jnp.logical_or(has_hundreds, score_tens > 0)
+        # Units digit is always shown
+
+        # Draw all 6 digits
         digit_width = 6  # Approximate digit width
         digit_spacing = 1  # Space between digits
-        
-        # Draw all 4 digits (thousands, hundreds, tens, units)
-        game_area = draw_score_digit(game_area, score_thousands, score_start_x, score_y)
-        game_area = draw_score_digit(game_area, score_hundreds, score_start_x + (digit_width + digit_spacing), score_y)
-        game_area = draw_score_digit(game_area, score_tens, score_start_x + 2 * (digit_width + digit_spacing), score_y)
-        game_area = draw_score_digit(game_area, score_units, score_start_x + 3 * (digit_width + digit_spacing), score_y)
+
+        game_area = draw_score_digit_or_invisible(game_area, score_hundred_thousands,
+                                                score_start_x, score_y, has_hundred_thousands)
+        game_area = draw_score_digit_or_invisible(game_area, score_ten_thousands,
+                                                score_start_x + (digit_width + digit_spacing), score_y, has_ten_thousands)
+        game_area = draw_score_digit_or_invisible(game_area, score_thousands,
+                                                score_start_x + 2 * (digit_width + digit_spacing), score_y, has_thousands)
+        game_area = draw_score_digit_or_invisible(game_area, score_hundreds,
+                                                score_start_x + 3 * (digit_width + digit_spacing), score_y, has_hundreds)
+        game_area = draw_score_digit_or_invisible(game_area, score_tens,
+                                                score_start_x + 4 * (digit_width + digit_spacing), score_y, has_tens)
+        # Units digit is always visible
+        game_area = draw_score_digit_or_invisible(game_area, score_units,
+                                                score_start_x + 5 * (digit_width + digit_spacing), score_y, True)
 
         # Countdown timer (to the right of lives) - black digits counting down from 50 to 0
         black_digits = self.sprites['black_digits']
