@@ -14,18 +14,10 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as jr
 
 """
-README README README README README README README 
+README
 Aaron Reinhardt
 Aaron Weis
 Leon Denis Kristof
-
-Starting our game with direct call provides more features than the play.py call.
-Game over, death and score display do not work in play.py call.
-
-Float casting is a temporary solution and will be fixed.
-
-direct call: python -m jaxatari.games.jax_galaxian
-play.py call: python scripts/play.py --game src/jaxatari/games/jax_galaxian.py --record my_record_file.npz
 """
 
 
