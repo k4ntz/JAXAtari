@@ -55,6 +55,101 @@ PALETTE = jnp.array([
     [128, 232, 128],  # 14: light green  (reward5–8 bottom band)
 ], dtype=jnp.uint8)
 
+digits = {
+    0: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0]
+    ]),
+    1: jnp.array([
+        [0,0,1,1,0,0],
+        [0,1,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,1,1,1,1,0]
+    ]),
+    2: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [0,0,0,0,1,1],
+        [0,0,0,1,1,0],
+        [0,0,1,1,0,0],
+        [0,1,1,0,0,0],
+        [1,1,1,1,1,1]
+    ]),
+    3: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [0,0,0,0,1,1],
+        [0,0,1,1,1,0],
+        [0,0,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0]
+    ]),
+    4: jnp.array([
+        [0,0,0,1,1,0],
+        [0,0,1,1,1,0],
+        [0,1,1,1,1,0],
+        [1,1,0,1,1,0],
+        [1,1,1,1,1,1],
+        [0,0,0,1,1,0],
+        [0,0,0,1,1,0]
+    ]),
+    5: jnp.array([
+        [1,1,1,1,1,1],
+        [1,1,0,0,0,0],
+        [1,1,1,1,1,0],
+        [0,0,0,0,1,1],
+        [0,0,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0]
+    ]),
+    6: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,0,0],
+        [1,1,0,0,0,0],
+        [1,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0]
+    ]),
+    7: jnp.array([
+        [1,1,1,1,1,1],
+        [0,0,0,0,1,1],
+        [0,0,0,1,1,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0],
+        [0,0,1,1,0,0]
+    ]),
+    8: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,0]
+    ]),
+    9: jnp.array([
+        [0,1,1,1,1,0],
+        [1,1,0,0,1,1],
+        [1,1,0,0,1,1],
+        [0,1,1,1,1,1],
+        [0,0,0,0,1,1],
+        [0,0,0,0,1,1],
+        [0,1,1,1,1,0]
+    ])
+}
+
+DIGITS_ARRAY = jnp.stack([digits[i] for i in range(10)])
+
 PLAYER_STANDING_RIGHT= jnp.array([
     [0,0,0,1,1,0,0,0], 
     [0,0,1,1,1,0,0,0], 
@@ -1553,7 +1648,6 @@ COIN_RGB, COIN_MASK = indices_to_rgb_and_mask(COIN, PALETTE)
 
 
 
-
 import jax.numpy as jnp
 from jax import lax
 
@@ -1699,6 +1793,28 @@ def draw_reward_by_timer(image, rx, ry, timer):
 def draw_coin(image, cx, cy):
     # cx, cy are top-left pixel coords (same convention as your other draw_* helpers)
     return draw_sprite_rgb(image, cx, cy, COIN_RGB, COIN_MASK)
+
+def number_to_array(num, length: int = 5):
+    num = jnp.asarray(num, dtype=jnp.int32)
+    divisors = 10 ** jnp.arange(length - 1, -1, -1, dtype=jnp.int32)
+    return (num // divisors) % 10
+
+def draw_score(image, score):
+    n_digits = 5
+    arr = number_to_array(score, n_digits)   # z. B. [0 0 8 0 0]
+
+    digit_width = 7
+    start_x = SCREEN_WIDTH - 5 - digit_width * n_digits
+    xs = start_x + jnp.arange(n_digits) * digit_width
+    ys = jnp.full((n_digits,), 5)
+
+    def body_fn(i, img):
+        digit_idx = arr[i]                           # getracete Zahl 0–9
+        sprite = DIGITS_ARRAY[digit_idx]             # sicheres JAX-Indexing
+        rgb, mask = indices_to_rgb_and_mask(sprite, PALETTE)
+        return draw_sprite_rgb(img, xs[i], ys[i], rgb, mask)
+
+    return lax.fori_loop(0, n_digits, body_fn, image)
 
 
 
@@ -1857,17 +1973,7 @@ class MarioBrosRenderer(JAXGameRenderer):
 
             # --- Draw score using 7-segment digits ---
             score = state.game.score
-            digit_positions = 5  # Max digits to display
-
-            def draw_score_digit(i, img):
-                power = digit_positions - 1 - i
-                divisor = 10 ** power
-                digit = (score // divisor) % 10
-                x = SCREEN_WIDTH - (digit_positions - i) * 12 - 5
-                y = 5
-                return draw_digit(img, digit, x, y)
-
-            image = lax.fori_loop(0, digit_positions, draw_score_digit, image)
+            image = draw_score(image, score)
 
             return image
         
