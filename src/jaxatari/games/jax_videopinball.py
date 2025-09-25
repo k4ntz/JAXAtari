@@ -73,6 +73,40 @@ class JaxVideoPinball(
         frameskip: int = 0,
         reward_funcs: list[Callable] | None = None,
     ):
+        """
+        Initialize the VideoPinball environment.
+
+        Parameters
+        ----------
+        consts : VideoPinballConstants | None
+            Configuration constants for the environment. When None, a default
+            VideoPinballConstants is created to ensure a consistent object is
+            provided to both the superclass and the renderer.
+        frameskip : int
+            Temporal resolution control (number of frames to skip). Kept on the
+            initializer for API compatibility and potential superclass usage.
+        reward_funcs : list[Callable] | None
+            Optional list of reward shaping callables. Converted to a tuple to
+            make the collection immutable and inexpensive to compare or hash.
+
+        Notes
+        -----
+        - reward_funcs is stored as a tuple when provided to prevent accidental
+          mutation after initialization and to allow stable equality semantics.
+        - action_set is explicitly defined here to make the environment's discrete
+          action space explicit and self-contained.
+        - renderer is constructed with the same consts to guarantee rendering uses
+          the identical configuration as the runtime environment.
+
+        Attributes
+        ----------
+        reward_funcs : tuple[Callable, ...] | None
+            Immutable sequence of reward functions (or None if not supplied).
+        action_set : set[Action]
+            The set of allowed actions for this environment.
+        renderer : VideoPinballRenderer
+            Renderer instance configured with the environment constants.
+        """
         consts = consts or VideoPinballConstants()
         super().__init__(consts)
         if reward_funcs is not None:
@@ -92,9 +126,29 @@ class JaxVideoPinball(
 
     def reset(self, key) -> Tuple[VideoPinballObservation, VideoPinballState]:
         """
-        Resets the game state to the initial state.
-        Returns the initial state and the reward (i.e. 0)
+        Reset the environment to a deterministic starting state using the provided PRNG key.
+
+        Parameters
+        ----------
+        key : jnp.ndarray
+            JAX PRNG key used to seed stochastic behavior; stored in the returned state
+            so future randomness is reproducible.
+
+        Returns
+        -------
+        Tuple[VideoPinballObservation, VideoPinballState]
+            initial_obs, state
+            - initial_obs: observation derived from the freshly initialized state (produced
+              with self._get_observation) so the caller sees a view that matches internal state.
+            - state: full game state with fields set to gameplay-appropriate defaults, chosen
+              to establish consistent startup behavior
+
+        Notes
+        -----
+        This function intentionally enforces deterministic initial conditions; any episode
+        variation should originate from the provided PRNG key or subsequent agent actions.
         """
+
         state = VideoPinballState(
             ball_x=jnp.array(self.consts.BALL_START_X, dtype=jnp.float32),
             ball_y=jnp.array(self.consts.BALL_START_Y, dtype=jnp.float32),
@@ -157,7 +211,40 @@ class JaxVideoPinball(
     ) -> Tuple[
         VideoPinballObservation, VideoPinballState, float, bool, VideoPinballInfo
     ]:
-        """Perform a single step in the environment given an action and a previous state."""
+        """
+        Description
+        ----------
+        Execute one environment timestep given a discrete action and the previous state.
+        This function is the JAX-jitted entry point for environment dynamics and orchestrates
+        the per-frame subsystems (plunger, flippers, ball physics, collisions, scoring,
+        cooldowns, respawn and bookkeeping).
+
+        Parameters
+        ----------
+        state : VideoPinballState
+            Full environment state before applying the action. Must contain the PRNG key
+            so stochastic components remain reproducible.
+        action : chex.Array
+            A JaxAtariAction (integer) representing the discrete action to take.
+
+        Returns
+        ----------
+        observation : VideoPinballObservation
+            Observation derived from the updated state.
+        new_state : VideoPinballState
+            Complete environment state after applying the action.
+        reward : float
+            Environment reward (difference in score by default).
+        done : bool
+            Whether the episode has terminated (out of lives and all points counted).
+        info : VideoPinballInfo
+            Additional info on the game state.
+
+        Design Notes / Rationale
+        ------------------------
+        - Accepting the full `state` (including rng_key) ensures deterministic,
+            reproducible randomness when splitting keys inside the step.
+        """
 
         # Give different rng keys to different stochastic parts of the environment
         rng_key, ball_step_key = jrandom.split(state.rng_key)
@@ -370,7 +457,47 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoPinballState):
-        """For the current state, generate the observation."""
+        """
+        Description
+         ----------
+        Produce a VideoPinballObservation that encodes the current logical scene as
+        fixed-format integer arrays. Each entity is represented as [x, y, w, h, active]
+        and grouped by category (ball, flippers, spinners, targets, bumpers, rollovers,
+        tilt plugs, plunger). Converting to jnp.int32 here ensures a stable, JAX-friendly
+        dtype for downstream vectorized computations and comparisons.
+
+        Parameters
+         ----------
+        state : VideoPinballState
+            Current game state (positions, angles, target/rollover/bumper flags,
+            plunger position, score, multipliers, etc.).
+            - Types are preserved from the state where meaningful (e.g. active flags)
+                but cast to int32 when placed into observation arrays to maintain a
+                homogeneous numeric representation for JAX transformations.
+
+        Returns
+         ----------
+        VideoPinballObservation
+            Structured observation with fields:
+            - ball: jnp.ndarray shape (5,)  -> [x, y, w, h, active]
+            - flippers: jnp.ndarray shape (2,5)
+              (each flipper computed by taking min/max extents across two scene
+              objects for its current angle to form a single bounding box)
+            - spinners: jnp.ndarray shape (2,5)
+            - targets: jnp.ndarray shape (4,5)
+              (active flags taken from state.active_targets)
+            - bumpers: jnp.ndarray shape (3,5)
+            - rollovers: jnp.ndarray shape (2,5)
+            - tilt_mode_hole_plugs: jnp.ndarray shape (2,5)
+            - plunger: jnp.ndarray shape (5,) (height depends on state.plunger_position)
+            - score, lives_lost, atari_symbols, bumper_multiplier, rollover_counter,
+              color_cycling, tilt_mode_active: all jnp.int32 scalars
+
+         Design Notes / Rationale
+         ----------
+        - Canonical layout: using a consistent [x,y,w,h,active] tuple for all entities
+            is used for compatibility with space.Box.
+        """
 
         ball = EntityState(
             x=state.ball_x.astype(jnp.int32),
@@ -728,7 +855,24 @@ class JaxVideoPinball(
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
-        """Convert the observation to a flat array."""
+        """
+        Description
+            Convert a structured VideoPinballObservation into a single 1D jnp.int32 array.
+
+        Parameters
+         ----------
+            obs : VideoPinballObservation
+                Structured observation containing fields (ball, spinners, flippers, plunger, targets, bumpers, rollovers, tilt_mode_hole_plugs, score, lives_lost, atari_symbols, bumper_multiplier, rollover_counter, color_cycling, tilt_mode_active).
+
+        Returns
+         ----------
+            jnp.ndarray
+                One-dimensional jnp.int32 array with a stable concatenation order matching observation_space().
+
+         Design Notes / Rationale
+         ----------
+            - Maintain a deterministic field order so downstream consumers get a consistent jax array.
+        """
         return jnp.concatenate(
             [
                 obs.ball.flatten(),
@@ -764,8 +908,25 @@ class JaxVideoPinball(
 
     def observation_space(self) -> spaces.Dict:
         """
-        Returns the space of possible observations of VideoPinball.
-        The datatype of all entries is jnp.int32.
+        Description
+            The observation_space describes the structured, JAX-friendly view of the observations.
+            It mirrors the VideoPinballObservation dataclass produced by _get_observation and
+            provides deterministic shapes, dtypes, and bounds so agents and wrappers can rely on them.
+
+        Parameters
+            ----------
+            None
+
+        Returns
+            ----------
+            spaces.Dict
+                A mapping of observation keys to Gym-like Box spaces. Each Box uses jnp.int32
+                and objects in the game have fixed shapes (e.g. (x,y,w,h,active)).
+
+         Design Notes / Rationale
+            -----------------------
+            - Shapes and dtypes are chosen to exactly match _get_observation and obs_to_flat_array.
+            - Using jnp.int32 everywhere enforces a homogeneous numeric representation.
         """
 
         # Most objects comprise of (x, y, width, height, active)
@@ -814,6 +975,26 @@ class JaxVideoPinball(
     def _get_info(
         self, state: VideoPinballState, all_rewards: chex.Array = None
     ) -> VideoPinballInfo:
+        """
+        Description
+            This helper assembles a small information dictionary (VideoPinballInfo)
+            from the full game state. The function is lightweight and intended to
+            provide information not part of the observation.
+
+        Parameters
+            ----------
+            state : VideoPinballState
+                Current environment state from which fields are sampled.
+            all_rewards : Optional[chex.Array]
+                Optional array of reward function outputs. Defaults to None.
+
+        Returns
+            ----------
+            VideoPinballInfo
+                A small dataclass holding runtime meta information:
+                time, plunger_power, cooldowns, rollover / respawn flags, tilt counter
+                and the optional per-step reward vector (over reward functions).
+        """
         return VideoPinballInfo(
             time=state.step_counter,
             plunger_power=state.plunger_power,
@@ -854,8 +1035,30 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _plunger_step(self, state: VideoPinballState, action: chex.Array) -> chex.Array:
         """
-        Update the plunger position based on the current state and action.
-        And set the plunger power to 2 * plunger_position.
+        Description
+            Update plunger position and compute launch power in a JAX-compatible, functional manner.
+            Only responds to FIRE when the ball is not in play; on FIRE it derives a speed from the
+            current plunger position and then resets the position to represent a launched ball.
+
+        Parameters
+         ----------
+            state: VideoPinballState
+                Current env state. Only state.plunger_position and state.ball_in_play are consumed.
+            action: chex.Array
+                Discrete JaxAtariAction (e.g. Action.UP / Action.DOWN / Action.FIRE).
+
+        Returns
+         ----------
+            Tuple[chex.Array, chex.Array]
+                plunger_position:
+                    Integer-like jnp.ndarray holding the updated plunger position (clamped to [0, PLUNGER_MAX_POSITION]).
+                    Reset to 0 when the ball is in play or immediately after a FIRE that launches the ball.
+                plunger_power:
+                    Float jnp.ndarray representing the launch speed. Non-zero only when FIRE and ball not in play;
+                    calculated as (plunger_position / PLUNGER_MAX_POSITION) * BALL_MAX_SPEED.
+
+         Design Notes / Rationale
+            - Explicitly zero position/power when state.ball_in_play is True to avoid stale values and ensure stable dtypes.
         """
 
         # if ball is not in play and DOWN was clicked, move plunger down
@@ -908,7 +1111,20 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _flipper_step(self, state: VideoPinballState, action: chex.Array):
         """
-        Update the flipper angles (has 4 states) and counters based on the current state and action.
+        Description
+            Compute and update flipper discrete states (4 possible angles) and cooldown counters.
+
+        Parameters
+            ----------
+            state : VideoPinballState
+                Current environment state containing flipper angles and counters.
+            action : chex.Array
+                Discrete action input indicating if a flipper control (LEFT, RIGHT, UP) is used.
+
+        Returns
+            ----------
+            tuple[chex.Array, chex.Array, chex.Array, chex.Array]
+                (left_flipper_angle, right_flipper_angle, left_flipper_counter, right_flipper_counter)
         """
 
         # Move left and right flippers up if LEFT/RIGHT/UP was clicked
@@ -2893,12 +3109,22 @@ class JaxVideoPinball(
         self, ball_direction
     ) -> tuple[chex.Array, chex.Array]:
         """
-        Atari Video Pinball has 4 ball directions:
-        0: Top Left
-        1: Bottom Left
-        2: Top Right
-        3: Bottom Right
-        This function returns the sign of the ball velocity in x and y direction, where +1 means right/down and -1 means left/up.
+        Description
+            Compute the signed multipliers for x and y velocity based on the discrete
+            ball_direction used by Atari VideoPinball.
+
+        Parameters
+            ----------
+            ball_direction: chex.Array
+                Discrete direction index in {0,1,2,3}:
+                    0: Top Left, 1: Bottom Left, 2: Top Right, 3: Bottom Right.
+
+        Returns
+            ----------
+            tuple[chex.Array, chex.Array]
+                (x_sign, y_sign) each a float32 scalar equal to +1.0 or -1.0. These are
+                intended to be multiplied with non-negative speed components to produce
+                screen-space signed velocities.
         """
         x_sign = jnp.where(
             jnp.logical_or(ball_direction == 2, ball_direction == 3),
@@ -2915,7 +3141,32 @@ class JaxVideoPinball(
     @partial(jax.jit, static_argnums=(0,))
     def _get_ball_direction(self, signed_vel_x, signed_vel_y) -> chex.Array:
         """
-        Calculates the new ball direction (0-3) from the signed x and y velocities.
+        Description
+            This deterministically maps signed x/y velocities to a discrete direction index (0-3).
+            The mapping encodes quadrant-like directions with a stable tie-breaking rule so it can be
+            applied elementwise to JAX/chex arrays without branching.
+
+        Parameters
+         ----------
+            signed_vel_x : chex.Array
+                Array of signed x velocities (can be scalar or batched). Negative x is treated as "left".
+            signed_vel_y : chex.Array
+                Array of signed y velocities (can be scalar or batched). Negative y is treated as "up" (Atari defines top left as origin).
+
+        Returns
+         ----------
+            chex.Array
+                Scalar or array of integer direction indices in [0, 3] with the following encoding:
+                0 = top-left (x <= 0, y <= 0)
+                1 = bottom-left (x <= 0, y > 0)
+                2 = top-right (x > 0, y <= 0)
+                3 = bottom-right (x > 0, y > 0)
+                The result type matches JAX/chex semantics for array/scalar outputs.
+
+         Design Notes / Rationale
+            - Uses inclusive boundary (<=) for zero to ensure deterministic classification of zero velocity.
+            - Constructs a boolean vector in a specific order and uses argmax so the first true entry
+              determines the direction; this provides a consistent tie-breaking behavior and vectorizes well.
         """
         # If both values are negative, we move closer to (0, 0) in the top left corner and fly in direction 0
         top_left = jnp.logical_and(signed_vel_x <= 0, signed_vel_y <= 0)  # 0
@@ -2953,15 +3204,67 @@ class JaxVideoPinball(
         self, state: VideoPinballState, action: Action, ball_x: chex.Array
     ):
         """
-        Checks wheter the player is nudging the machine and updates the tilt counter and tilt mode as well as the ball position accordingly.
+        Description
+            Compute and update the machine's tilt state driven by player nudges.
+            Returns whether tilt mode becomes active, the updated tilt counter and a
+            possibly nudged horizontal ball position. Keeps all logic JAX-friendly so
+            it can be jitted and vectorized.
+
+        Parameters
+            ----------
+            state : VideoPinballState
+                Full environment state (used for step counter and existing tilt values).
+            action : Action
+                Discrete action used to detect nudges (LEFTFIRE / RIGHTFIRE are of interest here).
+            ball_x : chex.Array
+                Current horizontal ball coordinate (float32), y direction can not be changed and is left out.
+
+        Returns
+            ----------
+            tuple[chex.Array, chex.Array, chex.Array]
+                (tilt_mode_active, tilt_counter, ball_x)
+                - tilt_mode_active: boolean-like scalar indicating if tilt mode is active.
+                - tilt_counter: integer-like scalar clamped to configured bounds.
+                - ball_x: possibly adjusted ball x coordinate after nudge effect.
+
+         Design Notes / Rationale
+            - Use interval-based updates for both counter changes and ball displacement
+                to match original game behavior.
         """
 
         # branch when there *is* a nudge (nudge_direction != 0)
         def _nudge_branch(state: VideoPinballState, action: Action, ball_x: chex.Array):
             """
-            The player is nudging the machine.
-            This increases the tilt counter on an interval and may activate tilt mode.
-            Additionally, the ball is moved horizontally depending on the nudge direction on an interval.
+            Description
+                Compute the updated tilt state and optionally shift the ball's horizontal position when the player nudges the machine.
+
+            Parameters
+            ----------
+                state: VideoPinballState
+                    Current game state (contains step_counter and tilt_counter).
+                action: JaxAtariAction
+                    Player input; nudging is detected via LEFTFIRE or RIGHTFIRE actions.
+                ball_x: chex.Array
+                    Scalar/array representing the ball's horizontal coordinate (float32). Kept generic to allow JAX array types and broadcasting.
+
+            Returns
+            ----------
+                tuple(
+                    tilt_mode_from_counter: jnp.ndarray (bool scalar/array),
+                    tilt_counter_capped: jnp.ndarray (integer scalar/array),
+                    ball_x_new: chex.Array (float scalar/array)
+                    tilt_mode_from_counter:
+                        Boolean indicating whether tilt mode would be active after applying the interval increment (used to drive game behaviour).
+                    tilt_counter_capped:
+                        Tilt counter bounded at the configured TILT_COUNT_TILT_MODE_ACTIVE threshold so downstream logic sees a stable maximum.
+                    ball_x_new:
+                        Horizontally adjusted ball position when a nudge takes effect; unchanged otherwise. Returned as same dtype/shape as input to preserve JAX tracing.
+
+             Design Notes / Rationale
+                -----------------------
+                - Intervaled updates: Both tilt-count increases and nudge effects are applied only on configurable intervals to mimic the original game's timing
+                - Exponential increase (doubling) when tilt counter > 0:
+                   Mimics the original game.
             """
             # increase tilt counter on interval
             inc_cond = jnp.equal(
@@ -3007,8 +3310,34 @@ class JaxVideoPinball(
             state: VideoPinballState, action: Action, ball_x: chex.Array
         ):
             """
-            The player is not nudging the machine.
-            This decreases the tilt counter on an interval, but can not deactivate tilt mode.
+            Description
+                Compute the periodic decay of the tilt counter when the player is not nudging.
+                This branch never clears an active tilt mode — it only decays the counter over time
+                until the configured minimum or the tilt threshold is reached again.
+
+            Parameters
+                ----------
+                state : VideoPinballState
+                    Full game state; used for step timing and existing tilt values.
+                action : Action
+                    Player action (kept for jax.cond() consistency; not used here).
+                ball_x : chex.Array
+                    Horizontal ball coordinate (returned unchanged by this branch (also for consistency with jax conditional)).
+
+            Returns
+                ----------
+                tuple[chex.Array, chex.Array, chex.Array]
+                    (tilt_mode_active, tilt_counter, ball_x) where:
+                        - tilt_mode_active: boolean scalar indicating whether tilt mode remains active
+                        - tilt_counter: integer scalar representing the (possibly decayed) tilt counter
+                        - ball_x: returned horizontal ball coordinate (unchanged)
+
+             Design Notes / Rationale
+                - Decay uses intervaled halving to mimic the original game's conservative recovery:
+                  the counter is only reduced on specific step intervals to avoid rapid recovery.
+                - Tilt mode is intentionally not deactivated in this branch so that once triggered,
+                  tilt remains until explicit reset elsewhere (matching original gameplay semantics).
+                - Counter clamped to be non-negative to avoid negative underflow during repeated halvings.
             """
 
             dec_cond = jnp.equal(
@@ -3171,8 +3500,45 @@ class JaxVideoPinball(
         key,
     ):
         """
-        Update the pinballs position and velocity based on the current state and action.
+        Description
+            Comprehensive dynamics update for a single timestep for the ball.
+            Applies plunger impulse, gravity, nudge/tilt adjustments, computes the
+            unswept trajectory, checks for the invisible plunger-block, resolves
+            collisions (including flippers, spinners, bumpers, etc.) and returns
+            the updated kinematic state and bookkeeping flags.
+
+        Parameters
+            ----------
+            state : VideoPinballState
+                Complete environment state (positions, velocities, flipper states, rng_key, etc.)
+            plunger_power : chex.Array
+                Scalar launch impulse computed by the plunger subsystem for this step.
+            action : chex.Array
+                Discrete JAX action for current timestep.
+            key : chex.Array
+                JAX PRNG key used for stochastic effects (split inside helpers as needed).
+
+        Returns
+            ----------
+            Tuple[
+                chex.Array,  # ball_x
+                chex.Array,  # ball_y
+                chex.Array,  # ball_direction
+                chex.Array,  # ball_vel_x
+                chex.Array,  # ball_vel_y
+                chex.Array,  # ball_in_play (bool-like)
+                chex.Array,  # scoring_list (bool vector per score type)
+                chex.Array,  # tilt_mode_active (bool-like)
+                chex.Array,  # tilt_counter (int)
+                chex.Array,  # left_flipper_active (bool-like)
+                chex.Array,  # right_flipper_active (bool-like)
+            ]
+
+         Design Notes / Rationale
+            - Defer geometric / collision specifics to the specialized helpers so this
+              function focuses on sequencing (plunger → gravity → movement → collisions → final velocity).
         """
+
         ball_x = state.ball_x
         ball_y = state.ball_y
         ball_vel_x = state.ball_vel_x
@@ -3383,11 +3749,47 @@ class JaxVideoPinball(
         special_target_cooldown,
         tilt_mode_active,
         tilt_counter,
-    ):
-        """
-        If the ball is lost, we calculate the final score, calculate the respawn timer,
-        i.e. the time until the animations are done and we should respawn the ball.
-        Further we reset the lives, active targets, atari symbols, special target cooldown and tilt mode/counter if the respawn timer is over.
+        ):
+        """ 
+        Description
+            If the ball is lost, we calculate the final score, calculate the respawn timer,
+            i.e. the time until the animations are done and we should respawn the ball.
+            Further we reset the lives, active targets, atari symbols, special target cooldown and tilt mode/counter if the respawn timer is over.
+
+        Parameters
+        ----------
+            respawn_timer (jnp.ndarray | int)
+                Scalar countdown (ticks) until respawn animations complete.
+            rollover_counter (jnp.ndarray | int)
+                Counter tracked across lives used for rollover bonuses when all lives are lost.
+            score (jnp.ndarray | int)
+                Player score accumulator; may be incremented at periodic animation frames.
+            atari_symbols (jnp.ndarray | int)
+                Number of collected Atari-symbols.
+            lives_lost (jnp.ndarray | int)
+                Count of lives lost so far; may be reset when respawn completes.
+            active_targets (jnp.ndarray)
+                Representation of currently active targets (diamonds and lit up).
+            special_target_cooldown (jnp.ndarray | int)
+                Ticks remaining before a special target is spawned.
+            tilt_mode_active (jnp.ndarray | bool)
+                Whether tilt penalties are currently suppressing play; cleared on respawn completion.
+            tilt_counter (jnp.ndarray | int)
+                Accumulated tilt counter; cleared when respawn finishes.
+
+        Returns
+        ----------
+            (
+                respawn_timer (jnp.ndarray | int),
+                rollover_counter (jnp.ndarray | int),
+                score (jnp.ndarray | int),
+                atari_symbols (jnp.ndarray | int),
+                lives_lost (jnp.ndarray | int),
+                active_targets (jnp.ndarray),
+                special_target_cooldown (jnp.ndarray | int),
+                tilt_mode_active (jnp.ndarray | bool),
+                tilt_counter (jnp.ndarray | int)
+            )
         """
 
         multiplier = jnp.clip(atari_symbols + 1, max=4)
