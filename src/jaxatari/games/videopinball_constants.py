@@ -1229,7 +1229,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(0),
@@ -1238,7 +1240,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(1),
@@ -1247,7 +1251,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(2),
@@ -1256,7 +1262,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(3),
@@ -1266,7 +1274,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_00_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(4),
@@ -1275,7 +1285,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_16_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(5),
@@ -1284,7 +1296,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_32_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(6),
@@ -1293,7 +1307,9 @@ class VideoPinballConstants(NamedTuple):
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_LEFT_48_END_X - FLIPPER_LEFT_PIVOT_X),
         hit_box_x_offset=FLIPPER_LEFT_PIVOT_X,
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(9),
         variant=jnp.array(7),
@@ -1302,8 +1318,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_00_BOT_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_00_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_00_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(8),
@@ -1311,8 +1331,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_16_BOT_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_16_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_16_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(9),
@@ -1320,8 +1344,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_32_BOT_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_32_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_32_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(10),
@@ -1329,8 +1357,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_48_BOT_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_BOT - FLIPPER_48_BOT_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_BOT, FLIPPER_48_BOT_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(11),
@@ -1339,8 +1371,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_00_TOP_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_00_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_00_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_00_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_00_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(12),
@@ -1348,8 +1384,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_16_TOP_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_16_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_16_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_16_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_16_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(13),
@@ -1357,8 +1397,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_32_TOP_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_32_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_32_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_32_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_32_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(14),
@@ -1366,8 +1410,12 @@ class VideoPinballConstants(NamedTuple):
     RIGHT_FLIPPER_48_TOP_SCENE_OBJECT = SceneObject(
         hit_box_height=jnp.abs(FLIPPER_PIVOT_Y_TOP - FLIPPER_48_TOP_END_Y),
         hit_box_width=jnp.abs(FLIPPER_RIGHT_PIVOT_X - FLIPPER_RIGHT_48_END_X),
-        hit_box_x_offset=jnp.min(jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])),
-        hit_box_y_offset=jnp.min(jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])),
+        hit_box_x_offset=jnp.min(
+            jnp.array([FLIPPER_RIGHT_PIVOT_X, FLIPPER_RIGHT_48_END_X])
+        ),
+        hit_box_y_offset=jnp.min(
+            jnp.array([FLIPPER_PIVOT_Y_TOP, FLIPPER_48_TOP_END_Y])
+        ),
         reflecting=jnp.array(1),
         score_type=jnp.array(10),
         variant=jnp.array(15),
@@ -1520,7 +1568,14 @@ class VideoPinballConstants(NamedTuple):
             if scene_object.reflecting == 0
         ]
     ).squeeze()
-    TOTAL_SCORE_TYPES = jnp.max(jnp.concat([REFLECTING_SCENE_OBJECTS, NON_REFLECTING_SCENE_OBJECTS], axis=0)[:,5]) + 1
+    TOTAL_SCORE_TYPES = (
+        jnp.max(
+            jnp.concat(
+                [REFLECTING_SCENE_OBJECTS, NON_REFLECTING_SCENE_OBJECTS], axis=0
+            )[:, 5]
+        )
+        + 1
+    )
 
     _FLIPPERS_SORTED = (
         # sorted in a way that allows finding/identifying
@@ -1533,7 +1588,6 @@ class VideoPinballConstants(NamedTuple):
         LEFT_FLIPPER_16_TOP_SCENE_OBJECT,
         LEFT_FLIPPER_32_TOP_SCENE_OBJECT,
         LEFT_FLIPPER_48_TOP_SCENE_OBJECT,
-
         RIGHT_FLIPPER_00_BOT_SCENE_OBJECT,
         RIGHT_FLIPPER_16_BOT_SCENE_OBJECT,
         RIGHT_FLIPPER_32_BOT_SCENE_OBJECT,
@@ -1560,23 +1614,72 @@ class VideoPinballConstants(NamedTuple):
             for scene_object in _FLIPPERS_SORTED
         ]
     ).squeeze()
-    FLIPPER_SEGMENTS_SORTED = jnp.array([
-        # (px, py), (ex, ey), again sorted by variant
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_00_END_X, FLIPPER_00_BOT_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_16_END_X, FLIPPER_16_BOT_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_32_END_X, FLIPPER_32_BOT_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_LEFT_48_END_X, FLIPPER_48_BOT_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_00_END_X, FLIPPER_00_TOP_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_16_END_X, FLIPPER_16_TOP_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_32_END_X, FLIPPER_32_TOP_END_Y]],
-        [[FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_LEFT_48_END_X, FLIPPER_48_TOP_END_Y]],
-
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_00_END_X, FLIPPER_00_BOT_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_16_END_X, FLIPPER_16_BOT_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_32_END_X, FLIPPER_32_BOT_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT], [FLIPPER_RIGHT_48_END_X, FLIPPER_48_BOT_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_00_END_X, FLIPPER_00_TOP_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_16_END_X, FLIPPER_16_TOP_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_32_END_X, FLIPPER_32_TOP_END_Y]],
-        [[FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP], [FLIPPER_RIGHT_48_END_X, FLIPPER_48_TOP_END_Y]],
-    ])
+    FLIPPER_SEGMENTS_SORTED = jnp.array(
+        [
+            # (px, py), (ex, ey), again sorted by variant
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_LEFT_00_END_X, FLIPPER_00_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_LEFT_16_END_X, FLIPPER_16_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_LEFT_32_END_X, FLIPPER_32_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_LEFT_48_END_X, FLIPPER_48_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_LEFT_00_END_X, FLIPPER_00_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_LEFT_16_END_X, FLIPPER_16_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_LEFT_32_END_X, FLIPPER_32_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_LEFT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_LEFT_48_END_X, FLIPPER_48_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_RIGHT_00_END_X, FLIPPER_00_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_RIGHT_16_END_X, FLIPPER_16_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_RIGHT_32_END_X, FLIPPER_32_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_BOT],
+                [FLIPPER_RIGHT_48_END_X, FLIPPER_48_BOT_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_RIGHT_00_END_X, FLIPPER_00_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_RIGHT_16_END_X, FLIPPER_16_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_RIGHT_32_END_X, FLIPPER_32_TOP_END_Y],
+            ],
+            [
+                [FLIPPER_RIGHT_PIVOT_X, FLIPPER_PIVOT_Y_TOP],
+                [FLIPPER_RIGHT_48_END_X, FLIPPER_48_TOP_END_Y],
+            ],
+        ]
+    )
