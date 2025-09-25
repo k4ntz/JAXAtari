@@ -1520,14 +1520,20 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                     escalator_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', f'{sprite_prefix}_{frame}.npy')
                     escalator_sprite_rgba = jr.loadFrame(escalator_sprite_path)
 
-                    # Handle RGBA properly with alpha blending
+                    # Extract RGB channels and use alpha channel to create transparent pixels
+                    # When alpha is low (transparent), set to white (which will be treated as transparent)
                     rgb_data = escalator_sprite_rgba[:, :, :3]
                     alpha_data = escalator_sprite_rgba[:, :, 3:4]
                     alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
                     white_background = jnp.ones_like(rgb_data) * 255
-
-                    escalator_frame_sprite = (rgb_data.astype(jnp.float32) * alpha_normalized +
-                                            white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+                    
+                    # For pixels with low alpha (below 0.5), use white (will be treated as transparent)
+                    # For pixels with high alpha, use the original RGB color
+                    escalator_frame_sprite = jnp.where(
+                        alpha_normalized > 0.5,
+                        rgb_data,
+                        white_background
+                    ).astype(jnp.uint8)
                     sprite_set.append(escalator_frame_sprite)
                     global_max_height = max(global_max_height, escalator_frame_sprite.shape[0])
                     global_max_width = max(global_max_width, escalator_frame_sprite.shape[1])
@@ -1550,7 +1556,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 height_diff = global_max_height - sprite.shape[0]
                 width_diff = global_max_width - sprite.shape[1]
 
-                # Pad with white (255, 255, 255)
+                # Pad with white (255, 255, 255) - will be treated as transparent by draw_sprite_with_transparency
                 padded_sprite = jnp.pad(
                     sprite,
                     ((0, height_diff), (0, width_diff), (0, 0)),
@@ -1940,7 +1946,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         game_area = jnp.where(
             escalator_1_visible,
-            draw_sprite(game_area, current_escalator_1_sprite, 0, escalator_1_sprite_y),
+            draw_sprite_with_transparency(game_area, current_escalator_1_sprite, 0, escalator_1_sprite_y),
             game_area
         )
 
@@ -1955,7 +1961,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         game_area = jnp.where(
             escalator_2_visible,
-            draw_sprite(game_area, current_escalator_2_sprite, 0, escalator_2_sprite_y),
+            draw_sprite_with_transparency(game_area, current_escalator_2_sprite, 0, escalator_2_sprite_y),
             game_area
         )
 
@@ -1970,7 +1976,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         game_area = jnp.where(
             escalator_3_visible,
-            draw_sprite(game_area, current_escalator_3_sprite, 0, escalator_3_sprite_y),
+            draw_sprite_with_transparency(game_area, current_escalator_3_sprite, 0, escalator_3_sprite_y),
             game_area
         )
 
