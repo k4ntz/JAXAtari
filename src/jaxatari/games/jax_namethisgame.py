@@ -116,7 +116,7 @@ class NameThisGameConfig:
     tentacle_square_w: int = 4
     tentacle_square_h: int = 6
     tentacle_width: int = 4  # for obs space compatibility (narrow bboxes)
-    tentacle_base_growth_p: float = 0.01
+    tentacle_base_growth_p: float = 0.015
     tentacle_destroy_points: int = 50
 
     # Oxygen line (drops from boat)
@@ -135,7 +135,7 @@ class NameThisGameConfig:
     round_clear_shark_resets: int = 3
     oxy_frames_speedup_per_round: int = 30
     oxy_min_shrink_interval: int = 20
-    tentacle_growth_round_coeff: float = 0.005
+    tentacle_growth_round_coeff: float = 0.0005
 
     # Lives & score UI
     lives_max: int = 3
@@ -871,18 +871,25 @@ class JaxNameThisGame(
             # Wave bar empty -> enter REST, increment round, clear hazards
             def _enter_rest(st: NameThisGameState) -> NameThisGameState:
                 zeros_T = jnp.zeros_like(st.tentacle_len)
+                new_round = st.round + jnp.array(1, jnp.int32)  # round increments here
+                lane0 = jnp.array(0, jnp.int32)
+                speed_abs = self._shark_speed_for_lane(new_round, lane0)  # correct lane-0 speed for new round
+                prev_sign = jnp.where(st.shark_dx < 0, jnp.int32(-1), jnp.int32(1))
+                rest_dx = prev_sign * speed_abs
+
                 return st._replace(
                     resting=jnp.array(True, jnp.bool_),
-                    round=st.round + jnp.array(1, jnp.int32),
+                    round=new_round,
                     tentacle_len=zeros_T,
                     tentacle_active=zeros_T.astype(jnp.bool_),
                     oxygen_line_active=jnp.array(False, jnp.bool_),
                     oxygen_line_x=jnp.array(-1, jnp.int32),
                     oxygen_line_ttl=jnp.array(0, jnp.int32),
-                    oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
-                    oxygen_frames_remaining=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
-                    shark_lane=jnp.array(0, jnp.int32),
-                    shark_y=cfg.shark_lanes_y[0],
+                    oxy_bar_px=jnp.array(self.config.hud_bar_initial_px, jnp.int32),
+                    oxygen_frames_remaining=jnp.array(self.config.hud_bar_initial_px, jnp.int32),
+                    shark_lane=lane0,
+                    shark_y=self.config.shark_lanes_y[lane0],
+                    shark_dx=rest_dx,  # <<< key line
                     shark_alive=jnp.array(True, jnp.bool_),
                 )
 
@@ -1183,7 +1190,7 @@ class JaxNameThisGame(
                 shark_lane=reset_lane,
                 shark_alive=jnp.array(True, jnp.bool_),
                 shark_resets_this_round=s.shark_resets_this_round + 1,
-                spear_alive=jnp.array(False, jnp.bool_),
+                spear_alive=jnp.array(True, jnp.bool_),
                 rng=rng_after,
             )
 
@@ -1375,13 +1382,17 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _life_loss_reset(self, state: NameThisGameState) -> NameThisGameState:
-        """Consume one life and soft-reset into REST (score/round are preserved)."""
         cfg = self.config
         rng1, rng2 = jax.random.split(state.rng)
         next_timer = jax.random.randint(
             rng2, (), cfg.oxygen_drop_min_interval, cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32
         )
         zeros_T = jnp.zeros_like(state.tentacle_len)
+
+        lane0 = jnp.array(0, jnp.int32)
+        speed_abs = self._shark_speed_for_lane(state.round, lane0)  # round doesn’t change on life loss
+        prev_sign = jnp.where(state.shark_dx < 0, jnp.int32(-1), jnp.int32(1))
+        rest_dx = prev_sign * speed_abs
 
         return state._replace(
             resting=jnp.array(True, jnp.bool_),
@@ -1408,8 +1419,9 @@ class JaxNameThisGame(
             oxygen_line_ttl=jnp.array(0, jnp.int32),
             oxygen_contact_counter=jnp.array(0, jnp.int32),
 
-            shark_lane=jnp.array(0, jnp.int32),
-            shark_y=self.config.shark_lanes_y[0],
+            shark_lane=lane0,
+            shark_y=cfg.shark_lanes_y[lane0],
+            shark_dx=rest_dx,  # <<< key line
             shark_alive=jnp.array(True, jnp.bool_),
 
             rng=rng1,
