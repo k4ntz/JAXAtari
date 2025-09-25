@@ -31,13 +31,16 @@ PLAYER_WIDTH = 7
 PLAYER_HEIGHT = 14
 DEATH_COOLDOWN = 50 # longer in real game
 BUFFER = 50
-ISLAND_SPAWN_PROB = 0.99
-STRAIGHT_PROP = 0.4
-EXPANSE_PROP = 0.4
+ISLAND_SPAWN_PROB = 0.3
+STRAIGHT_PROP = 0.6
+EXPANSE_PROP = 0.2
 SHRINK_PROP = 0.2
-MIN_ALTERNATION_LENGTH = 8
+MIN_ALTERNATION_LENGTH = 3
 MAX_ALTERNATION_LENGTH = 10
-
+ENTITY_SPAWN_PROP = 0.2 # includes fuel, only checked if constraints met
+FUEL_SPAWN_PROP = 0.1 # percentage of spawning entity being fuel
+PLAYER_ACCELERATION = 0.02
+PLAYER_MAX_SPEED = 4.0
 
 
 class RiverraidState(NamedTuple):
@@ -121,12 +124,11 @@ class RiverraidObservation(NamedTuple):
 
 
 # logic sperated into 3 branches: island, no_island, island_transition
-# except for the transition phases, the states are managed at the top level
-# islands are randomly spawned in no_island branch within expanse
-# before islands spawn, the river always
-# therefore island_transition_state that manages expanse - straight - island
-# islands are terminated when it randomly shrinks to smaller minimum island size OR when the logic decides to remove the island
-# then also shrink - straight - river shrink
+# except for the transition phases, the states are managed at the top of the method
+# islands are randomly spawned in no_island branch only when expanse is in progress (spawn trigger in expanse method)
+# island_transition_state that manages the required straight segment at start and end
+# islands can always shrink, if shrank below a threshold it is removed entirely
+# the logic also tests wheter to despawn the island at any point (even when large)
 @jax.jit
 def generate_altering_river(state: RiverraidState) -> RiverraidState:
     key = state.master_key
@@ -148,9 +150,8 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                            river_inner_left=scrolled_inner_left,
                            river_inner_right=scrolled_inner_right)
 
-    # New state set here ONLY if no alternation is ongoing
-    # later checked and change potentially REVERSED if cooldown is active
-    # determine IF the river is to be altered
+    # New state set here ONLY if NO alternation is ongoing
+    # determine IF the river is to be altered, else use old state
     new_river_state = jax.lax.cond(
         jnp.logical_and(state.river_alternation_length <= 0, state.alternation_cooldown <= 0),
         lambda state: (jax.random.choice(
@@ -380,6 +381,8 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
                         lambda state: terminate_island(state),
                         operand=state)
 
+
+
     new_river_island_present = jax.lax.cond(
         jnp.logical_and(
             state.river_island_present >= 2,
@@ -394,6 +397,7 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
     )
     state = state._replace(river_island_present=new_river_island_present)
 
+    # main handler for what branch to use
     state = jax.lax.cond(
         state.river_island_present == 0,
         lambda state: no_island_branch(state),
@@ -436,8 +440,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         return state._replace(
             river_left=new_left,
             river_right=new_right,
-            #river_alternation_length=new_alternation_length,
-            #alternation_cooldown=new_alternation_cooldown
         )
 
     def yes_island_clamping(state: RiverraidState) -> RiverraidState:
@@ -469,8 +471,6 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         return state._replace(
             river_inner_left=new_inner_left,
             river_inner_right=new_inner_right,
-            #river_alternation_length=new_alternation_length,
-            #alternation_cooldown=new_alternation_cooldown
         )
 
     state = jax.lax.cond(state.river_island_present == 0,
@@ -505,6 +505,10 @@ def generate_straight_river(state: RiverraidState) -> RiverraidState:
         river_state=jnp.array(0)
     )
 
+
+# segment transitions needs to ensure that no dam is present
+# then shrink the river to dam size
+# place a short straight segment before the dam
 @jax.jit
 def generate_segment_transition(state: RiverraidState) -> RiverraidState:
     def scroll_empty_island(state: RiverraidState) -> RiverraidState:
@@ -520,9 +524,11 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                                         lambda state: (jnp.array(0), jnp.array(2)),
                                         lambda state: (jnp.array(3), jnp.array(1)),
                                         operand=state)
+        # let the island removale be done by main river method by hard coding the river_island_present state to 3 (remove)
         return generate_altering_river(state._replace(river_island_present=new_island_present,
                                                       segment_transition_state=new_segment_transition_state))
 
+    # let main method handle as explained above
     def remove_island(state: RiverraidState) -> RiverraidState:
         new_state = generate_altering_river(state)
         new_segment_transition_state = jax.lax.cond(jnp.logical_and(new_state.river_island_present == 0, new_state.river_state == 0),
@@ -564,6 +570,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                               segment_straigt_counter=new_segment_straight_counter,
                               segment_transition_state=new_transition_state)
 
+    # place the dam and reset the states for next segment
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
@@ -591,7 +598,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                                                                 dam_into_new_segment],
                                                                operand=state)
 
-
+# handles alternating segement - dam - straught segment - dam etc...
 @jax.jit
 def update_river_banks(state: RiverraidState) -> RiverraidState:
     new_segment_state = jax.lax.cond(
@@ -607,6 +614,7 @@ def update_river_banks(state: RiverraidState) -> RiverraidState:
                                                 lambda state: generate_segment_transition(state)],
                                                 operand=state)
 
+# scroll dam and check collisions
 @jax.jit
 def handle_dam(state: RiverraidState) -> RiverraidState:
     new_dam_position = jnp.roll(state.dam_position, 1)
@@ -650,21 +658,22 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
         player_bullet_y=new_bullet_y,
         player_state=new_player_state)
 
+@jax.jit
 def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
     #input
     press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
     press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
 
     new_direction = 1 + press_right - press_left
-    velocity_change = (press_right * 0.01) - (press_left * 0.01)
+    velocity_change = (press_right * PLAYER_ACCELERATION) - (press_left * PLAYER_ACCELERATION)
     current_velocity = jnp.where(
         (press_left == 0) & (press_right == 0),
         0.0,
         state.player_velocity + velocity_change
     )
 
-    min_vel = jnp.where(press_right, 0.0, -3.0)
-    max_vel = jnp.where(press_left, 0.0, 3.0)
+    min_vel = jnp.where(press_right, 0.0, -PLAYER_MAX_SPEED)
+    max_vel = jnp.where(press_left, 0.0, PLAYER_MAX_SPEED)
     new_velocity = jnp.clip(current_velocity, min_vel, max_vel)
 
     # move
@@ -729,7 +738,7 @@ def get_action_from_keyboard(state: RiverraidState) -> Action:
         else:
             return Action.NOOP
 
-
+@jax.jit
 def player_shooting(state, action):
     shooting = action == Action.FIRE
     new_bullet_x, new_bullet_y = jax.lax.cond(
@@ -879,7 +888,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
 
     def spawn_entity(state: RiverraidState) -> RiverraidState:
-        spawn_fuel_flag = jax.random.bernoulli(subkey2, 0.15) # TODO balance
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, FUEL_SPAWN_PROP) # TODO balance
         return jax.lax.cond(
             spawn_fuel_flag,
             lambda state: spawn_fuel(state),
@@ -889,7 +898,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     # only spawn if no dam in the top 10 rows
     dam_at_top = jnp.any(state.dam_position[:50] >= 1)
     spawn_new_entity = jnp.logical_and(
-        jax.random.bernoulli(subkey1, 0.09), # TODO balance
+        jax.random.bernoulli(subkey1, ENTITY_SPAWN_PROP), # TODO balance
         ~dam_at_top
     )
 
@@ -929,12 +938,14 @@ def scroll_entities(state: RiverraidState) -> RiverraidState:
         fuel_x=new_fuel_x
     )
 
+# river collision (direction turn) in enemy_movement
+# handles bullet and player
 @jax.jit
 def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
         enemy_hitboxes = jnp.array([
             12,  # boat
-            7,  # helicopter
+            8,  # helicopter
             6  # plane
         ])
         active_enemy_mask = state.enemy_state == 1
@@ -1040,7 +1051,7 @@ def handle_animations(state: RiverraidState) -> RiverraidState:
     )
 
 
-
+# scrolling, player and bullet collision
 @jax.jit
 def handle_fuel(state: RiverraidState) -> RiverraidState:
     active_fuel_mask = state.fuel_state == 1
@@ -1097,38 +1108,29 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         player_score=new_score
     )
 
+# enemies idle until randomly begin their movement
 @jax.jit
 def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
-    key, *subkeys = jax.random.split(state.master_key, MAX_ENEMIES + 1)
-    subkeys = jnp.array(subkeys[:MAX_ENEMIES])
+    key, subkey = jax.random.split(state.master_key, 2)
 
-    def change_direction(i, enemy_direction):
-        should_change = jax.lax.cond(
-            active_static_mask[i],
-            lambda _: jax.random.bernoulli(subkeys[i], 0.01),   # start moving
-            lambda _: False,
-            operand=None
-        )
-        new_direction = jax.lax.cond(
-            should_change,
-            lambda _: jax.lax.cond(
-                enemy_direction[i] == 0,
-                lambda _: jnp.array(2),
-                lambda _: jnp.array(3),
-                operand=None
-            ),
-            lambda _: enemy_direction[i],
-            operand=None
-        )
-        return enemy_direction.at[i].set(new_direction)
+    should_change = jax.random.bernoulli(subkey, 0.01, shape=(MAX_ENEMIES,))
+    should_change = should_change & active_static_mask
 
-    new_enemy_direction = jax.lax.fori_loop(
-        0, MAX_ENEMIES,
-        lambda i, enemy_direction: change_direction(i, enemy_direction),
+    # Bestimme neue Richtung basierend auf aktueller Richtung
+    new_direction = jnp.where(
+        state.enemy_direction == 0,
+        jnp.array(2),  # left static -> left moving
+        jnp.array(3)  # right static -> right moving
+    )
+
+    updated_direction = jnp.where(
+        should_change,
+        new_direction,
         state.enemy_direction
     )
-    return state._replace(enemy_direction=new_enemy_direction, master_key=key)
+
+    return state._replace(enemy_direction=updated_direction, master_key=key)
 
 @jax.jit
 def enemy_movement(state: RiverraidState) -> RiverraidState:
@@ -1142,9 +1144,8 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 0.5, new_enemy_x)
 
     enemy_y = state.enemy_y.astype(jnp.int32)
-    enemy_width = 8  # Approximate width of the enemy sprite for collision
+    enemy_width = 8
 
-    # --- Define all potential collision surfaces ---
     # Collision with the outer river banks
     collides_with_outer_left = new_enemy_x <= state.river_left[enemy_y]
     collides_with_outer_right = new_enemy_x + enemy_width >= state.river_right[enemy_y]
@@ -1156,13 +1157,11 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     # A left-moving enemy hits the island's right shore
     collides_with_inner_right_shore = island_present_at_y & (new_enemy_x <= state.river_inner_right[enemy_y])
 
-    # --- Directional Collision Check ---
+
     # For enemies moving left, only check for collisions on their left-hand side.
-    # This can be the outer left bank OR the island's right shore.
     left_side_collision = move_left_mask & (collides_with_outer_left | collides_with_inner_right_shore)
 
     # For enemies moving right, only check for collisions on their right-hand side.
-    # This can be the outer right bank OR the island's left shore.
     right_side_collision = move_right_mask & (collides_with_outer_right | collides_with_inner_left_shore)
 
     # Combine the masks to find all enemies that need to change direction
@@ -1175,6 +1174,7 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     )
     return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
 
+@jax.jit
 def handle_housetree(state: RiverraidState) -> RiverraidState:
     scrolled_housetree_position = jnp.roll(state.housetree_position, 1)
     scrolled_housetree_position = scrolled_housetree_position.at[0].set(-1)
@@ -1218,9 +1218,6 @@ def handle_housetree(state: RiverraidState) -> RiverraidState:
         operand=new_state
     )
     return new_state
-
-
-
 
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
@@ -1352,8 +1349,8 @@ class JaxRiverraid(JaxEnvironment):
             new_state = handle_fuel(new_state)
             new_state = handle_housetree(new_state)
             #jax.debug.print("river island present : {}", new_state.river_island_present)
-            jax.debug.print("alternation cooldown : {}", new_state.alternation_cooldown)
-            jax.debug.print("alternation LENGTH : {}", new_state.river_alternation_length)
+            #jax.debug.print("alternation cooldown : {}", new_state.alternation_cooldown)
+            #jax.debug.print("alternation LENGTH : {}", new_state.river_alternation_length)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
