@@ -71,7 +71,7 @@ class RiverraidState(NamedTuple):
     player_y: chex.Array
     player_velocity: chex.Array
     player_direction: chex.Array  # 0 left, 1 straight, 2 right
-    player_state: chex.Array
+    player_state: chex.Array # 0 alive, 1 dead/respawning
     player_fuel: chex.Array
     player_score: chex.Array
     player_lives: chex.Array
@@ -652,11 +652,18 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
         lambda state: new_dam_position,
         operand=state
     )
+    new_score = jax.lax.cond(
+        bullet_above_dam,
+        lambda state: state.player_score + 500,
+        lambda state: state.player_score,
+        operand=state
+    )
     return state._replace(
         dam_position=new_dam_position,
         player_bullet_x=new_bullet_x,
         player_bullet_y=new_bullet_y,
-        player_state=new_player_state)
+        player_state=new_player_state,
+        player_score=new_score)
 
 @jax.jit
 def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
@@ -746,7 +753,7 @@ def player_shooting(state, action):
             shooting,
             state.player_bullet_y < 0),
         lambda state: ((state.player_x + 3).astype(jnp.float32), (state.player_y - 0).astype(jnp.float32)),
-        lambda state: (state.player_bullet_x.astype(jnp.float32), (state.player_bullet_y - 5).astype(jnp.float32)),
+        lambda state: (state.player_x.astype(jnp.float32), (state.player_bullet_y - 5).astype(jnp.float32)),
         operand=state
     )
 
@@ -1100,12 +1107,18 @@ def handle_fuel(state: RiverraidState) -> RiverraidState:
         operand=state
     )
 
+    new_player_state = jax.lax.cond(state.player_fuel <= 0,
+                                    lambda state: 1,
+                                    lambda state: state.player_state,
+                                    operand=state)
+
     return state._replace(
         fuel_state=new_fuel_state,
         player_bullet_x=new_bullet_x,
         player_bullet_y=new_bullet_y,
         player_fuel=new_player_fuel,
-        player_score=new_score
+        player_score=new_score,
+        player_state=new_player_state
     )
 
 # enemies idle until randomly begin their movement
@@ -1364,9 +1377,13 @@ class JaxRiverraid(JaxEnvironment):
             new_state = enemy_movement(new_state)
             new_state = handle_fuel(new_state)
             new_state = handle_housetree(new_state)
-            #jax.debug.print("river island present : {}", new_state.river_island_present)
-            #jax.debug.print("alternation cooldown : {}", new_state.alternation_cooldown)
-            #jax.debug.print("alternation LENGTH : {}", new_state.river_alternation_length)
+
+            # new life every 10.000 points
+            previous_life_threshold = state.player_score // 10000
+            current_life_threshold = new_state.player_score // 10000
+            earned_extra_life = current_life_threshold > previous_life_threshold
+            new_player_lives = jnp.where(earned_extra_life, state.player_lives + 1, state.player_lives)
+            new_state = new_state._replace(player_lives=new_player_lives)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
