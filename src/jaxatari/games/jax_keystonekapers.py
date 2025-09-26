@@ -155,6 +155,26 @@ class KeystoneKapersConstants(NamedTuple):
     PLANE_MIN_SPAWN_INTERVAL: float = 3.0
     PLANE_MAX_SPAWN_INTERVAL: float = 6.0
 
+    # Stationary obstacle configurations
+    OBSTACLE_WIDTH: int = 8
+    OBSTACLE_HEIGHT: int = 8
+    OBSTACLE_TIME_PENALTY: int = 600  # 10 seconds at 60fps
+    MAX_STATIONARY_OBSTACLES: int = 4
+
+    # Shopping cart configurations
+    SHOPPING_CART_WIDTH: int = 12
+    SHOPPING_CART_HEIGHT: int = 8
+    SHOPPING_CART_BASE_SPEED: float = 1.8
+    SHOPPING_CART_SPEED_SCALE: float = 0.08
+    SHOPPING_CART_MIN_SPAWN_INTERVAL: float = 2.0
+    SHOPPING_CART_MAX_SPAWN_INTERVAL: float = 4.0
+    SHOPPING_CART_TIME_PENALTY: int = 600  # 10 seconds at 60fps
+    MAX_SHOPPING_CARTS: int = 3
+
+    # Obstacle types
+    OBSTACLE_TYPE_STATIONARY: int = 0
+    OBSTACLE_TYPE_SHOPPING_CART: int = 1
+
     # Collectible configurations
     ITEM_WIDTH: int = 8
     ITEM_HEIGHT: int = 8
@@ -173,6 +193,10 @@ class KeystoneKapersConstants(NamedTuple):
     OBSTACLE_SPAWN_SCALE: float = 0.12
     MAX_OBSTACLES: int = 8
     MAX_ITEMS: int = 4
+
+    # Item types
+    ITEM_TYPE_MONEYBAG: int = 0
+    ITEM_TYPE_SUITCASE: int = 1
 
     # Colors (RGB)
     BACKGROUND_COLOR: Tuple[int, int, int] = (50, 152, 82)  # Green
@@ -279,6 +303,20 @@ class GameState(NamedTuple):
     item_y: chex.Array
     item_active: chex.Array
     item_type: chex.Array
+
+    # New obstacles
+    stationary_obstacle_x: chex.Array      # Shape: (MAX_STATIONARY_OBSTACLES,)
+    stationary_obstacle_y: chex.Array
+    stationary_obstacle_active: chex.Array
+    stationary_obstacle_floor: chex.Array
+
+    # Shopping carts
+    shopping_cart_x: chex.Array            # Shape: (MAX_SHOPPING_CARTS,)
+    shopping_cart_y: chex.Array
+    shopping_cart_active: chex.Array
+    shopping_cart_floor: chex.Array
+    shopping_cart_direction: chex.Array    # 1 for right, -1 for left
+    shopping_cart_spawn_timer: chex.Array
 
     # Game flags
     game_over: chex.Array
@@ -972,8 +1010,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
             floor_y = jnp.where(
                 spawn_floor == 0,
-                self.consts.FLOOR_1_Y,  # Ground floor (ball bottom sits on floor)
-                self.consts.FLOOR_3_Y   # Top floor (ball bottom sits on floor)
+                self.consts.FLOOR_1_Y + 2,  # Ground floor (with +2 offset like player)
+                self.consts.FLOOR_3_Y + 2   # Top floor (with +2 offset like player)
             )
 
             # Get current player section to spawn ball in current screen area
@@ -1064,8 +1102,12 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Get floor Y positions for each ball based on their assigned floor (consistent with spawn)
         ball_floor_y = jnp.where(
             obstacles.ball_floor == 0,
-            self.consts.FLOOR_1_Y,  # Ground floor surface (same as spawn)
-            self.consts.FLOOR_3_Y   # Top floor (ball bottom sits on floor)
+            self.consts.FLOOR_1_Y + 2,  # Ground floor surface (with +2 offset like player)
+            jnp.where(
+                obstacles.ball_floor == 1,
+                self.consts.FLOOR_2_Y + 2,  # Middle floor (with +2 offset like player)
+                self.consts.FLOOR_3_Y + 2   # Top floor (with +2 offset like player)
+            )
         )
 
         # Ball hits floor when it reaches or goes below the floor level
@@ -1201,6 +1243,176 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         return obstacles_after_ball_spawn._replace(ball_spawn_timer=final_ball_spawn_timer)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _spawn_items(self, key: chex.PRNGKey) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Spawn collectible items (moneybags/suitcases) in valid sections on each floor."""
+        # Valid sections for item spawning (exclude first, middle/elevator, and last sections)
+        # Sections: 0, 1, 2, 3(elevator), 4, 5, 6
+        # Valid sections: 1, 2, 4, 5
+        valid_sections = jnp.array([1, 2, 4, 5])
+        floors = jnp.array([0, 1, 2])  # Floor indices
+
+        # Split key for different random choices
+        key, subkey = jrandom.split(key)
+
+        # For each floor, spawn 1-2 items
+        items_per_floor = 1  # Keep it simple: 1 item per floor on valid sections
+        total_items = len(floors) * items_per_floor
+
+        # Initialize arrays
+        item_x = jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32)
+        item_y = jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32)
+        item_active = jnp.zeros(self.consts.MAX_ITEMS, dtype=bool)
+        item_type = jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32)
+
+        # Generate items for each floor
+        for floor_idx in range(3):  # 3 floors
+            if floor_idx < self.consts.MAX_ITEMS:
+                # Choose random valid section for this floor
+                section_key, key = jrandom.split(key)
+                section_idx = jrandom.choice(section_key, valid_sections)
+
+                # Calculate item position (center of section)
+                item_x_pos = section_idx * self.consts.SECTION_WIDTH + self.consts.SECTION_WIDTH // 2
+                item_y_pos = self._floor_y_position(jnp.array(floor_idx))
+
+                # Choose random item type
+                type_key, key = jrandom.split(key)
+                item_type_val = jrandom.choice(type_key, jnp.array([self.consts.ITEM_TYPE_MONEYBAG, self.consts.ITEM_TYPE_SUITCASE]))
+
+                # Update arrays
+                item_x = item_x.at[floor_idx].set(item_x_pos)
+                item_y = item_y.at[floor_idx].set(item_y_pos)
+                item_active = item_active.at[floor_idx].set(True)
+                item_type = item_type.at[floor_idx].set(item_type_val)
+
+        return item_x, item_y, item_active, item_type
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _spawn_stationary_obstacles(self, state: GameState, key: chex.PRNGKey) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Spawn stationary obstacles only after thief caught once, on floors 2-3 and roof."""
+        # Only spawn if thief has been caught at least once
+        should_spawn = state.thief_caught
+
+        # Valid sections for obstacle spawning (exclude first=0, middle/elevator=3, and last=6 sections)
+        # Valid sections: 1, 2, 4, 5
+        valid_sections = jnp.array([1, 2, 4, 5])
+        # Valid floors: 1 (middle floor), 2 (top floor) - these are floors 2-3 in user terms
+        valid_floors = jnp.array([1, 2])  # Skip floor 0 (ground floor)
+
+        # Initialize arrays
+        obstacle_x = jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32)
+        obstacle_y = jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32)
+        obstacle_active = jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=bool)
+        obstacle_floor = jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32)
+
+        # Generate obstacles on each valid floor
+        def spawn_obstacles():
+            obs_x, obs_y, obs_active, obs_floor = obstacle_x, obstacle_y, obstacle_active, obstacle_floor
+
+            # For each valid floor, try to spawn one obstacle
+            for i, floor_idx in enumerate(valid_floors):
+                if i < self.consts.MAX_STATIONARY_OBSTACLES:
+                    # Choose random section for this floor
+                    floor_key = jrandom.fold_in(key, i)
+                    section_idx = jrandom.choice(floor_key, valid_sections)
+
+                    # Calculate obstacle position (center of section)
+                    obstacle_x_pos = section_idx * self.consts.SECTION_WIDTH + self.consts.SECTION_WIDTH // 2
+                    obstacle_y_pos = self._floor_y_position(jnp.array(floor_idx)) + 4  # Match item positioning
+
+                    # Update arrays
+                    obs_x = obs_x.at[i].set(obstacle_x_pos)
+                    obs_y = obs_y.at[i].set(obstacle_y_pos)
+                    obs_active = obs_active.at[i].set(True)
+                    obs_floor = obs_floor.at[i].set(floor_idx)
+
+            return obs_x, obs_y, obs_active, obs_floor
+
+        # Use JAX conditional to spawn or not based on thief_caught
+        return jax.lax.cond(
+            should_spawn,
+            lambda: spawn_obstacles(),
+            lambda: (obstacle_x, obstacle_y, obstacle_active, obstacle_floor)
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_shopping_carts(self, state: GameState, key: chex.PRNGKey) -> GameState:
+        """Update shopping cart positions and spawn new ones."""
+        # Update spawn timer
+        new_spawn_timer = jnp.maximum(0, state.shopping_cart_spawn_timer - 1)
+
+        # Check if we should spawn a new cart
+        should_spawn = jnp.logical_and(
+            new_spawn_timer == 0,
+            jnp.sum(state.shopping_cart_active) < self.consts.MAX_SHOPPING_CARTS
+        )
+
+        # Update existing cart positions
+        new_x = state.shopping_cart_x + state.shopping_cart_direction * self.consts.SHOPPING_CART_BASE_SPEED
+
+        # Deactivate carts that have moved off screen
+        off_screen = jnp.logical_or(new_x < -50, new_x > self.consts.TOTAL_BUILDING_WIDTH + 50)
+        new_active = jnp.logical_and(state.shopping_cart_active, jnp.logical_not(off_screen))
+
+        # Spawn new cart if needed
+        def spawn_new_cart():
+            # Choose random floor (0, 1, 2 for floors 1, 2, 3)
+            spawn_key = jrandom.fold_in(key, state.step_counter)
+            floor_idx = jrandom.choice(spawn_key, jnp.array([0, 1, 2]))
+
+            # Determine direction and start position based on floor
+            direction = jnp.where(
+                floor_idx == 1,  # Floor 2 (middle) goes right to left
+                -1,
+                1  # Floors 1 and 3 go left to right
+            )
+
+            # Start position: left side if going right, right side if going left
+            start_x = jnp.where(
+                direction == 1,
+                -20,  # Start off-screen left
+                self.consts.TOTAL_BUILDING_WIDTH + 20  # Start off-screen right
+            )
+
+            # Y position for the floor
+            cart_y = self._floor_y_position(floor_idx) + 4  # Match positioning
+
+            # Find first inactive cart slot
+            first_inactive = jnp.argmax(jnp.logical_not(new_active))
+
+            # Update cart arrays
+            updated_x = new_x.at[first_inactive].set(start_x)
+            updated_active = new_active.at[first_inactive].set(True)
+            updated_floor = state.shopping_cart_floor.at[first_inactive].set(floor_idx)
+            updated_direction = state.shopping_cart_direction.at[first_inactive].set(direction)
+            updated_y = state.shopping_cart_y.at[first_inactive].set(cart_y)
+
+            # Reset spawn timer
+            spawn_interval = jrandom.uniform(
+                spawn_key, (),
+                minval=self.consts.SHOPPING_CART_MIN_SPAWN_INTERVAL * 60,
+                maxval=self.consts.SHOPPING_CART_MAX_SPAWN_INTERVAL * 60
+            ).astype(jnp.int32)
+
+            return state._replace(
+                shopping_cart_x=updated_x,
+                shopping_cart_y=updated_y,
+                shopping_cart_active=updated_active,
+                shopping_cart_floor=updated_floor,
+                shopping_cart_direction=updated_direction,
+                shopping_cart_spawn_timer=spawn_interval
+            )
+
+        def no_spawn():
+            return state._replace(
+                shopping_cart_x=new_x,
+                shopping_cart_active=new_active,
+                shopping_cart_spawn_timer=new_spawn_timer
+            )
+
+        return jax.lax.cond(should_spawn, spawn_new_cart, no_spawn)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _check_collisions(self, state: GameState) -> Tuple[bool, bool, bool, int, chex.Array]:
         """Check all collision types with proper hitbox handling for jump/crouch."""
         player = state.player
@@ -1216,10 +1428,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # player.y represents the bottom of the player, we need top for collision detection
         player_top_y = player.y - player_height
 
+        # Convert thief bottom position to top position for collision detection
+        # state.thief.y also represents the bottom of the thief, we need top for collision detection
+        thief_top_y = state.thief.y - self.consts.THIEF_HEIGHT
+
         # Player-thief collision
         thief_collision = self._entities_collide(
             player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
-            state.thief.x, state.thief.y, self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT
+            state.thief.x, thief_top_y, self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT
         )
         thief_caught = jnp.logical_and(thief_collision, player.floor == state.thief.floor)
 
@@ -1268,9 +1484,40 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Other obstacle collisions (carts and planes)
         other_obstacle_collisions = jnp.logical_or(jnp.any(cart_collisions), jnp.any(plane_collisions))
 
+        # Check stationary obstacle collisions
+        stationary_obstacle_collisions = jax.vmap(
+            lambda i: jnp.logical_and(
+                state.stationary_obstacle_active[i],
+                self._entities_collide(
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
+                    state.stationary_obstacle_x[i], state.stationary_obstacle_y[i] - self.consts.OBSTACLE_HEIGHT,
+                    self.consts.OBSTACLE_WIDTH, self.consts.OBSTACLE_HEIGHT
+                )
+            )
+        )(jnp.arange(self.consts.MAX_STATIONARY_OBSTACLES))
+
+        # Check shopping cart collisions
+        shopping_cart_collisions = jax.vmap(
+            lambda i: jnp.logical_and(
+                state.shopping_cart_active[i],
+                self._entities_collide(
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
+                    state.shopping_cart_x[i], state.shopping_cart_y[i] - self.consts.SHOPPING_CART_HEIGHT,
+                    self.consts.SHOPPING_CART_WIDTH, self.consts.SHOPPING_CART_HEIGHT
+                )
+            )
+        )(jnp.arange(self.consts.MAX_SHOPPING_CARTS))
+
+        # Combine all obstacle collisions
+        new_obstacle_collisions = jnp.logical_or(
+            jnp.any(stationary_obstacle_collisions),
+            jnp.any(shopping_cart_collisions)
+        )
+        all_obstacle_collisions = jnp.logical_or(other_obstacle_collisions, new_obstacle_collisions)
+
         # Only count obstacle hits if player is not jumping (jumping avoids most obstacles)
         # Exception: planes can still hit if player jumps too high
-        obstacle_hit = jnp.logical_and(jnp.logical_not(player.is_jumping), other_obstacle_collisions)
+        obstacle_hit = jnp.logical_and(jnp.logical_not(player.is_jumping), all_obstacle_collisions)
 
         # Item collection
         item_collisions = jax.vmap(
@@ -1278,14 +1525,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                 state.item_active[i],
                 self._entities_collide(
                     player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
-                    state.item_x[i], state.item_y[i],
+                    state.item_x[i], state.item_y[i] - self.consts.ITEM_HEIGHT,  # Convert item bottom to top position
                     self.consts.ITEM_WIDTH, self.consts.ITEM_HEIGHT
                 )
             )
         )(jnp.arange(self.consts.MAX_ITEMS))
         items_collected = jnp.sum(item_collisions)
 
-        return obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions
+        return obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions, item_collisions, stationary_obstacle_collisions, shopping_cart_collisions
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey = None) -> Tuple[KeystoneKapersObservation, GameState]:
@@ -1361,6 +1608,10 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         player_section = player_start_x // self.consts.SECTION_WIDTH
         camera_x = jnp.array(player_section * self.consts.SECTION_WIDTH, dtype=jnp.int32)
 
+        # Spawn items
+        key, item_key = jrandom.split(key)
+        item_x, item_y, item_active, item_type = self._spawn_items(item_key)
+
         # Initialize game state
         state = GameState(
             player=player,
@@ -1378,10 +1629,24 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             step_counter=jnp.array(0),
             escalator_frame=jnp.array(0),  # Animation frame for escalator steps
 
-            item_x=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
-            item_y=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
-            item_active=jnp.zeros(self.consts.MAX_ITEMS, dtype=bool),
-            item_type=jnp.zeros(self.consts.MAX_ITEMS, dtype=jnp.int32),
+            item_x=item_x,
+            item_y=item_y,
+            item_active=item_active,
+            item_type=item_type,
+
+            # Initialize new obstacles
+            stationary_obstacle_x=jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32),
+            stationary_obstacle_y=jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32),
+            stationary_obstacle_active=jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=bool),
+            stationary_obstacle_floor=jnp.zeros(self.consts.MAX_STATIONARY_OBSTACLES, dtype=jnp.int32),
+
+            # Shopping carts
+            shopping_cart_x=jnp.zeros(self.consts.MAX_SHOPPING_CARTS, dtype=jnp.int32),
+            shopping_cart_y=jnp.zeros(self.consts.MAX_SHOPPING_CARTS, dtype=jnp.int32),
+            shopping_cart_active=jnp.zeros(self.consts.MAX_SHOPPING_CARTS, dtype=bool),
+            shopping_cart_floor=jnp.zeros(self.consts.MAX_SHOPPING_CARTS, dtype=jnp.int32),
+            shopping_cart_direction=jnp.ones(self.consts.MAX_SHOPPING_CARTS, dtype=jnp.int32),  # Start moving right
+            shopping_cart_spawn_timer=jnp.array(120),  # 2 seconds
 
             game_over=jnp.array(False),
             thief_caught=jnp.array(False),
@@ -1403,6 +1668,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_elevator = self._update_elevator(state, action)
         new_obstacles = self._update_obstacles(state, step_key)
 
+        # Update shopping carts
+        updated_state = self._update_shopping_carts(state._replace(
+            player=new_player,
+            thief=new_thief,
+            obstacles=new_obstacles,
+            elevator=new_elevator
+        ), step_key)
+
         # True section-based camera system
         # Camera always shows the section that the player is currently in
         # Section boundaries are exact: 0-159 = section 0, 160-319 = section 1, etc.
@@ -1418,11 +1691,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_camera_x = jnp.clip(new_camera_x, 0, max_camera_x).astype(jnp.int32)
 
         # Check collisions
-        obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions = self._check_collisions(state._replace(
-            player=new_player,
-            thief=new_thief,
-            obstacles=new_obstacles
-        ))
+        obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions, item_collisions, stationary_obstacle_collisions, shopping_cart_collisions = self._check_collisions(updated_state)
 
         # Handle ball collision effects
         ball_timer_penalty = jax.lax.select(ball_hit, self.consts.BALL_TIME_PENALTY * 60, 0)  # Convert seconds to frames
@@ -1435,11 +1704,33 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Update obstacles with deactivated balls
         new_obstacles = new_obstacles._replace(ball_active=new_ball_active)
 
+        # Handle obstacle collisions - calculate penalties and deactivate obstacles
+        stationary_obstacle_hit = jnp.any(stationary_obstacle_collisions)
+        shopping_cart_hit = jnp.any(shopping_cart_collisions)
+
+        # Calculate obstacle timer penalties (10 seconds each)
+        obstacle_timer_penalty = jax.lax.select(
+            jnp.logical_or(stationary_obstacle_hit, shopping_cart_hit),
+            self.consts.OBSTACLE_TIME_PENALTY,  # 10 seconds in frames
+            0
+        )
+
+        # Deactivate obstacles that were hit
+        new_stationary_obstacle_active = jnp.logical_and(
+            updated_state.stationary_obstacle_active,
+            jnp.logical_not(stationary_obstacle_collisions)
+        )
+        new_shopping_cart_active = jnp.logical_and(
+            updated_state.shopping_cart_active,
+            jnp.logical_not(shopping_cart_collisions)
+        )
+
         # Update player with freeze timer
         player_with_freeze = new_player._replace(freeze_timer=new_freeze_timer)
 
-        # Update timer with penalties
-        timer_penalty = jax.lax.select(obstacle_hit, self.consts.COLLISION_PENALTY, 0) + ball_timer_penalty
+        # Update timer with penalties (ball penalty + obstacle penalty + original collision penalty)
+        timer_penalty = (jax.lax.select(obstacle_hit, self.consts.COLLISION_PENALTY, 0) +
+                        ball_timer_penalty + obstacle_timer_penalty)
         new_timer = jnp.maximum(state.timer - 1 - timer_penalty, 0)
 
         # Update score
@@ -1482,6 +1773,26 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # Level progression when thief is caught
         new_level = jax.lax.select(thief_caught, state.level + 1, state.level)
+
+        # Spawn stationary obstacles when thief is caught (updates state for future levels)
+        def spawn_stationary_obstacles():
+            obstacle_key = jrandom.fold_in(step_key, state.step_counter + 1)
+            obs_x, obs_y, obs_active, obs_floor = self._spawn_stationary_obstacles(
+                updated_state._replace(thief_caught=True), obstacle_key
+            )
+            return updated_state._replace(
+                stationary_obstacle_x=obs_x,
+                stationary_obstacle_y=obs_y,
+                stationary_obstacle_active=obs_active,
+                stationary_obstacle_floor=obs_floor
+            )
+
+        def no_spawn_obstacles():
+            return updated_state
+
+        # Update state with stationary obstacles if thief is caught
+        state_with_obstacles = jax.lax.cond(thief_caught, spawn_stationary_obstacles, no_spawn_obstacles)
+        updated_state = state_with_obstacles
 
         # Reset level when ANY of these conditions occur:
         # 1. Thief is caught (advance to next level)
@@ -1532,7 +1843,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         game_over = new_lives <= 0  # Only end game when no lives left
 
         # Deactivate collected items
-        new_item_active = state.item_active  # TODO: Implement item collection logic
+        new_item_active = jnp.logical_and(state.item_active, jnp.logical_not(item_collisions))
 
         # Create new state with camera update
         new_state = GameState(
@@ -1554,6 +1865,20 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             item_y=state.item_y,
             item_active=new_item_active,
             item_type=state.item_type,
+
+            # Update new obstacles with deactivated states
+            stationary_obstacle_x=updated_state.stationary_obstacle_x,
+            stationary_obstacle_y=updated_state.stationary_obstacle_y,
+            stationary_obstacle_active=new_stationary_obstacle_active,
+            stationary_obstacle_floor=updated_state.stationary_obstacle_floor,
+
+            # Shopping carts
+            shopping_cart_x=updated_state.shopping_cart_x,
+            shopping_cart_y=updated_state.shopping_cart_y,
+            shopping_cart_active=new_shopping_cart_active,
+            shopping_cart_floor=updated_state.shopping_cart_floor,
+            shopping_cart_direction=updated_state.shopping_cart_direction,
+            shopping_cart_spawn_timer=updated_state.shopping_cart_spawn_timer,
 
             # Update escalator animation frame
             escalator_frame=(state.escalator_frame + 1) % self.consts.ESCALATOR_ANIMATION_SPEED,
@@ -1918,7 +2243,103 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         sprites['cart'] = jnp.ones((self.consts.CART_HEIGHT, self.consts.CART_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.CART_COLOR, dtype=jnp.uint8)
         sprites['ball'] = jnp.ones((self.consts.BALL_HEIGHT, self.consts.BALL_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.BALL_COLOR, dtype=jnp.uint8)
         sprites['plane'] = jnp.ones((self.consts.PLANE_HEIGHT, self.consts.PLANE_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.PLANE_COLOR, dtype=jnp.uint8)
-        sprites['item'] = jnp.ones((self.consts.ITEM_HEIGHT, self.consts.ITEM_WIDTH, 3), dtype=jnp.uint8) * jnp.array(self.consts.ITEM_COLOR, dtype=jnp.uint8)
+
+        # Load collectible item sprites (moneybag and suitcase)
+        # Both sprites will be padded/cropped to ITEM_HEIGHT x ITEM_WIDTH for consistency
+        target_height = self.consts.ITEM_HEIGHT
+        target_width = self.consts.ITEM_WIDTH
+
+        # Load moneybag sprite
+        moneybag_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'money_bag.npy')
+        try:
+            moneybag_sprite_rgba = jr.loadFrame(moneybag_sprite_path)
+
+            # Handle RGBA properly with alpha blending
+            rgb_data = moneybag_sprite_rgba[:, :, :3]
+            alpha_data = moneybag_sprite_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+
+            moneybag_raw = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                          white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+
+            # Use the sprite as-is without forced resizing to avoid shape conflicts
+            # The sprite dimensions are reasonable (11x7), let's keep them
+            sprites['moneybag'] = moneybag_raw
+        except Exception as e:
+            print(f"Failed to load moneybag sprite: {e}")
+            # Fallback to yellow rectangle if sprite loading fails
+            sprites['moneybag'] = jnp.ones((target_height, target_width, 3), dtype=jnp.uint8) * jnp.array([255, 255, 0], dtype=jnp.uint8)
+
+        # Load suitcase sprite
+        try:
+            suitcase_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'suitcase.npy')
+            suitcase_sprite_rgba = jr.loadFrame(suitcase_sprite_path)
+
+            # Handle RGBA properly with alpha blending
+            rgb_data = suitcase_sprite_rgba[:, :, :3]
+            alpha_data = suitcase_sprite_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+
+            suitcase_raw = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                          white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+
+            # Use the sprite as-is without forced resizing
+            sprites['suitcase'] = suitcase_raw
+        except Exception as e:
+            print(f"Failed to load suitcase sprite: {e}")
+            # Fallback to blue rectangle if sprite loading fails
+            sprites['suitcase'] = jnp.ones((target_height, target_width, 3), dtype=jnp.uint8) * jnp.array([0, 100, 255], dtype=jnp.uint8)
+
+        # Load obstacle sprites
+        obstacle_target_height = self.consts.OBSTACLE_HEIGHT
+        obstacle_target_width = self.consts.OBSTACLE_WIDTH
+
+        # Load stationary obstacle sprite
+        try:
+            obstacle_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'obstacle.npy')
+            obstacle_sprite_rgba = jr.loadFrame(obstacle_sprite_path)
+
+            # Handle RGBA properly with alpha blending
+            rgb_data = obstacle_sprite_rgba[:, :, :3]
+            alpha_data = obstacle_sprite_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+
+            obstacle_raw = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                          white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+
+            # Use the sprite as-is without forced resizing
+            sprites['obstacle'] = obstacle_raw
+        except Exception as e:
+            print(f"Failed to load obstacle sprite: {e}")
+            # Fallback to red rectangle if sprite loading fails
+            sprites['obstacle'] = jnp.ones((obstacle_target_height, obstacle_target_width, 3), dtype=jnp.uint8) * jnp.array([255, 0, 0], dtype=jnp.uint8)
+
+        # Load shopping cart sprite
+        cart_target_height = self.consts.SHOPPING_CART_HEIGHT
+        cart_target_width = self.consts.SHOPPING_CART_WIDTH
+
+        try:
+            shopping_cart_sprite_path = os.path.join(os.path.dirname(__file__), 'sprites', 'keystonekapers', 'shoppingkart.npy')
+            shopping_cart_sprite_rgba = jr.loadFrame(shopping_cart_sprite_path)
+
+            # Handle RGBA properly with alpha blending
+            rgb_data = shopping_cart_sprite_rgba[:, :, :3]
+            alpha_data = shopping_cart_sprite_rgba[:, :, 3:4]
+            alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
+            white_background = jnp.ones_like(rgb_data) * 255
+
+            shopping_cart_raw = (rgb_data.astype(jnp.float32) * alpha_normalized +
+                               white_background * (1 - alpha_normalized)).astype(jnp.uint8)
+
+            # Use the sprite as-is without forced resizing
+            sprites['shopping_cart'] = shopping_cart_raw
+        except Exception as e:
+            print(f"Failed to load shopping cart sprite: {e}")
+            # Fallback to orange rectangle if sprite loading fails
+            sprites['shopping_cart'] = jnp.ones((cart_target_height, cart_target_width, 3), dtype=jnp.uint8) * jnp.array([255, 165, 0], dtype=jnp.uint8)
 
         # Load Kop sprites (standing and running animations)
         kop_sprites = {}
@@ -2182,26 +2603,31 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             """Draw a sprite at the given position in the game area."""
             sprite_height, sprite_width = sprite.shape[:2]
 
-            # Ensure coordinates are within bounds
-            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width)
-            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height)
+            # Ensure coordinates are within bounds and convert to integers
+            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width).astype(jnp.int32)
+            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height).astype(jnp.int32)
 
-            # Create indices for positioning
-            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
-            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
+            # Calculate the actual placement region
+            x_start = x
+            x_end = x + sprite_width
+            y_start = y  
+            y_end = y + sprite_height
 
-            # Create mask for sprite placement
-            mask = ((y_indices >= y) & (y_indices < y + sprite_height) &
-                   (x_indices >= x) & (x_indices < x + sprite_width))
+            # Use dynamic_slice to get the game area region where sprite should be placed
+            game_region = jax.lax.dynamic_slice(
+                game_area, 
+                (y_start, x_start, 0), 
+                (sprite_height, sprite_width, game_area.shape[2])
+            )
 
-            # Apply sprite where mask is True
-            sprite_indices_y = jnp.clip(y_indices - y, 0, sprite_height - 1)
-            sprite_indices_x = jnp.clip(x_indices - x, 0, sprite_width - 1)
+            # Pad or crop sprite to match the region size if needed
+            sprite_to_place = sprite
 
-            return jnp.where(
-                mask[:, :, None],
-                sprite[sprite_indices_y, sprite_indices_x, :],
-                game_area
+            # Create the updated game area by using dynamic_update_slice
+            return jax.lax.dynamic_update_slice(
+                game_area, 
+                sprite_to_place, 
+                (y_start, x_start, 0)
             )
 
         # Helper function to draw a sprite with transparency (white pixels = transparent)
@@ -2209,34 +2635,35 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             """Draw a sprite at the given position treating specified color as transparent."""
             sprite_height, sprite_width = sprite.shape[:2]
 
-            # Ensure coordinates are within bounds
-            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width)
-            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height)
+            # Ensure coordinates are within bounds and convert to integers
+            x = jnp.clip(x, 0, self.consts.GAME_AREA_WIDTH - sprite_width).astype(jnp.int32)
+            y = jnp.clip(y, 0, self.consts.GAME_AREA_HEIGHT - sprite_height).astype(jnp.int32)
 
-            # Create indices for positioning
-            y_indices = jnp.arange(self.consts.GAME_AREA_HEIGHT)[:, None]
-            x_indices = jnp.arange(self.consts.GAME_AREA_WIDTH)[None, :]
+            # Calculate the actual placement region
+            x_start = x
+            x_end = x + sprite_width
+            y_start = y  
+            y_end = y + sprite_height
 
-            # Create mask for sprite placement
-            sprite_mask = ((y_indices >= y) & (y_indices < y + sprite_height) &
-                          (x_indices >= x) & (x_indices < x + sprite_width))
-
-            # Get sprite pixel values
-            sprite_indices_y = jnp.clip(y_indices - y, 0, sprite_height - 1)
-            sprite_indices_x = jnp.clip(x_indices - x, 0, sprite_width - 1)
-            sprite_pixels = sprite[sprite_indices_y, sprite_indices_x, :]
+            # Get the game area region where sprite should be placed
+            game_region = jax.lax.dynamic_slice(
+                game_area, 
+                (y_start, x_start, 0), 
+                (sprite_height, sprite_width, game_area.shape[2])
+            )
 
             # Create transparency mask - pixels that are NOT the transparent color
-            is_transparent = jnp.all(sprite_pixels == transparent_color, axis=-1, keepdims=True)
+            is_transparent = jnp.all(sprite == transparent_color, axis=-1, keepdims=True)
             is_opaque = jnp.logical_not(is_transparent)
 
-            # Only draw non-transparent pixels within the sprite area
-            final_mask = sprite_mask[:, :, None] & is_opaque
+            # Blend sprite with existing game region using transparency mask
+            blended_region = jnp.where(is_opaque, sprite, game_region)
 
-            return jnp.where(
-                final_mask,
-                sprite_pixels,
-                game_area
+            # Update the game area with the blended region
+            return jax.lax.dynamic_update_slice(
+                game_area, 
+                blended_region, 
+                (y_start, x_start, 0)
             )
 
         # Draw sky and buildings sprite above the roof level (covering all green background)
@@ -2533,6 +2960,119 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Draw all active balls
         for i in range(self.consts.MAX_OBSTACLES):
             game_area = draw_ball(i)
+
+        # Draw collectible items (moneybags and suitcases)
+        def draw_item(i):
+            """Draw a single item with sprite and transparency."""
+            item_active = state.item_active[i]
+            item_x = state.item_x[i]
+            item_y = state.item_y[i]
+            item_type = state.item_type[i]
+
+            # Convert building coordinates to screen coordinates
+            item_screen_x = building_to_screen_x(item_x)
+
+            # Check if item is visible on current screen
+            item_visible = jnp.logical_and(
+                item_active,
+                jnp.logical_and(
+                    item_screen_x >= -self.consts.ITEM_WIDTH,
+                    item_screen_x <= self.consts.GAME_AREA_WIDTH
+                )
+            )
+
+            # Choose sprite based on item type - use conditional logic instead of jnp.where
+            # to avoid broadcasting issues with different sprite dimensions
+            def draw_moneybag():
+                current_sprite = self.sprites['moneybag']
+                sprite_height = current_sprite.shape[0]
+                # Use same positioning logic as player: object_y - sprite_height + object_height + 4
+                screen_y = item_y - sprite_height + self.consts.ITEM_HEIGHT + 10
+                return jnp.where(
+                    item_visible,
+                    draw_sprite_with_transparency(game_area, current_sprite, item_screen_x, screen_y),
+                    game_area
+                )
+
+            def draw_suitcase():
+                current_sprite = self.sprites['suitcase']
+                sprite_height = current_sprite.shape[0]
+                # Use same positioning logic as player: object_y - sprite_height + object_height + 4
+                screen_y = item_y - sprite_height + self.consts.ITEM_HEIGHT + 10
+                return jnp.where(
+                    item_visible,
+                    draw_sprite_with_transparency(game_area, current_sprite, item_screen_x, screen_y),
+                    game_area
+                )
+
+            # Use lax.cond instead of jnp.where to avoid broadcasting issues
+            return jax.lax.cond(
+                item_type == self.consts.ITEM_TYPE_MONEYBAG,
+                lambda _: draw_moneybag(),
+                lambda _: draw_suitcase(),
+                None
+            )
+
+        # Draw all active items
+        for i in range(self.consts.MAX_ITEMS):
+            game_area = draw_item(i)
+
+        # Draw stationary obstacles
+        def draw_stationary_obstacle(i):
+            """Draw a single stationary obstacle."""
+            obstacle_active = state.stationary_obstacle_active[i]
+            obstacle_x = state.stationary_obstacle_x[i]
+            obstacle_y = state.stationary_obstacle_y[i]
+
+            # Convert world coordinates to screen coordinates
+            obstacle_screen_x = building_to_screen_x(obstacle_x)
+            obstacle_visible = ((obstacle_screen_x >= -self.consts.OBSTACLE_WIDTH) &
+                              (obstacle_screen_x <= self.consts.GAME_AREA_WIDTH))
+
+            def draw_obstacle_sprite():
+                current_sprite = self.sprites['obstacle']
+                sprite_height = current_sprite.shape[0]
+                # Position sprite so its bottom aligns with the obstacle position
+                screen_y = obstacle_y - sprite_height + self.consts.OBSTACLE_HEIGHT + 4
+                return draw_sprite_with_transparency(game_area, current_sprite, obstacle_screen_x, screen_y)
+
+            return jnp.where(
+                jnp.logical_and(obstacle_active, obstacle_visible),
+                draw_obstacle_sprite(),
+                game_area
+            )
+
+        # Draw shopping carts
+        def draw_shopping_cart(i):
+            """Draw a single shopping cart."""
+            cart_active = state.shopping_cart_active[i]
+            cart_x = state.shopping_cart_x[i]
+            cart_y = state.shopping_cart_y[i]
+
+            # Convert world coordinates to screen coordinates
+            cart_screen_x = building_to_screen_x(cart_x)
+            cart_visible = ((cart_screen_x >= -self.consts.SHOPPING_CART_WIDTH) &
+                          (cart_screen_x <= self.consts.GAME_AREA_WIDTH))
+
+            def draw_cart_sprite():
+                current_sprite = self.sprites['shopping_cart']
+                sprite_height = current_sprite.shape[0]
+                # Position sprite so its bottom aligns with the cart position
+                screen_y = cart_y - sprite_height + self.consts.SHOPPING_CART_HEIGHT + 4
+                return draw_sprite_with_transparency(game_area, current_sprite, cart_screen_x, screen_y)
+
+            return jnp.where(
+                jnp.logical_and(cart_active, cart_visible),
+                draw_cart_sprite(),
+                game_area
+            )
+
+        # Draw all active obstacles
+        for i in range(self.consts.MAX_STATIONARY_OBSTACLES):
+            game_area = draw_stationary_obstacle(i)
+
+        for i in range(self.consts.MAX_SHOPPING_CARTS):
+            game_area = draw_shopping_cart(i)
 
         # Draw simple UI elements on game area
         ui_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White UI
