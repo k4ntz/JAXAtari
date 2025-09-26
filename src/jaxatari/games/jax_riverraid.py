@@ -39,7 +39,7 @@ MIN_ALTERNATION_LENGTH = 3
 MAX_ALTERNATION_LENGTH = 10
 ENTITY_SPAWN_PROP = 0.2 # includes fuel, only checked if constraints met
 FUEL_SPAWN_PROP = 0.1 # percentage of spawning entity being fuel
-PLAYER_ACCELERATION = 0.02
+PLAYER_ACCELERATION = 0.04
 PLAYER_MAX_SPEED = 4.0
 
 
@@ -797,8 +797,8 @@ def spawn_enemies(state):
                 state.river_inner_left[0] >= 0,
                 lambda state: jax.lax.cond(
                     jax.random.bernoulli(x_key, 0.5),
-                            lambda state: jax.random.randint(x_key, (), state.river_left[0] + 1, state.river_inner_left[0] - 8),
-                            lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + 1, state.river_right[0] - 8),
+                            lambda state: jax.random.randint(x_key, (), state.river_left[0] + 4, state.river_inner_left[0] - 4),
+                            lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + 4, state.river_right[0] - 4),
                     operand=state
                 ),
                 lambda state: jax.random.randint(x_key, (), state.river_left[0] + 8, state.river_right[0] - 8),
@@ -888,7 +888,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     key, subkey1, subkey2 = jax.random.split(state.master_key, 3)
 
     def spawn_entity(state: RiverraidState) -> RiverraidState:
-        spawn_fuel_flag = jax.random.bernoulli(subkey2, FUEL_SPAWN_PROP) # TODO balance
+        spawn_fuel_flag = jax.random.bernoulli(subkey2, FUEL_SPAWN_PROP)
         return jax.lax.cond(
             spawn_fuel_flag,
             lambda state: spawn_fuel(state),
@@ -898,7 +898,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     # only spawn if no dam in the top 10 rows
     dam_at_top = jnp.any(state.dam_position[:50] >= 1)
     spawn_new_entity = jnp.logical_and(
-        jax.random.bernoulli(subkey1, ENTITY_SPAWN_PROP), # TODO balance
+        jax.random.bernoulli(subkey1, ENTITY_SPAWN_PROP),
         ~dam_at_top
     )
 
@@ -1132,14 +1132,13 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
 
     return state._replace(enemy_direction=updated_direction, master_key=key)
 
+
 @jax.jit
 def enemy_movement(state: RiverraidState) -> RiverraidState:
-    new_enemy_x = state.enemy_x.copy()
-    # Masks for enemies that are alive and set to a moving direction
     move_left_mask = (state.enemy_state == 1) & (state.enemy_direction == 2)
     move_right_mask = (state.enemy_state == 1) & (state.enemy_direction == 3)
 
-    # Update positions based on direction
+    new_enemy_x = state.enemy_x.copy()
     new_enemy_x = jnp.where(move_left_mask, new_enemy_x - 0.5, new_enemy_x)
     new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 0.5, new_enemy_x)
 
@@ -1147,29 +1146,46 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     enemy_width = 8
 
     # Collision with the outer river banks
-    collides_with_outer_left = new_enemy_x <= state.river_left[enemy_y]
-    collides_with_outer_right = new_enemy_x + enemy_width >= state.river_right[enemy_y]
+    collides_with_outer_left = (new_enemy_x <= state.river_left[enemy_y]) & move_left_mask
+    collides_with_outer_right = (new_enemy_x + enemy_width >= state.river_right[enemy_y]) & move_right_mask
 
     # Collision with the inner island shores
     island_present_at_y = state.river_inner_left[enemy_y] >= 0
-    # A right-moving enemy hits the island's left shore
-    collides_with_inner_left_shore = island_present_at_y & (new_enemy_x + enemy_width >= state.river_inner_left[enemy_y])
-    # A left-moving enemy hits the island's right shore
-    collides_with_inner_right_shore = island_present_at_y & (new_enemy_x <= state.river_inner_right[enemy_y])
+    was_left_of_island = state.enemy_x + enemy_width < state.river_inner_left[enemy_y]
+    collides_with_inner_left_shore = island_present_at_y & was_left_of_island & \
+                                     (new_enemy_x + enemy_width >= state.river_inner_left[enemy_y]) & move_right_mask
+
+    was_right_of_island = state.enemy_x > state.river_inner_right[enemy_y]
+    collides_with_inner_right_shore = island_present_at_y & was_right_of_island & \
+                                      (new_enemy_x <= state.river_inner_right[enemy_y]) & move_left_mask
 
 
-    # For enemies moving left, only check for collisions on their left-hand side.
-    left_side_collision = move_left_mask & (collides_with_outer_left | collides_with_inner_right_shore)
+    left_side_collision = (collides_with_outer_left | collides_with_inner_right_shore)
+    right_side_collision = (collides_with_outer_right | collides_with_inner_left_shore)
 
-    # For enemies moving right, only check for collisions on their right-hand side.
-    right_side_collision = move_right_mask & (collides_with_outer_right | collides_with_inner_left_shore)
 
-    # Combine the masks to find all enemies that need to change direction
     change_direction_mask = left_side_collision | right_side_collision
+    new_enemy_x = jnp.where(
+        left_side_collision & (state.enemy_type != 2),
+        jnp.maximum(new_enemy_x + 1.0,
+                    jnp.where(collides_with_inner_right_shore,
+                              state.river_inner_right[enemy_y] + 1.0,
+                              state.river_left[enemy_y] + 1.0)),
+        new_enemy_x
+    )
+
+    new_enemy_x = jnp.where(
+        right_side_collision & (state.enemy_type != 2),
+        jnp.minimum(new_enemy_x - 1.0,
+                    jnp.where(collides_with_inner_left_shore,
+                              state.river_inner_left[enemy_y] - enemy_width - 1.0,
+                              state.river_right[enemy_y] - enemy_width - 1.0)),
+        new_enemy_x
+    )
 
     new_enemy_direction = jnp.where(
         change_direction_mask & (state.enemy_type != 2),  # Planes (type 2) fly off-screen and don't turn
-        jnp.where(state.enemy_direction == 2, 3, 2),      # Flip direction from left (2) to right (3) or vice-versa
+        jnp.where(state.enemy_direction == 2, 3, 2),  # Flip direction from left (2) to right (3) or vice-versa
         state.enemy_direction
     )
     return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
