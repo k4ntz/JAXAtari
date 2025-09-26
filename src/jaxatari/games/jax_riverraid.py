@@ -958,16 +958,29 @@ def scroll_entities(state: RiverraidState) -> RiverraidState:
 def enemy_collision(state: RiverraidState) -> RiverraidState:
     def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
         enemy_hitboxes = jnp.array([
-            12,  # boat
-            8,  # helicopter
-            6  # plane
+            13,  # boat
+            9,   # helicopter
+            6    # plane
         ])
         active_enemy_mask = state.enemy_state == 1
 
-        hitboxes = enemy_hitboxes[state.enemy_type]
+        # hitbox for boat and plane
+        hitbox_widths = enemy_hitboxes[state.enemy_type]
+        hitbox_starts_x = state.enemy_x
+        hitbox_ends_x = state.enemy_x + hitbox_widths
 
-        x_collision_mask = ((state.player_bullet_x < state.enemy_x + hitboxes) & (state.player_bullet_x + hitboxes > state.enemy_x))
-        y_collision_mask = ((state.player_bullet_y < state.enemy_y + 6) & (state.player_bullet_y + 1 > state.enemy_y))
+        # specific hitbox for helicopter
+        is_helicopter_mask = state.enemy_type == 1
+        # Directions: 0/2 are left-facing, 1/3 are right-facing
+        is_facing_right_mask = (state.enemy_direction == 1) | (state.enemy_direction == 3)
+        should_offset_helicopter = is_helicopter_mask & is_facing_right_mask
+        helicopter_offset = 4.0
+        hitbox_starts_x = jnp.where(should_offset_helicopter, hitbox_starts_x + helicopter_offset, hitbox_starts_x)
+        hitbox_ends_x = jnp.where(should_offset_helicopter, hitbox_ends_x + helicopter_offset, hitbox_ends_x)
+
+        # collision check
+        x_collision_mask = (state.player_bullet_x > hitbox_starts_x) & (state.player_bullet_x < hitbox_ends_x)
+        y_collision_mask = (state.player_bullet_y < state.enemy_y + 6) & (state.player_bullet_y + 1 > state.enemy_y)
 
         collision_mask = active_enemy_mask & x_collision_mask & y_collision_mask
         collision_present = jnp.any(collision_mask)
@@ -1000,6 +1013,26 @@ def enemy_collision(state: RiverraidState) -> RiverraidState:
             player_bullet_y=new_bullet_y,
             player_score=new_score
         )
+
+    # Bullet - Enemy Collision only when bullet present
+    new_state = jax.lax.cond(
+        state.player_bullet_y >= 0,
+        lambda state: handle_bullet_collision(state),
+        lambda state: state,
+        state
+    )
+
+    # Player - Enemy Collision
+    active_enemy_mask = new_state.enemy_state == 1
+
+    x_collision = (new_state.player_x < new_state.enemy_x + 8) & (new_state.player_x + 8 > new_state.enemy_x)
+    y_collision = (new_state.player_y < new_state.enemy_y + 8) & (new_state.player_y + 8 > new_state.enemy_y)
+    collision_mask = active_enemy_mask & x_collision & y_collision
+
+
+    collision_present = jnp.any(collision_mask)
+    new_player_state = jnp.where(collision_present, 1, new_state.player_state)
+    return new_state._replace(player_state=new_player_state)
 
     # Bullet - Enemy Collision only when bullet present
     new_state = jax.lax.cond(
