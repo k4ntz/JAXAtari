@@ -362,7 +362,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 state
             )
 
-        @partial(jax.jit, static_argnums=(0,))
         def initialise_new_dive(state, diver_idx):
             key = jax.random.PRNGKey(state.turn_step + 101)  # currently deterministic
             key_choice, key_volley, key_shot_delay = jax.random.split(key, 3)
@@ -501,7 +500,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 lambda state: state._replace(),
                 state)
 
-        @partial(jax.jit, static_argnums=(0,))
         def continue_active_dives(state: GalaxianState) -> GalaxianState:
             curr_x = state.enemy_attack_x
             curr_y = state.enemy_attack_y
@@ -657,7 +655,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 state
             )
 
-        @partial(jax.jit, static_argnums=(0,))
         def respawn_finished_dives(state: GalaxianState) -> GalaxianState:
             def body(i, new_state):
                 # diver unter dem player und außerhalb window werden auf respawn gesetzt
