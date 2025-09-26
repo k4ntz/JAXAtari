@@ -752,7 +752,9 @@ def get_action_from_keyboard(state: RiverraidState) -> Action:
 
 @jax.jit
 def player_shooting(state, action):
-    shooting = action == Action.FIRE
+    shooting = jnp.any(
+        jnp.array([action == Action.LEFTFIRE, action == Action.RIGHTFIRE, action == Action.FIRE])
+    )
     new_bullet_x, new_bullet_y = jax.lax.cond(
         jnp.logical_and(
             shooting,
