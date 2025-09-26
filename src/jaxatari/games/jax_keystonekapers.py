@@ -141,10 +141,10 @@ class KeystoneKapersConstants(NamedTuple):
     BALL_WIDTH: int = 6
     BALL_HEIGHT: int = 6
     BALL_BASE_SPEED: float = 2.0
-    BALL_BOUNCE_HEIGHT: int = 3  # Small bounce height for proper parabolic motion
+    BALL_BOUNCE_HEIGHT: int = 4  # Small bounce height for proper parabolic motion
     BALL_MIN_SPAWN_INTERVAL: float = 0.5  # Temporary: faster spawning for testing
     BALL_MAX_SPAWN_INTERVAL: float = 2.0  # Temporary: faster spawning for testing
-    BALL_GRAVITY: float = 1.0  # Higher gravity for faster falls
+    BALL_GRAVITY: float = 0.9  # Higher gravity for faster falls
     BALL_TIME_PENALTY: int = 10  # Time penalty in seconds when hit by ball
     BALL_FREEZE_TIME: int = 24  # Freeze time in frames (~0.4s at 60fps)
 
@@ -972,8 +972,8 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
             floor_y = jnp.where(
                 spawn_floor == 0,
-                self.consts.FLOOR_1_Y + 0,  # Ground floor + manual offset (adjust this number to move ball down/up)
-                self.consts.FLOOR_3_Y + 0   # Top floor + manual offset (adjust this number to move ball down/up)
+                self.consts.FLOOR_1_Y,  # Ground floor (ball bottom sits on floor)
+                self.consts.FLOOR_3_Y   # Top floor (ball bottom sits on floor)
             )
 
             # Get current player section to spawn ball in current screen area
@@ -1041,19 +1041,26 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_ball_y = (obstacles.ball_y + obstacles.ball_vel_y * obstacles.ball_active).astype(jnp.int32)
 
         # Enhanced ball bouncing logic with floor-specific collision detection
-        # Get floor Y positions for each ball based on their assigned floor (floor surface, not ceiling)
+        # Get floor Y positions for each ball based on their assigned floor (consistent with spawn)
         ball_floor_y = jnp.where(
             obstacles.ball_floor == 0,
-            self.consts.FLOOR_1_Y + 15,  # Ground floor surface + manual offset (same as spawn)
-            self.consts.FLOOR_3_Y + 15   # Top floor surface + manual offset (same as spawn)
+            self.consts.FLOOR_1_Y,  # Ground floor surface (same as spawn)
+            self.consts.FLOOR_3_Y   # Top floor surface (same as spawn)
         )
 
         # Ball hits floor when it reaches or goes below the floor level
         ball_hit_floor = new_ball_y >= ball_floor_y
 
         # Apply gravity and bouncing physics with proper parabolic motion
-        # First apply gravity to all balls
-        gravity_applied_vel_y = (obstacles.ball_vel_y + self.consts.BALL_GRAVITY).astype(jnp.int32)
+        # First apply gravity to all balls with proper fractional handling
+        # Scale gravity by 10 to handle decimals, then divide by 10
+        scaled_gravity = jnp.int32(self.consts.BALL_GRAVITY * 10)
+        gravity_applied_vel_y = obstacles.ball_vel_y + (scaled_gravity // 10)
+
+        # Add fractional part every 10 frames for smoother motion
+        fractional_part = scaled_gravity % 10
+        add_fractional = (obstacles.ball_y % 10) < fractional_part  # Use position as pseudo-random for fractional gravity
+        gravity_applied_vel_y = jnp.where(add_fractional, gravity_applied_vel_y + 1, gravity_applied_vel_y)
 
         # Then check for bouncing when hitting floor
         new_ball_vel_y = jnp.where(
@@ -1174,7 +1181,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         return obstacles_after_ball_spawn._replace(ball_spawn_timer=final_ball_spawn_timer)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _check_collisions(self, state: GameState) -> Tuple[bool, bool, bool, int]:
+    def _check_collisions(self, state: GameState) -> Tuple[bool, bool, bool, int, chex.Array]:
         """Check all collision types with proper hitbox handling for jump/crouch."""
         player = state.player
 
@@ -1185,9 +1192,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             self.consts.PLAYER_HEIGHT
         )
 
+        # Convert player bottom position to top position for collision detection
+        # player.y represents the bottom of the player, we need top for collision detection
+        player_top_y = player.y - player_height
+
         # Player-thief collision
         thief_collision = self._entities_collide(
-            player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
+            player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
             state.thief.x, state.thief.y, self.consts.THIEF_WIDTH, self.consts.THIEF_HEIGHT
         )
         thief_caught = jnp.logical_and(thief_collision, player.floor == state.thief.floor)
@@ -1198,7 +1209,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             lambda i: jnp.logical_and(
                 state.obstacles.cart_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
                     state.obstacles.cart_x[i], state.obstacles.cart_y[i],
                     self.consts.CART_WIDTH, self.consts.CART_HEIGHT
                 )
@@ -1206,12 +1217,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )(jnp.arange(self.consts.MAX_OBSTACLES))
 
         # Check ball collisions (can jump over)
+        # Note: both player.y and ball_y represent bottom positions, so we need to adjust for collision detection
         ball_collisions = jax.vmap(
             lambda i: jnp.logical_and(
                 state.obstacles.ball_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
-                    state.obstacles.ball_x[i], state.obstacles.ball_y[i],
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
+                    state.obstacles.ball_x[i], state.obstacles.ball_y[i] - self.consts.BALL_HEIGHT,
                     self.consts.BALL_WIDTH, self.consts.BALL_HEIGHT
                 )
             )
@@ -1222,7 +1234,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             lambda i: jnp.logical_and(
                 state.obstacles.plane_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, player_height,
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
                     state.obstacles.plane_x[i], state.obstacles.plane_y[i],
                     self.consts.PLANE_WIDTH, self.consts.PLANE_HEIGHT
                 )
@@ -1230,6 +1242,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )(jnp.arange(self.consts.MAX_OBSTACLES))
 
         # Separate ball collisions from other obstacles (balls have special collision effects)
+        # Balls can be avoided by jumping over them, but still hit the player's full height
         ball_hit = jnp.logical_and(jnp.logical_not(player.is_jumping), jnp.any(ball_collisions))
 
         # Other obstacle collisions (carts and planes)
@@ -1244,7 +1257,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             lambda i: jnp.logical_and(
                 state.item_active[i],
                 self._entities_collide(
-                    player.x, player.y, self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT,
+                    player.x, player_top_y, self.consts.PLAYER_WIDTH, player_height,
                     state.item_x[i], state.item_y[i],
                     self.consts.ITEM_WIDTH, self.consts.ITEM_HEIGHT
                 )
@@ -1252,7 +1265,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )(jnp.arange(self.consts.MAX_ITEMS))
         items_collected = jnp.sum(item_collisions)
 
-        return obstacle_hit, ball_hit, thief_caught, items_collected
+        return obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey = None) -> Tuple[KeystoneKapersObservation, GameState]:
@@ -1385,7 +1398,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_camera_x = jnp.clip(new_camera_x, 0, max_camera_x).astype(jnp.int32)
 
         # Check collisions
-        obstacle_hit, ball_hit, thief_caught, items_collected = self._check_collisions(state._replace(
+        obstacle_hit, ball_hit, thief_caught, items_collected, ball_collisions = self._check_collisions(state._replace(
             player=new_player,
             thief=new_thief,
             obstacles=new_obstacles
@@ -1394,6 +1407,13 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Handle ball collision effects
         ball_timer_penalty = jax.lax.select(ball_hit, self.consts.BALL_TIME_PENALTY * 60, 0)  # Convert seconds to frames
         new_freeze_timer = jax.lax.select(ball_hit, self.consts.BALL_FREEZE_TIME, jnp.maximum(0, new_player.freeze_timer - 1))
+
+        # Deactivate balls that collided with the player (only if not jumping to match collision logic)
+        collision_mask = jnp.logical_and(ball_collisions, jnp.logical_not(new_player.is_jumping))
+        new_ball_active = jnp.logical_and(new_obstacles.ball_active, jnp.logical_not(collision_mask))
+
+        # Update obstacles with deactivated balls
+        new_obstacles = new_obstacles._replace(ball_active=new_ball_active)
 
         # Update player with freeze timer
         player_with_freeze = new_player._replace(freeze_timer=new_freeze_timer)
@@ -2479,9 +2499,10 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Select appropriate sprite based on bouncing state
             current_ball_sprite = jnp.where(ball_is_bouncing, ball_bounce_sprite, ball_air_sprite)
 
-            # Position ball sprite correctly - ball_y is the bottom of the ball
+            # Position ball sprite correctly - ball_y is the physics bottom position of the ball
             ball_sprite_height = current_ball_sprite.shape[0]
-            ball_screen_y = ball_y - ball_sprite_height + 7  # Manual offset to adjust ball visual position
+            # SINGLE POINT FOR BALL VISUAL ADJUSTMENT: Change +7 to move ball up/down on screen
+            ball_screen_y = ball_y - ball_sprite_height + 22
 
             # Draw ball with transparency
             return jnp.where(
