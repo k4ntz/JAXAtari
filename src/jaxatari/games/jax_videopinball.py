@@ -3598,6 +3598,13 @@ class JaxVideoPinball(
         )
 
         ball_in_play = jnp.logical_or(ball_in_play, is_invisible_block_hit)
+        # account for the fact that the player could nudge in a way so that the
+        # ball misses the invisible block:
+        ball_in_play = jnp.logical_or(
+            ball_in_play,
+            ball_movement.old_ball_x < self.consts.BALL_START_X - 20
+        )
+
         ball_direction_changed = state.ball_direction != self._get_ball_direction(
             ball_movement.new_ball_x - ball_movement.old_ball_x,
             ball_movement.new_ball_y - ball_movement.old_ball_y,
@@ -3644,55 +3651,43 @@ class JaxVideoPinball(
             lambda: self._get_ball_direction(ball_trajectory_x, ball_trajectory_y),
             lambda: ball_direction,  # updated after gravity and before tilt
         )
-        ball_vel_x = jnp.abs(ball_vel_x)
-        ball_vel_y = jnp.abs(ball_vel_y)
         original_ball_speed = jnp.sqrt(ball_vel_x**2 + ball_vel_y**2)
-        new_ball_speed = (
-            (1 + jnp.clip(velocity_addition, -1, 1))
-            * original_ball_speed
-            * velocity_factor
+        reflected_ball_speed = jnp.sqrt(ball_trajectory_x**2 + ball_trajectory_y**2)
+        # if there was a collision, update the ball trajectory;
+        # but only if the new trajectory is sufficiently large to avoid numerical instabilities
+        ball_vel_x, ball_vel_y, ball_speed = jax.lax.cond(
+            ball_in_play & any_collision & (reflected_ball_speed > self.consts.BALL_MIN_SPEED / 10),
+            lambda: (jnp.abs(ball_trajectory_x), jnp.abs(ball_trajectory_y), reflected_ball_speed),
+            lambda: (jnp.abs(ball_vel_x), jnp.abs(ball_vel_y), original_ball_speed),
+        )
+        new_ball_speed = jnp.clip(
+            (original_ball_speed + jnp.clip(velocity_addition, -1, 1))
+            * velocity_factor,
+            0,
+            self.consts.BALL_MAX_SPEED,
         )
 
         ball_vel_x = jnp.where(
             any_collision,
-            jnp.clip(
-                ball_vel_x / original_ball_speed * new_ball_speed,
-                0,
-                self.consts.BALL_MAX_SPEED,
-            ),
+            ball_vel_x / ball_speed * new_ball_speed,
             ball_vel_x,
         )
         ball_vel_y = jnp.where(
             any_collision,
-            jnp.clip(
-                ball_vel_y / original_ball_speed * new_ball_speed,
-                0,
-                self.consts.BALL_MAX_SPEED,
-            ),
+            ball_vel_y / ball_speed * new_ball_speed,
             ball_vel_y,
         )
 
         # If ball velocity reaches a small threshold, accelerate it after hitting something
-        small_vel = jnp.logical_and(
-            ball_vel_x < self.consts.BALL_MIN_SPEED,
-            ball_vel_y < self.consts.BALL_MIN_SPEED,
-        )
+        small_vel = jnp.sqrt(ball_vel_x**2 + ball_vel_y**2) < self.consts.BALL_MIN_SPEED
         ball_vel_x = jnp.where(
             jnp.logical_and(any_collision, small_vel),
-            jnp.clip(
-                ball_vel_x * 2 + self.consts.BALL_MIN_SPEED,
-                0,
-                self.consts.BALL_MAX_SPEED,
-            ),
+            ball_vel_x * 2 + self.consts.BALL_MIN_SPEED,
             ball_vel_x,
         )
         ball_vel_y = jnp.where(
             jnp.logical_and(any_collision, small_vel),
-            jnp.clip(
-                ball_vel_y * 2 + self.consts.BALL_MIN_SPEED,
-                0,
-                self.consts.BALL_MAX_SPEED,
-            ),
+            ball_vel_y * 2 + self.consts.BALL_MIN_SPEED,
             ball_vel_y,
         )
 

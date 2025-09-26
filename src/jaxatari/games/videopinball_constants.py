@@ -147,16 +147,16 @@ class VideoPinballConstants(NamedTuple):
 
     # Physics constants
     GRAVITY = jnp.array(0.03)
-    VELOCITY_DAMPENING_VALUE = jnp.array(0.075)  # 24
+    VELOCITY_DAMPENING_VALUE = jnp.array(0.075)
     VELOCITY_ACCELERATION_VALUE = jnp.array(0.125)
     MAX_REFLECTIONS_PER_GAMESTEP = jnp.array(
         3  # max collisions to process per timestep
     )  # this significantly effects game performance
-    BALL_MAX_SPEED = jnp.array(3)
+    BALL_MAX_SPEED = jnp.array(3.5)
     BALL_MIN_SPEED = jnp.array(0.3)
     NUDGE_EFFECT_INTERVAL = jnp.array(2)  # Num steps in between nudge changing
     NUDGE_EFFECT_AMOUNT = jnp.array(
-        0.75
+        1.0
     )  # Amount of nudge effect applied to the ball's velocity
     TILT_COUNT_INCREASE_INTERVAL = jnp.array(
         4
