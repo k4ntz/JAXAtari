@@ -62,14 +62,14 @@ class KeystoneKapersConstants(NamedTuple):
     TOTAL_BUILDING_WIDTH: int = 7 * 152  # 1064 pixels total width
 
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
-    FLOOR_1_Y: int = 139  # Ground floor (was 140, shifted up by 5 more to close gap)
-    FLOOR_2_Y: int = 107   # Middle floor (was 100, shifted up by 5)
-    FLOOR_3_Y: int = 73   # Top floor (was 60, shifted up by 5)
-    ROOF_Y: int = 41      # Roof
+    FLOOR_1_Y: int = 136  # Ground floor (was 140, shifted up by 5 more to close gap)
+    FLOOR_2_Y: int = 104   # Middle floor (was 100, shifted up by 5)
+    FLOOR_3_Y: int = 72   # Top floor (was 60, shifted up by 5)
+    ROOF_Y: int = 40      # Roof
     FLOOR_HEIGHT: int = 20
 
     # Minimap area configuration (at bottom of game area)
-    MINIMAP_HEIGHT: int = 20  # Grey area height (reverted)
+    MINIMAP_HEIGHT: int = 35  # Grey area height (increased from original value)
     MINIMAP_COLOR: tuple = (151, 151, 151)  # #979797 in RGB
 
     # Actual minimap display area (within grey area)
@@ -2483,7 +2483,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         bottom_border_height = self.consts.TOTAL_SCREEN_HEIGHT - bottom_border_start_y
 
         # Position logo on the left side with some margin, near the top of bottom border
-        logo_x = 10  # Small margin from left edge
+        logo_x = 20  # Small margin from left edge
         logo_y = bottom_border_start_y + 5  # Small margin from top of bottom border
 
         # Apply logo to frame
