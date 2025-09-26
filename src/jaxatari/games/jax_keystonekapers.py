@@ -140,11 +140,11 @@ class KeystoneKapersConstants(NamedTuple):
 
     BALL_WIDTH: int = 6
     BALL_HEIGHT: int = 6
-    BALL_BASE_SPEED: float = 2.0
-    BALL_BOUNCE_HEIGHT: int = 4  # Small bounce height for proper parabolic motion
+    BALL_BASE_SPEED: float = 2.5  # Slower horizontal speed for more travel time
+    BALL_BOUNCE_HEIGHT: int = 3  # Lower bounce height for longer horizontal travel
     BALL_MIN_SPAWN_INTERVAL: float = 0.5  # Temporary: faster spawning for testing
     BALL_MAX_SPAWN_INTERVAL: float = 2.0  # Temporary: faster spawning for testing
-    BALL_GRAVITY: float = 0.9  # Higher gravity for faster falls
+    BALL_GRAVITY: float = 0.6  # Lower gravity for slower falling
     BALL_TIME_PENALTY: int = 10  # Time penalty in seconds when hit by ball
     BALL_FREEZE_TIME: int = 24  # Freeze time in frames (~0.4s at 60fps)
 
@@ -956,7 +956,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             # Find first inactive slot for bouncing ball
             inactive_mask = jnp.logical_not(obstacles.ball_active)
             spawn_idx = jnp.argmax(inactive_mask)
-            should_spawn = inactive_mask[spawn_idx]
+            can_spawn_slot = inactive_mask[spawn_idx]
 
             # Ball spawns only on the floor the player is currently on
             player_y = state.player.y
@@ -978,6 +978,26 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
             # Get current player section to spawn ball in current screen area
             current_section = state.player.x // self.consts.SCREEN_WIDTH
+
+            # Calculate elevator section (middle section of 7 total sections)
+            elevator_section = self.consts.ELEVATOR_BUILDING_X // self.consts.SCREEN_WIDTH
+
+            # Exception sections where balls should NOT spawn:
+            # - First section (0) and last section (6)
+            # - Elevator section (around section 3)
+            total_sections = 7  # Based on TOTAL_BUILDING_WIDTH / SCREEN_WIDTH
+            is_first_section = current_section == 0
+            is_last_section = current_section == (total_sections - 1)
+            is_elevator_section = current_section == elevator_section
+
+            # Don't spawn if in any exception section
+            in_exception_section = jnp.logical_or(
+                jnp.logical_or(is_first_section, is_last_section),
+                is_elevator_section
+            )
+
+            # Only spawn if we have a slot AND not in exception section
+            should_spawn = jnp.logical_and(can_spawn_slot, jnp.logical_not(in_exception_section))
             section_start_x = current_section * self.consts.SCREEN_WIDTH
 
             # Spawn from left side only (as balls should come from the direction of running)
@@ -1045,7 +1065,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         ball_floor_y = jnp.where(
             obstacles.ball_floor == 0,
             self.consts.FLOOR_1_Y,  # Ground floor surface (same as spawn)
-            self.consts.FLOOR_3_Y   # Top floor surface (same as spawn)
+            self.consts.FLOOR_3_Y   # Top floor (ball bottom sits on floor)
         )
 
         # Ball hits floor when it reaches or goes below the floor level
@@ -1837,7 +1857,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                     escalator_sprite_rgba = jr.loadFrame(escalator_sprite_path)
 
                     # Extract RGB channels and use alpha channel to create transparent pixels
-                    # When alpha is low (transparent), set to white (which will be treated as transparent)
+                    # When alpha is low (transparent), set to white (will be treated as transparent)
                     rgb_data = escalator_sprite_rgba[:, :, :3]
                     alpha_data = escalator_sprite_rgba[:, :, 3:4]
                     alpha_normalized = alpha_data.astype(jnp.float32) / 255.0
@@ -2007,8 +2027,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             except Exception as e:
                 print(f"Failed to load Thief running right sprite frame {frame}: {e}")
                 # Fallback to simple red rectangle
-                fallback_sprite = jnp.ones((20, 8, 3), dtype=jnp.uint8) * jnp.array([255, 0, 0], dtype=jnp.uint8)
-                thief_running_right_sprites.append(fallback_sprite)
+                thief_running_right_sprites.append(jnp.ones((20, 8, 3), dtype=jnp.uint8) * jnp.array([255, 0, 0], dtype=jnp.uint8))
 
         # Determine the maximum height and width among the thief running sprites
         thief_max_height = max(sprite.shape[0] for sprite in thief_running_right_sprites)
@@ -2407,7 +2426,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
         # Old player rendering (now replaced by Kop sprite above)
         # player_screen_x = building_to_screen_x(state.player.x)
         # player_visible = (player_screen_x >= 0) & (player_screen_x <= self.consts.GAME_AREA_WIDTH - self.consts.PLAYER_WIDTH)
-        # player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green player
+        # player_color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green
         # game_area = jnp.where(
         #     player_visible,
         #     draw_rectangle_simple(game_area, player_screen_x, state.player.y,
