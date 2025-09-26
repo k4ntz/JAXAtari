@@ -1372,12 +1372,31 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         # Check if we should spawn a new cart
         # Shopping carts only appear after the thief has been caught at least twice (level >= 2)
         level_requirement_met = state.level >= 0
+
+        # Check section restrictions (similar to ball logic)
+        current_section = state.player.x // self.consts.SCREEN_WIDTH
+        elevator_section = self.consts.ELEVATOR_BUILDING_X // self.consts.SCREEN_WIDTH
+        total_sections = 7  # Based on TOTAL_BUILDING_WIDTH / SCREEN_WIDTH
+
+        # Exception sections where shopping carts should NOT spawn
+        is_first_section = current_section == 0
+        is_last_section = current_section == (total_sections - 1)
+        is_elevator_section = current_section == elevator_section
+
+        in_exception_section = jnp.logical_or(
+            jnp.logical_or(is_first_section, is_last_section),
+            is_elevator_section
+        )
+
         should_spawn = jnp.logical_and(
             jnp.logical_and(
-                new_spawn_timer == 0,
-                jnp.sum(state.shopping_cart_active) < self.consts.MAX_SHOPPING_CARTS
+                jnp.logical_and(
+                    new_spawn_timer == 0,
+                    jnp.sum(state.shopping_cart_active) < self.consts.MAX_SHOPPING_CARTS
+                ),
+                level_requirement_met
             ),
-            level_requirement_met
+            jnp.logical_not(in_exception_section)
         )
 
         # Update existing cart positions
