@@ -627,9 +627,14 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
     dam_mask = new_dam_position == 1
     dam_exists = jnp.any(dam_mask)
     dam_top_y = jnp.argmax(dam_mask) - DAM_OFFSET
+    bullet_on_screen = state.player_bullet_y >= 0
+
     bullet_above_dam = jnp.logical_and(
         dam_exists,
-        jnp.logical_and(bullet_y < dam_top_y + DAM_OFFSET, bullet_x > 1)
+        jnp.logical_and(
+            bullet_on_screen,  # <-- This is the new condition
+            jnp.logical_and(bullet_y < dam_top_y + DAM_OFFSET, bullet_x > 1)
+        )
     )
 
     river_left = state.river_left[bullet_y]
@@ -1390,7 +1395,15 @@ class JaxRiverraid(JaxEnvironment):
             river_start_x = (SCREEN_WIDTH - DEFAULT_RIVER_WIDTH) // 2
             river_end_x = river_start_x + DEFAULT_RIVER_WIDTH
             initial_key = jax.random.PRNGKey(1)
-            new_state = RiverraidState(turn_step= state.turn_step - (state.turn_step % SEGMENT_LENGTH + 50), # respawn at the start of the last segment + some offset
+            new_segment_state = jax.lax.cond(
+                jnp.logical_or(state.segment_state == 0, state.segment_state == 1), # if altering or about to change
+                lambda _: jnp.array(0), # set to the end of altering (end ensuured by turn step)
+                lambda _: jnp.array(2), # else to the end of straight
+                operand=None
+            )
+            new_turn_step = state.turn_step - (state.turn_step % SEGMENT_LENGTH + 50) # respawn at the start of the last segment + some offset
+
+            new_state = RiverraidState(turn_step= new_turn_step,
                                    turn_step_linear=state.turn_step_linear,
                                    river_left=jnp.full((SCREEN_HEIGHT,), river_start_x, dtype=jnp.int32),
                                    river_right=jnp.full((SCREEN_HEIGHT,), river_end_x, dtype=jnp.int32),
@@ -1403,7 +1416,7 @@ class JaxRiverraid(JaxEnvironment):
                                    river_island_present=jnp.array(0),
                                    alternation_cooldown=jnp.array(10),
                                    island_transition_state=jnp.array(0),
-                                   segment_state=jnp.array(0),
+                                   segment_state=new_segment_state,
                                    segment_transition_state=jnp.array(0),
                                    segment_straigt_counter=jnp.array(8),
                                    dam_position=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.int32),
