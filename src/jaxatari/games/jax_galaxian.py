@@ -1319,31 +1319,32 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         new_state = new_state._replace(turn_step=new_state.turn_step + 1)
         done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
+        env_reward = self._get_reward(state, new_state)
+        all_rewards = self._get_all_rewards(state, new_state)
         info = self._get_info(new_state, all_rewards)
 
         observation = self._get_observation(new_state)
 
-        def do_reset(_):
-            obs, s = self.reset()
-            return obs, s, 0, False, self._get_info(s, jnp.zeros(1))
+        # def do_reset(_):
+        #     obs, s = self.reset()
+        #     return obs, s, 0, False, self._get_info(s, jnp.zeros(1))
 
-        return jax.lax.cond(
-            done,
-            do_reset,
-            lambda _: (observation, new_state, env_reward, done, info),
-            operand=None
-        )
+        return observation, new_state, env_reward, done, info
+        # jax.lax.cond(
+        #     done,
+        #     do_reset,
+        #     lambda _: (),
+        #     operand=None
+        # )
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: GalaxianState, state: GalaxianState):
+    def _get_reward(self, previous_state: GalaxianState, state: GalaxianState):
         return state.score - previous_state.score
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: GalaxianState, state: GalaxianState) -> chex.Array:
+    def _get_all_rewards(self, previous_state: GalaxianState, state: GalaxianState) -> chex.Array:
         if self.reward_funcs is None:
             return jnp.zeros(1)
         rewards = jnp.array(
@@ -1356,7 +1357,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         return state.lives < 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: GalaxianState, all_rewards: chex.Array) -> GalaxianInfo:
+    def _get_info(self, state: GalaxianState, all_rewards: chex.Array = None) -> GalaxianInfo:
         return GalaxianInfo(
             time=state.turn_step,
             lives=state.lives,
