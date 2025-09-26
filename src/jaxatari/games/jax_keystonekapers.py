@@ -142,8 +142,8 @@ class KeystoneKapersConstants(NamedTuple):
     BALL_HEIGHT: int = 6
     BALL_BASE_SPEED: float = 2.5  # Slower horizontal speed for more travel time
     BALL_BOUNCE_HEIGHT: int = 3  # Lower bounce height for longer horizontal travel
-    BALL_MIN_SPAWN_INTERVAL: float = 0.5  # Temporary: faster spawning for testing
-    BALL_MAX_SPAWN_INTERVAL: float = 2.0  # Temporary: faster spawning for testing
+    BALL_MIN_SPAWN_INTERVAL: float = 0.3  # Earlier spawning - reduced from 0.5
+    BALL_MAX_SPAWN_INTERVAL: float = 1.2  # Earlier spawning - reduced from 2.0
     BALL_GRAVITY: float = 0.6  # Lower gravity for slower falling
     BALL_TIME_PENALTY: int = 10  # Time penalty in seconds when hit by ball
     BALL_FREEZE_TIME: int = 24  # Freeze time in frames (~0.4s at 60fps)
@@ -1337,7 +1337,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
             ball_active=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=bool),
             ball_vel_x=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
             ball_vel_y=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),
-            ball_spawn_timer=jnp.array(120),  # 2 seconds
+            ball_spawn_timer=jnp.array(45),  # 0.75 seconds - reduced from 120 for earlier spawning
             ball_floor=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=jnp.int32),  # Floor assignment (0-2)
             ball_is_bouncing=jnp.zeros(self.consts.MAX_OBSTACLES, dtype=bool),  # Bouncing state
 
