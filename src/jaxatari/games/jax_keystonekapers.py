@@ -983,11 +983,26 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                 jax.lax.select(should_spawn, spawn_speed, obstacles.cart_speed[spawn_idx])
             )
 
-            return obstacles._replace(
+            # Return complete ObstacleState with all fields to match spawn_ball return type
+            return ObstacleState(
                 cart_x=new_cart_x,
                 cart_y=new_cart_y,
                 cart_active=new_cart_active,
-                cart_speed=new_cart_speed
+                cart_speed=new_cart_speed,
+                cart_spawn_timer=obstacles.cart_spawn_timer,
+                ball_x=obstacles.ball_x,
+                ball_y=obstacles.ball_y,
+                ball_active=obstacles.ball_active,
+                ball_vel_x=obstacles.ball_vel_x,
+                ball_vel_y=obstacles.ball_vel_y,
+                ball_spawn_timer=obstacles.ball_spawn_timer,
+                ball_floor=obstacles.ball_floor,
+                ball_is_bouncing=obstacles.ball_is_bouncing,
+                plane_x=obstacles.plane_x,
+                plane_y=obstacles.plane_y,
+                plane_active=obstacles.plane_active,
+                plane_speed=obstacles.plane_speed,
+                plane_spawn_timer=obstacles.plane_spawn_timer
             )
 
         def spawn_ball():
@@ -1065,13 +1080,26 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                 jax.lax.select(should_spawn, spawn_floor, obstacles.ball_floor[spawn_idx])
             )
 
-            return obstacles._replace(
+            # Return complete ObstacleState with all fields to match spawn_cart return type
+            return ObstacleState(
+                cart_x=obstacles.cart_x,
+                cart_y=obstacles.cart_y,
+                cart_active=obstacles.cart_active,
+                cart_speed=obstacles.cart_speed,
+                cart_spawn_timer=obstacles.cart_spawn_timer,
                 ball_x=new_ball_x,
                 ball_y=new_ball_y,
                 ball_active=new_ball_active,
                 ball_vel_x=new_ball_vel_x,
                 ball_vel_y=new_ball_vel_y,
-                ball_floor=new_ball_floor
+                ball_spawn_timer=obstacles.ball_spawn_timer,
+                ball_floor=new_ball_floor,
+                ball_is_bouncing=obstacles.ball_is_bouncing,
+                plane_x=obstacles.plane_x,
+                plane_y=obstacles.plane_y,
+                plane_active=obstacles.plane_active,
+                plane_speed=obstacles.plane_speed,
+                plane_spawn_timer=obstacles.plane_spawn_timer
             )
 
         # Use jax.lax.cond to handle obstacle type branching
@@ -1348,7 +1376,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         )
 
         # Update existing cart positions
-        new_x = state.shopping_cart_x + state.shopping_cart_direction * self.consts.SHOPPING_CART_BASE_SPEED
+        new_x = (state.shopping_cart_x + state.shopping_cart_direction * self.consts.SHOPPING_CART_BASE_SPEED).astype(jnp.int32)
 
         # Deactivate carts that have moved off screen
         off_screen = jnp.logical_or(new_x < -50, new_x > self.consts.TOTAL_BUILDING_WIDTH + 50)
@@ -1372,10 +1400,10 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                 direction == 1,
                 -20,  # Start off-screen left
                 self.consts.TOTAL_BUILDING_WIDTH + 20  # Start off-screen right
-            )
+            ).astype(jnp.int32)
 
             # Y position for the floor
-            cart_y = self._floor_y_position(floor_idx) + 4  # Match positioning
+            cart_y = (self._floor_y_position(floor_idx) + 4).astype(jnp.int32)  # Match positioning
 
             # Find first inactive cart slot
             first_inactive = jnp.argmax(jnp.logical_not(new_active))
