@@ -45,16 +45,16 @@ class KeystoneKapersConstants(NamedTuple):
 
     # Game area dimensions (includes minimap within the area)
     GAME_AREA_WIDTH: int = 152      # Slightly smaller for left border
-    GAME_AREA_HEIGHT: int = 175     # Reduced to end right after minimap area
+    GAME_AREA_HEIGHT: int = 177     # Reduced to end right after minimap area #@adham: revert to 175 if issues arise
 
     # Border offsets to match original layout
     GAME_AREA_OFFSET_X: int = 8     # Left border (keep same)
-    GAME_AREA_OFFSET_Y: int = 30    # Top border (keep same)
+    GAME_AREA_OFFSET_Y: int = 29    # Top border (keep same) #@adham: revert to 30 if issues arise
     # Bottom border will be: 250 - 30 - 175 = 45 pixels (bigger bottom border)
 
     # Legacy constants for compatibility
     SCREEN_WIDTH: int = 152         # Match game area
-    SCREEN_HEIGHT: int = 175        # Match game area
+    SCREEN_HEIGHT: int = 177        # Match game area #@adham: revert to 175 if issues arise
 
     # Building structure - 7 sections of horizontal scrolling
     BUILDING_SECTIONS: int = 7
@@ -62,14 +62,14 @@ class KeystoneKapersConstants(NamedTuple):
     TOTAL_BUILDING_WIDTH: int = 7 * 152  # 1064 pixels total width
 
     # Floor positions (Y coordinates) - shifted up further to eliminate blue gap above minimap
-    FLOOR_1_Y: int = 136  # Ground floor (was 140, shifted up by 5 more to close gap)
-    FLOOR_2_Y: int = 104   # Middle floor (was 100, shifted up by 5)
-    FLOOR_3_Y: int = 72   # Top floor (was 60, shifted up by 5)
-    ROOF_Y: int = 40      # Roof
-    FLOOR_HEIGHT: int = 20
+    FLOOR_1_Y: int = 132  # Ground floor (was 140, shifted up by 5 more to close gap)
+    FLOOR_2_Y: int = 100   # Middle floor (was 100, shifted up by 5)
+    FLOOR_3_Y: int = 68   # Top floor (was 60, shifted up by 5)
+    ROOF_Y: int = 36      # Roof
+    FLOOR_HEIGHT: int = 26 #@adham: revert to 20 if issues arise
 
     # Minimap area configuration (at bottom of game area)
-    MINIMAP_HEIGHT: int = 35  # Grey area height (increased from original value)
+    MINIMAP_HEIGHT: int = 35  # Grey area height (increased from original value 20)
     MINIMAP_COLOR: tuple = (151, 151, 151)  # #979797 in RGB
 
     # Actual minimap display area (within grey area)
@@ -2165,7 +2165,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
             # Position sprite so its bottom aligns with the floor
             thief_sprite_height = thief_sprite.shape[0]
-            thief_screen_y = state.thief.y - thief_sprite_height + self.consts.THIEF_HEIGHT
+            thief_screen_y = state.thief.y - thief_sprite_height + self.consts.THIEF_HEIGHT + 4  # Adjusted for floor height increase
 
             return draw_sprite_with_transparency(game_area, thief_sprite, thief_screen_x, thief_screen_y)
 
@@ -2199,7 +2199,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
         # Position sprite so its bottom aligns with the floor
         kop_sprite_height = kop_sprite.shape[0]
-        player_screen_y = state.player.y - kop_sprite_height + self.consts.PLAYER_HEIGHT
+        player_screen_y = state.player.y - kop_sprite_height + self.consts.PLAYER_HEIGHT + 4  # Adjusted for floor height increase
 
         # Draw the Kop sprite at the player's position with transparency (white pixels = transparent)
         game_area = draw_sprite_with_transparency(game_area, kop_sprite, player_screen_x, player_screen_y)
