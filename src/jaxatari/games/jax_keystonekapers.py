@@ -355,12 +355,12 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
     def _floor_y_position(self, floor: chex.Array) -> chex.Array:
         """Get Y position for a given floor number."""
         return jax.lax.select(
-            floor == 0, self.consts.FLOOR_1_Y,
+            floor == 0, self.consts.FLOOR_1_Y + 2,  # Ground floor, lowered by 2 pixels
             jax.lax.select(
-                floor == 1, self.consts.FLOOR_2_Y,
+                floor == 1, self.consts.FLOOR_2_Y + 2,  # Middle floor, lowered by 2 pixels
                 jax.lax.select(
-                    floor == 2, self.consts.FLOOR_3_Y,
-                    self.consts.ROOF_Y
+                    floor == 2, self.consts.FLOOR_3_Y + 2,  # Top floor, lowered by 2 pixels
+                    self.consts.ROOF_Y + 2  # Roof, lowered by 2 pixels
                 )
             )
         )
@@ -1298,14 +1298,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         player_start_x = self.consts.TOTAL_BUILDING_WIDTH - 78  # Near right edge
         player = PlayerState(
             x=jnp.array(player_start_x),
-            y=jnp.array(self.consts.FLOOR_1_Y),
+            y=jnp.array(self.consts.FLOOR_1_Y + 2),  # Lowered by 2 pixels
             floor=jnp.array(0),
             vel_x=jnp.array(0),
             vel_y=jnp.array(0),
             is_jumping=jnp.array(False),
             is_crouching=jnp.array(False),
             jump_timer=jnp.array(0),
-            jump_start_y=jnp.array(self.consts.FLOOR_1_Y),
+            jump_start_y=jnp.array(self.consts.FLOOR_1_Y + 2),  # Lowered by 2 pixels
             freeze_timer=jnp.array(0),  # Added freeze timer for ball collisions
             on_escalator=jnp.array(0),  # 0 = not on escalator
             escalator_progress=jnp.array(0.0),
@@ -1317,7 +1317,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         thief_start_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
         thief = ThiefState(
             x=jnp.array(thief_start_x),
-            y=jnp.array(self.consts.FLOOR_2_Y),
+            y=jnp.array(self.consts.FLOOR_2_Y + 2),  # Lowered by 2 pixels
             floor=jnp.array(1),  # Floor 1 = middle floor in this numbering system
             speed=jnp.array(self.consts.THIEF_BASE_SPEED),
             direction=jnp.array(1),  # Moving right initially
@@ -1490,7 +1490,7 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
 
         # When thief is caught, reset thief to starting position and reset timer
         thief_reset_x = self.consts.ELEVATOR_BUILDING_X + self.consts.ELEVATOR_WIDTH // 2
-        thief_reset_y = self.consts.FLOOR_2_Y
+        thief_reset_y = self.consts.FLOOR_2_Y + 2  # Lowered by 2 pixels
         thief_reset_floor = 1  # Middle floor
 
         # Reset thief state when level resets (either caught or life lost)
@@ -1512,14 +1512,14 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         player_reset_x = self.consts.TOTAL_BUILDING_WIDTH - 78  # Near right edge
         final_player = PlayerState(
             x=jax.lax.select(should_reset_level, jnp.array(player_reset_x), player_with_freeze.x),
-            y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y), player_with_freeze.y),
+            y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y + 2), player_with_freeze.y),  # Lowered by 2 pixels
             floor=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.floor),
             vel_x=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.vel_x),
             vel_y=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.vel_y),
             is_jumping=jax.lax.select(should_reset_level, jnp.array(False), player_with_freeze.is_jumping),
             is_crouching=jax.lax.select(should_reset_level, jnp.array(False), player_with_freeze.is_crouching),
             jump_timer=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.jump_timer),
-            jump_start_y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y), player_with_freeze.jump_start_y),
+            jump_start_y=jax.lax.select(should_reset_level, jnp.array(self.consts.FLOOR_1_Y + 2), player_with_freeze.jump_start_y),  # Lowered by 2 pixels
             freeze_timer=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.freeze_timer),
             on_escalator=jax.lax.select(should_reset_level, jnp.array(0), player_with_freeze.on_escalator),
             escalator_progress=jax.lax.select(should_reset_level, jnp.array(0.0), player_with_freeze.escalator_progress),
