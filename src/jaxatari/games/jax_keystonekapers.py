@@ -1370,17 +1370,31 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
         new_spawn_timer = jnp.maximum(0, state.shopping_cart_spawn_timer - 1)
 
         # Check if we should spawn a new cart
+        # Shopping carts only appear after the thief has been caught at least twice (level >= 2)
+        level_requirement_met = state.level >= 0
         should_spawn = jnp.logical_and(
-            new_spawn_timer == 0,
-            jnp.sum(state.shopping_cart_active) < self.consts.MAX_SHOPPING_CARTS
+            jnp.logical_and(
+                new_spawn_timer == 0,
+                jnp.sum(state.shopping_cart_active) < self.consts.MAX_SHOPPING_CARTS
+            ),
+            level_requirement_met
         )
 
         # Update existing cart positions
         new_x = (state.shopping_cart_x + state.shopping_cart_direction * self.consts.SHOPPING_CART_BASE_SPEED).astype(jnp.int32)
 
-        # Deactivate carts that have moved off screen
-        off_screen = jnp.logical_or(new_x < -50, new_x > self.consts.TOTAL_BUILDING_WIDTH + 50)
-        new_active = jnp.logical_and(state.shopping_cart_active, jnp.logical_not(off_screen))
+        # Section-based bounds (similar to ball logic)
+        # Get current player section for section-based cart management
+        current_section = state.player.x // self.consts.SCREEN_WIDTH
+        section_start_x = current_section * self.consts.SCREEN_WIDTH
+        section_end_x = section_start_x + self.consts.SCREEN_WIDTH
+
+        # Shopping cart disappears when it completely leaves the current section
+        cart_out_of_bounds = jnp.logical_or(
+            new_x + self.consts.SHOPPING_CART_WIDTH < section_start_x,  # Completely left of section
+            new_x > section_end_x                                      # Completely right of section
+        )
+        new_active = jnp.logical_and(state.shopping_cart_active, jnp.logical_not(cart_out_of_bounds))
 
         # Spawn new cart if needed
         def spawn_new_cart():
@@ -1395,15 +1409,20 @@ class JaxKeystoneKapers(JaxEnvironment[GameState, KeystoneKapersObservation, Key
                 1  # Floors 1 and 3 go left to right
             )
 
-            # Start position: left side if going right, right side if going left
+            # Start position: spawn within current section bounds (similar to ball logic)
+            # Get current player section for section-based spawning
+            current_section = state.player.x // self.consts.SCREEN_WIDTH
+            section_start_x = current_section * self.consts.SCREEN_WIDTH
+            section_end_x = section_start_x + self.consts.SCREEN_WIDTH
+
             start_x = jnp.where(
                 direction == 1,
-                -20,  # Start off-screen left
-                self.consts.TOTAL_BUILDING_WIDTH + 20  # Start off-screen right
+                section_start_x,  # Start at left edge of current section
+                section_end_x - self.consts.SHOPPING_CART_WIDTH  # Start at right edge of current section
             ).astype(jnp.int32)
 
             # Y position for the floor
-            cart_y = (self._floor_y_position(floor_idx) + 4).astype(jnp.int32)  # Match positioning
+            cart_y = (self._floor_y_position(floor_idx) + 6).astype(jnp.int32)  # Match ball positioning offset
 
             # Find first inactive cart slot
             first_inactive = jnp.argmax(jnp.logical_not(new_active))
@@ -2638,13 +2657,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Calculate the actual placement region
             x_start = x
             x_end = x + sprite_width
-            y_start = y  
+            y_start = y
             y_end = y + sprite_height
 
             # Use dynamic_slice to get the game area region where sprite should be placed
             game_region = jax.lax.dynamic_slice(
-                game_area, 
-                (y_start, x_start, 0), 
+                game_area,
+                (y_start, x_start, 0),
                 (sprite_height, sprite_width, game_area.shape[2])
             )
 
@@ -2653,8 +2672,8 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
             # Create the updated game area by using dynamic_update_slice
             return jax.lax.dynamic_update_slice(
-                game_area, 
-                sprite_to_place, 
+                game_area,
+                sprite_to_place,
                 (y_start, x_start, 0)
             )
 
@@ -2670,13 +2689,13 @@ class KeystoneKapersRenderer(JAXGameRenderer):
             # Calculate the actual placement region
             x_start = x
             x_end = x + sprite_width
-            y_start = y  
+            y_start = y
             y_end = y + sprite_height
 
             # Get the game area region where sprite should be placed
             game_region = jax.lax.dynamic_slice(
-                game_area, 
-                (y_start, x_start, 0), 
+                game_area,
+                (y_start, x_start, 0),
                 (sprite_height, sprite_width, game_area.shape[2])
             )
 
@@ -2689,8 +2708,8 @@ class KeystoneKapersRenderer(JAXGameRenderer):
 
             # Update the game area with the blended region
             return jax.lax.dynamic_update_slice(
-                game_area, 
-                blended_region, 
+                game_area,
+                blended_region,
                 (y_start, x_start, 0)
             )
 
@@ -3086,7 +3105,7 @@ class KeystoneKapersRenderer(JAXGameRenderer):
                 current_sprite = self.sprites['shopping_cart']
                 sprite_height = current_sprite.shape[0]
                 # Position sprite so its bottom aligns with the cart position
-                screen_y = cart_y - sprite_height + self.consts.SHOPPING_CART_HEIGHT + 4
+                screen_y = cart_y - sprite_height + self.consts.SHOPPING_CART_HEIGHT + 6
                 return draw_sprite_with_transparency(game_area, current_sprite, cart_screen_x, screen_y)
 
             return jnp.where(
