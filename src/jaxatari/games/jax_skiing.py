@@ -30,8 +30,8 @@ class GameConfig:
     skier_width: int = 10
     skier_height: int = 18
     skier_y: int = 40
-    flag_width: int = 5
-    flag_height: int = 14
+    flag_width: int = 10
+    flag_height: int = 28
     flag_distance: int = 20
     gate_vertical_spacing: int = 90  # fixed vertical spacing between gates (in pixels)
     tree_width: int = 16
