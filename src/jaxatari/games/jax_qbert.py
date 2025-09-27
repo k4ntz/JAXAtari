@@ -32,8 +32,8 @@ class QbertConstants(NamedTuple):
     """ Changes the difficulty of the game: 0 = no red balls will spawn, 1 = red balls will spawn """
     ENEMY_MOVE_TICK = jnp.array([65, 60, 55, 50, 45]).astype(jnp.int32)
     """ The number of ticks it take to move an enemy according to the current level """
-    ENEMY_SPAWN = jnp.array([300, 600, 2000, 2600]).astype(jnp.int32)
-    """" The probability that an enemy (green ball, sam, red ball, purple ball) is beeing spawned. Values can be from 0 to 4000 """
+    ENEMY_SPAWN = jnp.array([300, 600, 2000, 3000]).astype(jnp.int32)
+    """" The probability that an enemy (green ball, sam, red ball, purple ball) is being spawned. Values can be from 0 to 4000 """
 
 class QbertState(NamedTuple):
     player_score: chex.Numeric
@@ -125,7 +125,7 @@ class QbertState(NamedTuple):
 
     #action_mapping: chex.Array
 
-    prng_state: chex.Numeric
+    prng_state: chex.PRNGKey
     """the state used for the random number generator"""
 
 class QbertObservation(NamedTuple):
@@ -204,7 +204,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             green_ball_position=jnp.array([-1, -1]).astype(jnp.int32),
             sam_position=jnp.array([-1, -1]).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            prng_state=jax.random.uniform(key, (), minval=1, maxval=256).astype(jnp.uint8),
+            prng_state=jax.random.split(key, 10),
             just_spawned=jnp.array(1).astype(jnp.int32),
             snake_lock=jnp.array([-1,-1]).astype(jnp.int32),
             next_round_animation_counter=jnp.array(0).astype(jnp.int32),
@@ -438,7 +438,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param state: the state of the game
             """
         pos = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 1), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[0], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.purple_ball_position),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.purple_ball_position),
             operand=state
@@ -452,7 +452,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param state: the state of the game
             """
         pos = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 2), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[1], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.green_ball_position),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.green_ball_position),
             operand=state
@@ -466,7 +466,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param state: the state of the game
             """
         pos = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 3), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[2], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.sam_position),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.sam_position),
             operand=state
@@ -480,19 +480,19 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param state: the state of the game
             """
         pos1 = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 4), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[3], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.red_ball_positions[0]),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.red_ball_positions[0]),
             operand=state
         )
         pos2 = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 5), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[4], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.red_ball_positions[1]),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.red_ball_positions[1]),
                 operand=state
         )
         pos3 = jax.lax.cond(
-            pred = jax.random.uniform(jax.random.PRNGKey(state.prng_state + 6), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred = jax.random.uniform(state.prng_state[5], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda state2: self.move(state2,Action.DOWN, state2.red_ball_positions[2]),
             false_fun=lambda state2: self.move(state2,Action.RIGHT, state2.red_ball_positions[2]),
             operand=state
@@ -552,9 +552,9 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         return directions[index]
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawnCreatures(self, seed : chex.Numeric, red_pos: chex.Array, purple_pos: chex.Array, green_pos: chex.Array, sam_pos: chex.Array, snake_pos:chex.Array, difficulty:chex.Numeric):
+    def spawnCreatures(self, key : chex.PRNGKey, red_pos: chex.Array, purple_pos: chex.Array, green_pos: chex.Array, sam_pos: chex.Array, snake_pos:chex.Array, difficulty:chex.Numeric):
         """ function used to spawn all characters except the player with a hardcoded probability
-            :param seed: a seed for the random number generator
+            :param key: a key for the random number generator
             :param red_pos: the position of red
             :param purple_pos: the position of purple
             :param green_pos: the position of green
@@ -562,7 +562,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param snake_pos: the position of the snake
             :param difficulty: the difficulty value of the current game
             """
-        random = jax.random.uniform(jax.random.PRNGKey(seed + 8), (), minval=1, maxval=4000).astype(jnp.uint16)
+        random = jax.random.uniform(key[0], (), minval=1, maxval=4000).astype(jnp.uint16)
         creatureIndex=jax.lax.cond(
             pred=random < self.consts.ENEMY_SPAWN[0],
             # Green Ball
@@ -589,7 +589,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             operand=random
         )
         location=jax.lax.cond(
-            pred=jax.random.uniform(jax.random.PRNGKey(seed + 9), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+            pred=jax.random.uniform(key[1], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
             true_fun=lambda i: jnp.array([1,2]),
             false_fun=lambda i: jnp.array([2,2]),
             operand=None
@@ -669,7 +669,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         return jax.lax.cond(
             pred=complete,
             true_fun=lambda vals: (jax.lax.cond(
-                pred=jax.random.uniform(jax.random.PRNGKey(vals[3] + 10), (), minval=1, maxval=256).astype(jnp.uint8) < 128,
+                pred=jax.random.uniform(vals[3], (), minval=1, maxval=256).astype(jnp.uint8) < 128,
                 true_fun=lambda vals2: jnp.array([
                     [-1, -1, -1, -1, -1, -1, -1, -1],
                     [-1, 0, -1, -1, -1, -1, -1, -1],
@@ -694,7 +694,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 operand=None
             ),jnp.array(jnp.mod(vals[1], 5) + 1).astype(jnp.int32) , jnp.minimum(5, vals[2] + jnp.floor(vals[1]/4)).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
             false_fun=lambda vals: (vals[0],vals[1],vals[2], jnp.array(0).astype(jnp.int32), player_position, vals[4], vals[6]),
-            operand=(pyramid,round,level,state.prng_state,spawned, state.step_counter, green_ball_freeze_step)
+            operand=(pyramid,round,level,state.prng_state[6],spawned, state.step_counter, green_ball_freeze_step)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -858,7 +858,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             pred=jnp.logical_and(state.dead_animation_counter == 0, jnp.logical_and(state.next_round_animation_counter == 0, enemy_moving_counter == 0)),
             true_fun=lambda op: self.spawnCreatures(op[0], op[1], op[2], op[3], op[4], op[5], op[6]),
             false_fun=lambda op: (op[1], op[2], op[3], op[4]),
-            operand=(state.prng_state, jnp.array(red_pos), jnp.array(purple_pos) , jnp.array(green_pos), jnp.array(sam_pos), jnp.array(snake_pos), QbertConstants.DIFFICULTY)
+            operand=(jnp.array([state.prng_state[7], state.prng_state[8]]), jnp.array(red_pos), jnp.array(purple_pos) , jnp.array(green_pos), jnp.array(sam_pos), jnp.array(snake_pos), QbertConstants.DIFFICULTY)
         )
 
         # Calculates values at the end of the round
@@ -906,7 +906,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             green_ball_position=green_pos,
             sam_position=sam_pos,
             step_counter=state.step_counter + 1,
-            prng_state=state.prng_state + 15,
+            prng_state=jax.random.split(state.prng_state[9], 10),
             just_spawned=spawned,
             snake_lock=jnp.array([snake_lock[0], snake_lock[1]]),
             next_round_animation_counter=next_round_animation_counter,
