@@ -1376,6 +1376,124 @@ class BattleZoneRenderer(JAXGameRenderer):
         self.view_distance = 400.0
         self.fov = 60.0
         self.hud_bar_height = 28
+        
+        # --- tiny HUD font (3x5) for score ---
+    _DIGITS_3x5 = jnp.array([
+        # 0..9, each 5 rows à 3 cols (1=on)
+        # 0
+        [[1,1,1],
+         [1,0,1],
+         [1,0,1],
+         [1,0,1],
+         [1,1,1]],
+        # 1
+        [[0,1,0],
+         [1,1,0],
+         [0,1,0],
+         [0,1,0],
+         [1,1,1]],
+        # 2
+        [[1,1,1],
+         [0,0,1],
+         [1,1,1],
+         [1,0,0],
+         [1,1,1]],
+        # 3
+        [[1,1,1],
+         [0,0,1],
+         [0,1,1],
+         [0,0,1],
+         [1,1,1]],
+        # 4
+        [[1,0,1],
+         [1,0,1],
+         [1,1,1],
+         [0,0,1],
+         [0,0,1]],
+        # 5
+        [[1,1,1],
+         [1,0,0],
+         [1,1,1],
+         [0,0,1],
+         [1,1,1]],
+        # 6
+        [[1,1,1],
+         [1,0,0],
+         [1,1,1],
+         [1,0,1],
+         [1,1,1]],
+        # 7
+        [[1,1,1],
+         [0,0,1],
+         [0,1,0],
+         [0,1,0],
+         [0,1,0]],
+        # 8
+        [[1,1,1],
+         [1,0,1],
+         [1,1,1],
+         [1,0,1],
+         [1,1,1]],
+        # 9
+        [[1,1,1],
+         [1,0,1],
+         [1,1,1],
+         [0,0,1],
+         [1,1,1]],
+    ], dtype=jnp.uint8)
+
+    def _draw_digit(self, img, x, y, d, color, scale=2):
+        pat = self._DIGITS_3x5[d]
+        h, w = pat.shape
+        im = img
+        def row_body(r, imc1):
+            def col_body(c, imc2):
+                on = pat[r, c] == 1
+                def draw(_):
+                    return self._fill_rect(imc2, x + c*scale, y + r*scale, scale, scale, color)
+                return lax.cond(on, draw, lambda _: imc2, operand=None)
+            return lax.fori_loop(0, w, col_body, imc1)
+        return lax.fori_loop(0, h, row_body, im)
+
+    def _draw_score_hud(self, img, score_val):
+        # --- vorbereiten ---
+        s = jnp.asarray(score_val, jnp.int32)
+        s = jnp.maximum(s, 0)
+    
+        # bis zu 9 Stellen unterstützen (0..999,999,999); bei Bedarf MAX_DIGITS erhöhen
+        POW10 = jnp.asarray([1,10,100,1000,10000,100000,1000000,10000000,100000000], jnp.int32)
+        MAX_DIGITS = POW10.shape[0]
+    
+        # Ziffern vektoriell berechnen
+        divs = s // POW10                     # int32[9]
+        digits_right = divs % 10              # ones,tens,hundreds,...
+        digits_leftpad = digits_right[::-1]   # linksbündig mit Nullen aufgefüllt
+    
+        # Anzahl tatsächlicher Stellen (0 -> 1 Stelle)
+        n_raw = jnp.sum(divs > 0)             # wie floor(log10(s))+1, aber ohne float
+        n = jnp.maximum(n_raw, 1)
+    
+        # --- Layout ---
+        scale   = 2
+        glyph_w = 3 * scale
+        gap     = scale
+        total_w = n * glyph_w + (n - 1) * gap
+    
+        base_x = (WIDTH // 2) + 30 - (total_w // 2)      # mittig-rechts
+        base_y = HEIGHT - self.hud_bar_height + 4        # über den Leben
+        col    = jnp.asarray(HUD_ACCENT_COLOR, jnp.uint8)
+    
+        # --- Zeichnen: genau n Ziffern (links -> rechts) ---
+        start = MAX_DIGITS - n
+    
+        im = img
+        def body(i, imc):
+            dx = base_x + i * (glyph_w + gap)
+            d  = digits_leftpad[start + i].astype(jnp.int32)
+            return self._draw_digit(imc, dx, base_y, d, col, scale=scale)
+        im = lax.fori_loop(0, n, body, im)
+    
+        return im
 
     # ---------------- low-level primitives (pure JAX) ----------------
 
@@ -1913,7 +2031,11 @@ class BattleZoneRenderer(JAXGameRenderer):
             ly = jnp.int32(life_y - 6)
             return self._fill_rect(im_carry, lx, ly, 10, 12, HUD_ACCENT_COLOR)
 
+        # ... Leben gezeichnet ...
         im = lax.fori_loop(0, lives_to_draw, lives_body, im)
+
+        # --- SCORE über den Leben, mittig rechts, wie Screenshot ---
+        im = self._draw_score_hud(im, state.player_score)
 
         return im
 
