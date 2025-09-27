@@ -19,7 +19,7 @@ class TurmoilConstants(NamedTuple):
     ENEMY_RIGHT_SPAWN_X = 150
 
     # sizes
-    VERTICAL_LANE_GAP_SIZE = 17
+    HORIZONTAL_LANE_GAP_SIZE = 17
     PLAYER_SIZE = (8, 11) # (width, height)
     BULLET_SIZE = (8, 3)
     ENEMY_SIZE = (
@@ -36,18 +36,18 @@ class TurmoilConstants(NamedTuple):
     PRIZE_SIZE = (8, 9)
 
     # y offsets for finding the middle of the lane for each sprite
-    Y_OFFSET_PLAYER = (VERTICAL_LANE_GAP_SIZE - PLAYER_SIZE[1]) // 2
-    Y_OFFSET_PRIZE = (VERTICAL_LANE_GAP_SIZE - PRIZE_SIZE[1]) // 2
+    Y_OFFSET_PLAYER = (HORIZONTAL_LANE_GAP_SIZE - PLAYER_SIZE[1]) // 2
+    Y_OFFSET_PRIZE = (HORIZONTAL_LANE_GAP_SIZE - PRIZE_SIZE[1]) // 2
     Y_OFFSET_ENEMY = (
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[0][1]) // 2, # lines
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[1][1]) // 2, # arrow
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[2][1]) // 2, # tank
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[3][1]) // 2, # L
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[4][1]) // 2, # T
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[5][1]) // 2, # rocket
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[6][1]) // 2, # triangle_hollow
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[7][1]) // 2, # x_shape
-        (VERTICAL_LANE_GAP_SIZE - ENEMY_SIZE[8][1]) // 2, # sonic boom
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[0][1]) // 2, # lines
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[1][1]) // 2, # arrow
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[2][1]) // 2, # tank
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[3][1]) // 2, # L
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[4][1]) // 2, # T
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[5][1]) // 2, # rocket
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[6][1]) // 2, # triangle_hollow
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[7][1]) // 2, # x_shape
+        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[8][1]) // 2, # sonic boom
     )
 
     # player
@@ -92,8 +92,9 @@ class TurmoilConstants(NamedTuple):
     # probability of spawning when there is slot available
     ENEMY_SPAWN_PROBABILITY = 0.6
     PRIZE_SPAWN_PROBABILITY = 0.1
-
-    PRIZE_TO_BOOM_TIME = 40
+    
+    # prize
+    PRIZE_TO_BOOM_TIME = 150
     
 # Game state container
 class TurmoilState(NamedTuple):
@@ -490,7 +491,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         def can_move_horizontal(state: TurmoilState) :
-            return state.prize[3] == 1
+            return jnp.logical_and(
+                state.prize[3] == 1, # prize active and player on same lane
+                state.player_y - self.consts.Y_OFFSET_PLAYER == state.prize[2] - self.consts.Y_OFFSET_PRIZE
+            )
         
         # cooldown so player does not go too fast
         player_step_cooldown = jnp.where(
@@ -575,10 +579,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         player_y = jnp.where(
             player_y <= self.consts.MIN_BOUND[1],
-            self.consts.MIN_BOUND[1],
+            self.consts.MIN_BOUND[1] + self.consts.Y_OFFSET_PLAYER,
             jnp.where(
                 player_y >= self.consts.MAX_BOUND[1],
-                self.consts.MAX_BOUND[1],
+                self.consts.MAX_BOUND[1] + self.consts.Y_OFFSET_PLAYER,
                 player_y
             ),
         )
