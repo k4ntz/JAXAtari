@@ -1377,6 +1377,137 @@ class BattleZoneRenderer(JAXGameRenderer):
         self.fov = 60.0
         self.hud_bar_height = 28
         
+        # Sprite laden (Masken- oder RGBA-Variante wird unterstützt)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sprite_dir = os.path.join(base_dir, "sprites", "battlezone")
+        life_sprite_np = np.load(os.path.join(sprite_dir, "tank_life.npy"))
+        # Downscale overly large life sprite once (outside JIT) to avoid huge constant folding
+        if life_sprite_np.ndim >= 2:
+            sh, sw = life_sprite_np.shape[:2]
+            max_h, max_w = 6, 9  # HUD icon target size
+            sy = max(1, int(math.ceil(sh / max_h)))
+            sx = max(1, int(math.ceil(sw / max_w)))
+            life_sprite_np = life_sprite_np[::sy, ::sx, ...] if life_sprite_np.ndim == 3 else life_sprite_np[::sy, ::sx]
+        self.life_sprite = jnp.asarray(life_sprite_np)
+
+        # Für Layout/Spacing im HUD nützlich:
+        if self.life_sprite.ndim == 2:
+            self.life_h, self.life_w = self.life_sprite.shape
+        elif self.life_sprite.ndim == 3:
+            self.life_h, self.life_w = self.life_sprite.shape[:2]
+        else:
+            raise ValueError("tank_life.npy hat ein unerwartetes Format.")
+        # --- Player tank sprite (player_tank2.npy) ---
+        player_sprite_np = np.load(os.path.join(sprite_dir, "player_tank2.npy"))
+        # Optional downscale to keep small footprint in HUD area
+        if player_sprite_np.ndim >= 2:
+            psh, psw = player_sprite_np.shape[:2]
+            pmax_h, pmax_w = 120, 192  # target maximum for bottom-center tank icon
+            psy = max(1, int(math.ceil(psh / pmax_h)))
+            psx = max(1, int(math.ceil(psw / pmax_w)))
+            player_sprite_np = player_sprite_np[::psy, ::psx, ...] if player_sprite_np.ndim == 3 else player_sprite_np[::psy, ::psx]
+        self.player_sprite = jnp.asarray(player_sprite_np)
+        if self.player_sprite.ndim == 2:
+            self.player_h, self.player_w = self.player_sprite.shape
+        elif self.player_sprite.ndim == 3:
+            self.player_h, self.player_w = self.player_sprite.shape[:2]
+        else:
+            raise ValueError("player_tank2.npy hat ein unerwartetes Format.")
+
+    
+    def _blit_sprite(self, im, sprite, x, y, tint_rgb=None):
+            """
+            JIT-freundliches Blitting:
+            - dynamische Indizes via lax.dynamic_slice
+            - feste Slice-Größen via Padding
+            - dtype-Konflikte gelöst (uint8 <-> float32)
+            - NEU: Wenn tint_rgb gesetzt ist, wird unabhängig vom Spriteformat getintet.
+                   Für RGBA nutzen wir den Alphakanal als Maske (>0). Für RGB/Masken
+                   verwenden wir eine Luminanz-/Schwellenmaske (>0).
+            """
+            H, W, _ = im.shape
+    
+            # Sprite-Formate erkennen
+            if sprite.ndim == 2:          # Maske
+                sh, sw = sprite.shape
+                is_mask = True
+                is_rgba = False
+                C = 1
+            elif sprite.ndim == 3 and sprite.shape[-1] in (3, 4):
+                sh, sw, C = sprite.shape
+                is_mask = False
+                is_rgba = (C == 4)
+            else:
+                raise ValueError("Sprite muss HxW (Maske) oder HxWx3/4 (RGB/RGBA) sein.")
+    
+            sh_c = int(sh)
+            sw_c = int(sw)
+    
+            # Padding vorbereiten
+            pad_y = sh_c
+            pad_x = sw_c
+            im_padded = jnp.pad(im, ((pad_y, pad_y), (pad_x, pad_x), (0, 0)), mode="constant")
+    
+            # Startkoordinaten (dynamisch)
+            y_start = jnp.int32(y + pad_y)
+            x_start = jnp.int32(x + pad_x)
+    
+            # Ziel-Ausschnitt aus dem Bild (immer konstante Größe sh_c x sw_c)
+            dst = lax.dynamic_slice(im_padded, (y_start, x_start, 0), (sh_c, sw_c, 3))
+    
+            # Wenn Tint angefordert ist -> immer TINT-MODUS, egal ob Masken- oder RGBA/RGB-Sprite
+            if tint_rgb is not None:
+                if is_mask:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0), (sh_c, sw_c))
+                    mask = spr_slice > 0
+                else:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0, 0), (sh_c, sw_c, C))
+                    if is_rgba:
+                        alpha = spr_slice[..., 3:4].astype(jnp.float32) / 255.0
+                        # Alpha>0 als Maske
+                        mask = (alpha > 0.0)[..., 0]
+                    else:
+                        # RGB -> Luminanz als Maske (>0)
+                        rgb = spr_slice[..., :3].astype(jnp.float32)
+                        lum = (0.299*rgb[...,0] + 0.587*rgb[...,1] + 0.114*rgb[...,2])
+                        mask = lum > 0.0
+    
+                color = jnp.asarray(tint_rgb, dtype=im.dtype)
+                color_patch = jnp.broadcast_to(color, (sh_c, sw_c, 3))
+                out = jnp.where(mask[..., None], color_patch, dst).astype(im.dtype)
+            else:
+                # Standardpfad: Sprite direkt blenden (RGB/RGBA) oder Maske einfärben (HUD-Farbe)
+                if is_mask:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0), (sh_c, sw_c))
+                    mask = spr_slice > 0
+                    color = jnp.asarray(HUD_ACCENT_COLOR, dtype=im.dtype)
+                    color_patch = jnp.broadcast_to(color, (sh_c, sw_c, 3))
+                    out = jnp.where(mask[..., None], color_patch, dst).astype(im.dtype)
+                else:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0, 0), (sh_c, sw_c, C))
+                    if is_rgba:
+                        rgb = spr_slice[..., :3].astype(jnp.float32)
+                        alpha = spr_slice[..., 3:4].astype(jnp.float32) / 255.0
+                    else:
+                        rgb = spr_slice.astype(jnp.float32)
+                        alpha = jnp.ones((sh_c, sw_c, 1), dtype=jnp.float32)
+    
+                    dst_f = dst.astype(jnp.float32)
+                    out_f = rgb * alpha + dst_f * (1.0 - alpha)
+    
+                    # zurückcasten auf Bild-dtype
+                    if im.dtype == jnp.uint8:
+                        out = jnp.clip(out_f, 0.0, 255.0).astype(jnp.uint8)
+                    else:
+                        out = out_f.astype(im.dtype)
+    
+            # zurückschreiben ins gepaddete Bild
+            im_padded = lax.dynamic_update_slice(im_padded, out, (y_start, x_start, 0))
+    
+            # wieder zurückcroppen
+            im_final = lax.dynamic_slice(im_padded, (pad_y, pad_x, 0), (H, W, 3))
+            return im_final
+        
         # --- tiny HUD font (3x5) for score ---
     _DIGITS_3x5 = jnp.array([
         # 0..9, each 5 rows à 3 cols (1=on)
@@ -1459,40 +1590,40 @@ class BattleZoneRenderer(JAXGameRenderer):
         # --- vorbereiten ---
         s = jnp.asarray(score_val, jnp.int32)
         s = jnp.maximum(s, 0)
-    
+
         # bis zu 9 Stellen unterstützen (0..999,999,999); bei Bedarf MAX_DIGITS erhöhen
         POW10 = jnp.asarray([1,10,100,1000,10000,100000,1000000,10000000,100000000], jnp.int32)
         MAX_DIGITS = POW10.shape[0]
-    
+
         # Ziffern vektoriell berechnen
         divs = s // POW10                     # int32[9]
         digits_right = divs % 10              # ones,tens,hundreds,...
         digits_leftpad = digits_right[::-1]   # linksbündig mit Nullen aufgefüllt
-    
+
         # Anzahl tatsächlicher Stellen (0 -> 1 Stelle)
         n_raw = jnp.sum(divs > 0)             # wie floor(log10(s))+1, aber ohne float
         n = jnp.maximum(n_raw, 1)
-    
+
         # --- Layout ---
         scale   = 2
         glyph_w = 3 * scale
         gap     = scale
         total_w = n * glyph_w + (n - 1) * gap
-    
-        base_x = (WIDTH // 2) + 30 - (total_w // 2)      # mittig-rechts
+
+        base_x = (WIDTH // 2) - (total_w // 2)      # mittig-rechts
         base_y = HEIGHT - self.hud_bar_height + 4        # über den Leben
         col    = jnp.asarray(HUD_ACCENT_COLOR, jnp.uint8)
-    
+
         # --- Zeichnen: genau n Ziffern (links -> rechts) ---
         start = MAX_DIGITS - n
-    
+
         im = img
         def body(i, imc):
             dx = base_x + i * (glyph_w + gap)
             d  = digits_leftpad[start + i].astype(jnp.int32)
             return self._draw_digit(imc, dx, base_y, d, col, scale=scale)
         im = lax.fori_loop(0, n, body, im)
-    
+
         return im
 
     # ---------------- low-level primitives (pure JAX) ----------------
@@ -1920,14 +2051,14 @@ class BattleZoneRenderer(JAXGameRenderer):
 
         im = lax.fori_loop(0, b.x.shape[0], bullets_body, im)
 
-        # player tank wireframe (bottom center)
+        # player tank sprite (bottom center)
         base_x = WIDTH // 2
         base_y = HEIGHT - self.hud_bar_height - 10
-        im = self._draw_line(im, base_x - 30, base_y -10, base_x + 30, base_y -10, wire, samples=60)
-        im = self._draw_line(im, base_x - 3, base_y - 30, base_x - 3, base_y -10, wire, samples=24)
-        im = self._draw_line(im, base_x + 3, base_y - 30, base_x + 3, base_y -10, wire, samples=24)
-        im = self._draw_line(im, base_x - 40, base_y -10, base_x - 30, base_y +10, wire, samples=24)
-        im = self._draw_line(im, base_x + 30, base_y -10, base_x + 40, base_y +10, wire, samples=24)
+        # top-left so that sprite is centered around (base_x, base_y)
+        px0 = jnp.int32(base_x - (self.player_w // 2))
+        py0 = jnp.int32(base_y - (self.player_h // 2))
+        # If sprite is a mask: tint with WIREFRAME_COLOR; if RGB/RGBA: draw as-is
+        im = self._blit_sprite(im, self.player_sprite, px0, py0, tint_rgb=WIREFRAME_COLOR if self.player_sprite.ndim == 2 else None)
         return im
 
 
@@ -2020,18 +2151,24 @@ class BattleZoneRenderer(JAXGameRenderer):
             lives_val = jnp.int32(state.player_lives)
         except Exception:
             lives_val = jnp.int32(0)
-        lives_to_draw = jnp.clip(lives_val, 0, 5)
-        life_spacing = 16
-        total_w = jnp.where(lives_to_draw > 0, (lives_to_draw - 1) * life_spacing + 10, 0)
+        lives_to_draw = jnp.clip(state.player_lives, 0, 9)  # z.B. max. 9 anzeigen
+        # Layout: mittig unten in der HUD-Bar
+        life_spacing = self.life_w + 6  # 6px Abstand zwischen Sprites
+        total_w = lives_to_draw * life_spacing - jnp.where(lives_to_draw > 0, 6, 0)
         life_start_x = (WIDTH // 2) - (total_w // 2)
-        life_y = HEIGHT - self.hud_bar_height // 2 + 6
-
+        # leicht über der Mitte der HUD-Bar platzieren
+        # Score sitzt bei y = HEIGHT - self.hud_bar_height + 4, Höhe der Ziffern = 10 (scale=2)
+        # Abstand 2px darunter für die Leben (Sprite-Top)
+        score_top = HEIGHT - self.hud_bar_height + 4
+        score_h   = 10
+        life_gap  = 2
+        life_y    = score_top + score_h + life_gap
+        
         def lives_body(i, im_carry):
             lx = jnp.int32(life_start_x + i * life_spacing)
-            ly = jnp.int32(life_y - 6)
-            return self._fill_rect(im_carry, lx, ly, 10, 12, HUD_ACCENT_COLOR)
+            ly = jnp.int32(life_y)
+            return self._blit_sprite(im_carry, self.life_sprite, lx, ly, tint_rgb=HUD_ACCENT_COLOR)
 
-        # ... Leben gezeichnet ...
         im = lax.fori_loop(0, lives_to_draw, lives_body, im)
 
         # --- SCORE über den Leben, mittig rechts, wie Screenshot ---
