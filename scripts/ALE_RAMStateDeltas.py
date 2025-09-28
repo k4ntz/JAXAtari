@@ -38,6 +38,7 @@ class Renderer:
                 f"ALE/{env_name}-v5",
                 frameskip=1,
                 render_mode="rgb_array",
+                repeat_action_probability=0.0
             )
         except Exception as e:
             print(f"Error creating Gymnasium environment 'ALE/{env_name}-v5': {e}")

@@ -5,20 +5,37 @@ description = "GPU-accelerated, object-centric Atari environments for reinforcem
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "absl-py==2.1.0",
+    "absl-py>=2.3,<3",
+    "ale-py==0.11.1",
     "chex==0.1.87",
-    "jax==0.4.35",
-    "jaxlib==0.4.35",
-    "ml-dtypes==0.5.0",
-    "numpy==2.1.3",
-    "opt-einsum==3.4.0",
-    "pygame==2.6.1",
-    "scipy==1.14.1",
-    "toolz==1.0.0",
-    "typing-extensions==4.12.2",
+    "flax==0.10.6",
+    "gymnasium==1.2.0",
     "gymnax==0.0.8",
+    "jax==0.6.0",
+    "ml-dtypes==0.5.1",
+    "numpy==2.2.6",
+    "opt-einsum==3.4.0",
+    "scipy==1.15.3",
+    "toolz==1.0.0",
+    "typing-extensions==4.14.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pygame==2.5.0",
+  "gymnasium[other]==1.2.0",
+  "syrupy==4.9.1",
+]
+gh_ci = [
+  "pygame==2.5.0",
+  "opencv-python-headless",
+  "pytest",
+  "pytest-sugar",
+  "pytest-github-actions-annotate-failures",
+  "syrupy==4.9.1",
+]
