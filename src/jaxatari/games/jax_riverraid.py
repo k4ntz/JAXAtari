@@ -22,6 +22,7 @@ DEFAULT_RIVER_WIDTH = 80
 MIN_RIVER_WIDTH = 40
 MAX_RIVER_WIDTH = 160
 MAX_ENEMIES = 10
+MAX_HOUSE_TREES = 10
 MINIMUM_SPAWN_COOLDOWN = 20
 MAX_FUEL = 30
 UI_HEIGHT = 35
@@ -64,9 +65,11 @@ class RiverraidState(NamedTuple):
     segment_transition_state: chex.Array
     segment_straigt_counter: chex.Array
     dam_position: chex.Array
-    housetree_position: chex.Array
-    housetree_side: chex.Array
-    housetree_direction: chex.Array
+    housetree_x: chex.Array
+    housetree_y: chex.Array
+    housetree_state: chex.Array  # 0 for inactive, 1 for active
+    housetree_side: chex.Array  # 1 for left, 2 for right
+    housetree_direction: chex.Array  # 1 for left-facing, 2 for right-facing
     housetree_cooldown: chex.Array
 
     player_x: chex.Array
@@ -625,7 +628,7 @@ def river_generation(state: RiverraidState) -> RiverraidState:
     new_state = state._replace(segment_state=new_segment_state % 4)
     new_state = jax.lax.fori_loop(0, new_state.player_speed, lambda i, new_state: update_river_banks(new_state),
                                   new_state)
-    new_turn_step = jax.lax.cond(new_state.turn_step % SEGMENT_LENGTH < SEGMENT_LENGTH - 5,
+    new_turn_step = jax.lax.cond(new_state.turn_step % SEGMENT_LENGTH < SEGMENT_LENGTH - 15,
                                  lambda state: state.turn_step + state.player_speed - 1,
                                  lambda state: state.turn_step,
                                  operand=new_state
@@ -1324,50 +1327,65 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
     )
     return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
 
+
 @jax.jit
 def handle_housetree(state: RiverraidState) -> RiverraidState:
-    scrolled_housetree_position = jnp.roll(state.housetree_position, state.player_speed)
-    scrolled_housetree_position = jax.lax.fori_loop(0, state.player_speed, lambda i, pos: pos.at[i].set(-1), scrolled_housetree_position)
-    scrolled_houesetree_direction = jnp.roll(state.housetree_direction, state.player_speed)
-    scrolled_houesetree_direction = jax.lax.fori_loop(0, state.player_speed, lambda i, dir: dir.at[i].set(0), scrolled_houesetree_direction)
-    scrolled_housetree_side = jnp.roll(state.housetree_side, state.player_speed)
-    scrolled_housetree_side = jax.lax.fori_loop(0, state.player_speed, lambda i, side: side.at[i].set(0), scrolled_housetree_side)
-    new_state = state._replace(housetree_position=scrolled_housetree_position,
-                               housetree_direction=scrolled_houesetree_direction,
-                               housetree_side=scrolled_housetree_side,
-                               housetree_cooldown=state.housetree_cooldown - 1)
+    new_housetree_y = state.housetree_y + state.player_speed
+
+    # remove off-screen housetrees
+    off_screen_mask = new_housetree_y > SCREEN_HEIGHT
+    new_housetree_state = jnp.where(off_screen_mask, 0, state.housetree_state)
+
+    new_state = state._replace(
+        housetree_y=new_housetree_y,
+        housetree_state=new_housetree_state,
+        housetree_cooldown=state.housetree_cooldown - 1 * state.player_speed
+    )
 
     spawn_key, side_key, direction_key = jax.random.split(state.master_key, 3)
 
     def spawn_housetree(state: RiverraidState) -> RiverraidState:
-        new_housetree_position = state.housetree_position.at[0].set(1)
-        new_housetree_side = jax.lax.cond(
-            jax.random.bernoulli(side_key, 0.5),
-            lambda _: jnp.array(1),
-            lambda _: jnp.array(2),
-            operand=None
-        )
-        new_housetree_side = state.housetree_side.at[0].set(new_housetree_side)
-        new_housetree_direction = jax.lax.cond(
-            jax.random.bernoulli(direction_key, 0.5),
-            lambda _: jnp.array(1),
-            lambda _: jnp.array(2),
-            operand=None
-        )
-        new_housetree_direction = state.housetree_direction.at[0].set(new_housetree_direction)
-        return state._replace(housetree_position=new_housetree_position,
-                              housetree_side=new_housetree_side,
-                              housetree_direction=new_housetree_direction,
-                              housetree_cooldown=jnp.array(50))
+        free_idx = jnp.argmax(state.housetree_state == 0)
+        side = jax.random.choice(side_key, jnp.array([1, 2]))  # 1: left, 2: right
+        direction = jax.random.choice(direction_key, jnp.array([1, 2]))  # 1: left-facing, 2: right-facing
+        x_pos = jax.lax.cond(side == 1,
+                             lambda _: 2,
+                             lambda _: SCREEN_WIDTH - 18,
+                             operand=None)
 
-    spawn_new_housetree = jax.random.bernoulli(spawn_key, p=0.10)
+        # spawn the new housetree
+        updated_x = state.housetree_x.at[free_idx].set(x_pos)
+        updated_y = state.housetree_y.at[free_idx].set(0)
+        updated_state = state.housetree_state.at[free_idx].set(1)
+        updated_side = state.housetree_side.at[free_idx].set(side)
+        updated_direction = state.housetree_direction.at[free_idx].set(direction)
+
+        return state._replace(
+            housetree_x=updated_x,
+            housetree_y=updated_y,
+            housetree_state=updated_state,
+            housetree_side=updated_side,
+            housetree_direction=updated_direction,
+            housetree_cooldown=jnp.array(25)
+        )
+
+    free_slot = jnp.any(new_state.housetree_state == 0) # free slot?
+    free_area = jnp.logical_and(
+        state.river_right[0] - state.river_left[0] < MAX_RIVER_WIDTH - 30,
+        ~jnp.any(state.dam_position[:50] >= 1)
+    )
+    can_spawn = jnp.logical_and(free_slot, free_area)
+    spawn_new_housetree = jax.random.bernoulli(spawn_key, p=0.05)
+
     new_state = jax.lax.cond(
-        jnp.logical_and(spawn_new_housetree, new_state.housetree_cooldown <= 0),
-        lambda new_state: spawn_housetree(new_state),
-        lambda new_state: new_state,
+        jnp.logical_and(spawn_new_housetree,
+                        jnp.logical_and(new_state.housetree_cooldown <= 0,
+                                        can_spawn)),
+        lambda state: spawn_housetree(state),
+        lambda state: state,
         operand=new_state
     )
-    return new_state
+    return new_state._replace(master_key=spawn_key)
 
 @jax.jit
 def adjust_player_speed(state: RiverraidState, action: Action) -> RiverraidState:
@@ -1519,9 +1537,11 @@ class JaxRiverraid(JaxEnvironment):
                                spawn_cooldown=jnp.array(50),
                                player_score=jnp.array(0),
                                player_lives=jnp.array(3),
-                               housetree_position=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
-                               housetree_side=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
-                               housetree_direction=jnp.full((SCREEN_HEIGHT,), 0, dtype=jnp.float32),
+                               housetree_x=jnp.full((MAX_HOUSE_TREES,), -1, dtype=jnp.float32),
+                               housetree_y=jnp.full((MAX_HOUSE_TREES,), -1, dtype=jnp.float32),
+                               housetree_state=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
+                               housetree_side=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
+                               housetree_direction=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
                                housetree_cooldown=jnp.array(20),
                                enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
                                fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
@@ -1613,9 +1633,11 @@ class JaxRiverraid(JaxEnvironment):
                                    spawn_cooldown=jnp.array(50),
                                    player_score=state.player_score,
                                    player_lives= state.player_lives - 1,
-                                   housetree_position=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
-                                   housetree_side=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
-                                   housetree_direction=jnp.full((SCREEN_HEIGHT,), -1, dtype=jnp.float32),
+                                   housetree_x=jnp.full((MAX_HOUSE_TREES,), -1, dtype=jnp.float32),
+                                   housetree_y=jnp.full((MAX_HOUSE_TREES,), -1, dtype=jnp.float32),
+                                   housetree_state=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
+                                   housetree_side=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
+                                   housetree_direction=jnp.full((MAX_HOUSE_TREES,), 0, dtype=jnp.int32),
                                    housetree_cooldown=jnp.array(20),
                                    enemy_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
                                    fuel_animation_cooldowns=jnp.full(MAX_ENEMIES, 3),
@@ -2083,42 +2105,31 @@ class RiverraidRenderer(JAXGameRenderer):
             jnp.arange(MAX_ENEMIES)
         )[0]
 
-        def render_alive_housetree(raster, i):
-            def render_housetree_at_idx(raster, i):
-                hy = i
-                hx = jax.lax.cond(
-                    state.housetree_side[i] == 1,
-                    lambda _: 5,
-                    lambda _: SCREEN_WIDTH - 20,
-                    operand=None
-                )
+        def render_single_housetree(raster, i):
+            is_active = state.housetree_state[i] == 1
+
+            def draw_it(raster):
+                hx = state.housetree_x[i].astype(jnp.int32)
+                hy = state.housetree_y[i].astype(jnp.int32)
+
                 housetree_sprite = aj.get_sprite_frame(self.HOUSE_TREE, 0)
+
+                # Flip sprite based on its direction
                 housetree_sprite = jax.lax.cond(
                     state.housetree_direction[i] == 1,
-                    lambda _: jnp.flip(housetree_sprite, axis=1),
-                    lambda _: housetree_sprite,
-                    operand=None
+                    lambda state: jnp.flip(state, axis=1),
+                    lambda state: state,
+                    operand=housetree_sprite
                 )
-                raster = jax.lax.cond(
-                    jnp.abs(hy - dam_y) > 20,
-                    lambda raster: aj.render_at(raster, hx, hy, housetree_sprite),
-                    lambda raster: raster,
-                    operand=raster
-                )
-                return raster
 
-            new_raster = jax.lax.cond(
-                state.housetree_position[i] >= 0,
-                lambda raster: render_housetree_at_idx(raster, i),
-                lambda raster: raster,
-                operand=raster
-            )
-            return new_raster, None
+                # Render the sprite at its x, y position
+                return aj.render_at(raster, hx, hy, housetree_sprite)
 
+            return jax.lax.cond(is_active, draw_it, lambda raster: raster, operand=raster), None
         raster = jax.lax.scan(
-            render_alive_housetree,
+            render_single_housetree,
             raster,
-            jnp.arange(SCREEN_HEIGHT)  # Assuming housetree uses screen height range
+            jnp.arange(MAX_HOUSE_TREES)
         )[0]
 
         # UI mask
