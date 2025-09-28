@@ -1951,8 +1951,9 @@ class JaxVideoPinball(
 
         angular_velocity = self.consts.VELOCITY_ACCELERATION_VALUE
         # Tangential velocity of moving surface
-        u_x = angular_velocity * n_x * d_r
-        u_y = angular_velocity * n_y * d_r
+        # (2 * angular_velocity = what felt good)
+        u_x = 2 * angular_velocity * n_x * d_r
+        u_y = 2 * angular_velocity * n_y * d_r
 
         # Relative velocity
         v_rel_x = trajectory_x - u_x
