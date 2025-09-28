@@ -191,11 +191,11 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         # [deterministic]             minval=int(c.tree_height),
         # [deterministic]             maxval=int(c.screen_height - c.tree_height) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree y-position: evenly spaced between gates
+        # Deterministic tree y-position: evenly spaced between gates (already unique)
         base_ty = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.5
         step_ty = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
         trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
-        # --- FIX: remove initial subpixel jitter for trees by rounding Y to integer pixels
+        # --- FIX: ensure integer pixels & uniqueness stays (no rounding collisions)
         trees_y = jnp.round(trees_y).astype(jnp.float32)
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
@@ -342,9 +342,16 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             span_tx = max_tx - min_tx + 1
             step_tx = 17
             x_tree = (min_tx + (((state.gates_seen + i) * step_tx) % span_tx)).astype(jnp.float32)
-            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0 + jnp.float32(self.config.min_y_offset_tree_vs_rock))
 
-            # Enforce min separation from existing trees and rocks on respawn
+            # --- FIX (requested): ensure trees never spawn at the same Y height.
+            # Base Y just behind the deepest flag, then stagger each tree by a small delta.
+            base_y = (jnp.max(new_flags[:, 1]) 
+                      + jnp.float32(self.config.gate_vertical_spacing) / 2.0 
+                      + jnp.float32(self.config.min_y_offset_tree_vs_rock))
+            delta_y = jnp.float32(15.0)  # small vertical stagger (pixels), deterministic
+            y = base_y + (jnp.array(i, dtype=jnp.float32) * delta_y)
+
+            # Enforce min separation from existing trees and rocks on respawn (X only)
             min_sep_tree_tree = (jnp.float32(self.config.tree_width) + jnp.float32(self.config.tree_width)) * 0.5 + jnp.float32(8.0)
             min_sep_tree_rock = (jnp.float32(self.config.tree_width) + jnp.float32(self.config.rock_width)) * 0.5 + jnp.float32(8.0)
             xmin_t = jnp.float32(self.config.tree_width)
@@ -381,7 +388,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
             y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0 + jnp.float32(self.config.min_y_offset_tree_vs_rock))
 
-            # Enforce min separation from existing rocks and trees on respawn
+            # Enforce separation from existing rocks and trees on respawn
             min_sep_rock_rock = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.rock_width)) + jnp.float32(self.config.sep_margin_rock_rock)
             min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
             xmin_r = jnp.float32(self.config.rock_width)
