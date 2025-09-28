@@ -38,6 +38,12 @@ class GameConfig:
     tree_height: int = 30
     rock_width: int = 16
     rock_height: int = 7
+    # Separation margins (in pixels) used in X-separation checks
+    sep_margin_tree_tree: float = 14.0
+    sep_margin_rock_rock: float = 12.0
+    sep_margin_tree_rock: float = 14.0
+    # Small Y offset between rocks and trees to avoid identical rows
+    min_y_offset_tree_vs_rock: float = 8.0
     max_num_flags: int = 2
     max_num_trees: int = 4
     max_num_rocks: int = 3
@@ -150,11 +156,17 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         y_spacing = float(c.gate_vertical_spacing)
         i = jnp.arange(c.max_num_flags, dtype=jnp.float32)
         flags_y = (i + 1.0) * y_spacing + float(c.flag_height)
-        flags_x = jax.random.randint(
-            k_flags, (c.max_num_flags,),
-            minval=int(c.flag_width),
-            maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
-        ).astype(jnp.float32)
+        # [deterministic]         flags_x = jax.random.randint(
+        # [deterministic]             k_flags, (c.max_num_flags,),
+        # [deterministic]             minval=int(c.flag_width),
+        # [deterministic]             maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
+        # [deterministic]         ).astype(jnp.float32)
+        # Deterministic left-flag x-position: scan across lane with fixed step
+        min_fx = jnp.int32(self.config.flag_width)
+        max_fx = jnp.int32(self.config.screen_width - self.config.flag_width - self.config.flag_distance)
+        span_fx = max_fx - min_fx + 1
+        # simple sawtooth pattern using step 13
+        flags_x = (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
         flags = jnp.stack([
             flags_x, flags_y,
             jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float32),
@@ -164,18 +176,27 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         
         # Trees
         # Enforce min horizontal separation and no overlap among trees on spawn
-        trees_x = jax.random.randint(
-            k_trees, (c.max_num_trees,),
-            minval=int(c.tree_width),
-            maxval=int(c.screen_width - c.tree_width) + 1
-        ).astype(jnp.float32)
-        trees_y = jax.random.randint(
-            k_trees, (c.max_num_trees,),
-            minval=int(c.tree_height),
-            maxval=int(c.screen_height - c.tree_height) + 1
-        ).astype(jnp.float32)
+        # [deterministic]         trees_x = jax.random.randint(
+        # [deterministic]             k_trees, (c.max_num_trees,),
+        # [deterministic]             minval=int(c.tree_width),
+        # [deterministic]             maxval=int(c.screen_width - c.tree_width) + 1
+        # [deterministic]         ).astype(jnp.float32)
+        # Deterministic tree x-position: stride 17 across lane
+        min_tx = jnp.int32(self.config.tree_width)
+        max_tx = jnp.int32(self.config.screen_width - self.config.tree_width)
+        span_tx = max_tx - min_tx + 1
+        trees_x = (min_tx + ((jnp.arange(c.max_num_trees, dtype=jnp.int32) * 17) % span_tx)).astype(jnp.float32)
+        # [deterministic]         trees_y = jax.random.randint(
+        # [deterministic]             k_trees, (c.max_num_trees,),
+        # [deterministic]             minval=int(c.tree_height),
+        # [deterministic]             maxval=int(c.screen_height - c.tree_height) + 1
+        # [deterministic]         ).astype(jnp.float32)
+        # Deterministic tree y-position: evenly spaced between gates
+        base_ty = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.5
+        step_ty = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
+        trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
 
-        min_sep_tree = (jnp.float32(c.tree_width) + jnp.float32(c.tree_width)) * 0.5 + jnp.float32(8.0)
+        min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
         xmin = jnp.float32(c.tree_width)
         xmax = jnp.float32(c.screen_width - c.tree_width)
 
@@ -195,20 +216,29 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
 
 
         # Rocks
-        rocks_x = jax.random.randint(
-            k_rocks, (c.max_num_rocks,),
-            minval=int(c.rock_width),
-            maxval=int(c.screen_width - c.rock_width) + 1
-        ).astype(jnp.float32)
-        rocks_y = jax.random.randint(
-            k_rocks, (c.max_num_rocks,),
-            minval=int(c.rock_height),
-            maxval=int(c.screen_height - c.rock_height) + 1
-        ).astype(jnp.float32)
+        # [deterministic]         rocks_x = jax.random.randint(
+        # [deterministic]             k_rocks, (c.max_num_rocks,),
+        # [deterministic]             minval=int(c.rock_width),
+        # [deterministic]             maxval=int(c.screen_width - c.rock_width) + 1
+        # [deterministic]         ).astype(jnp.float32)
+        # Deterministic rock x-position: stride 19 across lane
+        min_rx = jnp.int32(self.config.rock_width)
+        max_rx = jnp.int32(self.config.screen_width - self.config.rock_width)
+        span_rx = max_rx - min_rx + 1
+        rocks_x = (min_rx + ((jnp.arange(c.max_num_rocks, dtype=jnp.int32) * 19) % span_rx)).astype(jnp.float32)
+        # [deterministic]         rocks_y = jax.random.randint(
+        # [deterministic]             k_rocks, (c.max_num_rocks,),
+        # [deterministic]             minval=int(c.rock_height),
+        # [deterministic]             maxval=int(c.screen_height - c.rock_height) + 1
+        # [deterministic]         ).astype(jnp.float32)
+        # Deterministic rock y-position: offset from trees_y for alternation
+        base_ry = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.25
+        step_ry = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_rocks))
+        rocks_y = (base_ry + jnp.arange(c.max_num_rocks, dtype=jnp.float32) * step_ry).astype(jnp.float32)
 
         # Enforce separation from trees and already placed rocks
-        min_sep_rock_tree = (jnp.float32(c.rock_width) + jnp.float32(c.tree_width)) * 0.5 + jnp.float32(8.0)
-        min_sep_rock_rock = (jnp.float32(c.rock_width) + jnp.float32(c.rock_width)) * 0.5 + jnp.float32(8.0)
+        min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
+        min_sep_rock_rock = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.rock_width)) + jnp.float32(self.config.sep_margin_rock_rock)
         xmin_r = jnp.float32(c.rock_width)
         xmax_r = jnp.float32(c.screen_width - c.rock_width)
 
@@ -259,16 +289,23 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         return self.renderer.render(state)
 
     def _create_new_objs(self, state, new_flags, new_trees, new_rocks):
-        k, k1, k2, k3, k4 = jax.random.split(state.key, num=5)
-        k1 = jnp.array([k1, k2, k3, k4])
+        # [deterministic]         k, k1, k2, k3, k4 = jax.random.split(state.key, num=5)  # not used (deterministic respawn)
+        # [deterministic]         k1 = jnp.array([k1, k2, k3, k4])
+        k = state.key
 
         def check_flags(i, flags):
             # neue x-Position innerhalb des gültigen Bereichs
-            x_flag = jax.random.randint(
-                k1.at[i].get(), [],
-                self.config.flag_width,
-                self.config.screen_width - self.config.flag_width - self.config.flag_distance
-            ).astype(jnp.float32)
+            # [deterministic]             x_flag = jax.random.randint(
+            # [deterministic]                 k1.at[i].get(), [],
+            # [deterministic]                 self.config.flag_width,
+            # [deterministic]                 self.config.screen_width - self.config.flag_width - self.config.flag_distance
+            # [deterministic]             ).astype(jnp.float32)
+            # Deterministic left-flag x based on gates_seen and loop index
+            min_fx = jnp.int32(self.config.flag_width)
+            max_fx = jnp.int32(self.config.screen_width - self.config.flag_width - self.config.flag_distance)
+            span_fx = max_fx - min_fx + 1
+            step_fx = 13
+            x_flag = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
 
             # Konstanter Vertikalabstand: immer hinter die aktuell tiefste Flagge spawnen
             # Berücksichtigt sowohl bereits neu gesetzte Flags (new_flags) als auch bestehende (flags)
@@ -286,16 +323,22 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         flags = jax.lax.fori_loop(0, 2, check_flags, new_flags)
 
         # ---- Trees ----
-        k, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(k, 9)
-        k1 = jnp.array([k1, k2, k3, k4, k5, k6, k7, k8])
+        # [deterministic]         k, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(k, 9)
+        # [deterministic]         k1 = jnp.array([k1, k2, k3, k4, k5, k6, k7, k8])
 
         def check_trees(i, trees):
-            x_tree = jax.random.randint(
-                k1.at[i].get(), [], 
-                self.config.tree_width,
-                self.config.screen_width - self.config.tree_width
-            ).astype(jnp.float32)
-            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0)
+            # [deterministic]             x_tree = jax.random.randint(
+            # [deterministic]                 k1.at[i].get(), [], 
+            # [deterministic]                 self.config.tree_width,
+            # [deterministic]                 self.config.screen_width - self.config.tree_width
+            # [deterministic]             ).astype(jnp.float32)
+            # Deterministic tree x based on gates_seen and index i, different step to avoid overlap
+            min_tx = jnp.int32(self.config.tree_width)
+            max_tx = jnp.int32(self.config.screen_width - self.config.tree_width)
+            span_tx = max_tx - min_tx + 1
+            step_tx = 17
+            x_tree = (min_tx + (((state.gates_seen + i) * step_tx) % span_tx)).astype(jnp.float32)
+            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0 + jnp.float32(self.config.min_y_offset_tree_vs_rock))
 
             # Enforce min separation from existing trees and rocks on respawn
             min_sep_tree_tree = (jnp.float32(self.config.tree_width) + jnp.float32(self.config.tree_width)) * 0.5 + jnp.float32(8.0)
@@ -317,20 +360,26 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         trees = jax.lax.fori_loop(0, 4, check_trees, new_trees)
 
         # ---- Rocks ----
-        k, k1, k2, k3, k4, k5, k6 = jax.random.split(k, 7)
-        k1 = jnp.array([k1, k2, k3, k4, k5, k6])
+        # [deterministic]         k, k1, k2, k3, k4, k5, k6 = jax.random.split(k, 7)
+        # [deterministic]         k1 = jnp.array([k1, k2, k3, k4, k5, k6])
 
         def check_rocks(i, rocks):
-            x_rock = jax.random.randint(
-                k1.at[i].get(), [], 
-                self.config.rock_width,
-                self.config.screen_width - self.config.rock_width
-            ).astype(jnp.float32)
-            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0)
+            # [deterministic]             x_rock = jax.random.randint(
+            # [deterministic]                 k1.at[i].get(), [], 
+            # [deterministic]                 self.config.rock_width,
+            # [deterministic]                 self.config.screen_width - self.config.rock_width
+            # [deterministic]             ).astype(jnp.float32)
+            # Deterministic rock x based on gates_seen and index i, different step
+            min_rx = jnp.int32(self.config.rock_width)
+            max_rx = jnp.int32(self.config.screen_width - self.config.rock_width)
+            span_rx = max_rx - min_rx + 1
+            step_rx = 19
+            x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
+            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.config.gate_vertical_spacing) / 2.0 + jnp.float32(self.config.min_y_offset_tree_vs_rock))
 
             # Enforce min separation from existing rocks and trees on respawn
-            min_sep_rock_rock = (jnp.float32(self.config.rock_width) + jnp.float32(self.config.rock_width)) * 0.5 + jnp.float32(8.0)
-            min_sep_rock_tree = (jnp.float32(self.config.rock_width) + jnp.float32(self.config.tree_width)) * 0.5 + jnp.float32(8.0)
+            min_sep_rock_rock = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.rock_width)) + jnp.float32(self.config.sep_margin_rock_rock)
+            min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
             xmin_r = jnp.float32(self.config.rock_width)
             xmax_r = jnp.float32(self.config.screen_width - self.config.rock_width)
             taken_from_rocks = rocks[:, 0]
