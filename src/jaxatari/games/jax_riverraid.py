@@ -579,7 +579,6 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
 
     # place the dam and reset the states for next segment
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
-        jax.debug.print("SETTING DAM")
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
         dam_position = state.dam_position.at[0].set(1)
@@ -1251,10 +1250,17 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
     key, subkey = jax.random.split(state.master_key, 2)
 
-    should_change = jax.random.bernoulli(subkey, ENEMY_START_MOVING_PROP * state.player_speed, shape=(MAX_ENEMIES,))
+    base_prob = ENEMY_START_MOVING_PROP * state.player_speed
+    plane_prob_multiplier = 10.0
+    individual_probs = jnp.where(
+        state.enemy_type == 2,  # plane
+        base_prob * plane_prob_multiplier,
+        base_prob
+    )
+    individual_probs = jnp.clip(individual_probs, 0.0, 1.0)
+    should_change = jax.random.bernoulli(subkey, individual_probs, shape=(MAX_ENEMIES,))
     should_change = should_change & active_static_mask
 
-    # Bestimme neue Richtung basierend auf aktueller Richtung
     new_direction = jnp.where(
         state.enemy_direction == 0,
         jnp.array(2),  # left static -> left moving
@@ -1430,7 +1436,6 @@ def adjust_player_speed(state: RiverraidState, action: Action) -> RiverraidState
         lambda: jnp.array(SPEED_CHANGE_COOLDOWN),  # Cooldown von 30 Frames
         lambda: jnp.maximum(state.player_speedchange_cooldown - 1, 0)
     )
-    jax.debug.print("player_speed: {}, cooldown: {}", new_speed, new_cooldown)
 
     return state._replace(
         player_speed=new_speed,
