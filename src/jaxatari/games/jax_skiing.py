@@ -195,6 +195,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         base_ty = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.5
         step_ty = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
         trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
+        # --- FIX: remove initial subpixel jitter for trees by rounding Y to integer pixels
+        trees_y = jnp.round(trees_y).astype(jnp.float32)
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
         xmin = jnp.float32(c.tree_width)
@@ -236,6 +238,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         step_ry = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_rocks))
         rocks_y = (base_ry + jnp.arange(c.max_num_rocks, dtype=jnp.float32) * step_ry).astype(jnp.float32)
 
+        # --- FIX: remove initial subpixel jitter for rocks by rounding Y to integer pixels
+        rocks_y = jnp.round(rocks_y).astype(jnp.float32)
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
         min_sep_rock_rock = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.rock_width)) + jnp.float32(self.config.sep_margin_rock_rock)
@@ -266,7 +270,7 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             skier_pos=jnp.array(4, dtype=jnp.int32),
             skier_fell=jnp.array(0, dtype=jnp.int32),
             skier_x_speed=jnp.array(0.0),
-            skier_y_speed=jnp.array(1.0),
+            skier_y_speed=jnp.array(0.0),
             flags=flags,
             trees=trees,
             rocks=rocks,
@@ -462,16 +466,26 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             dx_target * jnp.array(0.3, jnp.float32),  # no acceleration; slightly slower lateral speed
         )
         new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float32))
+        # --- First-frame jitter guard: freeze world & lateral motion on time==0
+        first_frame = jnp.equal(state.time, jnp.int32(0))
+        eff_x_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
+        eff_y_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
 
         min_x = self.config.skier_width / 2
         max_x = self.config.screen_width - self.config.skier_width / 2
-        new_x_nom = jnp.clip(state.skier_x + new_skier_x_speed_nom, min_x, max_x)
+        new_x_nom = jnp.clip(state.skier_x + eff_x_speed_nom, min_x, max_x)
 
         # 3) Welt – zunächst "nominal" bewegen (für Kollisionsprüfung),
         #    Freeze wird nach Kollisionsentscheidung angewandt.
-        new_trees_nom = state.trees.at[:, 1].add(-new_skier_y_speed_nom)
-        new_rocks_nom = state.rocks.at[:, 1].add(-new_skier_y_speed_nom)
-        new_flags_nom = state.flags.at[:, 1].add(-new_skier_y_speed_nom)
+        # Tree-specific first-frames guard to avoid residual jitter
+
+        first_two_frames = jnp.less_equal(state.time, jnp.int32(1))
+
+        eff_y_speed_trees = jax.lax.select(first_two_frames, jnp.array(0.0, jnp.float32), eff_y_speed_nom)
+
+        new_trees_nom = state.trees.at[:, 1].add(-eff_y_speed_trees)
+        new_rocks_nom = state.rocks.at[:, 1].add(-eff_y_speed_nom)
+        new_flags_nom = state.flags.at[:, 1].add(-eff_y_speed_nom)
 
         # 5) Kollisionen (seitliche Annäherung abfangen)
         skier_y_px = jnp.round(self.config.skier_y)
@@ -573,8 +587,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         freeze = jnp.greater(new_skier_fell, 0)
 
         # Apply freeze to speeds and world positions
-        new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
-        new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
+        new_skier_x_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), eff_x_speed_nom)
+        new_skier_y_speed = jax.lax.select(freeze, jnp.array(0.0, jnp.float32), eff_y_speed_nom)
         new_flags = jax.lax.select(freeze, freeze_flags, new_flags_nom)
         new_trees = jax.lax.select(freeze, freeze_trees, new_trees_nom)
         new_rocks = jax.lax.select(freeze, freeze_rocks, new_rocks_nom)
