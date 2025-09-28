@@ -37,11 +37,13 @@ EXPANSE_PROP = 0.2
 SHRINK_PROP = 0.2
 MIN_ALTERNATION_LENGTH = 3
 MAX_ALTERNATION_LENGTH = 10
-ENTITY_SPAWN_PROP = 0.2 # includes fuel, only checked if constraints met
-FUEL_SPAWN_PROP = 0.1 # percentage of spawning entity being fuel
+ENTITY_SPAWN_PROP = 0.2 # includes fuel, only checked if constraints met (cant be higher than 0.33)
+FUEL_SPAWN_PROP = 0.1 # percentage of spawned entity being fuel
 PLAYER_ACCELERATION = 0.06
 PLAYER_MAX_SPEED = 4.0
-
+ENEMY_START_MOVING_PROP = 0.01 #(cant be higher than 0.33)
+# 0.33 limit due to prop * player_speed and player speed being <= 3 -> prop cant be higher than 1
+SPEED_CHANGE_COOLDOWN = 20
 
 class RiverraidState(NamedTuple):
     turn_step: chex.Array
@@ -634,11 +636,9 @@ def river_generation(state: RiverraidState) -> RiverraidState:
 # scroll dam and check collisions
 @jax.jit
 def handle_dam(state: RiverraidState) -> RiverraidState:
-    #new_dam_position = jnp.roll(state.dam_position, 1)
-    #new_dam_position = new_dam_position.at[-1].set(0)
     new_dam_position = jnp.roll(state.dam_position, state.player_speed)
     new_dam_position = jax.lax.fori_loop(0, state.player_speed, lambda i, pos: pos.at[i].set(0), new_dam_position)
-    #jax.debug.print("Dam Position:", new_dam_position)
+
 
     # Kollisionsprüfung Kugel <-> Damm
     bullet_y = jnp.round(state.player_bullet_y).astype(jnp.int32)
@@ -993,7 +993,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     # only spawn if no dam in the top 10 rows
     dam_at_top = jnp.any(state.dam_position[:50] >= 1)
     spawn_new_entity = jnp.logical_and(
-        jax.random.bernoulli(subkey1, ENTITY_SPAWN_PROP),
+        jax.random.bernoulli(subkey1, ENTITY_SPAWN_PROP * state.player_speed),
         ~dam_at_top
     )
 
@@ -1007,7 +1007,7 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
     new_spawn_cooldown = jax.lax.cond(
         jnp.logical_and(state.spawn_cooldown <= 0, spawn_new_entity),
         lambda _: jnp.array(MINIMUM_SPAWN_COOLDOWN),
-        lambda _: state.spawn_cooldown - 1,
+        lambda _: state.spawn_cooldown - 1 * state.player_speed,
         operand=None
     )
 
@@ -1248,7 +1248,7 @@ def update_enemy_movement_status(state: RiverraidState) -> RiverraidState:
     active_static_mask = (state.enemy_state == 1) & (state.enemy_direction <= 1)
     key, subkey = jax.random.split(state.master_key, 2)
 
-    should_change = jax.random.bernoulli(subkey, 0.01, shape=(MAX_ENEMIES,))
+    should_change = jax.random.bernoulli(subkey, ENEMY_START_MOVING_PROP * state.player_speed, shape=(MAX_ENEMIES,))
     should_change = should_change & active_static_mask
 
     # Bestimme neue Richtung basierend auf aktueller Richtung
@@ -1409,7 +1409,7 @@ def adjust_player_speed(state: RiverraidState, action: Action) -> RiverraidState
 
     new_cooldown = jax.lax.cond(
         speed_changed,
-        lambda: jnp.array(30),  # Cooldown von 30 Frames
+        lambda: jnp.array(SPEED_CHANGE_COOLDOWN),  # Cooldown von 30 Frames
         lambda: jnp.maximum(state.player_speedchange_cooldown - 1, 0)
     )
     jax.debug.print("player_speed: {}, cooldown: {}", new_speed, new_cooldown)
@@ -2016,7 +2016,7 @@ class RiverraidRenderer(JAXGameRenderer):
 
             sprite = jax.lax.switch(enemy_type, [
                 lambda: self.ENEMY_BOAT,
-                lambda: helicopter_sprite,  #
+                lambda: helicopter_sprite,
                 lambda: self.ENEMY_AIRPLANE
             ])
 
@@ -2069,16 +2069,14 @@ class RiverraidRenderer(JAXGameRenderer):
                     )
                 )
             )
-
             frame = aj.get_sprite_frame(sprite, 0)
-
             new_raster = jax.lax.cond(
                 fuel_state > 0,
                 lambda: aj.render_at(raster, fuel_x, fuel_y, frame),
                 lambda: raster
             )
-
             return new_raster, None
+
         raster = jax.lax.scan(
             render_fuel,
             raster,
@@ -2094,7 +2092,6 @@ class RiverraidRenderer(JAXGameRenderer):
                     lambda _: SCREEN_WIDTH - 20,
                     operand=None
                 )
-
                 housetree_sprite = aj.get_sprite_frame(self.HOUSE_TREE, 0)
                 housetree_sprite = jax.lax.cond(
                     state.housetree_direction[i] == 1,
