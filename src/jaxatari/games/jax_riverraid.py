@@ -433,11 +433,11 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
         new_left = state.river_left.at[0].set(final_left)
         new_right = state.river_right.at[0].set(final_right)
 
-        new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(final_left != proposed_left, state.river_state == 2),
-                                             lambda _: (jnp.array(0), jnp.array(0)),
-                                             lambda state: (state.river_alternation_length, state.alternation_cooldown),
-                                             operand=state
-                                            )
+        #new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(final_left != proposed_left, state.river_state == 2),
+         #                                    lambda _: (jnp.array(0), jnp.array(0)),
+          #                                   lambda state: (state.river_alternation_length, state.alternation_cooldown),
+           #                                  operand=state
+            #                                )
 
         return state._replace(
             river_left=new_left,
@@ -465,11 +465,11 @@ def generate_altering_river(state: RiverraidState) -> RiverraidState:
             operand=state
         )
 
-        new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(proposed_inner_left != new_inner_left[0], state.river_state == 1),
-                                             lambda _: (jnp.array(0), jnp.array(0)),
-                                             lambda state: (state.river_alternation_length, state.alternation_cooldown),
-                                             operand=state
-                                            )
+        #new_alternation_length, new_alternation_cooldown =jax.lax.cond(jnp.logical_and(proposed_inner_left != new_inner_left[0], state.river_state == 1),
+         #                                    lambda _: (jnp.array(0), jnp.array(0)),
+          #                                   lambda state: (state.river_alternation_length, state.alternation_cooldown),
+           #                                  operand=state
+            #                                )
         return state._replace(
             river_inner_left=new_inner_left,
             river_inner_right=new_inner_right,
@@ -574,6 +574,7 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
 
     # place the dam and reset the states for next segment
     def dam_into_new_segment(state: RiverraidState) -> RiverraidState:
+        jax.debug.print("SETTING DAM")
         new_state = scroll_empty_island(state)
         new_segment_straight_counter = jnp.array(8)
         dam_position = state.dam_position.at[0].set(1)
@@ -600,27 +601,44 @@ def generate_segment_transition(state: RiverraidState) -> RiverraidState:
                                                                 dam_into_new_segment],
                                                                operand=state)
 
-# handles alternating segement - dam - straught segment - dam etc...
+# handles alternating segement - dam - straight segment - dam etc...
 @jax.jit
 def update_river_banks(state: RiverraidState) -> RiverraidState:
-    new_segment_state = jax.lax.cond(
-        (state.turn_step % SEGMENT_LENGTH) == 0,
-        lambda state: state.segment_state + 1,
-        lambda state: state.segment_state,
-        operand=state
-    )
-    state = state._replace(segment_state=new_segment_state % 4)
+
+
     return jax.lax.switch(state.segment_state, [lambda state: generate_altering_river(state),
                                                 lambda state: generate_segment_transition(state),
                                                 lambda state: generate_straight_river(state),
                                                 lambda state: generate_segment_transition(state)],
                                                 operand=state)
 
+@jax.jit
+def river_generation(state: RiverraidState) -> RiverraidState:
+    new_segment_state = jax.lax.cond(
+        (state.turn_step % SEGMENT_LENGTH) == 0,
+        lambda state: state.segment_state + 1,
+        lambda state: state.segment_state,
+        operand=state
+    )
+    new_state = state._replace(segment_state=new_segment_state % 4)
+    new_state = jax.lax.fori_loop(0, new_state.player_speed, lambda i, new_state: update_river_banks(new_state),
+                                  new_state)
+    new_turn_step = jax.lax.cond(new_state.turn_step % SEGMENT_LENGTH < SEGMENT_LENGTH - 5,
+                                 lambda state: state.turn_step + state.player_speed - 1,
+                                 lambda state: state.turn_step,
+                                 operand=new_state
+                                 )
+    new_state = new_state._replace(turn_step=new_turn_step)
+    return new_state
+
 # scroll dam and check collisions
 @jax.jit
 def handle_dam(state: RiverraidState) -> RiverraidState:
-    new_dam_position = jnp.roll(state.dam_position, 1)
-    new_dam_position = new_dam_position.at[-1].set(0)
+    #new_dam_position = jnp.roll(state.dam_position, 1)
+    #new_dam_position = new_dam_position.at[-1].set(0)
+    new_dam_position = jnp.roll(state.dam_position, state.player_speed)
+    new_dam_position = jax.lax.fori_loop(0, state.player_speed, lambda i, pos: pos.at[i].set(0), new_dam_position)
+    #jax.debug.print("Dam Position:", new_dam_position)
 
     # Kollisionsprüfung Kugel <-> Damm
     bullet_y = jnp.round(state.player_bullet_y).astype(jnp.int32)
@@ -998,11 +1016,11 @@ def spawn_entities(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def scroll_entities(state: RiverraidState) -> RiverraidState:
-    new_enemy_y = state.enemy_y + 1
+    new_enemy_y = state.enemy_y + state.player_speed
     new_enemy_state = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, 0, state.enemy_state)
     new_enemy_x = jnp.where(new_enemy_y > SCREEN_HEIGHT + 1, -1, state.enemy_x)
 
-    new_fuel_y = state.fuel_y + 1
+    new_fuel_y = state.fuel_y + state.player_speed
     new_fuel_state = jnp.where(new_fuel_y > SCREEN_HEIGHT + 1, 0, state.fuel_state)
     new_fuel_x = jnp.where(new_fuel_y > SCREEN_HEIGHT + 1, -1, state.fuel_x)
 
@@ -1308,12 +1326,12 @@ def enemy_movement(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def handle_housetree(state: RiverraidState) -> RiverraidState:
-    scrolled_housetree_position = jnp.roll(state.housetree_position, 1)
-    scrolled_housetree_position = scrolled_housetree_position.at[0].set(-1)
-    scrolled_houesetree_direction = jnp.roll(state.housetree_direction, 1)
-    scrolled_houesetree_direction = scrolled_houesetree_direction.at[0].set(0)
-    scrolled_housetree_side = jnp.roll(state.housetree_side, 1)
-    scrolled_housetree_side = scrolled_housetree_side.at[0].set(0)
+    scrolled_housetree_position = jnp.roll(state.housetree_position, state.player_speed)
+    scrolled_housetree_position = jax.lax.fori_loop(0, state.player_speed, lambda i, pos: pos.at[i].set(-1), scrolled_housetree_position)
+    scrolled_houesetree_direction = jnp.roll(state.housetree_direction, state.player_speed)
+    scrolled_houesetree_direction = jax.lax.fori_loop(0, state.player_speed, lambda i, dir: dir.at[i].set(0), scrolled_houesetree_direction)
+    scrolled_housetree_side = jnp.roll(state.housetree_side, state.player_speed)
+    scrolled_housetree_side = jax.lax.fori_loop(0, state.player_speed, lambda i, side: side.at[i].set(0), scrolled_housetree_side)
     new_state = state._replace(housetree_position=scrolled_housetree_position,
                                housetree_direction=scrolled_houesetree_direction,
                                housetree_side=scrolled_housetree_side,
@@ -1353,7 +1371,54 @@ def handle_housetree(state: RiverraidState) -> RiverraidState:
 
 @jax.jit
 def adjust_player_speed(state: RiverraidState, action: Action) -> RiverraidState:
-    return state
+    press_up = jnp.any(jnp.array([
+        action == Action.UP,
+        action == Action.UPFIRE,
+        action == Action.UPRIGHT,
+        action == Action.UPLEFT,
+        action == Action.UPRIGHTFIRE,
+        action == Action.UPLEFTFIRE
+    ]))
+
+    press_down = jnp.any(jnp.array([
+        action == Action.DOWN,
+        action == Action.DOWNFIRE,
+        action == Action.DOWNRIGHT,
+        action == Action.DOWNLEFT,
+        action == Action.DOWNRIGHTFIRE,
+        action == Action.DOWNLEFTFIRE
+    ]))
+
+    can_change_speed = state.player_speedchange_cooldown <= 0
+    speed_change = jax.lax.cond(
+        can_change_speed,
+        lambda: jax.lax.cond(
+            press_up,
+            lambda: jnp.array(1),
+            lambda: jax.lax.cond(
+                press_down,
+                lambda: jnp.array(-1),
+                lambda: jnp.array(0)
+            )
+        ),
+        lambda: jnp.array(0)
+    )
+
+    new_speed = jnp.clip(state.player_speed + speed_change, 1, 3)
+    speed_changed = new_speed != state.player_speed
+
+    new_cooldown = jax.lax.cond(
+        speed_changed,
+        lambda: jnp.array(30),  # Cooldown von 30 Frames
+        lambda: jnp.maximum(state.player_speedchange_cooldown - 1, 0)
+    )
+    jax.debug.print("player_speed: {}, cooldown: {}", new_speed, new_cooldown)
+
+    return state._replace(
+        player_speed=new_speed,
+        player_speedchange_cooldown=new_cooldown
+    )
+
 
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
@@ -1440,7 +1505,7 @@ class JaxRiverraid(JaxEnvironment):
                                player_state= jnp.array(0),
                                player_bullet_x= jnp.array(-1, dtype=jnp.float32),
                                player_bullet_y= jnp.array(-1, dtype=jnp.float32),
-                               player_speed= jnp.array(2),
+                               player_speed= jnp.array(1),
                                player_speedchange_cooldown= jnp.array(10),
                                enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
                                enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
@@ -1476,10 +1541,9 @@ class JaxRiverraid(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
         def player_alive(state: RiverraidState) -> RiverraidState:
-            new_state = handle_dam(state)
-            new_state = update_river_banks(new_state)
-            #new_state = update_river_banks(new_state)
-            #new_state = update_river_banks(new_state)
+            new_state = adjust_player_speed(state, action)
+            new_state = handle_dam(new_state)
+            new_state = river_generation(new_state)
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
             new_state = spawn_entities(new_state)
@@ -1535,7 +1599,7 @@ class JaxRiverraid(JaxEnvironment):
                                    player_state=jnp.array(0),
                                    player_bullet_x=jnp.array(-1, dtype=jnp.float32),
                                    player_bullet_y=jnp.array(-1, dtype=jnp.float32),
-                                   player_speed=jnp.array(2),
+                                   player_speed=jnp.array(1),
                                    player_speedchange_cooldown=jnp.array(10),
                                    enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
                                    enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
