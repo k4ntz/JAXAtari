@@ -115,6 +115,7 @@ class RiverraidObservation(NamedTuple):
     player_fuel: chex.Array
     player_lives: chex.Array
     player_score: chex.Array
+    player_speed: chex.Array
     river_left: chex.Array
     river_right: chex.Array
     river_inner_left: chex.Array
@@ -1476,6 +1477,7 @@ class JaxRiverraid(JaxEnvironment):
             player_fuel=state.player_fuel,
             player_lives=state.player_lives,
             player_score=state.player_score,
+            player_speed=state.player_speed,
             river_left=state.river_left,
             river_right=state.river_right,
             river_inner_left=state.river_inner_left,
@@ -1745,7 +1747,7 @@ class JaxRiverraid(JaxEnvironment):
                 obs.player_fuel.flatten(),
                 obs.player_lives.flatten(),
                 obs.player_score.flatten(),
-                oba.player_speed.flatten(),
+                obs.player_speed.flatten(),
                 obs.river_left.flatten(),
                 obs.river_right.flatten(),
                 obs.river_inner_left.flatten(),
