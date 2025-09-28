@@ -36,6 +36,7 @@ gh_ci = [
   "opencv-python-headless",
   "pytest",
   "pytest-sugar",
+  "pytest-forked",
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
 ]
