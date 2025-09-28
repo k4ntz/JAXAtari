@@ -39,7 +39,7 @@ MIN_ALTERNATION_LENGTH = 3
 MAX_ALTERNATION_LENGTH = 10
 ENTITY_SPAWN_PROP = 0.2 # includes fuel, only checked if constraints met
 FUEL_SPAWN_PROP = 0.1 # percentage of spawning entity being fuel
-PLAYER_ACCELERATION = 0.04
+PLAYER_ACCELERATION = 0.06
 PLAYER_MAX_SPEED = 4.0
 
 
@@ -75,6 +75,8 @@ class RiverraidState(NamedTuple):
     player_fuel: chex.Array
     player_score: chex.Array
     player_lives: chex.Array
+    player_speed: chex.Array
+    player_speedchange_cooldown: chex.Array
 
     player_bullet_x: chex.Array
     player_bullet_y: chex.Array
@@ -673,8 +675,22 @@ def handle_dam(state: RiverraidState) -> RiverraidState:
 @jax.jit
 def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
     #input
-    press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
-    press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
+    press_right = jnp.any(jnp.array([
+        action == Action.RIGHT,
+        action == Action.RIGHTFIRE,
+        action == Action.UPRIGHT,
+        action == Action.DOWNRIGHT,
+        action == Action.UPRIGHTFIRE,
+        action == Action.DOWNRIGHTFIRE
+    ]))
+    press_left = jnp.any(jnp.array([
+        action == Action.LEFT,
+        action == Action.LEFTFIRE,
+        action == Action.UPLEFT,
+        action == Action.DOWNLEFT,
+        action == Action.UPLEFTFIRE,
+        action == Action.DOWNLEFTFIRE
+    ]))
 
     new_direction = 1 + press_right - press_left
     velocity_change = (press_right * PLAYER_ACCELERATION) - (press_left * PLAYER_ACCELERATION)
@@ -725,35 +741,82 @@ def player_movement(state: RiverraidState, action: Action) -> RiverraidState:
         player_direction=new_direction
     )
 
+
 @jax.jit
 def get_action_from_keyboard(state: RiverraidState) -> Action:
     keys = pygame.key.get_pressed()
     left = keys[pygame.K_a] or keys[pygame.K_LEFT]
     right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
+    up = keys[pygame.K_w] or keys[pygame.K_UP]
+    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
     shooting = keys[pygame.K_SPACE]
 
-    left_only = left and not right
-    right_only = right and not left
+    # Diagonale Bewegungen
+    up_right = up and right and not left and not down
+    up_left = up and left and not right and not down
+    down_right = down and right and not left and not up
+    down_left = down and left and not right and not up
+
+    # Einzelne Richtungen
+    up_only = up and not left and not right and not down
+    down_only = down and not left and not right and not up
+    left_only = left and not right and not up and not down
+    right_only = right and not left and not up and not down
 
     if shooting:
-        if left_only:
+        if up_right:
+            return Action.UPRIGHTFIRE
+        elif up_left:
+            return Action.UPLEFTFIRE
+        elif down_right:
+            return Action.DOWNRIGHTFIRE
+        elif down_left:
+            return Action.DOWNLEFTFIRE
+        elif up_only:
+            return Action.UPFIRE
+        elif down_only:
+            return Action.DOWNFIRE
+        elif left_only:
             return Action.LEFTFIRE
         elif right_only:
             return Action.RIGHTFIRE
         else:
             return Action.FIRE
     else:
-        if left_only:
+        if up_right:
+            return Action.UPRIGHT
+        elif up_left:
+            return Action.UPLEFT
+        elif down_right:
+            return Action.DOWNRIGHT
+        elif down_left:
+            return Action.DOWNLEFT
+        elif up_only:
+            return Action.UP
+        elif down_only:
+            return Action.DOWN
+        elif left_only:
             return Action.LEFT
         elif right_only:
             return Action.RIGHT
         else:
             return Action.NOOP
 
+
 @jax.jit
 def player_shooting(state, action):
     shooting = jnp.any(
-        jnp.array([action == Action.LEFTFIRE, action == Action.RIGHTFIRE, action == Action.FIRE])
+        jnp.array([
+            action == Action.FIRE,
+            action == Action.LEFTFIRE,
+            action == Action.RIGHTFIRE,
+            action == Action.UPFIRE,
+            action == Action.DOWNFIRE,
+            action == Action.UPRIGHTFIRE,
+            action == Action.UPLEFTFIRE,
+            action == Action.DOWNRIGHTFIRE,
+            action == Action.DOWNLEFTFIRE
+        ])
     )
     new_bullet_x, new_bullet_y = jax.lax.cond(
         jnp.logical_and(
@@ -1288,6 +1351,10 @@ def handle_housetree(state: RiverraidState) -> RiverraidState:
     )
     return new_state
 
+@jax.jit
+def adjust_player_speed(state: RiverraidState, action: Action) -> RiverraidState:
+    return state
+
 class JaxRiverraid(JaxEnvironment):
     def __init__(self, frameskip: int = 0, reward_funcs: list[callable] = None):
         super().__init__()
@@ -1302,7 +1369,9 @@ class JaxRiverraid(JaxEnvironment):
             Action.RIGHT,
             Action.LEFT,
             Action.RIGHTFIRE,
-            Action.LEFTFIRE
+            Action.LEFTFIRE,
+            Action.UP,
+            Action.DOWN
         }
         self.renderer = RiverraidRenderer()
 
@@ -1371,6 +1440,8 @@ class JaxRiverraid(JaxEnvironment):
                                player_state= jnp.array(0),
                                player_bullet_x= jnp.array(-1, dtype=jnp.float32),
                                player_bullet_y= jnp.array(-1, dtype=jnp.float32),
+                               player_speed= jnp.array(2),
+                               player_speedchange_cooldown= jnp.array(10),
                                enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
                                enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
                                enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
@@ -1407,6 +1478,8 @@ class JaxRiverraid(JaxEnvironment):
         def player_alive(state: RiverraidState) -> RiverraidState:
             new_state = handle_dam(state)
             new_state = update_river_banks(new_state)
+            #new_state = update_river_banks(new_state)
+            #new_state = update_river_banks(new_state)
             new_state = player_movement(new_state, action)
             new_state = player_shooting(new_state, action)
             new_state = spawn_entities(new_state)
@@ -1462,6 +1535,8 @@ class JaxRiverraid(JaxEnvironment):
                                    player_state=jnp.array(0),
                                    player_bullet_x=jnp.array(-1, dtype=jnp.float32),
                                    player_bullet_y=jnp.array(-1, dtype=jnp.float32),
+                                   player_speed=jnp.array(2),
+                                   player_speedchange_cooldown=jnp.array(10),
                                    enemy_x=jnp.full((MAX_ENEMIES,), -1, dtype=jnp.float32),
                                    enemy_y=jnp.full((MAX_ENEMIES,), SCREEN_HEIGHT + 1, dtype=jnp.float32),
                                    enemy_state=jnp.full((MAX_ENEMIES,), 0, dtype=jnp.int32),
@@ -1538,6 +1613,7 @@ class JaxRiverraid(JaxEnvironment):
                 "player_fuel": spaces.Box(low=0 - BUFFER, high=MAX_FUEL + BUFFER, shape=(), dtype=jnp.float32),
                 "player_lives": spaces.Box(low=0 - BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.float32),
                 "player_score": spaces.Box(low=0 - BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.float32),
+                "player_speed": spaces.Box(low=0, high=3, shape=(), dtype=jnp.float32),
                 "river_left": spaces.Box(low=0 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.float32),
                 "river_right": spaces.Box(low=0 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.float32),
                 "river_inner_left": spaces.Box(low=-1 - BUFFER, high=SCREEN_WIDTH + BUFFER, shape=(SCREEN_HEIGHT,), dtype=jnp.float32),
