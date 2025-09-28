@@ -423,38 +423,48 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         ROCK_X_DIST = jnp.float32(1.0)
         Y_HIT_DIST  = jnp.float32(1.0)
 
-        # 1) Eingabe -> Zielpose
-
+        # 1) Eingabe -> Zielpose (Atari-like: 8 discrete headings + tap/auto-repeat)
         # Normalize action from get_human_action(): accept only A/D (JAXAtariAction LEFT=4, RIGHT=3).
         # Any other input (including SPACE/FIRE) becomes NOOP.
         is_left  = jnp.equal(action, jnp.int32(4))  # external LEFT (A)
-        is_right = jnp.equal(action, jnp.int32(3)) # external RIGHT (D)
+        is_right = jnp.equal(action, jnp.int32(3))  # external RIGHT (D)
         norm_action = jax.lax.select(is_left,  self.consts.LEFT,
-                    jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
-        new_skier_pos = jax.lax.cond(jnp.equal(norm_action, self.consts.LEFT),
-                                     lambda _: state.skier_pos - 1,
-                                     lambda _: state.skier_pos,
-                                     operand=None)
-        new_skier_pos = jax.lax.cond(jnp.equal(norm_action, self.consts.RIGHT),
-                                     lambda _: state.skier_pos + 1,
-                                     lambda _: new_skier_pos,
-                                     operand=None)
-        skier_pos = jnp.clip(new_skier_pos, 0, 7)
+                        jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
 
-        # Entprellung beibehalten
-        skier_pos, direction_change_counter = jax.lax.cond(
-            jnp.greater(state.direction_change_counter, 0),
-            lambda _: (state.skier_pos, state.direction_change_counter - 1),
-            lambda _: (skier_pos, jnp.array(0)),
-            operand=None,
+        # Atari feel: stepwise heading with auto-repeat while holding the key.
+        # We do NOT add new state fields; we re-use 'direction_change_counter' as a repeat timer.
+        # Logic:
+        # - When a LEFT/RIGHT key is held and the counter hits 0, advance one discrete step and reset the counter.
+        # - While the counter > 0, it counts down each frame and no additional step happens.
+        # - On NOOP, reset the counter to 0 (so the next tap is immediate).
+        REPEAT_FRAMES = jnp.int32(4)  # small cadence to feel snappy (tap-friendly)
+
+        # Count down when a direction key is pressed; else zero.
+        # If NOOP: counter -> 0
+        # If LEFT/RIGHT:
+        #   if counter==0 -> allow step now and set counter=REPEAT_FRAMES
+        #   else          -> just decrement by 1
+        counter_now = state.direction_change_counter
+        want_left   = jnp.equal(norm_action, self.consts.LEFT)
+        want_right  = jnp.equal(norm_action, self.consts.RIGHT)
+        want_turn   = jnp.logical_or(want_left, want_right)
+
+        can_step_now = jnp.logical_and(want_turn, jnp.equal(counter_now, 0))
+
+        delta = jnp.where(want_left, -1, jnp.where(want_right, +1, 0)).astype(jnp.int32)
+        new_skier_pos = jnp.where(can_step_now, state.skier_pos + delta, state.skier_pos)
+        new_skier_pos = jnp.clip(new_skier_pos, 0, 7)
+
+        direction_change_counter = jnp.where(
+            jnp.equal(norm_action, self.consts.NOOP),
+            jnp.int32(0),
+            jnp.where(
+                jnp.equal(counter_now, 0),
+                jnp.where(want_turn, REPEAT_FRAMES, jnp.int32(0)),
+                jnp.maximum(counter_now - 1, 0),
+            ),
         )
-        direction_change_counter = jax.lax.cond(
-            jnp.logical_and(jnp.not_equal(skier_pos, state.skier_pos),
-                            jnp.equal(direction_change_counter, 0)),
-            lambda _: jnp.array(16),
-            lambda _: direction_change_counter,
-            operand=None,
-        )
+        skier_pos = new_skier_pos
 
         # 2) Basisgeschwindigkeiten
         dx_target = side_speed.at[skier_pos].get()
