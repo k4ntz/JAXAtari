@@ -1220,8 +1220,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         rng_rest, bg_key = jax.random.split(state.rng_key)
         next_bg_visible = jax.lax.cond(
             state.level + 1 < 4,
-            1,
-            jax.random.bernoulli(bg_key)
+            lambda : 1,
+            lambda : jax.random.bernoulli(bg_key).astype(jnp.int32)
         )
 
         next_state = state._replace(
