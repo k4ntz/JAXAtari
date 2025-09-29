@@ -448,13 +448,12 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # Convert bullet to EntityPosition
-        bullet_pos = state.bullet_position
         bullet = EntityPosition(
-            x=bullet_pos[0],
-            y=bullet_pos[1],
+            x=state.bullet[0],
+            y=state.bullet[1],
             width=jnp.array(self.consts.BULLET_SIZE[0]),
             height=jnp.array(self.consts.BULLET_SIZE[1]),
-            active=jnp.array(bullet_pos[2] != 0),
+            active=jnp.array(state.bullet[2] != 0),
         )
 
         return TurmoilObservation(
