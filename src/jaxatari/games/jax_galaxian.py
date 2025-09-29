@@ -34,6 +34,7 @@ class GalaxianConstants():
     # -------- Player constants --------
     BULLET_MOVE_SPEED: int = 5
     LIVES: int = 2
+    EXTRA_LIFE_SCORE: int = 7000
     PLAYER_RESPAWN_TIME: int = 16
     PLAYER_BULLET_Y_OFFSET: int = 3
     PLAYER_BULLET_X_OFFSET: int = 3
@@ -50,7 +51,7 @@ class GalaxianConstants():
     # -------- Enemy constants --------
     ENEMY_ATTACK_SPEED: int = 2
     ENEMY_ATTACK_TURN_TIME: int = 32
-    ENEMY_ATTACK_BULLET_SPEED: int = 5
+    ENEMY_ATTACK_BULLET_SPEED: int = 3
     ENEMY_ATTACK_BULLET_DELAY: int = 75
     ENEMY_ATTACK_MAX_BULLETS: int = 2
     ENEMY_LEFT_BOUND: int = 17
@@ -164,6 +165,7 @@ class GalaxianState(NamedTuple):
     enemy_support_y: chex.Array
     level: chex.Array
     lives: chex.Array
+    got_extra_life: chex.Array
     player_alive: chex.Array
     score: chex.Array
     turn_step: chex.Array
@@ -1107,7 +1109,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         def process_hit(current_state):
             # reset bullets
             hit_indices = jnp.where(collision_mask, size=GalaxianConstants.MAX_DIVERS, fill_value=-1)[
-                0]  # size müsste man irgendwann vllt anpassen
+                0]
             new_bullet_x = current_state.enemy_attack_bullet_x.at[hit_indices].set(-1.0)
             new_bullet_y = current_state.enemy_attack_bullet_y.at[hit_indices].set(-1.0)
 
@@ -1202,6 +1204,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                               enemy_support_y=jnp.zeros(GalaxianConstants.MAX_SUPPORTERS, dtype=jnp.float32),
                               level=jnp.array(0, dtype=jnp.int32),
                               lives=jnp.array(GalaxianConstants.LIVES, dtype=jnp.int32),
+                              got_extra_life=jnp.array(False),
                               player_alive=jnp.array(True),
                               score=jnp.array(0, dtype=jnp.int32),
                               enemy_attack_target_x=jnp.zeros(GalaxianConstants.MAX_DIVERS),
@@ -1313,7 +1316,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = self.increase_player_respawn_timer(new_state)
         new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == GalaxianConstants.ACTIVE)), state.player_alive == False), lambda new_state: self.try_respawn_player(new_state), lambda s: s, new_state)
         new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == GalaxianConstants.GRID)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: self.enter_new_wave(new_state), lambda s: s, new_state)
-
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(state.got_extra_life),state.score >= GalaxianConstants.EXTRA_LIFE_SCORE), lambda s: s._replace(lives=s.lives + 1, got_extra_life=jnp.array(True)), lambda s: s, new_state)
         new_state = new_state._replace(turn_step=new_state.turn_step + 1)
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -1511,7 +1514,7 @@ class GalaxianRenderer(JAXGameRenderer):
         # Sprite-Dimensionen für Life-Icons
         life_frame = jnp.squeeze(self.SPRITE_LIFE, axis=0)  # (h, w, 4)
         self.life_h, self.life_w, _ = life_frame.shape
-        self.life_spacing = 5
+        self.life_spacing = 3
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GalaxianState):
@@ -1556,7 +1559,7 @@ class GalaxianRenderer(JAXGameRenderer):
 
         def _draw_single_enemy_bullet(i, r_acc):
             return lax.cond(
-                state.enemy_attack_bullet_y[i] >= 0,  # Active bullet
+                state.enemy_attack_bullet_y[i] >= 0 ,  # Active bullet
                 lambda r: jr.render_at(r,
                                        jnp.round(state.enemy_attack_bullet_x[i]).astype(jnp.int32),
                                        jnp.round(state.enemy_attack_bullet_y[i]).astype(jnp.int32),
@@ -1721,7 +1724,7 @@ class GalaxianRenderer(JAXGameRenderer):
             # nur zeichnen, wenn Leben vorhanden
             def draw(r0):
                 x0 = jnp.int32(
-                    GalaxianConstants.NATIVE_GAME_WIDTH - (i + 1) * (self.life_w + self.life_spacing)
+                    10 + (i + 1) * (self.life_w + self.life_spacing)
                 )
                 y0 = jnp.int32(
                     GalaxianConstants.NATIVE_GAME_HEIGHT - self.life_h - self.life_spacing -10
