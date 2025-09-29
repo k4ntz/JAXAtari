@@ -97,8 +97,8 @@ class TurmoilConstants(NamedTuple):
     PRIZE_TO_BOOM_TIME = 150
 
     # game phases
-    LOADING_GAME_PHASE_TIME = 200
-    PLAYER_SHRINK_TIME = 200
+    LOADING_GAME_PHASE_TIME = 100
+    PLAYER_SHRINK_TIME = 100
     LVL_CHANGE_SCORES = (
         200,  # lvl 1
         400,  # lvl 2
@@ -109,7 +109,8 @@ class TurmoilConstants(NamedTuple):
         5000, # lvl 7
         8000, # lvl 8
         10000 # lvl 9
-    ) # lvl end scores TODO find exact    
+    ) # lvl end scores TODO find exact
+    BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
 
 
 class TurmoilState(NamedTuple):
@@ -544,7 +545,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             level=jnp.array(1),
             step_counter=jnp.array(0),
             rng_key=key,
-            bg_visible=jnp.array(0),
+            bg_visible=jnp.array(1),
         )
 
         initial_obs = self._get_observation(reset_state)
@@ -1221,7 +1222,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         next_bg_visible = jax.lax.cond(
             state.level + 1 < 4,
             lambda : 1,
-            lambda : jax.random.bernoulli(bg_key).astype(jnp.int32)
+            lambda : jax.random.bernoulli(bg_key, p=self.consts.BG_APPER_PROBABILITY).astype(jnp.int32)
         )
 
         next_state = state._replace(
