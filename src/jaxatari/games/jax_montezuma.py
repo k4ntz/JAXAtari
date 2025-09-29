@@ -686,6 +686,7 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             self.renderer = MontezumaRenderer(consts=self.consts)
         # Vmap functions for enemy movement & animation to increase efficiency
         self.vmapped_single_enemy_movement = jax.vmap(self.handle_single_enemy_movement, in_axes=0, out_axes=0)
+        self.vmapped_single_enemy_reset = jax.vmap(self.handle_single_enemy_pos_reset, in_axes=0, out_axes=0)
         self.vmapped_single_enemy_animation = jax.vmap(self._handle_single_enemy_animation, in_axes=0, out_axes=0)
         
     def _make_barrier_activation_map(self, room: VanillaRoom, barrier_tag: RoomTags.LAZER_BARRIER.value):
@@ -2278,6 +2279,32 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         enemy_tag = SANTAH.attribute_setters[RoomTags.ENEMIES.value][RoomTagsNames.ENEMIES.value.enemies.value](enemy_tag, enemies)
         return enemy_tag
     
+    
+    @partial(jax.jit, static_argnames=["self"])
+    def handle_single_enemy_pos_reset(self, single_enemy: jArray) -> jArray:
+        single_enemy: Enemy = SANTAH.full_deserializations[Enemy](single_enemy)
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.pos_x.value](single_enemy, single_enemy.initial_x_pos)
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.pos_y.value](single_enemy, single_enemy.initial_y_pos)
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.horizontal_direction.value](single_enemy, single_enemy.initial_horizontal_direction)
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.render_in_reverse.value](single_enemy, single_enemy.initial_render_in_reverse)
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.sprite_index.value](single_enemy, jnp.array([0], jnp.int32))
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.optional_movement_counter.value](single_enemy, jnp.array([0], jnp.int32))
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.optional_utility_field.value](single_enemy, jnp.array([0], jnp.int32))
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.last_animation.value](single_enemy, jnp.array([0], jnp.int32))
+        single_enemy = SANTAH.attribute_setters[Enemy][EnemyFields.last_movement.value](single_enemy, jnp.array([0], jnp.int32))
+        
+        single_enemy = SANTAH.full_serialisations[Enemy](single_enemy)
+        return single_enemy
+    
+    def handle_enemy_pos_reset(self, enemy_tag: RoomTags.ENEMIES.value):
+        """Handles movement for all enemies in a room.
+        """
+        enemies: jArray = enemy_tag.enemies
+        
+        enemies = self.vmapped_single_enemy_reset(enemies)
+       
+        enemy_tag = SANTAH.attribute_setters[RoomTags.ENEMIES.value][RoomTagsNames.ENEMIES.value.enemies.value](enemy_tag, enemies)
+        return enemy_tag
     
     # Logic for advancing the animation counters for all enemies
     
@@ -3884,6 +3911,10 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
         if RoomTags.BONUSROOM in tags:
             bonus_tag: RoomTags.BONUSROOM.value = SANTAH.extract_tag_from_rooms[RoomTags.BONUSROOM](room_state)
             montezuma_state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.reset_room_state_on_room_change.value](montezuma_state, bonus_tag.reset_state_on_leave)
+        if RoomTags.ENEMIES in tags:
+            enemies_tag: RoomTags.ENEMIES.value = SANTAH.extract_tag_from_rooms[RoomTags.ENEMIES](room_state)
+            enemies_tag = self.handle_enemy_pos_reset(enemies_tag)
+            room_state = SANTAH.write_back_tag_information_to_room[room_type][RoomTags.ENEMIES](room_state, enemies_tag)
         if RoomTags.LADDERS in tags:
             # If we left a room via a ladder and the room we have entered also implements ladders, 
             # teleport the player onto the nearest ladder.
