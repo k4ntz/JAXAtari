@@ -862,8 +862,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         final_bullet_x, final_bullet_y, final_shots_fired, final_timers = final_carry
 
         return state._replace(
-            enemy_attack_bullet_x=final_bullet_x,
-            enemy_attack_bullet_y=final_bullet_y,
+            enemy_attack_bullet_x=final_bullet_x.astype(jnp.float32),
+            enemy_attack_bullet_y=final_bullet_y.astype(jnp.float32),
             enemy_attack_shots_fired=final_shots_fired,
             enemy_attack_shot_timer=final_timers
         )
@@ -1332,17 +1332,9 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         observation = self._get_observation(new_state)
 
-        # def do_reset(_):
-        #     obs, s = self.reset()
-        #     return obs, s, 0, False, self._get_info(s, jnp.zeros(1))
 
         return observation, new_state, env_reward, done, info
-        # jax.lax.cond(
-        #     done,
-        #     do_reset,
-        #     lambda _: (),
-        #     operand=None
-        # )
+
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1577,9 +1569,9 @@ class GalaxianRenderer(JAXGameRenderer):
             )
 
         indices = jnp.arange(GalaxianConstants.MAX_DIVERS)
-        bullets_rasters = jax.vmap(_draw_single_enemy_bullet)(indices)
-        bullets_raster = jnp.sum(bullets_rasters, axis=0)
-        raster = jnp.where(bullets_raster > 0, bullets_raster, raster)
+        bullets_rasters = jax.vmap(_draw_single_enemy_bullet)(indices).astype(jnp.uint8)
+        bullets_raster = jnp.clip(jnp.sum(bullets_rasters, axis=0),0,255).astype(jnp.uint8)
+        raster = jnp.where(bullets_raster > 0, bullets_raster, raster).astype(jnp.uint8)
 
 
         def draw_attackers(r):
@@ -1744,8 +1736,8 @@ class GalaxianRenderer(JAXGameRenderer):
             return lax.cond(i < state.lives, draw, lambda r0: r0, r_acc)
 
         life_indices = jnp.arange(GalaxianConstants.LIVES)
-        life_raster = jnp.sum(jax.vmap(lambda i: life_loop_body(i, jnp.zeros_like(raster)))(life_indices), axis=0)
-        raster = jnp.where(life_raster.sum(axis=-1, keepdims=True) > 0, life_raster, raster)
+        life_raster = jnp.clip(jnp.sum(jax.vmap(lambda i: life_loop_body(i, jnp.zeros_like(raster)))(life_indices), axis=0),0,255).astype(jnp.uint8)
+        raster = jnp.where(life_raster.sum(axis=-1, keepdims=True) > 0, life_raster, raster).astype(jnp.uint8)
 
         def get_digit(i, score):
             digit = (score // jnp.power(10, i)) % 10
@@ -1763,8 +1755,8 @@ class GalaxianRenderer(JAXGameRenderer):
             return lax.cond(i < 5, draw, lambda r0: r0, r_acc)
 
         score_indices = jnp.arange(5)
-        score_raster = jnp.sum(jax.vmap(lambda i: score_loop_body(i, jnp.zeros_like(raster)))(score_indices), axis=0)
-        raster = jnp.where(score_raster.sum(axis=-1, keepdims=True) > 0, score_raster, raster)
+        score_raster = jnp.clip(jnp.sum(jax.vmap(lambda i: score_loop_body(i, jnp.zeros_like(raster)))(score_indices), axis=0),0,255).astype(jnp.uint8)
+        raster = jnp.where(score_raster.sum(axis=-1, keepdims=True) > 0, score_raster, raster).astype(jnp.uint8)
 
         return raster
 
