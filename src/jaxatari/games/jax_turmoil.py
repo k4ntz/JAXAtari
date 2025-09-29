@@ -52,7 +52,7 @@ class TurmoilConstants(NamedTuple):
 
     # player
     PLAYER_SPEED = 10
-    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[3] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
+    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[6] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
     PLAYER_STEP_COOLDOWN = (0, 20) # (x cooldown, y cooldown)
     PLAYER_STEP = (1, 21) # (x_step_size, y_step_size)
 
@@ -1493,13 +1493,13 @@ class TurmoilRenderer(JAXGameRenderer):
             )
 
             # show the score
-            score_array = jr.int_to_digits(state.score, max_digits=4)
-            raster = jr.render_label(raster, 65, 10, score_array, DIGITS, spacing=8)
+            score_array = jr.int_to_digits(state.score, max_digits=5)
+            raster = jr.render_label(raster, 60, 10, score_array, DIGITS, spacing=8)
 
             # show remaining ships
             frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
             raster = jnp.where(
-                state.ships - 1 >= 0,
+                state.ships > 0,
                 jr.render_indicator(
                     raster,
                     55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
@@ -1616,10 +1616,28 @@ class TurmoilRenderer(JAXGameRenderer):
 
 
         def _render_loading_game_step(raster) :
-
             # show  level
             level_array = jr.int_to_digits(state.level, max_digits=1)
             raster = jr.render_label(raster, 76, 101, level_array, DIGITS, spacing=8)
+
+            # show the score
+            score_array = jr.int_to_digits(state.score, max_digits=5)
+            raster = jr.render_label(raster, 60, 10, score_array, DIGITS, spacing=8)
+
+            # show remaining ships
+            frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
+            raster = jnp.where(
+                state.ships > 0,
+                jr.render_indicator(
+                    raster,
+                    55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
+                    190,
+                    state.ships - 1,
+                    frame_pl_ship,
+                    spacing=15
+                ),
+                raster
+            )
 
             return raster
         
