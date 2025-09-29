@@ -53,6 +53,7 @@ class BackgammonState(NamedTuple):
     last_action: int = JAXAtariAction.NOOP  # Store last action for keyup handling
     await_keyup: bool = False  # new: blocks repeats until NOOP arrives
     await_keyup: bool = False
+    last_valid_drop: int = -1  # -1 means no persistent highlight
 
 
 
@@ -617,11 +618,71 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # ---------- helpers (JAX-safe) ----------
         def handle_cursor_move(s, direction):
-            can_move   = (s.game_phase == 1) | (s.game_phase == 2)
-            new_pos    = jnp.clip(s.cursor_position + direction, 0, 25)
-            new_cursor = jax.lax.cond(can_move, lambda _: new_pos, lambda _: s.cursor_position, operand=None)
+            """Cursor move with strict BAR rules:
+            - You may go TO BAR (24) only from 0←LEFT or 23→RIGHT AND only if you have a checker on BAR.
+            - From BAR (24): LEFT→0, RIGHT→23.
+            - Otherwise: normal step, BUT never step into 24 unless allowed above.
+            """
+            can_move = (s.game_phase == 1) | (s.game_phase == 2)
+            pos = s.cursor_position
+
+            is_left  = jnp.array(direction == -1, dtype=jnp.bool_)
+            is_right = jnp.array(direction == 1,  dtype=jnp.bool_)
+            at_bar   = (pos == jnp.int32(self.consts.BAR_INDEX))
+
+            # Do we actually have a checker on the bar for the current player?
+            player_idx = self.get_player_index(s.current_player)
+            has_bar_checker = s.board[player_idx, self.consts.BAR_INDEX] > 0
+
+            # From BAR: LEFT→0, RIGHT→23 (else stay)
+            from_bar_target = jax.lax.cond(
+                is_left,
+                lambda _: jnp.int32(0),
+                lambda _: jax.lax.cond(
+                    is_right, lambda _: jnp.int32(23), lambda _: pos, operand=None
+                ),
+                operand=None
+            )
+
+            # Allowed “jump to bar” only in these exact cases
+            to_bar_allowed = has_bar_checker & (
+                ((pos == jnp.int32(0))  & is_left) |
+                ((pos == jnp.int32(23)) & is_right)
+            )
+
+            # Base step (normal), then block accidental entry into BAR (24) unless allowed
+            base_step = jnp.clip(pos + jnp.int32(direction), 0, 25)
+
+            # If we're at 0←LEFT or 23→RIGHT and NOT allowed to go to bar, don't move (stay at pos)
+            trying_to_step_into_bar = ((pos == jnp.int32(0)) & is_left) | ((pos == jnp.int32(23)) & is_right)
+            base_step = jax.lax.cond(
+                trying_to_step_into_bar & (~to_bar_allowed),
+                lambda _: pos,           # block stepping into 24
+                lambda _: base_step,
+                operand=None
+            )
+
+            # Final target: from BAR mapping, or allowed BAR jump, else base_step
+            target_if_move = jax.lax.cond(
+                at_bar,
+                lambda _: from_bar_target,
+                lambda _: jax.lax.cond(
+                    to_bar_allowed,
+                    lambda _: jnp.int32(self.consts.BAR_INDEX),  # 24
+                    lambda _: base_step,
+                    operand=None
+                ),
+                operand=None
+            )
+
+            new_cursor = jax.lax.cond(
+                can_move, lambda _: target_if_move, lambda _: pos, operand=None
+            )
+
             ns = s._replace(cursor_position=new_cursor)
             return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
+
+
 
         def handle_space(s):
             def do_roll(ss):
@@ -645,24 +706,39 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 move = (ss.picked_checker_from, ss.cursor_position)
                 is_valid = self.is_valid_move(ss, move)
 
+            def do_drop(ss):
+                move = (ss.picked_checker_from, ss.cursor_position)
+                is_valid = self.is_valid_move(ss, move)
+
                 def execute_valid_move(s2):
                     obs, ns, reward, done, info, key = self.step_impl(s2, move, s2.key)
                     all_dice_used = jnp.all(ns.dice == 0)
-                    next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)  # WAIT or SELECT
+                    next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)
                     next_cursor = jax.lax.cond(
                         ns.current_player != s2.current_player,
-                        lambda _: jax.lax.cond(ns.current_player == self.consts.WHITE, lambda _: 0,  lambda _: 23, operand=None),
+                        lambda _: jax.lax.cond(ns.current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None),
                         lambda _: s2.cursor_position,
                         operand=None
                     )
-                    fs = ns._replace(picked_checker_from=-1, game_phase=next_phase, cursor_position=next_cursor, key=key)
+                    fs = ns._replace(
+                        picked_checker_from=-1, 
+                        game_phase=next_phase, 
+                        cursor_position=next_cursor, 
+                        key=key,
+                        last_valid_drop=s2.cursor_position  # Store destination
+                    )
                     return obs, fs, reward, done, info
 
-                def cancel_move(s2):
-                    ns = s2._replace(picked_checker_from=-1, game_phase=1)
+                def invalid_drop(s2):
+                    # Checker jumps back: move cursor to origin, return to SELECTING phase
+                    ns = s2._replace(
+                        picked_checker_from=-1,           # Drop the checker
+                        game_phase=1,                     # Back to SELECTING
+                        cursor_position=s2.picked_checker_from  # Move cursor to origin
+                    )
                     return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-                return jax.lax.cond(is_valid, execute_valid_move, cancel_move, operand=ss)
+                return jax.lax.cond(is_valid, execute_valid_move, invalid_drop, operand=ss)
 
             return jax.lax.switch(state.game_phase, [do_roll, do_select, do_drop], operand=state)
 
@@ -852,11 +928,11 @@ class BackgammonRenderer(JAXGameRenderer):
         self.frame_width = 160
         self.color_background = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black background
         self.color_board = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black board
-        self.color_triangle_light = jnp.array([0, 0, 255], dtype=jnp.uint8)  # blue points
-        self.color_triangle_dark = jnp.array([0, 200, 0], dtype=jnp.uint8)  # green points
+        self.color_triangle_light = jnp.array([42, 44, 168], dtype=jnp.uint8)  # blue points
+        self.color_triangle_dark = jnp.array([87, 147, 74], dtype=jnp.uint8)  # green points
         self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white checkers
-        self.color_black_checker = jnp.array([255, 0, 0], dtype=jnp.uint8)  # red checkers
-        self.color_border = jnp.array([0, 200, 0], dtype=jnp.uint8)  # green bar
+        self.color_black_checker = jnp.array([230, 88, 83], dtype=jnp.uint8)  # red checkers
+        self.color_border = jnp.array([81, 146, 119], dtype=jnp.uint8)  # green bar
 
         self.top_margin_for_dice = 25  # pixels reserved for dice row
 
@@ -868,6 +944,9 @@ class BackgammonRenderer(JAXGameRenderer):
         self.checker_width = 8  # rectangular checkers
         self.checker_height = 4  # smaller height
         self.checker_stack_offset = 5  # vertical stacking distance
+
+        self.edge_line_thickness = 2
+        self.edge_line_color     = jnp.array([81, 146, 119], dtype=jnp.uint8)
 
         self.bar_y = self.top_margin_for_dice + self.frame_height // 2 - self.bar_thickness // 2 - 10
         self.bar_x = self.board_margin
@@ -986,6 +1065,32 @@ class BackgammonRenderer(JAXGameRenderer):
             return self._draw_triangle(fr, x, y, self.triangle_length, self.triangle_thickness, color, point_right)
 
         return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_edge_lines(self, frame):
+        # triangle columns start/end
+        left_x  = self.board_margin
+        right_x = self.frame_width - self.board_margin - self.triangle_length
+        tri_span_x = left_x
+        tri_span_w = (right_x + self.triangle_length) - left_x  # ends exactly where triangles end
+
+        # vertical reference: triangles occupy [y_top_tri, y_bottom_tri)
+        y_top_tri    = self.top_margin_for_dice + self.board_margin
+        y_bottom_tri = self.frame_height - self.board_margin
+
+        # tweak thickness/offsets
+        thickness     = self.edge_line_thickness               # e.g., 3
+        bottom_offset = 2                                       # <- push the lower band a bit lower
+
+        # positions
+        top_y    = y_top_tri - thickness                        # just above top triangles
+        bottom_y = y_bottom_tri + bottom_offset                  # a bit below bottom triangles
+
+        # draw
+        frame = self._draw_rectangle(frame, tri_span_x, top_y,    tri_span_w, thickness, self.edge_line_color)
+        frame = self._draw_rectangle(frame, tri_span_x, bottom_y, tri_span_w, thickness, self.edge_line_color)
+        return frame
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
@@ -1156,40 +1261,65 @@ class BackgammonRenderer(JAXGameRenderer):
         frame = self._draw_board_outline(frame)
         frame = self._draw_triangles(frame)
 
-        # Draw cursor highlight if in selecting/moving phase
-        def draw_cursor_highlight(f):
-            pos = state.cursor_position
-            highlight_color = jnp.array([255, 255, 0], dtype=jnp.uint8)  # Yellow
+        frame = self._draw_edge_lines(frame)
 
-            # Only highlight in phases 1 and 2
-            should_highlight = (state.game_phase == 1) | (state.game_phase == 2)
+        # Draw highlight: under cursor in SELECTING, pinned to source in MOVING
+        def draw_cursor_highlight(f):
+            highlight_color = jnp.array([199, 172, 91], dtype=jnp.uint8)
+
+            def which_index(_):
+                return jax.lax.cond(
+                    state.game_phase == 2,  # MOVING: highlight origin (where picked from)
+                    lambda __: state.picked_checker_from,
+                    lambda __: jax.lax.cond(
+                        state.game_phase == 1,  # SELECTING: highlight cursor
+                        lambda ___: state.cursor_position,
+                        lambda ___: state.last_valid_drop,  # IDLE (phase 0): show last drop
+                        operand=None
+                    ),
+                    operand=None
+                )
+
+            hi = which_index(None)
+            no_hi = (hi < 0)
 
             def add_highlight(frame):
-                return jax.lax.cond(
-                    pos < 24,
-                    lambda fr: self._draw_triangle(
+                # triangle highlight
+                def on_triangle(fr):
+                    return self._draw_triangle(
                         fr,
-                        self.triangle_positions[pos][0],
-                        self.triangle_positions[pos][1],
+                        self.triangle_positions[hi][0],
+                        self.triangle_positions[hi][1],
                         self.triangle_length,
                         self.triangle_thickness,
                         highlight_color,
-                        self.triangle_positions[pos][0] == self.board_margin
-                    ),
-                    lambda fr: jax.lax.cond(
-                        pos == 24,
-                        lambda fr2: self._draw_rectangle(
-                            fr2, self.bar_x, self.bar_y,
-                            self.bar_width, self.bar_thickness,
-                            highlight_color
-                        ),
-                        lambda fr2: fr2,  # pos == 25 (home)
-                        operand=fr
+                        self.triangle_positions[hi][0] == self.board_margin
+                    )
+
+                # bar highlight
+                def on_bar(fr):
+                    return self._draw_rectangle(
+                        fr, self.bar_x, self.bar_y,
+                        self.bar_width, self.bar_thickness,
+                        highlight_color
+                    )
+
+                # home: no highlight
+                def noop(fr): return fr
+
+                return jax.lax.cond(
+                    hi < 24,
+                    on_triangle,
+                    lambda fr2: jax.lax.cond(
+                        hi == self.env.consts.BAR_INDEX,  # 24
+                        on_bar,
+                        noop,                              # 25 (home) → no highlight
+                        operand=fr2
                     ),
                     operand=frame
                 )
 
-            return jax.lax.cond(should_highlight, add_highlight, lambda f: f, operand=f)
+            return jax.lax.cond(no_hi, lambda fr: fr, add_highlight, operand=f)
 
         frame = draw_cursor_highlight(frame)
 
@@ -1219,12 +1349,25 @@ class BackgammonRenderer(JAXGameRenderer):
         frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
 
         # Bar and home stacks
-        frame = self._draw_bar_checkers(frame,
-                                        jnp.maximum(state.board[0, 24], 0),
-                                        jnp.maximum(state.board[1, 24], 0))
-        frame = self._draw_home_checkers(frame,
-                                         jnp.maximum(state.board[0, 25], 0),
-                                         jnp.maximum(state.board[1, 25], 0))
+        player_idx = self.env.get_player_index(state.current_player)
+        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.env.consts.BAR_INDEX)
+
+        # subtract 1 from the current player's bar if we picked the checker from BAR
+        white_bar = state.board[0, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
+        black_bar = state.board[1, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
+
+        white_bar = jnp.maximum(white_bar, 0)
+        black_bar = jnp.maximum(black_bar, 0)
+
+        frame = self._draw_bar_checkers(frame, white_bar, black_bar)
+
+        # Home stacks (unchanged)
+        frame = self._draw_home_checkers(
+            frame,
+            jnp.maximum(state.board[0, self.env.consts.HOME_INDEX], 0),
+            jnp.maximum(state.board[1, self.env.consts.HOME_INDEX], 0),
+        )
+
 
         # Dice
         frame = self._draw_dice(frame, state.dice)
