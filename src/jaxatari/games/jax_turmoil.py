@@ -581,6 +581,9 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 state.player_move_unlock[0] == 1
             )
         
+        def can_move_vertical(player_x) :
+            return player_x == self.consts.VERTICAL_LANE
+        
         # cooldown so player does not go too fast
         player_step_cooldown = jnp.where(
             state.player_step_cooldown > 0,
@@ -604,7 +607,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         player_y = jnp.where(
-            player_step_cooldown[1] <= 0,
+            jnp.logical_and(player_step_cooldown[1] <= 0, can_move_vertical(player_x)),
             jnp.where(
                 down,
                 state.player_y + self.consts.PLAYER_STEP[1],
