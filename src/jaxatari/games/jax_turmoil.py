@@ -778,6 +778,13 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_bullet,
         )
 
+        # if bullet not active reset
+        new_bullet = jnp.where(
+            new_bullet[2] == 0,
+            jnp.zeros_like(new_bullet),
+            new_bullet
+        )
+
         return new_bullet
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1044,14 +1051,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         new_score = jax.lax.switch(
             enemy_type,
             [
-                lambda : state.score + 10, # lines
+                lambda : state.score + 10,  # lines
                 lambda : state.score + 100, # arrow
-                lambda : state.score + 50, # tank
-                lambda : state.score + 40, # L
-                lambda : state.score + 60, # T
-                lambda : state.score + 30, # rocket
-                lambda : state.score + 10, # triangle_hollow
-                lambda : state.score + 20, # x_shape
+                lambda : state.score + 50,  # tank
+                lambda : state.score + 40,  # L
+                lambda : state.score + 60,  # T
+                lambda : state.score + 30,  # rocket
+                lambda : state.score,       # triangle_hollow
+                lambda : state.score + 20,  # x_shape
                 lambda : state.score + 100, # sonic_boom
             ]
         )
@@ -1091,9 +1098,11 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # if any enemy hit then update score (assumption only 1 enemy shot at a time)
+        hit_type = state.enemy[:, 0][jnp.argmax(hit)].astype(jnp.int32)
+
         new_score = jax.lax.cond(
             jnp.any(hit),
-            lambda : self.update_score(state, 0), # TODO only type 0???
+            lambda : self.update_score(state, hit_type),
             lambda : state.score,
         )
 
