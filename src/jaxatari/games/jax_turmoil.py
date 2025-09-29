@@ -119,7 +119,7 @@ class TurmoilState(NamedTuple):
 class PlayerEntity(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
-    o: jnp.ndarray
+    direction: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
     active: jnp.ndarray
@@ -135,6 +135,8 @@ class EntityPosition(NamedTuple):
 class TurmoilObservation(NamedTuple):
     player: PlayerEntity
     ships: jnp.array
+    score: jnp.array
+    bullet: EntityPosition
 
 class TurmoilInfo(NamedTuple):
     step_counter: jnp.ndarray  # Current step count
@@ -359,7 +361,34 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
         self.renderer = TurmoilRenderer(self.consts)
 
+    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
+        ])
 
+    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
+        return jnp.concatenate([
+            jnp.array([entity.x], dtype=jnp.int32),
+            jnp.array([entity.y], dtype=jnp.int32),
+            jnp.array([entity.direction], dtype=jnp.int32),
+            jnp.array([entity.width], dtype=jnp.int32),
+            jnp.array([entity.height], dtype=jnp.int32),
+            jnp.array([entity.active], dtype=jnp.int32)
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: TurmoilObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            self.flatten_player_entity(obs.player),
+            obs.ships.flatten().astype(jnp.int32),
+            obs.score.flatten().astype(jnp.int32),
+            self.flatten_entity_position(obs.bullet),
+        ])
+    
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TurmoilState) -> jnp.ndarray:
         """Render the game state to a raster image."""
@@ -367,23 +396,74 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+    
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space for Seaquest.
+        The observation contains:
+        - player: PlayerEntity (x, y, direction, width, height, active)
+        - ships: int (0-999999)
+        - score: int (0-999999)
+        - bullet: EntityPosition (x, y, width, height, active)
+        """
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+            "ships": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "bullet": spaces.Dict({
+                "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
+        })
 
-    @partial(jax.jit, static_argnums=(0, ))
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Seaquest.
+        The image is a RGB image with shape (210, 160, 3).
+        """
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+    
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TurmoilState) -> TurmoilObservation:
-        # Create player (already scalar, no need for vectorization)
         player = PlayerEntity(
             x=state.player_x,
             y=state.player_y,
-            o=state.player_direction,
+            direction=state.player_direction,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),  # Player is always active
+            active=jnp.array(1),  # Always active
+        )
+
+        # Convert bullet to EntityPosition
+        bullet_pos = state.bullet_position
+        bullet = EntityPosition(
+            x=bullet_pos[0],
+            y=bullet_pos[1],
+            width=jnp.array(self.consts.BULLET_SIZE[0]),
+            height=jnp.array(self.consts.BULLET_SIZE[1]),
+            active=jnp.array(bullet_pos[2] != 0),
         )
 
         return TurmoilObservation(
             player=player,
-            ships=state.ships
+            ships=state.ships,
+            score=state.score,
+            bullet=bullet,
         )
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TurmoilState, all_rewards: jnp.ndarray) -> TurmoilInfo:
@@ -393,7 +473,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_env_reward(self, previous_state: TurmoilState, state: TurmoilState):
+    def _get_reward(self, previous_state: TurmoilState, state: TurmoilState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
