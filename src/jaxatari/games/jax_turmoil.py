@@ -1351,7 +1351,7 @@ class TurmoilRenderer(JAXGameRenderer):
         frame_prize = jr.get_sprite_frame(PRIZE, state.step_counter)
 
         raster = jax.lax.cond(
-            state.prize[2],
+            state.prize[3],
             lambda r: jr.render_at(
                 r,
                 state.prize[1],
