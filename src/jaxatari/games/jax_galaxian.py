@@ -785,8 +785,15 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 )
                 return new_state
 
-            state = lax.fori_loop(0, GalaxianConstants.MAX_DIVERS, body, state)
-            return lax.fori_loop(0, GalaxianConstants.MAX_SUPPORTERS, body_support, state)
+            def scan_body(carry, i):
+                return body(i, carry), None
+
+            def scan_body_support(carry, i):
+                return body_support(i, carry), None
+
+            state, _ = lax.scan(scan_body, state, jnp.arange(GalaxianConstants.MAX_DIVERS))
+            state, _ = lax.scan(scan_body_support, state, jnp.arange(GalaxianConstants.MAX_SUPPORTERS))
+            return state
 
         new_state = respawn_finished_dives(state)
         new_state = test_for_new_dive(new_state)
@@ -848,11 +855,11 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         initial_carry = (bullets_x_after_move, bullets_y_after_move, state.enemy_attack_shots_fired, new_timers)
 
-        final_bullet_x, final_bullet_y, final_shots_fired, final_timers = lax.fori_loop(
-            0, GalaxianConstants.MAX_DIVERS,
-            lambda i, carry: _spawn_one_shot(sorted_shooter_indices[i], carry),
-            initial_carry
-        )
+        def scan_spawn_one_shot(carry, i):
+            return _spawn_one_shot(sorted_shooter_indices[i], carry), None
+
+        final_carry, _ = lax.scan(scan_spawn_one_shot, initial_carry, jnp.arange(GalaxianConstants.MAX_DIVERS))
+        final_bullet_x, final_bullet_y, final_shots_fired, final_timers = final_carry
 
         return state._replace(
             enemy_attack_bullet_x=final_bullet_x,
@@ -1557,18 +1564,22 @@ class GalaxianRenderer(JAXGameRenderer):
 
         enemy_bullet_sprite = jr.get_sprite_frame(self.SPRITE_ENEMY_BULLET, 0)
 
-        def _draw_single_enemy_bullet(i, r_acc):
+        def _draw_single_enemy_bullet(i):
             return lax.cond(
-                state.enemy_attack_bullet_y[i] >= 0 ,  # Active bullet
-                lambda r: jr.render_at(r,
-                                       jnp.round(state.enemy_attack_bullet_x[i]).astype(jnp.int32),
-                                       jnp.round(state.enemy_attack_bullet_y[i]).astype(jnp.int32),
-                                       enemy_bullet_sprite),
-                lambda r: r,
-                r_acc
+                state.enemy_attack_bullet_y[i] >= 0,  # Active bullet
+                lambda: jr.render_at(
+                    jnp.zeros_like(raster),
+                    jnp.round(state.enemy_attack_bullet_x[i]).astype(jnp.int32),
+                    jnp.round(state.enemy_attack_bullet_y[i]).astype(jnp.int32),
+                    enemy_bullet_sprite
+                ),
+                lambda: jnp.zeros_like(raster),
             )
 
-        raster = lax.fori_loop(0, GalaxianConstants.MAX_DIVERS, _draw_single_enemy_bullet, raster)
+        indices = jnp.arange(GalaxianConstants.MAX_DIVERS)
+        bullets_rasters = jax.vmap(_draw_single_enemy_bullet)(indices)
+        bullets_raster = jnp.sum(bullets_rasters, axis=0)
+        raster = jnp.where(bullets_raster > 0, bullets_raster, raster)
 
 
         def draw_attackers(r):
@@ -1731,7 +1742,10 @@ class GalaxianRenderer(JAXGameRenderer):
                 )
                 return jr.render_at(r0, x0, y0, life_sprite)
             return lax.cond(i < state.lives, draw, lambda r0: r0, r_acc)
-        raster = lax.fori_loop(0, GalaxianConstants.LIVES, life_loop_body, raster)
+
+        life_indices = jnp.arange(GalaxianConstants.LIVES)
+        life_raster = jnp.sum(jax.vmap(lambda i: life_loop_body(i, jnp.zeros_like(raster)))(life_indices), axis=0)
+        raster = jnp.where(life_raster.sum(axis=-1, keepdims=True) > 0, life_raster, raster)
 
         def get_digit(i, score):
             digit = (score // jnp.power(10, i)) % 10
@@ -1747,7 +1761,10 @@ class GalaxianRenderer(JAXGameRenderer):
                 )
                 return jr.render_at(r0, x0, y0, jr.get_sprite_frame(self.SPRITE_DIGIT, get_digit(i, state.score)))
             return lax.cond(i < 5, draw, lambda r0: r0, r_acc)
-        raster = lax.fori_loop(0,5,score_loop_body,raster)
+
+        score_indices = jnp.arange(5)
+        score_raster = jnp.sum(jax.vmap(lambda i: score_loop_body(i, jnp.zeros_like(raster)))(score_indices), axis=0)
+        raster = jnp.where(score_raster.sum(axis=-1, keepdims=True) > 0, score_raster, raster)
 
         return raster
 
