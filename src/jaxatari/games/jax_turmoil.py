@@ -102,6 +102,8 @@ class TurmoilState(NamedTuple):
     player_y: chex.Array
     player_direction: chex.Array
     player_step_cooldown: chex.Array # (2,) x_cooldown, y_cooldown
+    player_move_unlock: chex.Array # (2,) player to move when off center, cuase of prize
+                                   # can_move, position (1 -> right, -1 -> left)
     ships: chex.Array
     score: chex.Array
 
@@ -413,6 +415,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             player_y=jnp.array(self.consts.PLAYER_START_POS[1]),
             player_direction=jnp.array(0),
             player_step_cooldown=jnp.zeros(2),
+            player_move_unlock=jnp.zeros(2),
             ships=jnp.array(5),
             score=jnp.array(0),
 
@@ -491,9 +494,12 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         def can_move_horizontal(state: TurmoilState) :
-            return jnp.logical_and(
-                state.prize[3] == 1, # prize active and player on same lane
-                state.player_y - self.consts.Y_OFFSET_PLAYER == state.prize[2] - self.consts.Y_OFFSET_PRIZE
+            return jnp.logical_or(
+                jnp.logical_and(
+                    state.prize[3] == 1, # prize active and player on same lane
+                    state.player_y - self.consts.Y_OFFSET_PLAYER == state.prize[2] - self.consts.Y_OFFSET_PRIZE
+                ),
+                state.player_move_unlock[0] == 1
             )
         
         # cooldown so player does not go too fast
@@ -587,7 +593,41 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             ),
         )
 
-        return player_x, player_y, player_direction, player_step_cooldown
+        # player can move horizontal, if off center
+        new_player_move_unlock = jnp.where(
+            jnp.logical_and(player_x != self.consts.VERTICAL_LANE, state.player_move_unlock[0] == 0),
+            jnp.array([
+                1,
+                jnp.where(
+                    player_x - self.consts.VERTICAL_LANE > 0,
+                    1,
+                    -1
+                )
+                
+            ]),
+            state.player_move_unlock
+        )
+    
+        passed_vertical_lane = jnp.logical_or(
+            jnp.logical_and(new_player_move_unlock[1] == 1, player_x <= self.consts.VERTICAL_LANE),
+            jnp.logical_and(new_player_move_unlock[1] == -1, player_x >= self.consts.VERTICAL_LANE)
+        )
+
+        # player snaps to vertical lane 
+        player_x = jnp.where(
+            jnp.logical_and(passed_vertical_lane, new_player_move_unlock[0] == 1),
+            self.consts.VERTICAL_LANE,
+            player_x
+        )
+
+        # reset the lock
+        new_player_move_unlock = jnp.where(
+            jnp.logical_or(new_player_move_unlock[0] == 0, passed_vertical_lane),
+            jnp.array([0, 0]),
+            new_player_move_unlock
+        )
+
+        return player_x, player_y, player_direction, player_step_cooldown, new_player_move_unlock
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -987,7 +1027,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         def normal_game_step() :
             # player movement
-            new_player_x, new_player_y, new_player_direction, new_player_step_cooldown = self.player_step(
+            new_player_x, new_player_y, new_player_direction, new_player_step_cooldown, new_player_move_unlock= self.player_step(
                 state,
                 action
             )
@@ -996,7 +1036,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 player_x=new_player_x,
                 player_y=new_player_y,
                 player_direction=new_player_direction,
-                player_step_cooldown=new_player_step_cooldown
+                player_step_cooldown=new_player_step_cooldown,
+                player_move_unlock=new_player_move_unlock,
             )
 
             # bullet
