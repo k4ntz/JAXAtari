@@ -24,6 +24,7 @@ This module defines a JAX-accelerated backgammon environment for reinforcement l
 It includes the environment class, state structures, move validation and execution logic, rendering, and user interaction.
 """
 
+
 class BackgammonConstants(NamedTuple):
     """Constants for game Environment"""
     NUM_POINTS = 24
@@ -49,6 +50,11 @@ class BackgammonState(NamedTuple):
     cursor_position: int = 0
     picked_checker_from: int = -1
     game_phase: int = 0  # 0=WAITING_FOR_ROLL, 1=SELECTING_CHECKER, 2=MOVING_CHECKER
+    last_action: int = JAXAtariAction.NOOP  # Store last action for keyup handling
+    await_keyup: bool = False  # new: blocks repeats until NOOP arrives
+    await_keyup: bool = False
+
+
 
 class BackgammonInfo(NamedTuple):
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
@@ -56,21 +62,24 @@ class BackgammonInfo(NamedTuple):
     dice: jnp.ndarray
     all_rewards: chex.Array
 
+
 class BackgammonObservation(NamedTuple):
     """Complete backgammon observation structure for object-centric observations."""
     board: jnp.ndarray  # (2, 26) - full board state [white_checkers, black_checkers]
-    dice: jnp.ndarray   # (4,) - available dice values
+    dice: jnp.ndarray  # (4,) - available dice values
     current_player: jnp.ndarray  # (1,) - current player (-1 for black, 1 for white)
-    is_game_over: jnp.ndarray    # (1,) - game over flag
-    bar_counts: jnp.ndarray      # (2,) - checkers on bar [white, black]
-    home_counts: jnp.ndarray     # (2,) - checkers borne off [white, black]
+    is_game_over: jnp.ndarray  # (1,) - game over flag
+    bar_counts: jnp.ndarray  # (2,) - checkers on bar [white, black]
+    home_counts: jnp.ndarray  # (2,) - checkers borne off [white, black]
+
 
 class GamePhase(IntEnum):
     """Phases of the interactive gameplay."""
     WAITING_FOR_ROLL = 0  # Waiting for space to roll dice
     SELECTING_CHECKER = 1  # Moving cursor to select a checker
-    MOVING_CHECKER = 2     # Checker picked up, moving to destination
-    TURN_COMPLETE = 3      # All moves done, waiting for space to end turn
+    MOVING_CHECKER = 2  # Checker picked up, moving to destination
+    TURN_COMPLETE = 3  # All moves done, waiting for space to end turn
+
 
 class InteractiveState(NamedTuple):
     """State for interactive gameplay."""
@@ -80,8 +89,10 @@ class InteractiveState(NamedTuple):
     current_die_index: int  # Which die we're using (0-3)
     moves_made: jnp.ndarray  # Track which dice have been used
 
-WHITE_PATH = [0,1,2,3,4,5, 6,7,8,9,10,11, 12,13,14,15,16,17, 18,19,20,21,22,23, 24, 25]
-BLACK_PATH = [23,22,21,20,19,18, 17,16,15,14,13,12, 11,10,9,8,7,6, 5,4,3,2,1,0, 24, 25]
+
+WHITE_PATH = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+BLACK_PATH = [23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 24, 25]
+
 
 class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, BackgammonConstants]):
     """
@@ -108,7 +119,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         self.action_set = [
             JAXAtariAction.LEFT,  # Move cursor left
             JAXAtariAction.RIGHT,  # Move cursor right
-            JAXAtariAction.FIRE  # Space (select/drop/roll)
+            JAXAtariAction.FIRE,  # Space (select/drop/roll)
+            JAXAtariAction.NOOP  # No-op (do nothing)
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -176,7 +188,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             key=key,
             cursor_position=initial_cursor,
             picked_checker_from=-1,
-            game_phase=0  # Start in WAITING_FOR_ROLL
+            game_phase=0,  # Start in WAITING_FOR_ROLL
+            last_action=JAXAtariAction.NOOP,
+            await_keyup=False,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -200,7 +214,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         def cond_fun(carry):
             white_roll, black_roll, key = carry
             return white_roll == black_roll
-        
+
         # The code to be run in the while loop
         def body_fun(carry):
             _, _, key = carry
@@ -226,8 +240,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
         # Prepare initial dice values for that player
-        first_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: white_roll, lambda _: black_roll, operand=None)
-        second_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: black_roll, lambda _: white_roll, operand=None)
+        first_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: white_roll, lambda _: black_roll,
+                                  operand=None)
+        second_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: black_roll, lambda _: white_roll,
+                                   operand=None)
 
         is_double = first_dice == second_dice
         dice = jax.lax.cond(
@@ -270,7 +286,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         expanded_dice = jax.lax.cond(
             is_double,
             lambda d: jnp.array([d[0], d[0], d[0], d[0]]),  # use all 4 moves
-            lambda d: jnp.array([d[0], d[1], 0, 0]),         # only 2 dice used
+            lambda d: jnp.array([d[0], d[1], 0, 0]),  # only 2 dice used
             operand=dice
         )
 
@@ -288,10 +304,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         player_idx = self.get_player_index(player)
         opponent_idx = 1 - player_idx
 
-        in_bounds = ((0 <= from_point) & (from_point <= 24) & 
-                    (0 <= to_point) & (to_point <= self.consts.HOME_INDEX) & 
-                    (to_point != self.consts.BAR_INDEX))
-        
+        in_bounds = ((0 <= from_point) & (from_point <= 24) &
+                     (0 <= to_point) & (to_point <= self.consts.HOME_INDEX) &
+                     (to_point != self.consts.BAR_INDEX))
+
         # Convert from_point and to_point to JAX arrays to support JIT
         from_point = jnp.asarray(from_point)
         to_point = jnp.asarray(to_point)
@@ -376,7 +392,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             def normal_case(_):
                 has_piece = board[player_idx, from_point] > 0
                 not_blocked = board[opponent_idx, to_point] <= 1
-                base_distance = jax.lax.select(player == self.consts.WHITE, to_point - from_point, from_point - to_point)
+                base_distance = jax.lax.select(player == self.consts.WHITE, to_point - from_point,
+                                               from_point - to_point)
                 correct_direction = base_distance > 0
                 dice_match = jnp.any(state.dice == base_distance)
                 not_moving_to_bar = to_point != self.consts.BAR_INDEX
@@ -407,7 +424,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # Mask for non-home points
         non_home_mask = jnp.where(player == self.consts.WHITE,
-                                  point_indices < 18,   # Points 0–17 (before 19)
+                                  point_indices < 18,  # Points 0–17 (before 19)
                                   point_indices > 5)
 
         in_play = board[player_idx, :24]
@@ -590,146 +607,110 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return obs, new_state, reward, done, info, new_key
 
     def step(self, state: BackgammonState, action: jnp.ndarray):
-        """Handle interactive actions from play.py script."""
+        """Interactive step with JAX-safe debounce: each press triggers once; holding does nothing until NOOP arrives."""
 
-        # Map jaxatari actions to our internal actions
-        # Action.UP (2) = cursor left
-        # Action.DOWN (3) = cursor right
-        # Action.FIRE (1) = space (select/drop/roll)
+        # Action flags (JAX bool scalars)
+        is_left  = action == JAXAtariAction.LEFT
+        is_right = action == JAXAtariAction.RIGHT
+        is_fire  = action == JAXAtariAction.FIRE
+        is_noop  = action == JAXAtariAction.NOOP
 
-        def handle_cursor_move(state, direction):
-            """Move cursor left or right."""
-            # Only allow cursor movement in selecting/moving phases
-            can_move = (state.game_phase == 1) | (state.game_phase == 2)
+        # ---------- helpers (JAX-safe) ----------
+        def handle_cursor_move(s, direction):
+            can_move   = (s.game_phase == 1) | (s.game_phase == 2)
+            new_pos    = jnp.clip(s.cursor_position + direction, 0, 25)
+            new_cursor = jax.lax.cond(can_move, lambda _: new_pos, lambda _: s.cursor_position, operand=None)
+            ns = s._replace(cursor_position=new_cursor)
+            return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-            # Calculate new cursor position
-            new_pos = state.cursor_position + direction
-            # Clamp to valid range (0-25 for points + bar + home)
-            new_pos = jnp.clip(new_pos, 0, 25)
+        def handle_space(s):
+            def do_roll(ss):
+                dice, key = self.roll_dice(ss.key)
+                ns = ss._replace(dice=dice, key=key, game_phase=1)  # SELECTING_CHECKER
+                return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-            new_cursor = jax.lax.cond(
-                can_move,
-                lambda _: new_pos,
-                lambda _: state.cursor_position,
-                operand=None
-            )
-
-            new_state = state._replace(cursor_position=new_cursor)
-            return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
-
-        def handle_space(state):
-            """Handle space key based on game phase."""
-
-            def do_roll(state):
-                """Roll dice and move to selecting phase."""
-                dice, key = self.roll_dice(state.key)
-                new_state = state._replace(
-                    dice=dice,
-                    key=key,
-                    game_phase=1  # Move to SELECTING_CHECKER
-                )
-                return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
-
-            def do_select(state):
-                """Try to pick up a checker."""
-                player_idx = self.get_player_index(state.current_player)
-                pos = state.cursor_position
-
-                # Check if there's a checker at cursor position
-                has_checker = state.board[player_idx, pos] > 0
-
-                new_state = jax.lax.cond(
+            def do_select(ss):
+                player_idx = self.get_player_index(ss.current_player)
+                pos = ss.cursor_position
+                has_checker = ss.board[player_idx, pos] > 0
+                ns = jax.lax.cond(
                     has_checker,
-                    lambda s: s._replace(
-                        picked_checker_from=pos,
-                        game_phase=2  # Move to MOVING_CHECKER
-                    ),
-                    lambda s: s,  # Stay in selecting
-                    operand=state
+                    lambda s2: s2._replace(picked_checker_from=pos, game_phase=2),  # MOVING_CHECKER
+                    lambda s2: s2,
+                    operand=ss
                 )
+                return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-                return self._get_observation(new_state), new_state, 0.0, False, self._get_info(new_state)
+            def do_drop(ss):
+                move = (ss.picked_checker_from, ss.cursor_position)
+                is_valid = self.is_valid_move(ss, move)
 
-            def do_drop(state):
-                """Try to drop the checker."""
-                move = (state.picked_checker_from, state.cursor_position)
-                is_valid = self.is_valid_move(state, move)
-
-                def execute_valid_move(s):
-                    # Execute the move
-                    obs, new_s, reward, done, info, key = self.step_impl(s, move, s.key)
-
-                    # Check if turn ended (all dice used)
-                    all_dice_used = jnp.all(new_s.dice == 0)
-
-                    # Update phase and cursor
-                    next_phase = jax.lax.cond(
-                        all_dice_used,
-                        lambda _: 0,  # Back to WAITING_FOR_ROLL
-                        lambda _: 1,  # Back to SELECTING_CHECKER
-                        operand=None
-                    )
-
-                    # Reset cursor position for new player if turn changed
+                def execute_valid_move(s2):
+                    obs, ns, reward, done, info, key = self.step_impl(s2, move, s2.key)
+                    all_dice_used = jnp.all(ns.dice == 0)
+                    next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)  # WAIT or SELECT
                     next_cursor = jax.lax.cond(
-                        new_s.current_player != s.current_player,
-                        lambda _: jax.lax.cond(
-                            new_s.current_player == self.consts.WHITE,
-                            lambda _: 0,
-                            lambda _: 23,
-                            operand=None
-                        ),
-                        lambda _: s.cursor_position,
+                        ns.current_player != s2.current_player,
+                        lambda _: jax.lax.cond(ns.current_player == self.consts.WHITE, lambda _: 0,  lambda _: 23, operand=None),
+                        lambda _: s2.cursor_position,
                         operand=None
                     )
+                    fs = ns._replace(picked_checker_from=-1, game_phase=next_phase, cursor_position=next_cursor, key=key)
+                    return obs, fs, reward, done, info
 
-                    final_state = new_s._replace(
-                        picked_checker_from=-1,
-                        game_phase=next_phase,
-                        cursor_position=next_cursor,
-                        key=key
-                    )
+                def cancel_move(s2):
+                    ns = s2._replace(picked_checker_from=-1, game_phase=1)
+                    return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-                    return self._get_observation(final_state), final_state, reward, done, info
+                return jax.lax.cond(is_valid, execute_valid_move, cancel_move, operand=ss)
 
-                def cancel_move(s):
-                    # Invalid move - go back to selecting
-                    new_s = s._replace(
-                        picked_checker_from=-1,
-                        game_phase=1
-                    )
-                    return self._get_observation(new_s), new_s, 0.0, False, self._get_info(new_s)
+            return jax.lax.switch(state.game_phase, [do_roll, do_select, do_drop], operand=state)
 
-                return jax.lax.cond(is_valid, execute_valid_move, cancel_move, operand=state)
-
-            # Route to appropriate handler based on game phase
-            return jax.lax.switch(
-                state.game_phase,
-                [do_roll, do_select, do_drop],
-                operand=state
-            )
-
-        # Main action routing
-        is_cursor_left = action == JAXAtariAction.LEFT
-        is_cursor_right = action == JAXAtariAction.RIGHT
-        is_space = action == JAXAtariAction.FIRE
-
-        return jax.lax.cond(
-            is_cursor_left,
-            lambda s: handle_cursor_move(s, -1),
-            lambda s: jax.lax.cond(
-                is_cursor_right,
-                lambda s2: handle_cursor_move(s2, 1),
-                lambda s2: jax.lax.cond(
-                    is_space,
-                    handle_space,
-                    lambda s3: (self._get_observation(s3), s3, 0.0, False, self._get_info(s3)),  # No-op
-                    operand=s2
+        def process_action_once(s):
+            """Select exactly one action branch using nested lax.cond (priority: LEFT, RIGHT, FIRE, else NOOP/idle)."""
+            # LEFT
+            return jax.lax.cond(
+                is_left,
+                lambda ss: handle_cursor_move(ss, -1),
+                lambda ss: jax.lax.cond(
+                    is_right,
+                    lambda ss2: handle_cursor_move(ss2, 1),
+                    lambda ss2: jax.lax.cond(
+                        is_fire,
+                        handle_space,
+                        # default/NOOP: no state change
+                        lambda ss3: (self._get_observation(ss3), ss3, 0.0, False, self._get_info(ss3)),
+                        operand=ss2
+                    ),
+                    operand=ss
                 ),
                 operand=s
-            ),
-            operand=state
-        )
+            )
+
+        # When awaiting key-up: only NOOP clears; everything else is ignored.
+        def handle_when_blocked(s):
+            ns = jax.lax.cond(
+                is_noop,
+                lambda _: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP),
+                lambda _: s,
+                operand=None
+            )
+            return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
+
+        # When free: process one action and then arm debounce for LEFT/RIGHT/FIRE.
+        def handle_when_free(s):
+            obs, ns, reward, done, info = process_action_once(s)
+            should_arm = jnp.logical_or(jnp.logical_or(is_left, is_right), is_fire)  # arm for left/right/space
+            ns2 = jax.lax.cond(
+                should_arm,
+                lambda _: ns._replace(await_keyup=True, last_action=action),
+                lambda _: ns,
+                operand=None
+            )
+            return obs, ns2, reward, done, info
+
+        return jax.lax.cond(state.await_keyup, handle_when_blocked, handle_when_free, operand=state)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BackgammonObservation) -> jnp.ndarray:
@@ -869,14 +850,14 @@ class BackgammonRenderer(JAXGameRenderer):
         # Initialize all rendering parameters
         self.frame_height = 210
         self.frame_width = 160
-        self.color_background      = jnp.array([0, 0, 0], dtype=jnp.uint8)      # black background
-        self.color_board           = jnp.array([0, 0, 0], dtype=jnp.uint8)      # black board
-        self.color_triangle_light  = jnp.array([0, 0, 255], dtype=jnp.uint8)    # blue points
-        self.color_triangle_dark   = jnp.array([0, 200, 0], dtype=jnp.uint8)    # green points
-        self.color_white_checker   = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white checkers
-        self.color_black_checker   = jnp.array([255, 0, 0], dtype=jnp.uint8)     # red checkers
-        self.color_border          = jnp.array([0, 200, 0], dtype=jnp.uint8)     # green bar
-        
+        self.color_background = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black background
+        self.color_board = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black board
+        self.color_triangle_light = jnp.array([0, 0, 255], dtype=jnp.uint8)  # blue points
+        self.color_triangle_dark = jnp.array([0, 200, 0], dtype=jnp.uint8)  # green points
+        self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white checkers
+        self.color_black_checker = jnp.array([255, 0, 0], dtype=jnp.uint8)  # red checkers
+        self.color_border = jnp.array([0, 200, 0], dtype=jnp.uint8)  # green bar
+
         self.top_margin_for_dice = 25  # pixels reserved for dice row
 
         # Geometry
@@ -884,10 +865,10 @@ class BackgammonRenderer(JAXGameRenderer):
         self.triangle_length = 60
         self.triangle_thickness = 12
         self.bar_thickness = 14
-        self.checker_width = 8       # rectangular checkers
-        self.checker_height = 4      # smaller height
+        self.checker_width = 8  # rectangular checkers
+        self.checker_height = 4  # smaller height
         self.checker_stack_offset = 5  # vertical stacking distance
-        
+
         self.bar_y = self.top_margin_for_dice + self.frame_height // 2 - self.bar_thickness // 2 - 10
         self.bar_x = self.board_margin
         self.bar_width = self.frame_width - 2 * self.board_margin
@@ -950,7 +931,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
         center_y = y_f + thickness_f / 2.0
 
-        t = jax.lax.select(point_right,(xx_f - x_f) / length_f,(x_f + length_f - xx_f) / length_f)
+        t = jax.lax.select(point_right, (xx_f - x_f) / length_f, (x_f + length_f - xx_f) / length_f)
         half_width = (1.0 - t) * (thickness_f / 2.0)
         in_bbox = (xx >= x) & (xx < (x + length)) & (yy >= y) & (yy < (y + thickness))
         valid_t = (t >= 0.0) & (t <= 1.0)
@@ -980,7 +961,8 @@ class BackgammonRenderer(JAXGameRenderer):
         board_h = self.frame_height - self.top_margin_for_dice - 2 * (self.board_margin - 6)
 
         frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h, self.color_board)
-        frame = self._draw_rectangle(frame, self.bar_x, self.bar_y, self.bar_width, self.bar_thickness, self.color_border)
+        frame = self._draw_rectangle(frame, self.bar_x, self.bar_y, self.bar_width, self.bar_thickness,
+                                     self.color_border)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
@@ -989,14 +971,15 @@ class BackgammonRenderer(JAXGameRenderer):
 
         def draw_triangle_at_index(i, fr):
             pos = self.triangle_positions[i]
-            x = pos[0]; y = pos[1]
+            x = pos[0];
+            y = pos[1]
 
-            group  = i // 6        # 0: TL, 1: TR, 2: BR, 3: BL
-            within = i % 6         # 0..5 inside each group
+            group = i // 6  # 0: TL, 1: TR, 2: BR, 3: BL
+            within = i % 6  # 0..5 inside each group
 
             # Left groups (0,3) start with light; right groups (1,2) start with dark
             start_light = jnp.logical_or(group == 0, group == 3)
-            use_light   = jnp.where(start_light, (within % 2 == 0), (within % 2 == 1))
+            use_light = jnp.where(start_light, (within % 2 == 0), (within % 2 == 1))
 
             color = jax.lax.select(use_light, self.color_triangle_light, self.color_triangle_dark)
             point_right = (x == left_x)  # left columns point right, right columns point left
@@ -1012,12 +995,13 @@ class BackgammonRenderer(JAXGameRenderer):
         halves attach to the bottom edge.
         """
         pos = self.triangle_positions[point_idx]
-        x = pos[0]; y = pos[1]
+        x = pos[0];
+        y = pos[1]
 
         # left columns have x == board_margin → stacks go left→right
         left_x = self.board_margin
         is_left_column = (x == left_x)
-        is_top_half    = (point_idx < 12)
+        is_top_half = (point_idx < 12)
 
         # horizontal direction (+1 for left columns, -1 for right columns)
         dir_sign = jnp.where(is_left_column, 1, -1)
@@ -1025,7 +1009,7 @@ class BackgammonRenderer(JAXGameRenderer):
         # starting x near the base of the triangle (not the tip)
         base_x = jnp.where(
             is_left_column,
-            x + 2,                                    # left columns start near left edge
+            x + 2,  # left columns start near left edge
             x + self.triangle_length - self.checker_width - 2  # right columns start near right edge
         )
 
@@ -1033,22 +1017,23 @@ class BackgammonRenderer(JAXGameRenderer):
         # vertical origin for the two rows
         row0_y = jnp.where(
             is_top_half,
-            y + 1,                                    # top halves stick to top edge
-            y + self.triangle_thickness - 2*self.checker_height - 1  # bottom halves stick to bottom edge
+            y + 1,  # top halves stick to top edge
+            y + self.triangle_thickness - 2 * self.checker_height - 1  # bottom halves stick to bottom edge
         )
         row1_y = row0_y + (self.checker_height + 1)
 
         # helper to draw 'count' rectangles in 2-high columns, marching HORIZONTALLY
         def draw_stack(fr, count, color):
             def draw_single(i, f):
-                col = i // 2               # column index (0,1,2,...) along the triangle
-                row = i & 1                # 0 or 1 (which row of the 2-high stack)
+                col = i // 2  # column index (0,1,2,...) along the triangle
+                row = i & 1  # 0 or 1 (which row of the 2-high stack)
 
                 # x marches toward the triangle tip
                 cx = base_x + dir_sign * (col * (self.checker_width + 1))
                 cy = jnp.where(row == 0, row0_y, row1_y)
 
                 return self._draw_rectangle(f, cx, cy, self.checker_width, self.checker_height, color)
+
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
         # draw white then black on top (matches your layering approach)
@@ -1071,13 +1056,13 @@ class BackgammonRenderer(JAXGameRenderer):
                 checker_y = cy - self.checker_height // 2 + row * self.checker_stack_offset
                 return self._draw_rectangle(f, checker_x, checker_y,
                                             self.checker_width, self.checker_height, color)
+
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
         # White to the left, Black to the right (you can tweak offsets to taste)
         frame = draw_stack(frame, white_count, self.color_white_checker, -25)
         frame = draw_stack(frame, black_count, self.color_black_checker, +10)
         return frame
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_home_checkers(self, frame, white_count, black_count):
@@ -1089,12 +1074,13 @@ class BackgammonRenderer(JAXGameRenderer):
             def draw_single(i, f):
                 row = i // 2
                 col = i % 2
-                
+
                 checker_x = cx_center + x_offset + col * (self.checker_width + 1)
-                checker_y = cy - self.checker_height//2 + row * self.checker_stack_offset
-                
+                checker_y = cy - self.checker_height // 2 + row * self.checker_stack_offset
+
                 return self._draw_rectangle(f, checker_x, checker_y,
-                                          self.checker_width, self.checker_height, color)
+                                            self.checker_width, self.checker_height, color)
+
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
         frame = draw_stack(frame, white_count, self.color_white_checker, -30)
@@ -1112,10 +1098,10 @@ class BackgammonRenderer(JAXGameRenderer):
         def draw_single(i, fr):
             val = dice[i]
             dx = start_x + i * (dice_size + 3)
-            
+
             def draw_val(_):
                 fr2 = self._draw_rectangle(fr, dx, dice_y, dice_size, dice_size,
-                                        jnp.array([240, 240, 240], dtype=jnp.uint8))
+                                           jnp.array([240, 240, 240], dtype=jnp.uint8))
                 center_x = dx + dice_size // 2
                 center_y = dice_y + dice_size // 2
                 pip = jnp.array([0, 0, 0], dtype=jnp.uint8)
@@ -1135,7 +1121,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
                 def p3(_):
                     fr3 = dot(fr2, center_x - 3, center_y - 3)
-                    fr3 = dot(fr3, center_x,     center_y)
+                    fr3 = dot(fr3, center_x, center_y)
                     return dot(fr3, center_x + 3, center_y + 3)
 
                 def p4(_):
@@ -1150,18 +1136,17 @@ class BackgammonRenderer(JAXGameRenderer):
 
                 def p6(_):
                     fr6 = dot(fr2, center_x - 3, center_y - 3)
-                    fr6 = dot(fr6, center_x - 3, center_y    )
+                    fr6 = dot(fr6, center_x - 3, center_y)
                     fr6 = dot(fr6, center_x - 3, center_y + 3)
                     fr6 = dot(fr6, center_x + 3, center_y - 3)
-                    fr6 = dot(fr6, center_x + 3, center_y    )
+                    fr6 = dot(fr6, center_x + 3, center_y)
                     return dot(fr6, center_x + 3, center_y + 3)
 
                 funcs = [p1, p2, p3, p4, p5, p6]
                 return jax.lax.switch(jnp.clip(val - 1, 0, 5), funcs, operand=None)
 
-            
             return jax.lax.cond(val > 0, draw_val, lambda _: fr, operand=None)
-        
+
         return jax.lax.fori_loop(0, 4, draw_single, frame)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1286,547 +1271,3 @@ class BackgammonRenderer(JAXGameRenderer):
         )
 
         return frame
-
-class BackgammonInteractiveWrapper:
-    """
-    Wrapper around JaxBackgammonEnv to handle interactive gameplay with cursor.
-    This handles the state machine for picking up and dropping checkers.
-    """
-    
-    def __init__(self, env: JaxBackgammonEnv):
-        self.env = env
-        self.reset_interactive_state()
-        
-    def reset_interactive_state(self, state: BackgammonState = None):
-        """Reset the interactive state machine and initialize cursor index/position."""
-        self.game_phase = GamePhase.WAITING_FOR_ROLL
-        self.picked_checker_from = -1
-        self.cursor_index = 0
-        self.cursor_position = 0
-
-        if state is not None:
-            # CHANGED: use snap helper so start is 0 (White) / 23 (Black) or 24 if on bar
-            self._snap_cursor_start(state)
-
-    def reset(self, key=None):
-        obs, state = self.env.reset(key)
-        state = state._replace(dice=jnp.array([0, 0, 0, 0], dtype=jnp.int32))
-        self.reset_interactive_state(state)
-        return obs, state
-
-    # NEW: Opening roll (done in wrapper; no env change needed)
-    def _opening_roll(self, key):
-        # keep rolling until unequal
-        w = b = None
-        while True:
-            key, k1, k2 = jax.random.split(key, 3)
-            w = jax.random.randint(k1, (), 1, 7)
-            b = jax.random.randint(k2, (), 1, 7)
-            if int(w) != int(b):
-                break
-
-        # decide who starts
-        WHITE = self.env.consts.WHITE   # usually +1
-        BLACK = self.env.consts.BLACK   # usually -1
-        starter = jax.lax.cond(w > b, lambda _: WHITE, lambda _: BLACK, operand=None)
-
-        # dice for the starter: [bigger, smaller, 0, 0]
-        first  = jax.lax.cond(starter == WHITE, lambda _: w, lambda _: b, operand=None)
-        second = jax.lax.cond(starter == WHITE, lambda _: b, lambda _: w, operand=None)
-        dice = jnp.array([first, second, 0, 0], dtype=jnp.int32)
-        return dice, int(starter), key
-
-    # NEW: snap helper
-    def _snap_cursor_start(self, state: BackgammonState):
-        """Place cursor at a natural start each turn:
-           - If player has checkers on BAR (24): snap to BAR.
-           - Else: White -> 0, Black -> 23 (ignore 25 even if present in path).
-        """
-        path = self._movement_path_for(state)
-        player_idx = self.env.get_player_index(state.current_player)
-        has_bar = int(state.board[player_idx, 24]) > 0
-
-        if has_bar:
-            # If BAR appears twice, pick the one closer to player's side
-            idxs = [i for i, v in enumerate(path) if v == 24]
-            if idxs:
-                self.cursor_index = idxs[0] if state.current_player == self.env.consts.WHITE else idxs[-1]
-                self.cursor_position = 24
-                return
-
-        target_point = 0 if state.current_player == self.env.consts.WHITE else 23
-        candidates = [i for i, v in enumerate(path) if v == target_point]
-        if candidates:
-            self.cursor_index = candidates[0]
-            self.cursor_position = target_point
-            return
-
-        # Fallback: nearest real board cell (ignore 25)
-        board_idxs = [i for i, v in enumerate(path) if 0 <= v <= 23]
-        if board_idxs:
-            idx = board_idxs[0] if state.current_player == self.env.consts.WHITE else board_idxs[-1]
-            self.cursor_index = idx
-            self.cursor_position = path[idx]
-        else:
-            self.cursor_index = 0
-            self.cursor_position = path[0]
-        
-    def _movement_path_for(self, state: BackgammonState) -> list[int]:
-        """Clockwise path with conditional BAR and HOME:
-        - Insert BAR (24) between 5–6 and 17–18 only if player has checkers on bar.
-        - When bearing-off is legal, insert HOME (25) at BOTH ends:
-            White: 23 -> 25 (Right), Black: 0 -> 25 (Left).
-        """
-        player_idx = self.env.get_player_index(state.current_player)
-        has_bar = int(state.board[player_idx, 24]) > 0
-        can_bear = bool(self.env.check_bearing_off(state, state.current_player))
-
-        # Base clockwise path: 0..5, 6..17, 18..23
-        path = list(range(0, 6))
-        if has_bar:
-            path += [24]              # between 5 and 6
-        path += list(range(6, 18))
-        if has_bar:
-            path += [24]              # between 17 and 18
-        path += list(range(18, 24))
-
-        if can_bear:
-            path = [25] + path + [25]
-
-        return path
-
-    def handle_input(self, state: BackgammonState, action: str) -> Tuple[BackgammonState, bool]:
-        """
-        Handle keyboard input and update state accordingly.
-        
-        Args:
-            state: Current game state
-            action: One of 'left', 'right', 'space'
-            
-        Returns:
-            Updated state and whether the action was valid
-        """
-        if action == 'left':
-            return self._handle_cursor_left(state)
-        elif action == 'right':
-            return self._handle_cursor_right(state)
-        elif action == 'space':
-            return self._handle_space(state)
-        else:
-            return state, False
-            
-    def _move_cursor(self, state: BackgammonState, step: int):
-        """
-        Move cursor along a single clockwise path that may include BAR (24) twice.
-        No wrap-around. Uses cursor_index to disambiguate the two 24s.
-        """
-        path = self._movement_path_for(state)
-
-        # Resync cursor_index if path changed or position desynced
-        if not hasattr(self, "cursor_index"):
-            self.cursor_index = 0
-
-        if not (0 <= self.cursor_index < len(path)) or self.cursor_position != path[self.cursor_index]:
-            indices = [i for i, v in enumerate(path) if v == self.cursor_position]
-            if indices:
-                prev = getattr(self, "cursor_index", 0)
-                closest = min(indices, key=lambda i: abs(i - prev))
-                self.cursor_index = closest
-            else:
-                self.cursor_index = 0 if state.current_player == self.env.consts.WHITE else len(path) - 1
-                self.cursor_position = path[self.cursor_index]
-
-        # Apply movement and clamp (no wrap)
-        new_index = self.cursor_index + step
-        if new_index < 0:
-            new_index = 0
-        elif new_index >= len(path):
-            new_index = len(path) - 1
-
-        self.cursor_index = new_index
-        self.cursor_position = path[self.cursor_index]
-        return state, True
-
-    def _handle_cursor_left(self, state: BackgammonState):
-        if self.game_phase in [GamePhase.SELECTING_CHECKER, GamePhase.MOVING_CHECKER]:
-            return self._move_cursor(state, -1)
-        return state, False
-
-    def _handle_cursor_right(self, state: BackgammonState):
-        if self.game_phase in [GamePhase.SELECTING_CHECKER, GamePhase.MOVING_CHECKER]:
-            return self._move_cursor(state, +1)
-        return state, False
-
-    def _handle_space(self, state: BackgammonState) -> Tuple[BackgammonState, bool]:
-        """Space = context-sensitive: pick, drop, or pass/roll."""
-
-        # 1) Waiting for the player to roll at start of turn
-        if self.game_phase == GamePhase.WAITING_FOR_ROLL:
-            dice, starter, key = self._opening_roll(state.key)  
-            new_state = state._replace(dice=dice, current_player=starter, key=key)
-            self.game_phase = GamePhase.SELECTING_CHECKER
-            # snap cursor to 0 (White) / 23 (Black) or bar if needed
-            self._snap_cursor_start(new_state)                  
-            return new_state, True
-
-        # 2) Selecting a checker
-        elif self.game_phase == GamePhase.SELECTING_CHECKER:
-            # If there is no legal move with current dice → pass the turn (roll & switch)
-            if not self._has_valid_moves(state):
-                dice, key = self.env.roll_dice(state.key)
-                new_state = state._replace(
-                    dice=dice,
-                    current_player=-state.current_player,
-                    key=key
-                )
-                # CHANGED: snap cursor for the new player
-                self._snap_cursor_start(new_state)
-                return new_state, True
-
-            # Try to pick up a checker at the cursor position (point or bar)
-            player_idx = self.env.get_player_index(state.current_player)
-            pos = int(self.cursor_position)
-            has_bar = int(state.board[player_idx, 24]) > 0
-
-            # Enforce "bar first": if you have checkers on bar, you can only pick from 24
-            if has_bar and pos != 24:
-                try:
-                    path = self._movement_path_for(state)
-                    indices_24 = [i for i, v in enumerate(path) if v == 24]
-                    if indices_24:
-                        prev = getattr(self, "cursor_index", 0)
-                        target = min(indices_24, key=lambda i: abs(i - prev))
-                        self.cursor_index = target
-                        self.cursor_position = 24
-                except Exception:
-                    self.cursor_position = 24
-                return state, False
-
-            # do NOT allow picking from HOME (25); picking is allowed only from 0..24
-            if 0 <= pos <= 24 and int(state.board[player_idx, pos]) > 0:
-                self.picked_checker_from = pos
-                self.game_phase = GamePhase.MOVING_CHECKER
-                return state, True
-
-            return state, False
-
-        # 3) Moving a picked checker
-        elif self.game_phase == GamePhase.MOVING_CHECKER:
-            move = (int(self.picked_checker_from), int(self.cursor_position))
-
-            if self.env.is_valid_move(state, move):
-                # Apply move; env will consume dice and may flip the turn
-                _, new_state, _, _, _, key = self.env.step_impl(state, move, state.key)
-                new_state = new_state._replace(key=key)
-
-                # Back to selecting after a drop
-                self.game_phase = GamePhase.SELECTING_CHECKER
-                self.picked_checker_from = -1
-
-                # CHANGED: if player flipped, snap cursor for the new player
-                if new_state.current_player != state.current_player:
-                    self._snap_cursor_start(new_state)
-
-                return new_state, True
-
-            else:
-                # Invalid drop → cancel the selection
-                self.game_phase = GamePhase.SELECTING_CHECKER
-                self.picked_checker_from = -1
-                return state, False
-
-        # Default: nothing happened
-        return state, False
-
-    def _get_valid_moves_from_position(self, state: BackgammonState, from_pos: int) -> list:
-        """Get all valid moves from a given position."""
-        valid_moves = []
-        for to_pos in range(26):
-            if self.env.is_valid_move(state, (from_pos, to_pos)):
-                valid_moves.append(to_pos)
-        return valid_moves
-        
-    def _calculate_move_distance(self, state: BackgammonState, move: Tuple[int, int]) -> int:
-        """Calculate the distance of a move."""
-        return self.env.compute_distance(state.current_player, move[0], move[1])
-        
-    def _has_valid_moves(self, state: BackgammonState) -> bool:
-        """Check if the current player has any valid moves."""
-        return len(self.env.get_valid_moves(state)) > 0
-        
-    def _triangle_tip_xy(self, point_idx: int) -> Tuple[int, int]:
-        """Return pixel coords of the triangle tip center for a board point (0..23)."""
-        r = self.env.renderer
-        x, y = map(int, r.triangle_positions[point_idx])
-        tip_y = y + r.triangle_thickness // 2
-        # left column triangles point right; right column triangles point left
-        tip_x = x + r.triangle_length if x == r.board_margin else x
-        return tip_x, tip_y
-    
-    def render(self, state: BackgammonState) -> jnp.ndarray:
-        """Render with highlight under checkers and a single lifted checker when moving."""
-        r = self.env.renderer
-
-        # 1) Blank frame + board + triangles (no checkers yet)
-        frame = jnp.zeros((r.frame_height, r.frame_width, 3), dtype=jnp.uint8)
-        frame = r._draw_board_outline(frame)
-        frame = r._draw_triangles(frame)
-
-        # 2) Draw yellow highlight NOW so it stays under checkers
-        highlight = jnp.array([255, 255, 0], dtype=jnp.uint8)
-        pos = int(self.cursor_position)
-        if pos < 24:
-            tx, ty = map(int, r.triangle_positions[pos])
-            frame = r._draw_triangle(frame, tx, ty, r.triangle_length, r.triangle_thickness,
-                                    highlight, point_right=(tx == r.board_margin))
-        elif pos == 24:
-            frame = r._draw_rectangle(frame, r.bar_x, r.bar_y, r.bar_width, r.bar_thickness, highlight)
-        elif pos == 25:
-            cx = r.frame_width // 2 - 20
-            cy = r.frame_height - 30
-            frame = r._draw_rectangle(frame, cx, cy, 40, 20, highlight)
-
-        # 3) Draw checkers (optionally subtract 1 from the picked-from cell)
-        moving = (self.game_phase == GamePhase.MOVING_CHECKER and self.picked_checker_from >= 0)
-        player_idx = int(self.env.get_player_index(state.current_player))
-
-        # Board points 0..23
-        for i in range(24):
-            w = int(state.board[0, i])
-            b = int(state.board[1, i])
-            if moving and self.picked_checker_from == i:
-                if player_idx == 0 and w > 0:  # white picked from here
-                    w -= 1
-                elif player_idx == 1 and b > 0:  # black picked from here
-                    b -= 1
-            frame = r._draw_checkers_on_point(frame, i, w, b)
-
-        # Bar (24)
-        w_bar = int(state.board[0, 24])
-        b_bar = int(state.board[1, 24])
-        if moving and self.picked_checker_from == 24:
-            if player_idx == 0 and w_bar > 0:
-                w_bar -= 1
-            elif player_idx == 1 and b_bar > 0:
-                b_bar -= 1
-        frame = r._draw_bar_checkers(frame, w_bar, b_bar)
-
-        # 4) Dice
-        frame = r._draw_dice(frame, state.dice)
-
-        # 5) Floating checker (only while moving)
-        if moving:
-            color = r.color_white_checker if player_idx == 0 else r.color_black_checker
-
-            if pos < 24:
-                tip_x, tip_y = self._triangle_tip_xy(pos)
-                rect_x = tip_x - r.checker_width // 2
-                rect_y = tip_y - r.checker_height // 2
-                frame = r._draw_rectangle(frame, rect_x, rect_y, r.checker_width, r.checker_height, color)
-
-            elif pos == 24:
-                cx = r.bar_x + r.bar_width // 2
-                cy = r.bar_y + r.bar_thickness // 2
-                rect_x = int(cx) - r.checker_width // 2
-                rect_y = int(cy) - r.checker_height // 2
-                frame = r._draw_rectangle(frame, rect_x, rect_y, r.checker_width, r.checker_height, color)
-
-            else:  # pos == 25 (home)
-                cx = r.frame_width // 2
-                cy = r.frame_height - 22
-                rect_x = cx - r.checker_width // 2
-                rect_y = cy - r.checker_height // 2
-                frame = r._draw_rectangle(frame, rect_x, rect_y, r.checker_width, r.checker_height, color)
-
-        # 6) Phase indicator
-        frame = self._draw_phase_indicator(frame)
-        return frame
-        
-    def _draw_phase_indicator(self, frame: jnp.ndarray) -> jnp.ndarray:
-        """Draw text indicating current game phase."""
-        indicator_x = 5
-        indicator_y = 5
-        
-        if self.game_phase == GamePhase.WAITING_FOR_ROLL:
-            color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red
-        elif self.game_phase == GamePhase.SELECTING_CHECKER:
-            color = jnp.array([0, 255, 0], dtype=jnp.uint8)  # Green
-        elif self.game_phase == GamePhase.MOVING_CHECKER:
-            color = jnp.array([255, 255, 0], dtype=jnp.uint8)  # Yellow
-        else:  # TURN_COMPLETE
-            color = jnp.array([0, 0, 255], dtype=jnp.uint8)  # Blue
-            
-        return self.env.renderer._draw_rectangle(frame, indicator_x, indicator_y, 5, 5, color)
-
-
-# Main game execution
-def play_interactive_game():
-    """Main function to run the interactive backgammon game."""
-    import pygame
-    import numpy as np
-    
-    # Initialize Pygame
-    pygame.init()
-    
-    # Set up display
-    SCALE = 4  # Scale factor for the display
-    env = JaxBackgammonEnv()
-    wrapper = BackgammonInteractiveWrapper(env)
-    
-    WINDOW_WIDTH = env.renderer.frame_width * SCALE
-    WINDOW_HEIGHT = env.renderer.frame_height * SCALE
-    
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("JAX Backgammon - Interactive")
-    
-    # Initialize game
-    key = jax.random.PRNGKey(42)
-    obs, state = wrapper.reset(key)
-    # start in "press SPACE to roll"
-    wrapper.game_phase = GamePhase.WAITING_FOR_ROLL
-    
-    # Game loop
-    running = True
-    clock = pygame.time.Clock()
-    
-    # Font for displaying text
-    font = pygame.font.Font(None, 24)
-    
-    while running:
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                valid_move = False
-                
-                if event.key == pygame.K_LEFT:
-                    state, valid_move = wrapper.handle_input(state, 'left')
-                elif event.key == pygame.K_RIGHT:
-                    state, valid_move = wrapper.handle_input(state, 'right')
-                elif event.key == pygame.K_SPACE:
-                    state, valid_move = wrapper.handle_input(state, 'space')
-                elif event.key == pygame.K_r:
-                    # Reset game with a fresh RNG key; return to waiting-for-roll
-                    _, new_key = jax.random.split(state.key)
-                    obs, state = wrapper.reset(new_key)
-                    wrapper.game_phase = GamePhase.WAITING_FOR_ROLL
-                    valid_move = True
-                elif event.key == pygame.K_ESCAPE:
-                    running = False
-                    
-                # Debug output
-                if valid_move:
-                    print(f"Phase: {wrapper.game_phase}, Cursor: {wrapper.cursor_position}, Player: {int(state.current_player)}")
-                    print(f"Dice: {list(map(int, state.dice))}")
-        
-        # Render the game
-        frame = wrapper.render(state)
-        
-        # Convert JAX array to numpy then to pygame surface
-        frame_np = np.array(frame)
-        frame_surface = pygame.surfarray.make_surface(frame_np.transpose((1, 0, 2)))
-        frame_scaled = pygame.transform.scale(frame_surface, (WINDOW_WIDTH, WINDOW_HEIGHT))
-        
-        # Draw to screen
-        screen.blit(frame_scaled, (0, 0))
-        
-        # --- Top-right text overlays (right-aligned) ---
-        current_player = "White" if int(state.current_player) == 1 else "Black"
-        phase_names = {
-            GamePhase.WAITING_FOR_ROLL: "Press SPACE to roll",
-            GamePhase.SELECTING_CHECKER: "Select a checker",
-            GamePhase.MOVING_CHECKER: "Move to destination",
-            GamePhase.TURN_COMPLETE: "Press SPACE to end turn"
-        }
-        dice_str = f"Dice: {' '.join(str(int(d)) for d in state.dice if int(d) > 0)}"
-        line_player = f"Current: {current_player}"
-        line_phase  = phase_names.get(wrapper.game_phase, "")
-        line_dice   = dice_str
-        line_hint   = "Press R to reset"
-
-        surf_player = font.render(line_player, True, (255, 255, 255))
-        surf_phase  = font.render(line_phase,  True, (255, 255, 255))
-        surf_dice   = font.render(line_dice,   True, (255, 255, 255))
-        surf_hint   = font.render(line_hint,   True, (180, 180, 180))
-
-        margin = 10
-        x_player = WINDOW_WIDTH - margin - surf_player.get_width()
-        x_phase  = WINDOW_WIDTH - margin - surf_phase.get_width()
-        x_dice   = WINDOW_WIDTH - margin - surf_dice.get_width()
-        x_hint   = WINDOW_WIDTH - margin - surf_hint.get_width()
-
-        top = margin
-        screen.blit(surf_player, (x_player, top))
-        screen.blit(surf_phase,  (x_phase,  top + surf_player.get_height() + 2))
-        screen.blit(surf_dice,   (x_dice,   top + surf_player.get_height() + surf_phase.get_height() + 4))
-        screen.blit(surf_hint,   (x_hint,   top + surf_player.get_height() + surf_phase.get_height() + surf_dice.get_height() + 6))
-        # --- end top-right overlays ---
-
-        # Check for game over
-        if state.is_game_over:
-            winner = "White" if int(state.board[0, 25]) == 15 else "Black"
-            winner_text = font.render(f"Game Over! {winner} wins!", True, (255, 255, 0))
-            text_rect = winner_text.get_rect(center=(WINDOW_WIDTH//2, WINDOW_HEIGHT//2))
-            screen.blit(winner_text, text_rect)
-        
-        pygame.display.flip()
-        clock.tick(30)
-    
-    pygame.quit()
-
-
-# Alternative: Simple test without pygame
-def test_game_without_pygame():
-    """Test the game logic without pygame (console-based)."""
-    env = JaxBackgammonEnv()
-    wrapper = BackgammonInteractiveWrapper(env)
-    
-    key = jax.random.PRNGKey(42)
-    obs, state = wrapper.reset(key)
-    
-    print("Backgammon Game Started!")
-    print("Commands: 'l' (left), 'r' (right), 's' (space), 'q' (quit)")
-    print("-" * 50)
-    
-    while not state.is_game_over:
-        # Display current state
-        player = "White" if state.current_player == 1 else "Black"
-        print(f"\nCurrent Player: {player}")
-        print(f"Dice: {[d for d in state.dice if d > 0]}")
-        print(f"Cursor Position: {wrapper.cursor_position}")
-        print(f"Phase: {wrapper.game_phase}")
-        
-        # Get input
-        cmd = input("Command: ").strip().lower()
-        
-        if cmd == 'q':
-            break
-        elif cmd == 'l':
-            state, valid = wrapper.handle_input(state, 'left')
-        elif cmd == 'r':
-            state, valid = wrapper.handle_input(state, 'right')
-        elif cmd == 's':
-            state, valid = wrapper.handle_input(state, 'space')
-        else:
-            print("Invalid command!")
-            continue
-            
-        # Show board state (simplified)
-        print("\nBoard State:")
-        print("White:", [(i, int(state.board[0, i])) for i in range(26) if state.board[0, i] > 0])
-        print("Black:", [(i, int(state.board[1, i])) for i in range(26) if state.board[1, i] > 0])
-    
-    if state.is_game_over:
-        winner = "White" if state.board[0, 25] == 15 else "Black"
-        print(f"\nGame Over! {winner} wins!")
-
-
-if __name__ == "__main__":
-    # Choose which version to run
-    try:
-        import pygame
-        play_interactive_game()
-    except ImportError:
-        print("Pygame not installed. Running console version...")
-        test_game_without_pygame()
