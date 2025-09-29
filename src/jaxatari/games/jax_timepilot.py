@@ -292,10 +292,10 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         
         # move enemy without rotation
         def enemy_position_change(enemy_states):
-            def update_enemy_position(i, enemy_states):
+            def update_enemy_position(enemy_state, i):
                 # move enemy
-                new_x = enemy_states[i][0] + level_constants.enemy_speed_per_rotation[enemy_states[i][2]][0] # x direction
-                new_y = enemy_states[i][1] + level_constants.enemy_speed_per_rotation[enemy_states[i][2]][1] # y direction
+                new_x = enemy_state[0] + level_constants.enemy_speed_per_rotation[enemy_state[2]][0] # x direction
+                new_y = enemy_state[1] + level_constants.enemy_speed_per_rotation[enemy_state[2]][1] # y direction
                 # move view
                 new_x = new_x - self.consts.PLAYER_SPEED_PER_ROTATION[state_player_rotation][0] # x direction
                 new_y = new_y - self.consts.PLAYER_SPEED_PER_ROTATION[state_player_rotation][1] # y direction
@@ -303,7 +303,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                 enemy_size = jax.lax.cond(
                     i == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enemy_state[2]]
                 )
 
                 # only wrap around if enemy has spawned already
@@ -313,22 +313,22 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                         self.consts.MIN_ENTITY_Y,
                         self.consts.MAX_ENTITY_X - self.consts.MIN_ENTITY_X,
                         self.consts.MAX_ENTITY_Y - self.consts.MIN_ENTITY_Y,
-                        enemy_states[i][0],
-                        enemy_states[i][1],
+                        enemy_state[0],
+                        enemy_state[1],
                         enemy_size[0],
                         enemy_size[1]
                     ),
-                    lambda: enemy_states.at[i].set(jnp.array([
+                    lambda: jnp.array([
                         self.final_pos(self.consts.MIN_ENTITY_X, self.consts.MAX_ENTITY_X, new_x),
                         self.final_pos(self.consts.MIN_ENTITY_Y, self.consts.MAX_ENTITY_Y, new_y),
-                        enemy_states[i][2], enemy_states[i][3]])),
-                    lambda: enemy_states.at[i].set(jnp.array([
+                        enemy_state[2], enemy_state[3]]),
+                    lambda: jnp.array([
                         self.final_pos(self.consts.MIN_ENTITY_X - 50, self.consts.MAX_ENTITY_X + 50, new_x),
                         self.final_pos(self.consts.MIN_ENTITY_Y - 50, self.consts.MAX_ENTITY_Y + 50, new_y),
-                        enemy_states[i][2], enemy_states[i][3]])),
+                        enemy_state[2], enemy_state[3]]),
                 )
 
-            return jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, update_enemy_position, enemy_states)
+            return jax.vmap(update_enemy_position)(enemy_states, jnp.array(range(self.consts.MAX_NUMBER_OF_ENEMIES)))
         
         # rotate enemy without changing position
         def enemy_rotation_change(enemy_states, rng_key):
@@ -348,12 +348,12 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                 lambda: enemy_states[0][2] # old rotation
             )
 
-            def update_enemy_rotation(i, enemy_states):
+            def update_enemy_rotation(enemy_state):
                 # set enemy_states rotation to new_rotation
-                return enemy_states.at[i].set(jnp.array([enemy_states[i][0], enemy_states[i][1], 
-                                                         new_rotation, enemy_states[i][3]]))
+                return jnp.array([enemy_state[0], enemy_state[1], 
+                                                         new_rotation, enemy_state[3]])
 
-            return jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, update_enemy_rotation, enemy_states), rng_key
+            return jax.vmap(update_enemy_rotation)(enemy_states), rng_key
         
         # alternate changing enemy position and rotation according to step counter
         new_enemy_states, rng_key = jax.lax.cond(
@@ -363,19 +363,19 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         )
 
         # shake single enemy
-        def shake_enemy(i, enemy_states):
+        def shake_enemy(enemy_state, i):
             
             # shake enemy vertically
             new_y = jax.lax.cond(
                 respawn_timer % 16 < 8,
-                lambda: enemy_states[i][1] - 4,
-                lambda: enemy_states[i][1] + 4
+                lambda: enemy_state[1] - 4,
+                lambda: enemy_state[1] + 4
             )
 
             enemy_size = jax.lax.cond(
                     i == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enemy_state[2]]
                 )
 
             # only wrap around if enemy has spawned already
@@ -385,22 +385,22 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                         self.consts.MIN_ENTITY_Y,
                         self.consts.MAX_ENTITY_X - self.consts.MIN_ENTITY_X,
                         self.consts.MAX_ENTITY_Y - self.consts.MIN_ENTITY_Y,
-                        enemy_states[i][0],
-                        enemy_states[i][1],
+                        enemy_state[0],
+                        enemy_state[1],
                         enemy_size[0],
                         enemy_size[1]
                     ),
-                    lambda: enemy_states.at[i].set(
-                        [enemy_states[i][0],
+                    lambda: jnp.array(
+                        [enemy_state[0],
                          self.final_pos(self.consts.MIN_ENTITY_Y - 50, self.consts.MAX_ENTITY_Y + 50, new_y), 
-                         enemy_states[i][2],
-                         enemy_states[i][3]]
+                         enemy_state[2],
+                         enemy_state[3]]
                     ),
-                    lambda: enemy_states.at[i].set(
-                        [enemy_states[i][0],
+                    lambda: jnp.array(
+                        [enemy_state[0],
                          new_y, 
-                         enemy_states[i][2],
-                         enemy_states[i][3]]
+                         enemy_state[2],
+                         enemy_state[3]]
                     )
                 )
 
@@ -409,7 +409,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             jnp.logical_and(jnp.logical_not(position_change),
                             jnp.logical_and(respawn_timer >= self.consts.TRANSITION_DELAY, 
                                             respawn_timer <= self.consts.TRANSITION_DELAY + self.consts.PLAYER_DEATH_ANIMATION_DELAY)),
-            lambda: (jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, shake_enemy, new_enemy_states), rng_key),
+            lambda: (jax.vmap(shake_enemy)(new_enemy_states, jnp.array(range(self.consts.MAX_NUMBER_OF_ENEMIES))), rng_key),
             lambda: (new_enemy_states, rng_key)
         )
 
@@ -422,28 +422,28 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
     ):
         
         # update single cloud position
-        def update_cloud(i, cloud_positions):
+        def update_cloud(cloud_position):
 
             # move cloud in opposite direction of player
-            new_x = cloud_positions[i][0] - self.consts.PLAYER_SPEED_PER_ROTATION[player_rotation][0]
-            new_y = cloud_positions[i][1] - self.consts.PLAYER_SPEED_PER_ROTATION[player_rotation][1]
+            new_x = cloud_position[0] - self.consts.PLAYER_SPEED_PER_ROTATION[player_rotation][0]
+            new_y = cloud_position[1] - self.consts.PLAYER_SPEED_PER_ROTATION[player_rotation][1]
 
-            return cloud_positions.at[i].set(
+            return jnp.array(
                         [self.final_pos(self.consts.MIN_ENTITY_X - 32, self.consts.MAX_ENTITY_X, new_x),
                          self.final_pos(self.consts.MIN_ENTITY_Y - 12, self.consts.MAX_ENTITY_Y, new_y)]
                     )
         
         # shake single cloud
-        def shake_cloud(i, cloud_positions):
+        def shake_cloud(cloud_position):
 
             new_y = jax.lax.cond(
                 respawn_timer % 16 < 8,
-                lambda: cloud_positions[i][1] - 4,
-                lambda: cloud_positions[i][1] + 4
+                lambda: cloud_position[1] - 4,
+                lambda: cloud_position[1] + 4
             )
 
-            return cloud_positions.at[i].set(
-                        [cloud_positions[i][0],
+            return jnp.array(
+                        [cloud_position[0],
                          self.final_pos(self.consts.MIN_ENTITY_Y - 12, self.consts.MAX_ENTITY_Y, new_y)]
                     )
 
@@ -451,8 +451,8 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         return jax.lax.cond(
             jnp.logical_and(respawn_timer >= self.consts.TRANSITION_DELAY, 
                             respawn_timer <= self.consts.TRANSITION_DELAY + self.consts.PLAYER_DEATH_ANIMATION_DELAY),
-            lambda: jax.lax.fori_loop(0, 4, shake_cloud, state_cloud_positions),
-            lambda: jax.lax.fori_loop(0, 4, update_cloud, state_cloud_positions)
+            lambda: jax.vmap(shake_cloud)(state_cloud_positions),
+            lambda: jax.vmap(update_cloud)(state_cloud_positions)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -525,12 +525,12 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
     @partial(jax.jit, static_argnums=(0,))
     def enemy_missile_step(self, missile_states, enemy_states, enemy_attack, rng_key):
 
-        def move_missile(i, states):
+        def move_missile(state):
             
             # move missile position
-            new_state = jnp.array([states[i][0] + self.consts.ENEMY_MISSILE_SPEED_PER_ROTATION[states[i][2]][0],
-                                   states[i][1] + self.consts.ENEMY_MISSILE_SPEED_PER_ROTATION[states[i][2]][1],
-                                   states[i][2],
+            new_state = jnp.array([state[0] + self.consts.ENEMY_MISSILE_SPEED_PER_ROTATION[state[2]][0],
+                                   state[1] + self.consts.ENEMY_MISSILE_SPEED_PER_ROTATION[state[2]][1],
+                                   state[2],
                                    1])
 
             # set missile to inactive if it is out of screen
@@ -544,23 +544,23 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             )
 
             return jax.lax.cond(
-                states[i][3] > 0,
-                lambda: states.at[i].set(new_state),
-                lambda: states
+                state[3] > 0,
+                lambda: new_state,
+                lambda: state
                 )
         
-        missile_states = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, move_missile, missile_states)
+        missile_states = jax.vmap(move_missile)(missile_states)
 
         # select enemy for shooting
         rng_key, subkey = jax.random.split(rng_key)
         shooting_enemy_idx = jax.random.randint(subkey, [], 0, self.consts.MAX_NUMBER_OF_ENEMIES)
 
-        # do not shoot if enemy is inactive
-        index = jax.lax.fori_loop(
-            0,
-            self.consts.MAX_ENEMY_MISSILES,
-            lambda i, val: jax.lax.cond(jnp.logical_and(missile_states[i][3]<=0, val<0), lambda: i, lambda: val),
-            -1
+        # do not create new missile if two already exist
+        inactive_map = missile_states[:,3]<=0
+        index =  jax.lax.cond(
+            jnp.isin(True, inactive_map),
+            lambda: jnp.argmax(inactive_map),
+            lambda: -1
         )
 
         # possibly shoot new missile and move existing ones (if active)
@@ -624,32 +624,27 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         """
 
         level_constants = self._get_level_constants(level)
-
-        def get_hit_enemy(i, index):
-
+        
+        def get_hit_enemy(enumerated_enemy_state):
             enemy_size = jax.lax.cond(
-                    i == level_boss,
+                    enumerated_enemy_state[4] == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enumerated_enemy_state[2]]
                 )
             
             # return i if collision of player with enemy at index i occurred, old index otherwise
-            return jax.lax.cond(
-                jnp.logical_and(enemy_states[i][3] > 0,
+            return jnp.logical_and(enumerated_enemy_state[3] > 0,
                                 self.entities_collide(self.consts.PLAYER_X, self.consts.PLAYER_Y,
                                     self.consts.PLAYER_SIZE_PER_ROTATION[player_rotation][0], 
                                     self.consts.PLAYER_SIZE_PER_ROTATION[player_rotation][1],
-                                    enemy_states[i][0], enemy_states[i][1],
+                                    enumerated_enemy_state[0], enumerated_enemy_state[1],
                                     enemy_size[0], 
-                                    enemy_size[1])),
-                lambda: i,
-                lambda: index
-            )
+                                    enemy_size[1]))
 
-        # only return collision if player is active
+        hit_map = jax.vmap(get_hit_enemy)(jnp.concat([enemy_states, jnp.expand_dims(jnp.arange(0, self.consts.MAX_NUMBER_OF_ENEMIES), 1)], axis=1))
         return jax.lax.cond(
-            player_active,
-            lambda: jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, get_hit_enemy, -1),
+            jnp.logical_and(player_active, jnp.isin(True, hit_map)),
+            lambda: jnp.argmax(hit_map),
             lambda: -1
         )
 
@@ -666,24 +661,23 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         """
 
         level_constants = self._get_level_constants(level)
-
-        @jax.jit
-        def get_hit_enemy(i, index):
-
+        
+        def get_hit_enemy(enumerated_enemy_state):
             enemy_size = jax.lax.cond(
-                    i == level_boss,
+                    enumerated_enemy_state[4] == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enumerated_enemy_state[2]]
                 )
             
-            # return i if collision of player missile with enemy at index i occurred, old index otherwise
-            return jax.lax.cond(
-                self.is_hit(enemy_states[i][0], enemy_states[i][1], enemy_states[i][3] > 0,
-                            enemy_size, player_missile_state),
-                lambda: i,
-                lambda: index)
+            return self.is_hit(enumerated_enemy_state[0], enumerated_enemy_state[1], enumerated_enemy_state[3] > 0,
+                            enemy_size, player_missile_state)
 
-        return jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, get_hit_enemy, -1)
+        hit_map = jax.vmap(get_hit_enemy)(jnp.concat([enemy_states, jnp.expand_dims(jnp.arange(0, self.consts.MAX_NUMBER_OF_ENEMIES), 1)], axis=1))
+        return jax.lax.cond(
+            jnp.isin(True, hit_map),
+            lambda: jnp.argmax(hit_map),
+            lambda: -1
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def enemy_missile_hit(
@@ -695,16 +689,17 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         """
         Returns index of enemy missile hitting player (or -1 if player is not hit)
         """
+        
+        def get_hitting_missile(missile_state):
+            return self.is_hit(self.consts.PLAYER_X, self.consts.PLAYER_Y, player_active, 
+                            self.consts.PLAYER_SIZE_PER_ROTATION[player_rotation], missile_state)
 
-        def get_hitting_missile(i, index):
-            # return i if collision of player with enemy missile at index i occurred, old index otherwise
-            return jax.lax.cond(
-                self.is_hit(self.consts.PLAYER_X, self.consts.PLAYER_Y, player_active, 
-                            self.consts.PLAYER_SIZE_PER_ROTATION[player_rotation], enemy_missile_states[i]),
-                lambda: i,
-                lambda: index)
-
-        return jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, get_hitting_missile, -1)
+        hit_map = jax.vmap(get_hitting_missile)(enemy_missile_states)
+        return jax.lax.cond(
+            jnp.isin(True, hit_map),
+            lambda: jnp.argmax(hit_map),
+            lambda: -1
+        )
     
     def attack_delay_transform(self, value):
         """
@@ -839,57 +834,74 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
                                         jnp.logical_and(state.player_active, state.respawn_timer <= 0), enemy_missile_states)
 
         # making sure that enemies do not overlap after respawning
-        def check_ee_collision(i, j, val, current_enemy_states, level_boss):
+        def check_ee_collision(enumerated_state_1, enumerated_state_2, level_boss):
 
             enemy_size_i = jax.lax.cond(
-                    i == level_boss,
+                    enumerated_state_1[4] == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enumerated_state_1[2]]
                 )
             
             enemy_size_j = jax.lax.cond(
-                    j == level_boss,
+                    enumerated_state_2[4] == level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[j][2]]
+                    lambda: level_constants.enemy_size_per_rotation[enumerated_state_2[2]]
                 )
             
             return jax.lax.cond(
-                jnp.logical_and(self.entities_collide(
-                    current_enemy_states[i][0],
-                    current_enemy_states[i][1],
-                    enemy_size_i[0]*2,
-                    enemy_size_i[1]*2,
-                    current_enemy_states[j][0],
-                    current_enemy_states[j][1],
-                    enemy_size_j[0]*2,
-                    enemy_size_j[1]*2
-                ), i != j),
-                lambda: j,
-                lambda: val
+                enumerated_state_1[4] != enumerated_state_2[4],
+                lambda: self.entities_collide(
+                            enumerated_state_1[0],
+                            enumerated_state_1[1],
+                            enemy_size_i[0]*2,
+                            enemy_size_i[1]*2,
+                            enumerated_state_2[0],
+                            enumerated_state_2[1],
+                            enemy_size_j[0]*2,
+                            enemy_size_j[1]*2
+                        ),
+                lambda: False
+            )
+        
+        def get_ee_coll_idx(i, enemy_states, level_boss):
+            enumerated_states = jnp.concat([enemy_states, jnp.expand_dims(jnp.arange(0, self.consts.MAX_NUMBER_OF_ENEMIES), 1)], axis=1)
+            coll_map = jax.vmap(check_ee_collision, in_axes = (None, 0, None))(
+                enumerated_states[i],
+                enumerated_states,
+                level_boss
+            )
+        
+            return jax.lax.cond(
+                jnp.isin(True, coll_map),
+                lambda: jnp.argmax(coll_map),
+                lambda: -1
             )
 
         # respawn enemy when its death timer is at zero
         def respawn_enemy(i, enemy_states):
-
             # get respawn states according to level constants as well as index of overlapping, already existing enemy (-1 if ther is no overlap)
-            new_enemy_states, coll_idx = jax.lax.cond(
+            new_enemy_state = jax.lax.cond(
                 state.enemy_death_timers[i] == 1,
-                lambda: (enemy_states.at[i].set(level_constants.initial_enemies[i]), 
-                         jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, 
-                                           lambda j, val: check_ee_collision(i, j, val, enemy_states, state.level_boss), -1)),
-                lambda: (enemy_states, -1)
+                lambda: level_constants.initial_enemies[i],
+                lambda: enemy_states[i]
+            )
+
+            coll_idx = jax.lax.cond(
+                state.enemy_death_timers[i] == 1,
+                lambda: get_ee_coll_idx(i, enemy_states.at[i].set(new_enemy_state), state.level_boss),
+                lambda: -1
             )
 
             # get direction to move overlapping, new enemy
             mov_dir = jax.lax.cond(
                 coll_idx >= 0,
                 lambda: (jnp.array(
-                    jnp.logical_or(new_enemy_states[i][1]<self.consts.MIN_ENTITY_Y,
-                                   new_enemy_states[i][1]>self.consts.MAX_ENTITY_Y), 
-                                   jnp.int32)*jnp.where(new_enemy_states[i][0]<new_enemy_states[coll_idx][0], -1, 1), 
-                                   jnp.array(jnp.logical_or(new_enemy_states[i][0]<self.consts.MIN_ENTITY_X,
-                                                            new_enemy_states[i][0]>self.consts.MAX_ENTITY_X), 
-                                                            jnp.int32)*jnp.where(new_enemy_states[i][1]<new_enemy_states[coll_idx][1],
+                    jnp.logical_or(new_enemy_state[1]<self.consts.MIN_ENTITY_Y,
+                                   new_enemy_state[1]>self.consts.MAX_ENTITY_Y), 
+                                   jnp.int32)*jnp.where(new_enemy_state[0]<enemy_states[coll_idx][0], -1, 1), 
+                                   jnp.array(jnp.logical_or(new_enemy_state[0]<self.consts.MIN_ENTITY_X,
+                                                            new_enemy_state[0]>self.consts.MAX_ENTITY_X), 
+                                                            jnp.int32)*jnp.where(new_enemy_state[1]<enemy_states[coll_idx][1],
                                                                                   -1, 1)),
                 lambda: (0, 0)
             )
@@ -897,7 +909,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             enemy_size = jax.lax.cond(
                     i == state.level_boss,
                     lambda: level_constants.level_boss_size,
-                    lambda: level_constants.enemy_size_per_rotation[enemy_states[i][2]]
+                    lambda: level_constants.enemy_size_per_rotation[new_enemy_state[2]]
                 )
 
             # determine offsets to move overlapping, new enemy
@@ -913,32 +925,34 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             )
 
             # update enemy states accordingly
-            new_enemy_states = jax.lax.fori_loop(
+            new_enemy_state = jax.lax.fori_loop(
                 0,
                 self.consts.MAX_NUMBER_OF_ENEMIES,
-                lambda _, states: jax.lax.cond(
-                    (jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, 
-                                       lambda j, val: check_ee_collision(i, j, val, states, state.level_boss), 
-                                       -1) >= 0),
-                    lambda: states.at[i].set(jnp.array([new_enemy_states[i][0] + x_offset, new_enemy_states[i][1] + y_offset, 
-                                                        new_enemy_states[i][2], new_enemy_states[i][3]])),
-                    lambda: states
+                lambda _, e_state: jax.lax.cond(
+                    (get_ee_coll_idx(i, enemy_states.at[i].set(e_state), state.level_boss) >= 0),
+                    lambda: jnp.array([e_state[0] + x_offset, e_state[1] + y_offset,
+                                                        e_state[2], e_state[3]]),
+                    lambda: e_state
                 ),
-                new_enemy_states
+                new_enemy_state
             )
 
-            return new_enemy_states
+            return jax.lax.cond(
+                state.enemy_death_timers[i] == 1,
+                lambda: new_enemy_state,
+                lambda: enemy_states[i]
+            )
 
-        enemy_states = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, respawn_enemy, enemy_states)
+        enemy_states = jax.vmap(respawn_enemy, in_axes = (0, None))(jnp.arange(self.consts.MAX_NUMBER_OF_ENEMIES), enemy_states)
 
         # update death timer for colliding enemies
-        def update_enemy_death_timer(i, enemy_death_timers):
+        def update_enemy_death_timer(enemy_death_timer):
             return jax.lax.cond(
-                enemy_death_timers[i] > 0,
-                lambda: enemy_death_timers.at[i].set(enemy_death_timers[i] - 1),
-                lambda: enemy_death_timers
+                enemy_death_timer > 0,
+                lambda: enemy_death_timer - 1,
+                lambda: enemy_death_timer
             )
-        enemy_death_timers = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, update_enemy_death_timer, state.enemy_death_timers)
+        enemy_death_timers = jax.vmap(update_enemy_death_timer)(state.enemy_death_timers)
 
         # handle collision of enemy with player
         enemy_states, lives, score, enemies_remaining, enemy_death_timers = jax.lax.cond(
@@ -1728,13 +1742,12 @@ class TimePilotRenderer(JAXGameRenderer):
             raster)
 
         # clouds
-        def render_cloud(i, raster):
-
-            sprite = level_sprites['cloud']
-            frame = jr.get_sprite_frame(sprite, state.step_counter)
-            return jr.render_at(raster, state.cloud_positions[i][0], state.cloud_positions[i][1], frame, flip_horizontal=True)
-
-        raster = jax.lax.fori_loop(0, 4, render_cloud, raster)
+        sprite = level_sprites['cloud']
+        frame = jr.get_sprite_frame(sprite, state.step_counter)
+        raster = jr.render_at(raster, state.cloud_positions[0][0], state.cloud_positions[0][1], frame, flip_horizontal=True)
+        raster = jr.render_at(raster, state.cloud_positions[1][0], state.cloud_positions[1][1], frame, flip_horizontal=True)
+        raster = jr.render_at(raster, state.cloud_positions[2][0], state.cloud_positions[2][1], frame, flip_horizontal=True)
+        raster = jr.render_at(raster, state.cloud_positions[3][0], state.cloud_positions[3][1], frame, flip_horizontal=True)
 
         # top and bottom wall
         # top
