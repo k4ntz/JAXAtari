@@ -465,7 +465,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: TurmoilState, all_rewards: jnp.ndarray) -> TurmoilInfo:
+    def _get_info(self, state: TurmoilState, all_rewards: jnp.ndarray = None) -> TurmoilInfo:
         return TurmoilInfo(
             step_counter=state.step_counter,
             all_rewards=all_rewards,
@@ -1195,7 +1195,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         observation = self._get_observation(return_state)
         done = self._get_done(return_state)
-        env_reward = self._get_env_reward(previous_state, return_state)
+        env_reward = self._get_reward(previous_state, return_state)
         all_rewards = self._get_all_rewards(previous_state, return_state)
         info = self._get_info(return_state, all_rewards)
 
