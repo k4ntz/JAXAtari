@@ -36,6 +36,7 @@ class BackgammonConstants(NamedTuple):
     BLACK_HOME = jnp.array(range(0, 6))
     WHITE = 1
     BLACK = -1
+    DOUBLING_CUBE = 1  # 1x by default; set to 2, 4, 8... if you add a doubling cube UI
 
 
 class BackgammonState(NamedTuple):
@@ -128,57 +129,52 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     def init_state(self, key) -> BackgammonState:
         board = jnp.zeros((2, 26), dtype=jnp.int32)
         # White (player 0)
-        board = board.at[0, 0].set(2)  # point 24
-        board = board.at[0, 11].set(5)  # point 13
-        board = board.at[0, 16].set(3)  # point 8
-        board = board.at[0, 18].set(5)  # point 6
-
+        board = board.at[0, 0].set(2)   # 24
+        board = board.at[0, 11].set(5)  # 13
+        board = board.at[0, 16].set(3)  # 8
+        board = board.at[0, 18].set(5)  # 6
         # Black (player 1)
-        board = board.at[1, 23].set(2)  # point 1
-        board = board.at[1, 12].set(5)  # point 12
-        board = board.at[1, 7].set(3)  # point 17
-        board = board.at[1, 5].set(5)  # point 19
+        board = board.at[1, 23].set(2)  # 1
+        board = board.at[1, 12].set(5)  # 12
+        board = board.at[1, 7].set(3)   # 17
+        board = board.at[1, 5].set(5)   # 19
 
-        dice = jnp.zeros(4, dtype=jnp.int32)
+        # roll until not equal
+        def cond_fun(c):
+            w, b, k = c
+            return w == b
 
-        # The condition for the while loop
-        def cond_fun(carry):
-            white_roll, black_roll, key = carry
-            return white_roll == black_roll
+        def body_fun(c):
+            _, _, k = c
+            k, k1, k2 = jax.random.split(k, 3)
+            w = jax.random.randint(k1, (), 1, 7)
+            b = jax.random.randint(k2, (), 1, 7)
+            return (w, b, k)
 
-        # The code to be run in the while loop
-        def body_fun(carry):
-            _, _, key = carry
-            key, subkey1, subkey2 = jax.random.split(key, 3)
-            white_roll = jax.random.randint(subkey1, (), 1, 7)
-            black_roll = jax.random.randint(subkey2, (), 1, 7)
-            return (white_roll, black_roll, key)
+        key, k1, k2 = jax.random.split(key, 3)
+        w0 = jax.random.randint(k1, (), 1, 7)
+        b0 = jax.random.randint(k2, (), 1, 7)
+        w, b, key = jax.lax.while_loop(cond_fun, body_fun, (w0, b0, key))
 
-        # Generate the first dice throw
-        key, subkey1, subkey2 = jax.random.split(key, 3)
-        white_roll = jax.random.randint(subkey1, (), 1, 7)
-        black_roll = jax.random.randint(subkey2, (), 1, 7)
-        carry = (white_roll, black_roll, key)
-
-        white_roll, black_roll, key = jax.lax.while_loop(cond_fun, body_fun, carry)
-
-        # Set the player who rolled higher
+        # who starts?
         current_player = jax.lax.cond(
-            white_roll > black_roll,
-            lambda _: self.consts.WHITE,
-            lambda _: self.consts.BLACK,
+            w > b, lambda _: self.consts.WHITE, lambda _: self.consts.BLACK, operand=None
+        )
+
+        # starting dice: winner’s die first; doubles expand to 4
+        first  = jax.lax.cond(current_player == self.consts.WHITE, lambda _: w, lambda _: b, operand=None)
+        second = jax.lax.cond(current_player == self.consts.WHITE, lambda _: b, lambda _: w, operand=None)
+        is_double = first == second
+        dice = jax.lax.cond(
+            is_double,
+            lambda _: jnp.array([first, first, first, first]),
+            lambda _: jnp.array([first, second, 0, 0]),
             operand=None
         )
 
-        # Start with empty dice (waiting for roll)
-        dice = jnp.zeros(4, dtype=jnp.int32)
-
-        # Set initial cursor position based on player
+        # starting cursor
         initial_cursor = jax.lax.cond(
-            current_player == self.consts.WHITE,
-            lambda _: 0,
-            lambda _: 23,
-            operand=None
+            current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None
         )
 
         return BackgammonState(
@@ -187,89 +183,21 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             current_player=current_player,
             is_game_over=False,
             key=key,
+            last_move=(-1, -1),
+            last_dice=-1,
             cursor_position=initial_cursor,
             picked_checker_from=-1,
-            game_phase=0,  # Start in WAITING_FOR_ROLL
+            game_phase=jnp.int32(1),              # SELECTING_CHECKER
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def init_state(self, key) -> BackgammonState:
-        board = jnp.zeros((2, 26), dtype=jnp.int32)
-        # White (player 0)
-        board = board.at[0, 0].set(2)  # point 24
-        board = board.at[0, 11].set(5)  # point 13
-        board = board.at[0, 16].set(3)  # point 8
-        board = board.at[0, 18].set(5)  # point 6
-
-        # Black (player 1)
-        board = board.at[1, 23].set(2)  # point 1
-        board = board.at[1, 12].set(5)  # point 12
-        board = board.at[1, 7].set(3)  # point 17
-        board = board.at[1, 5].set(5)  # point 19
-
-        dice = jnp.zeros(4, dtype=jnp.int32)
-
-        # The condition for the while loop
-        def cond_fun(carry):
-            white_roll, black_roll, key = carry
-            return white_roll == black_roll
-
-        # The code to be run in the while loop
-        def body_fun(carry):
-            _, _, key = carry
-            key, subkey1, subkey2 = jax.random.split(key, 3)
-            white_roll = jax.random.randint(subkey1, (), 1, 7)
-            black_roll = jax.random.randint(subkey2, (), 1, 7)
-            return (white_roll, black_roll, key)
-
-        # Generate the first dice throw
-        key, subkey1, subkey2 = jax.random.split(key, 3)
-        white_roll = jax.random.randint(subkey1, (), 1, 7)
-        black_roll = jax.random.randint(subkey2, (), 1, 7)
-        carry = (white_roll, black_roll, key)
-
-        white_roll, black_roll, key = jax.lax.while_loop(cond_fun, body_fun, carry)
-
-        # Set the player who rolled higher
-        current_player = jax.lax.cond(
-            white_roll > black_roll,
-            lambda _: self.consts.WHITE,
-            lambda _: self.consts.BLACK,
-            operand=None
-        )
-
-        # Prepare initial dice values for that player
-        first_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: white_roll, lambda _: black_roll,
-                                  operand=None)
-        second_dice = jax.lax.cond(current_player == self.consts.WHITE, lambda _: black_roll, lambda _: white_roll,
-                                   operand=None)
-
-        is_double = first_dice == second_dice
-        dice = jax.lax.cond(
-            is_double,
-            lambda _: jnp.array([first_dice] * 4),
-            lambda _: jnp.array([first_dice, second_dice, 0, 0]),
-            operand=None
-        )
-
-        return BackgammonState(
-            board=board,
-            dice=dice,
-            current_player=current_player,
-            is_game_over=False,
-            key=key
+            last_valid_drop=-1,
         )
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
-        """Reset the environment with proper key handling."""
+        """Reset the environment. The initial roll happens inside init_state now."""
         if key is None:
             key = jax.random.PRNGKey(0)
-
-        state = self.init_state(key)
-        dice, key = self.roll_dice(key)
-        state = state._replace(dice=dice, key=key)
+        state = self.init_state(key)   # already rolled & selected starter
         return self._get_observation(state), state
 
     @staticmethod
@@ -455,6 +383,59 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             operand=board
         )
         return board
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _loser_has_checker_in_winner_home(self, state: BackgammonState, winner: int) -> bool:
+        # winner == WHITE(1) → check BLACK on 18..23
+        # winner == BLACK(-1) → check WHITE on 0..5
+        def white_wins(_):
+            return jnp.sum(state.board[1, 18:24]) > 0  # black in white home
+        def black_wins(_):
+            return jnp.sum(state.board[0, 0:6]) > 0    # white in black home
+        return jax.lax.cond(winner == self.consts.WHITE, white_wins, black_wins, operand=None)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_outcome_multiplier(self, state: BackgammonState) -> jnp.int32:
+        """
+        Returns 1 (single), 2 (gammon), 3 (backgammon) × DOUBLING_CUBE.
+        Rules implemented:
+        - Gammon: loser has borne off 0 checkers.
+        - Backgammon: loser has borne off 0 AND has checkers on BAR or in winner's home board.
+        """
+        white_off = state.board[0, self.consts.HOME_INDEX]
+        black_off = state.board[1, self.consts.HOME_INDEX]
+        white_bar = state.board[0, self.consts.BAR_INDEX]
+        black_bar = state.board[1, self.consts.BAR_INDEX]
+
+        white_won = (white_off == self.consts.NUM_CHECKERS)
+        black_won = (black_off == self.consts.NUM_CHECKERS)
+
+        def when_white_wins(_):
+            loser_off = black_off
+            loser_bar = black_bar
+            in_winner_home = self._loser_has_checker_in_winner_home(state, self.consts.WHITE)
+            is_backgammon = (loser_off == 0) & ( (loser_bar > 0) | in_winner_home )
+            is_gammon     = (loser_off == 0) & (~is_backgammon)
+            mul = jax.lax.select(is_backgammon, 3, jax.lax.select(is_gammon, 2, 1))
+            return jnp.int32(mul * self.consts.DOUBLING_CUBE)
+
+        def when_black_wins(_):
+            loser_off = white_off
+            loser_bar = white_bar
+            in_winner_home = self._loser_has_checker_in_winner_home(state, self.consts.BLACK)
+            is_backgammon = (loser_off == 0) & ( (loser_bar > 0) | in_winner_home )
+            is_gammon     = (loser_off == 0) & (~is_backgammon)
+            mul = jax.lax.select(is_backgammon, 3, jax.lax.select(is_gammon, 2, 1))
+            return jnp.int32(mul * self.consts.DOUBLING_CUBE)
+
+        def no_winner(_):
+            return jnp.int32(1)  # shouldn't be used if game not over
+
+        return jax.lax.cond(
+            white_won, when_white_wins,
+            lambda _: jax.lax.cond(black_won, when_black_wins, no_winner, operand=None),
+            operand=None
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def compute_distance(self, player, from_point, to_point):
@@ -929,15 +910,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             all_rewards=jnp.asarray(all_rewards, dtype=jnp.float32),
         )
 
-    @staticmethod
-    @jax.jit
-    def _get_reward(prev: BackgammonState, state: BackgammonState) -> float:
-        """Calculate the reward based on the game state."""
-        return jax.lax.select(
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, prev: BackgammonState, state: BackgammonState) -> float:
+        # your sign logic: +1 winner, -1 loser, 0 if ongoing
+        base = jax.lax.select(
             state.is_game_over,
             jax.lax.select(state.current_player != prev.current_player, 1.0, -1.0),
             0.0
         )
+        mult = self.compute_outcome_multiplier(state).astype(jnp.float32)
+        return base * mult
 
     @staticmethod
     @jax.jit
@@ -1091,18 +1073,23 @@ class BackgammonRenderer(JAXGameRenderer):
 
         def draw_triangle_at_index(i, fr):
             pos = self.triangle_positions[i]
-            x = pos[0];
-            y = pos[1]
+            x = pos[0]; y = pos[1]
 
-            group = i // 6  # 0: TL, 1: TR, 2: BR, 3: BL
-            within = i % 6  # 0..5 inside each group
+            group  = i // 6        # 0: top-left, 1: bottom-left, 2: bottom-right, 3: top-right
+            within = i % 6
 
-            # Left groups (0,3) start with light; right groups (1,2) start with dark
-            start_light = jnp.logical_or(group == 0, group == 3)
+            # Base: columns (left groups 0/1 start light, right groups 2/3 start dark)
+            base_start_light = jnp.logical_or(group == 0, group == 3)
+
+            # Flip the start color for *bottom* groups so they’re the inverse of the top
+            is_bottom = jnp.logical_or(group == 1, group == 2)
+            start_light = jax.lax.select(is_bottom, ~base_start_light, base_start_light)
+
+            # Alternate within each group
             use_light = jnp.where(start_light, (within % 2 == 0), (within % 2 == 1))
 
             color = jax.lax.select(use_light, self.color_triangle_light, self.color_triangle_dark)
-            point_right = (x == left_x)  # left columns point right, right columns point left
+            point_right = (x == self.board_margin)  # left column points right, right column points left
             return self._draw_triangle(fr, x, y, self.triangle_length, self.triangle_thickness, color, point_right)
 
         return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
@@ -1387,10 +1374,6 @@ class BackgammonRenderer(JAXGameRenderer):
 
         frame = self._draw_bar_checkers(frame, white_bar, black_bar)
 
-        # Dice
-        frame = self._draw_dice(frame, state.dice, state.current_player)
-
-
         def draw_floating_checker(f):
             player_idx = self.env.get_player_index(state.current_player)
             color = jax.lax.cond(
@@ -1451,4 +1434,5 @@ class BackgammonRenderer(JAXGameRenderer):
             operand=frame
         )
 
+        frame = self._draw_dice(frame, state.dice, state.current_player)
         return frame
