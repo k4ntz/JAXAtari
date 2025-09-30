@@ -82,18 +82,18 @@ class TurmoilConstants(NamedTuple):
     }
 
     ENEMY_SPEED = (
-        1, # lines
-        1, # arrow
-        1, # tank
-        1,  # L
-        1, # T
-        1, # rocket
-        1, # triangle_hollow
-        1, # x_shape
-        5, # sonic boom
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # lines
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # arrow
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # tank
+        [1, 1, 1, 1, 2, 2, 2, 2, 3],  # L
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # T
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # rocket
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # triangle_hollow
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # x_shape
+        [5, 5, 5, 5, 7, 7, 7, 7, 9], # sonic boom
     )
 
-    TANK_PUSH_BACK = 5
+    TANK_PUSH_BACK = 5 # tank displacement if shot from front
 
     # probability of spawning when there is slot available for each level
     ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
@@ -1021,7 +1021,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                         state.prize[1], # x
                         state.prize[2] - self.consts.Y_OFFSET_PRIZE + jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), 8), # y
                         1, # active
-                        jnp.take(jnp.array(self.consts.ENEMY_SPEED), 8), # speed
+                        jnp.take(
+                            jnp.take(jnp.array(self.consts.ENEMY_SPEED), 8, axis=0),
+                            state.level - 1
+                        ), # speed
                         state.prize[5], # direction
                         jnp.where( # change_type_coordiante
                             state.prize[5] == 1,
@@ -1065,7 +1068,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                     ), # X
                     jnp.take(jnp.array(self.consts.HORIZONTAL_LANES), lane) + jnp.take(jnp.array(self.consts.Y_OFFSET_ENEMY), enemy_type), #Y
                     1, # active
-                    jnp.take(jnp.array(self.consts.ENEMY_SPEED), enemy_type), # speed
+                    jnp.take(
+                        jnp.take(jnp.array(self.consts.ENEMY_SPEED), enemy_type, axis=0),
+                        state.level - 1
+                    ), # speed
                     direction,
                     jnp.where( # change_type_coordiante
                         direction == 1,
@@ -1110,7 +1116,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         new_enemy = new_enemy.at[:, 3].set(
             jnp.where(
                 jnp.logical_or(
-                    new_enemy[:, 1] > self.consts.MAX_BOUND[0], # TODO add enemy width for accuracy
+                    new_enemy[:, 1] > self.consts.MAX_BOUND[0] + self.consts.ENEMY_SIZE_FOR_COLLISION[0],
                     new_enemy[:, 1] < self.consts.MIN_BOUND[0]
                 ),
                 0,
