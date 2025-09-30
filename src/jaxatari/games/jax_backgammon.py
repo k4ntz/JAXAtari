@@ -363,6 +363,39 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return (outside_home_checkers == 0) & (on_bar == 0)
 
     @partial(jax.jit, static_argnums=(0,))
+    def has_any_legal_move(self, state: BackgammonState) -> jnp.ndarray:
+        mask = jax.vmap(lambda mv: self.is_valid_move(state, mv))(self._action_pairs)
+        return jnp.any(mask)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _auto_pass_if_stuck(self, state: BackgammonState) -> BackgammonState:
+        """
+        If the current player has NO legal move with the current dice, auto-pass:
+        - switch player
+        - roll new dice for the opponent
+        - reset phase & cursor for the new player
+        Otherwise, return state unchanged.
+        """
+        def do_pass(_):
+            next_dice, new_key = self.roll_dice(state.key)
+            next_player = -state.current_player
+            next_cursor = jax.lax.cond(
+                next_player == self.consts.WHITE, lambda _: jnp.int32(0), lambda _: jnp.int32(23), operand=None
+            )
+            return state._replace(
+                dice=next_dice,
+                key=new_key,
+                current_player=next_player,
+                game_phase=jnp.int32(1),          # SELECTING_CHECKER
+                cursor_position=next_cursor,
+                picked_checker_from=jnp.int32(-1),
+                last_move=state.last_move,
+                last_dice=jnp.int32(-1)
+            )
+
+        return jax.lax.cond(self.has_any_legal_move(state), lambda _: state, do_pass, operand=None)
+
+    @partial(jax.jit, static_argnums=(0,))
     def execute_move(self, board, player_idx, opponent_idx, from_point, to_point):
         """Apply a move to the board, updating for possible hits or bearing off."""
         # Remove checker from source first
@@ -443,25 +476,31 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         """Compute move distance based on player and points, including bearing off."""
         is_from_bar = from_point == self.consts.BAR_INDEX
 
+        # Distance when entering from BAR
         bar_distance = jax.lax.cond(
             player == self.consts.WHITE,
-            lambda _: to_point + 1,
-            lambda _: 24 - to_point,
+            lambda _: to_point + 1,         # WHITE enters on 0..5 → die = to_point+1
+            lambda _: 24 - to_point,        # BLACK enters on 23..18 → die = 24-to_point
             operand=None
         )
 
+        # Regular / bearing-off distance
         regular_distance = jax.lax.cond(
             to_point == self.consts.HOME_INDEX,
+            # FIX: bearing-off distance
+            # WHITE home is 18..23, with point 23 = 1-pip → distance = 24 - from_point
+            # BLACK home is 0..5,   with point 0  = 1-pip → distance = from_point + 1
             lambda _: jax.lax.cond(
                 player == self.consts.WHITE,
-                lambda _: self.consts.HOME_INDEX - from_point,
+                lambda _: jnp.int32(24) - from_point,   # ✅ was 25 - from_point (off-by-one)
                 lambda _: from_point + 1,
                 operand=None
             ),
+            # Normal board move
             lambda _: jax.lax.cond(
                 player == self.consts.WHITE,
-                lambda _: to_point - from_point,
-                lambda _: from_point - to_point,
+                lambda _: to_point - from_point,        # WHITE moves upward in index
+                lambda _: from_point - to_point,        # BLACK moves downward in index
                 operand=None
             ),
             operand=None
@@ -580,14 +619,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             last_move=(from_point, to_point),
             last_dice=used_dice
         )
+        
+        new_state = self._auto_pass_if_stuck(new_state)
 
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state, all_rewards)
-
         return obs, new_state, reward, done, info, new_key
+
 
     def step(self, state: BackgammonState, action: jnp.ndarray):
         """Interactive step with JAX-safe debounce: each press triggers once; holding does nothing until NOOP arrives."""
@@ -707,6 +748,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             def do_roll(ss):
                 dice, key = self.roll_dice(ss.key)
                 ns = ss._replace(dice=dice, key=key, game_phase=1)  # SELECTING_CHECKER
+                # Auto-pass if no legal move with these dice
+                ns = self._auto_pass_if_stuck(ns)
                 return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
             def do_select(ss):
@@ -923,14 +966,24 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, prev: BackgammonState, state: BackgammonState) -> float:
-        # your sign logic: +1 winner, -1 loser, 0 if ongoing
-        base = jax.lax.select(
-            state.is_game_over,
-            jax.lax.select(state.current_player != prev.current_player, 1.0, -1.0),
-            0.0
-        )
+        """
+        Reward is +1 for the winner, -1 for the loser (optionally × gammon/backgammon multiplier).
+        Crucially, we detect the winner directly from the board, not from turn switching.
+        """
+        white_off = state.board[0, self.consts.HOME_INDEX]
+        black_off = state.board[1, self.consts.HOME_INDEX]
+
+        # winner_sign: +1 if White won, -1 if Black won, 0 otherwise
+        white_won = (white_off == self.consts.NUM_CHECKERS)
+        black_won = (black_off == self.consts.NUM_CHECKERS)
+
+        winner_sign = jax.lax.select(white_won, 1.0,
+                        jax.lax.select(black_won, -1.0, 0.0))
+
+        # Keep gammon/backgammon multiplier (set to 1.0 if you want ±1 only)
         mult = self.compute_outcome_multiplier(state).astype(jnp.float32)
-        return base * mult
+
+        return winner_sign * mult
 
     @staticmethod
     @jax.jit
@@ -1118,32 +1171,33 @@ class BackgammonRenderer(JAXGameRenderer):
 
             # Column flags
             is_left_column  = (x == left_x)
-            is_right_column = ~is_left_column
 
-            # Row index within its column band (0..5). We can reconstruct an index
-            # inside each visual band based on i’s range after the remap:
+            # Row index within its column band (0..5):
             #  - lower-right:  i in 0..5
             #  - upper-right:  i in 6..11
             #  - upper-left:   i in 12..17
             #  - lower-left:   i in 18..23
-            # We’ll use this to alternate colors.
             band_idx = jnp.where(i < 6, i,
-                    jnp.where(i < 12, i - 6,
-                    jnp.where(i < 18, i - 12, i - 18)))
+                        jnp.where(i < 12, i - 6,
+                        jnp.where(i < 18, i - 12, i - 18)))
 
-            # Choose start color per band so it looks like a real board:
-            #   right column upper band starts DARK,
-            #   left column upper band starts LIGHT,
-            #   lower bands invert their upper counterparts.
-            is_upper_band = ( (i >= 6) & (i < 12) ) | ( (i >= 12) & (i < 18) )
+            # Base start color by column & band (your original logic)
+            is_upper_band = ((i >= 6) & (i < 12)) | ((i >= 12) & (i < 18))
             start_light = jnp.where(
                 is_left_column,
-                # left column: upper starts LIGHT, lower starts DARK
-                jnp.where(is_upper_band, True, False),
-                # right column: upper starts DARK, lower starts LIGHT
-                jnp.where(is_upper_band, False, True)
+                jnp.where(is_upper_band, True, False),   # left column: upper starts LIGHT, lower starts DARK
+                jnp.where(is_upper_band, False, True)    # right column: upper starts DARK,  lower starts LIGHT
             )
 
+            # --- Flip alternation for specific bands: upper-right (6..11) and lower-left (18..23) ---
+            # band_id: 0=lower-right, 1=upper-right, 2=upper-left, 3=lower-left
+            band_id = jnp.where(i < 6, 0,
+                        jnp.where(i < 12, 1,
+                        jnp.where(i < 18, 2, 3)))
+            flip = (band_id == 1) | (band_id == 3)
+            start_light = jnp.logical_xor(start_light, flip)
+
+            # Alternate color within the band
             use_light = jnp.where(start_light, (band_idx % 2 == 0), (band_idx % 2 == 1))
             color = jax.lax.select(use_light, self.color_triangle_light, self.color_triangle_dark)
 
