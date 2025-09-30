@@ -33,6 +33,7 @@ class TurmoilConstants(NamedTuple):
         (8, 11), # x_shape
         (4, 5), # sonic boom
     )
+    ENEMY_SIZE_FOR_COLLISION = (8, 13)  # max values from ENEMY_SIZE
     PRIZE_SIZE = (8, 9)
 
     # y offsets for finding the middle of the lane for each sprite
@@ -97,8 +98,8 @@ class TurmoilConstants(NamedTuple):
     PRIZE_TO_BOOM_TIME = 150
 
     # game phases
-    LOADING_GAME_PHASE_TIME = 100
-    PLAYER_SHRINK_TIME = 100
+    LOADING_GAME_PHASE_TIME = 50
+    PLAYER_SHRINK_TIME = 96
     LVL_CHANGE_SCORES = (
         200,  # lvl 1
         400,  # lvl 2
@@ -254,12 +255,18 @@ def load_sprites():
     # player shrink sprites
     PLAYER_SHRINK = jnp.concatenate(
         [
-            jnp.repeat(player_shrink_sprites[0][None], 4, axis=0),
-            jnp.repeat(player_shrink_sprites[1][None], 4, axis=0),
-            jnp.repeat(player_shrink_sprites[2][None], 4, axis=0),
-            jnp.repeat(player_shrink_sprites[3][None], 4, axis=0),
-            jnp.repeat(player_shrink_sprites[4][None], 4, axis=0),
-            jnp.repeat(player_shrink_sprites[5][None], 4, axis=0),
+            jnp.repeat(player_shrink_sprites[0][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[1][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[2][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[3][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[4][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[5][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[5][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[4][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[3][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[2][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[1][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[0][None], 8, axis=0),
         ]
     )
 
@@ -777,7 +784,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         # if player fired and there is no active bullet, create on in player_direction
         new_bullet = jnp.where(
-            jnp.logical_and(fire, jnp.logical_not(state.bullet[2])),
+            jnp.logical_and(jnp.logical_and(fire, jnp.logical_not(state.bullet[2])), jnp.logical_not(state.game_phase == 2)),
             jnp.where(
                 state.player_direction == -1,
                 jnp.array([
@@ -861,9 +868,9 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         # spawn new prize
         new_prize, rng_rest = jax.lax.cond(
-            state.prize[3],
+            jnp.logical_and(state.prize[3] == 0, jnp.logical_not(state.game_phase == 2)),
+            lambda : spawn(state, state.rng_key),
             lambda : (state.prize, state.rng_key),
-            lambda : spawn(state, state.rng_key)
         )
 
         # reduce boom_timer
@@ -877,7 +884,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_prize, rng_rest
 
-
+    @partial(jax.jit, static_argnums=(0,))
     def spawn_data(self, rng: chex.PRNGKey, state: TurmoilState, spawn_prob: float = 1):
         """
         Returns (new_rng, if_spawn, enemy_type, lane, direction).
@@ -905,7 +912,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             lane_idx = jax.random.randint(lane_key, (), 0, num_inactive)
             lane = jax.lax.dynamic_index_in_dim(inactive_indices, lane_idx, keepdims=False)
 
-            enemy_type = jax.random.choice(type_key, jnp.array([0, 1, 3, 4, 5, 6, 7]))
+            enemy_type = jax.random.choice(type_key, jnp.array([0, 1, 2, 3, 4, 5, 6, 7]))
             direction = jax.random.choice(dir_key, jnp.array([-1, 1]))
 
             return (
@@ -924,7 +931,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return jax.lax.cond(num_inactive == 0, no_spawn, maybe_spawn, rng)
 
 
-
+    @partial(jax.jit, static_argnums=(0,))
     def change_type(self, state: TurmoilState):
         """
         Change type of arrow -> tank or pize -> sonic_boom
@@ -1088,6 +1095,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_enemy
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_score(self, state: TurmoilState, enemy_type) :
         new_score = jax.lax.switch(
             enemy_type,
@@ -1105,29 +1113,63 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         return new_score
+    
 
+    @partial(jax.jit, static_argnums=(0,))
+    def check_collision_batch(self, pos1, size1, pos2_array, size2):
+        """Check collision between one entity and an array of entities"""
+        # Calculate edges for rectangle 1
+        rect1_left = pos1[0]
+        rect1_right = pos1[0] + size1[0]
+        rect1_top = pos1[1]
+        rect1_bottom = pos1[1] + size1[1]
+
+        # Calculate edges for all rectangles in pos2_array
+        rect2_left = pos2_array[:, 0]
+        rect2_right = pos2_array[:, 0] + size2[0]
+        rect2_top = pos2_array[:, 1]
+        rect2_bottom = pos2_array[:, 1] + size2[1]
+
+        # Check overlap for all entities
+        horizontal_overlaps = jnp.logical_and(
+            rect1_left < rect2_right,
+            rect1_right > rect2_left
+        )
+
+        vertical_overlaps = jnp.logical_and(
+            rect1_top < rect2_bottom,
+            rect1_bottom > rect2_top
+        )
+
+        # Combine checks for each entity
+        collisions = jnp.logical_and(horizontal_overlaps, vertical_overlaps)
+
+        return collisions
+    
+    
+    @partial(jax.jit, static_argnums=(0,))
     def bullet_enemy_collision_step(self, state: TurmoilState):
         """
         Find collision of bullets with enemies and deactivate both
         in case of collision
         """
-        bx, by = state.bullet[0], state.bullet[1]
-        ex = state.enemy[:, 1]
-        ey = state.enemy[:, 2]
-        active = state.enemy[:, 3]
+        bullet_pos = jnp.array([state.bullet[0], state.bullet[1]])
+        bullet_size = self.consts.BULLET_SIZE
 
-        w, h = (8, 13) # max values from self.consts.ENEMY_SIZE
+        enemy_pos = state.enemy[:, 1:3]
+        enemy_active = state.enemy[:, 3]
+        enemy_size = self.consts.ENEMY_SIZE_FOR_COLLISION
 
-        hit = (
-            (active == 1) &
-            (bx >= ex) & (bx <= ex + w) &
-            (by >= ey) & (by <= ey + h)
-        )
+        # mask inactive enemies
+        active_enemy_pos = jnp.where(enemy_active[:, None] == 1, enemy_pos, -9999)
 
-        # deactivate  collided enemy
+        # use batch collision
+        hit = self.check_collision_batch(bullet_pos, bullet_size, active_enemy_pos, enemy_size)
+
+        # deactivate collided enemy
         new_enemy = jnp.where(
             state.bullet[2] == 1,
-            state.enemy.at[:, 3].set(jnp.where(hit, 0, active)),
+            state.enemy.at[:, 3].set(jnp.where(hit, 0, enemy_active)),
             state.enemy
         )
 
@@ -1138,16 +1180,54 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.bullet
         )
 
-        # if any enemy hit then update score (assumption only 1 enemy shot at a time)
+        # update score if any enemy hit
         hit_type = state.enemy[:, 0][jnp.argmax(hit)].astype(jnp.int32)
-
         new_score = jax.lax.cond(
             jnp.any(hit),
-            lambda : self.update_score(state, hit_type),
-            lambda : state.score,
+            lambda: self.update_score(state, hit_type),
+            lambda: state.score,
         )
 
         return new_bullet, new_enemy, new_score
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def check_player_enemy_collision(self, state: TurmoilState) :
+        # player rectangle
+        player_pos = jnp.array([state.player_x, state.player_y])
+        player_size = self.consts.PLAYER_SIZE
+
+        enemy_pos = state.enemy[:, 1:3]   # take x, y columns
+        enemy_active = state.enemy[:, 3]  # active flag
+        enemy_size = self.consts.ENEMY_SIZE_FOR_COLLISION
+
+        # mask inactive enemies
+        active_enemy_pos = jnp.where(enemy_active[:, None] == 1, enemy_pos, -9999)
+
+        # check collisions
+        collisions = self.check_collision_batch(player_pos, player_size, active_enemy_pos, enemy_size)
+
+        any_collision = jnp.any(collisions)
+
+        # mark collided enemy inactive
+        new_enemy_active = jnp.where(
+            collisions,
+            0,
+            enemy_active
+        )
+
+        new_enemy = state.enemy.at[:, 3].set(new_enemy_active)
+
+        new_ships = state.ships - any_collision.astype(jnp.int32)
+
+        new_player_shrink = jnp.where(
+            any_collision,
+            1,
+            state.player_shrink
+        )
+
+        return new_player_shrink, new_ships, new_enemy
+
 
     @partial(jax.jit, static_argnums=(0,))
     def game_control(self, state: TurmoilState) :
@@ -1279,6 +1359,17 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             player_move_unlock=new_player_move_unlock,
         )
 
+        # player collision
+        new_player_shrink, new_ships, new_enemy = self.check_player_enemy_collision(
+            new_state
+        )
+
+        new_state = new_state._replace(
+            player_shrink=new_player_shrink,
+            ships=new_ships, 
+            enemy=new_enemy,
+        )
+
         # bullet
         new_bullet = self.bullet_step(
             new_state,
@@ -1395,7 +1486,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return new_state
     
     @partial(jax.jit, static_argnums=(0,))
-    def _player_shrink_animation(self, state: TurmoilState, action: chex.Array) :
+    def _player_shrink_animation_step(self, state: TurmoilState, action: chex.Array) :
         """
         step for shrinking player, if player enemy collision happens
         """
@@ -1421,6 +1512,54 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             player_shrink=new_player_shrink,
         )
 
+        # bullet
+        new_bullet = self.bullet_step(
+            new_state,
+            action
+        )
+
+        new_state = new_state._replace(
+            bullet=new_bullet
+        )
+
+        # bullet enemy collision
+        new_bullet, new_enemy, new_score = self.bullet_enemy_collision_step(
+            new_state
+        )
+        
+        new_state = new_state._replace(
+            bullet=new_bullet,
+            enemy=new_enemy,
+            score=new_score
+        )
+        
+        # enemy
+        new_enemy = self.enemy_step(
+            new_state,
+        )
+
+        new_state = new_state._replace(
+            enemy=new_enemy
+        )
+
+        # change types
+        new_enemy, new_prize = self.change_type(new_state)
+        
+        new_state = new_state._replace(
+            enemy=new_enemy,
+            prize=new_prize
+        )
+
+        # prize
+        new_prize, rng_rest = self.prize_step(
+            new_state,
+        )
+
+        new_state = new_state._replace(
+            prize=new_prize,
+            rng_key=rng_rest
+        )
+
         return new_state
     
     @partial(jax.jit, static_argnums=(0, ))
@@ -1435,7 +1574,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             [
                 lambda s: self._game_loading_step(s, action),
                 lambda s: self._normal_game_step(s, action),
-                lambda s: self._player_shrink_animation(s, action),
+                lambda s: self._player_shrink_animation_step(s, action),
             ],
             state,
         )
@@ -1469,14 +1608,26 @@ class TurmoilRenderer(JAXGameRenderer):
             )
 
             # render player
-            frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
-            raster = jr.render_at(
-                raster,
-                state.player_x,
-                state.player_y,
-                frame_pl_ship,
-                flip_horizontal = state.player_direction == self.consts.FACE_LEFT,
-            )
+            def _render_player(raster):
+                flip = state.player_direction == self.consts.FACE_LEFT
+
+                def render_normal():
+                    frame = jr.get_sprite_frame(PLAYER_SHIP, 0)
+                    return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
+
+                def render_shrink():
+                    frame = jr.get_sprite_frame(PLAYER_SHRINK, state.step_counter)
+                    return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
+
+                raster = jax.lax.cond(
+                    state.game_phase == 2,
+                    render_shrink,
+                    render_normal,
+                )
+
+                return raster
+
+            raster = _render_player(raster)
 
             # render bullet
             frame_bullet = jr.get_sprite_frame(BULLET, 0)
