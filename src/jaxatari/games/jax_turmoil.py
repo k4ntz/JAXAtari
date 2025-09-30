@@ -100,7 +100,7 @@ class TurmoilConstants(NamedTuple):
 
     # game phases
     LOADING_GAME_PHASE_TIME = 50
-    PLAYER_SHRINK_TIME = 96
+    PLAYER_SHRINK_TIME = 120
     LVL_CHANGE_SCORES = (
         200,  # lvl 1
         400,  # lvl 2
@@ -256,18 +256,16 @@ def load_sprites():
     # player shrink sprites
     PLAYER_SHRINK = jnp.concatenate(
         [
-            jnp.repeat(player_shrink_sprites[0][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[1][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[2][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[3][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[4][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[5][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[5][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[4][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[3][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[2][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[1][None], 8, axis=0),
-            jnp.repeat(player_shrink_sprites[0][None], 8, axis=0),
+            jnp.repeat(player_shrink_sprites[0][None], 31, axis=0),
+            jnp.repeat(player_shrink_sprites[1][None], 5, axis=0),
+            jnp.repeat(player_shrink_sprites[2][None], 7, axis=0),
+            jnp.repeat(player_shrink_sprites[3][None], 5, axis=0),
+            jnp.repeat(player_shrink_sprites[4][None], 7, axis=0),
+            jnp.repeat(player_shrink_sprites[5][None], 23, axis=0),
+            jnp.repeat(player_shrink_sprites[5][None], 23, axis=0),
+            jnp.repeat(player_shrink_sprites[4][None], 7, axis=0),
+            jnp.repeat(player_shrink_sprites[3][None], 5, axis=0),
+            jnp.repeat(player_shrink_sprites[2][None], 7, axis=0),
         ]
     )
 
@@ -1665,7 +1663,7 @@ class TurmoilRenderer(JAXGameRenderer):
                     return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
 
                 def render_shrink():
-                    frame = jr.get_sprite_frame(PLAYER_SHRINK, state.step_counter)
+                    frame = jr.get_sprite_frame(PLAYER_SHRINK, state.game_phase_timer)
                     return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
 
                 raster = jax.lax.cond(
