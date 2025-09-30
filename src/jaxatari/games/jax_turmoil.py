@@ -52,10 +52,10 @@ class TurmoilConstants(NamedTuple):
     )
 
     # player
-    PLAYER_SPEED = 10
     PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[6] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
-    PLAYER_STEP_COOLDOWN = (0, 20) # (x cooldown, y cooldown)
-    PLAYER_STEP = (1, 21) # (x_step_size, y_step_size)
+    PLAYER_STEP_COOLDOWN = (0, 10) # (x cooldown, y cooldown)
+    PLAYER_SPEED = (1, 21) # (x_step_size, y_step_size)
+    PLAYER_X_LANE_MOVEMENT_BUFFER = PLAYER_SIZE[1] // 2 # +/- this amount from VERTICAL_LANE player can move vertically
 
     # directions
     FACE_LEFT = -1
@@ -90,19 +90,20 @@ class TurmoilConstants(NamedTuple):
         5, # sonic boom
     )
 
-    # probability of spawning when there is slot available
-    ENEMY_SPAWN_PROBABILITY = 0.6
-    PRIZE_SPAWN_PROBABILITY = 0.1
     TANK_PUSH_BACK = 5
+
+    # probability of spawning when there is slot available for each level
+    ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+    PRIZE_SPAWN_PROBABILITY = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
     
     # prize
     PRIZE_TO_BOOM_TIME = 300
     PRIZE_SCORE_REWARD = 800
 
-    # game phases
+    # game phases and control
     LOADING_GAME_PHASE_TIME = 50
     PLAYER_SHRINK_TIME = 120
-    LVL_CHANGE_SCORES = (
+    LVL_CHANGE_SCORES = ( # lvl end scores TODO find exact
         200,  # lvl 1
         400,  # lvl 2
         800,  # lvl 3
@@ -112,7 +113,7 @@ class TurmoilConstants(NamedTuple):
         5000, # lvl 7
         8000, # lvl 8
         10000 # lvl 9
-    ) # lvl end scores TODO find exact
+    )
     BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
 
 
@@ -630,7 +631,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
         
         def can_move_vertical(player_x) :
-            return player_x == self.consts.VERTICAL_LANE
+            return jnp.logical_and(
+                player_x >= self.consts.VERTICAL_LANE - self.consts.PLAYER_X_LANE_MOVEMENT_BUFFER,
+                player_x <= self.consts.VERTICAL_LANE + self.consts.PLAYER_X_LANE_MOVEMENT_BUFFER,
+            )
         
         # cooldown so player does not go too fast
         player_step_cooldown = jnp.where(
@@ -644,10 +648,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             jnp.logical_and(player_step_cooldown[0] <= 0, can_move_horizontal(state)),
             jnp.where(
                 right,
-                state.player_x + self.consts.PLAYER_STEP[0],
+                state.player_x + self.consts.PLAYER_SPEED[0],
                 jnp.where(
                     left,
-                    state.player_x - self.consts.PLAYER_STEP[0],
+                    state.player_x - self.consts.PLAYER_SPEED[0],
                     state.player_x
                 )
             ),
@@ -658,14 +662,26 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             jnp.logical_and(player_step_cooldown[1] <= 0, can_move_vertical(player_x)),
             jnp.where(
                 down,
-                state.player_y + self.consts.PLAYER_STEP[1],
+                state.player_y + self.consts.PLAYER_SPEED[1],
                 jnp.where(
                     up,
-                    state.player_y - self.consts.PLAYER_STEP[1],
+                    state.player_y - self.consts.PLAYER_SPEED[1],
                     state.player_y
                 )
             ),
             state.player_y
+        )
+
+        # if moved vertical set player to VERTICAL_LANE
+        moved_vertically = jnp.logical_and(
+            jnp.logical_and(player_step_cooldown[1] <= 0, can_move_vertical(player_x)),
+            jnp.logical_or(up, down)
+        )
+
+        player_x = jnp.where(
+            moved_vertically,
+            self.consts.VERTICAL_LANE,
+            player_x
         )
 
         player_direction = jnp.where(
@@ -844,7 +860,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             rng_rest, if_spawn, _, lane, direction = self.spawn_data(
                 rng_in,
                 state,
-                self.consts.PRIZE_SPAWN_PROBABILITY
+                jnp.take(
+                    jnp.array(self.consts.PRIZE_SPAWN_PROBABILITY),
+                    state.level - 1
+                ),
             )
 
             new_prize = jnp.where(
@@ -1057,7 +1076,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         rng_rest, if_spawn, enemy_type, lane, direction = self.spawn_data(
             state.rng_key,
             state,
-            self.consts.ENEMY_SPAWN_PROBABILITY,
+            jnp.take(
+                jnp.array(self.consts.ENEMY_SPAWN_PROBABILITY),
+                state.level - 1
+            ),
         )
 
         # spawn
