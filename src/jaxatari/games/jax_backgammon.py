@@ -55,6 +55,7 @@ class BackgammonState(NamedTuple):
     await_keyup: bool = False  # new: blocks repeats until NOOP arrives
     await_keyup: bool = False
     last_valid_drop: int = -1  # -1 means no persistent highlight
+    picked_bar_side: int = -1  # 24 (left), 26 (right), or -1 if not from bar
 
 
 
@@ -599,119 +600,101 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # ---------- helpers (JAX-safe) ----------
         def handle_cursor_move(s, direction):
-            """Cursor move with split BAR (24 left, 26 right) + HOME (25) bear-off jump.
+            """
+            Cursor moves on the rotated ring:
 
-            Bar halves behave like normal triangles for cursor movement, but you cannot drop there.
-            - Left bar (24) sits between points 5 and 6:
-                from 5 + RIGHT → 24, from 6 + LEFT → 24,
-                from 24: LEFT → 5, RIGHT → 6
-            - Right bar (26) sits between points 17 and 18:
-                from 17 + RIGHT → 26, from 18 + LEFT → 26,
-                from 26: LEFT → 17, RIGHT → 18
+            LEFT  : 0→1→2→3→4→5→26→6→7→8→9→10→11→12→13→14→15→16→17→24→18→19→20→21→22→23
+            RIGHT : reverse of the above.
 
-            HOME (25):
-            While carrying (game_phase==2) you may jump to HOME:
-                * WHITE at 23 + RIGHT → 25
-                * BLACK at 0  + LEFT  → 25
-            From HOME you can only go back to the edge point:
-                * WHITE: 25 + LEFT  → 23
-                * BLACK: 25 + RIGHT → 0
+            Rules:
+            - Bars (24, 26) are cursor-only (you can stand on them but not drop there).
+            - No wrap 0↔23 ever.
+            - While MOVING at 0/23:
+                * at 0  : RIGHT does nothing (unless legal bear-off jump to 25), LEFT is allowed.
+                * at 23 : LEFT  does nothing (unless legal bear-off jump to 25), RIGHT is allowed.
+            - Leaving HOME (25) only back to its visual edge (25+LEFT→23 for White, 25+RIGHT→0 for Black).
             """
             can_move = (s.game_phase == 1) | (s.game_phase == 2)
             pos      = s.cursor_position
 
             is_left  = jnp.array(direction == -1, dtype=jnp.bool_)
-            is_right = jnp.array(direction == 1,  dtype=jnp.bool_)
+            is_right = jnp.array(direction ==  1, dtype=jnp.bool_)
 
             at_home       = (pos == jnp.int32(self.consts.HOME_INDEX))   # 25
-            at_bar_left   = (pos == jnp.int32(self.consts.BAR_INDEX))    # 24
-            at_bar_right  = (pos == jnp.int32(26))                       # cursor-only (no board index)
             at_left_edge  = (pos == jnp.int32(0))
             at_right_edge = (pos == jnp.int32(23))
-            at_5  = (pos == jnp.int32(5))
-            at_6  = (pos == jnp.int32(6))
-            at_17 = (pos == jnp.int32(17))
-            at_18 = (pos == jnp.int32(18))
 
             is_moving = (s.game_phase == jnp.int32(2))
             is_white  = (s.current_player == self.consts.WHITE)
-            # is_black = ~is_white  # not needed explicitly below
 
-            # --- HOME: only back to the edge point ---
-            from_home_target = jax.lax.cond(
-                is_white,
-                lambda _: jax.lax.select(is_left,  jnp.int32(23), pos),  # White: 25 + Left → 23
-                lambda _: jax.lax.select(is_right, jnp.int32(0),  pos),  # Black: 25 + Right → 0
-                operand=None
+            # Rotated ring order (26 = right bar, 24 = left bar)
+            ring = jnp.array(
+                [0, 1, 2, 3, 4, 5, 26, 6, 7, 8, 9, 10, 11,
+                12, 13, 14, 15, 16, 17, 24, 18, 19, 20, 21, 22, 23],
+                dtype=jnp.int32
             )
+            ring_len = ring.shape[0]
 
-            # --- Split bar neighbors (leaving each half) ---
-            leave_bar_left_target  = jax.lax.select(is_left,  jnp.int32(5),
-                                        jax.lax.select(is_right, jnp.int32(6), pos))
-            leave_bar_right_target = jax.lax.select(is_left,  jnp.int32(17),
-                                        jax.lax.select(is_right, jnp.int32(18), pos))
+            # Precompute next maps for LEFT/RIGHT on the ring
+            def build_maps(_):
+                next_left  = jnp.arange(27, dtype=jnp.int32)
+                next_right = jnp.arange(27, dtype=jnp.int32)
+                def body(i, carry):
+                    nL, nR = carry
+                    a = ring[i]
+                    b = ring[(i + 1) % ring_len]  # LEFT goes forward in ring array
+                    c = ring[(i - 1) % ring_len]  # RIGHT goes backward in ring array
+                    nL = nL.at[a].set(b)
+                    nR = nR.at[a].set(c)
+                    return (nL, nR)
+                return jax.lax.fori_loop(0, ring_len, body, (next_left, next_right))
 
-            # Enter each bar half only from its adjacent points (NOT from 0 or 23)
-            enter_bar_left  = ( (at_5  & is_right) | (at_6  & is_left)  )
-            enter_bar_right = ( (at_17 & is_right) | (at_18 & is_left) )
+            next_left, next_right = build_maps(None)
 
-            # --- HOME jump (bear-off cursor spot) guardrails ---
+            # Candidate target from ring movement (no special cases yet)
+            ring_target = jax.lax.select(is_left, next_left[pos],
+                            jax.lax.select(is_right, next_right[pos], pos))
+
+            # ---- Bear-off jump to HOME (only when MOVING and bearing-off is allowed) ----
             not_from_bar     = (s.picked_checker_from != jnp.int32(self.consts.BAR_INDEX))
             can_bear_off_now = self.check_bearing_off(s, s.current_player)
+            # Your desired directions:
+            #  - from 23 with LEFT  → 25 (White)
+            #  - from  0 with RIGHT → 25 (Black)
+            jump_home_white  = is_moving & is_left  & at_right_edge & is_white
+            jump_home_black  = is_moving & is_right & at_left_edge  & (~is_white)
+            to_home_attempt  = (jump_home_white | jump_home_black) & not_from_bar & can_bear_off_now
+            home_target      = jnp.int32(self.consts.HOME_INDEX)
 
-            jump_home_from_right = is_moving & is_white & at_right_edge & is_right   # 23 → 25
-            jump_home_from_left  = is_moving & (~is_white) & at_left_edge  & is_left # 0  → 25
-            to_home_attempt = (jump_home_from_right | jump_home_from_left) & not_from_bar & can_bear_off_now
-            home_target     = jnp.int32(self.consts.HOME_INDEX)  # 25
+            # ---- Block wrap 0↔23 always ----
+            block_wrap = (at_left_edge & is_right) | (at_right_edge & is_left)
+            ring_target = jax.lax.select(block_wrap, pos, ring_target)
 
-            # Base step (allow 26 as cursor-only); we’ll block illegal 24/26 below.
-            base_step = jnp.clip(pos + jnp.int32(direction), 0, 26)
+            # ---- While MOVING on edges, block only the forbidden direction (don't "stick") ----
+            # At 0  : block RIGHT (unless home jump)
+            # At 23 : block LEFT  (unless home jump)
+            block_edge_dir = is_moving & (
+                (at_left_edge  & is_right & (~to_home_attempt)) |
+                (at_right_edge & is_left  & (~to_home_attempt))
+            )
+            ring_target = jax.lax.select(block_edge_dir, pos, ring_target)
 
-            # Block any arrival at 24 unless it’s from 5→RIGHT or 6→LEFT (or we’re already at 24 leaving it)
-            base_step = jax.lax.cond(
-                (base_step == jnp.int32(self.consts.BAR_INDEX)) & (~enter_bar_left) & (~at_bar_left),
-                lambda _: pos,
-                lambda _: base_step,
+            # ---- Leaving HOME only to the correct edge ----
+            from_home_target = jax.lax.cond(
+                is_white,
+                lambda _: jax.lax.select(is_left,  jnp.int32(23), pos),  # White: 25 + LEFT  → 23
+                lambda _: jax.lax.select(is_right, jnp.int32(0),  pos),  # Black: 25 + RIGHT → 0
                 operand=None
             )
-            # Block any arrival at 26 unless it’s from 17→RIGHT or 18→LEFT (or we’re already at 26 leaving it)
-            base_step = jax.lax.cond(
-                (base_step == jnp.int32(26)) & (~enter_bar_right) & (~at_bar_right),
-                lambda _: pos,
-                lambda _: base_step,
-                operand=None
-            )
 
-            # Final target resolution:
+            # Final resolution:
+            # 1) If at HOME → restrict leaving
+            # 2) Else if a legal HOME jump now → 25
+            # 3) Else follow the (possibly blocked) ring target
             target_if_move = jax.lax.cond(
                 at_home,
                 lambda _: from_home_target,
-                lambda _: jax.lax.cond(
-                    at_bar_left,
-                    lambda _: leave_bar_left_target,
-                    lambda _: jax.lax.cond(
-                        at_bar_right,
-                        lambda _: leave_bar_right_target,
-                        lambda _: jax.lax.cond(
-                            enter_bar_left,
-                            lambda _: jnp.int32(self.consts.BAR_INDEX),   # 24
-                            lambda _: jax.lax.cond(
-                                enter_bar_right,
-                                lambda _: jnp.int32(26),                   # 26 (cursor only)
-                                lambda _: jax.lax.cond(
-                                    to_home_attempt,
-                                    lambda _: home_target,
-                                    lambda _: base_step,
-                                    operand=None
-                                ),
-                                operand=None
-                            ),
-                            operand=None
-                        ),
-                        operand=None
-                    ),
-                    operand=None
-                ),
+                lambda _: jax.lax.select(to_home_attempt, home_target, ring_target),
                 operand=None
             )
 
@@ -739,10 +722,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 )
                 has_checker = selectable > 0
                 picked_from = jax.lax.select(is_bar_cursor, jnp.int32(self.consts.BAR_INDEX), pos)
-
+                picked_bar_side = jax.lax.select(is_bar_cursor, pos, ss.picked_bar_side)
+                
                 ns = jax.lax.cond(
                     has_checker,
-                    lambda s2: s2._replace(picked_checker_from=picked_from, game_phase=2),
+                    # enter MOVING and remember which bar half we picked from
+                    lambda s2: s2._replace(
+                        picked_checker_from=picked_from,
+                        picked_bar_side=picked_bar_side,
+                        game_phase=2
+                    ),
                     lambda s2: s2,
                     operand=ss
                 )
@@ -763,20 +752,22 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                         operand=None
                     )
                     fs = ns._replace(
-                        picked_checker_from=-1, 
-                        game_phase=next_phase, 
-                        cursor_position=next_cursor, 
+                        picked_checker_from=-1,
+                        picked_bar_side=-1,                   
+                        game_phase=next_phase,
+                        cursor_position=next_cursor,
                         key=key,
-                        last_valid_drop=s2.cursor_position  # Store destination
+                        last_valid_drop=s2.cursor_position
                     )
                     return obs, fs, reward, done, info
 
                 def invalid_drop(s2):
                     # Checker jumps back: move cursor to origin, return to SELECTING phase
                     ns = s2._replace(
-                        picked_checker_from=-1,           # Drop the checker
-                        game_phase=1,                     # Back to SELECTING
-                        cursor_position=s2.picked_checker_from  # Move cursor to origin
+                        picked_checker_from=-1,
+                        picked_bar_side=-1,                   # reset
+                        game_phase=1,
+                        cursor_position=s2.picked_checker_from
                     )
                     return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
@@ -984,9 +975,20 @@ class BackgammonRenderer(JAXGameRenderer):
         self.triangle_length = 60
         self.triangle_thickness = 12
         self.bar_thickness = 14
-        self.checker_width = 8  # rectangular checkers
-        self.checker_height = 4  # smaller height
-        self.checker_stack_offset = 5  # vertical stacking distance
+        # Chip geometry
+        self.checker_width  = 4
+        self.checker_height = 4
+
+        # Horizontal distance of the first column from the triangle BASE edge
+        self.base_margin = 2          # pixels
+
+        # vertical & horizontal spacing controls
+        self.band_top_margin    = 1.2   # distance from top band edge
+        self.band_bottom_margin = 1   # distance from bottom band edge
+        self.chip_gap_y         = 2   # vertical gap between the two chip rows
+        self.chip_gap_x         = 4   # horizontal gap between columns (used in cx step)
+
+        self.checker_stack_offset = 4
 
         self.edge_line_thickness = 2
         self.edge_line_color     = jnp.array([81, 146, 119], dtype=jnp.uint8)
@@ -997,37 +999,44 @@ class BackgammonRenderer(JAXGameRenderer):
         self.triangle_positions = self._compute_triangle_positions()
 
     def _compute_triangle_positions(self):
-        positions = []
-
-        left_x = self.board_margin
+        # Screen anchors
+        left_x  = self.board_margin
         right_x = self.frame_width - self.board_margin - self.triangle_length
 
-        # Top-left (0–5)
-        for i in range(6):
-            y = self.top_margin_for_dice + self.board_margin + i * self.triangle_thickness
-            positions.append((left_x, y))
+        y_top    = self.top_margin_for_dice + self.board_margin
+        y_bottom = self.frame_height - self.board_margin
+        band_h   = 6 * self.triangle_thickness
 
-        # Bottom-left (6–11), top-to-bottom
-        for i in range(6):
-            y = self.frame_height - self.board_margin - (6 - i) * self.triangle_thickness
-            positions.append((left_x, y))
+        positions = []
 
-        # Bottom-right (12–17)
+        # 0..5  (lower-right)  bottom -> top   (0 lowest, 5 highest)
         for i in range(6):
-            y = self.frame_height - self.board_margin - (i + 1) * self.triangle_thickness
+            y = y_bottom - (i + 1) * self.triangle_thickness
             positions.append((right_x, y))
 
-        # Top-right (18–23), bottom-to-top
+        # 6..11 (upper-right)  bottom -> top   (6 lowest near center, 11 highest)
         for i in range(6):
-            y = self.top_margin_for_dice + self.board_margin + (5 - i) * self.triangle_thickness
+            y = y_top + (5 - i) * self.triangle_thickness
             positions.append((right_x, y))
 
-        # Add bar (24) → center of the board
-        bar_center_x = self.bar_x + self.bar_width // 2
+        # 12..17 (upper-left)  top -> bottom   (12 highest, 17 lowest)
+        for i in range(6):
+            y = y_top + i * self.triangle_thickness
+            positions.append((left_x, y))
+
+        # 18..23 (lower-left)  top -> bottom   (18 highest near center, 23 lowest)  <-- FIX
+        lower_left_top_y = y_bottom - band_h  # top edge of the lower band
+        for i in range(6):
+            y = lower_left_top_y + i * self.triangle_thickness
+            positions.append((left_x, y))
+
+        # bar-left (24): center of left half of the bar (logic unchanged)
+        bar_left_x   = self.bar_x + (self.bar_width // 4)
         bar_center_y = self.bar_y + self.bar_thickness // 2
-        positions.append((bar_center_x, bar_center_y))
+        positions.append((bar_left_x, bar_center_y))
 
         return jnp.array(positions, dtype=jnp.int32)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_rectangle(self, frame, x, y, width, height, color):
@@ -1082,7 +1091,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
         frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h, self.color_board)
 
-        # Split bar into two half rectangles (left for White, right for Red)
+        # Split bar into two half rectangles (left for Red, right for White)
         half_w = self.bar_width // 2
         # left half
         frame = self._draw_rectangle(frame, self.bar_x, self.bar_y, half_w, self.bar_thickness, self.color_border)
@@ -1092,30 +1101,57 @@ class BackgammonRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_triangles(self, frame):
-        left_x = self.board_margin
+        """
+        Draw triangles using the rotated layout.
+        - Left column triangles point RIGHT (toward center)
+        - Right column triangles point LEFT (toward center)
+        - Alternate colors by column and row to get the classic pattern.
+        """
+        left_x  = self.board_margin
+        right_x = self.frame_width - self.board_margin - self.triangle_length
 
         def draw_triangle_at_index(i, fr):
             pos = self.triangle_positions[i]
             x = pos[0]; y = pos[1]
 
-            group  = i // 6        # 0: top-left, 1: bottom-left, 2: bottom-right, 3: top-right
-            within = i % 6
+            # Column flags
+            is_left_column  = (x == left_x)
+            is_right_column = ~is_left_column
 
-            # Base: columns (left groups 0/1 start light, right groups 2/3 start dark)
-            base_start_light = jnp.logical_or(group == 0, group == 3)
+            # Row index within its column band (0..5). We can reconstruct an index
+            # inside each visual band based on i’s range after the remap:
+            #  - lower-right:  i in 0..5
+            #  - upper-right:  i in 6..11
+            #  - upper-left:   i in 12..17
+            #  - lower-left:   i in 18..23
+            # We’ll use this to alternate colors.
+            band_idx = jnp.where(i < 6, i,
+                    jnp.where(i < 12, i - 6,
+                    jnp.where(i < 18, i - 12, i - 18)))
 
-            # Flip the start color for *bottom* groups so they’re the inverse of the top
-            is_bottom = jnp.logical_or(group == 1, group == 2)
-            start_light = jax.lax.select(is_bottom, ~base_start_light, base_start_light)
+            # Choose start color per band so it looks like a real board:
+            #   right column upper band starts DARK,
+            #   left column upper band starts LIGHT,
+            #   lower bands invert their upper counterparts.
+            is_upper_band = ( (i >= 6) & (i < 12) ) | ( (i >= 12) & (i < 18) )
+            start_light = jnp.where(
+                is_left_column,
+                # left column: upper starts LIGHT, lower starts DARK
+                jnp.where(is_upper_band, True, False),
+                # right column: upper starts DARK, lower starts LIGHT
+                jnp.where(is_upper_band, False, True)
+            )
 
-            # Alternate within each group
-            use_light = jnp.where(start_light, (within % 2 == 0), (within % 2 == 1))
-
+            use_light = jnp.where(start_light, (band_idx % 2 == 0), (band_idx % 2 == 1))
             color = jax.lax.select(use_light, self.color_triangle_light, self.color_triangle_dark)
-            point_right = (x == self.board_margin)  # left column points right, right column points left
+
+            # Tip direction: left column points right; right column points left.
+            point_right = is_left_column
+
             return self._draw_triangle(fr, x, y, self.triangle_length, self.triangle_thickness, color, point_right)
 
         return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_edge_lines(self, frame):
@@ -1143,64 +1179,62 @@ class BackgammonRenderer(JAXGameRenderer):
         return frame
 
 
-    @partial(jax.jit, static_argnums=(0,))
     def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
         """
-        Draw Atari-like stacks: tiny rectangles, 2-high, extending HORIZONTALLY
-        along the triangle toward its tip. Top halves attach to the top edge; bottom
-        halves attach to the bottom edge.
+        Draw 2-high stacks of square chips that march horizontally toward the triangle tip.
+        Top band sits `band_top_margin` below the band edge.
+        Bottom band sits `band_bottom_margin` above the band edge.
+        Vertical spacing is symmetric.
         """
         pos = self.triangle_positions[point_idx]
-        x = pos[0];
-        y = pos[1]
+        x, y = pos[0], pos[1]
 
-        # left columns have x == board_margin → stacks go left→right
-        left_x = self.board_margin
-        is_left_column = (x == left_x)
-        is_top_half = (point_idx < 12)
+        is_left_column = (x == self.board_margin)
+        is_top_half    = (point_idx < 12)
 
-        # horizontal direction (+1 for left columns, -1 for right columns)
-        dir_sign = jnp.where(is_left_column, 1, -1)
+        # marching direction (+1 for left column, -1 for right column)
+        step = jnp.where(is_left_column, 1, -1)
 
-        # starting x near the base of the triangle (not the tip)
+        # start near the triangle base (center side)
         base_x = jnp.where(
             is_left_column,
-            x + 2,  # left columns start near left edge
-            x + self.triangle_length - self.checker_width - 2  # right columns start near right edge
+            x + 2,
+            x + self.triangle_length - self.checker_width - 2
         )
 
-        # two rows: row 0 and row 1 (2-high); attach to top or bottom band
-        # vertical origin for the two rows
-        row0_y = jnp.where(
-            is_top_half,
-            y + 1,  # top halves stick to top edge
-            y + self.triangle_thickness - 2 * self.checker_height - 1  # bottom halves stick to bottom edge
-        )
-        row1_y = row0_y + (self.checker_height + 1)
+        # --- symmetric vertical placement ---
+        # total height used by a 2-high stack = 2*checker_height + chip_gap_y
+        two_high = (2 * self.checker_height + self.chip_gap_y)
 
-        # helper to draw 'count' rectangles in 2-high columns, marching HORIZONTALLY
+        # top band: distance from the band’s top edge = band_top_margin
+        row0_y_top    = y + self.band_top_margin
+        row1_y_top    = row0_y_top + self.checker_height + self.chip_gap_y
+
+        # bottom band: keep the whole 2-row block `band_bottom_margin` above the band’s bottom edge
+        row0_y_bottom = y + self.triangle_thickness - self.band_bottom_margin - two_high
+        row1_y_bottom = row0_y_bottom + self.checker_height + self.chip_gap_y
+
+        # pick the right set based on band
+        row0_y = jnp.where(is_top_half, row0_y_top,    row0_y_bottom)
+        row1_y = jnp.where(is_top_half, row1_y_top,    row1_y_bottom)
+
+        # draw helper (uses chip_gap_x for column step)
         def draw_stack(fr, count, color):
             def draw_single(i, f):
-                col = i // 2  # column index (0,1,2,...) along the triangle
-                row = i & 1  # 0 or 1 (which row of the 2-high stack)
-
-                # x marches toward the triangle tip
-                cx = base_x + dir_sign * (col * (self.checker_width + 1))
+                col = i // 2
+                row = i & 1
+                cx = base_x + step * (col * (self.checker_width + self.chip_gap_x))
                 cy = jnp.where(row == 0, row0_y, row1_y)
-
                 return self._draw_rectangle(f, cx, cy, self.checker_width, self.checker_height, color)
-
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
-        # draw white then black on top (matches your layering approach)
         frame = draw_stack(frame, white_count, self.color_white_checker)
         frame = draw_stack(frame, black_count, self.color_black_checker)
         return frame
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_bar_checkers(self, frame, white_count, black_count):
-        """Draw checkers on the horizontal bar centered on the actual bar rectangle."""
-        # Center of the actual bar rectangle (not the whole frame)
+        """Draw square chips on the horizontal bar, centered on each half."""
         cx = self.bar_x + self.bar_width // 2
         cy = self.bar_y + self.bar_thickness // 2
 
@@ -1210,14 +1244,14 @@ class BackgammonRenderer(JAXGameRenderer):
                 col = i % 2
                 checker_x = cx + x_offset + col * (self.checker_width + 1)
                 checker_y = cy - self.checker_height // 2 + row * self.checker_stack_offset
-                return self._draw_rectangle(f, checker_x, checker_y,
-                                            self.checker_width, self.checker_height, color)
-
+                return self._draw_rectangle(
+                    f, checker_x, checker_y, self.checker_width, self.checker_height, color
+                )
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
-        # White to the left, Black to the right (you can tweak offsets to taste)
-        frame = draw_stack(frame, white_count, self.color_white_checker, -25)
-        frame = draw_stack(frame, black_count, self.color_black_checker, +10)
+        # Slightly tightened offsets to match the new smaller squares
+        frame = draw_stack(frame, white_count, self.color_white_checker, -22)
+        frame = draw_stack(frame, black_count, self.color_black_checker, +8)
         return frame
 
 
@@ -1301,16 +1335,33 @@ class BackgammonRenderer(JAXGameRenderer):
 
         # Draw highlight: under cursor in SELECTING, pinned to source in MOVING
         def draw_cursor_highlight(f):
+            # Color used for the highlight overlay
             highlight_color = jnp.array([199, 172, 91], dtype=jnp.uint8)
 
             def which_index(_):
+                # When MOVING, highlight the origin. If origin is BAR (24), use the remembered bar half (24 or 26).
+                def moving_origin(_):
+                    return jax.lax.cond(
+                        state.picked_checker_from == jnp.int32(self.env.consts.BAR_INDEX),
+                        # If we picked from bar, choose left(24) or right(26) based on picked_bar_side.
+                        lambda __: jax.lax.select(
+                            state.picked_bar_side == jnp.int32(26),
+                            jnp.int32(26),
+                            jnp.int32(self.env.consts.BAR_INDEX)
+                        ),
+                        # Otherwise just highlight the original triangle index.
+                        lambda __: jnp.int32(state.picked_checker_from),
+                        operand=None
+                    )
+
                 return jax.lax.cond(
-                    state.game_phase == 2,  # MOVING: highlight origin (where picked from)
-                    lambda __: state.picked_checker_from,
+                    state.game_phase == jnp.int32(2),   # MOVING
+                    moving_origin,
                     lambda __: jax.lax.cond(
-                        state.game_phase == 1,  # SELECTING: highlight cursor
-                        lambda ___: state.cursor_position,
-                        lambda ___: state.last_valid_drop,  # IDLE (phase 0): show last drop
+                        state.game_phase == jnp.int32(1),  # SELECTING
+                        lambda ___: jnp.int32(state.cursor_position),
+                        # IDLE (phase 0 or others): show last valid drop if any, else -1
+                        lambda ___: jnp.int32(state.last_valid_drop),
                         operand=None
                     ),
                     operand=None
@@ -1320,7 +1371,7 @@ class BackgammonRenderer(JAXGameRenderer):
             no_hi = (hi < 0)
 
             def add_highlight(frame):
-                # triangle highlight
+                # Triangle highlight (0..23)
                 def on_triangle(fr):
                     return self._draw_triangle(
                         fr,
@@ -1332,29 +1383,33 @@ class BackgammonRenderer(JAXGameRenderer):
                         self.triangle_positions[hi][0] == self.board_margin
                     )
 
-                # bar highlight
+                # Bar highlight halves
                 def on_bar_left(fr):
                     half_w = self.bar_width // 2
                     return self._draw_rectangle(fr, self.bar_x, self.bar_y, half_w, self.bar_thickness, highlight_color)
+
                 def on_bar_right(fr):
                     half_w = self.bar_width // 2
-                    return self._draw_rectangle(fr, self.bar_x + half_w, self.bar_y, self.bar_width - half_w, self.bar_thickness, highlight_color)
+                    return self._draw_rectangle(fr, self.bar_x + half_w, self.bar_y,
+                                                self.bar_width - half_w, self.bar_thickness, highlight_color)
 
-                # home: no highlight
-                def noop(fr): return fr
+                # Home (25) or anything else: no highlight
+                def noop(fr): 
+                    return fr
 
                 return jax.lax.cond(
-                    hi < 24,
+                    hi < jnp.int32(24),
                     on_triangle,
                     lambda fr2: jax.lax.cond(
-                        hi == self.env.consts.BAR_INDEX, on_bar_left,
-                        lambda fr3: jax.lax.cond(hi == 26, on_bar_right, noop, operand=fr3),
+                        hi == jnp.int32(self.env.consts.BAR_INDEX), on_bar_left,
+                        lambda fr3: jax.lax.cond(hi == jnp.int32(26), on_bar_right, noop, operand=fr3),
                         operand=fr2
                     ),
                     operand=frame
                 )
 
             return jax.lax.cond(no_hi, lambda fr: fr, add_highlight, operand=f)
+
 
         frame = draw_cursor_highlight(frame)
 
@@ -1406,23 +1461,32 @@ class BackgammonRenderer(JAXGameRenderer):
             )
 
             pos = state.cursor_position
-            is_home      = (pos == self.env.consts.HOME_INDEX)      # 25
-            is_bar_left  = (pos == jnp.int32(self.env.consts.BAR_INDEX))  # 24
-            is_bar_right = (pos == jnp.int32(26))                    # split-bar right half (cursor-only)
+            is_home      = (pos == self.env.consts.HOME_INDEX)                 # 25
+            is_bar_left  = (pos == jnp.int32(self.env.consts.BAR_INDEX))       # 24
+            is_bar_right = (pos == jnp.int32(26))                               # split-bar right half (cursor-only)
 
-            # Decide which edge triangle to anchor the HOME checker beside:
-            # If we picked from WHITE home (18..23) → use point 23; else use point 0.
+            # Choose edge triangle for HOME anchor:
+            # If picked from WHITE home (18..23) → use point 23; else use point 0.
             src = state.picked_checker_from
             use_right_edge = (src >= 18)  # white home points
             edge_idx = jax.lax.select(use_right_edge, jnp.int32(23), jnp.int32(0))
 
-            # Triangle centers
+            # Triangle X center at chosen edge
             tri_x = self.triangle_positions[edge_idx][0] + self.triangle_length // 2
 
-            # Put the HOME-floating checker slightly above the top band (invisible triangle zone)
-            y_top_tri = self.top_margin_for_dice + self.board_margin
+            # Place HOME just outside the correct band for the rotated layout:
+            # - if edge_idx is in top half (6..17) → just above the top band
+            # - else (0..5 or 18..23)              → just below the bottom band
+            y_top_tri    = self.top_margin_for_dice + self.board_margin
+            y_bottom_tri = self.frame_height - self.board_margin
+            edge_is_top_half = ( (edge_idx >= 6) & (edge_idx <= 17) )
+
             home_cx = tri_x
-            home_cy = y_top_tri - (self.checker_height // 2) - 1  # just above the top edge
+            home_cy = jax.lax.select(
+                edge_is_top_half,
+                y_top_tri - (self.checker_height // 2) - 1,   # above top band
+                y_bottom_tri + (self.checker_height // 2) + 1 # below bottom band
+            )
 
             # Centers for split bar halves
             bar_left_cx  = self.bar_x + (self.bar_width // 4)
