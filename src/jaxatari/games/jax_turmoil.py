@@ -57,6 +57,9 @@ class TurmoilConstants(NamedTuple):
     PLAYER_SPEED = (1, 21) # (x_step_size, y_step_size)
     PLAYER_X_LANE_MOVEMENT_BUFFER = PLAYER_SIZE[1] // 2 # +/- this amount from VERTICAL_LANE player can move vertically
 
+    # bullet
+    BULLET_SPEED = 5
+
     # directions
     FACE_LEFT = -1
     FACE_RIGHT = 1
@@ -834,7 +837,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         new_bullet = jnp.where(
             state.bullet[2],
             jnp.array([
-                new_bullet[0] + new_bullet[3] * 3, # bullet speed
+                new_bullet[0] + new_bullet[3] * self.consts.BULLET_SPEED, # bullet speed
                 new_bullet[1],
                 new_bullet[2],
                 new_bullet[3]
@@ -1325,33 +1328,6 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_player_shrink, new_ships, new_enemy
 
-
-    # def handle_single_prize(carry, prize):
-    #     state = carry
-    #     prize_lane, px, py, active, boom_timer, direction = prize
-
-    #     def no_collision_fn(_):
-    #         return prize, state
-
-    #     def collision_fn(_):
-    #         # reset prize
-    #         new_prize = jnp.array([prize_lane, 0, 0, 0, 0, 0])
-    #         # update score using lane as "enemy_type"
-    #         new_state = self.update_score(state, prize_lane)
-    #         return new_prize, new_state
-
-    #     collided = self.check_collision_single(
-    #         player_pos, self.consts.PLAYER_SIZE,
-    #         jnp.array([px, py]), self.consts.PRIZE_SIZE
-    #     )
-    #     return jax.lax.cond(
-    #         jnp.logical_and(active == 1, collided),
-    #         collision_fn,
-    #         no_collision_fn,
-    #         operand=None
-    #     )
-
-    # new_prizes, new_state = jax.lax.scan(handle_single_prize, state, state.prize)
 
     @partial(jax.jit, static_argnums=(0,))
     def prize_player_collision_step(self, state: TurmoilState):
