@@ -96,7 +96,8 @@ class TurmoilConstants(NamedTuple):
     TANK_PUSH_BACK = 5
     
     # prize
-    PRIZE_TO_BOOM_TIME = 150
+    PRIZE_TO_BOOM_TIME = 300
+    PRIZE_SCORE_REWARD = 800
 
     # game phases
     LOADING_GAME_PHASE_TIME = 50
@@ -1113,6 +1114,33 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_score
     
+    @partial(jax.jit, static_argnums=(0,))
+    def check_collision_single(self, pos1, size1, pos2, size2):
+        """Check collision between two single entities"""
+        # Calculate edges for rectangle 1
+        rect1_left = pos1[0]
+        rect1_right = pos1[0] + size1[0]
+        rect1_top = pos1[1]
+        rect1_bottom = pos1[1] + size1[1]
+
+        # Calculate edges for rectangle 2
+        rect2_left = pos2[0]
+        rect2_right = pos2[0] + size2[0]
+        rect2_top = pos2[1]
+        rect2_bottom = pos2[1] + size2[1]
+
+        # Check overlap
+        horizontal_overlap = jnp.logical_and(
+            rect1_left < rect2_right,
+            rect1_right > rect2_left
+        )
+
+        vertical_overlap = jnp.logical_and(
+            rect1_top < rect2_bottom,
+            rect1_bottom > rect2_top
+        )
+
+        return jnp.logical_and(horizontal_overlap, vertical_overlap)
 
     @partial(jax.jit, static_argnums=(0,))
     def check_collision_batch(self, pos1, size1, pos2_array, size2):
@@ -1275,6 +1303,62 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         return new_player_shrink, new_ships, new_enemy
 
+
+    # def handle_single_prize(carry, prize):
+    #     state = carry
+    #     prize_lane, px, py, active, boom_timer, direction = prize
+
+    #     def no_collision_fn(_):
+    #         return prize, state
+
+    #     def collision_fn(_):
+    #         # reset prize
+    #         new_prize = jnp.array([prize_lane, 0, 0, 0, 0, 0])
+    #         # update score using lane as "enemy_type"
+    #         new_state = self.update_score(state, prize_lane)
+    #         return new_prize, new_state
+
+    #     collided = self.check_collision_single(
+    #         player_pos, self.consts.PLAYER_SIZE,
+    #         jnp.array([px, py]), self.consts.PRIZE_SIZE
+    #     )
+    #     return jax.lax.cond(
+    #         jnp.logical_and(active == 1, collided),
+    #         collision_fn,
+    #         no_collision_fn,
+    #         operand=None
+    #     )
+
+    # new_prizes, new_state = jax.lax.scan(handle_single_prize, state, state.prize)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def prize_player_collision_step(self, state: TurmoilState):
+        """
+        Check player collision with prize
+        """
+        player_pos = jnp.array([state.player_x, state.player_y])
+        
+        # check collision
+        collision = self.check_collision_single(
+            player_pos,
+            self.consts.PLAYER_SIZE, 
+            jnp.array([state.prize[1], state.prize[2]]),
+            self.consts.PRIZE_SIZE,
+        )
+
+        new_prize = jnp.where(
+            collision,
+            jnp.zeros_like(state.prize),
+            state.prize,
+        )
+
+        new_score = jnp.where(
+            collision,
+            state.score + self.consts.PRIZE_SCORE_REWARD,
+            state.score
+        )
+
+        return new_prize, new_score
 
     @partial(jax.jit, static_argnums=(0,))
     def game_control(self, state: TurmoilState) :
@@ -1484,6 +1568,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         new_state = new_state._replace(
             prize=new_prize,
             rng_key=rng_rest
+        )
+
+        # prize collision
+        new_prize, new_score = self.prize_player_collision_step(new_state)
+
+        new_state = new_state._replace(
+            prize=new_prize,
+            score=new_score,
         )
 
         # game control
