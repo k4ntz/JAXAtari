@@ -52,7 +52,6 @@ class BackgammonState(NamedTuple):
     picked_checker_from: int = -1
     game_phase: int = 0  # 0=WAITING_FOR_ROLL, 1=SELECTING_CHECKER, 2=MOVING_CHECKER
     last_action: int = JAXAtariAction.NOOP  # Store last action for keyup handling
-    await_keyup: bool = False  # new: blocks repeats until NOOP arrives
     await_keyup: bool = False
     last_valid_drop: int = -1  # -1 means no persistent highlight
     picked_bar_side: int = -1  # 24 (left), 26 (right), or -1 if not from bar
@@ -429,12 +428,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return jax.lax.cond(winner == self.consts.WHITE, white_wins, black_wins, operand=None)
 
     @partial(jax.jit, static_argnums=(0,))
-    def compute_outcome_multiplier(self, state: BackgammonState) -> jnp.int32:
+    def compute_outcome_multiplier(self, state: BackgammonState) -> jax.Array:
         """
-        Returns 1 (single), 2 (gammon), 3 (backgammon) × DOUBLING_CUBE.
-        Rules implemented:
-        - Gammon: loser has borne off 0 checkers.
-        - Backgammon: loser has borne off 0 AND has checkers on BAR or in winner's home board.
+        Returns 1 (single), 2 (gammon), 3 (backgammon) × DOUBLING_CUBE as int32.
+        Gammon: loser has borne off 0.
+        Backgammon: loser has borne off 0 AND has checkers on bar or in winner's home.
         """
         white_off = state.board[0, self.consts.HOME_INDEX]
         black_off = state.board[1, self.consts.HOME_INDEX]
@@ -448,22 +446,24 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             loser_off = black_off
             loser_bar = black_bar
             in_winner_home = self._loser_has_checker_in_winner_home(state, self.consts.WHITE)
-            is_backgammon = (loser_off == 0) & ( (loser_bar > 0) | in_winner_home )
+            is_backgammon = (loser_off == 0) & ((loser_bar > 0) | in_winner_home)
             is_gammon     = (loser_off == 0) & (~is_backgammon)
-            mul = jax.lax.select(is_backgammon, 3, jax.lax.select(is_gammon, 2, 1))
-            return jnp.int32(mul * self.consts.DOUBLING_CUBE)
+            mul = jax.lax.select(is_backgammon, jnp.int32(3),
+                jax.lax.select(is_gammon,     jnp.int32(2), jnp.int32(1)))
+            return (mul * jnp.int32(self.consts.DOUBLING_CUBE)).astype(jnp.int32)
 
         def when_black_wins(_):
             loser_off = white_off
             loser_bar = white_bar
             in_winner_home = self._loser_has_checker_in_winner_home(state, self.consts.BLACK)
-            is_backgammon = (loser_off == 0) & ( (loser_bar > 0) | in_winner_home )
+            is_backgammon = (loser_off == 0) & ((loser_bar > 0) | in_winner_home)
             is_gammon     = (loser_off == 0) & (~is_backgammon)
-            mul = jax.lax.select(is_backgammon, 3, jax.lax.select(is_gammon, 2, 1))
-            return jnp.int32(mul * self.consts.DOUBLING_CUBE)
+            mul = jax.lax.select(is_backgammon, jnp.int32(3),
+                jax.lax.select(is_gammon,     jnp.int32(2), jnp.int32(1)))
+            return (mul * jnp.int32(self.consts.DOUBLING_CUBE)).astype(jnp.int32)
 
         def no_winner(_):
-            return jnp.int32(1)  # shouldn't be used if game not over
+            return jnp.int32(1)
 
         return jax.lax.cond(
             white_won, when_white_wins,
@@ -965,25 +965,20 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, prev: BackgammonState, state: BackgammonState) -> float:
-        """
-        Reward is +1 for the winner, -1 for the loser (optionally × gammon/backgammon multiplier).
-        Crucially, we detect the winner directly from the board, not from turn switching.
-        """
+    def _get_reward(self, prev: BackgammonState, state: BackgammonState) -> jax.Array:
+        """+1 winner, -1 loser (× gammon/backgammon)."""
         white_off = state.board[0, self.consts.HOME_INDEX]
         black_off = state.board[1, self.consts.HOME_INDEX]
 
-        # winner_sign: +1 if White won, -1 if Black won, 0 otherwise
         white_won = (white_off == self.consts.NUM_CHECKERS)
         black_won = (black_off == self.consts.NUM_CHECKERS)
 
-        winner_sign = jax.lax.select(white_won, 1.0,
-                        jax.lax.select(black_won, -1.0, 0.0))
+        winner_sign = jnp.where(white_won, 1.0,
+                        jnp.where(black_won, -1.0, 0.0)).astype(jnp.float32)
 
-        # Keep gammon/backgammon multiplier (set to 1.0 if you want ±1 only)
-        mult = self.compute_outcome_multiplier(state).astype(jnp.float32)
+        mult = self.compute_outcome_multiplier(state).astype(jnp.float32)  # or jnp.float32(1.0) for ±1 only
 
-        return winner_sign * mult
+        return (winner_sign * mult).astype(jnp.float32)
 
     @staticmethod
     @jax.jit
