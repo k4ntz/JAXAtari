@@ -85,7 +85,7 @@ class TurmoilConstants(NamedTuple):
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # lines
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # arrow
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # tank
-        [1, 1, 1, 1, 2, 2, 2, 2, 3],  # L
+        [1, 1, 1, 1, 2, 2, 2, 2, 3], # L
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # T
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # rocket
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # triangle_hollow
@@ -96,8 +96,8 @@ class TurmoilConstants(NamedTuple):
     TANK_PUSH_BACK = 5 # tank displacement if shot from front
 
     # probability of spawning when there is slot available for each level
-    ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-    PRIZE_SPAWN_PROBABILITY = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.05, 0.05, 0.05, 0.05, 0.07]
+    PRIZE_SPAWN_PROBABILITY = [0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.2]
     
     # prize
     PRIZE_TO_BOOM_TIME = 300
