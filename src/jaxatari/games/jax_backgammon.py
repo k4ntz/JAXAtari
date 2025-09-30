@@ -988,7 +988,7 @@ class BackgammonRenderer(JAXGameRenderer):
         self.chip_gap_y         = 2   # vertical gap between the two chip rows
         self.chip_gap_x         = 4   # horizontal gap between columns (used in cx step)
 
-        self.checker_stack_offset = 4
+        self.checker_stack_offset = self.checker_height + self.chip_gap_y
 
         self.edge_line_thickness = 2
         self.edge_line_color     = jnp.array([81, 146, 119], dtype=jnp.uint8)
@@ -996,6 +996,8 @@ class BackgammonRenderer(JAXGameRenderer):
         self.bar_y = self.top_margin_for_dice + self.frame_height // 2 - self.bar_thickness // 2 - 10
         self.bar_x = self.board_margin
         self.bar_width = self.frame_width - 2 * self.board_margin
+        self.bar_edge_padding = 2 
+        self.bar_vertical_padding = 2  
         self.triangle_positions = self._compute_triangle_positions()
 
     def _compute_triangle_positions(self):
@@ -1179,52 +1181,47 @@ class BackgammonRenderer(JAXGameRenderer):
         return frame
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
         """
-        Draw 2-high stacks of square chips that march horizontally toward the triangle tip.
-        Top band sits `band_top_margin` below the band edge.
-        Bottom band sits `band_bottom_margin` above the band edge.
-        Vertical spacing is symmetric.
+        Draw 2-high stacks that fill from BOTTOM to TOP inside each triangle band.
+        Spacing is controlled by:
+        - base_margin:   horizontal padding from the triangle base edge
+        - chip_gap_x:    horizontal gap between columns
+        - band_top_margin / band_bottom_margin: vertical paddings in the band
+        - checker_stack_offset: vertical distance between the two rows
         """
         pos = self.triangle_positions[point_idx]
         x, y = pos[0], pos[1]
 
         is_left_column = (x == self.board_margin)
-        is_top_half    = (point_idx < 12)
+        # march direction (+1 on left column, -1 on right column)
+        dir_sign = jnp.where(is_left_column, 1, -1)
 
-        # marching direction (+1 for left column, -1 for right column)
-        step = jnp.where(is_left_column, 1, -1)
-
-        # start near the triangle base (center side)
+        # start near the triangle BASE edge, not the tip
         base_x = jnp.where(
             is_left_column,
-            x + 2,
-            x + self.triangle_length - self.checker_width - 2
+            x + self.base_margin,
+            x + self.triangle_length - self.checker_width - self.base_margin
         )
 
-        # --- symmetric vertical placement ---
-        # total height used by a 2-high stack = 2*checker_height + chip_gap_y
-        two_high = (2 * self.checker_height + self.chip_gap_y)
+        # band vertical limits with adjustable paddings
+        band_top    = y + self.band_top_margin
+        band_bottom = y + self.triangle_thickness - self.band_bottom_margin
 
-        # top band: distance from the band’s top edge = band_top_margin
-        row0_y_top    = y + self.band_top_margin
-        row1_y_top    = row0_y_top + self.checker_height + self.chip_gap_y
+        # bottom row sits against band_bottom; second row above it
+        row0_y = jnp.int32(band_bottom - self.checker_height)
+        row1_y = jnp.int32(row0_y - self.checker_stack_offset)
 
-        # bottom band: keep the whole 2-row block `band_bottom_margin` above the band’s bottom edge
-        row0_y_bottom = y + self.triangle_thickness - self.band_bottom_margin - two_high
-        row1_y_bottom = row0_y_bottom + self.checker_height + self.chip_gap_y
+        # horizontal step between columns uses chip_gap_x
+        col_step = self.checker_width + self.chip_gap_x
 
-        # pick the right set based on band
-        row0_y = jnp.where(is_top_half, row0_y_top,    row0_y_bottom)
-        row1_y = jnp.where(is_top_half, row1_y_top,    row1_y_bottom)
-
-        # draw helper (uses chip_gap_x for column step)
         def draw_stack(fr, count, color):
             def draw_single(i, f):
-                col = i // 2
-                row = i & 1
-                cx = base_x + step * (col * (self.checker_width + self.chip_gap_x))
-                cy = jnp.where(row == 0, row0_y, row1_y)
+                col = i // 2     # column index along the triangle
+                row = i & 1      # 0 or 1 (bottom row first, then above)
+                cx  = base_x + dir_sign * (col * col_step)
+                cy  = jnp.where(row == 0, row0_y, row1_y)
                 return self._draw_rectangle(f, cx, cy, self.checker_width, self.checker_height, color)
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
@@ -1234,26 +1231,37 @@ class BackgammonRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_bar_checkers(self, frame, white_count, black_count):
-        """Draw square chips on the horizontal bar, centered on each half."""
-        cx = self.bar_x + self.bar_width // 2
-        cy = self.bar_y + self.bar_thickness // 2
+        """
+        Bar stacks anchored to OUTER edges, growing bottom→top.
+        Uses chip_gap_x for horizontal spacing and checker_stack_offset for vertical.
+        """
+        col_step = self.checker_width + self.chip_gap_x
+        row_step = self.checker_stack_offset
+        two_cols_w = 2 * self.checker_width + self.chip_gap_x  # total width of two columns with one gap
 
-        def draw_stack(fr, count, color, x_offset):
+        # leftmost and rightmost anchors inside the bar
+        base_x_left  = self.bar_x + self.bar_edge_padding
+        base_x_right = self.bar_x + self.bar_width - self.bar_edge_padding - two_cols_w
+
+        # bottom y inside the bar
+        base_y_bottom = (
+            self.bar_y + self.bar_thickness
+            - self.bar_vertical_padding - self.checker_height
+        )
+
+        def draw_stack(fr, count, base_x, color):
             def draw_single(i, f):
                 row = i // 2
                 col = i % 2
-                checker_x = cx + x_offset + col * (self.checker_width + 1)
-                checker_y = cy - self.checker_height // 2 + row * self.checker_stack_offset
-                return self._draw_rectangle(
-                    f, checker_x, checker_y, self.checker_width, self.checker_height, color
-                )
+                x = base_x + col * col_step
+                y = base_y_bottom - row * row_step   # bottom→top stacking
+                return self._draw_rectangle(f, x, y, self.checker_width, self.checker_height, color)
             return jax.lax.fori_loop(0, count, draw_single, fr)
 
-        # Slightly tightened offsets to match the new smaller squares
-        frame = draw_stack(frame, white_count, self.color_white_checker, -22)
-        frame = draw_stack(frame, black_count, self.color_black_checker, +8)
+        # Red (black player) on the far LEFT, White on the far RIGHT
+        frame = draw_stack(frame, black_count, base_x_left,  self.color_black_checker)
+        frame = draw_stack(frame, white_count, base_x_right, self.color_white_checker)
         return frame
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_dice(self, frame, dice, current_player):
