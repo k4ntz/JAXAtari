@@ -15,8 +15,14 @@ class TurmoilConstants(NamedTuple):
     # pre-defined movement lanes
     VERTICAL_LANE = 76 # x value
     HORIZONTAL_LANES = [37, 58, 79, 100, 121, 142, 163] # y values
-    ENEMY_LEFT_SPAWN_X = 2
-    ENEMY_RIGHT_SPAWN_X = 150
+
+    # boundaries
+    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
+    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
+
+    # directions
+    FACE_LEFT = -1
+    FACE_RIGHT = 1   
 
     # sizes
     HORIZONTAL_LANE_GAP_SIZE = 17
@@ -60,14 +66,6 @@ class TurmoilConstants(NamedTuple):
     # bullet
     BULLET_SPEED = 5
 
-    # directions
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
-
-    # boundaries
-    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
-    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
-
     # enemy types, so it is easier to identify by name
     ENEMY_TYPES = {
         "3lines" : 0,
@@ -93,6 +91,8 @@ class TurmoilConstants(NamedTuple):
         [5, 5, 5, 5, 7, 7, 7, 7, 9], # sonic boom
     )
 
+    ENEMY_LEFT_SPAWN_X = 3
+    ENEMY_RIGHT_SPAWN_X = 148
     TANK_PUSH_BACK = 5 # tank displacement if shot from front
 
     # probability of spawning when there is slot available for each level
@@ -985,6 +985,13 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 enemy[:, 5]
             )
 
+            # new change_type_coordinate
+            new_change_type_coordinate = jnp.where(
+                new_direction == 1,
+                self.consts.ENEMY_RIGHT_SPAWN_X,
+                self.consts.ENEMY_LEFT_SPAWN_X
+            )
+
             # update x
             new_y = jnp.where(
                 change_to_tank, # remove arrow offset and add tank offset
@@ -995,6 +1002,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             # update enemy
             new_enemy = enemy.at[:, 0].set(new_type)
             new_enemy = new_enemy.at[:, 5].set(new_direction)
+            new_enemy = new_enemy.at[:, 6].set(new_change_type_coordinate)
             new_enemy = new_enemy.at[:, 2].set(new_y)
 
             return new_enemy
@@ -1109,6 +1117,33 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 state.enemy[:, 3] == 1,
                 state.enemy[:, 1] + state.enemy[:, 4] * state.enemy[:, 5],
                 state.enemy[:, 1]
+            )
+        )
+
+        # if tank or sonic_boom flip them back
+        flip = jnp.logical_and(
+            jnp.logical_or(
+                new_enemy[:, 0] == 2, # type check
+                new_enemy[:, 0] == 8
+            ),
+            (new_enemy[:, 1] - new_enemy[:, 6]) * new_enemy[:, 5] >= 0 # reached change type
+        )
+
+        ## set new direction
+        new_enemy = new_enemy.at[:, 5].set(
+            jnp.where(
+                flip,
+                -1 * new_enemy[:, 5],
+                new_enemy[:, 5]
+            )
+        )
+
+        ## set new change_type_coordinate
+        new_enemy = new_enemy.at[:, 6].set(
+            jnp.where(
+                new_enemy[:, 5] == 1,
+                self.consts.ENEMY_RIGHT_SPAWN_X,
+                self.consts.ENEMY_LEFT_SPAWN_X
             )
         )
 
