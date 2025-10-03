@@ -98,7 +98,7 @@ class AsterixState(NamedTuple):
     collectibles: CollectibleEnt # Collectible Entities
     collect_spawn_timer: jnp.ndarray # Timer für das Spawnen von Collectibles
     hit_timer: chex.Array # Zählt Frames herunter, in denen Hit-Sprite angezeigt wird
-    respawn_timer: chex.Array # Zählt Frames herunter, bis Respawn nach Hit erfolgt
+    respawn_timer: chex.Array # Zählt Frames herunter bis Respawn nach Hit erfolgt
     score_popups: ScorePopup # Score Popups nach einsammeln eines Collectibles
     character_transition_timer: chex.Array # Timer für Charakterwechsel Animation
 
