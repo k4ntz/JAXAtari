@@ -912,9 +912,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         Returns (new_rng, if_spawn, enemy_type, lane, direction).
         spawn_prob [0,1] controls probability of spawning when slots are available.
         """
-        inactive_mask = (state.enemy[:, 3] == 0) & (
-            (state.prize[3] == 0) | (state.enemy[:, 0] != state.prize[0])
-        )
+        enemy_active_mask = (state.enemy[:, 3] == 1)
+        prize_lane_mask = (jnp.arange(7) == state.prize[0]) & (state.prize[3] == 1)
+
+        inactive_mask = jnp.logical_not(enemy_active_mask | prize_lane_mask)
 
         num_inactive = jnp.sum(inactive_mask)
 
