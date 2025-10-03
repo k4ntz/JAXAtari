@@ -59,7 +59,7 @@ class TurmoilConstants(NamedTuple):
 
     # player
     PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[6] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
-    PLAYER_STEP_COOLDOWN = (0, 10) # (x cooldown, y cooldown)
+    PLAYER_STEP_COOLDOWN = (0, 5) # (x cooldown, y cooldown)
     PLAYER_SPEED = (1, 21) # (x_step_size, y_step_size)
     PLAYER_X_LANE_MOVEMENT_BUFFER = PLAYER_SIZE[1] // 2 # +/- this amount from VERTICAL_LANE player can move vertically
 
@@ -96,8 +96,8 @@ class TurmoilConstants(NamedTuple):
     TANK_PUSH_BACK = 5 # tank displacement if shot from front
 
     # probability of spawning when there is slot available for each level
-    ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.05, 0.05, 0.05, 0.05, 0.07]
-    PRIZE_SPAWN_PROBABILITY = [0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.2]
+    ENEMY_SPAWN_PROBABILITY = [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15, 0.17]
+    PRIZE_SPAWN_PROBABILITY = [0.005, 0.007, 0.009, 0.011, 0.015, 0.017, 0.019, 0.021, 0.023]
     
     # prize
     PRIZE_TO_BOOM_TIME = 300
@@ -106,16 +106,16 @@ class TurmoilConstants(NamedTuple):
     # game phases and control
     LOADING_GAME_PHASE_TIME = 50
     PLAYER_SHRINK_TIME = 120
-    LVL_CHANGE_SCORES = ( # lvl end scores TODO find exact
-        200,  # lvl 1
-        400,  # lvl 2
-        800,  # lvl 3
-        1000, # lvl 4
-        2000, # lvl 5
-        3000, # lvl 6
-        5000, # lvl 7
-        8000, # lvl 8
-        10000 # lvl 9
+    LVL_CHANGE_SCORES = ( # lvl end scores
+        5000,  # lvl 1
+        10000, # lvl 2
+        15000, # lvl 3
+        20000, # lvl 4
+        30000, # lvl 5
+        40000, # lvl 6
+        60000, # lvl 7
+        80000, # lvl 8
+        99999  # lvl 9
     )
     BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
 
@@ -166,6 +166,8 @@ class EntityPosition(NamedTuple):
 class TurmoilObservation(NamedTuple):
     player: PlayerEntity
     ships: jnp.array
+    enemy: jnp.array # (7, 7)
+    prize: jnp.array # (6,)
     score: jnp.array
     bullet: EntityPosition
     game_phase: jnp.array
@@ -381,7 +383,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
+        self.obs_size = 6 + 1 + 7 * 7 + 6 * 1 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
@@ -408,6 +410,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return jnp.concatenate([
             self.flatten_player_entity(obs.player),
             obs.ships.flatten().astype(jnp.int32),
+            obs.enemy.flatten().astype(jnp.int32),
+            obs.prize.flatten().astype(jnp.int32),
             obs.score.flatten().astype(jnp.int32),
             self.flatten_entity_position(obs.bullet),
             obs.game_phase.flatten().astype(jnp.int32),
@@ -426,6 +430,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """Returns the observation space for Seaquest.
         The observation contains:
         - player: PlayerEntity (x, y, direction, width, height, active)
+        - enemy: array of shape (7, 7) with type, x, y, active, speed, direction, change_type_coordinate
+        - prize: array of shape (6,) with lane, x, y, active, boom_timer, direction
         - ships: int (0-6)
         - score: int (0-999999)
         - bullet: EntityPosition (x, y, width, height, active)
@@ -442,6 +448,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "ships": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
+            "enemy": spaces.Box(low=-1, high=210, shape=(7, 7), dtype=jnp.int32),
+            "prize": spaces.Box(low=-1, high=300, shape=(6,), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "bullet": spaces.Dict({
                 "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
@@ -473,10 +481,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             direction=state.player_direction,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),  # Always active
+            active=jnp.array(1), # always active
         )
 
-        # Convert bullet to EntityPosition
+        # bullet
         bullet = EntityPosition(
             x=state.bullet[0],
             y=state.bullet[1],
@@ -485,15 +493,38 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             active=jnp.array(state.bullet[2] != 0),
         )
 
+        # convert enemies
+        def convert_enemy(e):
+            return jnp.array([
+                e[1],  # x
+                e[2],  # y
+                self.consts.ENEMY_SIZE_FOR_COLLISION[0],  # width
+                self.consts.ENEMY_SIZE_FOR_COLLISION[1],  # height
+                e[3],  # active
+            ])
+
+        enemies = jax.vmap(convert_enemy)(state.enemy)
+
+        # prize
+        prize = EntityPosition(
+            x=state.prize[1],
+            y=state.prize[2],
+            width=jnp.array(self.consts.PRIZE_SIZE[0]),
+            height=jnp.array(self.consts.PRIZE_SIZE[1]),
+            active=jnp.array(state.prize[3] != 0),
+        )
+
         return TurmoilObservation(
             player=player,
             ships=state.ships,
+            enemies=enemies,
+            prize=prize,
             score=state.score,
             bullet=bullet,
             game_phase=state.game_phase,
             level=state.level,
         )
-
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TurmoilState, all_rewards: jnp.ndarray = None) -> TurmoilInfo:
