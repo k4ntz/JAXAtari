@@ -233,7 +233,7 @@ MAZES = [maze1, maze2, maze3, maze4]
 
 
 
-def load_background(level):
+def load_background(level, v_offset=0):
 	"""
 	Constructs the background based on the level.
 	"""
@@ -248,7 +248,7 @@ def load_background(level):
 	H, W = maze_grid.shape
 
 	# Initialize RGB image
-	background = jnp.zeros((210, W * SCALE, 3), dtype=jnp.uint8)
+	background = jnp.zeros((210 + v_offset, W * SCALE, 3), dtype=jnp.uint8)
 
 	# Fill background
 	for y in range(H):
@@ -257,7 +257,7 @@ def load_background(level):
 				lambda _: WALL_COLOR,
 				lambda _: PATH_COLOR,
 				operand=None)
-			background = background.at[1+y*SCALE:(y+2)*SCALE, x*SCALE:(x+1)*SCALE, :].set(color)
+			background = background.at[1+y*SCALE + v_offset: (y+2)*SCALE + v_offset, x*SCALE: (x+1)*SCALE, :].set(color)
 	for px in range(18):
 		x_offset = 8 if px < 9 else 12
 		for py in range(14):
@@ -266,7 +266,7 @@ def load_background(level):
 				pellet_y = py * 12 + 10
 				for i in range(4):
 					for j in range(2):
-						background = background.at[pellet_y+j, pellet_x+i].set(WALL_COLOR)
+						background = background.at[pellet_y+j + v_offset, pellet_x+i].set(WALL_COLOR)
 	return jnp.swapaxes(background, 0, 1)
 
 def pacmans_rgba(size: int = 10) -> jnp.ndarray:
@@ -332,6 +332,139 @@ def pacmans_rgba(size: int = 10) -> jnp.ndarray:
                             TRANSPARENT), 1, 0) for p in pacmans] 
                                    for pacmans in [pacmans_up, pacmans_right, pacmans_left, pacmans_down]]
     return images
+
+
+def get_digit_sprite(digit, color=(255, 255, 255, 255)):
+       DIGIT_BITMAPS = {
+              0: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+              1: jnp.array([
+                     [0,0,0,0,1,1,0,0,0,0],
+                     [0,0,1,1,1,1,0,0,0,0],
+                     [0,1,1,1,1,1,0,0,0,0],
+                     [1,1,0,1,1,1,0,0,0,0],
+                     [0,0,0,1,1,1,0,0,0,0],
+                     [0,0,0,1,1,1,0,0,0,0],
+                     [0,0,0,1,1,1,0,0,0,0],
+                     [0,0,0,1,1,1,0,0,0,0],
+                     [0,0,0,1,1,1,0,0,0,0],
+                     [1,1,1,1,1,1,1,1,1,1],
+              ], dtype=jnp.uint8),
+              2: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,1,1,0],
+                     [0,0,0,0,0,0,1,1,0,0],
+                     [0,0,0,0,0,1,1,0,0,0],
+                     [0,0,0,0,1,1,0,0,0,0],
+                     [0,0,0,1,1,0,0,0,0,0],
+                     [0,0,1,1,0,0,0,0,0,0],
+                     [1,1,1,1,1,1,1,1,1,1],
+              ], dtype=jnp.uint8),
+              3: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,1,1,0],
+                     [0,0,0,1,1,1,1,1,0,0],
+                     [0,0,0,0,0,0,0,1,1,0],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+              4: jnp.array([
+                     [0,0,0,0,0,1,1,0,0,0],
+                     [0,0,0,0,1,1,1,0,0,0],
+                     [0,0,0,1,1,1,1,0,0,0],
+                     [0,0,1,1,0,1,1,0,0,0],
+                     [0,1,1,0,0,1,1,0,0,0],
+                     [1,1,0,0,0,1,1,0,0,0],
+                     [1,1,1,1,1,1,1,1,1,1],
+                     [0,0,0,0,0,1,1,0,0,0],
+                     [0,0,0,0,0,1,1,0,0,0],
+                     [0,0,0,0,0,1,1,0,0,0],
+              ], dtype=jnp.uint8),
+              5: jnp.array([
+                     [1,1,1,1,1,1,1,1,1,1],
+                     [1,1,0,0,0,0,0,0,0,0],
+                     [1,1,0,0,0,0,0,0,0,0],
+                     [1,1,1,1,1,1,1,1,0,0],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+              6: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,0,0],
+                     [1,1,0,0,0,0,0,0,0,0],
+                     [1,1,1,1,1,1,1,1,0,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+              7: jnp.array([
+                     [1,1,1,1,1,1,1,1,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,1,1,0],
+                     [0,0,0,0,0,0,1,1,0,0],
+                     [0,0,0,0,0,1,1,0,0,0],
+                     [0,0,0,0,1,1,0,0,0,0],
+                     [0,0,0,1,1,0,0,0,0,0],
+                     [0,0,1,1,0,0,0,0,0,0],
+                     [0,1,1,0,0,0,0,0,0,0],
+                     [1,1,0,0,0,0,0,0,0,0],
+              ], dtype=jnp.uint8),
+              8: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+              9: jnp.array([
+                     [0,1,1,1,1,1,1,1,1,0],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [0,0,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [1,1,0,0,0,0,0,0,1,1],
+                     [0,1,1,1,1,1,1,1,1,0],
+              ], dtype=jnp.uint8),
+       }      
+       
+       mask = jnp.rot90(DIGIT_BITMAPS[digit], k=1)
+       fg = jnp.array(color, dtype=jnp.uint8)           # Make ones colorful
+       bg = jnp.array((0, 0, 0, 0), dtype=jnp.uint8)    # Make zeroes transparent
+       mask = mask[..., None]                           # Expand to (10,10,1) so broadcasting works
+
+       return mask * fg + (1 - mask) * bg        # Apply color and return sprite
+
 
 from jaxatari.renderers import AtraJaxisRenderer
 import jaxatari.rendering.atraJaxis as aj
