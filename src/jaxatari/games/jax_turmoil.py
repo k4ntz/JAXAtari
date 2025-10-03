@@ -224,7 +224,6 @@ def load_sprites():
     ])
     player_shrink_offsets = jnp.array(player_shrink_offsets)
 
-    # maybe change this later with render part as well
     lines_enemy_sprites = [lines_enemy]
     arrow_enemy_sprites = [arrow_enemy]
     boom_enemy_sprites, _ = jr.pad_to_match([boom_enemy_1, boom_enemy_2])
@@ -234,20 +233,6 @@ def load_sprites():
     tank_enemy_sprites, _ = jr.pad_to_match([tank_enemy_1, tank_enemy_2])
     triangle_hollow_enemy_sprites = [triangle_hollow_enemy]
     x_shape_enemy_sprites, _ = jr.pad_to_match([x_shape_enemy_1, x_shape_enemy_2])
-    
-    # sprites_enemy, _ = jr.pad_to_match([lines_enemy, arrow_enemy, boom_enemy_1, boom_enemy_2, L_enemy_1, L_enemy_2,
-    #                                     rocket_enemy_1, rocket_enemy_2, T_enemy_1, T_enemy_2, tank_enemy_1, tank_enemy_2, triangle_hollow_enemy, x_shape_enemy_1, x_shape_enemy_2])
-    
-
-    # lines_enemy_sprites = [sprites_enemy[0]]
-    # arrow_enemy_sprites = [sprites_enemy[1]]
-    # boom_enemy_sprites = [sprites_enemy[2], sprites_enemy[3]]
-    # L_enemy_sprites = [sprites_enemy[4], sprites_enemy[5]]
-    # rocket_enemy_sprites = [sprites_enemy[6], sprites_enemy[7]]
-    # T_enemy_sprites = [sprites_enemy[8], sprites_enemy[9]]
-    # tank_enemy_sprites = [sprites_enemy[10], sprites_enemy[11]]
-    # triangle_hollow_enemy_sprites = [sprites_enemy[12]]
-    # x_shape_enemy_sprites = [sprites_enemy[13], sprites_enemy[14]]
 
     # bg sprites
     SPRITE_BG = jnp.repeat(bg[0][None], 1, axis=0)
@@ -1843,78 +1828,27 @@ class TurmoilRenderer(JAXGameRenderer):
 
             def _render_enemy(raster) :
                 # render enemeis
-                frame_3lines_enemy = jr.get_sprite_frame(LINES_ENEMY, 0)
-                frame_arrow_enemy = jr.get_sprite_frame(ARROW_ENEMY, 0)
-                frame_tank_enemy = jr.get_sprite_frame(TANK_ENEMY, state.step_counter)
-                frame_L_enemy = jr.get_sprite_frame(L_ENEMY, state.step_counter)
-                frame_T_enemy = jr.get_sprite_frame(T_ENEMY, state.step_counter)
-                frame_rocket_enemy = jr.get_sprite_frame(ROCKET_ENEMY, state.step_counter)
-                frame_triangle_hollow_enemy = jr.get_sprite_frame(TRIANGLE_HOLLOW_ENEMY, 0)
-                frame_x_shape_enemy = jr.get_sprite_frame(X_SHAPE_ENEMY, state.step_counter)
-                frame_boom_enemy = jr.get_sprite_frame(BOOM_ENEMY, state.step_counter)
-                
-                # maybe change this later with get_sprites part as well
-                frame_enemies = [
-                    frame_3lines_enemy,
-                    frame_arrow_enemy,
-                    frame_tank_enemy,
-                    frame_L_enemy,
-                    frame_T_enemy,
-                    frame_rocket_enemy,
-                    frame_triangle_hollow_enemy,
-                    frame_x_shape_enemy,
-                    frame_boom_enemy,
-                ]
-
-                # Utility to pad a sprite to target shape
-                def pad_to_shape(arr: jnp.ndarray, target_shape: tuple[int, int, int]) -> jnp.ndarray:
-                    h, w, c = arr.shape
-                    H, W, C = target_shape
-                    out = jnp.zeros(target_shape, dtype=arr.dtype)
-                    out = out.at[:h, :w, :c].set(arr)
-                    return out
-
-                # Determine max H, W, C
-                max_h = max(f.shape[0] for f in frame_enemies)
-                max_w = max(f.shape[1] for f in frame_enemies)
-                max_c = max(f.shape[2] for f in frame_enemies)
-                target_shape = (max_h, max_w, max_c)
-
-                # Pad all frames to the same shape
-                frame_enemies = [pad_to_shape(f, target_shape) for f in frame_enemies]
-
-                # JAX-safe selection
-                def get_enemy_frame(enemy_id: int) -> jnp.ndarray:
-                    return jax.lax.switch(
-                        enemy_id,
-                        [lambda f=f: f for f in frame_enemies],
-                    )
-                
-                # def get_enemy_frame(enemy_id: int):
-                #     return jax.lax.switch(
-                #         enemy_id,
-                #         [
-                #             lambda: frame_3lines_enemy,
-                #             lambda: frame_arrow_enemy,
-                #             lambda: frame_boom_enemy,
-                #             lambda: frame_L_enemy,
-                #             lambda: frame_rocket_enemy,
-                #             lambda: frame_T_enemy,
-                #             lambda: frame_tank_enemy,
-                #             lambda: frame_triangle_hollow_enemy,
-                #             lambda: frame_x_shape_enemy,
-                #         ],
-                #     )
+                          
+                frame_enemies, _ = jr.pad_to_match([
+                    jr.get_sprite_frame(LINES_ENEMY, 0),
+                    jr.get_sprite_frame(ARROW_ENEMY, 0),
+                    jr.get_sprite_frame(TANK_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(L_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(T_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(ROCKET_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(TRIANGLE_HOLLOW_ENEMY, 0),
+                    jr.get_sprite_frame(X_SHAPE_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(BOOM_ENEMY, state.step_counter),
+                ])
 
                 def render_enemy(i, r) :
-                    enemy_id = state.enemy[i, 0].astype(int)
                     return jax.lax.cond(
                         state.enemy[i, 3] == 1,
                         lambda r: jr.render_at(
                             r,
                             state.enemy[i, 1],
                             state.enemy[i, 2],
-                            get_enemy_frame(enemy_id),
+                            jnp.array(frame_enemies)[state.enemy[i, 0].astype(jnp.int32)],
                             flip_horizontal = state.enemy[i, 5] == self.consts.FACE_LEFT,
                         ),
                         lambda r: r,
