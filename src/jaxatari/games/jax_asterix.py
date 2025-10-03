@@ -25,19 +25,23 @@ class AsterixConstants(NamedTuple):
     player_width: int = 8
     player_height: int = 8
     num_stages: int = 8
-    stage_spacing: int = 16 # ursprünglich 16
+    stage_spacing: int = 16
     stage_positions: List[int] = None
     top_border: int = 23 # oberer Rand des Spielfelds
     bottom_border: int = 8 * stage_spacing + top_border
-    cooldown_frames: int = 8 # Cooldown frames for lane changes
-    hit_frames: int = 100 # Anzahl Frames, die das Hit-Sprite angezeigt wird
-    respawn_frames: int = 240 # Anzahl Frames, bis der Spieler nach einem hit respawned wird.
-    character_transition_frames:int = 240 # Anzahl Frames in denen Obelix wave angezeigt wird
+    cooldown_frames: int = 4 # Cooldown frames for lane changes # vorher 8
+    hit_frames: int = 60 # Anzahl Frames, die das Hit-Sprite angezeigt wird (2 Sekunden bei 30 FPS) # vorher 120
+    respawn_frames: int = 120 # Anzahl Frames, bis der Spieler nach einem hit respawned wird (4 Sekunden bei 30 FPS) # vorher 240
+    character_transition_frames:int = 120 # Anzahl Frames in denen Obelix wave angezeigt wird (4 Sekunden bei 30 FPS) # vorher 240
+    score_popup_frames: int = 240 # Anzahl Frames, die ein Score-Popup angezeigt wird (8 Sekunden bei 30 FPS) # vorher 480
     num_lives: int = 3 # Anzahl der Leben
     max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
-    entity_base_speed : float = 0.5 # Base Speed der Gegner und Collectibles
+    entity_base_speed : float = 1.0 # Base Speed der Gegner und Collectibles # vorher 0.5
+    player_base_speed: float = 1.0 # Base Speed des Spielers # vorher 0.5
     entity_character_speed_factor : float = 0.7 # Speed-Faktor der Gegner und Collectibles pro Charakterstufe (Asterix=0, Obelix=1)
-    player_character_speed_factor : float = 0.5 # Speed-Faktor des Spielers pro Charakterstufe (Asterix=0, Obelix=1)
+    player_character_speed_factor : float = 0.5 # Speed-Faktor des Spielers pro Charakterstufe (Asterix=0, Obelix=1) # vorher 0.5
+    entity_spawn_min_delay: int = 30 # Minimaler Spawn-Delay der Gegner und Collectibles
+    entity_spawn_max_delay: int = 60 # Maximaler Spawn-Delay der Gegner und Collectibles
     ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
     OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
@@ -122,10 +126,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        # self.state = self.reset() OLD
 
         self.renderer = AsterixRenderer()
-        #self.obs_type = obs_type  # "rgb", "ram", "grayscale", 'object'
 
         _, self.state = self.reset()  # Initial state
 
@@ -169,7 +171,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         state = AsterixState(
             player_x =jnp.array(player_x, dtype=jnp.int32),
             player_y=jnp.array(player_y, dtype=jnp.int32),
-            score=jnp.array(32400, dtype=jnp.int32), # Start with 0 points
+            score=jnp.array(0, dtype=jnp.int32), # Start with 0 point; for debug purposes: obelix wave starts at 32500
             lives=jnp.array(self.consts.num_lives, dtype=jnp.int32),  # 3 Leben
             game_over=jnp.array(False, dtype=jnp.bool_),
             stage_cooldown = jnp.array(self.consts.cooldown_frames, dtype=jnp.int32), # Cooldown initial 0
@@ -178,7 +180,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             enemies=enemies,
             spawn_timer=spawn_timer,
             rng=state_rng,
-            # wave_id = jnp.array(0, dtype=jnp.int32),
             character_id=jnp.array(0, dtype=jnp.int32),  # Asterix
             collect_type_index=jnp.array(0, dtype=jnp.int32),  # erster collectable Typ
             collect_type_count=jnp.array(0, dtype=jnp.int32),
@@ -216,7 +217,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         dy = dy_table[mapped]
         action = mapped
 
-        speed_multiplier = 1.0 + state.character_id.astype(jnp.float32) * jnp.float32(
+        speed_multiplier = 2 * self.consts.player_base_speed + state.character_id.astype(jnp.float32) * jnp.float32(
             self.consts.player_character_speed_factor)
         # Skaliertes dx als Float
         float_dx = dx.astype(jnp.float32) * speed_multiplier
@@ -355,8 +356,18 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
 
         def new_timer_fn(_):
-            minD = min_delay(level)
-            maxD = max_delay(level)
+            minD = jax.lax.cond(
+                state.character_id == 0,
+                lambda _: min_delay(level, base_min=self.consts.entity_spawn_min_delay),
+                lambda _: min_delay(level, base_min=self.consts.entity_spawn_min_delay // 2),
+                operand=None
+            )
+            maxD = jax.lax.cond(
+                state.character_id == 0,
+                lambda _: max_delay(level, base_max=self.consts.entity_spawn_max_delay),
+                lambda _: max_delay(level, base_max=self.consts.entity_spawn_max_delay // 2),
+                operand=None
+            )
             return jax.random.randint(rng_enemy_delay, (), minD, maxD + 1)
 
         spawn_timer = jax.lax.cond(
@@ -367,8 +378,18 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
 
         def new_collect_timer_fn(_):
-            minD = min_delay(level)
-            maxD = max_delay(level)
+            minD = jax.lax.cond(
+                state.character_id == 0,
+                lambda _: min_delay(level, base_min=self.consts.entity_spawn_min_delay),
+                lambda _: min_delay(level, base_min=self.consts.entity_spawn_min_delay // 2),
+                operand=None
+            )
+            maxD = jax.lax.cond(
+                state.character_id == 0,
+                lambda _: max_delay(level, base_max=self.consts.entity_spawn_max_delay),
+                lambda _: max_delay(level, base_max=self.consts.entity_spawn_max_delay // 2),
+                operand=None
+            )
             return jax.random.randint(rng_col_delay, (), minD, maxD + 1)
 
         collect_spawn_timer = jax.lax.cond(
@@ -449,7 +470,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                     x=popup.x.at[idx].set(jnp.where(should_spawn, collectibles.x[i], popup.x[idx])),
                     y=popup.y.at[idx].set(jnp.where(should_spawn, collectibles.y[i], popup.y[idx])),
                     value=popup.value.at[idx].set(jnp.where(should_spawn, value, popup.value[idx])),
-                    timer=popup.timer.at[idx].set(jnp.where(should_spawn, 480, popup.timer[idx])),
+                    timer=popup.timer.at[idx].set(jnp.where(should_spawn, self.consts.score_popup_frames, popup.timer[idx])),
                     active=popup.active.at[idx].set(jnp.where(should_spawn, True, popup.active[idx]))
                 )
                 return popup
@@ -519,7 +540,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                                       rt_after_decr)
         new_hit_timer = jnp.where(
             any_collision_enemy & (~paused),
-            jnp.array(self.consts.respawn_frames, dtype=jnp.int32),
+            jnp.array(self.consts.hit_frames, dtype=jnp.int32),
             jnp.maximum(state.hit_timer - 1, 0),
         )
 
