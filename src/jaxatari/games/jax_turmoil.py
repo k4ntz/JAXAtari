@@ -503,19 +503,19 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 e[2],  # y
                 self.consts.ENEMY_SIZE_FOR_COLLISION[0],  # width
                 self.consts.ENEMY_SIZE_FOR_COLLISION[1],  # height
-                e[3],  # active
+                e[3] != 0,  # active
             ])
 
         enemy= jax.vmap(convert_enemy)(state.enemy)
 
         # prize
-        prize = EntityPosition(
-            x=state.prize[1],
-            y=state.prize[2],
-            width=jnp.array(self.consts.PRIZE_SIZE[0]),
-            height=jnp.array(self.consts.PRIZE_SIZE[1]),
-            active=jnp.array(state.prize[3] != 0),
-        )
+        prize = jnp.array([
+            state.prize[1], # x
+            state.prize[2], # y
+            self.consts.PRIZE_SIZE[0], # width
+            self.consts.PRIZE_SIZE[1], # height
+            state.prize[3] != 0 # active
+        ])
 
         return TurmoilObservation(
             player=player,
