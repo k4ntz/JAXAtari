@@ -137,7 +137,7 @@ class TurmoilState(NamedTuple):
 
     enemy: chex.Array # (7, 7) 7 lanes; 7 -> type (see constants), x, y, active, speed, direction, change_type_coordinate,
     prize: chex.Array # (6,) lane, x, y, active, boom_timer, direction
-    spawn_triangle_hollow: chex.Array # (2,) spawn, counter, lane, direction
+    spawn_triangle_hollow: chex.Array # (4,) spawn, counter, lane, direction
 
     game_phase: chex.Array # game phase 0-2
                            # 0 -> loading screen, 1 -> game, 2 -> player shrink
@@ -169,8 +169,8 @@ class EntityPosition(NamedTuple):
 class TurmoilObservation(NamedTuple):
     player: PlayerEntity
     ships: jnp.array
-    enemy: jnp.array # (7, 7)
-    prize: jnp.array # (6,)
+    enemy: jnp.array # (7, 6) -> type, x, y, active, width, height,
+    prize: EntityPosition
     score: jnp.array
     bullet: EntityPosition
     game_phase: jnp.array
@@ -414,7 +414,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             self.flatten_player_entity(obs.player),
             obs.ships.flatten().astype(jnp.int32),
             obs.enemy.flatten().astype(jnp.int32),
-            obs.prize.flatten().astype(jnp.int32),
+            self.flatten_entity_position(obs.prize),
             obs.score.flatten().astype(jnp.int32),
             self.flatten_entity_position(obs.bullet),
             obs.game_phase.flatten().astype(jnp.int32),
@@ -433,8 +433,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """Returns the observation space for Seaquest.
         The observation contains:
         - player: PlayerEntity (x, y, direction, width, height, active)
-        - enemy: array of shape (7, 7) with type, x, y, active, speed, direction, change_type_coordinate
-        - prize: array of shape (6,) with lane, x, y, active, boom_timer, direction
+        - enemy: array of shape (7, 6) -> type, x, y, active, width, height
+        - prize: EntityPosition (x, y, width, height, active)
         - ships: int (0-6)
         - score: int (0-999999)
         - bullet: EntityPosition (x, y, width, height, active)
@@ -451,8 +451,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "ships": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
-            "enemy": spaces.Box(low=-1, high=210, shape=(7, 7), dtype=jnp.int32),
-            "prize": spaces.Box(low=-1, high=300, shape=(6,), dtype=jnp.int32),
+            "enemy": spaces.Box(low=-1, high=210, shape=(7, 6), dtype=jnp.int32),
+            "prize": spaces.Dict({
+                "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "bullet": spaces.Dict({
                 "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
@@ -466,7 +472,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         })
 
     def image_space(self) -> spaces.Box:
-        """Returns the image space for Seaquest.
+        """Returns the image space for Turmoil.
         The image is a RGB image with shape (210, 160, 3).
         """
         return spaces.Box(
@@ -499,23 +505,24 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         # convert enemies
         def convert_enemy(e):
             return jnp.array([
+                e[0], # type
                 e[1],  # x
                 e[2],  # y
+                e[3] != 0,  # active
                 self.consts.ENEMY_SIZE_FOR_COLLISION[0],  # width
                 self.consts.ENEMY_SIZE_FOR_COLLISION[1],  # height
-                e[3] != 0,  # active
             ])
 
-        enemy= jax.vmap(convert_enemy)(state.enemy)
+        enemy = jax.vmap(convert_enemy)(state.enemy)
 
         # prize
-        prize = jnp.array([
-            state.prize[1], # x
-            state.prize[2], # y
-            self.consts.PRIZE_SIZE[0], # width
-            self.consts.PRIZE_SIZE[1], # height
-            state.prize[3] != 0 # active
-        ])
+        prize = EntityPosition(
+            x=state.prize[1],
+            y=state.prize[2],
+            width=jnp.array(self.consts.PRIZE_SIZE[0]),
+            height=jnp.array(self.consts.PRIZE_SIZE[1]),
+            active=jnp.array(state.bullet[3] != 0)
+        )
 
         return TurmoilObservation(
             player=player,
