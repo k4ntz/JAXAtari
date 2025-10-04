@@ -405,7 +405,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 6 + 1 + 7 * 7 + 6 * 1 + 1 + 5 + 1 + 1
+        self.obs_size = 6 + 1 + 7 * 6 + 5 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
