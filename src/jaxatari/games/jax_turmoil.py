@@ -1550,16 +1550,17 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         controls game phases
         """
         new_game_phase, new_game_phase_timer = state.game_phase, state.game_phase_timer + 1
-        new_player_shrink = state.player_shrink
+        new_player_shrink, new_player_x = state.player_shrink, state.player_x
 
         def stay():
-            return new_game_phase, new_game_phase_timer, new_player_shrink
+            return new_game_phase, new_game_phase_timer, new_player_shrink, new_player_x
 
         def to_loading():
             return (
                 jnp.array(0),
                 jnp.array(0),
                 jnp.array(0),
+                self.consts.PLAYER_START_POS[0],
             )
 
         def to_game():
@@ -1567,6 +1568,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 jnp.array(1),
                 jnp.array(0),
                 jnp.array(0),
+                self.consts.PLAYER_START_POS[0],
             )
         
         def to_shrink_animation() :
@@ -1574,6 +1576,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 jnp.array(2),
                 jnp.array(0),
                 jnp.array(0),
+                new_player_x,
             )
         
         return jax.lax.switch(
@@ -1805,7 +1808,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # game control
-        new_game_phase, new_game_phase_timer, new_player_shrink = self.game_control(
+        new_game_phase, new_game_phase_timer, new_player_shrink, new_player_x = self.game_control(
             new_state,
         )
 
@@ -1813,6 +1816,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
+            player_x=new_player_x,
         )
 
         # go to next level
@@ -1838,7 +1842,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # game control
-        new_game_phase, new_game_phase_timer, new_player_shrink = self.game_control(
+        new_game_phase, new_game_phase_timer, new_player_shrink, new_player_x = self.game_control(
             new_state,
         )
 
@@ -1846,6 +1850,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
+            player_x=new_player_x,
         )
 
         return new_state
@@ -1867,7 +1872,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # game control
-        new_game_phase, new_game_phase_timer, new_player_shrink = self.game_control(
+        new_game_phase, new_game_phase_timer, new_player_shrink, new_player_x = self.game_control(
             new_state,
         )
 
@@ -1875,6 +1880,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
+            player_x=new_player_x,
         )
 
         # bullet
