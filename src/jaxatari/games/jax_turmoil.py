@@ -15,8 +15,14 @@ class TurmoilConstants(NamedTuple):
     # pre-defined movement lanes
     VERTICAL_LANE = 76 # x value
     HORIZONTAL_LANES = [37, 58, 79, 100, 121, 142, 163] # y values
-    ENEMY_LEFT_SPAWN_X = 2
-    ENEMY_RIGHT_SPAWN_X = 150
+
+    # boundaries
+    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
+    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
+
+    # directions
+    FACE_LEFT = -1
+    FACE_RIGHT = 1   
 
     # sizes
     HORIZONTAL_LANE_GAP_SIZE = 17
@@ -53,20 +59,12 @@ class TurmoilConstants(NamedTuple):
 
     # player
     PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[6] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
-    PLAYER_STEP_COOLDOWN = (0, 10) # (x cooldown, y cooldown)
+    PLAYER_STEP_COOLDOWN = (0, 5) # (x cooldown, y cooldown)
     PLAYER_SPEED = (1, 21) # (x_step_size, y_step_size)
     PLAYER_X_LANE_MOVEMENT_BUFFER = PLAYER_SIZE[1] // 2 # +/- this amount from VERTICAL_LANE player can move vertically
 
     # bullet
     BULLET_SPEED = 5
-
-    # directions
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
-
-    # boundaries
-    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
-    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
 
     # enemy types, so it is easier to identify by name
     ENEMY_TYPES = {
@@ -93,29 +91,33 @@ class TurmoilConstants(NamedTuple):
         [5, 5, 5, 5, 7, 7, 7, 7, 9], # sonic boom
     )
 
+    ENEMY_LEFT_SPAWN_X = 3
+    ENEMY_RIGHT_SPAWN_X = 148
     TANK_PUSH_BACK = 5 # tank displacement if shot from front
 
     # probability of spawning when there is slot available for each level
-    ENEMY_SPAWN_PROBABILITY = [0.01, 0.01, 0.01, 0.01, 0.05, 0.05, 0.05, 0.05, 0.07]
-    PRIZE_SPAWN_PROBABILITY = [0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.2]
+    ENEMY_SPAWN_PROBABILITY = [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15, 0.17]
+    PRIZE_SPAWN_PROBABILITY = [0.005, 0.007, 0.009, 0.011, 0.015, 0.017, 0.019, 0.021, 0.023]
     
     # prize
     PRIZE_TO_BOOM_TIME = 300
     PRIZE_SCORE_REWARD = 800
+    PRIZE_TILL_TRIANGLE_HOLLOW_TIMER = 30
 
     # game phases and control
+    STEP_COUNTER = 1024
     LOADING_GAME_PHASE_TIME = 50
     PLAYER_SHRINK_TIME = 120
-    LVL_CHANGE_SCORES = ( # lvl end scores TODO find exact
-        200,  # lvl 1
-        400,  # lvl 2
-        800,  # lvl 3
-        1000, # lvl 4
-        2000, # lvl 5
-        3000, # lvl 6
-        5000, # lvl 7
-        8000, # lvl 8
-        10000 # lvl 9
+    LVL_CHANGE_SCORES = ( # lvl end scores
+        5000,  # lvl 1
+        10000, # lvl 2
+        15000, # lvl 3
+        20000, # lvl 4
+        30000, # lvl 5
+        40000, # lvl 6
+        60000, # lvl 7
+        80000, # lvl 8
+        99999  # lvl 9
     )
     BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
 
@@ -135,6 +137,7 @@ class TurmoilState(NamedTuple):
 
     enemy: chex.Array # (7, 7) 7 lanes; 7 -> type (see constants), x, y, active, speed, direction, change_type_coordinate,
     prize: chex.Array # (6,) lane, x, y, active, boom_timer, direction
+    spawn_triangle_hollow: chex.Array # (4,) spawn, counter, lane, direction
 
     game_phase: chex.Array # game phase 0-2
                            # 0 -> loading screen, 1 -> game, 2 -> player shrink
@@ -166,6 +169,8 @@ class EntityPosition(NamedTuple):
 class TurmoilObservation(NamedTuple):
     player: PlayerEntity
     ships: jnp.array
+    enemy: jnp.array # (7, 6) -> type, x, y, active, width, height,
+    prize: EntityPosition
     score: jnp.array
     bullet: EntityPosition
     game_phase: jnp.array
@@ -224,7 +229,6 @@ def load_sprites():
     ])
     player_shrink_offsets = jnp.array(player_shrink_offsets)
 
-    # maybe change this later with render part as well
     lines_enemy_sprites = [lines_enemy]
     arrow_enemy_sprites = [arrow_enemy]
     boom_enemy_sprites, _ = jr.pad_to_match([boom_enemy_1, boom_enemy_2])
@@ -234,20 +238,6 @@ def load_sprites():
     tank_enemy_sprites, _ = jr.pad_to_match([tank_enemy_1, tank_enemy_2])
     triangle_hollow_enemy_sprites = [triangle_hollow_enemy]
     x_shape_enemy_sprites, _ = jr.pad_to_match([x_shape_enemy_1, x_shape_enemy_2])
-    
-    # sprites_enemy, _ = jr.pad_to_match([lines_enemy, arrow_enemy, boom_enemy_1, boom_enemy_2, L_enemy_1, L_enemy_2,
-    #                                     rocket_enemy_1, rocket_enemy_2, T_enemy_1, T_enemy_2, tank_enemy_1, tank_enemy_2, triangle_hollow_enemy, x_shape_enemy_1, x_shape_enemy_2])
-    
-
-    # lines_enemy_sprites = [sprites_enemy[0]]
-    # arrow_enemy_sprites = [sprites_enemy[1]]
-    # boom_enemy_sprites = [sprites_enemy[2], sprites_enemy[3]]
-    # L_enemy_sprites = [sprites_enemy[4], sprites_enemy[5]]
-    # rocket_enemy_sprites = [sprites_enemy[6], sprites_enemy[7]]
-    # T_enemy_sprites = [sprites_enemy[8], sprites_enemy[9]]
-    # tank_enemy_sprites = [sprites_enemy[10], sprites_enemy[11]]
-    # triangle_hollow_enemy_sprites = [sprites_enemy[12]]
-    # x_shape_enemy_sprites = [sprites_enemy[13], sprites_enemy[14]]
 
     # bg sprites
     SPRITE_BG = jnp.repeat(bg[0][None], 1, axis=0)
@@ -396,7 +386,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.DOWNLEFTFIRE
         ]
         self.frame_stack_size = 4
-        self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
+        self.obs_size = 6 + 1 + 7 * 7 + 6 * 1 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 
     def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
@@ -423,6 +413,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return jnp.concatenate([
             self.flatten_player_entity(obs.player),
             obs.ships.flatten().astype(jnp.int32),
+            obs.enemy.flatten().astype(jnp.int32),
+            self.flatten_entity_position(obs.prize),
             obs.score.flatten().astype(jnp.int32),
             self.flatten_entity_position(obs.bullet),
             obs.game_phase.flatten().astype(jnp.int32),
@@ -441,6 +433,8 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """Returns the observation space for Seaquest.
         The observation contains:
         - player: PlayerEntity (x, y, direction, width, height, active)
+        - enemy: array of shape (7, 6) -> type, x, y, active, width, height
+        - prize: EntityPosition (x, y, width, height, active)
         - ships: int (0-6)
         - score: int (0-999999)
         - bullet: EntityPosition (x, y, width, height, active)
@@ -457,6 +451,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
             "ships": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
+            "enemy": spaces.Box(low=-1, high=210, shape=(7, 6), dtype=jnp.int32),
+            "prize": spaces.Dict({
+                "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            }),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "bullet": spaces.Dict({
                 "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
@@ -470,7 +472,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         })
 
     def image_space(self) -> spaces.Box:
-        """Returns the image space for Seaquest.
+        """Returns the image space for Turmoil.
         The image is a RGB image with shape (210, 160, 3).
         """
         return spaces.Box(
@@ -488,10 +490,10 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             direction=state.player_direction,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),  # Always active
+            active=jnp.array(1), # always active
         )
 
-        # Convert bullet to EntityPosition
+        # bullet
         bullet = EntityPosition(
             x=state.bullet[0],
             y=state.bullet[1],
@@ -500,15 +502,39 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             active=jnp.array(state.bullet[2] != 0),
         )
 
+        # convert enemies
+        def convert_enemy(e):
+            return jnp.array([
+                e[0], # type
+                e[1],  # x
+                e[2],  # y
+                e[3] != 0,  # active
+                self.consts.ENEMY_SIZE_FOR_COLLISION[0],  # width
+                self.consts.ENEMY_SIZE_FOR_COLLISION[1],  # height
+            ])
+
+        enemy = jax.vmap(convert_enemy)(state.enemy)
+
+        # prize
+        prize = EntityPosition(
+            x=state.prize[1],
+            y=state.prize[2],
+            width=jnp.array(self.consts.PRIZE_SIZE[0]),
+            height=jnp.array(self.consts.PRIZE_SIZE[1]),
+            active=jnp.array(state.bullet[3] != 0)
+        )
+
         return TurmoilObservation(
             player=player,
             ships=state.ships,
+            enemy=enemy,
+            prize=prize,
             score=state.score,
             bullet=bullet,
             game_phase=state.game_phase,
             level=state.level,
         )
-
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TurmoilState, all_rewards: jnp.ndarray = None) -> TurmoilInfo:
@@ -550,6 +576,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
             enemy=jnp.zeros((7, 7)),
             prize=jnp.zeros(6),
+            spawn_triangle_hollow=jnp.zeros(4),
 
             game_phase=jnp.array(0),
             game_phase_timer=jnp.array(0),
@@ -867,6 +894,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                     jnp.array(self.consts.PRIZE_SPAWN_PROBABILITY),
                     state.level - 1
                 ),
+                0,
             )
 
             new_prize = jnp.where(
@@ -907,13 +935,21 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return new_prize, rng_rest
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_data(self, rng: chex.PRNGKey, state: TurmoilState, spawn_prob: float = 1):
+    def spawn_data(self, rng: chex.PRNGKey, state: TurmoilState, spawn_prob: float = 1, for_enemy = 1):
         """
         Returns (new_rng, if_spawn, enemy_type, lane, direction).
         spawn_prob [0,1] controls probability of spawning when slots are available.
         """
-        inactive_mask = (state.enemy[:, 3] == 0) & (
-            (state.prize[3] == 0) | (state.enemy[:, 0] != state.prize[0])
+        enemy_active_mask = (state.enemy[:, 3] == 1)
+        prize_lane_mask = (jnp.arange(7) == state.prize[0]) & (state.prize[3] == 1)
+
+        triangle_hollow_lane_mask = (
+            (jnp.arange(7) == state.spawn_triangle_hollow[2])
+            & (state.spawn_triangle_hollow[0] == 1)
+        )
+
+        inactive_mask = jnp.logical_not(
+            enemy_active_mask | prize_lane_mask | triangle_hollow_lane_mask
         )
 
         num_inactive = jnp.sum(inactive_mask)
@@ -949,8 +985,35 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             rng_in, gate_key = jax.random.split(rng_in)
             do_spawn = jax.random.bernoulli(gate_key, p=spawn_prob)
             return jax.lax.cond(do_spawn, spawn, no_spawn, rng_in)
+        
+        def spawn_triangle_hollow_after_prize() :
+            return (
+                rng,
+                jnp.array(1, jnp.int32),
+                jnp.array(6, jnp.int32),
+                jnp.array(state.spawn_triangle_hollow[2], jnp.int32),
+                jnp.array(state.spawn_triangle_hollow[3], jnp.int32),
+            )
 
-        return jax.lax.cond(num_inactive == 0, no_spawn, maybe_spawn, rng)
+
+        return jax.lax.cond(
+            jnp.logical_and(
+                for_enemy == 1,
+                jnp.logical_and( # should spawn trinagle hollow in pre-defined lane
+                    state.spawn_triangle_hollow[0] == 1,
+                    jnp.mod(state.step_counter - state.spawn_triangle_hollow[1],
+                            self.consts.STEP_COUNTER) >= self.consts.PRIZE_TILL_TRIANGLE_HOLLOW_TIMER
+                )
+            ),
+            spawn_triangle_hollow_after_prize,
+            lambda: jax.lax.cond(
+                num_inactive == 0,
+                no_spawn,
+                maybe_spawn,
+                rng
+            ),
+        )
+
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -985,6 +1048,13 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 enemy[:, 5]
             )
 
+            # new change_type_coordinate
+            new_change_type_coordinate = jnp.where(
+                new_direction == 1,
+                self.consts.ENEMY_RIGHT_SPAWN_X,
+                self.consts.ENEMY_LEFT_SPAWN_X
+            )
+
             # update x
             new_y = jnp.where(
                 change_to_tank, # remove arrow offset and add tank offset
@@ -995,6 +1065,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             # update enemy
             new_enemy = enemy.at[:, 0].set(new_type)
             new_enemy = new_enemy.at[:, 5].set(new_direction)
+            new_enemy = new_enemy.at[:, 6].set(new_change_type_coordinate)
             new_enemy = new_enemy.at[:, 2].set(new_y)
 
             return new_enemy
@@ -1089,6 +1160,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 jnp.array(self.consts.ENEMY_SPAWN_PROBABILITY),
                 state.level - 1
             ),
+            1,
         )
 
         # spawn
@@ -1098,7 +1170,20 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             lambda : state.enemy,
         )
 
-        return rng_rest, new_enemy
+        # disable spawn_triangle_hollow
+        should_spawn_triangle_hollow = jnp.logical_and(
+            state.spawn_triangle_hollow[0] == 1,
+            jnp.mod(state.step_counter - state.spawn_triangle_hollow[1],
+                    self.consts.STEP_COUNTER) >= self.consts.PRIZE_TILL_TRIANGLE_HOLLOW_TIMER
+        )
+
+        new_spawn_triangle_hollow = jnp.where(
+            should_spawn_triangle_hollow,
+            jnp.zeros_like(state.spawn_triangle_hollow),
+            state.spawn_triangle_hollow
+        )
+
+        return rng_rest, new_enemy, new_spawn_triangle_hollow
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1109,6 +1194,33 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 state.enemy[:, 3] == 1,
                 state.enemy[:, 1] + state.enemy[:, 4] * state.enemy[:, 5],
                 state.enemy[:, 1]
+            )
+        )
+
+        # if tank or sonic_boom flip them back
+        flip = jnp.logical_and(
+            jnp.logical_or(
+                new_enemy[:, 0] == 2, # type check
+                new_enemy[:, 0] == 8
+            ),
+            (new_enemy[:, 1] - new_enemy[:, 6]) * new_enemy[:, 5] >= 0 # reached change type
+        )
+
+        ## set new direction
+        new_enemy = new_enemy.at[:, 5].set(
+            jnp.where(
+                flip,
+                -1 * new_enemy[:, 5],
+                new_enemy[:, 5]
+            )
+        )
+
+        ## set new change_type_coordinate
+        new_enemy = new_enemy.at[:, 6].set(
+            jnp.where(
+                new_enemy[:, 5] == 1,
+                self.consts.ENEMY_RIGHT_SPAWN_X,
+                self.consts.ENEMY_LEFT_SPAWN_X
             )
         )
 
@@ -1362,7 +1474,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.score
         )
 
-        return new_prize, new_score
+        # set spawn_triangle_hollow
+        new_spawn_triangle_hollow = jnp.where(
+            collision,
+            jnp.array([1, state.step_counter, state.prize[0], state.prize[5] * -1]),
+            state.spawn_triangle_hollow
+        )
+
+        return new_prize, new_score, new_spawn_triangle_hollow
 
     @partial(jax.jit, static_argnums=(0,))
     def game_control(self, state: TurmoilState) :
@@ -1458,6 +1577,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
             enemy=jnp.zeros((7, 7)),
             prize=jnp.zeros(6),
+            spawn_triangle_hollow=jnp.zeros(4),
 
             game_phase=state.game_phase,
             game_phase_timer=state.game_phase_timer,
@@ -1536,13 +1656,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # spawn enemies
-        new_rng, new_enemy = self.enemy_spawn_step(
+        new_rng, new_enemy, new_spawn_triangle_hollow = self.enemy_spawn_step(
             new_state
         )
 
         new_state = new_state._replace(
             enemy=new_enemy,
             rng_key=new_rng,
+            spawn_triangle_hollow=new_spawn_triangle_hollow,
         )
 
         # change types
@@ -1555,7 +1676,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         # increment step_counter
         new_step_counter = jnp.where(
-            new_state.step_counter == 1024,
+            new_state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             new_state.step_counter + 1,
         )
@@ -1575,11 +1696,12 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # prize collision
-        new_prize, new_score = self.prize_player_collision_step(new_state)
+        new_prize, new_score, new_spawn_triangle_hollow = self.prize_player_collision_step(new_state)
 
         new_state = new_state._replace(
             prize=new_prize,
             score=new_score,
+            spawn_triangle_hollow=new_spawn_triangle_hollow,
         )
 
         # game control
@@ -1606,7 +1728,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """
         # increment step_counter
         new_step_counter = jnp.where(
-            state.step_counter == 1024,
+            state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             state.step_counter + 1,
         )
@@ -1635,7 +1757,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """
         # increment step_counter
         new_step_counter = jnp.where(
-            state.step_counter == 1024,
+            state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             state.step_counter + 1,
         )
@@ -1807,78 +1929,27 @@ class TurmoilRenderer(JAXGameRenderer):
 
             def _render_enemy(raster) :
                 # render enemeis
-                frame_3lines_enemy = jr.get_sprite_frame(LINES_ENEMY, 0)
-                frame_arrow_enemy = jr.get_sprite_frame(ARROW_ENEMY, 0)
-                frame_tank_enemy = jr.get_sprite_frame(TANK_ENEMY, state.step_counter)
-                frame_L_enemy = jr.get_sprite_frame(L_ENEMY, state.step_counter)
-                frame_T_enemy = jr.get_sprite_frame(T_ENEMY, state.step_counter)
-                frame_rocket_enemy = jr.get_sprite_frame(ROCKET_ENEMY, state.step_counter)
-                frame_triangle_hollow_enemy = jr.get_sprite_frame(TRIANGLE_HOLLOW_ENEMY, 0)
-                frame_x_shape_enemy = jr.get_sprite_frame(X_SHAPE_ENEMY, state.step_counter)
-                frame_boom_enemy = jr.get_sprite_frame(BOOM_ENEMY, state.step_counter)
-                
-                # maybe change this later with get_sprites part as well
-                frame_enemies = [
-                    frame_3lines_enemy,
-                    frame_arrow_enemy,
-                    frame_tank_enemy,
-                    frame_L_enemy,
-                    frame_T_enemy,
-                    frame_rocket_enemy,
-                    frame_triangle_hollow_enemy,
-                    frame_x_shape_enemy,
-                    frame_boom_enemy,
-                ]
-
-                # Utility to pad a sprite to target shape
-                def pad_to_shape(arr: jnp.ndarray, target_shape: tuple[int, int, int]) -> jnp.ndarray:
-                    h, w, c = arr.shape
-                    H, W, C = target_shape
-                    out = jnp.zeros(target_shape, dtype=arr.dtype)
-                    out = out.at[:h, :w, :c].set(arr)
-                    return out
-
-                # Determine max H, W, C
-                max_h = max(f.shape[0] for f in frame_enemies)
-                max_w = max(f.shape[1] for f in frame_enemies)
-                max_c = max(f.shape[2] for f in frame_enemies)
-                target_shape = (max_h, max_w, max_c)
-
-                # Pad all frames to the same shape
-                frame_enemies = [pad_to_shape(f, target_shape) for f in frame_enemies]
-
-                # JAX-safe selection
-                def get_enemy_frame(enemy_id: int) -> jnp.ndarray:
-                    return jax.lax.switch(
-                        enemy_id,
-                        [lambda f=f: f for f in frame_enemies],
-                    )
-                
-                # def get_enemy_frame(enemy_id: int):
-                #     return jax.lax.switch(
-                #         enemy_id,
-                #         [
-                #             lambda: frame_3lines_enemy,
-                #             lambda: frame_arrow_enemy,
-                #             lambda: frame_boom_enemy,
-                #             lambda: frame_L_enemy,
-                #             lambda: frame_rocket_enemy,
-                #             lambda: frame_T_enemy,
-                #             lambda: frame_tank_enemy,
-                #             lambda: frame_triangle_hollow_enemy,
-                #             lambda: frame_x_shape_enemy,
-                #         ],
-                #     )
+                          
+                frame_enemies, _ = jr.pad_to_match([
+                    jr.get_sprite_frame(LINES_ENEMY, 0),
+                    jr.get_sprite_frame(ARROW_ENEMY, 0),
+                    jr.get_sprite_frame(TANK_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(L_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(T_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(ROCKET_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(TRIANGLE_HOLLOW_ENEMY, 0),
+                    jr.get_sprite_frame(X_SHAPE_ENEMY, state.step_counter),
+                    jr.get_sprite_frame(BOOM_ENEMY, state.step_counter),
+                ])
 
                 def render_enemy(i, r) :
-                    enemy_id = state.enemy[i, 0].astype(int)
                     return jax.lax.cond(
                         state.enemy[i, 3] == 1,
                         lambda r: jr.render_at(
                             r,
                             state.enemy[i, 1],
                             state.enemy[i, 2],
-                            get_enemy_frame(enemy_id),
+                            jnp.array(frame_enemies)[state.enemy[i, 0].astype(jnp.int32)],
                             flip_horizontal = state.enemy[i, 5] == self.consts.FACE_LEFT,
                         ),
                         lambda r: r,
