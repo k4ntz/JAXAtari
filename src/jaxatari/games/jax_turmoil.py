@@ -102,8 +102,10 @@ class TurmoilConstants(NamedTuple):
     # prize
     PRIZE_TO_BOOM_TIME = 300
     PRIZE_SCORE_REWARD = 800
+    PRIZE_TILL_TRIANGLE_HOLLOW_TIMER = 30
 
     # game phases and control
+    STEP_COUNTER = 1024
     LOADING_GAME_PHASE_TIME = 50
     PLAYER_SHRINK_TIME = 120
     LVL_CHANGE_SCORES = ( # lvl end scores
@@ -135,6 +137,7 @@ class TurmoilState(NamedTuple):
 
     enemy: chex.Array # (7, 7) 7 lanes; 7 -> type (see constants), x, y, active, speed, direction, change_type_coordinate,
     prize: chex.Array # (6,) lane, x, y, active, boom_timer, direction
+    spawn_triangle_hollow: chex.Array # (2,) spawn, counter, lane, direction
 
     game_phase: chex.Array # game phase 0-2
                            # 0 -> loading screen, 1 -> game, 2 -> player shrink
@@ -503,7 +506,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 e[3],  # active
             ])
 
-        enemies = jax.vmap(convert_enemy)(state.enemy)
+        enemy= jax.vmap(convert_enemy)(state.enemy)
 
         # prize
         prize = EntityPosition(
@@ -517,7 +520,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return TurmoilObservation(
             player=player,
             ships=state.ships,
-            enemies=enemies,
+            enemy=enemy,
             prize=prize,
             score=state.score,
             bullet=bullet,
@@ -566,6 +569,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
             enemy=jnp.zeros((7, 7)),
             prize=jnp.zeros(6),
+            spawn_triangle_hollow=jnp.zeros(4),
 
             game_phase=jnp.array(0),
             game_phase_timer=jnp.array(0),
@@ -883,6 +887,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                     jnp.array(self.consts.PRIZE_SPAWN_PROBABILITY),
                     state.level - 1
                 ),
+                0,
             )
 
             new_prize = jnp.where(
@@ -923,7 +928,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return new_prize, rng_rest
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_data(self, rng: chex.PRNGKey, state: TurmoilState, spawn_prob: float = 1):
+    def spawn_data(self, rng: chex.PRNGKey, state: TurmoilState, spawn_prob: float = 1, for_enemy = 1):
         """
         Returns (new_rng, if_spawn, enemy_type, lane, direction).
         spawn_prob [0,1] controls probability of spawning when slots are available.
@@ -931,7 +936,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         enemy_active_mask = (state.enemy[:, 3] == 1)
         prize_lane_mask = (jnp.arange(7) == state.prize[0]) & (state.prize[3] == 1)
 
-        inactive_mask = jnp.logical_not(enemy_active_mask | prize_lane_mask)
+        triangle_hollow_lane_mask = (
+            (jnp.arange(7) == state.spawn_triangle_hollow[2])
+            & (state.spawn_triangle_hollow[0] == 1)
+        )
+
+        inactive_mask = jnp.logical_not(
+            enemy_active_mask | prize_lane_mask | triangle_hollow_lane_mask
+        )
 
         num_inactive = jnp.sum(inactive_mask)
 
@@ -966,8 +978,35 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             rng_in, gate_key = jax.random.split(rng_in)
             do_spawn = jax.random.bernoulli(gate_key, p=spawn_prob)
             return jax.lax.cond(do_spawn, spawn, no_spawn, rng_in)
+        
+        def spawn_triangle_hollow_after_prize() :
+            return (
+                rng,
+                jnp.array(1, jnp.int32),
+                jnp.array(6, jnp.int32),
+                jnp.array(state.spawn_triangle_hollow[2], jnp.int32),
+                jnp.array(state.spawn_triangle_hollow[3], jnp.int32),
+            )
 
-        return jax.lax.cond(num_inactive == 0, no_spawn, maybe_spawn, rng)
+
+        return jax.lax.cond(
+            jnp.logical_and(
+                for_enemy == 1,
+                jnp.logical_and( # should spawn trinagle hollow in pre-defined lane
+                    state.spawn_triangle_hollow[0] == 1,
+                    jnp.mod(state.step_counter - state.spawn_triangle_hollow[1],
+                            self.consts.STEP_COUNTER) >= self.consts.PRIZE_TILL_TRIANGLE_HOLLOW_TIMER
+                )
+            ),
+            spawn_triangle_hollow_after_prize,
+            lambda: jax.lax.cond(
+                num_inactive == 0,
+                no_spawn,
+                maybe_spawn,
+                rng
+            ),
+        )
+
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1114,6 +1153,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
                 jnp.array(self.consts.ENEMY_SPAWN_PROBABILITY),
                 state.level - 1
             ),
+            1,
         )
 
         # spawn
@@ -1123,7 +1163,20 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             lambda : state.enemy,
         )
 
-        return rng_rest, new_enemy
+        # disable spawn_triangle_hollow
+        should_spawn_triangle_hollow = jnp.logical_and(
+            state.spawn_triangle_hollow[0] == 1,
+            jnp.mod(state.step_counter - state.spawn_triangle_hollow[1],
+                    self.consts.STEP_COUNTER) >= self.consts.PRIZE_TILL_TRIANGLE_HOLLOW_TIMER
+        )
+
+        new_spawn_triangle_hollow = jnp.where(
+            should_spawn_triangle_hollow,
+            jnp.zeros_like(state.spawn_triangle_hollow),
+            state.spawn_triangle_hollow
+        )
+
+        return rng_rest, new_enemy, new_spawn_triangle_hollow
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1414,7 +1467,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.score
         )
 
-        return new_prize, new_score
+        # set spawn_triangle_hollow
+        new_spawn_triangle_hollow = jnp.where(
+            collision,
+            jnp.array([1, state.step_counter, state.prize[0], state.prize[5] * -1]),
+            state.spawn_triangle_hollow
+        )
+
+        return new_prize, new_score, new_spawn_triangle_hollow
 
     @partial(jax.jit, static_argnums=(0,))
     def game_control(self, state: TurmoilState) :
@@ -1510,6 +1570,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
             enemy=jnp.zeros((7, 7)),
             prize=jnp.zeros(6),
+            spawn_triangle_hollow=jnp.zeros(4),
 
             game_phase=state.game_phase,
             game_phase_timer=state.game_phase_timer,
@@ -1588,13 +1649,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # spawn enemies
-        new_rng, new_enemy = self.enemy_spawn_step(
+        new_rng, new_enemy, new_spawn_triangle_hollow = self.enemy_spawn_step(
             new_state
         )
 
         new_state = new_state._replace(
             enemy=new_enemy,
             rng_key=new_rng,
+            spawn_triangle_hollow=new_spawn_triangle_hollow,
         )
 
         # change types
@@ -1607,7 +1669,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
 
         # increment step_counter
         new_step_counter = jnp.where(
-            new_state.step_counter == 1024,
+            new_state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             new_state.step_counter + 1,
         )
@@ -1627,11 +1689,12 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         )
 
         # prize collision
-        new_prize, new_score = self.prize_player_collision_step(new_state)
+        new_prize, new_score, new_spawn_triangle_hollow = self.prize_player_collision_step(new_state)
 
         new_state = new_state._replace(
             prize=new_prize,
             score=new_score,
+            spawn_triangle_hollow=new_spawn_triangle_hollow,
         )
 
         # game control
@@ -1658,7 +1721,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """
         # increment step_counter
         new_step_counter = jnp.where(
-            state.step_counter == 1024,
+            state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             state.step_counter + 1,
         )
@@ -1687,7 +1750,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         """
         # increment step_counter
         new_step_counter = jnp.where(
-            state.step_counter == 1024,
+            state.step_counter == self.consts.STEP_COUNTER,
             jnp.array(0),
             state.step_counter + 1,
         )
