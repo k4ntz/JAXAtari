@@ -854,13 +854,13 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             jnp.where(
                 state.player_direction == -1,
                 jnp.array([
-                    state.player_x - self.consts.BULLET_SIZE[0], # x, y, active, direction
+                    state.player_x, # x, y, active, direction
                     state.player_y + self.consts.PLAYER_SIZE[1] // 2 - 1,
                     1,
                     -1
                 ]),
                 jnp.array([
-                    state.player_x + self.consts.PLAYER_SIZE[0],
+                    state.player_x,
                     state.player_y + self.consts.PLAYER_SIZE[1] // 2 - 1,
                     1,
                     1
