@@ -1941,9 +1941,7 @@ class BattleZoneRenderer(JAXGameRenderer):
             im = lax.fori_loop(0, num, wheel_body, im)
             return im
 
-        # Ensure `left` is boolean tensor
-        left_bool = jnp.asarray(left, dtype=jnp.bool_)
-        return lax.cond(left_bool, draw_left, draw_right, operand=None)
+        return lax.cond(left, draw_left, draw_right, operand=None)
 
 
     def _draw_saucer(self, img, x, y, distance, color):
