@@ -275,6 +275,16 @@ class Obstacle(NamedTuple):
     target_angle: chex.Array  # Target angle for patrol/movement
     state_timer: chex.Array  # Timer for current state
 
+class DeathEffects(NamedTuple):
+    x: chex.Array        # world x per obstacle slot
+    y: chex.Array        # world y per obstacle slot
+    age: chex.Array      # current age in frames
+    lifetime: chex.Array # max lifetime in frames
+    size: chex.Array     # initial pixel size at spawn
+    r: chex.Array        # color channels per effect
+    g: chex.Array
+    b: chex.Array
+
 class BattleZoneState(NamedTuple):
     player_tank: Tank
     bullets: Bullet
@@ -285,6 +295,7 @@ class BattleZoneState(NamedTuple):
     prev_player_y: chex.Array  # Previous player y (for motion-based rendering)
     player_score: chex.Array   # HUD: player's score
     player_lives: chex.Array   # HUD: player's remaining lives
+    death_effects: DeathEffects  # short-lived hit spark effects
 
 class BattleZoneObservation(NamedTuple):
     player_tank: Tank
@@ -394,7 +405,7 @@ def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
     )
 
 @jax.jit
-def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle, chex.Array]:
+def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle, chex.Array, chex.Array]:
     """Check for collisions between bullets and obstacles, removing both on hit.
     Returns updated bullets, updated obstacles, and score_delta (1000 per obstacle killed by a player bullet).
     """
@@ -478,7 +489,54 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
         state_timer=obstacles.state_timer
     )
     
-    return updated_bullets, updated_obstacles, score_delta
+    return updated_bullets, updated_obstacles, score_delta, obstacles_killed_by_player
+
+
+@jax.jit
+def update_death_effects(effects: DeathEffects, death_mask: chex.Array, prev_obstacles: Obstacle, player_tank: Tank) -> DeathEffects:
+    """Spawn new death effects where obstacles died this step and age existing ones.
+    death_mask: boolean/int array per obstacle slot where a player bullet killed it.
+    """
+    # Age existing effects
+    new_age = jnp.where(effects.age < effects.lifetime, effects.age + 1, effects.age)
+
+    # Compute spawn parameters for killed obstacles
+    # Size scales inversely with distance (cap at 60 units)
+    dx = prev_obstacles.x - player_tank.x
+    dy = prev_obstacles.y - player_tank.y
+    dist = jnp.sqrt(dx * dx + dy * dy)
+    denom = jnp.maximum(dist / 60.0, 1.0)
+    size_f = 14.0 / denom
+    spawn_size = jnp.maximum(4, jnp.int32(jnp.round(size_f)))
+
+    # Color by subtype (fallback to wireframe color)
+    subtype = getattr(prev_obstacles, 'enemy_subtype', jnp.full_like(prev_obstacles.x, -1))
+    N = prev_obstacles.x.shape[0]
+    col = jnp.tile(jnp.array(WIREFRAME_COLOR, dtype=jnp.uint8), (N,1))
+    def apply_type(mask, rgb, cur):
+        rgb_arr = jnp.tile(jnp.array(rgb, dtype=jnp.uint8), (N,1))
+        mask2 = (mask[:,None].astype(jnp.bool_))
+        return jnp.where(mask2, rgb_arr, cur)
+    col = apply_type(subtype == ENEMY_TYPE_SUPERTANK, SUPERTANK_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_TANK, TANK_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_FIGHTER, FIGHTER_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_SAUCER, SAUCER_COLOR, col)
+
+    # When death_mask is true in a slot, (re)spawn effect at that slot
+    dm = death_mask.astype(jnp.bool_)
+    new_x = jnp.where(dm, prev_obstacles.x, effects.x)
+    new_y = jnp.where(dm, prev_obstacles.y, effects.y)
+    new_age = jnp.where(dm, jnp.zeros_like(new_age), new_age)
+    new_life = jnp.where(dm, jnp.full_like(effects.lifetime, 8), effects.lifetime)
+    new_size = jnp.where(dm, spawn_size, effects.size)
+    new_r = jnp.where(dm, col[:,0], effects.r)
+    new_g = jnp.where(dm, col[:,1], effects.g)
+    new_b = jnp.where(dm, col[:,2], effects.b)
+
+    return DeathEffects(
+        x=new_x, y=new_y, age=new_age, lifetime=new_life, size=new_size,
+        r=new_r, g=new_g, b=new_b
+    )
 @jax.jit
 def should_fire(action: chex.Array) -> chex.Array:
     """Check if the action includes firing."""
@@ -1024,6 +1082,16 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             state_timer=enemy_state_timer
         )
         
+
+        # Initialize death effects buffer (one slot per obstacle)
+        num_slots = obstacles.x.shape[0]
+        zero_i = jnp.zeros(num_slots, dtype=jnp.int32)
+        zero_f = jnp.zeros(num_slots)
+        zero_u = jnp.zeros(num_slots, dtype=jnp.uint8)
+        death_effects = DeathEffects(
+            x=zero_f, y=zero_f, age=zero_i, lifetime=zero_i, size=zero_i,
+            r=zero_u, g=zero_u, b=zero_u
+        )
         state = BattleZoneState(
             player_tank=player_tank,
             bullets=bullets,
@@ -1033,7 +1101,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             prev_player_x=player_tank.x,
             prev_player_y=player_tank.y,
             player_score=jnp.array(0),   # initialize score
-            player_lives=jnp.array(5)    # initialize lives (5 as requested)
+            player_lives=jnp.array(5),   # initialize lives (5 as requested)
+            death_effects=death_effects
         )
         
         observation = self._get_observation(state)
@@ -1125,10 +1194,13 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         new_spawn_timer = jnp.where(should_try_spawn, ENEMY_SPAWN_COOLDOWN, new_spawn_timer)
         
         # Check for bullet-obstacle collisions (now returns score delta when player killed obstacles)
-        updated_bullets, updated_obstacles, score_delta = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
+        updated_bullets, updated_obstacles, score_delta, death_mask = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
         
         # Check if player is hit by enemy bullets
         new_player_tank = check_player_hit(new_player_tank, updated_bullets)
+
+        # Update death effects (hit sparks) based on which obstacles died this step
+        updated_death_effects = update_death_effects(state.death_effects, death_mask, state.obstacles, new_player_tank)
 
         # Detect whether the player was shot this step (alive -> dead)
         player_was_shot = jnp.logical_and(state.player_tank.alive == 1, new_player_tank.alive == 0)
@@ -1180,6 +1252,17 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 state_timer=enemy_state_timer
             )
 
+
+            # initialize death effects buffer
+            num_slots = obstacles_rst.x.shape[0]
+            zero_i = jnp.zeros(num_slots, dtype=jnp.int32)
+            zero_f = jnp.zeros(num_slots)
+            zero_u = jnp.zeros(num_slots, dtype=jnp.uint8)
+            death_effects = DeathEffects(
+                x=zero_f, y=zero_f, age=zero_i, lifetime=zero_i, size=zero_i,
+                r=zero_u, g=zero_u, b=zero_u
+            )
+
             return BattleZoneState(
                 player_tank=player_tank_rst,
                 bullets=bullets_rst,
@@ -1189,7 +1272,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 prev_player_x=player_tank_rst.x,
                 prev_player_y=player_tank_rst.y,
                 player_score=state.player_score,      # preserve score
-                player_lives=lives_after
+                player_lives=state.player_lives,
+                death_effects=death_effects
             )
 
         # If player was shot and still has lives left -> restart. If no lives left, keep dead state (game over).
@@ -1209,6 +1293,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                     prev_player_y=state.player_tank.y,
                     player_score=state.player_score + score_delta,
                     player_lives=lives_after
+                ,
+                    death_effects=updated_death_effects
                 )
             return jax.lax.cond(lives_after > 0, return_reset, return_gameover)
 
@@ -1222,6 +1308,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             prev_player_y=state.player_tank.y,
             player_score=state.player_score + score_delta,
             player_lives=state.player_lives
+        ,
+            death_effects=updated_death_effects
         ))
 
         observation = self._get_observation(final_state)
@@ -1819,6 +1907,30 @@ class BattleZoneRenderer(JAXGameRenderer):
             im = self._fill_rect(im, 0, y1, WIDTH, y2 - y1, color)
         return im
 
+    def _draw_death_effects(self, img, state):
+        """Draw short-lived hit spark effects from state.death_effects."""
+        eff = state.death_effects
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        N = eff.x.shape[0]
+
+        def body(i, im):
+            active = eff.age[i] < eff.lifetime[i]
+            def draw_one(im2):
+                sx, sy, dist, vis = self._world_to_screen_3d(eff.x[i], eff.y[i], px, py, pang)
+                # Only draw if in front and on-screen
+                on_scr = jnp.logical_and(vis, (sx >= 0) & (sx < WIDTH) & (sy >= 0) & (sy < HEIGHT))
+                # Shrink over lifetime
+                size_now = jnp.maximum(1, eff.size[i] - jnp.int32(jnp.floor((eff.age[i] * eff.size[i]) / jnp.maximum(eff.lifetime[i], 1))))
+                col = jnp.array([eff.r[i], eff.g[i], eff.b[i]], dtype=jnp.uint8)
+                im3 = self._fill_rect(im2, sx - (size_now//2), sy - (size_now//2), size_now, size_now, col)
+                # Add a small ring outline for sparkle
+                im3 = self._draw_circle_outline(im3, sx, sy, jnp.maximum(1, size_now//2), col, samples=36)
+                return jax.lax.cond(on_scr, lambda _: im3, lambda _: im2, operand=None)
+            return jax.lax.cond(active, draw_one, lambda im2: im2, im)
+
+        return lax.fori_loop(0, N, body, img)
+
+
     def _draw_crosshair(self, img, state, wire):
         center_x = WIDTH // 2
         cross_bottom = HORIZON_Y - 6
@@ -2238,6 +2350,9 @@ class BattleZoneRenderer(JAXGameRenderer):
 
         # enemies + bullets + player
         img = self._draw_wire_primitives(img, state, wire)
+
+        # death effects (hit sparks)
+        img = self._draw_death_effects(img, state)
 
         # crosshair
         img = self._draw_crosshair(img, state, wire)
