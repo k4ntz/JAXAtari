@@ -334,9 +334,17 @@ def run_parallel_jax(
         
         # jit_parallel_step returns (next_states_batch, obs_batch, aux_output_batch)
         # The scan only needs to carry 'next_states_batch' and the new RNG key.
-        next_states_batch, _obs_batch, _aux_output_batch = jit_parallel_step(current_states_batch, actions_to_take)
+        next_states_batch, _obs_batch, aux_output_batch = jit_parallel_step(current_states_batch, actions_to_take)
         
-        return (next_states_batch, next_rng_key_for_carry), None # Scan's per-iteration output is None
+        if use_render_step:
+            # jnp.sum() is a very fast operation on device.
+            output_metric = jnp.sum(aux_output_batch) 
+        else:
+            # If not rendering, the output is just a zero.
+            output_metric = 0.0
+
+
+        return (next_states_batch, next_rng_key_for_carry), output_metric # Scan's per-iteration output is None
 
     warmup_steps = 1000
     print(f"JAX: Starting warmup ({warmup_steps} steps) and compilation...")
@@ -366,10 +374,14 @@ def run_parallel_jax(
     time.sleep(1)
 
     start_time = time.time()
-    (final_states, _), _ = jax.lax.scan(
+    (final_states, _), collected_renders = jax.lax.scan(
         run_one_step, (states_for_benchmark_run, run_key), None, length=num_steps_per_env
     )
-    jax.block_until_ready(final_states)
+    if use_render_step:
+        jax.block_until_ready(collected_renders)
+    else:
+        # If not rendering, just block on the final state as before.
+        jax.block_until_ready(final_states)
     total_time = time.time() - start_time
 
     total_steps = num_steps_per_env * num_envs
@@ -458,7 +470,9 @@ def run_scaling_benchmarks(
     use_render_jax: bool = False,
     output_dir_path: Path = None,
     current_timestamp: str = "",
-    jax_game_name_str: str = "jax_game"
+    jax_game_name_str: str = "jax_game",
+    run_gymnasium: bool = True, # New parameter to control Gymnasium benchmark execution
+    save_to_file: bool = True
 ):
     # CPU scaling (Gymnasium)
     # Max workers to test should not exceed available CPUs by too much, 
@@ -468,36 +482,35 @@ def run_scaling_benchmarks(
         cpu_workers_to_test.append(mp.cpu_count())
         cpu_workers_to_test = sorted(list(set(cpu_workers_to_test)))
 
-
     gym_results_scaling = []
     actual_cpu_workers_tested = []
-    print(f"\nRunning Gymnasium (ALE/{ale_game_name_gym}) scaling tests...")
-    for workers in cpu_workers_to_test:
-        if workers <= 0: continue
-        print(
-            f"Gymnasium: Testing with {workers} workers ({num_steps_per_env_val // 1000}K steps per worker, "
-            f"{workers * num_steps_per_env_val // 1000}K total steps)..."
-        )
-        try:
-            results = run_parallel_gym(
-                ale_game_name_gym,
-                num_steps_per_env=num_steps_per_env_val,
-                num_envs=workers,
+    if run_gymnasium: # Only run Gymnasium benchmarks if enabled
+        print(f"\nRunning Gymnasium (ALE/{ale_game_name_gym}) scaling tests...")
+        for workers in cpu_workers_to_test:
+            if workers <= 0: continue
+            print(
+                f"Gymnasium: Testing with {workers} workers ({num_steps_per_env_val // 1000}K steps per worker, "
+                f"{workers * num_steps_per_env_val // 1000}K total steps)..."
             )
-            gym_results_scaling.append(results)
-            actual_cpu_workers_tested.append(workers)
-            print_benchmark_results(
-                f"Gymnasium Scaling ({workers} workers)",
-                results[0], results[1], results[2], results[3],
-                workers, num_steps_per_env_val,
-                output_dir_path, current_timestamp, jax_game_name_str, is_scaling_log=True
-            )
-        except Exception as e:
-            print(f"Error during Gymnasium scaling test with {workers} workers: {e}")
-            break # Stop if one configuration fails
+            try:
+                results = run_parallel_gym(
+                    ale_game_name_gym,
+                    num_steps_per_env=num_steps_per_env_val,
+                    num_envs=workers,
+                )
+                gym_results_scaling.append(results)
+                actual_cpu_workers_tested.append(workers)
+                print_benchmark_results(
+                    f"Gymnasium Scaling ({workers} workers)",
+                    results[0], results[1], results[2], results[3],
+                    workers, num_steps_per_env_val,
+                    output_dir_path, current_timestamp, jax_game_name_str, is_scaling_log=True, save_to_file=save_to_file
+                )
+            except Exception as e:
+                print(f"Error during Gymnasium scaling test with {workers} workers: {e}")
+                break # Stop if one configuration fails
 
     # GPU scaling (JAX)
-    # Ensure JAX is using GPU if available, otherwise this might be misleading
     try:
         print(f"JAX is using backend: {jax.default_backend()}")
         if jax.default_backend() == 'cpu':
@@ -505,7 +518,6 @@ def run_scaling_benchmarks(
     except Exception as e:
         print(f"Could not determine JAX backend: {e}")
 
-    # Original list, can be made configurable
     gpu_envs_to_test = [1, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
     jax_results_scaling = []
     actual_gpu_envs_tested = []
@@ -528,17 +540,14 @@ def run_scaling_benchmarks(
                 f"JAX Scaling ({num_envs_val} envs)",
                 results[0], results[1], results[2], results[3],
                 num_envs_val, num_steps_per_env_val,
-                output_dir_path, current_timestamp, jax_game_name_str, is_scaling_log=True
+                output_dir_path, current_timestamp, jax_game_name_str, is_scaling_log=True, save_to_file=save_to_file
             )
         except Exception as e:
             print(f"Error during JAX scaling test with {num_envs_val} environments: {e}")
             if "out of memory" in str(e).lower():
                 print("Likely OOM error. Stopping JAX scaling tests.")
                 break
-            # For other errors, maybe continue or stop depending on severity
-            # For now, let's stop on any error to avoid cascading issues
             break
-
 
     return actual_cpu_workers_tested, gym_results_scaling, actual_gpu_envs_tested, jax_results_scaling
 
@@ -701,8 +710,15 @@ def print_benchmark_results(
     output_path: Path,
     timestamp_str: str,
     jax_game_name_for_log: str,
-    is_scaling_log: bool = False # To slightly alter log file name for scaling runs
+    is_scaling_log: bool = False, # To slightly alter log file name for scaling runs
+    save_to_file: bool = True
 ):
+    # Always print a concise console summary (includes Steps per Second)
+    print(f"[{run_name_str}] time={total_time_val:.2f}s, sps={steps_per_second_val:,.2f}, steps={total_steps_val:,}, envs={num_environments_val:,}, spe={steps_per_env_val:,}")
+
+    if not save_to_file or output_path is None:
+        return
+
     log_file_suffix = "scaling_log" if is_scaling_log else "std_results"
     log_filename = output_path / f"benchmark_{log_file_suffix}_{timestamp_str}_{jax_game_name_for_log}.txt"
     
@@ -716,7 +732,7 @@ def print_benchmark_results(
         print(f"Total time: {total_time_val:.2f} seconds", file=f)
         print(f"Average steps per second: {steps_per_second_val:,.2f}", file=f)
         if total_steps_val > 0:
-             print(f"Microseconds per step: {(total_time_val * 1_000_000 / total_steps_val):.2f}\u03BCs", file=f) # mu symbol
+            print(f"Microseconds per step: {(total_time_val * 1_000_000 / total_steps_val):.2f}\u03BCs", file=f)
         
         print("\nResource Usage (Averages):", file=f)
         print(f"  CPU Usage: {resource_usage_dict['cpu_avg']:.1f}%", file=f)
@@ -766,21 +782,27 @@ def save_raw_scaling_results(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark JAX vs Gymnasium Atari environments.")
     parser.add_argument("--jax-game-path", type=str, required=True, help="Path to the Python file for the JAX game environment.")
-    parser.add_argument("--ale-game-name", type=str, required=True, help="Name of the ALE ROM for Gymnasium (e.g., Pong-v5, Breakout-v5).")
+    parser.add_argument("--ale-game-name", type=str, required=False, help="Name of the ALE ROM for Gymnasium (e.g., Pong-v5, Breakout-v5). If not provided, only JAX benchmarks will run.")
     
-    parser.add_argument("--steps-per-env", type=int, default=250_000, help="Steps per environment for benchmarks.")
+    parser.add_argument("--steps-per-env", type=int, default=50_000, help="Steps per environment for benchmarks.")
     parser.add_argument("--output-dir", type=str, default="./benchmark_results", help="Directory to save results.")
+    parser.add_argument("--save-output", action=argparse.BooleanOptionalAction, default=False, help="Save logs, raw data, and plots to disk.")
 
     parser.add_argument("--run-std-benchmark", action=argparse.BooleanOptionalAction, default=True, help="Run the standard (single point) benchmark.")
     parser.add_argument("--run-scaling-benchmark", action=argparse.BooleanOptionalAction, default=False, help="Run the scaling benchmark.")
     
     parser.add_argument("--render-jax", action=argparse.BooleanOptionalAction, default=False, help="Use JAX environment's 'step_with_render' method (if available).")
     
-    parser.add_argument("--num-envs-jax-std", type=int, default=2048, help="Number of environments for JAX standard benchmark.")
+    parser.add_argument("--num-envs-jax-std", type=int, default=128, help="Number of environments for JAX standard benchmark.")
     parser.add_argument("--num-envs-gym-std", type=int, default=mp.cpu_count(), help="Number of workers for Gymnasium standard benchmark.")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed.")
 
     args = parser.parse_args()
+
+    # Check if ALE game is provided
+    run_gymnasium_benchmarks = args.ale_game_name is not None
+    if not run_gymnasium_benchmarks:
+        print("Note: No ALE game specified. Running JAX-only benchmarks.")
 
     try:
         print(f"Loading JAX game from: {args.jax_game_path}")
@@ -790,47 +812,73 @@ if __name__ == "__main__":
         print(f"Fatal: Could not load JAX game environment: {e}")
         sys.exit(1)
 
-    # Create base output directory for this game
-    main_output_path = Path(args.output_dir) / jax_game_name_main
-    main_output_path.mkdir(parents=True, exist_ok=True)
-    raw_output_path = main_output_path / "raw_data"
-    raw_output_path.mkdir(parents=True, exist_ok=True)
+    # Create base output directory for this game (only if saving is enabled)
+    if args.save_output:
+        main_output_path = Path(args.output_dir) / jax_game_name_main
+        main_output_path.mkdir(parents=True, exist_ok=True)
+        raw_output_path = main_output_path / "raw_data"
+        raw_output_path.mkdir(parents=True, exist_ok=True)
+    else:
+        main_output_path = None
+        raw_output_path = None
 
     timestamp_main = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Save system information
-    sys_info_log = main_output_path / f"system_info_{timestamp_main}_{jax_game_name_main}.txt"
-    with open(sys_info_log, "w") as f:
-        print("--- System Information ---", file=f)
-        print(f"Timestamp: {timestamp_main}", file=f)
-        print(f"JAX Game: {jax_game_name_main} (from {args.jax_game_path})", file=f)
-        print(f"Gymnasium ALE Game: {args.ale_game_name}", file=f)
-        print(f"Steps per Environment (nominal): {args.steps_per_env:,}", file=f)
-        print(f"JAX Standard Envs: {args.num_envs_jax_std}", file=f)
-        print(f"Gym Standard Envs: {args.num_envs_gym_std}", file=f)
-        print(f"JAX Render Step Used: {args.render_jax}", file=f)
-        print(f"CPU cores available (multiprocessing): {mp.cpu_count()}", file=f)
+    # Save system information (only if saving is enabled)
+    if args.save_output:
+        sys_info_log = (Path(args.output_dir) / jax_game_name_main) / f"system_info_{timestamp_main}_{jax_game_name_main}.txt"
+        with open(sys_info_log, "w") as f:
+            print("--- System Information ---", file=f)
+            print(f"Timestamp: {timestamp_main}", file=f)
+            print(f"JAX Game: {jax_game_name_main} (from {args.jax_game_path})", file=f)
+            print(f"Gymnasium ALE Game: {args.ale_game_name if run_gymnasium_benchmarks else 'Not specified (JAX-only mode)'}", file=f)
+            print(f"Steps per Environment (nominal): {args.steps_per_env:,}", file=f)
+            print(f"JAX Standard Envs: {args.num_envs_jax_std}", file=f)
+            if run_gymnasium_benchmarks:
+                print(f"Gym Standard Envs: {args.num_envs_gym_std}", file=f)
+            print(f"JAX Render Step Used: {args.render_jax}", file=f)
+            print(f"CPU cores available (multiprocessing): {mp.cpu_count()}", file=f)
+            try:
+                print(f"JAX Devices: {jax.devices()}", file=f)
+                print(f"JAX Default Backend: {jax.default_backend()}", file=f)
+            except Exception as e:
+                print(f"Could not get JAX device info: {e}", file=f)
+        print(f"System info logged to: {sys_info_log}")
+    else:
+        print("--- System Information ---")
+        print(f"Timestamp: {timestamp_main}")
+        print(f"JAX Game: {jax_game_name_main} (from {args.jax_game_path})")
+        print(f"Gymnasium ALE Game: {'Not specified (JAX-only mode)' if not run_gymnasium_benchmarks else args.ale_game_name}")
+        print(f"Steps per Environment (nominal): {args.steps_per_env:,}")
+        print(f"JAX Standard Envs: {args.num_envs_jax_std}")
+        if run_gymnasium_benchmarks:
+            print(f"Gym Standard Envs: {args.num_envs_gym_std}")
+        print(f"JAX Render Step Used: {args.render_jax}")
         try:
-            print(f"JAX Devices: {jax.devices()}", file=f)
-            print(f"JAX Default Backend: {jax.default_backend()}", file=f)
+            print(f"JAX Devices: {jax.devices()}")
+            print(f"JAX Default Backend: {jax.default_backend()}")
         except Exception as e:
-            print(f"Could not get JAX device info: {e}", file=f)
-    print(f"System info logged to: {sys_info_log}")
-
+            print(f"Could not get JAX device info: {e}")
 
     # --- Run Scaling Benchmarks ---
     if args.run_scaling_benchmark:
-        print(f"\n--- Starting Scaling Benchmarks for {jax_game_name_main} vs {args.ale_game_name} ---")
+        if run_gymnasium_benchmarks:
+            print(f"\n--- Starting Scaling Benchmarks for {jax_game_name_main} vs {args.ale_game_name} ---")
+        else:
+            print(f"\n--- Starting JAX Scaling Benchmarks for {jax_game_name_main} ---")
+        
         gym_workers_tested, gym_scaling_res, jax_envs_tested, jax_scaling_res = run_scaling_benchmarks(
             jax_env_instance=jax_env_main,
             ale_game_name_gym=args.ale_game_name,
             num_steps_per_env_val=args.steps_per_env,
             use_render_jax=args.render_jax,
-            output_dir_path=main_output_path,
+            output_dir_path=(main_output_path if args.save_output else None),
             current_timestamp=timestamp_main,
-            jax_game_name_str=jax_game_name_main
+            jax_game_name_str=jax_game_name_main,
+            run_gymnasium=run_gymnasium_benchmarks,
+            save_to_file=args.save_output
         )
-        if gym_scaling_res or jax_scaling_res:
+        if (gym_scaling_res or jax_scaling_res) and args.save_output:
             save_raw_scaling_results(
                 gym_scaling_res, jax_scaling_res,
                 gym_workers_tested, jax_envs_tested,
@@ -842,14 +890,17 @@ if __name__ == "__main__":
                 jax_envs_tested, jax_scaling_res,
                 timestamp_main, jax_game_name_main, main_output_path
             )
-        else:
+        elif not (gym_scaling_res or jax_scaling_res):
             print("No data from scaling benchmarks to plot.")
     else:
         print("\nSkipping scaling benchmarks as per arguments.")
 
     # --- Run Standard Benchmarks for Detailed Comparison ---
     if args.run_std_benchmark:
-        print(f"\n--- Starting Standard Benchmark for {jax_game_name_main} vs {args.ale_game_name} ---")
+        if run_gymnasium_benchmarks:
+            print(f"\n--- Starting Standard Benchmark for {jax_game_name_main} vs {args.ale_game_name} ---")
+        else:
+            print(f"\n--- Starting JAX Standard Benchmark for {jax_game_name_main} ---")
         print(f"JAX ({jax_game_name_main}): Running with {args.num_envs_jax_std} environments, {args.steps_per_env} steps each.")
         
         std_jax_results = None
@@ -866,38 +917,53 @@ if __name__ == "__main__":
             print_benchmark_results(
                 f"JAX Standard ({jax_game_name_main})", *std_jax_results,
                 args.num_envs_jax_std, args.steps_per_env,
-                main_output_path, timestamp_main, jax_game_name_main
+                (main_output_path if args.save_output else None), timestamp_main, jax_game_name_main,
+                save_to_file=args.save_output
             )
-            save_raw_results(std_jax_results, ["time", "sps", "total_steps", "resource_usage"], raw_output_path, "jax_std")
+            if args.save_output:
+                save_raw_results(std_jax_results, ["time", "sps", "total_steps", "resource_usage"], raw_output_path, "jax_std")
         except Exception as e:
             print(f"Error during JAX standard benchmark: {e}")
-            # Optionally, decide if the script should terminate or continue to Gym benchmark
 
-        print(f"\nGymnasium ({args.ale_game_name}): Running with {args.num_envs_gym_std} workers, {args.steps_per_env} steps each.")
-        try:
-            std_gym_results = run_parallel_gym(
-                ale_game_name=args.ale_game_name,
-                num_steps_per_env=args.steps_per_env,
-                num_envs=args.num_envs_gym_std,
-                base_seed=args.seed
-            )
-            print_benchmark_results(
-                f"Gymnasium Standard ({args.ale_game_name})", *std_gym_results,
-                args.num_envs_gym_std, args.steps_per_env,
-                main_output_path, timestamp_main, jax_game_name_main # Log gym under jax game name for grouping
-            )
-            save_raw_results(std_gym_results, ["time", "sps", "total_steps", "resource_usage"], raw_output_path, "gym_std")
-        except Exception as e:
-            print(f"Error during Gymnasium standard benchmark: {e}")
+        if run_gymnasium_benchmarks:
+            print(f"\nGymnasium ({args.ale_game_name}): Running with {args.num_envs_gym_std} workers, {args.steps_per_env} steps each.")
+            try:
+                std_gym_results = run_parallel_gym(
+                    ale_game_name=args.ale_game_name,
+                    num_steps_per_env=args.steps_per_env,
+                    num_envs=args.num_envs_gym_std,
+                    base_seed=args.seed
+                )
+                print_benchmark_results(
+                    f"Gymnasium Standard ({args.ale_game_name})", *std_gym_results,
+                    args.num_envs_gym_std, args.steps_per_env,
+                    (main_output_path if args.save_output else None), timestamp_main, jax_game_name_main, # Log gym under jax game name for grouping
+                    save_to_file=args.save_output
+                )
+                if args.save_output:
+                    save_raw_results(std_gym_results, ["time", "sps", "total_steps", "resource_usage"], raw_output_path, "gym_std")
+            except Exception as e:
+                print(f"Error during Gymnasium standard benchmark: {e}")
 
-        if std_jax_results and std_gym_results:
-            print("\nGenerating standard comparison plots...")
-            plot_benchmark_comparison(
-                std_jax_results, std_gym_results, timestamp_main, jax_game_name_main, main_output_path
-            )
+            if std_jax_results and std_gym_results and args.save_output:
+                print("\nGenerating standard comparison plots...")
+                plot_benchmark_comparison(
+                    std_jax_results, std_gym_results, timestamp_main, jax_game_name_main, main_output_path
+                )
+            elif not (std_jax_results and std_gym_results):
+                print("Could not generate standard comparison plots due to missing results from one or both frameworks.")
         else:
-            print("Could not generate standard comparison plots due to missing results from one or both frameworks.")
+            print("\nSkipping Gymnasium benchmarks (JAX-only mode).")
     else:
         print("\nSkipping standard benchmark comparison as per arguments.")
 
-    print(f"\n--- Benchmark run for {jax_game_name_main} complete! Check the '{main_output_path}' directory. ---")
+    if run_gymnasium_benchmarks:
+        if args.save_output:
+            print(f"\n--- Benchmark run for {jax_game_name_main} vs {args.ale_game_name} complete! Check the '{main_output_path}' directory. ---")
+        else:
+            print(f"\n--- Benchmark run for {jax_game_name_main} vs {args.ale_game_name} complete! No files were saved (--no-save-output). ---")
+    else:
+        if args.save_output:
+            print(f"\n--- JAX-only benchmark run for {jax_game_name_main} complete! Check the '{main_output_path}' directory. ---")
+        else:
+            print(f"\n--- JAX-only benchmark run for {jax_game_name_main} complete! No files were saved (--no-save-output). ---")
