@@ -848,9 +848,17 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             )
         )
 
+        same_lane_as_prize = jnp.logical_and(
+            state.player_y - self.consts.Y_OFFSET_PLAYER == state.prize[2] - self.consts.Y_OFFSET_PRIZE,
+            state.prize[3] == 1 # prize is active
+        )
+
         # if player fired and there is no active bullet, create on in player_direction
         new_bullet = jnp.where(
-            jnp.logical_and(jnp.logical_and(fire, jnp.logical_not(state.bullet[2])), jnp.logical_not(state.game_phase == 2)),
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_and(fire, jnp.logical_not(state.bullet[2])), jnp.logical_not(state.game_phase == 2)),
+                jnp.logical_not(same_lane_as_prize)
+            ),
             jnp.where(
                 state.player_direction == -1,
                 jnp.array([
