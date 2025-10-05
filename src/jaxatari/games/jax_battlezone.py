@@ -2045,7 +2045,7 @@ class BattleZoneRenderer(JAXGameRenderer):
                                 jnp.array(BULLET_COLOR, jnp.uint8),
                                 jnp.array([255,100,100], jnp.uint8))
                 return lax.cond(vis & inside,
-                                lambda _: self._draw_line(im_carry, sx, sy-3, sx, sy+3, col, samples=8),
+                                lambda _: self._fill_rect(im_carry, sx - 2, sy - 3, 3, 7, col),
                                 lambda _: im_carry, operand=None)
             return lax.cond(active_i, when_active, lambda _: im_carry, operand=None)
 
