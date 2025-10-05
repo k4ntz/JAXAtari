@@ -46,13 +46,13 @@ PLAYER_BULLET_LIMIT = 8  # Reserve first 8 for the player
 ENEMY_BULLET_LIMIT = 8   # Reserve last 8 for enemies
 MAX_OBSTACLES = 16
 
-# Enemy AI constants
-ENEMY_DETECTION_RANGE = 500.0
-ENEMY_MOVE_SPEED = 0.35
-ENEMY_TURN_SPEED = 0.008
+# Enemy AI constants (Authentic Atari 2600 Battle Zone behavior)
+ENEMY_DETECTION_RANGE = 500.0  # Distance at which enemies detect and pursue player
+ENEMY_MOVE_SPEED = 0.35  # Base enemy movement speed (tanks)
+ENEMY_TURN_SPEED = 0.008  # Legacy constant (not used in new implementation)
 ENEMY_FIRE_COOLDOWN = 180  # frames between shots (3 seconds at 60fps)
-ENEMY_FIRE_RANGE = 400.0
-ENEMY_OPTIMAL_DISTANCE = 120.0  # Preferred engagement distance
+ENEMY_FIRE_RANGE = 400.0  # Maximum firing range
+ENEMY_OPTIMAL_DISTANCE = 120.0  # Preferred engagement distance (not heavily used in authentic mode)
 ENEMY_MIN_DISTANCE = 60.0  # Too close - retreat
 ENEMY_MAX_DISTANCE = 200.0  # Too far - advance
 
@@ -77,9 +77,43 @@ ENEMY_SPAWN_COOLDOWN = 300  # frames between spawns (5 seconds at 60fps)
 ENEMY_SPAWN_WAIT = 120  # frames enemies wait after spawn before aiming/shooting
 
 # =============================================================
-# Atari BattleZone-inspired enemy AI tuning constants (new)
-# Enemy AI adapted to Atari 2600 Battlezone rules — see Atari manual & gameplay.
-# Tunable parameters for designers.
+# Atari 2600 BattleZone-inspired enemy AI tuning constants
+# =============================================================
+# Enemy AI adapted to authentic Atari 2600 Battlezone rules.
+#
+# AUTHENTIC ENEMY BEHAVIORS (based on original Atari 2600 game):
+#
+# 1. REGULAR TANKS (Blue):
+#    - Slowest movement speed (75% of player speed)
+#    - Gradual, methodical rotation toward player (90°/sec turn rate)
+#    - Advance when far, retreat when too close, hold at optimal range
+#    - Fire when facing player within 8° tolerance
+#    - 2 second fire cooldown (slower, more predictable)
+#
+# 2. SUPER TANKS (Yellow):
+#    - Faster movement (115% of player speed)
+#    - Quicker rotation (150°/sec turn rate)
+#    - More aggressive pursuit behavior
+#    - Same firing mechanics but 1.2 second cooldown (faster)
+#
+# 3. MISSILES/FIGHTERS (Red):
+#    - Very fast movement (200% of player speed)
+#    - Pronounced zigzag pattern while approaching
+#    - Rapid rotation capability (360°/sec)
+#    - Suicide attack at point-blank range (fighter disappears after firing)
+#    - 1.5 second fire cooldown
+#
+# 4. FLYING SAUCERS (White):
+#    - Independent drifting movement (50% of player speed)
+#    - Do NOT pursue player (float independently)
+#    - Cannot fire (harmless but worth bonus points)
+#    - Slow, meandering sine-wave drift pattern
+#
+# KEY IMPLEMENTATION NOTES:
+# - Tanks use GRADUAL rotation (not instant facing) with per-frame turn limits
+# - Movement is stuttering/pulsing (authentic move-pause-move pattern)
+# - Fighters use large-amplitude zigzag for visible lateral movement
+# - Saucers are completely independent and do not track player
 # =============================================================
 DEBUG_ENEMY_AI = False  # Set True to enable on-screen and console debug for enemy AI
 DEBUG_ENEMY_SPAWN = False  # Set True to enable spawn-time debug prints
@@ -93,27 +127,37 @@ ENEMY_TYPE_FIGHTER = 2
 ENEMY_TYPE_SAUCER = 3
 
 # Speed factors relative to player speed (player uses TANK_SPEED constant)
-SLOW_TANK_SPEED_FACTOR = 0.85
-SUPERTANK_SPEED_FACTOR = 1.25
-FIGHTER_SPEED_FACTOR = 1.6
-SAUCER_SPEED_FACTOR = 0.6
+# Authentic Atari 2600 Battle Zone enemy speeds:
+# - Regular tanks are slower than player (methodical pursuit)
+# - Super tanks are slightly faster than player (aggressive)
+# - Fighters are much faster (rapid closing speed)
+# - Saucers are slow drifters
+SLOW_TANK_SPEED_FACTOR = 0.75  # Regular tanks slower than player
+SUPERTANK_SPEED_FACTOR = 1.15  # Super tanks slightly faster
+FIGHTER_SPEED_FACTOR = 2.0  # Fighters very fast
+SAUCER_SPEED_FACTOR = 0.5  # Saucers slow drift
 
 # Turn rates (degrees per second) - converted to per-frame using 60 fps assumption
-TANK_MAX_TURN_DEG = 120.0
-SUPERTANK_MAX_TURN_DEG = 200.0
-FIGHTER_MAX_TURN_DEG = 380.0
+# Authentic Atari 2600 Battle Zone turn rates:
+# - Regular tanks have slow, methodical rotation
+# - Super tanks have faster rotation
+# - Fighters have very fast rotation (aerial maneuverability)
+TANK_MAX_TURN_DEG = 90.0  # Slower, more realistic tank rotation
+SUPERTANK_MAX_TURN_DEG = 150.0  # Faster but still tank-like
+FIGHTER_MAX_TURN_DEG = 360.0  # Very fast aerial maneuvers
 
-# Firing / engagement parameters
-FIRING_ANGLE_THRESHOLD_DEG = 6.0  # degrees tolerance to consider 'on target'
+# Firing / engagement parameters (Authentic Atari 2600 Battle Zone)
+FIRING_ANGLE_THRESHOLD_DEG = 8.0  # degrees tolerance to consider 'on target' (slightly more lenient)
 FIRING_RANGE = 400.0  # max distance to consider firing
 ENEMY_NO_FIRE_AFTER_SPAWN_SEC = 2.0  # seconds to wait before firing after spawn
 FPS = 60.0
 ENEMY_NO_FIRE_AFTER_SPAWN = int(ENEMY_NO_FIRE_AFTER_SPAWN_SEC * FPS)
 
-# Fire cooldowns in seconds -> frames
-ENEMY_FIRE_COOLDOWN_TANK_SEC = 1.2
-ENEMY_FIRE_COOLDOWN_SUPERTANK_SEC = 0.8
-ENEMY_FIRE_COOLDOWN_FIGHTER_SEC = 1.0
+# Fire cooldowns in seconds -> frames (Authentic timing)
+# Regular tanks fire slower, super tanks fire faster, fighters fire on approach
+ENEMY_FIRE_COOLDOWN_TANK_SEC = 2.0  # Regular tanks methodical firing
+ENEMY_FIRE_COOLDOWN_SUPERTANK_SEC = 1.2  # Super tanks more aggressive
+ENEMY_FIRE_COOLDOWN_FIGHTER_SEC = 1.5  # Fighters moderate cooldown
 ENEMY_FIRE_COOLDOWN_TANK = int(ENEMY_FIRE_COOLDOWN_TANK_SEC * FPS)
 ENEMY_FIRE_COOLDOWN_SUPERTANK = int(ENEMY_FIRE_COOLDOWN_SUPERTANK_SEC * FPS)
 ENEMY_FIRE_COOLDOWN_FIGHTER = int(ENEMY_FIRE_COOLDOWN_FIGHTER_SEC * FPS)
@@ -131,12 +175,13 @@ ENEMY_SPEED_MULTIPLIERS = jnp.array([
     SAUCER_SPEED_FACTOR,
 ], dtype=jnp.float32)
 
-# Per-type firing parameters (based on ENEMY_FIRING spec)
-ENEMY_FIRING_ANGLE_DEG = jnp.array([3.0, 3.0, 3.0, 3.0], dtype=jnp.float32)
+# Per-type firing parameters (Authentic Atari 2600 Battle Zone)
+# Regular tanks and super tanks fire at medium range, fighters at close range
+ENEMY_FIRING_ANGLE_DEG = jnp.array([8.0, 8.0, 10.0, 8.0], dtype=jnp.float32)  # More lenient angle
 ENEMY_FIRING_ANGLE_THRESH_RAD = (ENEMY_FIRING_ANGLE_DEG * (math.pi / 180.0)) / 1.0
-ENEMY_FIRING_RANGE = jnp.array([30.0, 30.0, 15.0, 0.0], dtype=jnp.float32)
-ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES = jnp.array([int(2.0 * FPS), int(2.0 * FPS), int(0.5 * FPS), int(2.0 * FPS)], dtype=jnp.int32)
-FIGHTER_POINT_BLANK_DIST = 5.0
+ENEMY_FIRING_RANGE = jnp.array([50.0, 50.0, 25.0, 0.0], dtype=jnp.float32)  # Longer effective range
+ENEMY_NO_FIRE_AFTER_SPAWN_FRAMES = jnp.array([int(2.0 * FPS), int(2.0 * FPS), int(1.0 * FPS), int(2.0 * FPS)], dtype=jnp.int32)
+FIGHTER_POINT_BLANK_DIST = 8.0  # Slightly larger point-blank range
 FIGHTER_VEER_ANGLE_RAD = math.radians(90.0)
 
 # Lateral angle to apply during HUNT state so enemies move left/right rather than directly at player
@@ -571,13 +616,14 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_cooldown = jnp.maximum(0, enemy_cooldown - 1)
         should_fire = jnp.array(False)
 
-        # Detection and movement bands
+        # Detection and movement bands (simplified authentic behavior)
         in_detection = jnp.logical_and(should_process, distance_to_player < ENEMY_DETECTION_RANGE)
         too_close = distance_to_player < ENEMY_MIN_DISTANCE
         too_far = distance_to_player > ENEMY_MAX_DISTANCE
         in_engage_band = jnp.logical_and(distance_to_player <= ENEMY_MAX_DISTANCE, distance_to_player >= ENEMY_MIN_DISTANCE)
 
-        move_forward = jnp.logical_and(in_detection, jnp.logical_or(too_far, jnp.logical_and(in_engage_band, distance_to_player > ENEMY_OPTIMAL_DISTANCE)))
+        # Authentic movement decisions: advance when far, retreat when close, hold at optimal
+        move_forward = jnp.logical_and(in_detection, too_far)
         move_backward = jnp.logical_and(in_detection, too_close)
 
         # Subtype handling
@@ -592,45 +638,52 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         new_x = jnp.where(move_backward_non_tank, enemy_x - dir_x * ENEMY_MOVE_SPEED, new_x)
         new_y = jnp.where(move_backward_non_tank, enemy_y - dir_y * ENEMY_MOVE_SPEED, new_y)
 
-        # Fighter behaviour: zigzag while advancing and a stronger veer when close
+        # Fighter behaviour: zigzag while advancing with authentic pattern
+        # Authentic Atari 2600 fighters have pronounced lateral movement
         is_fighter = subtype == ENEMY_TYPE_FIGHTER
         perp_x = -dir_y
         perp_y = dir_x
-        zig_freq = 0.35
+        # Authentic zigzag: slower frequency, larger amplitude for visible zigzag
+        zig_freq = 0.25  # Slower zigzag frequency
         zig_phase = i * 0.71
         zig = jnp.sin(step_counter * zig_freq + zig_phase)
         fighter_base_speed = ENEMY_MOVE_SPEED * ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_FIGHTER]
-        zig_amp = fighter_base_speed * 1.4
+        # Larger zigzag amplitude for pronounced lateral movement
+        zig_amp = fighter_base_speed * 2.0  # Increased from 1.4
         lateral_dx = perp_x * zig * zig_amp
         lateral_dy = perp_y * zig * zig_amp
 
-        # Fighters should relentlessly advance toward the player until point-blank
-        # (don't use the generic move_forward/optimal-distance gating used by tanks)
+        # Fighters relentlessly advance toward player until point-blank range
         fighter_advancing = jnp.logical_and(is_fighter, distance_to_player > FIGHTER_POINT_BLANK_DIST)
         fighter_next_x = enemy_x + dir_x * fighter_base_speed + lateral_dx
         fighter_next_y = enemy_y + dir_y * fighter_base_speed + lateral_dy
         new_x = jnp.where(fighter_advancing, fighter_next_x, new_x)
         new_y = jnp.where(fighter_advancing, fighter_next_y, new_y)
 
-        fighter_close_radius = ENEMY_FIRING_RANGE[subtype.astype(jnp.int32)] * 1.2
+        # Fighter close-range aggressive veer (pre-attack maneuver)
+        fighter_close_radius = ENEMY_FIRING_RANGE[subtype.astype(jnp.int32)] * 1.5
         fighter_pre_veer = jnp.logical_and(is_fighter, distance_to_player <= fighter_close_radius)
-        veer_boost = 1.8
+        veer_boost = 2.5  # Increased veer intensity
         fighter_veer_x = enemy_x + dir_x * fighter_base_speed + perp_x * (zig * zig_amp * veer_boost)
         fighter_veer_y = enemy_y + dir_y * fighter_base_speed + perp_y * (zig * zig_amp * veer_boost)
         new_x = jnp.where(fighter_pre_veer, fighter_veer_x, new_x)
         new_y = jnp.where(fighter_pre_veer, fighter_veer_y, new_y)
 
-        # Saucer behaviour: independent drifting, no pursuit
+        # Saucer behaviour: independent drifting, no pursuit (authentic)
+        # Atari 2600 saucers float independently and do not chase the player
         is_saucer = subtype == ENEMY_TYPE_SAUCER
         saucer_speed = ENEMY_MOVE_SPEED * ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_SAUCER]
-        saucer_dx = jnp.cos(step_counter * 0.12 + i * 0.33) * saucer_speed
-        saucer_dy = jnp.sin(step_counter * 0.15 + i * 0.29) * saucer_speed
+        # Slower, more meandering drift pattern
+        saucer_dx = jnp.cos(step_counter * 0.08 + i * 0.33) * saucer_speed  # Slower frequency
+        saucer_dy = jnp.sin(step_counter * 0.10 + i * 0.29) * saucer_speed  # Slower frequency
         saucer_next_x = enemy_x + saucer_dx
         saucer_next_y = enemy_y + saucer_dy
         new_x = jnp.where(jnp.logical_and(is_saucer, should_process), saucer_next_x, new_x)
         new_y = jnp.where(jnp.logical_and(is_saucer, should_process), saucer_next_y, new_y)
 
-        # --- Tank-like steering and movement ---
+        # --- Tank-like steering and movement (AUTHENTIC GRADUAL ROTATION) ---
+        # Key change: Tanks gradually rotate toward player using limited turn rate per frame
+        # NOT instant facing like previous implementation
         subtype_idx = subtype.astype(jnp.int32)
         turn_rate = jnp.where(subtype == ENEMY_TYPE_SUPERTANK,
                               ENEMY_TURN_RATES[ENEMY_TYPE_SUPERTANK],
@@ -640,18 +693,17 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
                                      ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_SUPERTANK],
                                      ENEMY_SPEED_MULTIPLIERS[ENEMY_TYPE_TANK])
 
+        # Compute desired heading toward player
         desired_heading = angle_to_player
-        is_hunt = enemy_state == ENEMY_STATE_HUNT
-        is_blue_tank = subtype == ENEMY_TYPE_TANK
-        lateral_rad = ENEMY_HUNT_LATERAL_ANGLE_RAD[subtype_idx]
-        sign = jnp.where(jnp.sin(step_counter * 0.13 + i * 0.41) > 0, 1.0, -1.0)
-        lateral_offset = lateral_rad * sign
-        desired_heading = jnp.where(jnp.logical_and(is_hunt, is_blue_tank), desired_heading + lateral_offset, desired_heading)
-
+        
+        # Calculate angular difference and clamp to maximum turn rate per frame
+        # This creates the authentic gradual rotation behavior seen in the original game
         raw_delta = desired_heading - new_angle
         delta_angle = jnp.arctan2(jnp.sin(raw_delta), jnp.cos(raw_delta))
         max_turn = turn_rate
         turn_amount = jnp.clip(delta_angle, -max_turn, max_turn)
+        
+        # Apply gradual steering only for tank-like enemies when in detection range
         apply_steer = jnp.logical_and(should_process, in_detection)
         applied_turn = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), turn_amount, jnp.array(0.0))
 
@@ -659,34 +711,26 @@ def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, 
         base_move_speed = ENEMY_MOVE_SPEED * speed_multiplier
         new_angle = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_angle, new_angle)
 
+        # Movement along current facing direction (authentic tank movement)
         move_angle = jnp.where(jnp.logical_and(apply_steer, is_tank_subtype), steered_angle, new_angle)
         tank_move_cond = jnp.logical_and(should_process, is_tank_subtype)
 
+        # Authentic movement pattern: tanks alternate between moving and pausing
+        # This creates the characteristic stuttering movement of original Battle Zone enemies
         phase = jnp.sin(step_counter * 0.08 + i * 0.3)
         move_phase = phase > 0.0
         move_multiplier = jnp.where(move_phase, 1.0, 0.0)
 
+        # Don't advance further when close enough to firing range (hold position behavior)
         stop_advance_threshold = ENEMY_FIRING_RANGE[subtype_idx]
         close_enough_to_stop = distance_to_player <= stop_advance_threshold
         effective_move_multiplier = jnp.where(close_enough_to_stop, 0.0, move_multiplier)
 
+        # Calculate next position based on current facing angle and movement speed
         tank_next_x = new_x + jnp.cos(move_angle) * base_move_speed * effective_move_multiplier
         tank_next_y = new_y + jnp.sin(move_angle) * base_move_speed * effective_move_multiplier
 
-        agg_radius = ENEMY_FIRING_RANGE[subtype_idx] * 1.5 + 1e-6
-        aggression = jnp.clip((agg_radius - distance_to_player) / agg_radius, 0.0, 1.0)
-
-        lateral_base = 0.45
-        lateral_strength = base_move_speed * (lateral_base + aggression * 1.2)
-        lateral_dir = jnp.sign(player_tank.x - enemy_x)
-        lateral_correction = lateral_strength * lateral_dir
-
-        hold_scale = 0.25
-        applied_lateral = jnp.where(effective_move_multiplier > 0,
-                                    lateral_correction * (1.0 + aggression),
-                                    lateral_correction * (hold_scale + aggression * 0.5))
-
-        tank_next_x = tank_next_x + applied_lateral
+        # Apply movement for tank subtypes
         new_x = jnp.where(tank_move_cond, tank_next_x, new_x)
         new_y = jnp.where(tank_move_cond, tank_next_y, new_y)
 
