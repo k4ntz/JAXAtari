@@ -992,7 +992,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             lane_idx = jax.random.randint(lane_key, (), 0, num_inactive)
             lane = jax.lax.dynamic_index_in_dim(inactive_indices, lane_idx, keepdims=False)
 
-            enemy_type = jax.random.choice(type_key, jnp.array([0, 1, 2, 3, 4, 5, 6, 7]))
+            enemy_type = jax.random.choice(type_key, jnp.array([0, 1, 3, 4, 5, 6, 7]))
             direction = jax.random.choice(dir_key, jnp.array([-1, 1]))
 
             return (
