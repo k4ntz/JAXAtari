@@ -1,9 +1,9 @@
 from functools import partial
-import pygame
 import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+from jax import lax
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple
 import random
@@ -61,7 +61,6 @@ ENEMY_STATE_PATROL = 0
 ENEMY_STATE_HUNT = 1
 ENEMY_STATE_ENGAGE = 2
 ENEMY_STATE_RETREAT = 3
-
 
 # Tank movement constants
 TANK_SPEED = 0.2  # Reduced from 0.5
@@ -275,6 +274,16 @@ class Obstacle(NamedTuple):
     target_angle: chex.Array  # Target angle for patrol/movement
     state_timer: chex.Array  # Timer for current state
 
+class DeathEffects(NamedTuple):
+    x: chex.Array        # world x per obstacle slot
+    y: chex.Array        # world y per obstacle slot
+    age: chex.Array      # current age in frames
+    lifetime: chex.Array # max lifetime in frames
+    size: chex.Array     # initial pixel size at spawn
+    r: chex.Array        # color channels per effect
+    g: chex.Array
+    b: chex.Array
+
 class BattleZoneState(NamedTuple):
     player_tank: Tank
     bullets: Bullet
@@ -285,6 +294,7 @@ class BattleZoneState(NamedTuple):
     prev_player_y: chex.Array  # Previous player y (for motion-based rendering)
     player_score: chex.Array   # HUD: player's score
     player_lives: chex.Array   # HUD: player's remaining lives
+    death_effects: DeathEffects  # short-lived hit spark effects
 
 class BattleZoneObservation(NamedTuple):
     player_tank: Tank
@@ -299,52 +309,6 @@ class BattleZoneInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
     player_shot: chex.Array  # New flag: 1 if player was shot this step, 0 otherwise
-
-def get_human_action() -> chex.Array:
-    """Get human input for BattleZone controls (arrow keys for movements and space for shooting)."""
-    keys = pygame.key.get_pressed()
-    
-    # Diagonal Movement + Fire combinations
-    if keys[pygame.K_UP] and keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-        return jnp.array(UPRIGHTFIRE)
-    elif keys[pygame.K_UP] and keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-        return jnp.array(UPLEFTFIRE)
-    elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-        return jnp.array(DOWNRIGHTFIRE)
-    elif keys[pygame.K_DOWN] and keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-        return jnp.array(DOWNLEFTFIRE)
-    # Single Direction + Fire combinations
-    elif keys[pygame.K_UP] and keys[pygame.K_SPACE]:
-        return jnp.array(UPFIRE)
-    elif keys[pygame.K_DOWN] and keys[pygame.K_SPACE]:
-        return jnp.array(DOWNFIRE)
-    elif keys[pygame.K_LEFT] and keys[pygame.K_SPACE]:
-        return jnp.array(LEFTFIRE)
-    elif keys[pygame.K_RIGHT] and keys[pygame.K_SPACE]:
-        return jnp.array(RIGHTFIRE)
-    # Diagonal Movement only
-    elif keys[pygame.K_UP] and keys[pygame.K_RIGHT]:
-        return jnp.array(UPRIGHT)
-    elif keys[pygame.K_UP] and keys[pygame.K_LEFT]:
-        return jnp.array(UPLEFT)
-    elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT]:
-        return jnp.array(DOWNRIGHT)
-    elif keys[pygame.K_DOWN] and keys[pygame.K_LEFT]:
-        return jnp.array(DOWNLEFT)
-    # Single Direction Movement only
-    elif keys[pygame.K_UP]:
-        return jnp.array(UP)
-    elif keys[pygame.K_DOWN]:
-        return jnp.array(DOWN)
-    elif keys[pygame.K_LEFT]:
-        return jnp.array(LEFT)
-    elif keys[pygame.K_RIGHT]:
-        return jnp.array(RIGHT)
-    # Fire only
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(FIRE)
-    else:
-        return jnp.array(NOOP)
 
 @jax.jit
 def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
@@ -440,7 +404,7 @@ def update_tank_position(tank: Tank, action: chex.Array) -> Tank:
     )
 
 @jax.jit
-def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle, chex.Array]:
+def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tuple[Bullet, Obstacle, chex.Array, chex.Array]:
     """Check for collisions between bullets and obstacles, removing both on hit.
     Returns updated bullets, updated obstacles, and score_delta (1000 per obstacle killed by a player bullet).
     """
@@ -524,7 +488,54 @@ def check_bullet_obstacle_collisions(bullets: Bullet, obstacles: Obstacle) -> Tu
         state_timer=obstacles.state_timer
     )
     
-    return updated_bullets, updated_obstacles, score_delta
+    return updated_bullets, updated_obstacles, score_delta, obstacles_killed_by_player
+
+
+@jax.jit
+def update_death_effects(effects: DeathEffects, death_mask: chex.Array, prev_obstacles: Obstacle, player_tank: Tank) -> DeathEffects:
+    """Spawn new death effects where obstacles died this step and age existing ones.
+    death_mask: boolean/int array per obstacle slot where a player bullet killed it.
+    """
+    # Age existing effects
+    new_age = jnp.where(effects.age < effects.lifetime, effects.age + 1, effects.age)
+
+    # Compute spawn parameters for killed obstacles
+    # Size scales inversely with distance (cap at 60 units)
+    dx = prev_obstacles.x - player_tank.x
+    dy = prev_obstacles.y - player_tank.y
+    dist = jnp.sqrt(dx * dx + dy * dy)
+    denom = jnp.maximum(dist / 60.0, 1.0)
+    size_f = 14.0 / denom
+    spawn_size = jnp.maximum(4, jnp.int32(jnp.round(size_f)))
+
+    # Color by subtype (fallback to wireframe color)
+    subtype = getattr(prev_obstacles, 'enemy_subtype', jnp.full_like(prev_obstacles.x, -1))
+    N = prev_obstacles.x.shape[0]
+    col = jnp.tile(jnp.array(WIREFRAME_COLOR, dtype=jnp.uint8), (N,1))
+    def apply_type(mask, rgb, cur):
+        rgb_arr = jnp.tile(jnp.array(rgb, dtype=jnp.uint8), (N,1))
+        mask2 = (mask[:,None].astype(jnp.bool_))
+        return jnp.where(mask2, rgb_arr, cur)
+    col = apply_type(subtype == ENEMY_TYPE_SUPERTANK, SUPERTANK_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_TANK, TANK_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_FIGHTER, FIGHTER_COLOR, col)
+    col = apply_type(subtype == ENEMY_TYPE_SAUCER, SAUCER_COLOR, col)
+
+    # When death_mask is true in a slot, (re)spawn effect at that slot
+    dm = death_mask.astype(jnp.bool_)
+    new_x = jnp.where(dm, prev_obstacles.x, effects.x)
+    new_y = jnp.where(dm, prev_obstacles.y, effects.y)
+    new_age = jnp.where(dm, jnp.zeros_like(new_age), new_age)
+    new_life = jnp.where(dm, jnp.full_like(effects.lifetime, 8), effects.lifetime)
+    new_size = jnp.where(dm, spawn_size, effects.size)
+    new_r = jnp.where(dm, col[:,0], effects.r)
+    new_g = jnp.where(dm, col[:,1], effects.g)
+    new_b = jnp.where(dm, col[:,2], effects.b)
+
+    return DeathEffects(
+        x=new_x, y=new_y, age=new_age, lifetime=new_life, size=new_size,
+        r=new_r, g=new_g, b=new_b
+    )
 @jax.jit
 def should_fire(action: chex.Array) -> chex.Array:
     """Check if the action includes firing."""
@@ -1075,6 +1086,16 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             state_timer=enemy_state_timer
         )
         
+
+        # Initialize death effects buffer (one slot per obstacle)
+        num_slots = obstacles.x.shape[0]
+        zero_i = jnp.zeros(num_slots, dtype=jnp.int32)
+        zero_f = jnp.zeros(num_slots)
+        zero_u = jnp.zeros(num_slots, dtype=jnp.uint8)
+        death_effects = DeathEffects(
+            x=zero_f, y=zero_f, age=zero_i, lifetime=zero_i, size=zero_i,
+            r=zero_u, g=zero_u, b=zero_u
+        )
         state = BattleZoneState(
             player_tank=player_tank,
             bullets=bullets,
@@ -1084,7 +1105,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             prev_player_x=player_tank.x,
             prev_player_y=player_tank.y,
             player_score=jnp.array(0),   # initialize score
-            player_lives=jnp.array(5)    # initialize lives (5 as requested)
+            player_lives=jnp.array(5),   # initialize lives (5 as requested)
+            death_effects=death_effects
         )
         
         observation = self._get_observation(state)
@@ -1096,6 +1118,37 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         This updates the game state based on the action taken.
         It is the main update LOOP for the game.
         """
+                # --- Normalize external action from play.py ---
+        # Mappe den externen Action-Index robust auf die 18 gültigen BattleZone-Aktionen.
+        # Alles außerhalb 0–17 wird auf NOOP gesetzt.
+        action = jnp.asarray(action, dtype=jnp.int32)
+
+        # Aktions-Lookup Tabelle (Index = Action-ID aus play.py)
+        action_table = jnp.array([
+            NOOP,
+            FIRE,
+            UP,
+            RIGHT,
+            LEFT,
+            DOWN,
+            UPRIGHT,
+            UPLEFT,
+            DOWNRIGHT,
+            DOWNLEFT,
+            UPFIRE,
+            RIGHTFIRE,
+            LEFTFIRE,
+            DOWNFIRE,
+            UPRIGHTFIRE,
+            UPLEFTFIRE,
+            DOWNRIGHTFIRE,
+            DOWNLEFTFIRE,
+        ], dtype=jnp.int32)
+
+        # Index clampen, damit out-of-range Werte nicht crashen
+        idx = jnp.clip(action, 0, action_table.shape[0] - 1)
+        norm_action = action_table[idx]
+
         # Update player tank
         new_player_tank = update_tank_position(state.player_tank, action)
         
@@ -1145,10 +1198,13 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         new_spawn_timer = jnp.where(should_try_spawn, ENEMY_SPAWN_COOLDOWN, new_spawn_timer)
         
         # Check for bullet-obstacle collisions (now returns score delta when player killed obstacles)
-        updated_bullets, updated_obstacles, score_delta = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
+        updated_bullets, updated_obstacles, score_delta, death_mask = check_bullet_obstacle_collisions(updated_bullets, updated_obstacles)
         
         # Check if player is hit by enemy bullets
         new_player_tank = check_player_hit(new_player_tank, updated_bullets)
+
+        # Update death effects (hit sparks) based on which obstacles died this step
+        updated_death_effects = update_death_effects(state.death_effects, death_mask, state.obstacles, new_player_tank)
 
         # Detect whether the player was shot this step (alive -> dead)
         player_was_shot = jnp.logical_and(state.player_tank.alive == 1, new_player_tank.alive == 0)
@@ -1200,6 +1256,17 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 state_timer=enemy_state_timer
             )
 
+
+            # initialize death effects buffer
+            num_slots = obstacles_rst.x.shape[0]
+            zero_i = jnp.zeros(num_slots, dtype=jnp.int32)
+            zero_f = jnp.zeros(num_slots)
+            zero_u = jnp.zeros(num_slots, dtype=jnp.uint8)
+            death_effects = DeathEffects(
+                x=zero_f, y=zero_f, age=zero_i, lifetime=zero_i, size=zero_i,
+                r=zero_u, g=zero_u, b=zero_u
+            )
+
             return BattleZoneState(
                 player_tank=player_tank_rst,
                 bullets=bullets_rst,
@@ -1209,7 +1276,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                 prev_player_x=player_tank_rst.x,
                 prev_player_y=player_tank_rst.y,
                 player_score=state.player_score,      # preserve score
-                player_lives=lives_after
+                player_lives=state.player_lives,
+                death_effects=death_effects
             )
 
         # If player was shot and still has lives left -> restart. If no lives left, keep dead state (game over).
@@ -1229,6 +1297,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
                     prev_player_y=state.player_tank.y,
                     player_score=state.player_score + score_delta,
                     player_lives=lives_after
+                ,
+                    death_effects=updated_death_effects
                 )
             return jax.lax.cond(lives_after > 0, return_reset, return_gameover)
 
@@ -1242,6 +1312,8 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             prev_player_y=state.player_tank.y,
             player_score=state.player_score + score_delta,
             player_lives=state.player_lives
+        ,
+            death_effects=updated_death_effects
         ))
 
         observation = self._get_observation(final_state)
@@ -1267,8 +1339,6 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
     def action_space(self) -> Space:
         """Discrete action space (callable) to match JaxEnvironment API and tests."""
         return spaces.Discrete(len(self.action_set))
-
-    # Replace your observation_space() with:
 
     def observation_space(self) -> Space:
         # Use module-level constants directly to avoid mismatches
@@ -1365,28 +1435,14 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: EnvState) -> Tuple[jnp.ndarray]:
-        H, W = HEIGHT, WIDTH
-        # Simple sky/ground split
-        y = jnp.arange(H)[:, None]
-        sky = (y < HORIZON_Y).astype(jnp.uint8)
-        ground = 1 - sky
-
-        # Base image: sky=0, ground=32
-        img = (ground * 32).astype(jnp.uint8)
-        img = jnp.repeat(img, W, axis=1)
-
-        # Add a thin horizon line
-        img = img.at[HORIZON_Y:HORIZON_Y+1, :].set(64)
-
-        # Put a small marker for the player that moves with angle so it’s non-constant
-        px = (W // 2 + (jnp.cos(state.player_tank.angle) * 10).astype(jnp.int32)).clip(0, W-1)
-        py = (H // 2 + (jnp.sin(state.player_tank.angle) * 6).astype(jnp.int32)).clip(0, H-1)
-        img = img.at[py, px].set(200)
-
-        # Stack to RGB
-        rgb = jnp.stack([img, img, img], axis=-1)
-        return rgb
-
+        """Render the state via the JAX renderer (uint8 HxWx3). Falls back to zeros."""
+        img_shape = (HEIGHT, WIDTH, 3)
+        def _fallback(_: EnvState):
+            return jnp.zeros(img_shape, dtype=jnp.uint8)
+        def _draw(st: EnvState):
+            return self.renderer.render(st)
+        has_renderer = jnp.array(self.renderer is not None)
+        return jax.lax.cond(has_renderer, _draw, _fallback, operand=state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: BattleZoneState, state: BattleZoneState) -> float:
@@ -1427,1011 +1483,886 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
         """
         return self._get_env_reward(previous_state, state)
 
-class BattleZoneRenderer:
-    """3D wireframe renderer for BattleZone in the style of the original Atari 2600 game."""
+# Annahme: folgende Konstanten/Farben sind bereits im Modul definiert:
+# WIDTH, HEIGHT, HORIZON_Y, WORLD_SIZE
+# WIREFRAME_COLOR, HUD_ACCENT_COLOR, BULLET_COLOR
+# SUPERTANK_COLOR, TANK_COLOR, FIGHTER_COLOR, SAUCER_COLOR
+# ENEMY_TYPE_SUPERTANK, ENEMY_TYPE_TANK, ENEMY_TYPE_FIGHTER, ENEMY_TYPE_SAUCER
+# MAX_BULLETS
+# und ein BattleZoneState mit Feldern: player_tank (x,y,angle), prev_player_x/y,
+# obstacles (x,y,angle,alive,obstacle_type,enemy_subtype), bullets (x,y,active,owner),
+# player_score, player_lives, step_counter
+# Außerdem: eine Basisklasse JAXGameRenderer ist optional; falls nicht vorhanden, entferne die Klammer.
+
+
+class BattleZoneRenderer(JAXGameRenderer):
+    """
+    JAX-only renderer that mirrors the Pygame version's look-and-feel:
+    - identical world_to_screen_3d projection math
+    - dynamic sky + mountains, horizon, ground bands
+    - enemy drawing (frontal/profile), saucer, fighter
+    - bullets as short lines (player white, enemy reddish)
+    - centered radar in a top bar with sweep + ticks; saucer hidden on radar
+    - bottom HUD bar with centered score placeholder and life icons as rectangles
+    - player tank wireframe at bottom center (sprite-less fallback)
+    Notes:
+      * No pygame, no fonts, no image loading. Fully jit-friendly.
+    """
 
     def __init__(self):
-        self.view_distance = 400.0  # How far we can see
-        self.fov = 60.0  # Field of view in degrees
-
-        # HUD bar height used for top radar container and bottom HUD
+        self.view_distance = 400.0
+        self.fov = 60.0
         self.hud_bar_height = 28
-
-        # HUD font (requires pygame to be initialized before renderer creation)
-        try:
-            pygame.font.init()
-            self.hud_font = pygame.font.SysFont("monospace", 14, bold=True)
-        except Exception:
-            self.hud_font = None
-
-        # Load player tank sprite
-        try:
-            # Try both possible locations for the sprite
-            sprite_paths = [
-                os.path.join(os.path.dirname(__file__), "../sprites/battlezone/player_tank2.npy"),
-                os.path.join(os.path.dirname(__file__), "sprites/battlezone/player_tank2.npy"),
-            ]
-            for path in sprite_paths:
-                if os.path.exists(path):
-                    self.player_tank_sprite = np.load(path)
-                    self.sprite_loaded = True
-                    break
-            else:
-                self.sprite_loaded = False
-        except Exception:
-            self.sprite_loaded = False
-
-        # Load life icon sprite (scaled down in HUD). Try a couple of likely paths.
-        try:
-            life_paths = [
-                os.path.join(os.path.dirname(__file__), "../sprites/battlezone/tank_life.npy"),
-                os.path.join(os.path.dirname(__file__), "sprites/battlezone/tank_life.npy"),
-            ]
-            self.life_sprite = None
-            self.life_sprite_loaded = False
-            for lp in life_paths:
-                if os.path.exists(lp):
-                    try:
-                        self.life_sprite = np.load(lp)
-                        self.life_sprite_loaded = True
-                        break
-                    except Exception:
-                        continue
-        except Exception:
-            self.life_sprite = None
-            self.life_sprite_loaded = False
-
-        # Death-effect state: remembers previous obstacle alive/positions so we can
-        # create a short-lived pixel-blur when an enemy is killed (visual feedback).
-        # Initialized on first render when obstacle arrays are available.
-        self._prev_obstacles_alive = None
-        self._prev_obstacles_x = None
-        self._prev_obstacles_y = None
-        # Each effect: dict with keys: x, y, color, lifetime, age, size
-        self._death_effects = []
-
-    def draw_player_bullet(self, screen, state: BattleZoneState):
-        """Draw all bullets (player and enemy) as moving lines."""
-        bullets = state.bullets
         
-        # Draw all active bullets
-        for i in range(MAX_BULLETS):
-            if bullets.active[i]:
-                bullet_x = bullets.x[i]
-                bullet_y = bullets.y[i]
-                owner = bullets.owner[i]
+        # Sprite laden (Masken- oder RGBA-Variante wird unterstützt)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sprite_dir = os.path.join(base_dir, "sprites", "battlezone")
+        life_sprite_np = np.load(os.path.join(sprite_dir, "tank_life.npy"))
+        # Downscale overly large life sprite once (outside JIT) to avoid huge constant folding
+        if life_sprite_np.ndim >= 2:
+            sh, sw = life_sprite_np.shape[:2]
+            max_h, max_w = 6, 9  # HUD icon target size
+            sy = max(1, int(math.ceil(sh / max_h)))
+            sx = max(1, int(math.ceil(sw / max_w)))
+            life_sprite_np = life_sprite_np[::sy, ::sx, ...] if life_sprite_np.ndim == 3 else life_sprite_np[::sy, ::sx]
+        self.life_sprite = jnp.asarray(life_sprite_np)
 
-                # Transform bullet position to screen
-                screen_x, screen_y, distance, visible = self.world_to_screen_3d(
-                    bullet_x, bullet_y,
-                    state.player_tank.x,
-                    state.player_tank.y,
-                    state.player_tank.angle
-                )
-
-                if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
-                    # Different colors for player vs enemy bullets
-                    color = BULLET_COLOR if owner == 0 else (255, 100, 100)  # Red for enemy bullets
-                    pygame.draw.line(
-                        screen,
-                        color,
-                        (screen_x, screen_y - 3),
-                        (screen_x, screen_y + 3),
-                        3
-                    )
-
-
-    def numpy_to_pygame_surface(self, array):
-        """Convert numpy array to pygame surface."""
-        if array.dtype == np.uint8:
-            sprite_array = array
-        elif array.dtype == np.float32 or array.dtype == np.float64:
-            sprite_array = (array * 255).astype(np.uint8)
+        # Für Layout/Spacing im HUD nützlich:
+        if self.life_sprite.ndim == 2:
+            self.life_h, self.life_w = self.life_sprite.shape
+        elif self.life_sprite.ndim == 3:
+            self.life_h, self.life_w = self.life_sprite.shape[:2]
         else:
-            sprite_array = array.astype(np.uint8)
-
-        if len(sprite_array.shape) == 2:
-            height, width = sprite_array.shape
-            rgb_array = np.stack([sprite_array] * 3, axis=-1)
-            surface = pygame.Surface((width, height))
-            pygame.surfarray.blit_array(surface, rgb_array.swapaxes(0, 1))
-
-        elif len(sprite_array.shape) == 3:
-            height, width, channels = sprite_array.shape
-            if channels == 1:
-                rgb_array = np.repeat(sprite_array, 3, axis=-1)
-                surface = pygame.Surface((width, height))
-                pygame.surfarray.blit_array(surface, rgb_array.swapaxes(0, 1))
-            elif channels == 3:
-                rgb_array = sprite_array
-                surface = pygame.Surface((width, height))
-                pygame.surfarray.blit_array(surface, rgb_array.swapaxes(0, 1))
-            elif channels == 4:
-                # RGBA support via frombuffer
-                rgba_array = sprite_array
-                surface = pygame.image.frombuffer(rgba_array.tobytes(), (width, height), "RGBA").convert_alpha()
-            else:
-                raise ValueError(f"Unsupported number of channels: {channels}")
+            raise ValueError("tank_life.npy hat ein unerwartetes Format.")
+        # --- Player tank sprite (player_tank2.npy) ---
+        player_sprite_np = np.load(os.path.join(sprite_dir, "player_tank2.npy"))
+        # Optional downscale to keep small footprint in HUD area
+        if player_sprite_np.ndim >= 2:
+            psh, psw = player_sprite_np.shape[:2]
+            pmax_h, pmax_w = 120, 192  # target maximum for bottom-center tank icon
+            psy = max(1, int(math.ceil(psh / pmax_h)))
+            psx = max(1, int(math.ceil(psw / pmax_w)))
+            player_sprite_np = player_sprite_np[::psy, ::psx, ...] if player_sprite_np.ndim == 3 else player_sprite_np[::psy, ::psx]
+        self.player_sprite = jnp.asarray(player_sprite_np)
+        if self.player_sprite.ndim == 2:
+            self.player_h, self.player_w = self.player_sprite.shape
+        elif self.player_sprite.ndim == 3:
+            self.player_h, self.player_w = self.player_sprite.shape[:2]
         else:
-            raise ValueError(f"Unsupported array shape: {sprite_array.shape}")
-        
-        return surface
+            raise ValueError("player_tank2.npy hat ein unerwartetes Format.")
 
-    def world_to_screen_3d(self, world_x, world_y, player_x, player_y, player_angle):
-        """Convert world coordinates to 3D screen coordinates relative to player.
+    
+    def _blit_sprite(self, im, sprite, x, y, tint_rgb=None):
+            """
+            JIT-freundliches Blitting:
+            - dynamische Indizes via lax.dynamic_slice
+            - feste Slice-Größen via Padding
+            - dtype-Konflikte gelöst (uint8 <-> float32)
+            - NEU: Wenn tint_rgb gesetzt ist, wird unabhängig vom Spriteformat getintet.
+                   Für RGBA nutzen wir den Alphakanal als Maske (>0). Für RGB/Masken
+                   verwenden wir eine Luminanz-/Schwellenmaske (>0).
+            """
+            H, W, _ = im.shape
+    
+            # Sprite-Formate erkennen
+            if sprite.ndim == 2:          # Maske
+                sh, sw = sprite.shape
+                is_mask = True
+                is_rgba = False
+                C = 1
+            elif sprite.ndim == 3 and sprite.shape[-1] in (3, 4):
+                sh, sw, C = sprite.shape
+                is_mask = False
+                is_rgba = (C == 4)
+            else:
+                raise ValueError("Sprite muss HxW (Maske) oder HxWx3/4 (RGB/RGBA) sein.")
+    
+            sh_c = int(sh)
+            sw_c = int(sw)
+    
+            # Padding vorbereiten
+            pad_y = sh_c
+            pad_x = sw_c
+            im_padded = jnp.pad(im, ((pad_y, pad_y), (pad_x, pad_x), (0, 0)), mode="constant")
+    
+            # Startkoordinaten (dynamisch)
+            y_start = jnp.int32(y + pad_y)
+            x_start = jnp.int32(x + pad_x)
+    
+            # Ziel-Ausschnitt aus dem Bild (immer konstante Größe sh_c x sw_c)
+            dst = lax.dynamic_slice(im_padded, (y_start, x_start, 0), (sh_c, sw_c, 3))
+    
+            # Wenn Tint angefordert ist -> immer TINT-MODUS, egal ob Masken- oder RGBA/RGB-Sprite
+            if tint_rgb is not None:
+                if is_mask:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0), (sh_c, sw_c))
+                    mask = spr_slice > 0
+                else:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0, 0), (sh_c, sw_c, C))
+                    if is_rgba:
+                        alpha = spr_slice[..., 3:4].astype(jnp.float32) / 255.0
+                        # Alpha>0 als Maske
+                        mask = (alpha > 0.0)[..., 0]
+                    else:
+                        # RGB -> Luminanz als Maske (>0)
+                        rgb = spr_slice[..., :3].astype(jnp.float32)
+                        lum = (0.299*rgb[...,0] + 0.587*rgb[...,1] + 0.114*rgb[...,2])
+                        mask = lum > 0.0
+    
+                color = jnp.asarray(tint_rgb, dtype=im.dtype)
+                color_patch = jnp.broadcast_to(color, (sh_c, sw_c, 3))
+                out = jnp.where(mask[..., None], color_patch, dst).astype(im.dtype)
+            else:
+                # Standardpfad: Sprite direkt blenden (RGB/RGBA) oder Maske einfärben (HUD-Farbe)
+                if is_mask:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0), (sh_c, sw_c))
+                    mask = spr_slice > 0
+                    color = jnp.asarray(HUD_ACCENT_COLOR, dtype=im.dtype)
+                    color_patch = jnp.broadcast_to(color, (sh_c, sw_c, 3))
+                    out = jnp.where(mask[..., None], color_patch, dst).astype(im.dtype)
+                else:
+                    spr_slice = lax.dynamic_slice(sprite, (0, 0, 0), (sh_c, sw_c, C))
+                    if is_rgba:
+                        rgb = spr_slice[..., :3].astype(jnp.float32)
+                        alpha = spr_slice[..., 3:4].astype(jnp.float32) / 255.0
+                    else:
+                        rgb = spr_slice.astype(jnp.float32)
+                        alpha = jnp.ones((sh_c, sw_c, 1), dtype=jnp.float32)
+    
+                    dst_f = dst.astype(jnp.float32)
+                    out_f = rgb * alpha + dst_f * (1.0 - alpha)
+    
+                    # zurückcasten auf Bild-dtype
+                    if im.dtype == jnp.uint8:
+                        out = jnp.clip(out_f, 0.0, 255.0).astype(jnp.uint8)
+                    else:
+                        out = out_f.astype(im.dtype)
+    
+            # zurückschreiben ins gepaddete Bild
+            im_padded = lax.dynamic_update_slice(im_padded, out, (y_start, x_start, 0))
+    
+            # wieder zurückcroppen
+            im_final = lax.dynamic_slice(im_padded, (pad_y, pad_x, 0), (H, W, 3))
+            return im_final
         
-        Coordinate system:
-        - World: X increases right, Y increases down
-        - Player angle: 0=right, π/2=down, π=left, -π/2=up
-        - View space: X is left(-)/right(+) relative to player, Y is forward(+)/back(-) relative to player
-        - Screen: X increases right, Y increases down, with horizon at HORIZON_Y
-        """
-        # Translate to player-relative coordinates
+        # --- tiny HUD font (3x5) for score ---
+    _DIGITS_3x5 = jnp.array([
+        # 0..9, each 5 rows à 3 cols (1=on)
+        # 0
+        [[1,1,1],
+         [1,0,1],
+         [1,0,1],
+         [1,0,1],
+         [1,1,1]],
+        # 1
+        [[0,1,0],
+         [1,1,0],
+         [0,1,0],
+         [0,1,0],
+         [1,1,1]],
+        # 2
+        [[1,1,1],
+         [0,0,1],
+         [1,1,1],
+         [1,0,0],
+         [1,1,1]],
+        # 3
+        [[1,1,1],
+         [0,0,1],
+         [0,1,1],
+         [0,0,1],
+         [1,1,1]],
+        # 4
+        [[1,0,1],
+         [1,0,1],
+         [1,1,1],
+         [0,0,1],
+         [0,0,1]],
+        # 5
+        [[1,1,1],
+         [1,0,0],
+         [1,1,1],
+         [0,0,1],
+         [1,1,1]],
+        # 6
+        [[1,1,1],
+         [1,0,0],
+         [1,1,1],
+         [1,0,1],
+         [1,1,1]],
+        # 7
+        [[1,1,1],
+         [0,0,1],
+         [0,1,0],
+         [0,1,0],
+         [0,1,0]],
+        # 8
+        [[1,1,1],
+         [1,0,1],
+         [1,1,1],
+         [1,0,1],
+         [1,1,1]],
+        # 9
+        [[1,1,1],
+         [1,0,1],
+         [1,1,1],
+         [0,0,1],
+         [1,1,1]],
+    ], dtype=jnp.uint8)
+
+    def _draw_digit(self, img, x, y, d, color, scale=2):
+        pat = self._DIGITS_3x5[d]
+        h, w = pat.shape
+        im = img
+        def row_body(r, imc1):
+            def col_body(c, imc2):
+                on = pat[r, c] == 1
+                def draw(_):
+                    return self._fill_rect(imc2, x + c*scale, y + r*scale, scale, scale, color)
+                return lax.cond(on, draw, lambda _: imc2, operand=None)
+            return lax.fori_loop(0, w, col_body, imc1)
+        return lax.fori_loop(0, h, row_body, im)
+
+    def _draw_score_hud(self, img, score_val):
+        # --- vorbereiten ---
+        s = jnp.asarray(score_val, jnp.int32)
+        s = jnp.maximum(s, 0)
+
+        # bis zu 9 Stellen unterstützen (0..999,999,999); bei Bedarf MAX_DIGITS erhöhen
+        POW10 = jnp.asarray([1,10,100,1000,10000,100000,1000000,10000000,100000000], jnp.int32)
+        MAX_DIGITS = POW10.shape[0]
+
+        # Ziffern vektoriell berechnen
+        divs = s // POW10                     # int32[9]
+        digits_right = divs % 10              # ones,tens,hundreds,...
+        digits_leftpad = digits_right[::-1]   # linksbündig mit Nullen aufgefüllt
+
+        # Anzahl tatsächlicher Stellen (0 -> 1 Stelle)
+        n_raw = jnp.sum(divs > 0)             # wie floor(log10(s))+1, aber ohne float
+        n = jnp.maximum(n_raw, 1)
+
+        # --- Layout ---
+        scale   = 2
+        glyph_w = 3 * scale
+        gap     = scale
+        total_w = n * glyph_w + (n - 1) * gap
+
+        base_x = (WIDTH // 2) - (total_w // 2)      # mittig-rechts
+        base_y = HEIGHT - self.hud_bar_height + 4        # über den Leben
+        col    = jnp.asarray(HUD_ACCENT_COLOR, jnp.uint8)
+
+        # --- Zeichnen: genau n Ziffern (links -> rechts) ---
+        start = MAX_DIGITS - n
+
+        im = img
+        def body(i, imc):
+            dx = base_x + i * (glyph_w + gap)
+            d  = digits_leftpad[start + i].astype(jnp.int32)
+            return self._draw_digit(imc, dx, base_y, d, col, scale=scale)
+        im = lax.fori_loop(0, n, body, im)
+
+        return im
+
+    # ---------------- low-level primitives (pure JAX) ----------------
+
+    @staticmethod
+    def _put_pixel(img, x, y, color):
+        h, w = img.shape[0], img.shape[1]
+        x = jnp.asarray(x, jnp.int32)
+        y = jnp.asarray(y, jnp.int32)
+        color = jnp.asarray(color, jnp.uint8)
+        def body(_):
+            im = img
+            im = im.at[y, x, 0].set(color[0])
+            im = im.at[y, x, 1].set(color[1])
+            im = im.at[y, x, 2].set(color[2])
+            return im
+        inside = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+        return lax.cond(inside, body, lambda _: img, operand=None)
+
+    @staticmethod
+    def _draw_line(img, x0, y0, x1, y1, color, samples=256):
+        # Parametric line sampling (jit-friendly; Bresenham avoids floats but needs while loops)
+        t = jnp.linspace(0.0, 1.0, samples)
+        xs = jnp.round(x0 + (x1 - x0) * t).astype(jnp.int32)
+        ys = jnp.round(y0 + (y1 - y0) * t).astype(jnp.int32)
+        color = jnp.asarray(color, jnp.uint8)
+        im = img
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 0].set(color[0])
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 1].set(color[1])
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 2].set(color[2])
+        return im
+
+    
+    @staticmethod
+    def _fill_rect(img, x, y, w_, h_, color):
+        # Tracer-safe: fill rectangle using boolean masking over the full (static) image.
+        color = jnp.asarray(color, jnp.uint8)
+        H = img.shape[0]
+        W = img.shape[1]
+        x0 = jnp.clip(jnp.int32(x), 0, W)
+        y0 = jnp.clip(jnp.int32(y), 0, H)
+        x1 = jnp.clip(jnp.int32(x + w_), 0, W)
+        y1 = jnp.clip(jnp.int32(y + h_), 0, H)
+
+        ys = jnp.arange(H)[:, None]     # static extent
+        xs = jnp.arange(W)[None, :]     # static extent
+        mask = (ys >= y0) & (ys < y1) & (xs >= x0) & (xs < x1)
+        # Broadcast color to image shape
+        col = jnp.broadcast_to(jnp.reshape(color, (1,1,3)), img.shape)
+        mask3 = jnp.stack([mask, mask, mask], axis=-1)
+        return jnp.where(mask3, col, img)
+
+    @staticmethod
+    def _draw_circle_outline(img, cx, cy, r, color, samples=360):
+        ang = jnp.linspace(0, 2*jnp.pi, samples, endpoint=False)
+        xs = jnp.round(cx + r * jnp.cos(ang)).astype(jnp.int32)
+        ys = jnp.round(cy + r * jnp.sin(ang)).astype(jnp.int32)
+        color = jnp.asarray(color, jnp.uint8)
+        im = img
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 0].set(color[0])
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 1].set(color[1])
+        im = im.at[ys.clip(0, im.shape[0]-1), xs.clip(0, im.shape[1]-1), 2].set(color[2])
+        return im
+
+    # ---------------- math: projection identical to pygame version ----------------
+
+    @staticmethod
+    def _world_to_screen_3d(world_x, world_y, player_x, player_y, player_angle):
         rel_x = world_x - player_x
-        rel_y = world_y - player_y  
-        
-        # Rotate by player angle to get view-relative coordinates
-        # We need to rotate the world coordinates to align with player's facing direction
+        rel_y = world_y - player_y
         cos_a = jnp.cos(player_angle)
         sin_a = jnp.sin(player_angle)
-        
-        # CORRECTED transformation matrix:
-        # When player faces right (angle=0): forward should be +X direction in world
-        # When player faces down (angle=π/2): forward should be +Y direction in world
-        # The transformation should map world directions to view directions correctly
-        
-        # For a proper view transformation:
-        # - view_x (left/right): perpendicular to player's facing direction
-        # - view_y (forward/back): aligned with player's facing direction
-        view_x = -rel_x * sin_a + rel_y * cos_a   # Right/left relative to player (perpendicular to facing)
-        view_y = rel_x * cos_a + rel_y * sin_a    # Forward/back relative to player (parallel to facing)
-                
-        # Perspective projection
-        if view_y > 1.0:  # Object is in front of player (positive forward distance)
-            # Standard perspective projection with proper FOV scaling
-            fov_scale = 80.0  # Field of view scaling factor
-            screen_x = int(WIDTH // 2 + (view_x / view_y) * fov_scale)
-            
-            # For proper 3D perspective:
-            # - Objects farther away should appear higher on screen (closer to horizon)
-            # - Objects closer should appear lower on screen (away from horizon)
-            # - The perspective scale should make closer objects larger
-            perspective_scale = 100.0  # Controls how much perspective affects Y position
-            screen_y = int(HORIZON_Y + (perspective_scale / view_y))
-            
-            distance = view_y
-            return screen_x, screen_y, distance, True
-        else:
-            return 0, 0, 0, False  # Behind player or too close
+        # view_x left/right, view_y forward
+        view_x = -rel_x * sin_a + rel_y * cos_a
+        view_y =  rel_x * cos_a + rel_y * sin_a
 
-    def draw_enemy_tank_frontal(self, screen, x, y, scale, color):
-        """Draw frontal view of enemy tank matching BattleZone style."""
-        try:
-            # Tank body - more angular and authentic BattleZone style
-            body_width = int(scale * 1.0)
-            body_height = int(scale * 0.7)
-            
-            # Main body - trapezoidal shape
-            body_points = [
-                (x - body_width//2, y + body_height//2),      # bottom-left
-                (x + body_width//2, y + body_height//2),      # bottom-right
-                (x + body_width//3, y - body_height//2),      # top-right
-                (x - body_width//3, y - body_height//2),      # top-left
-            ]
-            pygame.draw.polygon(screen, color, body_points, 1)
-            
-            # Turret - small rectangular turret
-            turret_width = scale // 3
-            turret_height = scale // 3
-            pygame.draw.rect(screen, color,
-                           (x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
-            
-            # Cannon - thin line extending forward
-            cannon_length = scale // 2
-            pygame.draw.line(screen, color, (x, y), (x, y + cannon_length), 1)
-            
-            # Tank treads/tracks - vertical lines on sides
-            track_height = body_height
-            for i in range(3):
-                track_x_left = x - body_width//2 - 2
-                track_x_right = x + body_width//2 + 2
-                track_y = y - track_height//2 + i * (track_height//3)
-                pygame.draw.line(screen, color, (track_x_left, track_y), (track_x_left, track_y + 3), 1)
-                pygame.draw.line(screen, color, (track_x_right, track_y), (track_x_right, track_y + 3), 1)
-            
-        except:
-            pass
+        # in front?
+        in_front = view_y > 1.0
 
-    def draw_enemy_tank_profile_left(self, screen, x, y, scale, color):
-        """Draw left profile of enemy tank matching BattleZone style."""
-        try:
-            # Tank body - elongated hexagonal shape
-            body_width = int(scale * 1.8)
-            body_height = int(scale * 0.6)
-            
-            # Main body points for side view
-            body_points = [
-                (x - body_width//2, y + body_height//3),      # rear-bottom
-                (x - body_width//3, y + body_height//2),      # rear-bottom-slope
-                (x + body_width//3, y + body_height//2),      # front-bottom-slope
-                (x + body_width//2, y + body_height//3),      # front-bottom
-                (x + body_width//2 - 2, y - body_height//2),  # front-top
-                (x - body_width//2 + 2, y - body_height//2),  # rear-top
-            ]
-            pygame.draw.polygon(screen, color, body_points, 1)
-            
-            # Turret - offset rectangular turret
-            turret_width = scale // 2
-            turret_height = scale // 4
-            turret_x = x - scale // 6
-            pygame.draw.rect(screen, color,
-                           (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
-            
-            # Cannon pointing left
-            cannon_length = int(scale * 1.2)
-            pygame.draw.line(screen, color, (turret_x, y), (turret_x - cannon_length, y), 2)
-            
-            # Track wheels/details
-            wheel_y = y + body_height//2 + 2
-            for i in range(0, body_width - 4, 6):
-                wheel_x = x - body_width//2 + 2 + i
-                pygame.draw.circle(screen, color, (wheel_x, wheel_y), 2, 1)
-            
-            # Track line
-            pygame.draw.line(screen, color, 
-                           (x - body_width//2, wheel_y), 
-                           (x + body_width//2, wheel_y), 1)
-            
-        except:
-            pass
+        fov_scale = 80.0
+        perspective_scale = 100.0
+        screen_x = (WIDTH // 2) + (view_x / view_y) * fov_scale
+        screen_y = HORIZON_Y + (perspective_scale / view_y)
 
-    def draw_enemy_tank_profile_right(self, screen, x, y, scale, color):
-        """Draw right profile of enemy tank matching BattleZone style."""
-        try:
-            # Tank body - elongated hexagonal shape (mirrored)
-            body_width = int(scale * 1.8)
-            body_height = int(scale * 0.6)
-            
-            # Main body points for side view
-            body_points = [
-                (x + body_width//2, y + body_height//3),      # front-bottom
-                (x + body_width//3, y + body_height//2),      # front-bottom-slope
-                (x - body_width//3, y + body_height//2),      # rear-bottom-slope
-                (x - body_width//2, y + body_height//3),      # rear-bottom
-                (x - body_width//2 + 2, y - body_height//2),  # rear-top
-                (x + body_width//2 - 2, y - body_height//2),  # front-top
-            ]
-            pygame.draw.polygon(screen, color, body_points, 1)
-            
-            # Turret - offset rectangular turret
-            turret_width = scale // 2
-            turret_height = scale // 4
-            turret_x = x + scale // 6
-            pygame.draw.rect(screen, color,
-                           (turret_x - turret_width//2, y - turret_height//2, turret_width, turret_height), 1)
-            
-            # Cannon pointing right
-            cannon_length = int(scale * 1.2)
-            pygame.draw.line(screen, color, (turret_x, y), (turret_x + cannon_length, y), 2)
-            
-            # Track wheels/details
-            wheel_y = y + body_height//2 + 2
-            for i in range(0, body_width - 4, 6):
-                wheel_x = x - body_width//2 + 2 + i
-                pygame.draw.circle(screen, color, (wheel_x, wheel_y), 2, 1)
-            
-            # Track line
-            pygame.draw.line(screen, color, 
-                           (x - body_width//2, wheel_y), 
-                           (x + body_width//2, wheel_y), 1)
-            
-        except:
-            pass
+        sx = jnp.where(in_front, jnp.int32(jnp.round(screen_x)), jnp.int32(0))
+        sy = jnp.where(in_front, jnp.int32(jnp.round(screen_y)), jnp.int32(0))
+        dist = jnp.where(in_front, view_y, 0.0)
+        return sx, sy, dist, in_front
 
-    def draw_saucer(self, screen, x, y, distance, color):
-        """Draw a simple flying saucer (UFO) shape."""
-        try:
-            if distance > self.view_distance:
-                return
-            # scale size inversely with distance
-            size = max(6, int(18 / max(distance / 50, 1)))
-            # body
-            pygame.draw.ellipse(screen, color, (x - size, y - size//3, size*2, size//1.5), 1)
-            # dome
-            pygame.draw.ellipse(screen, color, (x - size//2, y - size//2, size, size//2), 1)
-            # small glow dots
-            for dx in (-size//3, 0, size//3):
-                pygame.draw.circle(screen, color, (x + dx, y + size//6), 1)
-        except Exception:
-            pass
+    # ---------------- high-level elements ----------------
 
-    def draw_fighter(self, screen, x, y, distance, color):
-        """Draw a simple aerial fighter/missile with propeller-like shape."""
-        try:
-            if distance > self.view_distance:
-                return
-            # Use beige paint with black stripes to match provided sprite
-            body_color = (222, 196, 130)  # beige
-            stripe_color = (0, 0, 0)
-            size = max(8, int(20 / max(distance / 60, 1)))
-
-            # Central square body
-            body_w = int(size * 1.0)
-            body_h = int(size * 0.7)
-            pygame.draw.rect(screen, body_color, (x - body_w//2, y - body_h//2, body_w, body_h), 0)
-            pygame.draw.rect(screen, stripe_color, (x - body_w//2, y - body_h//2, body_w, body_h), 1)
-
-            # Left and right wing blocks (with horizontal black stripes)
-            wing_w = int(size * 0.9)
-            wing_h = int(size * 0.5)
-            left_x = x - body_w//2 - wing_w
-            right_x = x + body_w//2
-            wing_y = y - wing_h//2
-            # Draw wings filled
-            pygame.draw.rect(screen, body_color, (left_x, wing_y, wing_w, wing_h), 0)
-            pygame.draw.rect(screen, body_color, (right_x, wing_y, wing_w, wing_h), 0)
-            # Outline wings
-            pygame.draw.rect(screen, stripe_color, (left_x, wing_y, wing_w, wing_h), 1)
-            pygame.draw.rect(screen, stripe_color, (right_x, wing_y, wing_w, wing_h), 1)
-
-            # Add horizontal black stripes on wings (two stripes each)
-            stripe_h = max(2, wing_h // 5)
-            for i in range(2):
-                sy = wing_y + int((i + 1) * wing_h / 3) - stripe_h//2
-                pygame.draw.rect(screen, stripe_color, (left_x + 2, sy, wing_w - 4, stripe_h), 0)
-                pygame.draw.rect(screen, stripe_color, (right_x + 2, sy, wing_w - 4, stripe_h), 0)
-
-            # Small front nose block
-            nose_w = int(body_w * 0.4)
-            nose_h = int(body_h * 0.5)
-            pygame.draw.rect(screen, stripe_color, (x + body_w//2 - 2, y - nose_h//2, nose_w, nose_h), 0)
-        except Exception:
-            pass
-
-    def _add_death_effect(self, screen_x: int, screen_y: int, color: Tuple[int, int, int], distance: float, lifetime: int = 8):
-        """Enqueue a short-lived pixel blur effect at screen coordinates.
-
-        The effect will be drawn for `lifetime` frames and will fade out.
-        """
-        size = max(4, int(14 / max(distance / 60.0, 1.0)))
-        eff = {
-            'x': int(screen_x),
-            'y': int(screen_y),
-            'color': tuple(int(c) for c in color),
-            'lifetime': int(lifetime),
-            'age': 0,
-            'size': size
-        }
-        self._death_effects.append(eff)
-
-    def _draw_death_effects(self, screen, step_counter: int):
-        """Draw and age all active death effects; remove expired ones."""
-        if not self._death_effects:
-            return
-
-        new_effects = []
-        for idx, e in enumerate(self._death_effects):
-            remaining = e['lifetime'] - e['age']
-            if remaining <= 0:
-                continue
-
-            # Fade factor (1.0 -> 0.0)
-            f = max(0.0, float(remaining) / float(e['lifetime']))
-            base_r, base_g, base_b = e['color']
-            draw_color = (int(base_r * f), int(base_g * f), int(base_b * f))
-
-            # Draw several small rectangles to simulate a pixel blur/smear
-            parts = max(4, e['size'] // 3)
-            for p in range(parts):
-                # deterministic offsets for visual consistency using step_counter
-                dx = int((p - parts // 2) * (1 + (idx % 3)))
-                dy = int(((p * 2) - parts) * (1 + ((step_counter + idx) % 2)))
-                w = max(1, e['size'] // (2 + (p % 3)))
-                h = max(1, e['size'] // (3 + (p % 2)))
-                try:
-                    pygame.draw.rect(screen, draw_color, (e['x'] + dx, e['y'] + dy, w, h), 0)
-                except Exception:
-                    # ignore drawing errors and continue
-                    pass
-
-            # age and keep if still alive
-            e['age'] += 1
-            if e['age'] < e['lifetime']:
-                new_effects.append(e)
-
-        self._death_effects = new_effects
-
-    def draw_enemy_tank(self, screen, x, y, distance, color, tank_angle, player_angle):
-        """Draw enemy tank with directional appearance based on relative orientation."""
-        if distance > self.view_distance:
-            return
-            
-        # Scale based on distance for perspective
-        scale = max(4, int(20 / max(distance / 50, 1)))
-        
-        # Calculate relative angle between tank and player
-        # Determine which view to show based on tank's orientation relative to player's view
-        relative_angle = tank_angle - player_angle
-        
-        # Normalize angle to [-π, π]
-        relative_angle = math.atan2(math.sin(relative_angle), math.cos(relative_angle))
-        
-        # Determine tank appearance based on relative angle
-        if abs(relative_angle) < math.pi/4 or abs(relative_angle) > 3*math.pi/4:
-            # Tank is facing toward or away from player (frontal view)
-            self.draw_enemy_tank_frontal(screen, x, y, scale, color)
-        elif relative_angle > 0:
-            # Tank is facing to the left relative to player view
-            self.draw_enemy_tank_profile_left(screen, x, y, scale, color)
-        else:
-            # Tank is facing to the right relative to player view
-            self.draw_enemy_tank_profile_right(screen, x, y, scale, color)
-
-    def draw_player_tank(self, screen):
-        """Draw player tank using sprite or wireframe fallback."""
-        base_x = WIDTH // 2
-        # Place the tank directly above the bottom HUD bar so it is visible over the scene
-        base_y = HEIGHT - self.hud_bar_height - 10  # slight vertical offset above the bar
-
-        if self.sprite_loaded:
-            sprite_surface = self.numpy_to_pygame_surface(self.player_tank_sprite)
-            sprite_width, sprite_height = sprite_surface.get_size()
-            scale_factor = 0.1  # Adjust this to make sprite bigger/smaller
-            scaled_width = int(sprite_width * scale_factor)
-            scaled_height = int(sprite_height * scale_factor)
-            sprite_surface = pygame.transform.scale(sprite_surface, (scaled_width, scaled_height))
-            sprite_rect = sprite_surface.get_rect()
-            # Align the bottom center of the sprite directly above the bottom HUD bar
-            sprite_rect.midbottom = (base_x, HEIGHT - self.hud_bar_height - 1)
-            screen.blit(sprite_surface, sprite_rect)
-        else:
-            # Fallback to wireframe rendering
-            pygame.draw.ellipse(screen, WIREFRAME_COLOR, (base_x - 30, base_y - 10, 60, 20), 1)
-            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x - 3, base_y - 30, 6, 20), 1)
-            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x - 40, base_y - 10, 10, 20), 1)
-            pygame.draw.rect(screen, WIREFRAME_COLOR, (base_x + 30, base_y - 10, 10, 20), 1)
-
-    def draw_radar(self, screen, state: BattleZoneState):
-        """Draw the BattleZone radar matching the classic appearance with proper rotation."""
-        radar_radius = int(WIDTH * 0.12)
-        # Top black bar to contain radar (full width)
-        top_bar_height = radar_radius * 2 + 12
-        pygame.draw.rect(screen, (0, 0, 0), (0, 0, WIDTH, top_bar_height))
-
-        # Center the radar horizontally in that top bar
-        radar_center_x = WIDTH // 2
-        radar_center_y = top_bar_height // 2
-
-        # Draw radar circle at centered location
-        pygame.draw.circle(screen, (0, 255, 0), (radar_center_x, radar_center_y), radar_radius, 1)
-
-        # Radar sweep (keep same visual behaviour but centered)
-        sweep_speed = 0.025
-        angle = float(state.step_counter) * sweep_speed % (2 * math.pi)
-        sweep_length = radar_radius - 2
-        sweep_x = int(radar_center_x + sweep_length * math.cos(angle - math.pi/2))
-        sweep_y = int(radar_center_y + sweep_length * math.sin(angle - math.pi/2))
-        pygame.draw.line(screen, (255, 255, 255), (radar_center_x, radar_center_y), (sweep_x, sweep_y), 2)
-
-        # Add iconic short diagonal ticks at top-left and top-right of the radar (as in original)
-        try:
-            # angles slightly left/right of the top (-pi/2)
-            left_ang = -math.pi/2 - 0.6
-            right_ang = -math.pi/2 + 0.6
-            # start just inside the circle edge and draw inward toward center
-            edge_r = radar_radius - 2
-            # original outward length was roughly 12; use 60% of that (~7 pixels)
-            tick_len = max(4, int(12 * 0.6))
-
-            lx_start = int(radar_center_x + edge_r * math.cos(left_ang))
-            ly_start = int(radar_center_y + edge_r * math.sin(left_ang))
-            lx_end = int(radar_center_x + (edge_r - tick_len) * math.cos(left_ang))
-            ly_end = int(radar_center_y + (edge_r - tick_len) * math.sin(left_ang))
-
-            rx_start = int(radar_center_x + edge_r * math.cos(right_ang))
-            ry_start = int(radar_center_y + edge_r * math.sin(right_ang))
-            rx_end = int(radar_center_x + (edge_r - tick_len) * math.cos(right_ang))
-            ry_end = int(radar_center_y + (edge_r - tick_len) * math.sin(right_ang))
-
-            pygame.draw.line(screen, WIREFRAME_COLOR, (lx_start, ly_start), (lx_end, ly_end), 2)
-            pygame.draw.line(screen, WIREFRAME_COLOR, (rx_start, ry_start), (rx_end, ry_end), 2)
-        except Exception:
-            pass
-
-        # Radar scale as before
-        scale = (radar_radius - 4) / (WORLD_SIZE / 2)
-
-        # Convert player values
-        player_x = float(state.player_tank.x)
-        player_y = float(state.player_tank.y)
-        player_angle = float(state.player_tank.angle)
-        
-        # Draw obstacles/bullets relative positions using centered radar origin
-        for i, (ox, oy, alive) in enumerate(zip(state.obstacles.x, state.obstacles.y, state.obstacles.alive)):
-            if alive:
-                ox_f = float(ox); oy_f = float(oy)
-                # Choose color by enemy subtype when available
-                try:
-                    subtype_val = int(state.obstacles.enemy_subtype[i])
-                except Exception:
-                    subtype_val = -1
-                # Do not show saucers on radar
-                if subtype_val == ENEMY_TYPE_SAUCER:
-                    continue
-                if subtype_val == ENEMY_TYPE_SUPERTANK:
-                    enemy_color = SUPERTANK_COLOR
-                elif subtype_val == ENEMY_TYPE_TANK:
-                    enemy_color = TANK_COLOR
-                elif subtype_val == ENEMY_TYPE_FIGHTER:
-                    enemy_color = FIGHTER_COLOR
-                elif subtype_val == ENEMY_TYPE_SAUCER:
-                    enemy_color = SAUCER_COLOR
-                else:
-                    enemy_color = (255, 0, 0)
-                rel_x = ox_f - player_x
-                rel_y = oy_f - player_y
-                cos_a = math.cos(player_angle); sin_a = math.sin(player_angle)
-                view_x = -rel_x * sin_a + rel_y * cos_a
-                view_y = rel_x * cos_a + rel_y * sin_a
-                radar_dx = view_x
-                radar_dy = -view_y
-                rx = int(radar_center_x + radar_dx * scale)
-                ry = int(radar_center_y + radar_dy * scale)
-                if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                    pygame.draw.circle(screen, enemy_color, (rx, ry), 3)
-                    enemy_angle = float(state.obstacles.angle[i])
-                    rel_angle = enemy_angle - player_angle
-                    indicator_length = 4
-                    end_x = rx + int(indicator_length * math.cos(rel_angle))
-                    end_y = ry + int(indicator_length * math.sin(rel_angle))
-                    pygame.draw.line(screen, enemy_color, (rx, ry), (end_x, end_y), 1)
-
-        bullets = state.bullets
-        for i in range(len(bullets.x)):
-            if bullets.active[i]:
-                bx = float(bullets.x[i]); by = float(bullets.y[i])
-                rel_x = bx - player_x; rel_y = by - player_y
-                cos_a = math.cos(player_angle); sin_a = math.sin(player_angle)
-                view_x = -rel_x * sin_a + rel_y * cos_a
-                view_y = rel_x * cos_a + rel_y * sin_a
-                radar_dx = view_x; radar_dy = -view_y
-                rx = int(radar_center_x + radar_dx * scale)
-                ry = int(radar_center_y + radar_dy * scale)
-                if (rx - radar_center_x) ** 2 + (ry - radar_center_y) ** 2 <= (radar_radius - 3) ** 2:
-                    color = (255, 255, 255) if bullets.owner[i] == 0 else (255, 100, 100)
-                    pygame.draw.circle(screen, color, (rx, ry), 1)
-
-        # Bottom black bar for HUD (score & lives) - use shared HUD bar height
-        bottom_bar_height = self.hud_bar_height
-        pygame.draw.rect(screen, (0, 0, 0), (0, HEIGHT - bottom_bar_height, WIDTH, bottom_bar_height))
-
-        # Render score (centered) and lives (icons left of center)
-        try:
-            score_val = int(float(state.player_score))
-        except Exception:
-            score_val = 0
-        try:
-            lives_val = int(float(state.player_lives))
-        except Exception:
-            lives_val = 0
-
-        # Draw score centered (accent color)
-        if self.hud_font is not None:
-            score_surf = self.hud_font.render(f"{score_val:03d}", True, HUD_ACCENT_COLOR)
-            score_rect = score_surf.get_rect(center=(WIDTH // 2, HEIGHT - bottom_bar_height // 2 - 6))
-            screen.blit(score_surf, score_rect)
-
-        # Draw life icons centered below the score (max 5)
-        max_lives_to_show = 5
-        lives_to_draw = min(max_lives_to_show, max(0, lives_val))
-        life_spacing = 16
-        # Compute start x so icons are centered horizontally
-        total_width = (lives_to_draw - 1) * life_spacing + 10 if lives_to_draw > 0 else 0
-        life_start_x = (WIDTH // 2) - (total_width // 2)
-        # Position icons below the score slightly
-        life_y = HEIGHT - bottom_bar_height // 2 + 6
-
-        # If life sprite loaded, scale it down to the size of the previous rectangles and tint
-        if getattr(self, 'life_sprite_loaded', False) and self.life_sprite is not None:
-            try:
-                life_surf_orig = self.numpy_to_pygame_surface(self.life_sprite)
-                # Target size similar to previous rectangles (10x12)
-                target_w, target_h = (12, 12)
-                life_surf = pygame.transform.scale(life_surf_orig, (target_w, target_h)).convert_alpha()
-
-                # Tint life surf to HUD_ACCENT_COLOR
-                tint = pygame.Surface((target_w, target_h), pygame.SRCALPHA)
-                tint.fill(HUD_ACCENT_COLOR + (0,))
-                life_surf.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-
-                for i in range(lives_to_draw):
-                    lx = int(life_start_x + i * life_spacing)
-                    ly = int(life_y - target_h//2)
-                    screen.blit(life_surf, (lx, ly))
-            except Exception:
-                # Fallback to rectangles on any error
-                for i in range(lives_to_draw):
-                    lx = int(life_start_x + i * life_spacing)
-                    ly = int(life_y - 6)
-                    pygame.draw.rect(screen, HUD_ACCENT_COLOR, (lx, ly, 10, 12), 0)
-        else:
-            for i in range(lives_to_draw):
-                lx = int(life_start_x + i * life_spacing)
-                ly = int(life_y - 6)
-                pygame.draw.rect(screen, HUD_ACCENT_COLOR, (lx, ly, 10, 12), 0)
-
-    def render(self, state: BattleZoneState, screen=None):
-        """Render the 3D wireframe view.
-
-        If `screen` (a pygame Surface) is provided the renderer draws into it and
-        returns None. If `screen` is None the function will attempt to create a
-        temporary surface (if pygame is available) and return an RGB numpy array
-        representing the rendered frame. If pygame is unavailable a zero RGB
-        image with the correct shape/dtype is returned as a safe fallback for
-        headless tests.
-        """
-        # If no screen provided, attempt to render to a temporary surface and
-        # return as a numpy array so callers that expect an image can use this
-        # method directly.
-        created_surface = False
-        surface = screen
-        if surface is None:
-            try:
-                if pygame is None:
-                    raise Exception("pygame unavailable")
-                surface = pygame.Surface((WIDTH, HEIGHT))
-                created_surface = True
-            except Exception:
-                # Headless fallback: return zero image with correct shape/dtype
-                return np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-
-        player = state.player_tank
-        # --- Death-effect detection -------------------------------------------------
-        # Initialize previous-obstacle caches on first render and detect newly-dead
-        # obstacles by comparing previous alive flags to current ones. When an
-        # obstacle transitions from alive->dead we enqueue a short-lived pixel blur
-        # effect at the last known world position of the obstacle.
-        obs = state.obstacles
-        try:
-            if self._prev_obstacles_alive is None:
-                # First render: cache alive flags and positions
-                self._prev_obstacles_alive = [int(a) for a in obs.alive]
-                self._prev_obstacles_x = [float(x) for x in obs.x]
-                self._prev_obstacles_y = [float(y) for y in obs.y]
-            else:
-                # Detect newly dead obstacles
-                for i in range(len(obs.x)):
-                    try:
-                        prev_alive = int(self._prev_obstacles_alive[i])
-                    except Exception:
-                        prev_alive = 0
-                    try:
-                        cur_alive = int(obs.alive[i])
-                    except Exception:
-                        try:
-                            cur_alive = int(float(obs.alive[i]))
-                        except Exception:
-                            cur_alive = 0
-
-                    # Alive->dead transition
-                    if prev_alive == 1 and cur_alive == 0:
-                        # Use previous world coordinates to compute screen position
-                        px = self._prev_obstacles_x[i]
-                        py = self._prev_obstacles_y[i]
-                        sx, sy, dist, vis = self.world_to_screen_3d(
-                            px, py,
-                            state.player_tank.x, state.player_tank.y, state.player_tank.angle
-                        )
-                        try:
-                            vis_bool = bool(vis)
-                        except Exception:
-                            try:
-                                vis_bool = bool(int(vis))
-                            except Exception:
-                                vis_bool = False
-
-                        if vis_bool and 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
-                            # Choose color based on subtype when available
-                            try:
-                                subtype_val = int(state.obstacles.enemy_subtype[i])
-                            except Exception:
-                                subtype_val = -1
-                            if subtype_val == ENEMY_TYPE_SUPERTANK:
-                                color = SUPERTANK_COLOR
-                            elif subtype_val == ENEMY_TYPE_TANK:
-                                color = TANK_COLOR
-                            elif subtype_val == ENEMY_TYPE_FIGHTER:
-                                color = FIGHTER_COLOR
-                            elif subtype_val == ENEMY_TYPE_SAUCER:
-                                color = SAUCER_COLOR
-                            else:
-                                color = WIREFRAME_COLOR
-
-                            # Enqueue effect using previous screen coords and distance
-                            self._add_death_effect(sx, sy, color, dist, lifetime=10)
-
-                # Update caches
-                self._prev_obstacles_alive = [int(a) for a in obs.alive]
-                self._prev_obstacles_x = [float(x) for x in obs.x]
-                self._prev_obstacles_y = [float(y) for y in obs.y]
-        except Exception:
-            # Any error in detection should not break rendering
-            pass
-        # --- Dynamic sky with moving mountains ---
+    def _draw_sky(self, img, px, pang):
         sky_height = HORIZON_Y
-        sky_bands = 24
-        # Blue gradient for sky
-        for y in range(sky_height):
-            t = y / max(sky_height - 1, 1)
-            r = int(60 * (1 - t) + 10 * t)
-            g = int(120 * (1 - t) + 40 * t)
-            b = int(200 * (1 - t) + 120 * t)
-            pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
+        # blue-ish gradient like pygame line fill
+        yy = jnp.arange(sky_height)
+        t = yy / jnp.maximum(sky_height - 1, 1)
+        r = (60 * (1 - t) + 10 * t).astype(jnp.uint8)
+        g = (120 * (1 - t) + 40 * t).astype(jnp.uint8)
+        b = (200 * (1 - t) + 120 * t).astype(jnp.uint8)
+        im = img
+        im = im.at[yy, :, 0].set(r[:, None])
+        im = im.at[yy, :, 1].set(g[:, None])
+        im = im.at[yy, :, 2].set(b[:, None])
+        # mountains (3 layers)
+        layers = (
+            ((110,110,110), 18.0, 0.025, 30.0, 0.1),
+            ((80,80,80),   28.0, 0.035, 18.0, 0.2),
+            ((50,50,50),   38.0, 0.045,  0.0, 0.4),
+        )
+        # We need player pose for phase; pass via closure at render call (set attributes temporarily)
+        px = px
+        pang = pang
+        im2 = im
+        for color, amp, freq, y_off, speed in layers:
+            # phase uses player.x and angle
+            phase = (px * speed * 0.01 + pang * 8.0)
+            xs = jnp.arange(0, WIDTH+1, 2)
+            ycurve = jnp.int32(jnp.round(
+                sky_height - (jnp.sin(freq * (xs + phase * 120.0)) * amp + y_off)
+            ))
+            # polygon fill: draw vertical lines from curve to horizon
+            def draw_col(i, imc):
+                x = xs[i]
+                y = jnp.clip(ycurve[i], 0, sky_height-1)
+                return self._fill_rect(imc, x, y, 2, sky_height - y, color)
+            im2 = lax.fori_loop(0, xs.shape[0], draw_col, im2)
+        return im2
 
-        # --- Moving mountains (parallax effect) - slower movement ---
-        mountain_layers = [
-            # (color, amplitude, freq, y_offset, speed_factor)
-            ((110, 110, 110), 18, 0.025, 30, 0.1),   # Reduced speed from 0.25
-            ((80, 80, 80), 28, 0.035, 18, 0.2),      # Reduced speed from 0.5
-            ((50, 50, 50), 38, 0.045, 0, 0.4),       # Reduced speed from 1.0
-        ]
-        for color, amp, freq, y_off, speed in mountain_layers:
-            points = []
-            # Slower phase calculation to match reduced movement speed
-            phase = (player.x * speed * 0.01 + player.angle * 8.0) % (2 * math.pi)
-            for x in range(0, WIDTH + 1, 2):
-                y = int(
-                    sky_height
-                    - (math.sin(freq * (x + phase * 120)) * amp + y_off)
-                )
-                points.append((x, y))
-            points.append((WIDTH, sky_height))
-            points.append((0, sky_height))
-            pygame.draw.polygon(screen, color, points)
-
-        # --- Ground rendering with restored movement sensitivity for forward/back ---
+    def _draw_ground(self, img, state):
         ground_bands = 16
-        ground_colors = [
-            (60, 120, 60), (70, 130, 60), (80, 140, 60), (90, 150, 60),
-            (100, 160, 60), (110, 170, 60), (120, 180, 60), (130, 190, 60),
-            (140, 200, 60), (150, 210, 60), (160, 220, 60), (170, 230, 60),
-            (180, 240, 60), (170, 230, 60), (160, 220, 60), (150, 210, 60)
-        ]
-        # Compute player's forward/backward movement since last frame and move ground opposite
-        try:
-            player_x = float(player.x)
-            player_y = float(player.y)
-            prev_x = float(state.prev_player_x)
-            prev_y = float(state.prev_player_y)
-            player_angle = float(player.angle)
-            # forward movement scalar (positive = moved forward in facing direction)
-            forward_delta = (math.cos(player_angle) * (player_x - prev_x)
-                             + math.sin(player_angle) * (player_y - prev_y))
-        except Exception:
-            forward_delta = 0.0
+        colors = jnp.array([
+            [60,120,60],[70,130,60],[80,140,60],[90,150,60],
+            [100,160,60],[110,170,60],[120,180,60],[130,190,60],
+            [140,200,60],[150,210,60],[160,220,60],[170,230,60],
+            [180,240,60],[170,230,60],[160,220,60],[150,210,60]
+        ], dtype=jnp.uint8)
 
-        # Use forward_delta to shift ground in opposite direction to create motion illusion.
-        # Scale chosen experimentally to produce visible but not excessive parallax.
-        ground_offset = int((player.y * 0.15 - forward_delta * 20.0 + player_angle * 2.0)) % ground_bands
-        band_height = (HEIGHT - HORIZON_Y) // ground_bands
+        # forward delta since last frame
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        prev_x = state.prev_player_x; prev_y = state.prev_player_y
+        forward_delta = (jnp.cos(pang)*(px-prev_x) + jnp.sin(pang)*(py-prev_y))
+        ground_offset = jnp.int32(jnp.mod((py*0.15 - forward_delta*20.0 + pang*2.0), ground_bands))
+        band_h = (HEIGHT - HORIZON_Y) // ground_bands
+        im = img
         for i in range(ground_bands):
-            color = ground_colors[(i + ground_offset) % ground_bands]
-            y1 = HORIZON_Y + i * band_height
-            y2 = HORIZON_Y + (i + 1) * band_height if i < ground_bands - 1 else HEIGHT
-            pygame.draw.rect(screen, color, (0, y1, WIDTH, y2 - y1))
+            color = colors[(i + ground_offset) % ground_bands]
+            y1 = HORIZON_Y + i * band_h
+            y2 = HORIZON_Y + (i + 1) * band_h if i < ground_bands - 1 else HEIGHT
+            im = self._fill_rect(im, 0, y1, WIDTH, y2 - y1, color)
+        return im
 
-        # --- Draw perspective ground lines (simulate 3D effect) ---
-        num_lines = 14
-        for i in range(1, num_lines):
-            t = i / num_lines
-            y = int(HORIZON_Y + (HEIGHT - HORIZON_Y) * t * t)
-            # Use a thin, light gray line instead of thick black
-            # pygame.draw.line(screen, (100, 100, 100), (0, y), (WIDTH, y), 1)
+    def _draw_death_effects(self, img, state):
+        """Draw short-lived hit spark effects from state.death_effects."""
+        eff = state.death_effects
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        N = eff.x.shape[0]
 
-        # --- Draw horizon line ---
-        pygame.draw.line(screen, WIREFRAME_COLOR, (0, HORIZON_Y), (WIDTH, HORIZON_Y), 1)
+        def body(i, im):
+            active = eff.age[i] < eff.lifetime[i]
+            def draw_one(im2):
+                sx, sy, dist, vis = self._world_to_screen_3d(eff.x[i], eff.y[i], px, py, pang)
+                # Only draw if in front and on-screen
+                on_scr = jnp.logical_and(vis, (sx >= 0) & (sx < WIDTH) & (sy >= 0) & (sy < HEIGHT))
+                # Shrink over lifetime
+                size_now = jnp.maximum(1, eff.size[i] - jnp.int32(jnp.floor((eff.age[i] * eff.size[i]) / jnp.maximum(eff.lifetime[i], 1))))
+                col = jnp.array([eff.r[i], eff.g[i], eff.b[i]], dtype=jnp.uint8)
+                im3 = self._fill_rect(im2, sx - (size_now//2), sy - (size_now//2), size_now, size_now, col)
+                # Add a small ring outline for sparkle
+                im3 = self._draw_circle_outline(im3, sx, sy, jnp.maximum(1, size_now//2), col, samples=36)
+                return jax.lax.cond(on_scr, lambda _: im3, lambda _: im2, operand=None)
+            return jax.lax.cond(active, draw_one, lambda im2: im2, im)
 
-        # --- Draw player crosshair (vertical bar) ---
-        # Centered horizontally in the viewport, a few pixels above the horizon
-        try:
-            center_x = WIDTH // 2
-            # place the bar a few pixels higher above the horizon
-            cross_bottom = HORIZON_Y - 6
-            # Reduce thickness to half of previous default (previously 3 -> now floor(3/2)=1)
-            original_thickness = 3
-            cross_thickness = max(1, original_thickness // 2)
-            # height is twice the width (thickness), ensures proportional shape
-            cross_height = cross_thickness * 4
-            cross_top = cross_bottom - cross_height
+        return lax.fori_loop(0, N, body, img)
 
-            # Default fill color: black; if any visible enemy is horizontally aligned, fill white
-            fill_color = (0, 0, 0)
-            outline_color = WIREFRAME_COLOR
-            tolerance_pixels = 2  # how close to center counts as 'aligned'
 
-            # Check obstacles for horizontal alignment with center of screen
-            obs = state.obstacles
-            for i in range(len(obs.x)):
-                try:
-                    alive_val = int(obs.alive[i])
-                except Exception:
-                    try:
-                        alive_val = int(float(obs.alive[i]))
-                    except Exception:
-                        alive_val = 0
-                if alive_val == 0:
-                    continue
+    def _draw_crosshair(self, img, state, wire):
+        center_x = WIDTH // 2
+        cross_bottom = HORIZON_Y - 6
+        cross_thickness = max(1, 3 // 2)
+        cross_height = cross_thickness * 4
+        cross_top = cross_bottom - cross_height
 
-                sx, sy, dist, vis = self.world_to_screen_3d(
-                    obs.x[i], obs.y[i],
-                    state.player_tank.x, state.player_tank.y, state.player_tank.angle
-                )
+        # determine if any alive/visible obstacle is horizontally aligned
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        ox = state.obstacles.x; oy = state.obstacles.y; alive = state.obstacles.alive.astype(jnp.bool_)
 
-                # Convert visibility to bool safely
-                try:
-                    vis_bool = bool(vis)
-                except Exception:
-                    try:
-                        vis_bool = bool(int(vis))
-                    except Exception:
-                        vis_bool = False
+        def check(i, acc):
+            cond = acc
+            vis = alive[i]
+            def when_vis(_):
+                sx, sy, dist, vis2 = self._world_to_screen_3d(ox[i], oy[i], px, py, pang)
+                aligned = (jnp.abs(sx - center_x) <= 2) & vis2
+                return cond | aligned
+            return lax.cond(vis, when_vis, lambda _: cond, operand=None)
 
-                if not vis_bool:
-                    continue
+        any_aligned = lax.fori_loop(0, ox.shape[0], check, jnp.bool_(False))
+        fill = jnp.where(any_aligned, jnp.array([255,255,255], jnp.uint8), jnp.array([0,0,0], jnp.uint8))
+        outline = jnp.where(any_aligned, jnp.array([255,255,255], jnp.uint8), jnp.asarray(wire, jnp.uint8))
 
-                try:
-                    sx_int = int(sx)
-                except Exception:
-                    try:
-                        sx_int = int(float(sx))
-                    except Exception:
-                        continue
+        img = self._draw_line(img, center_x - (cross_thickness//2) - 1, cross_top - 1,
+                                   center_x + (cross_thickness//2) + 1, cross_top - 1, outline, samples=16)
+        img = self._draw_line(img, center_x - (cross_thickness//2) - 1, cross_bottom + 1,
+                                   center_x + (cross_thickness//2) + 1, cross_bottom + 1, outline, samples=16)
+        # vertical fill
+        img = self._fill_rect(img, center_x - cross_thickness//2, cross_top, cross_thickness, cross_height, fill)
+        return img
 
-                if abs(sx_int - center_x) <= tolerance_pixels:
-                    fill_color = (255, 255, 255)
-                    outline_color = (255, 255, 255)
-                    break
+    def _draw_enemy_tank_frontal(self, img, x, y, scale, color):
+        # Trapezoid body
+        bw = jnp.int32(scale * 1.0)
+        bh = jnp.int32(scale * 0.7)
+        pts = jnp.array([
+            [x - bw//2, y + bh//2],
+            [x + bw//2, y + bh//2],
+            [x + bw//3, y - bh//2],
+            [x - bw//3, y - bh//2],
+            [x - bw//2, y + bh//2]  # close
+        ], dtype=jnp.int32)
+        im = img
+        for i in range(4):
+            im = self._draw_line(im, pts[i,0], pts[i,1], pts[i+1,0], pts[i+1,1], color, samples=64)
+        # turret
+        tw = jnp.int32(scale//3); th = jnp.int32(scale//3)
+        im = self._fill_rect(im, x - tw//2, y - th//2, tw, th, color)
+        # cannon
+        im = self._draw_line(im, x, y, x, y + jnp.int32(scale//2), color, samples=32)
+        # tracks (vertical dashes)
+        thh = bh
+        for i in range(3):
+            txl = x - bw//2 - 2; txr = x + bw//2 + 2
+            ty = y - thh//2 + i * (thh//3)
+            im = self._draw_line(im, txl, ty, txl, ty + 3, color, samples=4)
+            im = self._draw_line(im, txr, ty, txr, ty + 3, color, samples=4)
+        return im
 
-            # Draw the vertical bar with outline so it's visible on dark backgrounds
-            outer_rect = (center_x - (cross_thickness // 2) - 1, cross_top - 1, cross_thickness + 2, cross_height + 2)
-            inner_rect = (center_x - cross_thickness // 2, cross_top, cross_thickness, cross_height)
-            pygame.draw.rect(screen, outline_color, outer_rect, 1)
-            pygame.draw.rect(screen, fill_color, inner_rect)
-        except Exception:
-            # Fail silently to avoid breaking rendering
-            pass
+    
+    def _draw_enemy_tank_profile(self, img, x, y, scale, color, left=True):
+        # Eliminate Python branching on tracer `left` by computing both paths and selecting via lax.cond.
+        bw = jnp.int32(scale * 1.8)
+        bh = jnp.int32(scale * 0.6)
 
-        # --- Draw game objects ---
-        # Draw obstacles (now enemy tanks and other objects)
-        obstacles = state.obstacles
-        for i in range(len(obstacles.x)):
-            obstacle_x = obstacles.x[i]
-            obstacle_y = obstacles.y[i]
-            obstacle_type = obstacles.obstacle_type[i]
-            obstacle_angle = obstacles.angle[i]
-            obstacle_alive = obstacles.alive[i]
-            
-            # Only draw if alive
-            if not obstacle_alive:
-                continue
-            
-            # Transform obstacle position to screen coordinates
-            screen_x, screen_y, distance, visible = self.world_to_screen_3d(
-                obstacle_x, obstacle_y,
-                state.player_tank.x,
-                state.player_tank.y,
-                state.player_tank.angle
+        def draw_left(_):
+            pts = jnp.array([
+                [x - bw//2, y + bh//3],
+                [x - bw//3, y + bh//2],
+                [x + bw//3, y + bh//2],
+                [x + bw//2, y + bh//3],
+                [x + bw//2 - 2, y - bh//2],
+                [x - bw//2 + 2, y - bh//2],
+                [x - bw//2, y + bh//3]
+            ], dtype=jnp.int32)
+            turret_x = x - scale//6
+            cannon_end_x = turret_x - jnp.int32(scale*1.2)
+            im = img
+            for i in range(pts.shape[0]-1):
+                im = self._draw_line(im, pts[i,0], pts[i,1], pts[i+1,0], pts[i+1,1], color, samples=64)
+            tw = jnp.int32(scale//2); th = jnp.int32(scale//4)
+            im = self._fill_rect(im, turret_x - tw//2, y - th//2, tw, th, color)
+            im = self._draw_line(im, turret_x, y, cannon_end_x, y, color, samples=32)
+            wheel_y = y + bh//2 + 2
+            im = self._draw_line(im, x - bw//2, wheel_y, x + bw//2, wheel_y, color, samples=64)
+            # wheel dots
+            def wheel_body(j, imc):
+                cx = x - bw//2 + 2 + j*6
+                return self._put_pixel(imc, cx, wheel_y, color)
+            num = jnp.maximum(0, (bw-4)//6)
+            im = lax.fori_loop(0, num, wheel_body, im)
+            return im
+
+        def draw_right(_):
+            pts = jnp.array([
+                [x + bw//2, y + bh//3],
+                [x + bw//3, y + bh//2],
+                [x - bw//3, y + bh//2],
+                [x - bw//2, y + bh//3],
+                [x - bw//2 + 2, y - bh//2],
+                [x + bw//2 - 2, y - bh//2],
+                [x + bw//2, y + bh//3]
+            ], dtype=jnp.int32)
+            turret_x = x + scale//6
+            cannon_end_x = turret_x + jnp.int32(scale*1.2)
+            im = img
+            for i in range(pts.shape[0]-1):
+                im = self._draw_line(im, pts[i,0], pts[i,1], pts[i+1,0], pts[i+1,1], color, samples=64)
+            tw = jnp.int32(scale//2); th = jnp.int32(scale//4)
+            im = self._fill_rect(im, turret_x - tw//2, y - th//2, tw, th, color)
+            im = self._draw_line(im, turret_x, y, cannon_end_x, y, color, samples=32)
+            wheel_y = y + bh//2 + 2
+            im = self._draw_line(im, x - bw//2, wheel_y, x + bw//2, wheel_y, color, samples=64)
+            # wheel dots
+            def wheel_body(j, imc):
+                cx = x - bw//2 + 2 + j*6
+                return self._put_pixel(imc, cx, wheel_y, color)
+            num = jnp.maximum(0, (bw-4)//6)
+            im = lax.fori_loop(0, num, wheel_body, im)
+            return im
+
+        return lax.cond(left, draw_left, draw_right, operand=None)
+
+
+    def _draw_saucer(self, img, x, y, distance, color):
+        size = jnp.maximum(6, jnp.int32(18 / jnp.maximum(distance / 50.0, 1.0)))
+        # Ellipse body (width=2*size, height≈size/1.5), dome (width=size, height≈size/2)
+        H = img.shape[0]; W = img.shape[1]
+        Y = jnp.arange(H)[:, None]; X = jnp.arange(W)[None, :]
+
+        # Body ellipse: ((X-x)^2)/(a^2) + ((Y-(y - h/3))^2)/(b^2) <= 1
+        a = size.astype(jnp.float32); b = (size/1.5).astype(jnp.float32)
+        xc = x.astype(jnp.float32); yc = y.astype(jnp.float32) - (b/2)
+        body_mask = (( (X - xc)**2 )/(a*a) + ( (Y - yc)**2 )/(b*b)) <= 1.0
+
+        # Dome ellipse on top: ((X-x)^2)/(ad^2) + ((Y-(y - b))^2)/(bd^2) <= 1
+        ad = (size/2).astype(jnp.float32); bd = (size/2).astype(jnp.float32)
+        ycd = y.astype(jnp.float32) - bd
+        dome_mask = (((X - xc)**2)/(ad*ad) + ((Y - ycd)**2)/(bd*bd)) <= 1.0
+
+        mask = body_mask | dome_mask
+
+        col = jnp.asarray(color, jnp.uint8)
+        col_img = jnp.broadcast_to(col, img.shape)
+        mask3 = jnp.stack([mask, mask, mask], axis=-1)
+        im = jnp.where(mask3, col_img, img)
+
+        # glow dots (3 pixels) near bottom of body
+        for dx in (-size//3, 0, size//3):
+            im = self._put_pixel(im, x + dx, y + size//6, color)
+        return im
+
+    def _draw_fighter(self, img, x, y, distance, color):
+        size = jnp.maximum(8, jnp.int32(20 / jnp.maximum(distance / 60.0, 1.0)))
+        body_w = jnp.int32(size*1.0); body_h = jnp.int32(size*0.7)
+        im = self._fill_rect(img, x - body_w//2, y - body_h//2, body_w, body_h, color)
+        # outline (thin)
+        im = self._draw_line(im, x - body_w//2, y - body_h//2, x + body_w//2, y - body_h//2, (0,0,0), samples=64)
+        im = self._draw_line(im, x - body_w//2, y + body_h//2, x + body_w//2, y + body_h//2, (0,0,0), samples=64)
+        im = self._draw_line(im, x - body_w//2, y - body_h//2, x - body_w//2, y + body_h//2, (0,0,0), samples=48)
+        im = self._draw_line(im, x + body_w//2, y - body_h//2, x + body_w//2, y + body_h//2, (0,0,0), samples=48)
+        # wings + stripes
+        wing_w = jnp.int32(size*0.9); wing_h = jnp.int32(size*0.5)
+        left_x = x - body_w//2 - wing_w; right_x = x + body_w//2; wing_y = y - wing_h//2
+        im = self._fill_rect(im, left_x, wing_y, wing_w, wing_h, color)
+        im = self._fill_rect(im, right_x, wing_y, wing_w, wing_h, color)
+        im = self._draw_line(im, left_x, wing_y, left_x+wing_w, wing_y, (0,0,0), samples=48)
+        im = self._draw_line(im, right_x, wing_y, right_x+wing_w, wing_y, (0,0,0), samples=48)
+        for i in range(2):
+            sy = wing_y + jnp.int32((i+1)*wing_h/3)
+            im = self._draw_line(im, left_x+2, sy, left_x+wing_w-2, sy, (0,0,0), samples=44)
+            im = self._draw_line(im, right_x+2, sy, right_x+wing_w-2, sy, (0,0,0), samples=44)
+        # nose block
+        nose_w = jnp.int32(body_w*0.4); nose_h = jnp.int32(body_h*0.5)
+        im = self._fill_rect(im, x + body_w//2 - 2, y - nose_h//2, nose_w, nose_h, (0,0,0))
+        return im
+
+    
+    
+    def _draw_enemy_tank(self, img, x, y, distance, color, tank_angle, player_angle):
+        # Use lax.cond instead of Python if to remain jit-safe.
+        def do_nothing(_):
+            return img
+        def do_draw(_):
+            scale = jnp.maximum(4, jnp.int32(20 / jnp.maximum(distance / 50.0, 1.0)))
+            rel = tank_angle - player_angle
+            rel = jnp.arctan2(jnp.sin(rel), jnp.cos(rel))
+            frontal = (jnp.abs(rel) < jnp.pi/4) | (jnp.abs(rel) > 3*jnp.pi/4)
+            return lax.cond(
+                frontal,
+                lambda __: self._draw_enemy_tank_frontal(img, x, y, scale, color),
+                lambda __: self._draw_enemy_tank_profile(img, x, y, scale, color, left=(rel>0)),
+                operand=None
             )
-            
-            if visible and 0 <= screen_x < WIDTH and 0 <= screen_y < HEIGHT:
-                if obstacle_type == 0:  # Enemy tank
-                    # Choose color by enemy subtype when available
-                    try:
-                        subtype_val = int(state.obstacles.enemy_subtype[i])
-                    except Exception:
-                        subtype_val = -1
-                    if subtype_val == ENEMY_TYPE_SUPERTANK:
-                        enemy_color = SUPERTANK_COLOR
-                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
-                                           obstacle_angle, state.player_tank.angle)
-                    elif subtype_val == ENEMY_TYPE_TANK:
-                        enemy_color = TANK_COLOR
-                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
-                                           obstacle_angle, state.player_tank.angle)
-                    elif subtype_val == ENEMY_TYPE_FIGHTER:
-                        enemy_color = FIGHTER_COLOR
-                        # Draw as aerial fighter shape
-                        self.draw_fighter(screen, screen_x, screen_y, distance, enemy_color)
-                        continue
-                    elif subtype_val == ENEMY_TYPE_SAUCER:
-                        # Draw saucer with dedicated renderer and skip tank drawing
-                        self.draw_saucer(screen, screen_x, screen_y, distance, SAUCER_COLOR)
-                        continue
-                    else:
-                        enemy_color = WIREFRAME_COLOR
-                        self.draw_enemy_tank(screen, screen_x, screen_y, distance, enemy_color,
-                                           obstacle_angle, state.player_tank.angle)
-                elif obstacle_type == 1:  # Cube obstacle
-                    self.draw_wireframe_cube(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
-                else:  # Pyramid obstacle
-                    self.draw_wireframe_pyramid(screen, screen_x, screen_y, distance, WIREFRAME_COLOR)
+        return lax.cond(distance > self.view_distance, do_nothing, do_draw, operand=None)
 
-        # Draw death effects on top of object geometry (so they replace the
-        # disappeared enemy visually). Then draw bullets and player afterwards.
+
+    
+    def _draw_wire_primitives(self, img, state, wire):
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        obs = state.obstacles
+        im = img
+
+        def draw_enemy(im_in, i):
+            # Body draws conditionally on visibility/inside
+            sx, sy, dist, vis = self._world_to_screen_3d(obs.x[i], obs.y[i], px, py, pang)
+            inside = (sx >= 0) & (sx < WIDTH) & (sy >= 0) & (sy < HEIGHT)
+            cond_visible = vis & inside
+
+            def when_visible(_):
+                # choose subtype color
+                subtype = jnp.int32(obs.enemy_subtype[i]) if hasattr(obs, "enemy_subtype") else jnp.int32(-1)
+
+                def pick_color():
+                    # default wireframe
+                    col = jnp.array(WIREFRAME_COLOR, jnp.uint8)
+                    col = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, jnp.array(SUPERTANK_COLOR, jnp.uint8), col)
+                    col = jnp.where(subtype == ENEMY_TYPE_TANK,      jnp.array(TANK_COLOR, jnp.uint8),      col)
+                    col = jnp.where(subtype == ENEMY_TYPE_FIGHTER,   jnp.array(FIGHTER_COLOR, jnp.uint8),   col)
+                    col = jnp.where(subtype == ENEMY_TYPE_SAUCER,    jnp.array(SAUCER_COLOR, jnp.uint8),    col)
+                    return col
+
+                color = pick_color()
+
+                def draw_saucer(_):
+                    return self._draw_saucer(im_in, sx, sy, dist, SAUCER_COLOR)
+
+                def draw_fighter(_):
+                    return self._draw_fighter(im_in, sx, sy, dist, FIGHTER_COLOR)
+
+                def draw_tank(col):
+                    return self._draw_enemy_tank(im_in, sx, sy, dist, col, obs.angle[i], pang)
+
+                # route by subtype
+                im_out = lax.cond(subtype == ENEMY_TYPE_SAUCER,
+                                  draw_saucer,
+                                  lambda _: im_in, operand=None)
+                im_out = lax.cond(subtype == ENEMY_TYPE_FIGHTER,
+                                  draw_fighter,
+                                  lambda _: im_out, operand=None)
+                # For tanks / default: draw tank with selected color
+                is_tank_like = (subtype == ENEMY_TYPE_TANK) | (subtype == ENEMY_TYPE_SUPERTANK) | ((subtype != ENEMY_TYPE_FIGHTER) & (subtype != ENEMY_TYPE_SAUCER))
+                im_out = lax.cond(is_tank_like,
+                                  lambda _: draw_tank(color),
+                                  lambda _: im_out, operand=None)
+                return im_out
+
+            return lax.cond(cond_visible, when_visible, lambda _: im_in, operand=None)
+
+        # Loop over obstacles with fori_loop to keep jit-friendly semantics
+        def obs_body(i, im_carry):
+            alive_i = (obs.alive[i] == 1) if obs.alive.dtype != jnp.bool_ else obs.alive[i]
+            return lax.cond(alive_i, lambda _: draw_enemy(im_carry, i), lambda _: im_carry, operand=None)
+
+        im = lax.fori_loop(0, obs.x.shape[0], obs_body, im)
+
+        # bullets
+        b = state.bullets
+        def bullets_body(i, im_carry):
+            active_i = b.active[i]
+            def when_active(_):
+                sx, sy, dist, vis = self._world_to_screen_3d(b.x[i], b.y[i], px, py, pang)
+                inside = (sx >= 0) & (sx < WIDTH) & (sy >= 0) & (sy < HEIGHT)
+                col = jnp.where(b.owner[i] == 0,
+                                jnp.array(BULLET_COLOR, jnp.uint8),
+                                jnp.array([255,100,100], jnp.uint8))
+                return lax.cond(vis & inside,
+                                lambda _: self._fill_rect(im_carry, sx - 2, sy - 3, 3, 7, col),
+                                lambda _: im_carry, operand=None)
+            return lax.cond(active_i, when_active, lambda _: im_carry, operand=None)
+
+        im = lax.fori_loop(0, b.x.shape[0], bullets_body, im)
+
+        # player tank sprite (bottom center)
+        base_x = WIDTH // 2
+        base_y = HEIGHT - self.hud_bar_height - 10
+        # top-left so that sprite is centered around (base_x, base_y)
+        px0 = jnp.int32(base_x - (self.player_w // 2))
+        py0 = jnp.int32(base_y - (self.player_h // 2))
+        # If sprite is a mask: tint with WIREFRAME_COLOR; if RGB/RGBA: draw as-is
+        im = self._blit_sprite(im, self.player_sprite, px0, py0, tint_rgb=WIREFRAME_COLOR if self.player_sprite.ndim == 2 else None)
+        return im
+
+
+    
+    def _draw_radar(self, img, state):
+        radar_radius = int(WIDTH * 0.12)
+        top_bar_h = radar_radius * 2 + 12
+        im = self._fill_rect(img, 0, 0, WIDTH, top_bar_h, (0,0,0))
+        cx = WIDTH // 2; cy = top_bar_h // 2
+        # circle
+        im = self._draw_circle_outline(im, cx, cy, radar_radius, (0,255,0), samples=180)
+        # sweep
+        sweep_speed = 0.025
+        angle = (state.step_counter.astype(jnp.float32) * sweep_speed) % (2*jnp.pi)
+        sx = jnp.int32(jnp.round(cx + (radar_radius-2)*jnp.cos(angle - jnp.pi/2)))
+        sy = jnp.int32(jnp.round(cy + (radar_radius-2)*jnp.sin(angle - jnp.pi/2)))
+        im = self._draw_line(im, cx, cy, sx, sy, (255,255,255), samples=radar_radius)
+        # ticks
+        left_ang = -jnp.pi/2 - 0.6; right_ang = -jnp.pi/2 + 0.6
+        edge_r = radar_radius - 2; tick_len = jnp.maximum(4, jnp.int32(12*0.6))
+        def tick(a, imc):
+            x0 = jnp.int32(jnp.round(cx + edge_r*jnp.cos(a)))
+            y0 = jnp.int32(jnp.round(cy + edge_r*jnp.sin(a)))
+            x1 = jnp.int32(jnp.round(cx + (edge_r - tick_len)*jnp.cos(a)))
+            y1 = jnp.int32(jnp.round(cy + (edge_r - tick_len)*jnp.sin(a)))
+            return self._draw_line(imc, x0, y0, x1, y1, WIREFRAME_COLOR, samples=16)
+        im = tick(left_ang, im); im = tick(right_ang, im)
+
+        # scale
+        scale = (radar_radius - 4) / (WORLD_SIZE / 2.0)
+        px = state.player_tank.x; py = state.player_tank.y; pang = state.player_tank.angle
+        cos_a = jnp.cos(pang); sin_a = jnp.sin(pang)
+
+        # enemies (loop with fori_loop, no Python bool)
+        o = state.obstacles
+        def enemies_body(i, im_carry):
+            alive_i = o.alive[i]
+            def when_alive(_):
+                subtype = jnp.int32(o.enemy_subtype[i]) if hasattr(o, "enemy_subtype") else jnp.int32(-1)
+                enemy_color = jnp.array([255,0,0], jnp.uint8)
+                enemy_color = jnp.where(subtype == ENEMY_TYPE_SUPERTANK, jnp.array(SUPERTANK_COLOR, jnp.uint8), enemy_color)
+                enemy_color = jnp.where(subtype == ENEMY_TYPE_TANK,      jnp.array(TANK_COLOR, jnp.uint8),      enemy_color)
+                enemy_color = jnp.where(subtype == ENEMY_TYPE_FIGHTER,   jnp.array(FIGHTER_COLOR, jnp.uint8),   enemy_color)
+                # hide saucer
+                def draw_enemy(_):
+                    rel_x = (o.x[i] - px).astype(jnp.float32); rel_y = (o.y[i] - py).astype(jnp.float32)
+                    view_x = -rel_x * sin_a + rel_y * cos_a
+                    view_y =  rel_x * cos_a + rel_y * sin_a
+                    rx = jnp.int32(jnp.round(cx + view_x * scale)); ry = jnp.int32(jnp.round(cy - view_y * scale))
+                    inside = ((rx-cx)**2 + (ry-cy)**2) <= (radar_radius-3)**2
+                    def when_inside(_):
+                        im2 = self._fill_rect(im_carry, rx-1, ry-1, 3, 3, enemy_color)
+                        enemy_angle = o.angle[i].astype(jnp.float32)
+                        rel = enemy_angle - pang.astype(jnp.float32)
+                        end_x = rx + jnp.int32(jnp.round(4 * jnp.cos(rel)))
+                        end_y = ry + jnp.int32(jnp.round(4 * jnp.sin(rel)))
+                        im2 = self._draw_line(im2, rx, ry, end_x, end_y, enemy_color, samples=6)
+                        return im2
+                    return lax.cond(inside, when_inside, lambda _: im_carry, operand=None)
+                return lax.cond(subtype == ENEMY_TYPE_SAUCER, lambda _: im_carry, draw_enemy, operand=None)
+            return lax.cond(alive_i.astype(jnp.bool_), when_alive, lambda _: im_carry, operand=None)
+
+        im = lax.fori_loop(0, o.x.shape[0], enemies_body, im)
+
+        # bullets
+        b = state.bullets
+        def bullets_body(i, im_carry):
+            active_i = b.active[i]
+            def when_active(_):
+                rel_x = (b.x[i] - px).astype(jnp.float32); rel_y = (b.y[i] - py).astype(jnp.float32)
+                view_x = -rel_x * sin_a + rel_y * cos_a
+                view_y =  rel_x * cos_a + rel_y * sin_a
+                rx = jnp.int32(jnp.round(cx + view_x * scale)); ry = jnp.int32(jnp.round(cy - view_y * scale))
+                inside = ((rx-cx)**2 + (ry-cy)**2) <= (radar_radius-3)**2
+                col = jnp.where(b.owner[i] == 0,
+                                jnp.array(BULLET_COLOR, jnp.uint8),
+                                jnp.array([255,100,100], jnp.uint8))
+                def when_inside(_):
+                    return self._put_pixel(im_carry, rx, ry, col)
+                return lax.cond(inside, when_inside, lambda _: im_carry, operand=None)
+            return lax.cond(active_i.astype(jnp.bool_), when_active, lambda _: im_carry, operand=None)
+
+        im = lax.fori_loop(0, b.x.shape[0], bullets_body, im)
+
+        # bottom HUD bar
+        im = self._fill_rect(im, 0, HEIGHT - self.hud_bar_height, WIDTH, self.hud_bar_height, (0,0,0))
+
+        # draw lives as rectangles
         try:
-            self._draw_death_effects(surface, int(state.step_counter))
+            lives_val = jnp.int32(state.player_lives)
         except Exception:
-            pass
-
-        # Draw bullets
-        self.draw_player_bullet(surface, state)
-
-        # Draw player tank (this was missing!)
-        self.draw_player_tank(surface)
-
-        # --- Draw radar ---
-        self.draw_radar(surface, state)
-
-        # If we created a temporary surface, convert it to a numpy array and return
-        if created_surface:
-            try:
-                arr = pygame.surfarray.array3d(surface)
-                # pygame.surfarray.array3d returns shape (width, height, 3) — transpose to (height, width, 3)
-                arr = arr.swapaxes(0, 1)
-                return arr.astype(np.uint8)
-            except Exception:
-                return np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-
-
-
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WIDTH * 3, HEIGHT * 3))
-    pygame.display.set_caption("BattleZone - Simplified")
-    clock = pygame.time.Clock()
-    
-    # Initialize game
-    game = JaxBattleZone()
-    renderer = BattleZoneRenderer()
-    
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-    
-    obs, curr_state = jitted_reset()
-    
-    # Game loop
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r:
-                    obs, curr_state = jitted_reset()
+            lives_val = jnp.int32(0)
+        lives_to_draw = jnp.clip(state.player_lives, 0, 9)  # z.B. max. 9 anzeigen
+        # Layout: mittig unten in der HUD-Bar
+        life_spacing = self.life_w + 6  # 6px Abstand zwischen Sprites
+        total_w = lives_to_draw * life_spacing - jnp.where(lives_to_draw > 0, 6, 0)
+        life_start_x = (WIDTH // 2) - (total_w // 2)
+        # leicht über der Mitte der HUD-Bar platzieren
+        # Score sitzt bei y = HEIGHT - self.hud_bar_height + 4, Höhe der Ziffern = 10 (scale=2)
+        # Abstand 2px darunter für die Leben (Sprite-Top)
+        score_top = HEIGHT - self.hud_bar_height + 4
+        score_h   = 10
+        life_gap  = 2
+        life_y    = score_top + score_h + life_gap
         
-        action = get_human_action()
-        obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-        
-        # Print to console when the player gets shot by an enemy bullet.
-        try:
-            if int(info.player_shot) == 1:
-                print("Player got shot!")
-        except Exception:
-            # If conversion fails (shouldn't under normal execution), ignore.
-            pass
+        def lives_body(i, im_carry):
+            lx = jnp.int32(life_start_x + i * life_spacing)
+            ly = jnp.int32(life_y)
+            return self._blit_sprite(im_carry, self.life_sprite, lx, ly, tint_rgb=HUD_ACCENT_COLOR)
 
-        # Create a surface for the game area
-        game_surface = pygame.Surface((WIDTH, HEIGHT))
-        renderer.render(curr_state, game_surface)
-        
-        # Scale up the game surface
-        scaled_surface = pygame.transform.scale(game_surface, (WIDTH * 3, HEIGHT * 3))
-        screen.blit(scaled_surface, (0, 0))
-        
-        pygame.display.flip()
-        clock.tick(60)
-    
-    pygame.quit()
-# test
+        im = lax.fori_loop(0, lives_to_draw, lives_body, im)
+
+        # --- SCORE über den Leben, mittig rechts, wie Screenshot ---
+        im = self._draw_score_hud(im, state.player_score)
+
+        return im
+
+
+    # ---------------- main render ----------------
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state) -> jnp.ndarray:
+        # create base image
+        img = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
+
+        # colors
+        wire = jnp.asarray(WIREFRAME_COLOR, jnp.uint8)
+        hud  = jnp.asarray(HUD_ACCENT_COLOR, jnp.uint8)
+
+        # store pose for sky parallax
+        # sky + ground + horizon
+        img = self._draw_sky(img, state.player_tank.x, state.player_tank.angle)
+        img = self._draw_ground(img, state)
+        img = self._draw_line(img, 0, HORIZON_Y, WIDTH-1, HORIZON_Y, hud, samples=WIDTH)
+
+        # enemies + bullets + player
+        img = self._draw_wire_primitives(img, state, wire)
+
+        # death effects (hit sparks)
+        img = self._draw_death_effects(img, state)
+
+        # crosshair
+        img = self._draw_crosshair(img, state, wire)
+
+        # radar + bottom HUD
+        img = self._draw_radar(img, state)
+
+        return img

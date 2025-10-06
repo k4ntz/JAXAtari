@@ -40,6 +40,7 @@ class Renderer:
             render_oc_overlay=True,
             frameskip=1,
             obs_mode="obj",
+            repeat_action_probability=0.0
         )
 
         self.env.reset(seed=42)
@@ -152,13 +153,32 @@ class Renderer:
         pygame.quit()
 
     def _get_action(self):
-        pressed_keys = list(self.current_keys_down)
-        pressed_keys.sort()
-        pressed_keys = tuple(pressed_keys)
-        if pressed_keys in self.keys2actions.keys():
-            return self.keys2actions[pressed_keys]
-        else:
-            return 0  # NOOP
+        # Get the state of all keyboard keys
+        keys = pygame.key.get_pressed()
+        
+        # Default action is NOOP
+        action = 0
+        
+        # Iterate through the available actions
+        for key_tuple, corresponding_action in self.keys2actions.items():
+            all_keys_pressed = True
+            # Iterate through the keys required for this action (e.g., 'w', 'a')
+            for key_str in key_tuple:
+                # --- BUG FIX ---
+                # Convert the key string (e.g., 'w') into Pygame's integer code (e.g., K_w)
+                key_code = pygame.key.key_code(key_str)
+                
+                # Check if the key is pressed using the integer code
+                if not keys[key_code]:
+                    all_keys_pressed = False
+                    break
+            
+            if all_keys_pressed:
+                action = corresponding_action
+                # We don't break here to allow for more complex actions 
+                # (e.g., 'w' and 'd' should override just 'w')
+
+        return action
 
     def _handle_user_input(self):
         self.current_mouse_pos = np.asarray(pygame.mouse.get_pos())
@@ -336,11 +356,6 @@ class Renderer:
                 elif event.key == pygame.K_ESCAPE and self.active_cell_idx is not None:
                     self._unselect_active_cell()
 
-                elif [
-                    x for x in self.keys2actions.keys() if event.key in x
-                ]:  # (event.key,) in self.keys2actions.keys() or [x for x in self.keys2actions.keys() if event.key in x]:  # env action
-                    self.current_keys_down.add(event.key)
-
                 elif pygame.K_0 <= event.key <= pygame.K_9:  # enter digit
                     char = str(event.key - pygame.K_0)
                     if self.active_cell_idx is not None:
@@ -367,12 +382,6 @@ class Renderer:
                                 )
                         self._unselect_active_cell()
 
-            elif event.type == pygame.KEYUP:  # keyboard key released
-                if [
-                    x for x in self.keys2actions.keys() if event.key in x
-                ]:  # (event.key,) in self.keys2actions.keys():
-                    self.current_keys_down.remove(event.key)
-
     def _render(self, frame=None):
         self.window.fill((0, 0, 0))  # clear the entire window
         self._render_atari(frame)
@@ -397,18 +406,18 @@ class Renderer:
             self._render_ram_cell(i, value)
 
     def _get_ram_value_at(self, idx: int):
-        ale = self.env.unwrapped.ale
+        ale = self.env.unwrapped._ale
         ram = ale.getRAM()
         return ram[idx]
 
     def _set_ram_value_at(self, idx: int, value: int):
-        ale = self.env.unwrapped.ale
+        ale = self.env.unwrapped._ale
         ale.setRAM(idx, value)
         # self.current_frame = self.env.render()
         # self._render()
 
     def _set_ram(self, values):
-        ale = self.env.unwrapped.ale
+        ale = self.env.unwrapped._ale
         for k, value in enumerate(values):
             ale.setRAM(k, value)
 
