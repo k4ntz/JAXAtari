@@ -627,14 +627,19 @@ def check_player_hit(player_tank: Tank, bullets: Bullet) -> Tank:
 
 @jax.jit
 def update_enemy_tanks(obstacles: Obstacle, player_tank: Tank, bullets: Bullet, step_counter: chex.Array) -> Tuple[Obstacle, Bullet]:
-    """JAX-friendly enemy AI that more closely matches Atari BattleZone behaviour.
+    """JAX-friendly enemy AI that authentically matches Atari 2600 BattleZone behaviour.
 
-    Key behaviours restored:
-    - Instant facing toward player when in detection range.
-    - Simple distance-band movement (advance/retreat/hold).
-    - Fire only while in engagement band, roughly frontal, within range, cooldown ready,
-      and not during the spawn waiting timer.
-    - Deterministic per-enemy bullet slot assignment (JAX fori_loop).
+    Authentic Atari 2600 Battle Zone enemy behaviors:
+    - Regular Tanks (Blue): Gradual turning toward player with limited turn rate, methodical pursuit
+    - Super Tanks (Yellow): Faster movement and better turn rate, more aggressive
+    - Missiles/Fighters (Red): Fast zigzagging approach, suicide attack at point-blank range
+    - Flying Saucers (White): Independent drifting movement, do not pursue player
+    
+    Key authentic behaviors:
+    - Gradual rotation toward player using per-type turn rates (NOT instant facing)
+    - Distance-based movement (advance when far, retreat when too close, hold at optimal range)
+    - Firing only when facing player (within angle threshold), cooldown ready, and after spawn delay
+    - Deterministic per-enemy bullet slot assignment (JAX fori_loop)
     """
 
     def update_single_enemy(i):
@@ -1378,6 +1383,7 @@ class JaxBattleZone(JaxEnvironment[BattleZoneState, BattleZoneObservation, chex.
             "player_score": spaces.Box(low=0, high=INT32_MAX, shape=(), dtype=np.float32),
             "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=np.float32),
         })
+
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs) -> jnp.ndarray:
