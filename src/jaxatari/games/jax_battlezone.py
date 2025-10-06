@@ -62,7 +62,6 @@ ENEMY_STATE_HUNT = 1
 ENEMY_STATE_ENGAGE = 2
 ENEMY_STATE_RETREAT = 3
 
-
 # Tank movement constants
 TANK_SPEED = 0.2  # Reduced from 0.5
 TANK_TURN_SPEED = 0.008  # Reduced from 0.02
