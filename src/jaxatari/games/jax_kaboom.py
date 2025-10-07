@@ -53,6 +53,19 @@ MAX_SCORE: int = 999999  # Maximum score as per original Atari Kaboom
 DIFFICULTY_NORMAL: int = 0  # Full-size buckets (b position)
 DIFFICULTY_ADVANCED: int = 1  # Half-size buckets (a position)
 
+# Group-based speed progression - even faster bomb dropping
+# Speed decreases (gets faster) with each group progression
+GROUP_DROP_SPEEDS = jnp.array([20, 14, 9, 6, 4, 3, 2, 1], dtype=jnp.int32)  # Group 1-8 speeds - EVEN FASTER
+
+# Keep original wave system for compatibility
+WAVE_SCORE_THRESHOLDS = jnp.array([10, 50, 300, 1000, 2900], dtype=jnp.int32)
+WAVE_START_SCORES = jnp.array([1, 11, 51, 301, 1001, 2901], dtype=jnp.int32)  # Where each wave starts after advancing
+# Progressive difficulty: MUCH more dramatic speed differences for clearer gameplay
+WAVE_SPEEDS = jnp.array([50, 35, 20, 12, 6, 3], dtype=jnp.int32)  # DRAMATIC: Very slow → Extremely fast
+
+# Maximum waves
+MAX_WAVES = 5
+
 BOMB_GROUPS = [
     (1, 10, 1, 10, 10),
     (2, 20, 2, 40, 50),
@@ -70,8 +83,10 @@ GROUP_CUMULATIVE_SCORES = jnp.array([group[4] for group in BOMB_GROUPS])
 
 GROUP_SPEED_MULTIPLIERS = jnp.array([1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.0])
 
-# Colors
-BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
+# Colors - Exact authentic Kaboom colors from frame analysis
+BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)  # Black score bar at top (~2%)
+GREEN_BACKGROUND: Tuple[int, int, int] = (80, 146, 68)  # Authentic green RGB(80,146,68)
+GREY_BACKGROUND: Tuple[int, int, int] = (122, 122, 122)  # Authentic grey RGB(122,122,122)
 BUCKET_COLOR: Tuple[int, int, int] = (255, 255, 0)
 BOMBER_COLOR: Tuple[int, int, int] = (255, 0, 0)
 BOMB_COLOR: Tuple[int, int, int] = (255, 165, 0)
@@ -109,6 +124,19 @@ except Exception:
     # Fallback to a minimal 1x1 white pixel per digit to avoid crashes if files are missing
     DIGIT_SPRITES = jnp.ones((10, 1, 1, 4), dtype=jnp.uint8) * jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
 
+# Load authentic bomber sprite
+_BOMBER_SPRITE_PATH = os.path.join(MODULE_DIR, "sprites", "kaboom", "bomber.npy")
+try:
+    # Load the authentic bomber sprite
+    bomber_sprite_data = jnp.load(_BOMBER_SPRITE_PATH)
+    # Convert RGBA to RGB for rendering (ignore alpha channel)
+    BOMBER_SPRITE = bomber_sprite_data[:, :, :3].astype(jnp.uint8)
+    # Update bomber dimensions based on actual sprite size
+    BOMBER_HEIGHT, BOMBER_WIDTH = BOMBER_SPRITE.shape[:2]
+except Exception:
+    # Fallback to simple colored rectangle if sprite loading fails
+    BOMBER_SPRITE = jnp.ones((BOMBER_HEIGHT, BOMBER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMBER_COLOR, dtype=jnp.uint8)
+
 # Immutable state container
 class KaboomState(NamedTuple):
     bucket_x: chex.Array
@@ -129,6 +157,7 @@ class KaboomState(NamedTuple):
     bombs_in_group: chex.Array
     difficulty: chex.Array
     group_transition_timer: chex.Array
+    bombs_dropped_in_wave: chex.Array  # Track bombs dropped in current wave
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -208,6 +237,80 @@ def bomber_step(key: chex.PRNGKey, bomber_x: chex.Array, bomber_direction: chex.
     new_bomber_x = jnp.clip(new_bomber_x, BOMBER_MIN_X, BOMBER_MAX_X)
     return key, new_bomber_x, new_bomber_direction
 
+def get_current_wave(score: chex.Array) -> chex.Array:
+    """Get current wave number based on score."""
+    return jnp.searchsorted(WAVE_SCORE_THRESHOLDS, score, side='right')
+
+def apply_wave_system(score: chex.Array, points_earned: chex.Array, action: chex.Array) -> tuple[chex.Array, chex.Array]:
+    """Apply authentic Kaboom wave progression to score. Returns (new_score, reset_bomb_counter)."""
+    # Check if current score is already at a threshold (wave complete, waiting for space)
+    at_threshold = jnp.any(score == WAVE_SCORE_THRESHOLDS)
+    
+    # Check if SPACE (FIRE) key is pressed to advance wave
+    space_pressed = action == 1  # FIRE action
+    
+    # Find which threshold we're at (if any)
+    threshold_indices = jnp.where(score == WAVE_SCORE_THRESHOLDS, 
+                                jnp.arange(len(WAVE_SCORE_THRESHOLDS)),
+                                -1)
+    current_threshold_idx = jnp.max(threshold_indices)
+    next_wave_idx = current_threshold_idx + 1
+    
+    # Jump to next wave start score if at threshold and space pressed
+    advance_wave = at_threshold & space_pressed & (next_wave_idx < len(WAVE_START_SCORES))
+    jump_score = jnp.where(
+        advance_wave,
+        WAVE_START_SCORES[next_wave_idx],
+        score  # Stay at current score when at threshold
+    )
+    
+    # Normal score progression when not at threshold
+    new_score = jnp.minimum(score + points_earned, MAX_SCORE)
+    
+    # Check if we would cross a new threshold with this score increase
+    current_wave = get_current_wave(score)
+    potential_wave = get_current_wave(score + points_earned)
+    crossing_threshold = potential_wave > current_wave
+    
+    # If crossing a threshold, cap at that threshold
+    threshold_idx = jnp.clip(current_wave, 0, len(WAVE_SCORE_THRESHOLDS) - 1) 
+    capped_score = jnp.where(
+        crossing_threshold,
+        WAVE_SCORE_THRESHOLDS[threshold_idx],
+        new_score
+    )
+    
+    # Return score: if at threshold use jump_score, else use capped_score
+    final_score = jnp.where(at_threshold, jump_score, capped_score)
+    
+    # Reset bomb counter when advancing wave OR when score changes (new wave starting)
+    # This ensures we get exactly 10 bombs per wave
+    reset_counter = advance_wave | crossing_threshold
+    
+    return final_score, reset_counter
+
+def get_wave_drop_speed(score: chex.Array) -> chex.Array:
+    """Get bomb drop timer based on current wave."""
+    current_wave = get_current_wave(score)
+    wave_idx = jnp.clip(current_wave, 0, len(WAVE_SPEEDS) - 1)
+    return WAVE_SPEEDS[wave_idx]
+
+def get_group_drop_speed(bomb_group: chex.Array) -> chex.Array:
+    """Get bomb drop timer based on current bomb group.
+    
+    Group 1 (0-10 bombs): Fast (20)
+    Group 2 (11-20 bombs): Faster (14)
+    Group 3 (21-30 bombs): Very fast (9)
+    Group 4 (31-40 bombs): Very fast (6)
+    Group 5 (41-50 bombs): Extremely fast (4)
+    Group 6 (51-75 bombs): Insanely fast (3)
+    Group 7 (76-100 bombs): Maximum speed (2)
+    Group 8 (101-150+ bombs): Constant bombs (1)
+    """
+    # Clamp group to valid range (0-7 for groups 1-8)
+    group_idx = jnp.clip(bomb_group, 0, len(GROUP_DROP_SPEEDS) - 1)
+    return GROUP_DROP_SPEEDS[group_idx]
+
 @jax.jit
 def drop_bomb(
     bomb_active: chex.Array,
@@ -219,12 +322,18 @@ def drop_bomb(
     drop_timer: chex.Array,
     bomb_group: chex.Array,
     pause_dropping: chex.Array,
+    score: chex.Array,
+    bombs_caught: chex.Array,
 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Potentially drop a new bomb."""
-    # Skip decrement/drop during transition pause
-    new_drop_timer = jnp.where(pause_dropping > 0, drop_timer, drop_timer - 1)
+    # Check if we're at a wave threshold (waiting for SPACE)
+    at_wave_threshold = jnp.any(score == WAVE_SCORE_THRESHOLDS)
+    
+    # Pause bombing when: at threshold OR during group transition
+    wave_pause = jnp.logical_or(pause_dropping > 0, at_wave_threshold)
+    new_drop_timer = jnp.where(wave_pause, drop_timer, drop_timer - 1)
 
-    should_drop = jnp.logical_and(new_drop_timer <= 0, pause_dropping <= 0)
+    should_drop = jnp.logical_and(new_drop_timer <= 0, jnp.logical_not(wave_pause))
 
     inactive_slots = jnp.where(bomb_active == 0, 1, 0)
     first_inactive = jnp.argmax(inactive_slots)
@@ -240,11 +349,12 @@ def drop_bomb(
         GROUP_SPEED_MULTIPLIERS[-1]
     )
 
-    current_drop_interval = jnp.maximum(18 - bomb_group, 5)
-
+    # Use group-based drop interval 
+    group_drop_interval = get_group_drop_speed(bomb_group)
+    
     new_drop_timer = jnp.where(
         will_drop,
-        current_drop_interval,
+        group_drop_interval,
         new_drop_timer
     )
 
@@ -263,6 +373,7 @@ def drop_bomb(
     new_bomb_speed = bomb_speed.at[first_inactive].set(
         jnp.where(will_drop, adjusted_speed, bomb_speed[first_inactive])
     )
+    
     return new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer
 
 @jax.jit
@@ -279,7 +390,8 @@ def update_bombs(
     bomb_group: chex.Array,
     bombs_in_group: chex.Array,
     difficulty: chex.Array,
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    action: chex.Array,  # Add action parameter for wave system
+) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
     """Update positions of active bombs and check for catches/misses."""
 
     new_bomb_y = jnp.where(
@@ -343,22 +455,17 @@ def update_bombs(
 
     catches = jnp.sum(caught)
 
-    safe_group_idx = jnp.clip(bomb_group, 0, len(GROUP_POINT_VALUES) - 1)
+    # Authentic Kaboom: Each bomb is worth exactly 1 point
+    points_earned = catches * 1
 
-    current_points_per_bomb = jnp.where(
-        bomb_group < len(GROUP_POINT_VALUES),
-        GROUP_POINT_VALUES[safe_group_idx],
-        GROUP_POINT_VALUES[-1]
-    )
-
-    points_earned = catches * current_points_per_bomb
-
-    new_score = jnp.minimum(score + points_earned, MAX_SCORE)
+    # Apply authentic Kaboom wave system
+    new_score, reset_bomb_counter = apply_wave_system(score, points_earned, action)
 
     new_bombs_caught = bombs_caught + catches
 
     new_bombs_in_group = bombs_in_group + catches
 
+    safe_group_idx = jnp.clip(bomb_group, 0, len(GROUP_BOMB_COUNTS) - 1)
     current_group_bomb_limit = jnp.where(
         bomb_group < len(GROUP_BOMB_COUNTS),
         GROUP_BOMB_COUNTS[safe_group_idx],
@@ -384,7 +491,7 @@ def update_bombs(
         0
     )
 
-    new_level = (jnp.floor(new_score / 100) + 1).astype(jnp.int32)
+    new_level = (jnp.floor(new_score / 10) + 1).astype(jnp.int32)  # Level up every 10 points instead of 100
     
     return (
         new_bomb_active, 
@@ -397,7 +504,8 @@ def update_bombs(
         new_bombs_caught, 
         new_bomb_group, 
         new_bombs_in_group,
-        new_group_transition_timer
+        new_group_transition_timer,
+        reset_bomb_counter
     )
 
 @jax.jit
@@ -407,16 +515,19 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
     new_bucket_x = bucket_step(state.bucket_x, action)
     bomber_key, new_bomber_x, new_bomber_direction = bomber_step(bomber_key, state.bomber_x, state.bomber_direction)
 
-    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer = drop_bomb(
+    # First, update existing bombs and calculate new score
+    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level, new_bombs_caught, new_bomb_group, new_bombs_in_group, new_group_transition_timer, reset_bomb_counter = update_bombs(
         state.bomb_active, state.bomb_x, state.bomb_y, state.bomb_speed,
-        new_bomber_x, state.level, state.drop_timer, state.bomb_group,
-        state.group_transition_timer
+        new_bucket_x, state.score, state.lives, state.level,
+        state.bombs_caught, state.bomb_group, state.bombs_in_group, state.difficulty,
+        action  # Add action for wave system
     )
 
-    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_score, new_lives, new_level, new_bombs_caught, new_bomb_group, new_bombs_in_group, new_group_transition_timer = update_bombs(
+    # Then, check if we should drop new bombs based on the UPDATED score
+    new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed, new_drop_timer = drop_bomb(
         new_bomb_active, new_bomb_x, new_bomb_y, new_bomb_speed,
-        new_bucket_x, state.score, state.lives, state.level,
-        state.bombs_caught, state.bomb_group, state.bombs_in_group, state.difficulty
+        new_bomber_x, state.level, state.drop_timer, state.bomb_group,
+        state.group_transition_timer, new_score, new_bombs_caught
     )
 
     reward = new_score - state.score
@@ -444,7 +555,8 @@ def step_fn(key: chex.PRNGKey, state: KaboomState, action: chex.Array) -> Tuple[
         bomb_group=new_bomb_group,
         bombs_in_group=new_bombs_in_group,
         difficulty=state.difficulty,
-        group_transition_timer=jnp.maximum(new_group_transition_timer, dec_group_transition_timer)
+        group_transition_timer=jnp.maximum(new_group_transition_timer, dec_group_transition_timer),
+        bombs_dropped_in_wave=jnp.array(0, dtype=jnp.int32)  # Keep field but don't track
     )
 
     info = KaboomInfo(
@@ -490,7 +602,8 @@ def reset_fn(key: chex.PRNGKey) -> KaboomState:
         bomb_group=jnp.array(0, dtype=jnp.int32),
         bombs_in_group=jnp.array(0, dtype=jnp.int32),
         difficulty=jnp.array(DIFFICULTY_NORMAL, dtype=jnp.int32),
-        group_transition_timer=jnp.array(0, dtype=jnp.int32)
+        group_transition_timer=jnp.array(0, dtype=jnp.int32),
+        bombs_dropped_in_wave=jnp.array(0, dtype=jnp.int32)
     )
     
     return state
@@ -683,7 +796,22 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 @jax.jit
 def render_frame(state: KaboomState) -> jnp.ndarray:
     """Render the current state as an RGB array (JIT-compatible)."""
+    # Create authentic Kaboom background: Grey top (~29%) + Green bottom (~71%)
     frame = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
+    
+    # Calculate split point: 29% of screen height for grey area
+    split_y = int(0.29 * HEIGHT)  # ~61 pixels for HEIGHT=210
+    
+    # Create y-coordinate array for comparison
+    y_coords = jnp.arange(HEIGHT).reshape(-1, 1, 1)
+    
+    # Create color arrays
+    grey_color = jnp.array(GREY_BACKGROUND, dtype=jnp.uint8).reshape(1, 1, 3)
+    green_color = jnp.array(GREEN_BACKGROUND, dtype=jnp.uint8).reshape(1, 1, 3)
+    
+    # Fill background: grey for y < split_y, green for y >= split_y
+    frame = jnp.where(y_coords < split_y, grey_color, green_color)
+    frame = jnp.broadcast_to(frame, (HEIGHT, WIDTH, 3))
 
     bucket_x = state.bucket_x.astype(jnp.int32)
     bucket_y = BUCKET_START_Y
@@ -695,9 +823,8 @@ def render_frame(state: KaboomState) -> jnp.ndarray:
     bomber_x = state.bomber_x.astype(jnp.int32)
     bomber_y = BOMBER_START_Y
 
-    bomber_rect = jnp.ones((BOMBER_HEIGHT, BOMBER_WIDTH, 3), dtype=jnp.uint8) * jnp.array(BOMBER_COLOR, dtype=jnp.uint8)
-
-    frame = jax.lax.dynamic_update_slice(frame, bomber_rect, (bomber_y, bomber_x, 0))
+    # Use authentic bomber sprite instead of colored rectangle
+    frame = jax.lax.dynamic_update_slice(frame, BOMBER_SPRITE, (bomber_y, bomber_x, 0))
 
     def draw_bomb(i, f):
         bomb_x = state.bomb_x[i].astype(jnp.int32)
