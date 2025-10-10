@@ -16,7 +16,7 @@ import numpy as np
 
 # Make sure we can import from project src
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_SRC = os.path.abspath(os.path.join(THIS_DIR, "..", "src"))
+PROJECT_SRC = os.path.abspath(os.path.join(THIS_DIR, "..", "..", "src"))
 if PROJECT_SRC not in sys.path:
     sys.path.insert(0, PROJECT_SRC)
 
@@ -1383,25 +1383,29 @@ Tips
 
         perimeter_edges = self._compute_perimeter_edges_from_edges(h_arr, v_arr)
 
-        # Work on a copy to possibly reorder
-        enemy_positions = list(self.enemy_positions)
-        max_enemies = len(enemy_positions)
-        perimeter_indices = [i for i, p in enumerate(enemy_positions) if _point_on_edges(p, perimeter_edges)]
-        if not perimeter_indices:
-            messagebox.showerror(
-                "Tracer placement",
-                "Place at least one enemy on the outer perimeter to act as the Tracer, then export again.",
-            )
-            return
-        # Move the first perimeter enemy to index 0 (stable order for others)
-        first_idx = perimeter_indices[0]
-        if first_idx != 0:
-            tracer = enemy_positions.pop(first_idx)
-            enemy_positions.insert(0, tracer)
-            # reflect change in UI state so user sees the order
-            self.enemy_positions = enemy_positions[:]
+        if len(self.enemy_positions) > 0:
+            # Work on a copy to possibly reorder
+            enemy_positions = list(self.enemy_positions)
+            max_enemies = len(enemy_positions)
+            perimeter_indices = [i for i, p in enumerate(enemy_positions) if _point_on_edges(p, perimeter_edges)]
+            if not perimeter_indices:
+                messagebox.showerror(
+                    "Tracer placement",
+                    "Place at least one enemy on the outer perimeter to act as the Tracer, then export again.",
+                )
+                return
+            # Move the first perimeter enemy to index 0 (stable order for others)
+            first_idx = perimeter_indices[0]
+            if first_idx != 0:
+                tracer = enemy_positions.pop(first_idx)
+                enemy_positions.insert(0, tracer)
+                # reflect change in UI state so user sees the order
+                self.enemy_positions = enemy_positions[:]
 
-        enemy_pos = np.array(enemy_positions, dtype=np.int32)
+            enemy_pos = np.array(enemy_positions, dtype=np.int32)
+        else:
+            enemy_pos = np.zeros((0, 2), dtype=np.int32)
+            max_enemies = 0
 
         # Compute player's starting path index (index into PATH_EDGES = [H|V])
         def _compute_player_starting_path(h_edges: np.ndarray, v_edges: np.ndarray, player: np.ndarray) -> int:
