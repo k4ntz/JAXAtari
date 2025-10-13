@@ -6,6 +6,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import pygame
+import numpy as np
 from gymnax.environments import spaces
 
 from jaxatari.rendering import jax_rendering_utils as aj
@@ -34,6 +35,7 @@ MAX_LIVES = 3
 LIVES_Y = 200
 LIFE_ONE_X = 25
 LIFE_OFFSET = 20
+FIRE_MAX_PROB = 0.02
 
 ENEMY_Y_POSITIONS = (64, 96, 128)
 
@@ -83,6 +85,46 @@ STATE_TRANSLATOR: dict = {
     34: "buffer",
 }
 
+def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
+    """Updates the Pygame display with the rendered raster.
+ 
+    Args:
+        pygame_screen: The Pygame screen surface.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
+        raster: JAX array of shape (Height, Width, 3/4) containing the image data.
+        SCALING_FACTOR: Factor to scale the raster for display.
+        WIDTH: Expected width of the input raster (used for scaling calculation).
+        HEIGHT: Expected height of the input raster (used for scaling calculation).
+    """
+    pygame_screen.fill((0, 0, 0))
+
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
+    # Convert JAX array (H, W, C) to NumPy (H, W, C)
+    raster_np = np.array(raster)
+    raster_np = raster_np.astype(np.uint8)
+
+    # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
+    # Transpose from (H, W, C) to (W, H, C) for pygame
+    frame_surface = pygame.surfarray.make_surface(raster_np.transpose(1, 0, 2))
+
+    # Pygame scale expects target (width, height)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
+    # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
+    target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
+
+
+    frame_surface_scaled = pygame.transform.scale(
+        frame_surface, (target_width_px, target_height_px)
+    )
+
+    pygame_screen.blit(frame_surface_scaled, (0, 0))
+    pygame.display.flip()
+
 def get_human_action() -> chex.Array:
     """
     Records if UP or DOWN is being pressed and returns the corresponding action.
@@ -99,7 +141,7 @@ def get_human_action() -> chex.Array:
         return jnp.array(LEFT)
     elif keys[pygame.K_d]:
         return jnp.array(RIGHT)
-    elif keys[pygame.K_SPACE]:
+    elif keys[pygame.K_w]:
         return jnp.array(FIRE)
     else:
         return jnp.array(NOOP)
@@ -276,14 +318,8 @@ def cooldown_step(
 def enemy_projectile_step(
     state
 ):
-    # If projectile is inactive, check for random fire opportunity
+    # If projectile is inactive, check for fire opportunity
     can_fire = state.enemy_projectile_y < 0
-    
-    # Random chance of firing (1% probability)
-    # Note: In a complete implementation, you would use a proper PRNG key
-    fire_action = jnp.equal(jnp.mod(state.step_counter, 180), 0)
-    #jax.debug.print(f"Can Fire : {can_fire}, Random fire chance: {fire_random}, Fire action: {fire_action}")
-    spawn_proj = jnp.logical_and(fire_action, can_fire)
     
     # Initialize with default values
     chosen_enemy_x = jnp.array(0)
@@ -325,10 +361,28 @@ def enemy_projectile_step(
     is_better = jnp.logical_and(e6_active, state.enemy_6_y > chosen_enemy_y)
     chosen_enemy_x = jnp.where(is_better, state.enemy_6_x, chosen_enemy_x)
     chosen_enemy_y = jnp.where(is_better, state.enemy_6_y, chosen_enemy_y)
-    
-    # Only spawn projectile if we have an active enemy
+        
+    # Only proceed if we have an active enemy
     has_active_enemy = chosen_enemy_y >= 0
-    effective_spawn = jnp.logical_and(spawn_proj, has_active_enemy)
+
+    # --- New Firing Logic ---
+    # Calculate distance-based probability
+    distance_x = jnp.abs(state.player_x - chosen_enemy_x)
+    
+    # Define max probability when player is right under the enemy
+    max_prob = FIRE_MAX_PROB 
+    
+    # Probability decreases linearly with distance
+    fire_prob = max_prob * (1 - distance_x / WIDTH)
+    fire_prob = jnp.maximum(0, fire_prob)
+
+    # Generate a random number for the firing chance
+    random_seed = jnp.mod(state.step_counter, 10000)
+    random_chance = jax.random.uniform(jax.random.PRNGKey(random_seed), shape=())
+
+    fire_action = random_chance < fire_prob
+    
+    effective_spawn = jnp.logical_and.reduce(jnp.array([fire_action, can_fire, has_active_enemy]))
     
     # Spawn projectile at the chosen enemy's position
     new_proj_x = jnp.where(effective_spawn, chosen_enemy_x + ENEMY_SIZE[0]//2, state.enemy_projectile_x)
@@ -633,7 +687,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
             occupied_y=jnp.array([0, 0, 0]),
             step_counter=jnp.array(0).astype(jnp.int32),
             enemies_killed=jnp.array(0).astype(jnp.int32),
-            current_stage=jnp.array(2).astype(jnp.int32),
+            current_stage=jnp.array(0).astype(jnp.int32),
             enemies_spawned_this_stage=jnp.array(0).astype(jnp.int32),
             enemies_invisible=jnp.array(0).astype(jnp.int32),
             cooldown=jnp.array(0).astype(jnp.int32),
@@ -703,7 +757,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         new_enemy_proj_dir = jnp.where(projectiles_intersecting, 0, new_state.enemy_projectile_dir)
 
         def split_condition(stage):
-            return stage > -1
+            return stage >= 4
 
         def kill_enemy(arr):
             ex, ey, ew, eh, proj_x, proj_y, occupied_y, linked_y = arr
@@ -832,7 +886,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         new_current_stage = jnp.where(stage_complete, state.current_stage + 1, state.current_stage)
         
         invis_action = jax.lax.cond(
-            jnp.equal(state.current_stage, 1),
+            jnp.logical_and(state.current_stage >= 8, state.current_stage <= 11),
             lambda _: jax.random.uniform(jax.random.PRNGKey(state.step_counter), shape=()) < 0.01,
             lambda _: jnp.array(False),
             operand=None
@@ -1273,7 +1327,7 @@ class Renderer_AtraJaxisAssault(JAXGameRenderer):
         raster = heat_bar_fn(state.heat, raster)
         print(self.PLAYER_PROJECTILE)
         return raster
-    """
+    
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
@@ -1290,7 +1344,7 @@ if __name__ == "__main__":
     jitted_step = jax.jit(game.step)
     jitted_reset = jax.jit(game.reset)
 
-    obs, curr_state = jitted_reset()
+    obs, curr_state = jitted_reset(jax.random.PRNGKey(0))
 
     # Game loop
     running = True
@@ -1340,4 +1394,3 @@ if __name__ == "__main__":
         clock.tick(60)
 
     pygame.quit()
-"""
