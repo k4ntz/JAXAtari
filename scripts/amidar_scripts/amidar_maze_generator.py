@@ -1504,7 +1504,10 @@ Tips
         content.append(f"SHORT_PATHS = jnp.array({short_paths.tolist()}, dtype=jnp.int32)")
         content.append("")
         content.append(f"INITIAL_PLAYER_POSITION = jnp.array({player_pos.tolist()}, dtype=jnp.int32)")
-        content.append(f"INITIAL_ENEMY_POSITIONS = jnp.array({enemy_pos.tolist()}, dtype=jnp.int32)")
+        if len(self.enemy_positions) > 0:
+            content.append(f"INITIAL_ENEMY_POSITIONS = jnp.array({enemy_pos.tolist()}, dtype=jnp.int32)")
+        else: 
+            content.append(f"INITIAL_ENEMY_POSITIONS = jnp.empty((0, 2), dtype=jnp.int32)")
         content.append(f"PLAYER_STARTING_PATH = jnp.array([{int(player_start_idx)}], dtype=jnp.int32)")
         content.append("")
         content.append("# Import these from this file where needed instead of modifying jax_amidar.py.")
