@@ -1,5 +1,6 @@
 import argparse
 import sys
+import os
 import pygame
 
 import jax
@@ -73,6 +74,19 @@ def main():
         action="store_true",
         help="Verbose mode.",
     )
+    parser.add_argument(
+        "--screenshot-dir",
+        type=str,
+        default=None,
+        help="Directory to save frames (npy/png). Defaults to '<game>_screenshots' on first save.",
+    )
+    parser.add_argument(
+        "--save-format",
+        type=str,
+        choices=["npy", "png"],
+        default="npy",
+        help="Format to save frames when pressing 'O' (npy or png).",
+    )
 
     args = parser.parse_args()
 
@@ -111,6 +125,50 @@ def main():
         )
         clock = pygame.time.Clock()
 
+    # Frame saving setup: defer directory creation until first save request
+    screenshot_dir = args.screenshot_dir
+
+    frame_save_counter = 1
+
+    def save_frame(image):
+        nonlocal frame_save_counter, screenshot_dir
+        if image is None:
+            print("Warning: Cannot save None frame.")
+            return
+        # Create directory on first save if not provided
+        if screenshot_dir is None:
+            screenshot_dir = f"{args.game}_screenshots"
+        try:
+            os.makedirs(screenshot_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not create screenshot directory '{screenshot_dir}': {e}")
+            return
+
+        try:
+            if args.save_format == "npy":
+                filepath = os.path.join(screenshot_dir, f"frame_{frame_save_counter:05d}.npy")
+                np.save(filepath, np.asarray(image))
+            else:  # png
+                # Build a pygame surface from the RGB numpy array and save it
+                # image expected shape: (H, W, 3) uint8
+                arr = np.asarray(image)
+                if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+                    print("Warning: Unexpected image shape for PNG save; expected HxWx3 or HxWx4.")
+                h, w = arr.shape[:2]
+                surface = pygame.Surface((w, h))
+                try:
+                    pygame.pixelcopy.array_to_surface(surface, arr.swapaxes(0, 1))
+                except Exception:
+                    # Fallback: ensure contiguous uint8 RGB
+                    arr = np.ascontiguousarray(arr[:, :, :3], dtype=np.uint8)
+                    pygame.pixelcopy.array_to_surface(surface, arr.swapaxes(0, 1))
+                filepath = os.path.join(screenshot_dir, f"frame_{frame_save_counter:05d}.png")
+                pygame.image.save(surface, filepath)
+            frame_save_counter += 1
+            print(f"Saved frame to {filepath}")
+        except Exception as e:
+            print(f"Error saving frame: {e}")
+
     action_space = env.action_space()
 
     save_keys = {}
@@ -145,8 +203,9 @@ def main():
 
             obs, state, reward, done, info = jitted_step(state, action)
             image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
+            if not execute_without_rendering:
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                clock.tick(frame_rate)
 
             # Check for quit event
             for event in pygame.event.get():
@@ -155,14 +214,19 @@ def main():
                 ):
                     pygame.quit()
                     sys.exit(0)
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_o: # save current frame (s is taken by navigation)
+                    save_frame(image)
 
         pygame.quit()
         sys.exit(0)
 
     # display the first frame (reset frame) -> purely for aesthetics
     image = jitted_render(state)
-    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-    clock.tick(frame_rate)
+    if not execute_without_rendering:
+        update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+        clock.tick(frame_rate)
+
+    frame_counter = 0
 
     # main game loop
     while running:
@@ -180,10 +244,17 @@ def main():
                     frame_by_frame = not frame_by_frame
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
+                elif event.key == pygame.K_o:  # save current frame
+                    try:
+                        current_image = jitted_render(state)
+                    except Exception:
+                        current_image = None
+                    save_frame(current_image)
         if pause or (frame_by_frame and not next_frame_asked):
             image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
+            if not execute_without_rendering:
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                clock.tick(frame_rate)
             continue
         if args.random:
             # sample an action from the action space array
@@ -206,8 +277,9 @@ def main():
                 next_frame_asked = False
 
         if done:
-            print(f"Done. Total return {total_return}")
+            print(f"Done. Total return {total_return}, Frames this episode: {frame_counter}")
             total_return = 0
+            frame_counter = 0
             obs, state = jitted_reset(key)
 
         # Render the environment
@@ -217,6 +289,8 @@ def main():
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
 
             clock.tick(frame_rate)
+
+        frame_counter += 1
 
     if args.record:
         # Convert dictionary to array of actions
