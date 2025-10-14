@@ -233,7 +233,7 @@ MAZES = [maze1, maze2, maze3, maze4]
 
 
 
-def load_background(level, v_offset=0):
+def load_background(level):
 	"""
 	Constructs the background based on the level.
 	"""
@@ -248,7 +248,7 @@ def load_background(level, v_offset=0):
 	H, W = maze_grid.shape
 
 	# Initialize RGB image
-	background = jnp.zeros((210 + v_offset, W * SCALE, 3), dtype=jnp.uint8)
+	background = jnp.zeros((210, W * SCALE, 3), dtype=jnp.uint8)
 
 	# Fill background
 	for y in range(H):
@@ -257,7 +257,7 @@ def load_background(level, v_offset=0):
 				lambda _: WALL_COLOR,
 				lambda _: PATH_COLOR,
 				operand=None)
-			background = background.at[1+y*SCALE + v_offset: (y+2)*SCALE + v_offset, x*SCALE: (x+1)*SCALE, :].set(color)
+			background = background.at[1+y*SCALE: (y+2)*SCALE, x*SCALE: (x+1)*SCALE, :].set(color)
 	for px in range(18):
 		x_offset = 8 if px < 9 else 12
 		for py in range(14):
@@ -266,7 +266,7 @@ def load_background(level, v_offset=0):
 				pellet_y = py * 12 + 10
 				for i in range(4):
 					for j in range(2):
-						background = background.at[pellet_y+j + v_offset, pellet_x+i].set(WALL_COLOR)
+						background = background.at[pellet_y+j, pellet_x+i].set(WALL_COLOR)
 	return jnp.swapaxes(background, 0, 1)
 
 def pacmans_rgba(size: int = 10) -> jnp.ndarray:
