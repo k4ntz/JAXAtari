@@ -17,9 +17,8 @@ from jax import random, Array
 
 
 WIDTH = 160
-HEIGHT = 210
+HEIGHT = 220
 
-VOFFSET = 18 # extra space above the maze for the scoreboard
 RESET_LEVEL = 0 # the starting level, loaded when reset is called
 SCORE_DIGITS = 6 # Number of digits to display in the score
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
@@ -461,8 +460,8 @@ class MsPacmanRenderer(AtraJaxisRenderer):
     def reset_bg(self):
         """Reset the background for a new level."""
         life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
-        self.SPRITE_BG = load_background(RESET_LEVEL, VOFFSET)
-        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.ones(SCORE_DIGITS, dtype=jnp.bool_), self.digit_sprites)
+        self.SPRITE_BG = load_background(RESET_LEVEL)
+        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, SCORE_DIGITS, SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.digit_sprites)
         for life in range(NB_INITIAL_LIVES-1):
             self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + life * 16, 182, life_sprite)
    
@@ -480,7 +479,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             # Render game over screen
             self.reset_bg()
         if state.completed_level:
-            self.SPRITE_BG = load_background(state.maze_layout, VOFFSET)
+            self.SPRITE_BG = load_background(state.maze_layout)
         raster = self.SPRITE_BG
         # de-render pellets
         # if state.has_pellet:
@@ -489,16 +488,16 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             pellet_y = state.pacman_pos[1] + 4
             for i in range(4):
                 for j in range(2):
-                    self.SPRITE_BG = self.SPRITE_BG.at[pellet_x+i, pellet_y+j + VOFFSET].set(PATH_COLOR)
+                    self.SPRITE_BG = self.SPRITE_BG.at[pellet_x+i, pellet_y+j].set(PATH_COLOR)
         # power pellets
         for i in range(2):
             pel_n = 2*i + ((state.step_count & 0b1000) >> 3) # Alternate power pellet rendering
             if state.power_pellets[pel_n]:
                 pellet_x, pellet_y = POWER_PELLET_POSITIONS[pel_n]
-                raster = aj.render_at(raster, pellet_x, pellet_y + VOFFSET, POWER_PELLET_SPRITE)
+                raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
         orientation = state.pacman_last_dir_int
         pacman_sprite = self.SPRITES_PLAYER[orientation][((state.step_count & 0b1000) >> 2)]
-        raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1] + VOFFSET, 
+        raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], 
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
 
@@ -514,16 +513,16 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                 g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][5] # white blinking effect
             else:
                 g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][4] # blue ghost
-            raster = aj.render_at(raster, g_pos[0], g_pos[1] + VOFFSET, g_sprite)
+            raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite)
         if state.death_timer == RESET_TIMER-1:
             # Remove one life from the background
             black_sprite = jnp.zeros((10, 10, 4), dtype=jnp.uint8)
             black_sprite = black_sprite.at[:, :, 3].set(255) # Set alpha channel to 255
             # Remove the last life sprite from the background
-            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182 + VOFFSET, black_sprite)
+            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182, black_sprite)
         return raster
 
-def render_score(raster, score, score_changed, digit_sprites, score_x=4, score_y=4, spacing=10, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=10, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
     """
     Render the score on the raster at a fixed position.
     """
