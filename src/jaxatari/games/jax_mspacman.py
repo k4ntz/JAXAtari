@@ -19,10 +19,12 @@ from jax import random, Array
 WIDTH = 160
 HEIGHT = 210
 
-VOFFSET = 18    # extra space above the maze for the scoreboard
+VOFFSET = 18 # extra space above the maze for the scoreboard
 RESET_LEVEL = 0 # the starting level, loaded when reset is called
-FRIGHTENED_DURATION = 62*8  # Duration of power pellet effect in frames (x8 steps)
+SCORE_DIGITS = 6 # Number of digits to display in the score
+FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
+
 #POWER PELLETS X Y POSITIONS
 ppx0 = 8
 ppx1 = 148
@@ -223,7 +225,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             has_pellet=jnp.array(False),
             power_pellets=jnp.ones(4, dtype=jnp.bool_),
             score=jnp.array(0),
-            score_changed=jnp.array(False),
+            score_changed=jnp.zeros(SCORE_DIGITS, dtype=jnp.bool_), # indicates which score digit changed since the last step
             step_count=jnp.array(0),
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
@@ -277,7 +279,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 power_pellets=state.power_pellets,
                 power_mode_timer=power_mode_timer,
                 score=state.score,
-                score_changed=jnp.array(False, dtype=jnp.bool_),
+                score_changed=jnp.zeros(SCORE_DIGITS, dtype=jnp.bool_),
                 step_count=state.step_count + 1,
                 game_over=game_over,
                 level=state.level,
@@ -396,11 +398,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             maze_layout = (maze_layout + 1) % 4  # len(MAZES)
             print(f"Level completed! New level: {maze_layout}")
             dofmaze= precompute_dof(MAZES[maze_layout])
-        # Flag score change
-        if score > state.score:
-            score_changed = jnp.array(True, dtype=jnp.bool_)
+
+        # Flag score change digit-wise
+        if score != state.score:
+            # score_str       = str(score)
+            # state_score_str = str(state.score)
+            # max_len         = max(len(score_str), len(state_score_str))
+            # score_str       = score_str.zfill(max_len)
+            # state_score_str = state_score_str.zfill(max_len)
+            score_digits        = aj.int_to_digits(score, max_digits=SCORE_DIGITS)
+            state_score_digits  = aj.int_to_digits(state.score, max_digits=SCORE_DIGITS)
+            score_changed       = score_digits != state_score_digits
         else:
-            score_changed = False
+            score_changed       = jnp.array(False, dtype=jnp.bool_)
 
         new_state = PacmanState(
             pacman_pos=new_pacman_pos,
@@ -452,6 +462,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         """Reset the background for a new level."""
         life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
         self.SPRITE_BG = load_background(RESET_LEVEL, VOFFSET)
+        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.ones(SCORE_DIGITS, dtype=jnp.bool_), self.digit_sprites)
         for life in range(NB_INITIAL_LIVES-1):
             self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + life * 16, 182, life_sprite)
    
@@ -491,19 +502,10 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
 
-        # Render score
-        if state.score_changed:
-            score_x = 4
-            score_y = 4
-            digit_indices = aj.int_to_digits(state.score, max_digits=6)
-            raster = aj.render_label(raster, score_x, score_y, digit_indices, self.digit_sprites, spacing=8)    # TODO: Use the right sprites
-        
-            # for i, d in enumerate(str(state.score)):
-            #     score_x = 4
-            #     score_y = 4
-            #     sprite = get_digit_sprite(int(d))
-            #     raster = aj.render_at(raster, score_x + i*12, score_y, sprite, flip_horizontal=True)
-            
+        # Render score if changed
+        if jnp.any(state.score_changed):
+            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.digit_sprites)
+
         for i, g_pos in enumerate(state.ghost_positions):
             # Render frightened ghost
             if not (state.ghosts_modes[i] == GHOST_FRIGHTENED or state.ghosts_modes[i] == GHOST_BLINKING):
@@ -521,6 +523,24 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182 + VOFFSET, black_sprite)
         return raster
 
+def render_score(raster, score, score_changed, digit_sprites, score_x=4, score_y=4, spacing=10, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+    """
+    Render the score on the raster at a fixed position.
+    """
+    digits = aj.int_to_digits(score, max_digits=SCORE_DIGITS)
+    # Only update changed digits
+    for idx in range(SCORE_DIGITS):
+        if score_changed[idx]:
+            d_sprite = digit_sprites[digits[idx]]
+            for i in range(d_sprite.shape[0]):
+                for j in range(d_sprite.shape[1]):
+                    # Clear previous digit area
+                    if raster.at[score_x + i + idx * spacing, score_y + j].get() is not bg_color:
+                        raster = raster.at[score_x + i + idx * spacing, score_y + j].set(bg_color)
+                    # Render new digit pixel if alpha > 0
+                    if d_sprite[i, j, 3] > 0:
+                        raster = raster.at[score_x + i + idx * spacing, score_y + j].set(jnp.array(d_sprite[i, j, :3], dtype=jnp.uint8))
+    return raster
 
 def get_direction_index(direction: chex.Array) -> int:
     """
