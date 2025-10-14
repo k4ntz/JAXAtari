@@ -10,7 +10,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.games.mspacman_mazes import MAZES, load_background, get_digit_sprite, pacmans_rgba, load_ghosts, precompute_dof, base_pellets
+from jaxatari.games.mspacman_mazes import MAZES, load_background, load_score_digits, pacmans_rgba, load_ghosts, precompute_dof, base_pellets
 
 from jax import random, Array
 
@@ -140,6 +140,7 @@ class PacmanState(NamedTuple):
     has_pellet: chex.Array  # Boolean indicating if pacman just collected a pellet
     power_pellets: chex.Array
     score: chex.Array
+    score_changed: chex.Array
     step_count: chex.Array
     game_over: chex.Array
     power_mode_timer: chex.Array # Timer for power mode, decrements every 8 steps
@@ -222,6 +223,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             has_pellet=jnp.array(False),
             power_pellets=jnp.ones(4, dtype=jnp.bool_),
             score=jnp.array(0),
+            score_changed=jnp.array(False),
             step_count=jnp.array(0),
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
@@ -275,6 +277,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 power_pellets=state.power_pellets,
                 power_mode_timer=power_mode_timer,
                 score=state.score,
+                score_changed=jnp.array(False, dtype=jnp.bool_),
                 step_count=state.step_count + 1,
                 game_over=game_over,
                 level=state.level,
@@ -393,6 +396,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             maze_layout = (maze_layout + 1) % 4  # len(MAZES)
             print(f"Level completed! New level: {maze_layout}")
             dofmaze= precompute_dof(MAZES[maze_layout])
+        # Flag score change
+        if score > state.score:
+            score_changed = jnp.array(True, dtype=jnp.bool_)
+        else:
+            score_changed = False
 
         new_state = PacmanState(
             pacman_pos=new_pacman_pos,
@@ -410,6 +418,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             power_pellets=power_pellets,
             power_mode_timer=power_mode_timer,
             score=score,
+            score_changed=score_changed,
             step_count=state.step_count + 1,
             game_over=game_over,
             level=state.level,
@@ -435,6 +444,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         super().__init__()
         self.SPRITES_PLAYER = pacmans_rgba()
         self.SPRITES_GHOSTS = load_ghosts()
+        self.digit_sprites = load_score_digits()
         # self.reset_bg()
         
 
@@ -480,12 +490,20 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1] + VOFFSET, 
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
+
         # Render score
-        for i, d in enumerate(str(state.score)):
+        if state.score_changed:
             score_x = 4
             score_y = 4
-            sprite = get_digit_sprite(int(d))
-            raster = aj.render_at(raster, score_x + i*12, score_y, sprite, flip_horizontal=True)
+            digit_indices = aj.int_to_digits(state.score, max_digits=6)
+            raster = aj.render_label(raster, score_x, score_y, digit_indices, self.digit_sprites, spacing=8)    # TODO: Use the right sprites
+        
+            # for i, d in enumerate(str(state.score)):
+            #     score_x = 4
+            #     score_y = 4
+            #     sprite = get_digit_sprite(int(d))
+            #     raster = aj.render_at(raster, score_x + i*12, score_y, sprite, flip_horizontal=True)
+            
         for i, g_pos in enumerate(state.ghost_positions):
             # Render frightened ghost
             if not (state.ghosts_modes[i] == GHOST_FRIGHTENED or state.ghosts_modes[i] == GHOST_BLINKING):
