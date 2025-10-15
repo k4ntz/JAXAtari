@@ -17,7 +17,7 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.games.amidar_mazes import original as chosen_maze # change this to change the maze
+from jaxatari.games.amidar_mazes import original as chosen_maze # change this to change the maze; default to be overwritten by wrappers
 
 # Functions to precompute some constants so they only need to be calculated once
 
@@ -198,7 +198,7 @@ class AmidarConstants(NamedTuple):
     MAX_LIVES: int = 3
     FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
     CHICKEN_MODE_DURATION: int = 640
-    DONE_ON_LEVEL_COMPLETION = False
+    DONE_ON_LEVEL_COMPLETION: bool = False
 
     # Deterministic mode 
     DETERMINISTIC_MODE: bool = True
@@ -211,11 +211,11 @@ class AmidarConstants(NamedTuple):
     RIGHT: int = 3
 
     # Rendering
-    PATH_COLOR_BROWN = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
-    PATH_COLOR_GREEN = jnp.array([82, 126, 45, 255], dtype=jnp.uint8)  # Green color for the path
-    WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
-    PATH_THICKNESS_HORIZONTAL = chosen_maze.PATH_THICKNESS_HORIZONTAL
-    PATH_THICKNESS_VERTICAL = chosen_maze.PATH_THICKNESS_VERTICAL 
+    PATH_COLOR_BROWN: chex.Array = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
+    PATH_COLOR_GREEN: chex.Array = jnp.array([82, 126, 45, 255], dtype=jnp.uint8)  # Green color for the path
+    WALKED_ON_COLOR: chex.Array = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
+    PATH_THICKNESS_HORIZONTAL: int = chosen_maze.PATH_THICKNESS_HORIZONTAL
+    PATH_THICKNESS_VERTICAL: int = chosen_maze.PATH_THICKNESS_VERTICAL
 
     # Points
     PIXELS_PER_POINT_HORIZONTAL: int = 3 # Values to calculate how many points an Edge is worth based on how long it is
@@ -228,7 +228,7 @@ class AmidarConstants(NamedTuple):
     PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = chosen_maze.INITIAL_PLAYER_POSITION
     INITIAL_PLAYER_DIRECTION: chex.Array = UP
-    PLAYER_STARTING_PATH = chosen_maze.PLAYER_STARTING_PATH
+    PLAYER_STARTING_PATH: chex.Array = chosen_maze.PLAYER_STARTING_PATH
 
     # Jumping
     # The jumping mechanics are like this to resemble the ALE version. 
