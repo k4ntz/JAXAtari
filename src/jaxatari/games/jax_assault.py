@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import chex
 import pygame
 import numpy as np
-from gymnax.environments import spaces
+import jaxatari.spaces as spaces
 
 from jaxatari.rendering import jax_rendering_utils as aj
 from jaxatari.environment import JaxEnvironment
@@ -236,7 +236,6 @@ class AssaultObservation(NamedTuple):
     score: jnp.ndarray
     
 
-
 class AssaultInfo(NamedTuple):
     time: jnp.ndarray
     all_rewards: chex.Array
@@ -442,9 +441,6 @@ def enemy_projectile_step(
         player_lives=new_lives
     )
     
-    
-
-
 @jax.jit
 def enemy_step(state):     
     occupied_y = state.occupied_y
@@ -607,7 +603,6 @@ def mothership_step(state):
     mothership_x, mothership_dir = move_mothership(state.mothership_x, state.mothership_dir)
     return state._replace(mothership_x=mothership_x, mothership_dir=mothership_dir)
 
-
 @jax.jit
 def check_collision(px, py, ex, ey, ew, eh):
     # Returns True if (px, py) is inside the enemy box
@@ -621,10 +616,11 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
     def __init__(self):
         super().__init__()
         self.frameskip = 1
-        self.frame_stack_size = 4
+        self.frame_stack_size = 1
         self.action_set = {NOOP, FIRE, RIGHT, LEFT, RIGHTFIRE, LEFTFIRE}
         self.reward_funcs = None
         self.occupied_y = jnp.array([0, 0, 0])
+        self.renderer = Renderer_AtraJaxisAssault()
 
     def action_space(self) -> spaces.Discrete:
         """
@@ -632,17 +628,35 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         """
         return spaces.Discrete(len(self.action_set))
     
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
         """
         Returns the observation space of the environment.
         """
         # Return a box space representing the stacked frames
-        return spaces.Box(
-            low=0, 
-            high=255, 
-            shape=(self.frame_stack_size, WIDTH, HEIGHT, 3), 
-            dtype=jnp.uint8
-        )
+        EntityDict = spaces.Dict(
+               {
+                   "x": spaces.Box(low=-1, high=211, shape=(), dtype=jnp.int32),
+                   "y": spaces.Box(low=-1, high=211, shape=(), dtype=jnp.int32),
+                   "width": spaces.Box(low=-1, high=211, shape=(), dtype=jnp.int32),
+                   "height": spaces.Box(low=-1, high=211, shape=(), dtype=jnp.int32),
+                   "visibility": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+               }
+           )
+
+        return spaces.Dict({
+           "player": EntityDict,
+            "mothership": EntityDict,
+            "enemy_1": EntityDict,
+            "enemy_2": EntityDict,
+            "enemy_3": EntityDict,
+            "enemy_4": EntityDict,
+            "enemy_5": EntityDict,
+            "enemy_6": EntityDict,
+            "enemy_projectile": EntityDict,
+            "lives": spaces.Box(low=0, high=MAX_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+
+        })
 
     def reset(self, key: chex.PRNGKey) -> AssaultState:
         # Minimal state initialization
@@ -898,17 +912,17 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
             player_projectile_x=new_player_proj_x,
             player_projectile_y=new_player_proj_y,
             player_projectile_dir=new_player_proj_dir,
-            enemy_projectile_x=new_enemy_proj_x,
-            enemy_projectile_y=new_enemy_proj_y,
+            enemy_projectile_x=jnp.int32(new_enemy_proj_x),
+            enemy_projectile_y=jnp.int32(new_enemy_proj_y),
             enemy_projectile_dir=new_enemy_proj_dir,
             enemy_1_x=e1_x, enemy_1_y=e1_y,
-            enemy_1_split=jnp.logical_or(new_state.enemy_1_split, e1_split),
+            enemy_1_split=jnp.int32(jnp.logical_or(new_state.enemy_1_split, e1_split)),
             enemy_1_dir=jnp.where(e1_split,-1, new_state.enemy_1_dir),
             enemy_2_x=e2_x, enemy_2_y=e2_y,
-            enemy_2_split=jnp.logical_or(new_state.enemy_2_split,e2_split),
+            enemy_2_split=jnp.int32(jnp.logical_or(new_state.enemy_2_split,e2_split)),
             enemy_2_dir=jnp.where(e2_split,-1, new_state.enemy_2_dir),
             enemy_3_x=e3_x, enemy_3_y=e3_y,
-            enemy_3_split=jnp.logical_or(new_state.enemy_3_split,e3_split),
+            enemy_3_split=jnp.int32(jnp.logical_or(new_state.enemy_3_split,e3_split)),
             enemy_3_dir=jnp.where(e3_split,-1, new_state.enemy_3_dir),
             enemy_4_x=e4_x, enemy_4_y=e4_y,
             enemy_4_dir=jnp.where(e1_split,1, new_state.enemy_4_dir),
@@ -936,19 +950,19 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         info = AssaultInfo(time=jnp.array(0), all_rewards=jnp.zeros(1))
 
         # Use jax.debug.print instead of Python's print for JIT compatibility
-        jax.debug.print("Enemy positions:")
-        jax.debug.print("Enemy 1: ({}, {})", state.enemy_1_x, state.enemy_1_y)
-        jax.debug.print("Enemy 2: ({}, {})", state.enemy_2_x, state.enemy_2_y)
-        jax.debug.print("Enemy 3: ({}, {})", state.enemy_3_x, state.enemy_3_y)
-        jax.debug.print("Enemy 4: ({}, {})", state.enemy_4_x, state.enemy_4_y)
-        jax.debug.print("Enemy 5: ({}, {})", state.enemy_5_x, state.enemy_5_y)
-        jax.debug.print("Enemy 6: ({}, {})", state.enemy_6_x, state.enemy_6_y)
+        # jax.debug.print("Enemy positions:")
+        # jax.debug.print("Enemy 1: ({}, {})", state.enemy_1_x, state.enemy_1_y)
+        # jax.debug.print("Enemy 2: ({}, {})", state.enemy_2_x, state.enemy_2_y)
+        # jax.debug.print("Enemy 3: ({}, {})", state.enemy_3_x, state.enemy_3_y)
+        # jax.debug.print("Enemy 4: ({}, {})", state.enemy_4_x, state.enemy_4_y)
+        # jax.debug.print("Enemy 5: ({}, {})", state.enemy_5_x, state.enemy_5_y)
+        # jax.debug.print("Enemy 6: ({}, {})", state.enemy_6_x, state.enemy_6_y)
         
         # Print occupied_y using jax.debug.print
-        jax.debug.print("Occupied rows: {}", state.occupied_y)
-        jax.debug.print("current_stage: {}", state.current_stage)
-        jax.debug.print("Enemies killed: {}", state.enemies_killed)
-        jax.debug.print("----------------------------------------")
+        # jax.debug.print("Occupied rows: {}", state.occupied_y)
+        # jax.debug.print("current_stage: {}", state.current_stage)
+        # jax.debug.print("Enemies killed: {}", state.enemies_killed)
+        # jax.debug.print("----------------------------------------")
 
         new_step_counter = jnp.mod(state.step_counter + 1, Y_STEP_DELAY * 100000)
         new_state = new_state._replace(step_counter=new_step_counter)
@@ -956,8 +970,15 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         return obs_stack, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: AssaultState):
+    def _get_observation(self, state: AssaultState) -> AssaultObservation:
         # Build observation from state
+        def enemy_entity(x, y):
+            return EntityPosition(
+                x=x, y=y,
+                width=jnp.array(ENEMY_SIZE[0]),
+                height=jnp.array(ENEMY_SIZE[1]),
+                invisible=jnp.array(0),
+            )
         player = EntityPosition(
             x=state.player_x,
             y=jnp.array(PLAYER_Y),
@@ -972,13 +993,6 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
             height=jnp.array(MOTHERSHIP_SIZE[1]),
             invisible=jnp.array(0),
         )
-        def enemy_entity(x, y):
-            return EntityPosition(
-                x=x, y=y,
-                width=jnp.array(ENEMY_SIZE[0]),
-                height=jnp.array(ENEMY_SIZE[1]),
-                invisible=jnp.array(0),
-            )
         enemy_projectile=EntityPosition(
                 x=state.enemy_projectile_x,
                 y=state.enemy_projectile_y,
@@ -986,6 +1000,7 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
                 height=jnp.array(4),
                 invisible=jnp.array(0),
             )
+        jax.debug.print("Enemy projectile position: ({}, {})", state.enemy_1_x, state.enemy_1_y)
         return AssaultObservation(
             player=player,
             mothership=mothership,
@@ -1003,31 +1018,42 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: AssaultObservation) -> jnp.ndarray:
         # Flatten all positions and stats into a 1D array
-        return jnp.concatenate([
-            obs.player.x.flatten(), obs.player.y.flatten(),
-            obs.player.width.flatten(), obs.player.height.flatten(),
-            obs.mothership.x.flatten(), obs.mothership.y.flatten(),
-            obs.enemy_1.x.flatten(), obs.enemy_1.y.flatten(),
-            obs.enemy_2.x.flatten(), obs.enemy_2.y.flatten(),
-            obs.enemy_3.x.flatten(), obs.enemy_3.y.flatten(),
-            obs.enemy_4.x.flatten(), obs.enemy_4.y.flatten(),
-            obs.enemy_5.x.flatten(), obs.enemy_5.y.flatten(),
-            obs.enemy_6.x.flatten(), obs.enemy_6.y.flatten(),
-            obs.enemy_projectile.x.flatten(), obs.enemy_projectile.y.flatten(),
-            obs.lives.flatten(), obs.score.flatten()
-        ])
+        def flatten_entity(e: EntityPosition):
+            jax.debug.print("Flattening entity with length:{}", e.x.reshape(-1).shape[0])
+            return jnp.concatenate([e.x.flatten(), e.y.flatten(), e.width.flatten(), e.height.flatten(), e.invisible.flatten()])
+        
+        flat_list = [
+            flatten_entity(obs.player),
+            flatten_entity(obs.mothership),
+            flatten_entity(obs.enemy_1),
+            flatten_entity(obs.enemy_2),
+            flatten_entity(obs.enemy_3),
+            flatten_entity(obs.enemy_4),
+            flatten_entity(obs.enemy_5),
+            flatten_entity(obs.enemy_6),
+            flatten_entity(obs.enemy_projectile),
+            obs.lives.reshape(-1), 
+            obs.score.reshape(-1)
+        ]
+        # jax.debug.print("flat_list lengths: {}", [f.shape for f in flat_list])
+        # jax.debug.print("Flattened observation array: {}", jnp.concatenate(flat_list).shape)
+        return jnp.concatenate(flat_list)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
     
-    def observation_space(self) -> spaces.Box:
+    
+    def image_space(self) -> spaces.Box:
+        """Returns the image space for Freeway.
+        The image is a RGB image with shape (210, 160, 3).
+        """
         return spaces.Box(
             low=0,
             high=255,
-            shape=None,
-            dtype=jnp.uint8,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
         )
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AssaultState, all_rewards: chex.Array) -> AssaultInfo:
         return AssaultInfo(time=state.step_counter, all_rewards=all_rewards)
@@ -1049,12 +1075,15 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AssaultState) -> bool:
-        return jnp.logical_or(
-            jnp.greater_equal(state.player_score, 20),
-            jnp.greater_equal(state.enemy_score, 20),
-        )
-    
+        return jnp.less_equal(state.player_lives, 0)
 
+    def render(self, state: AssaultState) -> jnp.ndarray:
+        """Render the game state to a raster image."""
+        return self.renderer.render(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: AssaultState, current_state: AssaultState) -> chex.Array:
+        return current_state.score - previous_state.score
 
 def load_assault_sprites():
     """
@@ -1325,7 +1354,6 @@ class Renderer_AtraJaxisAssault(JAXGameRenderer):
                 raster, WIDTH-60, LIVES_Y,heat+1,MAX_HEAT+1,48,5,color,background_color
             )
         raster = heat_bar_fn(state.heat, raster)
-        print(self.PLAYER_PROJECTILE)
         return raster
     
 if __name__ == "__main__":
