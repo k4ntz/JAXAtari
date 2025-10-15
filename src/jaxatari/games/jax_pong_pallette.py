@@ -7,7 +7,7 @@ import chex
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import planned_render_save as jr
+from jaxatari.rendering import jax_rendering_utils_pallette as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class PongConstants(NamedTuple):
@@ -556,144 +556,98 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             jnp.greater_equal(state.enemy_score, 21),
         )
 
-
-SPRITE_ID_PLAYER = 0
-SPRITE_ID_ENEMY = 1
-SPRITE_ID_BALL = 2
-# Full-size wall sprites (different heights)
-SPRITE_ID_WALL_TOP = 3
-SPRITE_ID_WALL_BOTTOM = 4
-# -> Digit sprites will start after the main ones.
-SPRITE_ID_PLAYER_DIGITS_START = 5
-SPRITE_ID_ENEMY_DIGITS_START = 15 # (5 + 10 player digits)
-
 class PongRenderer(JAXGameRenderer):
     def __init__(self, consts: PongConstants = None):
+        super().__init__()
         self.consts = consts or PongConstants()
-        
-        # -> Load all sprites and build the atlas and info table.
-        (
-            self.texture_atlas,
-            self.sprite_info_table,
-            self.background # -> Keep the background separate from the atlas.
-        ) = self._initialize_assets()
-        self.max_sprite_w = jnp.max(self.sprite_info_table[:, 2]).item()
-        self.max_sprite_h = jnp.max(self.sprite_info_table[:, 3]).item()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=1,
+            downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS = self.load_sprites()
 
-    def _initialize_assets(self):
-        """
-        -> New function to load all sprites, stack them into a single atlas,
-           and create the metadata lookup table.
-        """
+        self.static_top_wall = (round(self.consts.WALL_TOP_Y * self.config.height_scaling), round((self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT) * self.config.height_scaling))
+        self.static_bottom_wall = (round(self.consts.WALL_BOTTOM_Y * self.config.height_scaling), round((self.consts.WALL_BOTTOM_Y + self.consts.WALL_BOTTOM_HEIGHT) * self.config.height_scaling))
+
+    def load_sprites(self):
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-        # 1. Load all individual sprite frames (H, W, C)
-        player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/player.npy"))
-        enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/enemy.npy"))
-        ball = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/ball.npy"))
-        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/background.npy"))
-        
-        # -> Create full-size wall sprites (RGBA) using constants
-        wall_rgb = jnp.array(self.consts.WALL_COLOR, dtype=jnp.uint8)
-        wall_rgba = jnp.append(wall_rgb, 255).astype(jnp.uint8)
-        wall_top = jnp.tile(wall_rgba, (self.consts.WALL_TOP_HEIGHT, self.consts.WIDTH, 1))
-        wall_bottom = jnp.tile(wall_rgba, (self.consts.WALL_BOTTOM_HEIGHT, self.consts.WIDTH, 1))
+        player = self.jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/player.npy"))
+        enemy = self.jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/enemy.npy"))
+        ball = self.jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/ball.npy"))
 
-        player_digits = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/pong/player_score_{}.npy"), num_chars=10
+        bg = self.jr.loadFrame(os.path.join(MODULE_DIR, "sprites/pong/background.npy"))
+        player_digits = self.jr.load_and_pad_digits(
+            os.path.join(MODULE_DIR, "sprites/pong/player_score_{}.npy"),
+            num_chars=10,
         )
-        enemy_digits = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/pong/enemy_score_{}.npy"), num_chars=10
+        enemy_digits = self.jr.load_and_pad_digits(
+            os.path.join(MODULE_DIR, "sprites/pong/enemy_score_{}.npy"),
+            num_chars=10,
         )
-        
-        # 2. Combine all sprites (except background) into a list
-        #    The order MUST match the SPRITE_ID constants.
-        all_sprites = [player, enemy, ball, wall_top, wall_bottom]
-        # -> We flatten the digits from (10, H, W, C) into the list
-        all_sprites.extend([d for d in player_digits])
-        all_sprites.extend([d for d in enemy_digits])
 
-        # 3. Pad all sprites to the same width and stack into an atlas
-        max_width = max(s.shape[1] for s in all_sprites)
-        padded_sprites = [
-            jnp.pad(s, ((0, 0), (0, max_width - s.shape[1]), (0, 0))) for s in all_sprites
-        ]
-        texture_atlas = jnp.concatenate(padded_sprites, axis=0) # Stack vertically
+        # Create a dictionary of all loaded sprites
+        loaded_sprites = {
+            "player": player,
+            "enemy": enemy,
+            "ball": ball,
+            "background": bg,
+            "player_digits": player_digits,
+            "enemy_digits": enemy_digits,
+        }
 
-        # 4. Create the sprite_info_table [atlas_u, atlas_v, width, height]
-        sprite_info = []
-        current_v = 0
-        for s in all_sprites:
-            h, w, _ = s.shape
-            # u (atlas x) is always 0 since we padded to max_width
-            # v (atlas y) is the cumulative height
-            sprite_info.append([0, current_v, w, h])
-            current_v += h
-            
-        sprite_info_table = jnp.array(sprite_info, dtype=jnp.int32)
-        
-        return texture_atlas, sprite_info_table, bg
+        # Call the setup function to process everything automatically
+        return self.jr.setup_rendering_assets(loaded_sprites)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        # -> 1. Create an empty plan, passing in the static sprite info table.
-        plan = jr.create_initial_frame(
-            max_sprites=32, # Set a reasonable max
-            sprite_info_table=self.sprite_info_table
-        )
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # -> 2. Add commands to the plan instead of rendering sequentially.
-        #    The Z-depth determines draw order. Background is 0, walls 1, objects 2, UI 3.
-        plan = jr.render_at(plan, self.consts.PLAYER_X, state.player_y, sprite_id=SPRITE_ID_PLAYER, depth_z=2)
-        plan = jr.render_at(plan, self.consts.ENEMY_X, state.enemy_y, sprite_id=SPRITE_ID_ENEMY, depth_z=2)
-        plan = jr.render_at(plan, state.ball_x, state.ball_y, sprite_id=SPRITE_ID_BALL, depth_z=2)
+        player_mask = self.SHAPE_MASKS["player"]
+        raster = self.jr.render_at(raster, self.consts.PLAYER_X, state.player_y, player_mask)
 
-        # -> Draw walls by referencing the wall sprite ID.
-        #    The Pallas kernel will use the width/height from the command, not the sprite_info.
-        #    This requires a slight modification to your `render_at` to accept w/h overrides,
-        #    or a new helper `add_scaled_sprite_command`. For simplicity, let's assume `render_at`
-        #    just adds the command using the info table size, and we created full-size wall sprites.
-        plan = jr.render_at(plan, 0, self.consts.WALL_TOP_Y, sprite_id=SPRITE_ID_WALL_TOP, depth_z=5)
-        plan = jr.render_at(plan, 0, self.consts.WALL_BOTTOM_Y, sprite_id=SPRITE_ID_WALL_BOTTOM, depth_z=5)
+        enemy_mask = self.SHAPE_MASKS["enemy"]
+        raster = self.jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, enemy_mask)
 
-        # -> The score rendering logic is now cleaner.
-        player_score_digits = jr.int_to_digits(state.player_score, max_digits=2)
-        enemy_score_digits = jr.int_to_digits(state.enemy_score, max_digits=2)
+        ball_mask = self.SHAPE_MASKS["ball"]
+        raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
+
+        # --- Stamp Walls and Score (using the same color/ID) ---
+        score_color_tuple = self.consts.SCORE_COLOR # (236, 236, 236)
+        score_id = self.COLOR_TO_ID[score_color_tuple]
+
+        # Stamp Walls directly by modifying the raster
+        '''
+        raster = raster.at[self.static_top_wall[0]:self.static_top_wall[1], :].set(score_id)
+
+        raster = raster.at[self.static_bottom_wall[0]:self.static_bottom_wall[1], :].set(score_id)
+        '''
+        # Stamp Score using the label utility
+        player_digits = self.jr.int_to_digits(state.player_score, max_digits=2)
+        enemy_digits = self.jr.int_to_digits(state.enemy_score, max_digits=2)
+
+        # Note: The logic for single/double digits is complex for a jitted function.
+        player_digit_masks = self.SHAPE_MASKS["player_digits"] # Assumes single color
+        enemy_digit_masks = self.SHAPE_MASKS["enemy_digits"] # Assumes single color
+
+        is_player_single_digit = state.player_score < 10
+        player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
+        player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
+        player_render_x = jax.lax.select(is_player_single_digit,
+                                         120 + 16 // 2,
+                                         120)
+
+        raster = self.jr.render_label_selective(raster, player_render_x, 3, player_digits, player_digit_masks, player_start_index, player_num_to_render, spacing=16)
         
-        is_player_single = state.player_score < 10
-        player_offset = jax.lax.select(is_player_single, 16 // 2, 0)
-        
-        plan = jr.render_label_selective(
-            plan, x=120 + player_offset, y=3,
-            all_digits=player_score_digits,
-            num_to_render=jax.lax.select(is_player_single, 1, 2),
-            char_sprite_ids=jnp.arange(SPRITE_ID_PLAYER_DIGITS_START, SPRITE_ID_PLAYER_DIGITS_START + 10),
-            start_index=jax.lax.select(is_player_single, 1, 0),
-            depth_z=3
-        )
+        is_enemy_single_digit = state.enemy_score < 10
+        enemy_start_index = jax.lax.select(is_enemy_single_digit, 1, 0)
+        enemy_num_to_render = jax.lax.select(is_enemy_single_digit, 1, 2)
+        enemy_render_x = jax.lax.select(is_enemy_single_digit,
+                                        10 + 16 // 2,
+                                        10)
 
-        is_enemy_single = state.enemy_score < 10
-        enemy_offset = jax.lax.select(is_enemy_single, 16 // 2, 0)
+        raster = self.jr.render_label_selective(raster, enemy_render_x, 3, enemy_digits, enemy_digit_masks, enemy_start_index, enemy_num_to_render, spacing=16)
 
-        plan = jr.render_label_selective(
-            plan, x=10 + enemy_offset, y=3,
-            all_digits=enemy_score_digits,
-            num_to_render=jax.lax.select(is_enemy_single, 1, 2),
-            char_sprite_ids=jnp.arange(SPRITE_ID_ENEMY_DIGITS_START, SPRITE_ID_ENEMY_DIGITS_START + 10),
-            start_index=jax.lax.select(is_enemy_single, 1, 0),
-            depth_z=3
-        )
-
-        # -> 3. Execute the entire plan at once and return the final image.
-        #return jr.execute_plan_gather(plan, self.background, self.texture_atlas, screen_height=210, screen_width=160)
-        
-        # create empty frame with background
-        return jr.execute_plan_vectorized(
-            plan, 
-            self.background, 
-            self.texture_atlas,
-            screen_height=210, 
-            screen_width=160,
-            max_sprite_w=self.max_sprite_w, # Pass as static arg
-            max_sprite_h=self.max_sprite_h  # Pass as static arg
-        )
+        return self.jr.render_from_palette(raster, self.PALETTE)

@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, Dict, Any, Optional
+from typing import List, NamedTuple, Tuple, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
 import chex
@@ -9,7 +9,7 @@ from jax import Array
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils as jr
+import jaxatari.rendering.jax_rendering_utils_pallette as render_utils
 from jaxatari.games.kangaroo_levels import (
     LevelConstants,
     Kangaroo_Level_1,
@@ -1991,10 +1991,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    # Type hint for sprites dictionary
-    sprites: Dict[str, Any]
-    pivots: Dict[str, Any]
-
     def __init__(self, consts=None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
@@ -2003,509 +1999,320 @@ class KangarooRenderer(JAXGameRenderer):
             sprite_path: Path to the directory containing sprite .npy files.
         """
         self.consts = consts or KangarooConstants()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kangaroo"
-        self.sprites, self.pivots = self._load_sprites()
-        # Store background sprites directly for use in render function
-        self.background_0 = self.sprites.get('background_0')
-        self.background_1 = self.sprites.get('background_1')
-        self.background_2 = self.sprites.get('background_2')
-        # ladder constants
-        self.ladder_rung_height = 4  # The height of the solid bar
-        self.ladder_space_height = 4 # The height of the empty space
-        self.ladder_color = jnp.array([162, 98, 33], dtype=jnp.uint8)
-        # platform constants
-        self.platform_color = jnp.array([162, 98, 33], dtype=jnp.uint8)
 
-    def _load_sprites(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
-        """Loads all necessary sprites from .npy files and stores pivots."""
-        sprites: Dict[str, Any] = {}
-        pad_offsets: Dict[str, Any] = {}
+        self.rendering_config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=1,
+            downscale=(84, 84)
+        )
 
-        # Helper function to load a single sprite frame
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f'{name}.npy')
-            frame = jr.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
+        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
 
-        # --- Load Sprites ---
-        # Backgrounds + Dynamic elements + UI elements
+        # Load and process all sprites
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self._load_sprites()
+
+        # get color ideas from the background for ladder and platform rendering
+        self.LADDER_COLOR_ID = self.COLOR_TO_ID.get((162, 98, 33), 0)
+        self.PLATFORM_COLOR_ID = self.COLOR_TO_ID.get((162, 98, 33), 0)
+
+        # Pre-calculate static ladder properties (these should be constant even for different sized ladders) -> meaning that ladder heights should be divisible by 4!!
+        self.ladder_rung_height = 4
+        self.ladder_space_height = 4
+            
+    
+    def _load_sprites(self):
+        """Loads RGBA sprites, pads them, and processes them into palette-based assets."""
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kangaroo"
+
+        # Helper to load a single RGBA sprite from a .npy file
+        def _load_rgba_frame(name: str) -> Optional[chex.Array]:
+            path = os.path.join(sprite_path, f'{name}.npy')
+            return self.jr.loadFrame(path).astype(jnp.uint8)
+
+        # Use the existing pad_to_match function from jax_rendering_utils
+        from jaxatari.rendering.jax_rendering_utils import pad_to_match
+
+        # 1. Load all individual RGBA sprites
         sprite_names = [
-            'background',
-            'ape_climb_left', 'ape_climb_right', 'ape_moving', 'ape_standing',
+            'background', 'ape_climb_left', 'ape_climb_right', 'ape_moving', 'ape_standing',
             'bell', 'ringing_bell', 'child_jump', 'child', 'coconut', 'kangaroo',
-            'kangaroo_climb', 'kangaroo_dead', 'kangaroo_ducking',
-            'kangaroo_jump_high', 'kangaroo_jump', 'kangaroo_lives',
-            'kangaroo_walk', 'kangaroo_boxing',
+            'kangaroo_climb', 'kangaroo_dead', 'kangaroo_ducking', 'kangaroo_jump_high',
+            'kangaroo_jump', 'kangaroo_lives', 'kangaroo_walk', 'kangaroo_boxing',
             'strawberry', 'tomato', 'cherry', 'pineapple', 'throwing_ape', 'thrown_coconut', 'time_dash',
         ]
-        for name in sprite_names:
-            loaded_sprite = _load_sprite_frame(name)
-            if loaded_sprite is not None:
-                sprites[name] = loaded_sprite
+        raw_sprites = {name: _load_rgba_frame(name) for name in sprite_names}
 
-        # pad the kangaroo and monkey sprites since they have to be used interchangeably (and jax enforces same sizes)
-        ape_sprites, ape_pivots = jr.pad_to_match([
-            sprites['ape_climb_left'], 
-            sprites['ape_climb_right'], 
-            sprites['ape_moving'], 
-            sprites['ape_standing'], 
-            sprites['throwing_ape']
+        # 2. Pad and stack related sprites into 4D arrays, collecting flip offsets
+        padded_apes, ape_flip_offsets = pad_to_match([
+            raw_sprites['ape_standing'], raw_sprites['ape_climb_left'], raw_sprites['ape_moving'],
+            raw_sprites['throwing_ape'], raw_sprites['ape_climb_right']
         ])
-        ape_keys = ['ape_climb_left', 'ape_climb_right', 'ape_moving', 'ape_standing', 'throwing_ape']
-        for i, key in enumerate(ape_keys):
-            sprites[key] = ape_sprites[i]
-            pad_offsets[key] = ape_pivots[i]
+        ape_stack = jnp.stack(padded_apes)
+        ape_flip_offset = ape_flip_offsets[0]  # All offsets should be the same
 
-        # --- pad kangaroo ---
-        kangaroo_sprites, kangaroo_pivots = jr.pad_to_match([
-            sprites['kangaroo'],
-            sprites['kangaroo_climb'],
-            sprites['kangaroo_dead'],
-            sprites['kangaroo_ducking'],
-            sprites['kangaroo_jump_high'],
-            sprites['kangaroo_jump'],
-            sprites['kangaroo_walk'],
-            sprites['kangaroo_boxing']
+        padded_kangaroos, kangaroo_flip_offsets = pad_to_match([
+            raw_sprites['kangaroo'], raw_sprites['kangaroo_dead'], raw_sprites['kangaroo_climb'],
+            raw_sprites['kangaroo_ducking'], raw_sprites['kangaroo_jump'], raw_sprites['kangaroo_boxing'],
+            raw_sprites['kangaroo_walk'], raw_sprites['kangaroo_jump_high']
         ])
-        kangaroo_keys = [
-            'kangaroo', 'kangaroo_climb', 'kangaroo_dead', 'kangaroo_ducking',
-            'kangaroo_jump_high', 'kangaroo_jump', 'kangaroo_walk', 'kangaroo_boxing'
-        ]
-        for i, key in enumerate(kangaroo_keys):
-            sprites[key] = kangaroo_sprites[i]
-            pad_offsets[key] = kangaroo_pivots[i]
+        kangaroo_stack = jnp.stack(padded_kangaroos)
+        kangaroo_flip_offset = kangaroo_flip_offsets[0]  # All offsets should be the same
 
-        # pad bell / ringing bell
-        bell_sprites, bell_pivots = jr.pad_to_match([sprites['bell'], sprites['ringing_bell']])
-        bell_keys = ['bell', 'ringing_bell']
-        for i, key in enumerate(bell_keys):
-            sprites[key] = bell_sprites[i]
-            pad_offsets[key] = bell_pivots[i]
+        padded_bells, bell_flip_offsets = pad_to_match([raw_sprites['bell'], raw_sprites['ringing_bell']])
+        bell_stack = jnp.stack(padded_bells)
+        bell_flip_offset = bell_flip_offsets[0]  # All offsets should be the same
 
-        # pad fruits
-        fruit_sprites, fruit_pivots = jr.pad_to_match([
-            sprites['strawberry'], sprites['tomato'], sprites['cherry'], sprites['pineapple']
+        padded_fruits, fruit_flip_offsets = pad_to_match([
+            raw_sprites['strawberry'], raw_sprites['tomato'], raw_sprites['cherry'], raw_sprites['pineapple']
         ])
-        fruit_keys = ['strawberry', 'tomato', 'cherry', 'pineapple']
-        for i, key in enumerate(fruit_keys):
-            sprites[key] = fruit_sprites[i]
-            pad_offsets[key] = fruit_pivots[i]
+        fruit_stack = jnp.stack(padded_fruits)
+        fruit_flip_offset = fruit_flip_offsets[0]  # All offsets should be the same
 
-        # pad child sprites
-        child_sprites, child_pivots = jr.pad_to_match([
-            sprites['child'], sprites['child_jump']
-        ])
-        child_keys = ['child', 'child_jump']
-        for i, key in enumerate(child_keys):
-            sprites[key] = child_sprites[i]
-            pad_offsets[key] = child_pivots[i]
+        padded_children, child_flip_offsets = pad_to_match([raw_sprites['child'], raw_sprites['child_jump']])
+        child_stack = jnp.stack(padded_children)
+        child_flip_offset = child_flip_offsets[0]  # All offsets should be the same
+        
+        score_digits = self.jr.load_and_pad_digits(os.path.join(sprite_path, 'score_{}.npy'))
+        time_digits = self.jr.load_and_pad_digits(os.path.join(sprite_path, 'time_{}.npy'))
 
-        # --- Load Digit Sprites ---
-        # Score digits
-        score_digit_path = os.path.join(self.sprite_path, 'score_{}.npy')
-        digits = jr.load_and_pad_digits(score_digit_path, num_chars=10)
-        sprites['digits'] = digits
-        # Time digits
-        time_digit_path = os.path.join(self.sprite_path, 'time_{}.npy')
-        time_digits = jr.load_and_pad_digits(time_digit_path, num_chars=10)
-        sprites['time_digits'] = time_digits
-
-        # expand all sprites similar to the Pong/Seaquest loading
-        for key in sprites.keys():
-            if isinstance(sprites[key], (list, tuple)):
-                sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
-            else:
-                sprites[key] = jnp.expand_dims(sprites[key], axis=0)
-
-        return sprites, pad_offsets
-
+        # 3. Create the dictionary of sprites to be processed by the palette setup
+        loaded_sprites_dict = {
+            "background": raw_sprites['background'], "ape": ape_stack, "kangaroo": kangaroo_stack,
+            "bell": bell_stack, "fruit": fruit_stack, "child": child_stack,
+            "coconut": raw_sprites['coconut'], "thrown_coconut": raw_sprites['thrown_coconut'],
+            "lives": raw_sprites['kangaroo_lives'], "score_digits": score_digits, "time_digits": time_digits
+        }
+        
+        # 4. Process all sprites to generate palette, masks, and background
+        PALETTE, SHAPE_MASKS, BACKGROUND, COLOR_TO_ID, FLIP_OFFSETS = self.jr.setup_rendering_assets(loaded_sprites_dict)
+        
+        # 5. Override FLIP_OFFSETS with the manually calculated ones
+        FLIP_OFFSETS["ape"] = ape_flip_offset
+        FLIP_OFFSETS["kangaroo"] = kangaroo_flip_offset
+        FLIP_OFFSETS["bell"] = bell_flip_offset
+        FLIP_OFFSETS["fruit"] = fruit_flip_offset
+        FLIP_OFFSETS["child"] = child_flip_offset
+        # Single sprites don't need flip offsets
+        FLIP_OFFSETS["coconut"] = jnp.array([0, 0])
+        FLIP_OFFSETS["thrown_coconut"] = jnp.array([0, 0])
+        FLIP_OFFSETS["lives"] = jnp.array([0, 0])
+        FLIP_OFFSETS["score_digits"] = jnp.array([0, 0])
+        FLIP_OFFSETS["time_digits"] = jnp.array([0, 0])
+        
+        return PALETTE, SHAPE_MASKS, BACKGROUND, COLOR_TO_ID, FLIP_OFFSETS
+        
     # Apply JIT compilation. static_argnums=(0,) means 'self' is static.
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KangarooState) -> chex.Array:
-        """
-        Renders the current game state to a JAX array (raster image)
-        using pre-rendered backgrounds per level.
+        # --- 1. Initialize Raster ---
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        Args:
-            state: The current KangarooState.
-
-        Returns:
-            A JAX array representing the rendered game screen (HEIGHT, WIDTH, 3), dtype=uint8.
-        """
-
-        # --- Select and Render Background ---
-        # Initialize raster using the consistent function
-        raster = jr.create_initial_frame(width=160, height=210)
-
-        background_sprite = self.sprites.get('background')
-        background_sprite = jr.get_sprite_frame(background_sprite, 0)
-        raster = jr.render_at(raster, 0, 0, background_sprite)
-
-        # --- Draw the current platforms ---
-
+        # --- 2. Draw Platforms and Ladders using original boolean-mask logic, writing palette IDs ---
         def create_single_platform_mask(pos, size, xx, yy):
-            """Generates a boolean mask for one rectangular platform."""
             should_draw = pos[0] != -1
 
             def draw_fn():
-                """Calculates and returns the actual platform mask."""
                 x_start, y_start = pos[0], pos[1]
                 width, height = size[0], size[1]
                 return (xx >= x_start) & (xx < x_start + width) & \
-                    (yy >= y_start) & (yy < y_start + height)
+                       (yy >= y_start) & (yy < y_start + height)
 
             def no_draw_fn():
-                """Returns an empty mask."""
                 return jnp.zeros_like(xx, dtype=bool)
 
             return jax.lax.cond(should_draw, draw_fn, no_draw_fn)
 
-        platform_positions = state.level.platform_positions
-        platform_sizes = state.level.platform_sizes
-        platform_color = self.platform_color
-
-        # Create coordinate grids once for the entire raster
-        xx, yy = jnp.meshgrid(jnp.arange(self.consts.SCREEN_WIDTH), jnp.arange(self.consts.SCREEN_HEIGHT), indexing='xy')
-
-        # Use vmap to create all platform masks in parallel
-        vmap_platform_mask = jax.vmap(
-            create_single_platform_mask,
-            in_axes=(0, 0, None, None)
-        )
-        all_platform_masks = vmap_platform_mask(platform_positions, platform_sizes, xx, yy)
-
-        # Reduce the stack of masks into a single one with a logical OR
-        combined_platform_mask = jnp.logical_or.reduce(all_platform_masks, axis=0)
-
-        # Apply the combined mask to the raster in one operation
-        raster = jnp.where(combined_platform_mask[..., None], platform_color, raster)
-    
-
         def create_single_ladder_mask(pos, size, xx, yy, rung_height, space_height):
-            """Generates a boolean mask for one ladder using jax.lax.cond."""
             should_draw = pos[0] != -1
 
             def draw_fn():
-                """Calculates and returns the full ladder mask."""
                 x_start, y_start = pos[0], pos[1]
                 width, hitbox_height = size[0], size[1]
                 pattern_height = rung_height + space_height
 
-                # Calculate number of rungs and the final visual height
                 num_rungs = jnp.ceil((hitbox_height + space_height) / pattern_height).astype(int)
                 visual_height = (num_rungs * rung_height) + ((num_rungs - 1) * space_height)
 
-                # Create the mask for this ladder
                 area_mask = (xx >= x_start) & (xx < x_start + width) & \
                             (yy >= y_start) & (yy < y_start + visual_height)
                 relative_y = yy - y_start
                 pattern_mask = (relative_y % pattern_height) < rung_height
-                
+
                 return area_mask & pattern_mask
 
             def no_draw_fn():
-                """Returns an empty mask for invalid ladders."""
                 return jnp.zeros_like(xx, dtype=bool)
 
-            # Use lax.cond to choose which function to execute.
             return jax.lax.cond(should_draw, draw_fn, no_draw_fn)
 
-        # --- Draw the current ladders ---
-        ladder_positions = state.level.ladder_positions
-        ladder_sizes = state.level.ladder_sizes
-
-        # Use vmap to create all ladder masks in parallel
-        vmap_ladder_mask = jax.vmap(
-            create_single_ladder_mask,
-            in_axes=(0, 0, None, None, None, None)
-        )
-        all_masks = vmap_ladder_mask(
-            ladder_positions,
-            ladder_sizes,
-            xx,
-            yy,
-            self.ladder_rung_height,
-            self.ladder_space_height
+        # Coordinate grids built to match the (possibly downscaled) raster size
+        width_scale = self.jr.config.width_scaling
+        height_scale = self.jr.config.height_scaling
+        target_w = int(round(self.consts.SCREEN_WIDTH * width_scale))
+        target_h = int(round(self.consts.SCREEN_HEIGHT * height_scale))
+        xx, yy = jnp.meshgrid(
+            jnp.arange(target_w),
+            jnp.arange(target_h),
+            indexing='xy'
         )
 
-        # Reduce the stack of masks into a single mask with a logical OR
-        combined_mask = jnp.logical_or.reduce(all_masks, axis=0)
+        # Platforms
+        # Scale platform geometry to the target grid
+        plat_pos_scaled = jnp.stack([
+            jnp.round(state.level.platform_positions[:, 0] * width_scale).astype(jnp.int32),
+            jnp.round(state.level.platform_positions[:, 1] * height_scale).astype(jnp.int32),
+        ], axis=1)
+        plat_size_scaled = jnp.stack([
+            jnp.maximum(1, jnp.round(state.level.platform_sizes[:, 0] * width_scale)).astype(jnp.int32),
+            jnp.maximum(1, jnp.round(state.level.platform_sizes[:, 1] * height_scale)).astype(jnp.int32),
+        ], axis=1)
 
-        # Apply the combined mask to the raster in one operation
-        raster = jnp.where(combined_mask[..., None], self.ladder_color, raster)
+        vmap_platform_mask = jax.vmap(create_single_platform_mask, in_axes=(0, 0, None, None))
+        platform_masks = vmap_platform_mask(
+            plat_pos_scaled,
+            plat_size_scaled,
+            xx, yy
+        )
+        combined_platform_mask = jnp.logical_or.reduce(platform_masks, axis=0)
+        raster = jnp.where(
+            combined_platform_mask,
+            jnp.asarray(self.PLATFORM_COLOR_ID, raster.dtype),
+            raster,
+        )
 
-        # --- Draw fruits ---
-        fruit_positions = state.level.fruit_positions
-        fruit_actives = state.level.fruit_actives
+        # Ladders
+        # Scale ladder geometry to the target grid
+        ladd_pos_scaled = jnp.stack([
+            jnp.round(state.level.ladder_positions[:, 0] * width_scale).astype(jnp.int32),
+            jnp.round(state.level.ladder_positions[:, 1] * height_scale).astype(jnp.int32),
+        ], axis=1)
+        ladd_size_scaled = jnp.stack([
+            jnp.maximum(1, jnp.round(state.level.ladder_sizes[:, 0] * width_scale)).astype(jnp.int32),
+            jnp.maximum(1, jnp.round(state.level.ladder_sizes[:, 1] * height_scale)).astype(jnp.int32),
+        ], axis=1)
+        rung_scaled = int(max(1, round(self.ladder_rung_height * height_scale)))
+        space_scaled = int(max(0, round(self.ladder_space_height * height_scale)))
 
+        vmap_ladder_mask = jax.vmap(create_single_ladder_mask, in_axes=(0, 0, None, None, None, None))
+        ladder_masks = vmap_ladder_mask(
+            ladd_pos_scaled,
+            ladd_size_scaled,
+            xx, yy,
+            rung_scaled,
+            space_scaled,
+        )
+        combined_ladder_mask = jnp.logical_or.reduce(ladder_masks, axis=0)
+        raster = jnp.where(
+            combined_ladder_mask,
+            jnp.asarray(self.LADDER_COLOR_ID, raster.dtype),
+            raster,
+        )
+
+        # --- 3. Draw Dynamic Objects ---
+        # Fruits
         def _draw_fruit(i, current_raster):
-            # get the current fruit type using the fruit_stages array
+            should_draw = state.level.fruit_actives[i]
             fruit_type = state.level.fruit_stages[i].astype(int)
+            pos = state.level.fruit_positions[i]
+            fruit_mask = self.SHAPE_MASKS["fruit"][fruit_type]
+            draw_fn = lambda r: self.jr.render_at(r, pos[0].astype(int), pos[1].astype(int), fruit_mask, flip_offset=self.FLIP_OFFSETS.get("fruit", jnp.array([0,0])))
+            return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
+        raster = jax.lax.fori_loop(0, state.level.fruit_positions.shape[0], _draw_fruit, raster)
+        
+        # Bell
+        bell_anim_on = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
+                       ((state.level.bell_animation >= 128) & (state.level.bell_animation <= 143)) | \
+                       ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95)) | \
+                       ((state.level.bell_animation >= 32) & (state.level.bell_animation <= 47))
+        bell_idx = jax.lax.select(bell_anim_on, 1, 0) # 1 for ringing, 0 for still
+        bell_mask = self.SHAPE_MASKS["bell"][bell_idx]
+        flip_bell = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
+                    ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95))
+        should_draw_bell = (state.level.bell_position[0] != -1) & ~jnp.any(state.level.fruit_stages == 3)
+        raster = jax.lax.cond(should_draw_bell, 
+            lambda r: self.jr.render_at(r, state.level.bell_position[0].astype(int), state.level.bell_position[1].astype(int), bell_mask, flip_horizontal=flip_bell, flip_offset=self.FLIP_OFFSETS.get("bell", jnp.array([0,0]))),
+            lambda r: r, raster)
 
-            fruit_sprite = jax.lax.switch(
-                fruit_type,
-                [
-                    lambda: self.sprites.get('strawberry'), # Case 0
-                    lambda: self.sprites.get('tomato'),    # Case 1
-                    lambda: self.sprites.get('cherry'),    # Case 2
-                    lambda: self.sprites.get('pineapple'),  # Case 3
-                ]
-            )
-
-            fruit_pivot = jax.lax.switch(
-                fruit_type,
-                [
-                    lambda: self.pivots.get('strawberry', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('tomato', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('cherry', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('pineapple', jnp.array([0.0, 0.0])),
-                ]
-            )
-
-            should_draw = jnp.logical_and(fruit_actives[i], fruit_sprite is not None)
-            pos = fruit_positions[i]
-            def render_fruit_sprite(raster_to_update):
-                return jr.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), jr.get_sprite_frame(fruit_sprite, 0), flip_offset=fruit_pivot)
-            return jax.lax.cond(should_draw, render_fruit_sprite, lambda r: r, current_raster)
-
-        num_fruits_to_draw = fruit_positions.shape[0]
-        raster = jax.lax.fori_loop(0, num_fruits_to_draw, _draw_fruit, raster)
-
-        # --- Draw Bell ---
-        # if the bell_animation is: 192-176, 143-128, 95-80, 47-32 draw the alternate bell sprite
-        bell_in_range_left = jnp.logical_or(
-            jnp.logical_and(state.level.bell_animation <= 192, state.level.bell_animation >= 176),
-            jnp.logical_and(state.level.bell_animation <= 95, state.level.bell_animation >= 80),
-        )
-
-        bell_in_range_right = jnp.logical_or(
-            jnp.logical_and(state.level.bell_animation <= 143, state.level.bell_animation >= 128),
-            jnp.logical_and(state.level.bell_animation <= 47, state.level.bell_animation >= 32)
-        )
-
-        bell_sprite = jax.lax.cond(
-            jnp.logical_or(bell_in_range_left, bell_in_range_right),
-            lambda: self.sprites.get('ringing_bell'),
-            lambda: self.sprites.get('bell')
-        )
-        bell_pivot = jax.lax.cond(
-            jnp.logical_or(bell_in_range_left, bell_in_range_right),
-            lambda: self.pivots.get('ringing_bell', jnp.array([0.0, 0.0])),
-            lambda: self.pivots.get('bell', jnp.array([0.0, 0.0]))
-        )
-
-        bell_pos = state.level.bell_position
-        not_all_fruits_collected = ~jnp.any(state.level.fruit_stages == 3)
-        bell_pos_valid = bell_pos[0] != -1
-        sprite_is_valid = bell_sprite is not None
-        should_draw_bell = jnp.logical_and(jnp.logical_and(not_all_fruits_collected, bell_pos_valid), sprite_is_valid)
-
-        def draw_bell_func(current_raster):
-            return jr.render_at(current_raster, bell_pos[0].astype(int), bell_pos[1].astype(int), jr.get_sprite_frame(bell_sprite, 0), flip_horizontal=bell_in_range_left, flip_offset=bell_pivot)
-        raster = jax.lax.cond(should_draw_bell, draw_bell_func, lambda r: r, raster)
-
-        # --- Draw monkeys (Apes) ---
-        monkey_positions = state.level.monkey_positions
-        monkey_states = state.level.monkey_states
-
+        # Monkeys (Apes)
         def _draw_monkey(i, current_raster):
-            state_idx = monkey_states[i].astype(int)
-            pos = monkey_positions[i]
-            should_draw = state_idx != 0
-            """
-            - 0: non-existent
-            - 1: moving down
-            - 2: moving left
-            - 3: throwing
-            - 4: moving right
-            - 5: moving up
-            """
-            monkey_sprite = jax.lax.switch(
-                state_idx,
-                [
-                    lambda: self.sprites.get('ape_standing'), # Case 0
-                    lambda: self.sprites.get('ape_climb_left'),    # Case 1
-                    lambda: self.sprites.get('ape_moving'),    # Case 2
-                    lambda: self.sprites.get('throwing_ape'),  # Case 3
-                    lambda: self.sprites.get('ape_moving'),    # Case 4
-                    lambda: self.sprites.get('ape_climb_right'),# Case 5
-                ]
-            )
+            state_idx = state.level.monkey_states[i].astype(int)
+            pos = state.level.monkey_positions[i]
+            monkey_sprite_idx = jnp.array([0, 1, 2, 3, 2, 4])[state_idx] # Map game state to sprite index
+            is_walking = (state_idx == 2) | (state_idx == 4)
+            use_standing_anim = is_walking & ((state.level.step_counter % 32) < 16)
+            final_sprite_idx = jax.lax.select(use_standing_anim, 0, monkey_sprite_idx) # Index 0 is 'standing'
+            monkey_mask = self.SHAPE_MASKS["ape"][final_sprite_idx]
+            flip_h = (state_idx == 4)
+            should_draw = (state_idx != 0)
+            draw_fn = lambda r: self.jr.render_at(r, pos[0].astype(int), pos[1].astype(int), monkey_mask, flip_horizontal=flip_h, flip_offset=self.FLIP_OFFSETS.get("ape", jnp.array([0,0])))
+            return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
+        raster = jax.lax.fori_loop(0, state.level.monkey_positions.shape[0], _draw_monkey, raster)
 
-            monkey_pivot = jax.lax.switch(
-                state_idx,
-                [
-                    lambda: self.pivots.get('ape_standing', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('ape_climb_left', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('ape_moving', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('throwing_ape', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('ape_moving', jnp.array([0.0, 0.0])),
-                    lambda: self.pivots.get('ape_climb_right', jnp.array([0.0, 0.0])),
-                ]
-            )
-
-            # in case its state_idx 2 or 4 and the counter is % 16, use standing instead of moving
-            monkey_sprite, monkey_pivot = jax.lax.cond(
-                jnp.logical_and(
-                    (state.level.step_counter % 32) < 16,
-                    jnp.logical_or(state_idx == 2, state_idx == 4)
-                ),
-                lambda: (self.sprites.get('ape_standing'), self.pivots.get('ape_standing', jnp.array([0.0, 0.0]))),
-                lambda: (monkey_sprite, monkey_pivot)
-            )
-
-            is_moving_left = (state_idx == 4)
-            flip_h = is_moving_left
-            sprite_is_valid = monkey_sprite is not None
-            should_draw = jnp.logical_and(should_draw, sprite_is_valid)
-            def render_monkey_sprite(raster_to_update):
-                return jr.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), jr.get_sprite_frame(monkey_sprite, 0), flip_horizontal=flip_h, flip_offset=monkey_pivot)
-            return jax.lax.cond(should_draw, render_monkey_sprite, lambda r: r, current_raster)
-
-        num_monkeys_to_draw = monkey_positions.shape[0]
-        raster = jax.lax.fori_loop(0, num_monkeys_to_draw, _draw_monkey, raster)
-
-        # --- Draw player (Kangaroo) ---
-        player_pos_x = state.player.x
-        player_pos_y = state.player.y
-        player_orientation = state.player.orientation
-        flip_player = player_orientation < 0
-        sprite_lambda = jax.lax.cond(
-            state.player.is_crashing, lambda: self.sprites.get('kangaroo_dead'),
-            lambda: jax.lax.cond(
-                state.player.is_climbing, lambda: self.sprites.get('kangaroo_climb'),
-                lambda: jax.lax.cond(
-                    state.player.is_crouching, lambda: self.sprites.get('kangaroo_ducking'),
-                    lambda: jax.lax.cond(
-                        state.player.is_jumping, lambda: self.sprites.get('kangaroo_jump'),
-                        lambda: jax.lax.cond(
-                            state.player.punch_left | state.player.punch_right,
-                            lambda: self.sprites.get('kangaroo_boxing'),
-                            lambda: self.sprites.get('kangaroo')
-                        )
-                    )
-                )
-            )
+        # Player (Kangaroo)
+        is_walking_anim = (state.player.walk_animation > 6) & (state.player.walk_animation < 16) & \
+                          ~state.player.is_crouching & ~state.player.is_jumping & \
+                          ~state.player.is_climbing & ~state.player.is_crashing
+        is_high_jump = (state.player.jump_counter > 16) & (state.player.jump_counter < 25)
+        
+        # Select sprite index based on player state
+        player_sprite_idx = jax.lax.cond(state.player.is_crashing, lambda: 1,
+            lambda: jax.lax.cond(state.player.is_climbing, lambda: 2,
+            lambda: jax.lax.cond(state.player.is_crouching, lambda: 3,
+            lambda: jax.lax.cond(is_high_jump, lambda: 7,
+            lambda: jax.lax.cond(state.player.is_jumping, lambda: 4,
+            lambda: jax.lax.cond(state.player.punch_left | state.player.punch_right, lambda: 5,
+            lambda: jax.lax.cond(is_walking_anim, lambda: 6, lambda: 0)))))))
+        
+        player_mask = self.SHAPE_MASKS["kangaroo"][player_sprite_idx]
+        flip_offset = self.FLIP_OFFSETS.get("kangaroo", jnp.array([0, 0]))
+        flip_player = state.player.orientation < 0
+        player_y_offset = jax.lax.select(is_walking_anim, -1, 0)
+        
+        raster = self.jr.render_at(
+            raster,
+            x=state.player.x.astype(int),
+            y=(state.player.y + player_y_offset).astype(int),
+            sprite_mask=player_mask,
+            flip_horizontal=flip_player,
+            flip_offset=flip_offset
         )
 
-        # check if player.walk_animation is between 6 and 16 in which range the kangaroo has a different animation
-        player_walking_animation = jnp.logical_and(state.player.walk_animation > 6, state.player.walk_animation < 16)
-
-        # Only apply walking animation if not crouching, jumping, climbing, or crashing
-        is_walking_anim = (
-            player_walking_animation
-            & ~state.player.is_crouching
-            & ~state.player.is_jumping
-            & ~state.player.is_climbing
-            & ~state.player.is_crashing
-        )
-
-        # Only offset y by 1 if we are really walking (not crouching)
-        player_pos_y = jnp.where(
-            is_walking_anim,
-            player_pos_y - 1,
-            player_pos_y
-        )
-
-        sprite_lambda = jax.lax.cond(
-            is_walking_anim,
-            lambda: self.sprites.get('kangaroo_walk'),
-            lambda: sprite_lambda
-        )
-
-        # in case the player_animation is between 17 and 25, use high jump
-        sprite_lambda = jax.lax.cond(
-            jnp.logical_and(state.player.jump_counter > 16, state.player.jump_counter < 25),
-            lambda: self.sprites.get('kangaroo_jump_high'),
-            lambda: sprite_lambda
-        )
-
-        player_sprite = sprite_lambda
-        player_pivot = jax.lax.switch(
-            jnp.argmax(jnp.array([
-                state.player.is_crashing,
-                state.player.is_climbing,
-                state.player.is_crouching,
-                state.player.is_jumping,
-                state.player.punch_left | state.player.punch_right,
-                is_walking_anim,
-                True # fallback to normal kangaroo
-            ])),
-            [
-                lambda: self.pivots.get('kangaroo_dead', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo_climb', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo_ducking', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo_jump', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo_boxing', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo_walk', jnp.array([0.0, 0.0])),
-                lambda: self.pivots.get('kangaroo', jnp.array([0.0, 0.0]))
-            ]
-        )
-        sprite_is_valid = player_sprite is not None
-        def render_player_sprite(raster_to_update):
-             return jr.render_at(raster_to_update,
-                                 player_pos_x.astype(int),
-                                 player_pos_y.astype(int),
-                                 jr.get_sprite_frame(player_sprite, 0),
-                                 flip_horizontal=flip_player,
-                                 flip_offset=player_pivot)
-        raster = jax.lax.cond(sprite_is_valid, render_player_sprite, lambda r: r, raster)
-
-        # --- Draw Child ---
-        child_pos = state.level.child_position
+        # Child
         is_jumping = (state.level.step_counter % 32) < 16
-        # if the velocity is negative, flip horizontal
-        child_flip = state.level.child_velocity > 0
-        child_sprite_lambda = jax.lax.cond(
-            is_jumping, lambda: self.sprites.get('child_jump'), lambda: self.sprites.get('child')
-        )
-        child_sprite = child_sprite_lambda
-        should_draw_child = jnp.logical_and(child_pos[0] != -1, child_sprite is not None)
-        child_pivot = self.pivots.get('child', jnp.array([0.0, 0.0]))
-        def draw_child_func(current_raster):
-            return jr.render_at(current_raster, child_pos[0].astype(int), child_pos[1].astype(int), jr.get_sprite_frame(child_sprite, 0), flip_horizontal=child_flip, flip_offset=child_pivot)
-        raster = jax.lax.cond(should_draw_child, draw_child_func, lambda r: r, raster)
+        child_idx = jax.lax.select(is_jumping, 1, 0)
+        child_mask = self.SHAPE_MASKS["child"][child_idx]
+        flip_child = state.level.child_velocity > 0
+        raster = jax.lax.cond(state.level.child_position[0] != -1,
+            lambda r: self.jr.render_at(r, state.level.child_position[0].astype(int), state.level.child_position[1].astype(int), child_mask, flip_horizontal=flip_child, flip_offset=self.FLIP_OFFSETS.get("child", jnp.array([0,0]))),
+            lambda r: r, raster)
 
-        # --- Draw falling coconut ---
-        falling_coco_pos = state.level.falling_coco_position
-        coco_sprite = self.sprites.get('thrown_coconut', None)
-        should_draw_falling_coco = jnp.logical_and(falling_coco_pos[1] != -1, coco_sprite is not None)
-        coco_pivot = self.pivots.get('thrown_coconut', jnp.array([0.0, 0.0]))
-        def draw_falling_coco_func(current_raster):
-            return jr.render_at(current_raster, falling_coco_pos[0].astype(int), falling_coco_pos[1].astype(int), jr.get_sprite_frame(coco_sprite, 0), flip_offset=coco_pivot)
-        raster = jax.lax.cond(should_draw_falling_coco, draw_falling_coco_func, lambda r: r, raster)
-
-        # --- Draw thrown coconuts ---
-        coco_positions = state.level.coco_positions
-        coco_states = state.level.coco_states
-        coco_sprite = self.sprites.get('coconut', None)
-        coco_pivot = self.pivots.get('coconut', jnp.array([0.0, 0.0]))
+        # Coconuts
+        raster = self.jr.render_at(raster, state.level.falling_coco_position[0].astype(int), state.level.falling_coco_position[1].astype(int), self.SHAPE_MASKS["thrown_coconut"], flip_offset=self.FLIP_OFFSETS.get("thrown_coconut", jnp.array([0,0])))
         def _draw_coco(i, current_raster):
-            should_draw = jnp.logical_and(coco_states[i] != 0, coco_sprite is not None)
-            pos = coco_positions[i]
-            def render_coco_sprite(raster_to_update):
-                return jr.render_at(raster_to_update, pos[0].astype(int), pos[1].astype(int), jr.get_sprite_frame(coco_sprite, 0), flip_offset=coco_pivot)
-            return jax.lax.cond(should_draw, render_coco_sprite, lambda r: r, current_raster)
-        num_cocos_to_draw = coco_positions.shape[0]
-        raster = jax.lax.fori_loop(0, num_cocos_to_draw, _draw_coco, raster)
+            should_draw = (state.level.coco_states[i] != 0)
+            pos = state.level.coco_positions[i]
+            draw_fn = lambda r: self.jr.render_at(r, pos[0].astype(int), pos[1].astype(int), self.SHAPE_MASKS["coconut"], flip_offset=self.FLIP_OFFSETS.get("coconut", jnp.array([0,0])))
+            return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
+        raster = jax.lax.fori_loop(0, state.level.coco_positions.shape[0], _draw_coco, raster)
 
-        # --- Draw UI ---
+        # --- 4. Draw UI ---
         # Score
-        digit_sprites = self.sprites.get('digits', None)
-        score_digits_indices = jr.int_to_digits(state.score, max_digits=6)
-        raster = jr.render_label(raster, 105, 182, score_digits_indices, digit_sprites[0], spacing=8)
+        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
+        raster = self.jr.render_label(raster, 105, 182, score_digits, self.SHAPE_MASKS["score_digits"], spacing=8, max_digits=6)
 
         # Lives
-        life_sprite = self.sprites.get('kangaroo_lives', None)
         lives_count = jnp.maximum(state.lives.astype(int) - 1, 0)
-        raster = jr.render_indicator(raster, 15, 182, lives_count, life_sprite[0], spacing=8)
+        raster = self.jr.render_indicator(raster, 15, 182, lives_count, self.SHAPE_MASKS["lives"], spacing=8, max_value=5)
 
         # Timer
-        time_digit_sprites = self.sprites.get('time_digits', None)
-        timer_val = jnp.maximum(state.level.timer.astype(int), 0)
-        timer_digits_indices = jr.int_to_digits(timer_val, max_digits=4)
-        raster = jr.render_label(raster, 80, 190, timer_digits_indices, time_digit_sprites[0], spacing=4)
+        timer_digits = self.jr.int_to_digits(jnp.maximum(state.level.timer.astype(int), 0), max_digits=4)
+        raster = self.jr.render_label(raster, 80, 190, timer_digits, self.SHAPE_MASKS["time_digits"], spacing=4, max_digits=4)
 
-        # Ensure the final raster has the correct dtype
-        return raster.astype(jnp.uint8)
+        # --- 5. Final Palette Lookup ---
+        return self.jr.render_from_palette(raster, self.PALETTE)
