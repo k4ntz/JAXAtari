@@ -15,19 +15,41 @@ from jaxatari.renderers import JAXGameRenderer
 WIDTH = 160
 HEIGHT = 210
 
+# UPFIRE: int = 10
+# RIGHTFIRE: int = 11
+# LEFTFIRE: int = 12
+# DOWNFIRE: int = 13
+
+LEFTFIRE = 9
+RIGHTFIRE = 8
+UPFIRE = 7
+DOWNFIRE = 6
 NOOP = 5
 FIRE = 4
 LEFT = 3
 RIGHT = 2
 UP = 1
 DOWN = 0
+
 ACTION_TRANSLATOR = jnp.array([
     NOOP,
     FIRE,
     UP,
     RIGHT,
     LEFT,
-    DOWN
+    DOWN,
+    UP,
+    UP,
+    DOWN,
+    DOWN,
+    UPFIRE,
+    RIGHTFIRE,
+    LEFTFIRE,
+    DOWNFIRE,
+    UPFIRE,
+    RIGHTFIRE,
+    LEFTFIRE,
+    DOWNFIRE,
 ])
 # DOWN = 5
 
@@ -1090,6 +1112,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             BankHeistState: The new state of the game after the player's action.
         """
         player_input = jnp.where(action == NOOP, state.player.direction, action)  # Convert NOOP to direction 4
+        player_input = jnp.where(action > 5, action - 6, player_input)  # Convert UP+FIRE to UP (etc)
         player_input = jnp.where(action == FIRE, state.player.direction, player_input)  # Ignore FIRE for movement
         current_player, invalid_input = self.validate_input(state, state.player, player_input)
         new_player = self.move(current_player, current_player.direction)
@@ -1120,7 +1143,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = jax.lax.cond(police_hit, lambda: self.lose_life(new_state), lambda: new_state)
 
         # Handle dynamite placement when FIRE action is pressed
-        new_state = jax.lax.cond(action == FIRE, 
+        new_state = jax.lax.cond(jnp.logical_or(action >= DOWNFIRE, action == FIRE), 
             lambda: self.place_dynamite(new_state, new_player),
             lambda: new_state
         )
