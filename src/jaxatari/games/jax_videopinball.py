@@ -3491,6 +3491,70 @@ class JaxVideoPinball(
             lambda: ball_movement,
         )
         return ball_movement, ball_vel_x, ball_vel_y, is_invisible_block_hit
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _decide_on_ball_vel(
+        self,
+        ball_in_play: chex.Array,
+        any_collision: chex.Array,
+        ball_vel_x: chex.Array,
+        ball_vel_y: chex.Array,
+        original_ball_speed: chex.Array,
+        collision_vel_x: chex.Array,
+        collision_vel_y: chex.Array,
+    ):
+        """
+        Description
+            Determines which set of velocity components (pre-collision or post-collision)
+            should define the ball's continued motion after a physics update step.
+
+            The function handles the logic for selecting between the *reflected* velocity
+            (produced by a valid collision response) and the *original* velocity (no collision
+            or numerically unstable result). It guards against very small velocity changes
+            that can produce numerical instabilities.
+
+        Parameters
+            ----------
+            ball_in_play : chex.Array
+                Boolean-like flag indicating whether the ball is currently active in play.
+            any_collision : chex.Array
+                Boolean-like flag indicating whether any obstacle or surface collision
+                occurred during this timestep.
+            ball_vel_x : chex.Array
+                X-component of the ball's velocity prior to collision handling.
+            ball_vel_y : chex.Array
+                Y-component of the ball's velocity prior to collision handling.
+            original_ball_speed : chex.Array
+                Magnitude of the ball's original velocity vector before collision response.
+            collision_vel_x : chex.Array
+                Post-collision X-component of velocity, representing the residual velocity
+                after contact resolution within the current timestep.
+            collision_vel_y : chex.Array
+                Post-collision Y-component of velocity, representing the residual velocity
+                after contact resolution within the current timestep.
+
+        Returns
+            ----------
+            Tuple[
+                chex.Array,  # selected_vel_x
+                chex.Array,  # selected_vel_y
+                chex.Array,  # selected_speed (magnitude)
+            ]
+                The velocity vector (x, y) and magnitude chosen for continued ball motion.
+                If a valid, sufficiently energetic collision occurred, the reflected
+                components are returned. Otherwise, the pre-collision velocity is retained.
+
+        Design Notes / Rationale
+            - Numerical stability safeguard:
+                Reflected velocity is only trusted if its magnitude exceeds
+                `BALL_MIN_SPEED / 10`. Otherwise, fallback prevents underflow-driven drift.
+        """
+        reflected_ball_speed = jnp.sqrt(collision_vel_x**2 + collision_vel_y**2)
+        return jax.lax.cond(
+            ball_in_play & any_collision & (reflected_ball_speed > self.consts.BALL_MIN_SPEED / 10),
+            lambda: (jnp.abs(collision_vel_x), jnp.abs(collision_vel_y), reflected_ball_speed),
+            lambda: (jnp.abs(ball_vel_x), jnp.abs(ball_vel_y), original_ball_speed),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _ball_step(
@@ -3653,13 +3717,16 @@ class JaxVideoPinball(
             lambda: ball_direction,  # updated after gravity and before tilt
         )
         original_ball_speed = jnp.sqrt(ball_vel_x**2 + ball_vel_y**2)
-        reflected_ball_speed = jnp.sqrt(ball_trajectory_x**2 + ball_trajectory_y**2)
         # if there was a collision, update the ball trajectory;
         # but only if the new trajectory is sufficiently large to avoid numerical instabilities
-        ball_vel_x, ball_vel_y, ball_speed = jax.lax.cond(
-            ball_in_play & any_collision & (reflected_ball_speed > self.consts.BALL_MIN_SPEED / 10),
-            lambda: (jnp.abs(ball_trajectory_x), jnp.abs(ball_trajectory_y), reflected_ball_speed),
-            lambda: (jnp.abs(ball_vel_x), jnp.abs(ball_vel_y), original_ball_speed),
+        ball_vel_x, ball_vel_y, ball_speed = self._decide_on_ball_vel(
+            ball_in_play,
+            any_collision,
+            ball_vel_x,
+            ball_vel_y,
+            original_ball_speed,
+            ball_trajectory_x,
+            ball_trajectory_y,
         )
         new_ball_speed = jnp.clip(
             (original_ball_speed + jnp.clip(velocity_addition, -1, 1))

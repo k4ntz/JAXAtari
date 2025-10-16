@@ -155,7 +155,7 @@ class VideoPinballConstants(NamedTuple):
     BALL_MAX_SPEED = jnp.array(4)
     BALL_MIN_SPEED = jnp.array(0.3)
     NUDGE_EFFECT_INTERVAL = jnp.array(2)  # Num steps in between nudge changing
-    NUDGE_EFFECT_AMOUNT = jnp.array(
+    NUDGE_EFFECT_AMOUNT: jnp.ndarray = jnp.array(
         0.75
     )  # Amount of nudge effect applied to the ball's velocity
     TILT_COUNT_INCREASE_INTERVAL = jnp.array(
