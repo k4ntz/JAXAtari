@@ -453,7 +453,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         super().__init__()
         self.SPRITES_PLAYER = pacmans_rgba()
         self.SPRITES_GHOSTS = load_ghosts()
-        self.digit_sprites = load_score_digits()
+        self.SPRITES_DIGITS = load_score_digits()
         # self.reset_bg()
         
 
@@ -461,7 +461,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         """Reset the background for a new level."""
         life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
         self.SPRITE_BG = load_background(RESET_LEVEL)
-        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, SCORE_DIGITS, SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.digit_sprites)
+        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, SCORE_DIGITS, SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.SPRITES_DIGITS)
         for life in range(NB_INITIAL_LIVES-1):
             self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + life * 16, 182, life_sprite)
    
@@ -503,7 +503,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         # Render score if changed
         if jnp.any(state.score_changed):
-            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.digit_sprites)
+            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.SPRITES_DIGITS)
 
         for i, g_pos in enumerate(state.ghost_positions):
             # Render frightened ghost
@@ -522,7 +522,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182, black_sprite)
         return raster
 
-def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=10, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=8, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
     """
     Render the score on the raster at a fixed position.
     """
