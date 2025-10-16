@@ -37,9 +37,9 @@ class NoScoringCooldown(JaxatariWrapper):
     def remove_cooldown(self, state: VideoPinballState) -> VideoPinballState:
         new_state = state._replace(
             target_cooldown=jnp.array(-1, dtype=jnp.int32),
-            special_target_cooldown=jnp.array(0, dtype=jnp.int32),
-            active_targets=jnp.array([True, True, True, False], dtype=jnp.bool_),
-            rollover_enabled=jnp.array(False, dtype=jnp.bool_),
+            special_target_cooldown=jnp.array(-1, dtype=jnp.int32),
+            active_targets=jnp.array([True, True, True, True], dtype=jnp.bool_),
+            rollover_enabled=jnp.array(True, dtype=jnp.bool_),
         )
 
         return new_state

@@ -4028,7 +4028,7 @@ class JaxVideoPinball(
             lambda cd, a: (
                 cd - self.consts.SPECIAL_TARGET_INACTIVE_DURATION,
                 a.at[3].set(False),
-            ),  # Check how the real cooldown works
+            ),
             lambda cd, a: (cd, a),
             special_target_cooldown,
             active_targets,
