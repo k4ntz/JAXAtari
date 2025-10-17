@@ -20,7 +20,7 @@ WIDTH = 160
 HEIGHT = 220
 
 RESET_LEVEL = 0 # the starting level, loaded when reset is called
-SCORE_DIGITS = 6 # Number of digits to display in the score
+MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
 
@@ -41,7 +41,7 @@ POWER_PELLET_POINTS = 50
 FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000]  
 EAT_GHOSTS_BASE_POINTS = 200
 BONUS_LIFE_LIMIT = 10000
-NB_INITIAL_LIVES = 1
+NB_INITIAL_LIVES = 2
 RESET_TIMER = 40  # Timer for resetting the game after death
 
 PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
@@ -224,7 +224,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             has_pellet=jnp.array(False),
             power_pellets=jnp.ones(4, dtype=jnp.bool_),
             score=jnp.array(0),
-            score_changed=jnp.zeros(SCORE_DIGITS, dtype=jnp.bool_), # indicates which score digit changed since the last step
+            score_changed=jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_), # indicates which score digit changed since the last step
             step_count=jnp.array(0),
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
@@ -269,7 +269,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 current_action=state.current_action,
                 ghost_positions=ghost_positions,
                 ghosts_dirs=ghosts_dirs,
-                ghost_modes=jnp.zeros(4),
+                ghosts_modes=jnp.zeros(4),
                 ghosts_timers=jnp.zeros(4),
                 eaten_ghosts=state.eaten_ghosts,
                 pellets=state.pellets,
@@ -278,7 +278,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 power_pellets=state.power_pellets,
                 power_mode_timer=power_mode_timer,
                 score=state.score,
-                score_changed=jnp.zeros(SCORE_DIGITS, dtype=jnp.bool_),
+                score_changed=jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_),
                 step_count=state.step_count + 1,
                 game_over=game_over,
                 level=state.level,
@@ -405,8 +405,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             # max_len         = max(len(score_str), len(state_score_str))
             # score_str       = score_str.zfill(max_len)
             # state_score_str = state_score_str.zfill(max_len)
-            score_digits        = aj.int_to_digits(score, max_digits=SCORE_DIGITS)
-            state_score_digits  = aj.int_to_digits(state.score, max_digits=SCORE_DIGITS)
+            score_digits        = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
+            state_score_digits  = aj.int_to_digits(state.score, max_digits=MAX_SCORE_DIGITS)
             score_changed       = score_digits != state_score_digits
         else:
             score_changed       = jnp.array(False, dtype=jnp.bool_)
@@ -461,15 +461,14 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         """Reset the background for a new level."""
         life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
         self.SPRITE_BG = load_background(RESET_LEVEL)
-        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, SCORE_DIGITS, SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.SPRITES_DIGITS)
-        for life in range(NB_INITIAL_LIVES-1):
-            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + life * 16, 182, life_sprite)
+        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, MAX_SCORE_DIGITS, MAX_SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.SPRITES_DIGITS)
+        self.SPRITE_BG = render_lives(self.SPRITE_BG, NB_INITIAL_LIVES, life_sprite)
    
 # # GHOSTS MODES
 # GHOST_RANDOM = 0
 # GHOST_CHASING = 1
 # GHOST_FRIGHTENED = 2
-# GHOST_BLINKING = 3
+# GHOST_BLINKING = 3 
 # GHOST_RETURNING = 4
 # GHOST_ENJAILED = 5
 
@@ -514,31 +513,40 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             else:
                 g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][4] # blue ghost
             raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite)
+
+        # Remove one life if a life is lost
         if state.death_timer == RESET_TIMER-1:
-            # Remove one life from the background
-            black_sprite = jnp.zeros((10, 10, 4), dtype=jnp.uint8)
-            black_sprite = black_sprite.at[:, :, 3].set(255) # Set alpha channel to 255
-            # Remove the last life sprite from the background
-            self.SPRITE_BG = aj.render_at(self.SPRITE_BG, 12 + (state.lives-1) * 16, 182, black_sprite)
+            self.SPRITE_BG = render_lives(self.SPRITE_BG, state.lives, self.SPRITES_PLAYER[1][1])
         return raster
 
-def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=8, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
     """
     Render the score on the raster at a fixed position.
+    Only updates digits that have changed.
     """
-    digits = aj.int_to_digits(score, max_digits=SCORE_DIGITS)
-    # Only update changed digits
-    for idx in range(SCORE_DIGITS):
+    digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
+    for idx in range(MAX_SCORE_DIGITS):
         if score_changed[idx]:
-            d_sprite = digit_sprites[digits[idx]]
-            for i in range(d_sprite.shape[0]):
-                for j in range(d_sprite.shape[1]):
-                    # Clear previous digit area
-                    if raster.at[score_x + i + idx * spacing, score_y + j].get() is not bg_color:
-                        raster = raster.at[score_x + i + idx * spacing, score_y + j].set(bg_color)
-                    # Render new digit pixel if alpha > 0
-                    if d_sprite[i, j, 3] > 0:
-                        raster = raster.at[score_x + i + idx * spacing, score_y + j].set(jnp.array(d_sprite[i, j, :3], dtype=jnp.uint8))
+            d_sprite    = digit_sprites[digits[idx]]
+            bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
+            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
+    return raster
+
+def render_lives(raster, current_lifes, life_sprite, initial_lifes=NB_INITIAL_LIVES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+    """
+    Render the lives on the raster at a fixed position.
+    """
+    if current_lifes > initial_lifes:
+        raise ValueError("Number of current lives cannot exceed the number of initial lives!")
+    elif current_lifes < 0:
+        raise ValueError("Number of current lives cannot be negative!")
+    elif current_lifes == initial_lifes:
+        for i in range(current_lifes):
+            raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
+    else:
+        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+        raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
     return raster
 
 def get_direction_index(direction: chex.Array) -> int:
