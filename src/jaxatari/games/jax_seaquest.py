@@ -8,7 +8,7 @@ import chex
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 class SeaquestConstants(NamedTuple):
@@ -167,200 +167,6 @@ class CarryState(NamedTuple):
 
 
 # RENDER CONSTANTS
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Load sprites - no padding needed for background since it's already full size
-    bg1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/bg/1.npy"))
-    pl_sub1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/1.npy"))
-    pl_sub2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/2.npy"))
-    pl_sub3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_sub/3.npy"))
-    diver1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/diver/1.npy"))
-    diver2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/diver/2.npy"))
-    shark1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/shark/1.npy"))
-    shark2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/shark/2.npy"))
-    
-    enemy_sub1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/enemy_sub/1.npy"))
-    enemy_sub2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/enemy_sub/2.npy"))
-    enemy_sub3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/enemy_sub/3.npy"))
-    pl_torp = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/player_torp/1.npy"))
-    en_torp = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/enemy_torp/1.npy"))
-
-    # Pad player submarine sprites to match each other
-    pl_sub_sprites, pl_sub_offsets = jr.pad_to_match([pl_sub1, pl_sub2, pl_sub3])
-    pl_sub_offsets = jnp.array(pl_sub_offsets)
-    # Pad diver sprites to match each other
-    diver_sprites, diver_offsets = jr.pad_to_match([diver1, diver2])
-    diver_offsets = jnp.array(diver_offsets)
-
-    # Pad shark sprites to match each other
-    shark_sprites, shark_offsets = jr.pad_to_match([shark1, shark2])
-    shark_offsets = jnp.array(shark_offsets)
-    
-    # Create colored versions of the animated shark sprites
-    # Define colors: Green, Yellow, Pink, Orange
-    shark_colors = jnp.array([
-        [92, 186, 92],    # Green 
-        [160, 171, 79],    # Yellow  
-        [198, 89, 179],  # Pink
-        [198, 108, 58],   # Orange
-    ], dtype=jnp.uint8)
-    
-    # Recolor each shark animation frame
-    def recolor_shark_frame(frame, color):
-        """Recolor a shark frame to the specified color"""
-        # Instead of assuming (0,0,0) is transparent, let's use a more robust approach
-        # We'll look for any pixel that has some non-zero values and recolor those
-        
-        # Create a mask for pixels that have any non-zero RGB values
-        # This is more robust than assuming specific transparency values
-        mask = jnp.any(frame > 0, axis=-1, keepdims=True)
-        
-        # Start with the original frame
-        recolored = frame.copy()
-        
-        # Apply the new color to non-transparent pixels
-        # Use the mask to only change pixels that have content
-        recolored = recolored.at[:, :, 0].set(
-            jnp.where(mask[:, :, 0], color[0], frame[:, :, 0])
-        )
-        recolored = recolored.at[:, :, 1].set(
-            jnp.where(mask[:, :, 0], color[1], frame[:, :, 1])
-        )
-        recolored = recolored.at[:, :, 2].set(
-            jnp.where(mask[:, :, 0], color[2], frame[:, :, 2])
-        )
-        
-        # Ensure we return integer values
-        return recolored.astype(jnp.uint8)
-    
-    # Create colored versions of each shark animation frame
-    # For green sharks, use the original sprite (no recoloring needed)
-    shark_green_frames = jnp.array(shark_sprites).astype(jnp.uint8)
-    shark_yellow_frames = jnp.array([recolor_shark_frame(frame, shark_colors[1]) for frame in shark_sprites], dtype=jnp.uint8)
-    shark_pink_frames = jnp.array([recolor_shark_frame(frame, shark_colors[2]) for frame in shark_sprites], dtype=jnp.uint8)
-    shark_orange_frames = jnp.array([recolor_shark_frame(frame, shark_colors[3]) for frame in shark_sprites], dtype=jnp.uint8)
-
-    # Pad enemy submarine sprites to match each other
-    enemy_sub_sprites, enemy_sub_offsets = jr.pad_to_match([enemy_sub1, enemy_sub2, enemy_sub3])
-    enemy_sub_offsets = jnp.array(enemy_sub_offsets)
-
-    # Pad player torpedo sprites to match each other
-    pl_torp_sprites = [pl_torp]
-
-    # Pad enemy torpedo sprites to match each other
-    en_torp_sprites = [en_torp]
-
-    # Background sprite (no padding needed)
-    SPRITE_BG = jnp.expand_dims(bg1, axis=0)
-
-    # Player submarine sprites
-    SPRITE_PL_SUB = jnp.concatenate(
-        [
-            jnp.repeat(pl_sub_sprites[0][None], 4, axis=0),
-            jnp.repeat(pl_sub_sprites[1][None], 4, axis=0),
-            jnp.repeat(pl_sub_sprites[2][None], 4, axis=0),
-        ]
-    )
-
-    # Diver sprites
-    SPRITE_DIVER = jnp.concatenate(
-        [
-            jnp.repeat(diver_sprites[0][None], 16, axis=0),
-            jnp.repeat(diver_sprites[1][None], 4, axis=0),
-        ]
-    )
-
-    # Colored shark sprites - maintain the same animation frame structure
-    # Green sharks use the original sprite (no recoloring)
-    SPRITE_SHARK_GREEN = jnp.concatenate(
-        [
-            jnp.repeat(shark_green_frames[0][None], 16, axis=0),
-            jnp.repeat(shark_green_frames[1][None], 8, axis=0),
-        ]
-    ).astype(jnp.uint8)
-    
-    SPRITE_SHARK_YELLOW = jnp.concatenate(
-        [
-            jnp.repeat(shark_yellow_frames[0][None], 16, axis=0),
-            jnp.repeat(shark_yellow_frames[1][None], 8, axis=0),
-        ]
-    ).astype(jnp.uint8)
-    
-    SPRITE_SHARK_PINK = jnp.concatenate(
-        [
-            jnp.repeat(shark_pink_frames[0][None], 16, axis=0),
-            jnp.repeat(shark_pink_frames[1][None], 8, axis=0),
-        ]
-    ).astype(jnp.uint8)
-    
-    SPRITE_SHARK_ORANGE = jnp.concatenate(
-        [
-            jnp.repeat(shark_orange_frames[0][None], 16, axis=0),
-            jnp.repeat(shark_orange_frames[1][None], 8, axis=0),
-        ]
-    ).astype(jnp.uint8)
-
-    # Enemy submarine sprites
-    SPRITE_ENEMY_SUB = jnp.concatenate(
-        [
-            jnp.repeat(enemy_sub_sprites[0][None], 4, axis=0),
-            jnp.repeat(enemy_sub_sprites[1][None], 4, axis=0),
-            jnp.repeat(enemy_sub_sprites[2][None], 4, axis=0),
-        ]
-    )
-
-    DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/seaquest/digits/{}.npy"))
-    LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/seaquest/life_indicator/1.npy"))
-    DIVER_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/seaquest/diver_indicator/1.npy"))
-
-    # Player torpedo sprites
-    SPRITE_PL_TORP = jnp.repeat(pl_torp_sprites[0][None], 1, axis=0)
-
-    # Enemy torpedo sprites
-    SPRITE_EN_TORP = jnp.repeat(en_torp_sprites[0][None], 1, axis=0)
-    # Return all sprites and all offsets for future use
-    return (
-        SPRITE_BG,
-        SPRITE_PL_SUB,
-        SPRITE_DIVER,
-        SPRITE_SHARK_GREEN,
-        SPRITE_SHARK_YELLOW,
-        SPRITE_SHARK_PINK,
-        SPRITE_SHARK_ORANGE,
-        SPRITE_ENEMY_SUB,
-        SPRITE_PL_TORP,
-        SPRITE_EN_TORP,
-        DIGITS,
-        LIFE_INDICATOR,
-        DIVER_INDICATOR,
-        pl_sub_offsets,
-        diver_offsets,
-        shark_offsets,
-        enemy_sub_offsets,
-    )
-
-# Load sprites once at module level
-(
-    SPRITE_BG,
-    SPRITE_PL_SUB,
-    SPRITE_DIVER,
-    SPRITE_SHARK_GREEN,
-    SPRITE_SHARK_YELLOW,
-    SPRITE_SHARK_PINK,
-    SPRITE_SHARK_ORANGE,
-    SPRITE_ENEMY_SUB,
-    SPRITE_PL_TORP,
-    SPRITE_EN_TORP,
-    DIGITS,
-    LIFE_INDICATOR,
-    DIVER_INDICATOR,
-    PL_SUB_OFFSETS,
-    DIVER_OFFSETS,
-    SHARK_OFFSETS,
-    ENEMY_SUB_OFFSETS,
-) = load_sprites()
-
-
 def get_shark_color_index(difficulty: chex.Array) -> chex.Array:
     """
     Determine which shark color to use based on difficulty level.
@@ -377,40 +183,6 @@ def get_shark_color_index(difficulty: chex.Array) -> chex.Array:
     color_mapping = jnp.array([0, 1, 2, 3, 0, 1, 0, 3])  # 0=Green, 1=Yellow, 2=Pink, 3=Orange
     color_index = jnp.take(color_mapping, difficulty % 8)
     return color_index
-
-
-def get_shark_sprite_by_difficulty(difficulty: chex.Array, step_counter: chex.Array):
-    """
-    Get the appropriate shark sprite based on difficulty level.
-    
-    Args:
-        difficulty: Current difficulty level
-        step_counter: Current step counter for animation
-        
-    Returns:
-        Shark sprite frame for the current difficulty and animation frame
-    """
-    color_index = get_shark_color_index(difficulty)
-    
-    # Use jnp.where with conditions to select the correct sprite
-    # This approach works better with JAX's JIT compilation
-    shark_sprite = jnp.where(
-        color_index == 0,
-        SPRITE_SHARK_GREEN,
-        jnp.where(
-            color_index == 1,
-            SPRITE_SHARK_YELLOW,
-            jnp.where(
-                color_index == 2,
-                SPRITE_SHARK_PINK,
-                SPRITE_SHARK_ORANGE  # color_index == 3
-            )
-        )
-    )
-    
-    # Get the appropriate frame from the selected sprite
-    return jr.get_sprite_frame(shark_sprite, step_counter)
-
 
 class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInfo, SeaquestConstants]):
     def initialize_spawn_state(self) -> SpawnState:
@@ -2890,65 +2662,257 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 class SeaquestRenderer(JAXGameRenderer):
     def __init__(self, consts: SeaquestConstants = None):
         super().__init__()
-        self.offset_length = len(PL_SUB_OFFSETS)
-        self.diver_offset_length = len(DIVER_OFFSETS)
-        self.shark_offset_length = len(SHARK_OFFSETS)
-        self.enemy_sub_offset_length = len(ENEMY_SUB_OFFSETS)
         self.consts = consts or SeaquestConstants()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # Load and setup assets using the new pattern
+        asset_config = self._get_asset_config()
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/seaquest"
+        
+        # Create colored shark sprites at initialization time
+        colored_shark_sprites = self._create_colored_shark_sprites()
+        
+        # Create black bar sprite at initialization time
+        black_bar_sprite = self._create_black_bar_sprite()
+        
+        # Add colored shark sprites to the asset config as procedural assets
+        for name, sprite_data in colored_shark_sprites.items():
+            asset_config.append({
+                'name': name, 
+                'type': 'procedural', 
+                'data': sprite_data
+            })
+        
+        # Add black bar sprite to the asset config as procedural asset
+        asset_config.append({
+            'name': 'black_bar', 
+            'type': 'procedural', 
+            'data': black_bar_sprite
+        })
+        
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # IMPORTANT: Replicate original animation timing by repeating frames,
+        # matching the legacy seaquest sprite batching logic exactly.
+        def _expand_animation(masks, repeats):
+            parts = []
+            for idx, rep in enumerate(repeats):
+                parts.append(jnp.repeat(masks[idx][None], rep, axis=0))
+            return jnp.concatenate(parts, axis=0)
+
+        # Player submarine: frames [1,2,3] each repeated 4x  -> total 12
+        if (
+            "player_sub" in self.SHAPE_MASKS
+            and self.SHAPE_MASKS["player_sub"].ndim == 3
+            and self.SHAPE_MASKS["player_sub"].shape[0] == 3
+        ):
+            self.SHAPE_MASKS["player_sub"] = _expand_animation(self.SHAPE_MASKS["player_sub"], [4, 4, 4])
+
+        # Diver: frame0 repeated 16x, frame1 repeated 4x -> total 20
+        if (
+            "diver" in self.SHAPE_MASKS
+            and self.SHAPE_MASKS["diver"].ndim == 3
+            and self.SHAPE_MASKS["diver"].shape[0] == 2
+        ):
+            self.SHAPE_MASKS["diver"] = _expand_animation(self.SHAPE_MASKS["diver"], [16, 4])
+
+        # Enemy submarine: frames [1,2,3] each repeated 4x -> total 12
+        if (
+            "enemy_sub" in self.SHAPE_MASKS
+            and self.SHAPE_MASKS["enemy_sub"].ndim == 3
+            and self.SHAPE_MASKS["enemy_sub"].shape[0] == 3
+        ):
+            self.SHAPE_MASKS["enemy_sub"] = _expand_animation(self.SHAPE_MASKS["enemy_sub"], [4, 4, 4])
+
+        # Sharks (colored variants): each has 2 frames; repeat [16, 8] -> total 24
+        for shark_key in ("shark_green", "shark_yellow", "shark_pink", "shark_orange"):
+            if (
+                shark_key in self.SHAPE_MASKS
+                and self.SHAPE_MASKS[shark_key].ndim == 3
+                and self.SHAPE_MASKS[shark_key].shape[0] == 2
+            ):
+                self.SHAPE_MASKS[shark_key] = _expand_animation(self.SHAPE_MASKS[shark_key], [16, 8])
+
+        # Compute per-frame flip offsets for divers exactly like original logic
+        # by reading the raw diver frames and applying pad_to_match. This yields
+        # per-frame [pad_w, pad_h] needed for correct flipped placement.
+        diver1_rgba = self.jr.loadFrame(os.path.join(sprite_path, "diver/1.npy"))
+        diver2_rgba = self.jr.loadFrame(os.path.join(sprite_path, "diver/2.npy"))
+        _, diver_flip_offsets = self.jr.pad_to_match([diver1_rgba, diver2_rgba])
+        # Store as (num_frames, 2)
+        self.DIVER_OFFSETS = jnp.stack(diver_flip_offsets)
+
+    def _create_colored_shark_sprites(self) -> dict:
+        """Create colored versions of shark sprites at initialization time."""
+        # Define colors: Green, Yellow, Pink, Orange
+        shark_colors = [
+            (92, 186, 92),    # Green 
+            (160, 171, 79),   # Yellow  
+            (198, 89, 179),   # Pink
+            (198, 108, 58),   # Orange
+        ]
+        
+        colored_sprites = {}
+        
+        # Load base shark sprites
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/seaquest"
+        shark1 = self.jr.loadFrame(os.path.join(sprite_path, "shark/1.npy"))
+        shark2 = self.jr.loadFrame(os.path.join(sprite_path, "shark/2.npy"))
+        
+        # Create colored versions
+        for i, color in enumerate(shark_colors):
+            color_name = ["green", "yellow", "pink", "orange"][i]
+            
+            # Recolor each frame
+            recolored_shark1 = self._recolor_sprite(shark1, color)
+            recolored_shark2 = self._recolor_sprite(shark2, color)
+            
+            # Pad and stack like the original pattern
+            padded_sprites, offsets = self.jr.pad_to_match([recolored_shark1, recolored_shark2])
+            
+            # Create the same animation pattern as original
+            colored_sprite = jnp.concatenate([
+                jnp.repeat(padded_sprites[0][None], 16, axis=0),
+                jnp.repeat(padded_sprites[1][None], 8, axis=0),
+            ]).astype(jnp.uint8)
+            
+            colored_sprites[f"shark_{color_name}"] = colored_sprite
+            
+        return colored_sprites
+
+    def _recolor_sprite(self, sprite: jnp.ndarray, target_color: tuple) -> jnp.ndarray:
+        """Recolor a sprite to the target color."""
+        # Create a mask for pixels that have any non-zero RGB values
+        mask = jnp.any(sprite > 0, axis=-1, keepdims=True)
+        
+        # Start with the original sprite
+        recolored = sprite.copy()
+        
+        # Apply the new color to non-transparent pixels
+        recolored = recolored.at[:, :, 0].set(
+            jnp.where(mask[:, :, 0], target_color[0], sprite[:, :, 0])
+        )
+        recolored = recolored.at[:, :, 1].set(
+            jnp.where(mask[:, :, 0], target_color[1], sprite[:, :, 1])
+        )
+        recolored = recolored.at[:, :, 2].set(
+            jnp.where(mask[:, :, 0], target_color[2], sprite[:, :, 2])
+        )
+        
+        return recolored.astype(jnp.uint8)
+
+    def _create_black_bar_sprite(self) -> jnp.ndarray:
+        """Create a black bar sprite for the left side of the screen."""
+        # Create an 8-pixel wide black bar covering the full height
+        bar_height = 210  # Seaquest screen height
+        bar_width = 8
+        # Create black sprite with full alpha (255) so it gets added to palette
+        black_bar = jnp.zeros((bar_height, bar_width, 4), dtype=jnp.uint8)
+        black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha to 255
+        return black_bar
+
+    def _get_asset_config(self) -> list:
+        """Returns the declarative manifest of all assets for the game."""
+        return [
+            {'name': 'background', 'type': 'background', 'file': 'bg/1.npy'},
+            {
+                'name': 'player_sub', 'type': 'group',
+                'files': ['player_sub/1.npy', 'player_sub/2.npy', 'player_sub/3.npy']
+            },
+            {
+                'name': 'diver', 'type': 'group',
+                'files': ['diver/1.npy', 'diver/2.npy']
+            },
+            {
+                'name': 'enemy_sub', 'type': 'group',
+                'files': ['enemy_sub/1.npy', 'enemy_sub/2.npy', 'enemy_sub/3.npy']
+            },
+            {'name': 'player_torp', 'type': 'single', 'file': 'player_torp/1.npy'},
+            {'name': 'enemy_torp', 'type': 'single', 'file': 'enemy_torp/1.npy'},
+            {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator/1.npy'},
+            {'name': 'diver_indicator', 'type': 'single', 'file': 'diver_indicator/1.npy'},
+            {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+        ]
+
+    def _get_shark_mask_by_difficulty(self, difficulty: chex.Array, step_counter: chex.Array):
+        """Get the appropriate shark mask based on difficulty level."""
+        color_index = get_shark_color_index(difficulty)
+        
+        # Select the appropriate colored shark sprite based on difficulty
+        # Use jax.lax.switch with concrete sprite arrays
+        shark_mask = jax.lax.switch(
+            color_index,
+            [
+                lambda: self.SHAPE_MASKS["shark_green"],
+                lambda: self.SHAPE_MASKS["shark_yellow"], 
+                lambda: self.SHAPE_MASKS["shark_pink"],
+                lambda: self.SHAPE_MASKS["shark_orange"],
+            ]
+        )
+        
+        # Get the animation frame based on step counter
+        frame_index = step_counter % shark_mask.shape[0]
+        return shark_mask[frame_index]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jr.create_initial_frame(width=160, height=210)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # render background
-        frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
-
-        # render player submarine
-        frame_pl_sub = jr.get_sprite_frame(SPRITE_PL_SUB, state.step_counter)
-        idx_pl_sub = state.step_counter % self.offset_length
-        pl_sub_offset = jnp.take(PL_SUB_OFFSETS, idx_pl_sub, axis=0)
-        raster = jr.render_at(
+        # Render player submarine
+        frame_index = state.step_counter % self.SHAPE_MASKS["player_sub"].shape[0]
+        player_mask = self.SHAPE_MASKS["player_sub"][frame_index]
+        raster = self.jr.render_at(
             raster,
             state.player_x,
             state.player_y,
-            frame_pl_sub,
+            player_mask,
             flip_horizontal=state.player_direction == self.consts.FACE_LEFT,
-            flip_offset=pl_sub_offset,
+            flip_offset=self.FLIP_OFFSETS["player_sub"]
         )
+
         # Player torpedo
-        frame_pl_torp = jr.get_sprite_frame(SPRITE_PL_TORP, state.step_counter)
-        should_render = state.player_missile_position[0] > 0
+        should_render_torp = state.player_missile_position[0] > 0
         raster = jax.lax.cond(
-            should_render,
-            lambda r: jr.render_at(
+            should_render_torp,
+            lambda r: self.jr.render_at(
                 r,
                 state.player_missile_position[0],
                 state.player_missile_position[1],
-                frame_pl_torp,
+                self.SHAPE_MASKS["player_torp"],
                 flip_horizontal=state.player_missile_position[2] == self.consts.FACE_LEFT,
             ),
             lambda r: r,
             raster,
         )
 
-        # render divers
-        frame_diver = jr.get_sprite_frame(SPRITE_DIVER, state.step_counter)
-        diver_positions = state.diver_positions
-
+        # Render divers
         def render_diver(i, raster_base):
-            should_render = diver_positions[i][0] > 0
-            idx_diver = i % self.diver_offset_length
-            diver_offset = jnp.take(DIVER_OFFSETS, idx_diver, axis=0)
+            should_render = state.diver_positions[i][0] > 0
+            frame_index = state.step_counter % self.SHAPE_MASKS["diver"].shape[0]
+            diver_mask = self.SHAPE_MASKS["diver"][frame_index]
+            # Map frame_index (which cycles over concatenated animation) to the
+            # base 2-frame set used for padding offsets.
+            base_idx = frame_index % self.DIVER_OFFSETS.shape[0]
+            diver_offset = self.DIVER_OFFSETS[base_idx]
             return jax.lax.cond(
                 should_render,
-                lambda r: jr.render_at(
+                lambda r: self.jr.render_at(
                     r,
-                    diver_positions[i][0],
-                    diver_positions[i][1],
-                    frame_diver,
-                    flip_horizontal=(diver_positions[i][2] == self.consts.FACE_LEFT),
-                    flip_offset=diver_offset,
+                    state.diver_positions[i][0],
+                    state.diver_positions[i][1],
+                    diver_mask,
+                    flip_horizontal=(state.diver_positions[i][2] == self.consts.FACE_LEFT),
+                    flip_offset=diver_offset
                 ),
                 lambda r: r,
                 raster_base,
@@ -2956,46 +2920,42 @@ class SeaquestRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_DIVERS, render_diver, raster)
 
-        # render sharks
-        frame_shark = get_shark_sprite_by_difficulty(state.spawn_state.difficulty, state.step_counter)
+        # Render sharks
+        shark_mask = self._get_shark_mask_by_difficulty(state.spawn_state.difficulty, state.step_counter)
 
         def render_shark(i, raster_base):
             should_render = state.shark_positions[i][0] > 0
-            idx_shark = i % self.shark_offset_length
-            shark_offset = jnp.take(SHARK_OFFSETS, idx_shark, axis=0)
             return jax.lax.cond(
                 should_render,
-                lambda r: jr.render_at(
+                lambda r: self.jr.render_at(
                     r,
                     state.shark_positions[i][0],
                     state.shark_positions[i][1],
-                    frame_shark,
+                    shark_mask,
                     flip_horizontal=(state.shark_positions[i][2] == self.consts.FACE_LEFT),
-                    flip_offset=shark_offset,
+                    flip_offset=self.FLIP_OFFSETS["shark_green"]
                 ),
                 lambda r: r,
                 raster_base,
             )
 
-        # Use fori_loop to render all sharks
         raster = jax.lax.fori_loop(0, self.consts.MAX_SHARKS, render_shark, raster)
 
-        # render enemy subs
-        frame_enemy_sub = jr.get_sprite_frame(SPRITE_ENEMY_SUB, state.step_counter)
+        # Render enemy subs
+        frame_index = state.step_counter % self.SHAPE_MASKS["enemy_sub"].shape[0]
+        enemy_sub_mask = self.SHAPE_MASKS["enemy_sub"][frame_index]
 
         def render_enemy_sub(i, raster_base):
             should_render = state.sub_positions[i][0] > 0
-            idx_enemy_sub = i % self.enemy_sub_offset_length
-            enemy_sub_offset = jnp.take(ENEMY_SUB_OFFSETS, idx_enemy_sub, axis=0)
             return jax.lax.cond(
                 should_render,
-                lambda r: jr.render_at(
+                lambda r: self.jr.render_at(
                     r,
                     state.sub_positions[i][0],
                     state.sub_positions[i][1],
-                    frame_enemy_sub,
+                    enemy_sub_mask,
                     flip_horizontal=(state.sub_positions[i][2] == self.consts.FACE_LEFT),
-                    flip_offset=enemy_sub_offset,
+                    flip_offset=self.FLIP_OFFSETS["enemy_sub"]
                 ),
                 lambda r: r,
                 raster_base,
@@ -3003,39 +2963,35 @@ class SeaquestRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_SUBS, render_enemy_sub, raster)
 
-        def render_enemy_surface_sub(i, raster_base):
+        # Render surface submarine
+        def render_surface_sub(i, raster_base):
             should_render = state.surface_sub_position[0] > 0
-            idx_enemy_sub = i % self.enemy_sub_offset_length
-            enemy_sub_offset = jnp.take(ENEMY_SUB_OFFSETS, idx_enemy_sub, axis=0)
             return jax.lax.cond(
                 should_render,
-                lambda r: jr.render_at(
+                lambda r: self.jr.render_at(
                     r,
                     state.surface_sub_position[0],
                     state.surface_sub_position[1],
-                    frame_enemy_sub,
+                    enemy_sub_mask,
                     flip_horizontal=(state.surface_sub_position[2] == self.consts.FACE_LEFT),
-                    flip_offset=enemy_sub_offset,
+                    flip_offset=self.FLIP_OFFSETS["enemy_sub"]
                 ),
                 lambda r: r,
                 raster_base,
             )
 
-        raster = jax.lax.fori_loop(
-            0, self.consts.MAX_SURFACE_SUBS, render_enemy_surface_sub, raster
-        )
+        raster = jax.lax.fori_loop(0, self.consts.MAX_SURFACE_SUBS, render_surface_sub, raster)
 
-        frame_enemy_torp = jr.get_sprite_frame(SPRITE_EN_TORP, state.step_counter)
-
+        # Render enemy torpedoes
         def render_enemy_torp(i, raster_base):
             should_render = state.enemy_missile_positions[i][0] > 0
             return jax.lax.cond(
                 should_render,
-                lambda r: jr.render_at(
+                lambda r: self.jr.render_at(
                     r,
                     state.enemy_missile_positions[i][0],
                     state.enemy_missile_positions[i][1],
-                    frame_enemy_torp,
+                    self.SHAPE_MASKS["enemy_torp"],
                     flip_horizontal=(state.enemy_missile_positions[i][2] == self.consts.FACE_LEFT),
                 ),
                 lambda r: r,
@@ -3044,25 +3000,30 @@ class SeaquestRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, render_enemy_torp, raster)
 
-        # show the scores
-        score_array = jr.int_to_digits(state.score, max_digits=8)
-        # convert the score to a list of digits
-        raster = jr.render_label(raster, 10, 10, score_array, DIGITS, spacing=7)
-        raster = jr.render_indicator(
-            raster, 10, 20, state.lives, LIFE_INDICATOR, spacing=10
-        )
-        raster = jr.render_indicator(
-            raster, 49, 178, state.divers_collected, DIVER_INDICATOR, spacing=10
-        )
+        # Render score
+        score_digits = self.jr.int_to_digits(state.score, max_digits=8)
+        score_digit_masks = self.SHAPE_MASKS["digits"]
+        raster = self.jr.render_label(raster, 10, 10, score_digits, score_digit_masks, spacing=7)
 
-        raster = jr.render_bar(
-            raster, 49, 170, state.oxygen, 64, 63, 5, self.consts.OXYGEN_BAR_COLOR, (0, 0, 0, 0)
+        # Render indicators
+        raster = self.jr.render_indicator(
+            raster, 10, 20, state.lives, self.SHAPE_MASKS["life_indicator"], spacing=10
+        )
+        raster = self.jr.render_indicator(
+            raster, 49, 178, state.divers_collected, self.SHAPE_MASKS["diver_indicator"], spacing=10
         )
 
-        # Force the first 8 columns (x=0 to x=7) to be black
-        bar_width = 8
-        # Assuming raster shape is (Height, Width, Channels)
-        # Select all rows (:), the first 'bar_width' columns (0:bar_width), and all channels (:)
-        raster = raster.at[:, :bar_width, :].set(0)
+        # Render oxygen bar using render_bar (now JIT-friendly)
+        # Use RGB tuple for palette lookup (palette stores RGB, not RGBA)
+        oxygen_rgb = tuple(self.consts.OXYGEN_BAR_COLOR[:3]) if len(self.consts.OXYGEN_BAR_COLOR) == 4 else tuple(self.consts.OXYGEN_BAR_COLOR)
+        oxygen_color_id = self.COLOR_TO_ID.get(oxygen_rgb, 0)
+        default_color_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        raster = self.jr.render_bar(
+            raster, 49, 170, state.oxygen, 64, 63, 5, oxygen_color_id, default_color_id
+        )
 
-        return raster
+        # Render black bar on the left side
+        black_bar_mask = self.SHAPE_MASKS["black_bar"]
+        raster = self.jr.render_at(raster, 0, 0, black_bar_mask)
+
+        return self.jr.render_from_palette(raster, self.PALETTE)

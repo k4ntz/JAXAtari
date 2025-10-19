@@ -9,7 +9,7 @@ from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 
 class FreewayConstants(NamedTuple):
     screen_width: int = 160
@@ -368,205 +368,121 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
 
 
 class FreewayRenderer(JAXGameRenderer):
-
     def __init__(self, consts: FreewayConstants = None):
         super().__init__()
         self.consts = consts or FreewayConstants()
-        self.sprites, self.offsets = self._load_sprites()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=1,
+            downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # Load and setup assets using the new pattern
+        asset_config = self._get_asset_config()
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        
+        # Create black bar sprite at initialization time
+        black_bar_sprite = self._create_black_bar_sprite()
+        
+        # Add black bar sprite to the asset config as procedural asset
+        asset_config.append({
+            'name': 'black_bar', 
+            'type': 'procedural', 
+            'data': black_bar_sprite
+        })
+        
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-    def _load_sprites(self):
-        """Load all sprites required for Freeway rendering."""
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_path = os.path.join(MODULE_DIR, "sprites/freeway/")
+    def _create_black_bar_sprite(self) -> jnp.ndarray:
+        """Create a black bar sprite for the left side of the screen."""
+        # Create an 8-pixel wide black bar covering the full height
+        bar_height = self.consts.screen_height
+        bar_width = 8
+        # Create black sprite with full alpha (255) so it gets added to palette
+        black_bar = jnp.zeros((bar_height, bar_width, 4), dtype=jnp.uint8)
+        black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha to 255
+        return black_bar
 
-        sprites: Dict[str, Any] = {}
-        offsets: Dict[str, Any] = {}
-
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(sprite_path, f'{name}.npy')
-            frame = jr.loadFrame(path)
-            return frame.astype(jnp.uint8)
-
-        sprite_names = [
-            'background',
-            'player_hit', 'player_walk', 'player_idle',
-            'car_dark_red', 'car_light_green', 'car_dark_green', 'car_light_red', 'car_blue', 'car_brown',
-            'car_light_blue', 'car_red', 'car_green', 'car_yellow',
+    def _get_asset_config(self) -> list:
+        """Returns the declarative manifest of all assets for the game."""
+        return [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {
+                'name': 'player', 'type': 'group',
+                'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
+            },
+            {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
+            {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
+            {'name': 'car_dark_green', 'type': 'single', 'file': 'car_dark_green.npy'},
+            {'name': 'car_light_red', 'type': 'single', 'file': 'car_light_red.npy'},
+            {'name': 'car_blue', 'type': 'single', 'file': 'car_blue.npy'},
+            {'name': 'car_brown', 'type': 'single', 'file': 'car_brown.npy'},
+            {'name': 'car_light_blue', 'type': 'single', 'file': 'car_light_blue.npy'},
+            {'name': 'car_red', 'type': 'single', 'file': 'car_red.npy'},
+            {'name': 'car_green', 'type': 'single', 'file': 'car_green.npy'},
+            {'name': 'car_yellow', 'type': 'single', 'file': 'car_yellow.npy'},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         ]
-
-        for name in sprite_names:
-            loaded_sprite = _load_sprite_frame(name)
-            if loaded_sprite is not None:
-                sprites[name] = loaded_sprite
-
-        # pad the player sprites since they are used interchangably
-        player_sprites, player_offsets = jr.pad_to_match([
-            sprites['player_hit'], sprites['player_walk'], sprites['player_idle']
-        ])
-        sprites['player_hit'] = player_sprites[0]
-        sprites['player_walk'] = player_sprites[1]
-        sprites['player_idle'] = player_sprites[2]
-        offsets['player_hit'] = player_offsets[0]
-        offsets['player_walk'] = player_offsets[1]
-        offsets['player_idle'] = player_offsets[2]
-
-        # --- Load Digit Sprites ---
-        score_digit_path = os.path.join(sprite_path, 'score_{}.npy')
-        digits = jr.load_and_pad_digits(score_digit_path, num_chars=10)
-        sprites['score'] = digits
-
-        for key in sprites.keys():
-            if isinstance(sprites[key], (list, tuple)):
-                sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
-            else:
-                sprites[key] = jnp.expand_dims(sprites[key], axis=0)
-
-        return sprites, offsets
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        """Render the game state to a raster image."""
-        raster = jr.create_initial_frame(width=160, height=210)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # draw the background
-        background = jr.get_sprite_frame(self.sprites['background'], 0)
+        # Draw fixed chicken at x=110
+        chicken_idle_mask = self.SHAPE_MASKS["player"][2]  # player_idle is index 2
+        raster = self.jr.render_at(raster, 110, self.consts.bottom_border + self.consts.chicken_height - 1, chicken_idle_mask)
 
-        raster = jr.render_at(raster,0, 0, background)
-
-        # draw fixed 2nd chicken at x=110 and y=self.consts.bottom_border + self.consts.chicken_height - 1
-        chicken_idle = jr.get_sprite_frame(self.sprites['player_idle'], 0)
-        chicken_walk = jr.get_sprite_frame(self.sprites['player_walk'], 0)
-        chicken_hit = jr.get_sprite_frame(self.sprites['player_hit'], 0)
-        chicken_idle_offset = self.offsets['player_idle']
-        chicken_walk_offset = self.offsets['player_walk']
-        chicken_hit_offset = self.offsets['player_hit']
-        raster = jr.render_at(raster, 110, self.consts.bottom_border + self.consts.chicken_height - 1, chicken_idle, flip_offset=chicken_idle_offset)
-
-        # select a frame based on the walking frames (0-3 for walk, 4-7 for idle, repeat)
+        # Select chicken sprite based on walking frames and hit state
         use_idle = state.walking_frames < 4
-        chicken = jax.lax.cond(
-            use_idle,
-            lambda: chicken_idle,
-            lambda: chicken_walk,
-        )
-        chicken_offset = jax.lax.cond(
-            use_idle,
-            lambda: chicken_idle_offset,
-            lambda: chicken_walk_offset,
-        )
+        chicken_frame_index = jax.lax.select(use_idle, 2, 1)  # 2=idle, 1=walk
+        
         is_hit = state.cooldown > 0
-        chicken = jax.lax.cond(
+        chicken_frame_index = jax.lax.select(
             jnp.logical_and(is_hit, jnp.logical_or((state.cooldown % 8) < 4, state.cooldown < 30)),
-            lambda: chicken_hit,
-            lambda: chicken
+            0,  # player_hit is index 0
+            chicken_frame_index
         )
-        chicken_offset = jax.lax.cond(
-            is_hit,
-            lambda: chicken_hit_offset,
-            lambda: chicken_offset,
-        )
-        raster = jr.render_at(raster, self.consts.chicken_x, state.chicken_y, chicken, flip_offset=chicken_offset)
+        
+        chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
+        raster = self.jr.render_at(raster, self.consts.chicken_x, state.chicken_y, chicken_mask)
 
-        # render the cars in the correct color (starting from the top: dark red, light green, dark green, light red, blue, brown, light blue, red, green, yellow)
-        dark_red = jr.get_sprite_frame(self.sprites['car_dark_red'], 0)
-        raster = jr.render_at(raster, state.cars[0, 0], state.cars[0, 1], dark_red)
+        # Render cars in the correct colors
+        car_masks = [
+            self.SHAPE_MASKS["car_dark_red"],
+            self.SHAPE_MASKS["car_light_green"],
+            self.SHAPE_MASKS["car_dark_green"],
+            self.SHAPE_MASKS["car_light_red"],
+            self.SHAPE_MASKS["car_blue"],
+            self.SHAPE_MASKS["car_brown"],
+            self.SHAPE_MASKS["car_light_blue"],
+            self.SHAPE_MASKS["car_red"],
+            self.SHAPE_MASKS["car_green"],
+            self.SHAPE_MASKS["car_yellow"],
+        ]
+        
+        for i in range(self.consts.num_lanes):
+            raster = self.jr.render_at(raster, state.cars[i, 0], state.cars[i, 1], car_masks[i])
 
-        light_green = jr.get_sprite_frame(self.sprites['car_light_green'], 0)
-        raster = jr.render_at(raster, state.cars[1, 0], state.cars[1, 1], light_green)
+        # Render score
+        score_digits = self.jr.int_to_digits(state.score, max_digits=2)
+        score_digit_masks = self.SHAPE_MASKS["score_digits"]
+        
+        is_single_digit = state.score < 10
+        start_index = jax.lax.select(is_single_digit, 1, 0)
+        num_to_render = jax.lax.select(is_single_digit, 1, 2)
+        render_x = jax.lax.select(is_single_digit, 49 + 8 // 2, 49)
+        
+        raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index, num_to_render, spacing=8)
 
-        dark_green = jr.get_sprite_frame(self.sprites['car_dark_green'], 0)
-        raster = jr.render_at(raster, state.cars[2, 0], state.cars[2, 1], dark_green)
+        # Render black bar on the left side
+        black_bar_mask = self.SHAPE_MASKS["black_bar"]
+        raster = self.jr.render_at(raster, 0, 0, black_bar_mask)
 
-        light_red = jr.get_sprite_frame(self.sprites['car_light_red'], 0)
-        raster = jr.render_at(raster, state.cars[3, 0], state.cars[3, 1], light_red)
-
-        blue = jr.get_sprite_frame(self.sprites['car_blue'], 0)
-        raster = jr.render_at(raster, state.cars[4, 0], state.cars[4, 1], blue)
-
-        brown = jr.get_sprite_frame(self.sprites['car_brown'], 0)
-        raster = jr.render_at(raster, state.cars[5, 0], state.cars[5, 1], brown)
-
-        light_blue = jr.get_sprite_frame(self.sprites['car_light_blue'], 0)
-        raster = jr.render_at(raster, state.cars[6, 0], state.cars[6, 1], light_blue)
-
-        red = jr.get_sprite_frame(self.sprites['car_red'], 0)
-        raster = jr.render_at(raster, state.cars[7, 0], state.cars[7, 1], red)
-
-        green = jr.get_sprite_frame(self.sprites['car_green'], 0)
-        raster = jr.render_at(raster, state.cars[8, 0], state.cars[8, 1], green)
-
-        yellow = jr.get_sprite_frame(self.sprites['car_yellow'], 0)
-        raster = jr.render_at(raster, state.cars[9, 0], state.cars[9, 1], yellow)
-
-        # ----------- SCORE -------------
-        # Define score positions and spacing
-        player_score_rightmost_digit_x = 49  # X position for the START of the player's rightmost digit (or single digit)
-        enemy_score_rightmost_digit_x = 114  # X position for the START of the enemy's single '0' digit
-        score_y = 5
-        score_spacing = 8  # Spacing between digits (should match digit width ideally)
-        max_score_digits = 2
-
-        # Get digit sprites
-        digit_sprites = self.sprites.get('score', None)
-
-        # Define the function to render scores if sprites are available
-        def render_scores(raster_to_update):
-            # --- Player Score (Left) ---
-            # Convert score to digit indices (always 2, e.g., 0 -> [0,0], 10 -> [1,0])
-            player_score_digits_indices = jr.int_to_digits(state.score, max_digits=max_score_digits)
-
-            # Determine parameters based on score magnitude
-            is_player_single_digit = state.score < 10
-
-            # Start index in player_score_digits_indices:
-            # - If single digit (e.g., score=5 -> indices=[0,5]), start reading at index 1 to get the '5'.
-            # - If double digit (e.g., score=12 -> indices=[1,2]), start reading at index 0 to get '1' then '2'.
-            player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
-
-            # Number of digits to render: 1 for single, 2 for double
-            player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
-
-            # Calculate the starting X position for rendering:
-            # - If single digit, render starts at player_score_rightmost_digit_x.
-            # - If double digit, render starts score_spacing pixels *before* player_score_rightmost_digit_x,
-            #   so the second digit ('0' in '10') aligns correctly at player_score_rightmost_digit_x.
-            player_render_x = jax.lax.select(is_player_single_digit,
-                                             player_score_rightmost_digit_x,
-                                             player_score_rightmost_digit_x - score_spacing)
-
-            # Render player score using selective rendering
-            raster_updated = jr.render_label_selective(raster_to_update, player_render_x, score_y,
-                                                       player_score_digits_indices, digit_sprites[0],
-                                                       player_start_index, player_num_to_render,
-                                                       spacing=score_spacing)
-
-            # --- Enemy Score (Right - rendering a Dummy '0' since the right player is not playable) ---
-            enemy_score = 0
-            enemy_score_digits_indices = jr.int_to_digits(enemy_score, max_digits=max_score_digits)  # [0, 0]
-            # Parameters for single digit '0'
-            enemy_start_index = 1  # Read the second '0' from indices [0, 0]
-            enemy_num_to_render = 1  # Render only one digit
-            # Render the enemy '0' starting at its designated rightmost position
-            enemy_render_x = enemy_score_rightmost_digit_x
-
-            # Render enemy score using selective rendering
-            raster_final = jr.render_label_selective(raster_updated, enemy_render_x, score_y,
-                                                     enemy_score_digits_indices, digit_sprites[0],
-                                                     enemy_start_index, enemy_num_to_render,
-                                                     spacing=score_spacing)  # Spacing doesn't matter here
-            return raster_final
-
-        # Render scores conditionally
-        raster = jax.lax.cond(
-            digit_sprites is not None,
-            render_scores,
-            lambda r: r,
-            raster
-        )
-
-        # Force the first 8 columns (x=0 to x=7) to be black (KEEP THIS PART)
-        # Frame is (Height, Width, Channels) so we index as [y_range, x_range, :]
-        bar_width = 8
-        raster = raster.at[:, :bar_width, :].set(0)
-
-        return raster
+        return self.jr.render_from_palette(raster, self.PALETTE)
