@@ -11,7 +11,7 @@ import pygame
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 from functools import partial
 
-from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.environment import (
     JaxEnvironment,
@@ -22,7 +22,7 @@ import jaxatari.spaces as spaces
 
 
 @dataclass(frozen=True)
-class GameConfig:
+class GameConfig: # TODO: move this into the constants..
     """Game configuration parameters"""
 
     screen_width: int = 160
@@ -161,310 +161,6 @@ class AtlantisConstants(NamedTuple):
     pass
 
 
-class Renderer_AtraJaxis(JAXGameRenderer):
-    sprites: Dict[str, Any]
-
-    def __init__(self, config: GameConfig | None = None):
-        super().__init__()
-        self.config = config or GameConfig()
-        self.sprite_path = (
-            f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
-        )
-        self.sprites = self._load_sprites()
-        self.score_digit_sprites = self.sprites.get("score_digit_sprites")
-
-    def _load_sprites(self) -> dict[str, Any]:
-        """Loads all necessary sprites from .npy files."""
-        sprites: Dict[str, Any] = {}
-
-        # Helper function to load a single sprite frame
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f"{name}.npy")
-            frame = aj.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
-
-        # Load Sprites
-        # Backgrounds + Dynamic elements + UI elements
-        sprite_names = [
-            "small_enemy",
-            "round_enemy",
-            "long_enemy",
-            "cannon_left",
-            "cannon_right",
-            "cannon_middle",
-            "installation_1",
-            "installation_2",
-            "installation_3",
-            "installation_4",
-            "installation_5",
-            "installation_6",
-            "background",
-        ]
-        for name in sprite_names:
-            loaded_sprite = _load_sprite_frame(name)
-            if loaded_sprite is not None:
-                sprites[name] = loaded_sprite
-
-        # digits for score
-        sprites["score_digit_sprites"] = aj.load_and_pad_digits(
-            os.path.join(self.sprite_path, "score_{}.npy"), num_chars=10
-        )
-        return sprites
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: AtlantisState) -> chex.Array:
-
-        def _solid_sprite(
-            width: int, height: int, rgb: tuple[int, int, int]
-        ) -> chex.Array:
-            """Creates a slid-color RGBA sprite of given size and color"""
-            rgb_arr = jnp.broadcast_to(
-                jnp.array(rgb, dtype=jnp.uint8), (width, height, 3)
-            )
-            alpha = jnp.full((width, height, 1), 255, dtype=jnp.uint8)
-            return jnp.concatenate([rgb_arr, alpha], axis=-1)  # (W, H, 4)
-
-        cfg = self.config
-        W, H = cfg.screen_width, cfg.screen_height
-
-        # add background
-        bg_sprite = self.sprites["background"]
-        raster = aj.render_at(
-            jnp.zeros_like(bg_sprite[..., :3]), 0, 0, bg_sprite
-        )
-
-        # add cannons
-        raster = aj.render_at(
-            raster,
-            cfg.cannon_x[0],
-            cfg.cannon_y[0],
-            self.sprites["cannon_left"],
-        )
-        raster = jax.lax.cond(
-            state.command_post_alive,
-            lambda r: aj.render_at(
-                r,
-                cfg.cannon_x[1],
-                cfg.cannon_y[1],
-                self.sprites["cannon_middle"],
-            ),
-            lambda r: r,  # return raster unchanged if false
-            raster,
-        )
-        raster = aj.render_at(
-            raster,
-            cfg.cannon_x[2],
-            cfg.cannon_y[2],
-            self.sprites["cannon_right"],
-        )
-
-        # add installations
-        raster = jax.lax.cond(
-            state.installations[0],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[0],
-                cfg.installations_y[0],
-                self.sprites["installation_1"],
-            ),
-            lambda r: r,  # return raster unchanged if false
-            raster,
-        )
-        raster = jax.lax.cond(
-            state.installations[1],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[1],
-                cfg.installations_y[1],
-                self.sprites["installation_2"],
-            ),
-            lambda r: r,
-            raster,
-        )
-        raster = jax.lax.cond(
-            state.installations[2],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[2],
-                cfg.installations_y[2],
-                self.sprites["installation_3"],
-            ),
-            lambda r: r,
-            raster,
-        )
-        raster = jax.lax.cond(
-            state.installations[3],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[3],
-                cfg.installations_y[3],
-                self.sprites["installation_4"],
-            ),
-            lambda r: r,
-            raster,
-        )
-        raster = jax.lax.cond(
-            state.installations[4],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[4],
-                cfg.installations_y[4],
-                self.sprites["installation_5"],
-            ),
-            lambda r: r,
-            raster,
-        )
-        raster = jax.lax.cond(
-            state.installations[5],
-            lambda r: aj.render_at(
-                raster,
-                cfg.installations_x[5],
-                cfg.installations_y[5],
-                self.sprites["installation_6"],
-            ),
-            lambda r: r,
-            raster,
-        )
-
-        # add solid white bullets
-        bullet_sprite = _solid_sprite(
-            cfg.bullet_width, cfg.bullet_height, (255, 255, 255)
-        )
-
-        def _draw_bullet(i, ras):
-            alive = state.bullets_alive[i]
-            bx, by = state.bullets[i, 0], state.bullets[i, 1]
-            return jax.lax.cond(
-                alive,
-                lambda r: aj.render_at(r, bx, by, bullet_sprite),
-                lambda r: r,
-                ras,
-            )
-
-        raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
-
-        # add enemies
-        enemy_sprites = (
-            self.sprites["long_enemy"],
-            self.sprites["round_enemy"],
-            self.sprites["small_enemy"],
-        )
-
-        def _draw_enemy(i, ras):
-            state_i = state.enemies[i]
-            active = state.enemies[i, 5] == 1
-            ex = state.enemies[i, 0].astype(jnp.int32)
-            ey = state.enemies[i, 1].astype(jnp.int32)
-            flip = state.enemies[i, 2] < 0  # dx < 0 -> facing left
-            enemy_type = state.enemies[i, 3]
-            enemy_type = state_i[3].astype(jnp.int32)
-
-            def _do(r):
-                fns = (
-                    lambda r: aj.render_at(
-                        r, ex, ey, enemy_sprites[0], flip_horizontal=flip
-                    ),
-                    lambda r: aj.render_at(
-                        r, ex, ey, enemy_sprites[1], flip_horizontal=flip
-                    ),
-                    lambda r: aj.render_at(
-                        r, ex, ey, enemy_sprites[2], flip_horizontal=flip
-                    ),
-                )
-                # chooses based on the enemy_type (int) the draw function (this change needed because cond doesn't work with different sprite sizes)
-                return jax.lax.switch(enemy_type, fns, r)
-
-            return jax.lax.cond(active, _do, lambda r: r, ras)
-
-        raster = jax.lax.fori_loop(0, cfg.max_enemies, _draw_enemy, raster)
-
-        # render the score
-        max_digits = self.config.max_digits_for_score  # max amount of digits
-        num_digits = jnp.where(
-            state.score > 0,
-            (
-                jnp.ceil(
-                    jnp.log10(state.score.astype(jnp.float32) + 1.0)
-                ).astype(jnp.int32)
-            ),
-            1,
-        )  # actual amount of digits
-
-        score_digits = aj.int_to_digits(
-            state.score, max_digits=max_digits
-        )  # get digit array
-
-        # Position (centered on top)
-        digit_w = 8
-        total_w = digit_w * num_digits
-        score_x = (self.config.screen_width - total_w) // 2
-        score_y = 5
-
-        # Render score using the selective renderer
-        raster = aj.render_label_selective(
-            raster,
-            score_x,
-            score_y,
-            score_digits,
-            self.score_digit_sprites,
-            max_digits - num_digits,  # skip 0s in front of score
-            num_digits,  # show that many digits
-            spacing=digit_w,
-        )
-
-        # 1) Pre-make two full‐height, static-shape beams:
-        beam_light_blue = _solid_sprite(
-            self.config.height_upper_beam, 3, (90, 204, 165)
-        )
-        beam_green = _solid_sprite(50, 3, (61, 151, 60))
-
-        # 2) Helper to stack beams on top of each other
-        def _draw_two_tone_beam(raster, x):
-            r1 = aj.render_at(
-                raster, x, self.config.start_beam, beam_light_blue
-            )
-            # then draw yellow from start_y downward (overwrites just the top segment)
-            return aj.render_at(
-                r1,
-                x,
-                self.config.start_beam + self.config.height_upper_beam,
-                beam_green,
-            )
-
-        # 3) Draw plasma:
-        def _handle_draw_plasma(i, raster):
-            lane = state.enemies[i, 4].astype(jnp.int32)
-            active = state.enemies[i, 5] == 1
-            can_shoot = active & state.plasma_active[i]
-            on_lane4 = lane == 3
-
-            dx_i = state.enemies[i, 2]
-            x_i = state.enemies[i, 0].astype(jnp.int32)
-            half_w = (cfg.enemy_width[i] // 2).astype(jnp.int32)
-
-            # If dx <0 enemy is moving from right to left. Plasma should be drawn at enemy_x plus half width
-            # If dx > 0 enemy is moving from left to right. Plasma should be drawn at enemy_x plus enemy_x_width minus half width
-            ex = jnp.where(
-                dx_i < 0, x_i + half_w, x_i + cfg.enemy_width[i] - half_w
-            )
-
-            def _draw(r):
-                return _draw_two_tone_beam(r, ex)
-
-            return jax.lax.cond(
-                on_lane4 & can_shoot, _draw, lambda r: r, raster
-            )
-
-        # 5) finally, run it across all enemies
-
-        raster = jax.lax.fori_loop(
-            0, cfg.max_enemies, _handle_draw_plasma, raster
-        )
-
-        return raster
-
-
 class JaxAtlantis(
     JaxEnvironment[
         AtlantisState, AtlantisObservation, AtlantisInfo, AtlantisConstants
@@ -534,7 +230,7 @@ class JaxAtlantis(
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.renderer = Renderer_AtraJaxis(config=self.config)
+        self.renderer = AtlantisRenderer(config=self.config)
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -1700,130 +1396,180 @@ class JaxAtlantis(
         )
 
 
-# Keyboard inputs
-def get_human_action() -> chex.Array:
-    keys = pygame.key.get_pressed()
-    # up = keys[pygame.K_w] or keys[pygame.K_UP]
-    # down = keys[pygame.K_s] or keys[pygame.K_DOWN]
-    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    fire = keys[pygame.K_SPACE]
 
-    if right and fire:
-        return jnp.array(Action.RIGHTFIRE)
-    if left and fire:
-        return jnp.array(Action.LEFTFIRE)
-    if fire:
-        return jnp.array(Action.FIRE)
-
-    return jnp.array(Action.NOOP)
-
-
-def main():
-    config = GameConfig()
-    pygame.init()
-    screen = pygame.display.set_mode(
-        (
-            config.screen_width * config.scaling_factor,
-            config.screen_height * config.scaling_factor,
+class AtlantisRenderer(JAXGameRenderer):
+    def __init__(self, config: GameConfig | None = None):
+        super().__init__()
+        self.config = config or GameConfig()
+        self.jr = render_utils.JaxRenderingUtils(
+            render_utils.RendererConfig(
+                game_dimensions=(self.config.screen_height, self.config.screen_width)
+            )
         )
-    )
-    pygame.display.set_caption("Atlantis")
-    clock = pygame.time.Clock()
 
-    game = JaxAtlantis(config=config)
+        asset_config = self._get_asset_config()
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-    renderer = Renderer_AtraJaxis(config=config)
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
+        # --- FIX: Pad installation masks to the same size before stacking ---
+        inst_masks = [
+            self.SHAPE_MASKS["installation_1"], self.SHAPE_MASKS["installation_2"],
+            self.SHAPE_MASKS["installation_3"], self.SHAPE_MASKS["installation_4"],
+            self.SHAPE_MASKS["installation_5"], self.SHAPE_MASKS["installation_6"],
+        ]
 
-    # (curr_state, _) = jitted_reset()
-    (_, curr_state) = jitted_reset()
+        # Find the max dimensions
+        max_h = max(m.shape[0] for m in inst_masks)
+        max_w = max(m.shape[1] for m in inst_masks)
 
-    # Game loop
-    running = True
-    frame_by_frame = False
-    frameskip = game.frameskip
-    counter = 1
+        # Pad each mask to the max dimensions
+        padded_masks = []
+        for mask in inst_masks:
+            h, w = mask.shape
+            padded_mask = jnp.pad(
+                mask,
+                ((0, max_h - h), (0, max_w - w)),
+                mode="constant",
+                constant_values=self.jr.TRANSPARENT_ID
+            )
+            padded_masks.append(padded_mask)
 
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        (obs, curr_state, _, _, _) = jitted_step(
-                            curr_state, action
-                        )
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                (obs, curr_state, _, _, _) = jitted_step(curr_state, action)
-                # print("Enemies remaining:", int(curr_state.number_enemies_wave_remaining))
-                # print("Current wave: ", int(curr_state.wave))
-                # print(f"Timout: {int(curr_state.wave_end_cooldown_remaining)}")
-                # dx_list = curr_state.enemies[:, 2][curr_state.enemies[:, 5] == 1].tolist()
-                # print("Active enemy dx’s:", dx_list)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        # aj.update_pygame(
-        #    screen,
-        #    raster,
-        #    config.scaling_factor,
-        #    config.screen_width,
-        #    config.screen_height,
-        # )
-
-        counter += 1
-        # FPS
-        clock.tick(60)
-
-    pygame.quit()
+        # Now that all masks are the same shape, stack them
+        self.INSTALLATION_MASKS_STACKED = jnp.stack(padded_masks)
 
 
-if __name__ == "__main__":
-    main()
+    # ... The _get_asset_config method remains unchanged ...
+    def _get_asset_config(self) -> list:
+        config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {'name': 'small_enemy', 'type': 'single', 'file': 'small_enemy.npy'},
+            {'name': 'round_enemy', 'type': 'single', 'file': 'round_enemy.npy'},
+            {'name': 'long_enemy', 'type': 'single', 'file': 'long_enemy.npy'},
+            {'name': 'cannon_left', 'type': 'single', 'file': 'cannon_left.npy'},
+            {'name': 'cannon_right', 'type': 'single', 'file': 'cannon_right.npy'},
+            {'name': 'cannon_middle', 'type': 'single', 'file': 'cannon_middle.npy'},
+            {'name': 'installation_1', 'type': 'single', 'file': 'installation_1.npy'},
+            {'name': 'installation_2', 'type': 'single', 'file': 'installation_2.npy'},
+            {'name': 'installation_3', 'type': 'single', 'file': 'installation_3.npy'},
+            {'name': 'installation_4', 'type': 'single', 'file': 'installation_4.npy'},
+            {'name': 'installation_5', 'type': 'single', 'file': 'installation_5.npy'},
+            {'name': 'installation_6', 'type': 'single', 'file': 'installation_6.npy'},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        ]
+        def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:
+            color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
+            return jnp.tile(color, (height, width, 1))
+        procedural_assets = [
+            {'name': 'bullet', 'data': _solid_sprite_data(self.config.bullet_width, self.config.bullet_height, (255, 255, 255))},
+            {'name': 'beam_light_blue', 'data': _solid_sprite_data(3, self.config.height_upper_beam, (90, 204, 165))},
+            {'name': 'beam_green', 'data': _solid_sprite_data(3, 50, (61, 151, 60))},
+        ]
+        for asset in procedural_assets:
+            config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
+        return config
 
 
-# --------------------- Script to visualize sprites ---------------------
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: AtlantisState) -> chex.Array:
+        cfg = self.config
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-# import os
-# import numpy as np
-# import matplotlib.pyplot as plt
-#
-# def main2():
-#     # Pfad zur .npy Datei relativ zu diesem Skript
-#     script_dir = os.path.dirname(os.path.abspath(__file__))
-#     image_path = os.path.join(
-#         script_dir,
-#         "sprites", "atlantis", "0.npy"
-#     )
-#
-#     # .npy laden (Form (H, W, 4) mit RGBA)
-#     img = np.load(image_path)
-#
-#     # Figure und Achse anlegen, beide mit transparentem Hintergrund
-#     fig, ax = plt.subplots(figsize=(6, 6),
-#                            facecolor="none")        # Figure durchsichtig
-#     ax.set_facecolor("none")                         # Achse durchsichtig
-#
-#     # Bild anzeigen (RGBA wird unterstützt)
-#     ax.imshow(img)
-#     ax.axis("off")  # keine Achsenlinien
-#
-#     # Interaktive Anzeige
-#     plt.show()
-#
-#
-# if __name__ == "__main__":
-#     main2()
+        # --- Render Cannons ---
+        raster = self.jr.render_at(raster, cfg.cannon_x[0], cfg.cannon_y[0], self.SHAPE_MASKS["cannon_left"])
+        raster = jax.lax.cond(
+            state.command_post_alive,
+            lambda r: self.jr.render_at(r, cfg.cannon_x[1], cfg.cannon_y[1], self.SHAPE_MASKS["cannon_middle"]),
+            lambda r: r,
+            raster,
+        )
+        raster = self.jr.render_at(raster, cfg.cannon_x[2], cfg.cannon_y[2], self.SHAPE_MASKS["cannon_right"])
+
+        # --- Render Installations ---
+        # --- FIX: The logic is now valid because it uses the padded and stacked array ---
+        def _draw_installation(i, r):
+            return jax.lax.cond(
+                state.installations[i],
+                lambda ras: self.jr.render_at(ras, cfg.installations_x[i], cfg.installations_y[i], self.INSTALLATION_MASKS_STACKED[i]),
+                lambda ras: ras,
+                r
+            )
+        raster = jax.lax.fori_loop(0, 6, _draw_installation, raster)
+
+        # --- Render Bullets ---
+        bullet_mask = self.SHAPE_MASKS["bullet"]
+        def _draw_bullet(i, r):
+            return jax.lax.cond(
+                state.bullets_alive[i],
+                lambda ras: self.jr.render_at(ras, state.bullets[i, 0], state.bullets[i, 1], bullet_mask),
+                lambda ras: ras,
+                r,
+            )
+        raster = jax.lax.fori_loop(0, cfg.max_bullets, _draw_bullet, raster)
+
+        # --- Render Enemies ---
+        enemy_masks = [
+            self.SHAPE_MASKS["long_enemy"],
+            self.SHAPE_MASKS["round_enemy"],
+            self.SHAPE_MASKS["small_enemy"],
+        ]
+        def _draw_enemy(i, r):
+            def _do_draw(ras):
+                # Define a separate render function (branch) for each enemy type
+                def branch_0(r_): # long_enemy
+                    return self.jr.render_at_clipped(r_, state.enemies[i, 0].astype(jnp.int32), state.enemies[i, 1].astype(jnp.int32), 
+                                             self.SHAPE_MASKS["long_enemy"], flip_horizontal=state.enemies[i, 2] < 0)
+                
+                def branch_1(r_): # round_enemy
+                    return self.jr.render_at_clipped(r_, state.enemies[i, 0].astype(jnp.int32), state.enemies[i, 1].astype(jnp.int32), 
+                                             self.SHAPE_MASKS["round_enemy"], flip_horizontal=state.enemies[i, 2] < 0)
+
+                def branch_2(r_): # small_enemy
+                    return self.jr.render_at_clipped(r_, state.enemies[i, 0].astype(jnp.int32), state.enemies[i, 1].astype(jnp.int32), 
+                                             self.SHAPE_MASKS["small_enemy"], flip_horizontal=state.enemies[i, 2] < 0)
+
+                branches = [branch_0, branch_1, branch_2]
+                enemy_type_idx = state.enemies[i, 3].astype(jnp.int32)
+                
+                # Execute the correct branch based on the enemy type
+                return jax.lax.switch(enemy_type_idx, branches, ras)
+
+            return jax.lax.cond(state.enemies[i, 5] == 1, _do_draw, lambda ras: ras, r)
+        
+        raster = jax.lax.fori_loop(0, cfg.max_enemies, _draw_enemy, raster)
+
+        # --- Render Score ---
+        max_digits = cfg.max_digits_for_score
+        num_digits = jnp.where(state.score > 0, (jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.0)).astype(jnp.int32)), 1)
+        score_digits = self.jr.int_to_digits(state.score, max_digits=max_digits)
+        digit_w = 8
+        score_x = (cfg.screen_width - (digit_w * num_digits)) // 2
+        raster = self.jr.render_label_selective(
+            raster, score_x, 5, score_digits, self.SHAPE_MASKS["score_digits"],
+            start_index=(max_digits - num_digits), num_to_render=num_digits, spacing=digit_w
+        )
+
+        # --- Render Plasma Beams ---
+        beam_light_blue_mask = self.SHAPE_MASKS["beam_light_blue"]
+        beam_green_mask = self.SHAPE_MASKS["beam_green"]
+        def _draw_two_tone_beam(r, x):
+            r1 = self.jr.render_at(r, x, cfg.start_beam, beam_light_blue_mask)
+            return self.jr.render_at(r1, x, cfg.start_beam + cfg.height_upper_beam, beam_green_mask)
+
+        def _handle_draw_plasma(i, r):
+            can_shoot = (state.enemies[i, 5] == 1) & state.plasma_active[i] & (state.enemies[i, 4] == 3)
+            half_w = (cfg.enemy_width[i] // 2).astype(jnp.int32)
+            ex = jnp.where(
+                state.enemies[i, 2] < 0,
+                state.enemies[i, 0] + half_w,
+                state.enemies[i, 0] + cfg.enemy_width[i] - half_w
+            ).astype(jnp.int32)
+            return jax.lax.cond(can_shoot, lambda ras: _draw_two_tone_beam(ras, ex), lambda ras: ras, r)
+        raster = jax.lax.fori_loop(0, cfg.max_enemies, _handle_draw_plasma, raster)
+
+        return self.jr.render_from_palette(raster, self.PALETTE)
