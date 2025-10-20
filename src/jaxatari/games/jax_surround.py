@@ -7,7 +7,7 @@ from typing import NamedTuple, Tuple, Optional, Callable, Sequence
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
 
 
@@ -114,111 +114,6 @@ def create_border_mask(consts: SurroundConstants) -> jnp.ndarray:
     mask = mask.at[:, :by].set(True)
     mask = mask.at[:, -by:].set(True)
     return mask
-
-
-class SurroundRenderer(JAXGameRenderer):
-    """Very small dummy renderer used for tests."""
-
-    def __init__(self, consts: Optional[SurroundConstants] = None):
-        consts = consts or SurroundConstants()
-        super().__init__(consts)
-        self.consts = consts
-
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
-        digits = jr.load_and_pad_digits(digit_path)
-        p1_color = jnp.array(self.consts.P1_HEAD_COLOR, dtype=jnp.uint8)
-        p2_color = jnp.array(self.consts.P2_HEAD_COLOR, dtype=jnp.uint8)
-        self.p1_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p1_color, 0))
-        self.p2_digits = digits.at[..., :3].set(jnp.where(digits[..., 3:] > 0, p2_color, 0))
-
-    def render(self, state: SurroundState) -> jnp.ndarray:  # pragma: no cover - visual
-        bg = jnp.array(self.consts.BACKGROUND_COLOR, dtype=jnp.uint8)
-        width, height = self.consts.SCREEN_SIZE
-        img = jnp.ones((height, width, 3), dtype=jnp.uint8) * bg
-
-        # Playfield-Geometrie
-        cell_w, cell_h = self.consts.CELL_SIZE
-        field_h = self.consts.GRID_HEIGHT * cell_h
-        field_w = self.consts.GRID_WIDTH * cell_w
-        slack = height - field_h
-        y_off = (slack // cell_h) * cell_h  # snap offset to cell size for grid alignment
-
-        playfield = jnp.ones((field_h, field_w, 3), dtype=jnp.uint8) * bg
-
-        # Trails (upscale aus Zellen)
-        def upscale(mask):
-            return jnp.repeat(jnp.repeat(mask, cell_h, axis=0), cell_w, axis=1)
-
-        p1_color = jnp.array(self.consts.P1_TRAIL_COLOR, dtype=jnp.uint8)
-        p2_color = jnp.array(self.consts.P2_TRAIL_COLOR, dtype=jnp.uint8)
-
-        p1_mask = upscale((state.trail == 1).T)[..., None]
-        p2_mask = upscale((state.trail == 2).T)[..., None]
-        playfield = jnp.where(p1_mask, p1_color, playfield)
-        playfield = jnp.where(p2_mask, p2_color, playfield)
-
-        # Border
-        bx = self.consts.BORDER_CELLS_X * cell_w
-        by = self.consts.BORDER_CELLS_Y * cell_h
-        border_color = jnp.array(self.consts.BORDER_COLOR, dtype=jnp.uint8)
-        playfield = playfield.at[:by, :, :].set(border_color)
-        playfield = playfield.at[-by:, :, :].set(border_color)
-        playfield = playfield.at[:, :bx, :].set(border_color)
-        playfield = playfield.at[:, -bx:, :].set(border_color)
-
-        # Divider stripes over trails and border (horizontal midline per cell)
-        trail_any = upscale((state.trail != 0).T)
-        border_up = upscale(state.border.T)
-        occupied = jnp.logical_or(trail_any, border_up)
-        ys = jnp.arange(field_h)
-        mid = cell_h // 2
-        band = (ys % cell_h >= mid) & (ys % cell_h < mid + max(1, self.consts.DIVIDER_THICKNESS))
-        band_2d = jnp.broadcast_to(band[:, None], (field_h, field_w))
-        divider_mask = jnp.logical_and(band_2d, occupied)[..., None]
-        divider_col = jnp.array(self.consts.DIVIDER_COLOR, dtype=jnp.uint8)
-        playfield = jnp.where(divider_mask, divider_col, playfield)
-
-        # Köpfe (ohne Python-int()) — draw after divider so heads remain solid
-        p1x = (state.pos0[0] * cell_w).astype(jnp.int32)
-        p1y = (state.pos0[1] * cell_h).astype(jnp.int32)
-        p2x = (state.pos1[0] * cell_w).astype(jnp.int32)
-        p2y = (state.pos1[1] * cell_h).astype(jnp.int32)
-
-        head_patch1 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * p1_color
-        head_patch2 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * p2_color
-        playfield = jax.lax.dynamic_update_slice(playfield, head_patch1, (p1y, p1x, 0))
-        playfield = jax.lax.dynamic_update_slice(playfield, head_patch2, (p2y, p2x, 0))
-
-        # ---- Head fills the entire cell, colored as in the score display ----
-        head_patch1 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * jnp.array(self.consts.P1_HEAD_COLOR, dtype=jnp.uint8)
-        head_patch2 = jnp.ones((cell_h, cell_w, 3), dtype=jnp.uint8) * jnp.array(self.consts.P2_HEAD_COLOR, dtype=jnp.uint8)
-        playfield = jax.lax.dynamic_update_slice(playfield, head_patch1, (p1y, p1x, 0))
-        playfield = jax.lax.dynamic_update_slice(playfield, head_patch2, (p2y, p2x, 0))
-        # Playfield ins Bild
-        img = img.at[y_off:y_off + field_h, :field_w, :].set(playfield)
-
-        # Scores: directly above the box surrounding the playfield
-        idx0 = jnp.clip(state.score0 % 10, 0, 9)
-        idx1 = jnp.clip(state.score1 % 10, 0, 9)
-        digit_p1 = jr.get_sprite_frame(self.p1_digits, idx0)
-        digit_p2 = jr.get_sprite_frame(self.p2_digits, idx1)
-        
-        # Größer skalieren
-        scale_digits = 2
-        digit_p1 = jnp.kron(digit_p1, jnp.ones((scale_digits, scale_digits, 1), dtype=jnp.uint8))
-        digit_p2 = jnp.kron(digit_p2, jnp.ones((scale_digits, scale_digits, 1), dtype=jnp.uint8))
-
-        # Y-Position (wie gehabt)
-        border_y = self.consts.BORDER_CELLS_Y * self.consts.CELL_SIZE[1]
-        score_y = max(0, y_off + border_y - digit_p1.shape[0] - 8)
-
-        # X-Position: näher zusammengerückt
-        padding_x = 30
-        img = jr.render_at(img, padding_x, score_y, digit_p1)
-        img = jr.render_at(img, width - padding_x - digit_p2.shape[1], score_y, digit_p2)
-
-        return img
 
 
 class JaxSurround(
@@ -706,86 +601,139 @@ class JaxSurround(
         return jnp.concatenate(flat).astype(jnp.int32)
 
 
-def _pygame_action() -> int:
-    """Map pressed keys to a Surround action."""
-    import pygame
+class SurroundRenderer(JAXGameRenderer):
+    def __init__(self, consts: Optional[SurroundConstants] = None):
+        super().__init__()
+        self.consts = consts or SurroundConstants()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0]),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_UP]:
-        return Action.UP
-    if keys[pygame.K_RIGHT]:
-        return Action.RIGHT
-    if keys[pygame.K_LEFT]:
-        return Action.LEFT
-    if keys[pygame.K_DOWN]:
-        return Action.DOWN
-    if keys[pygame.K_SPACE]:
-        return Action.FIRE
-    return Action.NOOP
+        # --- FIX: Centralize all estimated colors as instance attributes ---
+        self.P1_HEAD_COLOR_TUPLE = (214, 214, 42)    # Yellow
+        self.P2_HEAD_COLOR_TUPLE = (198, 89, 179)    # Red/Pink
+        self.PLAYFIELD_COLOR_TUPLE = (181, 119, 181) # Lavender
+        self.BORDER_COLOR_TUPLE = (214, 92, 92)      # Pink
+        self.DIVIDER_COLOR_TUPLE = (142, 142, 142)   # Grey
 
+        asset_config = self._get_asset_config()
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, "")
 
-def main():
-    import pygame
-    import jax.numpy as jnp
-    from jaxatari.environment import JAXAtariAction as Action
-    from jaxatari.games.jax_surround import JaxSurround
+        self.TRAIL_COLOR_MAP = jnp.array([
+            self.jr.TRANSPARENT_ID,
+            self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR],
+            self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR],
+        ])
 
-    env = JaxSurround()
-    _obs, state = env.reset()
+    def _get_asset_config(self) -> list:
+        """Returns the declarative manifest of all assets for the game."""
+        config = []
 
-    pygame.init()
-    scale = 4
-    W, H = env.consts.SCREEN_SIZE
-    screen = pygame.display.set_mode((W * scale, H * scale))
-    pygame.display.set_caption("JAX Surround")
-    clock = pygame.time.Clock()
+        # --- FIX: Use the instance attributes defined in __init__ ---
+        procedural_sprites = {
+            'p1_head': jnp.array(list(self.P1_HEAD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'p2_head': jnp.array(list(self.P2_HEAD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'p1_trail': jnp.array(list(self.consts.P1_TRAIL_COLOR) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'p2_trail': jnp.array(list(self.consts.P2_TRAIL_COLOR) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'border': jnp.array(list(self.BORDER_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'divider': jnp.array(list(self.DIVIDER_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+            'playfield': jnp.array(list(self.PLAYFIELD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
+        }
 
-    # ---------- WICHTIG: JIT WARMUP ----------
-    # Einmal step + render ausführen, damit JIT vor Spielstart kompiliert.
-    warmup_action = jnp.array([Action.NOOP, Action.NOOP], dtype=jnp.int32)
-    _o, state, _r, _d, _i = env.step(state, warmup_action)
-    _ = env.render(state)
-    clock.tick(0)     # dt zurücksetzen
-    # -----------------------------------------
+        config.append({'name': 'background', 'type': 'background', 'data': jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)})
 
-    LOGIC_HZ = 4                # 4 Zellen pro Sekunde
-    RENDER_HZ = 60
-    STEP_MS = 1000 // LOGIC_HZ
-    acc_ms = 0
-    running = True
-    latest_action = Action.NOOP
+        for name, data in procedural_sprites.items():
+            config.append({'name': name, 'type': 'procedural', 'data': data})
 
-    while running:
-        # feste Render-FPS
-        dt = clock.tick(RENDER_HZ)
-        acc_ms += dt
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
+        base_digits = self.jr.load_and_pad_digits(digit_path)
+        scale = 2
+        scaled_digits_list = [jnp.kron(d, jnp.ones((scale, scale, 1), dtype=jnp.uint8)) for d in base_digits]
+        scaled_digits = jnp.stack(scaled_digits_list)
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+        alpha_mask = scaled_digits[..., 3:] > 128
+        p1_digits_rgba = jnp.concatenate([jnp.where(alpha_mask, jnp.array(self.P1_HEAD_COLOR_TUPLE), 0), scaled_digits[..., 3:]], axis=-1)
+        p2_digits_rgba = jnp.concatenate([jnp.where(alpha_mask, jnp.array(self.P2_HEAD_COLOR_TUPLE), 0), scaled_digits[..., 3:]], axis=-1)
 
-        # Eingabe (immer lesen, aber erst beim nächsten Logikstep anwenden)
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
-            latest_action = Action.UP
-        elif keys[pygame.K_RIGHT]:
-            latest_action = Action.RIGHT
-        elif keys[pygame.K_LEFT]:
-            latest_action = Action.LEFT
-        elif keys[pygame.K_DOWN]:
-            latest_action = Action.DOWN
-        elif keys[pygame.K_SPACE]:
-            latest_action = Action.FIRE
+        config.append({'name': 'p1_digits', 'type': 'procedural', 'data': p1_digits_rgba})
+        config.append({'name': 'p2_digits', 'type': 'procedural', 'data': p2_digits_rgba})
 
-        # ---- feste Logikrate: max. 1 Step pro Frame (Clamping) ----
-        if acc_ms >= STEP_MS:
-            acc_ms -= STEP_MS
-            joint_action = jnp.array([latest_action, Action.NOOP], dtype=jnp.int32)
-            _obs, state, reward, done, _info = env.step(state, joint_action)
-            if bool(done):
-                _obs, state = env.reset()
-                latest_action = Action.NOOP
-                acc_ms = 0
-        # -----------------------------------------------------------
-if __name__ == "__main__":
-    main()
+        return config
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: SurroundState) -> jnp.ndarray:
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        cell_w, cell_h = self.consts.CELL_SIZE
+        field_h = self.consts.GRID_HEIGHT * cell_h
+        field_w = self.consts.GRID_WIDTH * cell_w
+        slack = self.consts.SCREEN_SIZE[1] - field_h
+        y_off = (slack // cell_h) * cell_h
+
+        raster = self.jr.draw_rects(
+            raster,
+            positions=jnp.array([[0, y_off]]),
+            sizes=jnp.array([[field_w, field_h]]),
+            color_id=self.COLOR_TO_ID[self.PLAYFIELD_COLOR_TUPLE]
+        )
+
+        raster = self.jr.render_grid_inverse(
+            raster, state.trail.T, (0, y_off), (cell_w, cell_h), self.TRAIL_COLOR_MAP
+        )
+
+        bx = self.consts.BORDER_CELLS_X * cell_w
+        by = self.consts.BORDER_CELLS_Y * cell_h
+        border_positions = jnp.array([[0, y_off], [0, y_off + field_h - by], [0, y_off], [field_w - bx, y_off]])
+        border_sizes = jnp.array([[field_w, by], [field_w, by], [bx, field_h], [bx, field_h]])
+        # --- FIX: Use the consistent color attribute for the border ---
+        raster = self.jr.draw_rects(raster, border_positions, border_sizes, self.COLOR_TO_ID[self.BORDER_COLOR_TUPLE])
+
+        occupied_grid = jnp.logical_or(state.trail != 0, state.border).T.astype(jnp.int32)
+        temp_raster = jnp.zeros_like(raster, dtype=bool)
+        grid_mask_raster = self.jr.render_grid_inverse(
+            temp_raster, occupied_grid, (0, y_off), (cell_w, cell_h), jnp.array([False, True])
+        )
+        yy = self.jr._yy
+        relative_y = yy - y_off
+        mid = cell_h // 2
+        divider_thickness = max(1, self.consts.DIVIDER_THICKNESS)
+        band_mask = (relative_y % cell_h >= mid) & (relative_y % cell_h < mid + divider_thickness)
+        final_divider_mask = jnp.logical_and(grid_mask_raster, band_mask)
+        # --- FIX: Use the consistent color attribute for the divider ---
+        raster = jnp.where(final_divider_mask, self.COLOR_TO_ID[self.DIVIDER_COLOR_TUPLE], raster)
+
+        p1x = state.pos0[0] * cell_w
+        p1y = state.pos0[1] * cell_h + y_off
+        p2x = state.pos1[0] * cell_w
+        p2y = state.pos1[1] * cell_h + y_off
+
+        p1_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR]
+        p2_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR]
+        # --- FIX: Use the consistent color attributes for the heads ---
+        p1_head_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.P1_HEAD_COLOR_TUPLE]
+        p2_head_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.P2_HEAD_COLOR_TUPLE]
+
+        raster = self.jr.render_at(raster, p1x, p1y, p1_trail_mask)
+        raster = self.jr.render_at(raster, p2x, p2y, p2_trail_mask)
+        raster = self.jr.render_at(raster, p1x, p1y, p1_head_mask)
+        raster = self.jr.render_at(raster, p2x, p2y, p2_head_mask)
+
+        border_y_abs = y_off + self.consts.BORDER_CELLS_Y * cell_h
+        digit_h = self.SHAPE_MASKS['p1_digits'].shape[1]
+        score_y = max(0, border_y_abs - digit_h - 8)
+        padding_x = 30
+        p1_digit_val = jnp.clip(state.score0 % 10, 0, 9)
+        p2_digit_val = jnp.clip(state.score1 % 10, 0, 9)
+
+        raster = self.jr.render_at(raster, padding_x, score_y, self.SHAPE_MASKS['p1_digits'][p1_digit_val])
+        raster = self.jr.render_at(raster, self.consts.SCREEN_SIZE[0] - padding_x - self.SHAPE_MASKS['p2_digits'].shape[2], score_y, self.SHAPE_MASKS['p2_digits'][p2_digit_val])
+
+        return self.jr.render_from_palette(raster, self.PALETTE)

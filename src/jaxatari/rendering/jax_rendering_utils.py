@@ -334,31 +334,54 @@ class JaxRenderingUtils:
 
         # 1. Load all assets from the configuration manifest
         for asset in asset_config:
-            name, asset_type = asset['name'], asset['type']
+            name, asset_type = asset.get('name'), asset.get('type')
 
             if asset_type == 'background':
-                path = os.path.join(base_path, asset['file'])
-                background_rgba = self.loadFrame(path)
+                # Support either file-backed or procedural backgrounds
+                if 'file' in asset:
+                    path = os.path.join(base_path, asset['file'])
+                    background_rgba = self.loadFrame(path)
+                elif 'data' in asset:
+                    background_rgba = asset['data']
+                else:
+                    raise ValueError("Background asset must include 'file' or 'data'.")
                 continue
 
             if asset_type == 'single':
-                path = os.path.join(base_path, asset['file'])
-                raw_sprites_dict[name] = self.loadFrame(path)
+                if 'file' in asset:
+                    path = os.path.join(base_path, asset['file'])
+                    raw_sprites_dict[name] = self.loadFrame(path)
+                elif 'data' in asset:
+                    raw_sprites_dict[name] = asset['data']
+                else:
+                    raise ValueError(f"Single asset '{name}' must include 'file' or 'data'.")
                 FLIP_OFFSETS[name] = jnp.array([0, 0])
 
             elif asset_type == 'group':
-                        paths = [os.path.join(base_path, f) for f in asset['files']]
-                        sprites_to_pad = [self.loadFrame(p) for p in paths]
-                        
-                        padded_sprites, flip_offset = self.pad_to_match(sprites_to_pad)
-                        raw_sprites_dict[name] = jnp.stack(padded_sprites)
-                        
-                        # Stack the list of offsets into a (N, 2) array
-                        FLIP_OFFSETS[name] = flip_offset[0]
+                if 'files' in asset:
+                    paths = [os.path.join(base_path, f) for f in asset['files']]
+                    sprites_to_pad = [self.loadFrame(p) for p in paths]
+                elif 'data' in asset:
+                    # Allow passing a list/stack of RGBA sprites directly
+                    data = asset['data']
+                    sprites_to_pad = list(data) if isinstance(data, (list, tuple)) else [s for s in data]
+                else:
+                    raise ValueError(f"Group asset '{name}' must include 'files' or 'data'.")
+
+                padded_sprites, flip_offset = self.pad_to_match(sprites_to_pad)
+                raw_sprites_dict[name] = jnp.stack(padded_sprites)
+                # Use per-sprite offsets; keep API-compatible scalar by picking first if uniform
+                FLIP_OFFSETS[name] = flip_offset[0]
 
             elif asset_type == 'digits':
-                pattern = os.path.join(base_path, asset['pattern'])
-                raw_sprites_dict[name] = self.load_and_pad_digits(pattern)
+                if 'pattern' in asset:
+                    pattern = os.path.join(base_path, asset['pattern'])
+                    raw_sprites_dict[name] = self.load_and_pad_digits(pattern)
+                elif 'data' in asset:
+                    # Accept preloaded/padded digit stacks directly
+                    raw_sprites_dict[name] = asset['data']
+                else:
+                    raise ValueError(f"Digits asset '{name}' must include 'pattern' or 'data'.")
                 FLIP_OFFSETS[name] = jnp.array([0, 0])
 
             elif asset_type == 'procedural':

@@ -10,7 +10,8 @@ from jax import random as jrandom
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
+import numpy as np
 from jaxatari.renderers import JAXGameRenderer
 
 class TetrisConstants(NamedTuple):
@@ -599,207 +600,151 @@ class TetrisRenderer(JAXGameRenderer):
     def __init__(self, consts: TetrisConstants = None):
         super().__init__()
         self.consts = consts or TetrisConstants()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 1. Load all assets using the declarative pattern
+        asset_config = self._get_asset_config()
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris"
+
         (
-            self.SPRITE_BG,
-            self.SPRITE_BOARD,
-            self.SCORE_DIGIT_SPRITES,
-            self.SPRITE_ROW_COLORS,
-            self.SPRITE_ONE, #new banner for one
-            self.SPRITE_TWO, #new banner for two
-            self.SPRITE_THREE, #new banner for triple
-            self.SPRITE_TETRIS, #new banner for tetris
-        ) = self.load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        self.N_COLOR_ROWS = int(self.SPRITE_ROW_COLORS.shape[0])
+        # 2. Precompute the color map for the board grid
+        self.BOARD_COLOR_MAP = self._precompute_board_color_map()
 
-    def load_sprites(self):
-        """Load all sprites required for Tetris rendering."""
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    def _get_asset_config(self) -> list:
+        """Returns the declarative manifest of all assets for the game."""
+        # This list defines all sprites that need to be loaded from files.
+        config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {'name': 'board_overlay', 'type': 'single', 'file': 'board.npy'},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
+            {'name': 'banner_one', 'type': 'single', 'file': 'text_one.npy'},
+            {'name': 'banner_two', 'type': 'single', 'file': 'text_two.npy'},
+            {'name': 'banner_triple', 'type': 'single', 'file': 'text_triple.npy'},
+            {'name': 'banner_tetris', 'type': 'single', 'file': 'text_tetris.npy'},
+        ]
 
-        # Load background sprites
-        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/background.npy"))
-        board = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/board.npy"))
+        # Procedurally generate 1x1 pixel sprites for each of the 22 row colors.
+        # This ensures they are all included in the final color palette.
+        for i in range(22):
+            # The file is loaded here to get the color, then converted to a procedural sprite.
+            color_rgba = self.jr.loadFrame(
+                f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris/height_colors/h_{i}.npy"
+            )[0, 0] # Get the color from the top-left pixel
+            config.append({
+                'name': f'row_color_{i}',
+                'type': 'procedural',
+                'data': color_rgba.reshape(1, 1, 4)
+            })
+        return config
 
-        # Convert all sprites to the expected format (add frame dimension)
-        SPRITE_BG = jnp.expand_dims(bg, axis=0)
-        SPRITE_BOARD = jnp.expand_dims(board, axis=0)
-
-        # Load digits for scores
-        SCORE_DIGIT_SPRITES = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/tetris/score/score_{}.npy"),
-            num_chars=10,
-        )
-
-        # Colors for tetris pieces on the board
-        row_squares = []
-        for i in range(22):  # 22 rows
-            sprite = jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/tetris/height_colors/h_{i}.npy"))
-            row_squares.append(sprite)
-
-        SPRITE_ROW_COLORS = jnp.stack(row_squares, axis=0)  # Shape: (22, H, W, 4)
-
-        # Sprites for banners: when a row is cleared a message
-        # on the right side of the board is shown
-        # Load banner sprites shown when rows are cleared.
-        # Each .npy file stores an RGBA image (H, W, 4) for ONE/TWO/TRIPLE/TETRIS
-        one = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_one.npy"))
-        two = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_two.npy"))
-        three = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_triple.npy"))
-        tetris = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/tetris/text_tetris.npy"))
-
-
-        # uint8 -> everything into 8 bits. It also works without the conversion so idk
-        # SPRITE_ONE = jnp.expand_dims(one.astype(jnp.uint8), axis=0)
-
-        # expand dimensions so that shape (H, W, 4) becomes (1, H, W, 4),
-        # making them compatible with sprite-handling code that expects a
-        # sequence of frames: (NumFrames, Height, Width, Channels).
-        SPRITE_ONE = jnp.expand_dims(jnp.array(one, dtype=jnp.uint8), axis=0)
-        SPRITE_TWO = jnp.expand_dims(jnp.array(two, dtype=jnp.uint8), axis=0)
-        SPRITE_THREE = jnp.expand_dims(jnp.array(three, dtype=jnp.uint8), axis=0)
-        SPRITE_TETRIS = jnp.expand_dims(jnp.array( tetris, dtype=jnp.uint8), axis=0)
-
-
-        return (
-            SPRITE_BG,
-            SPRITE_BOARD,
-            SCORE_DIGIT_SPRITES,
-            SPRITE_ROW_COLORS,
-            SPRITE_ONE,
-            SPRITE_TWO,
-            SPRITE_THREE,
-            SPRITE_TETRIS
-        )
+    def _precompute_board_color_map(self) -> jnp.ndarray:
+        """Creates a lookup table mapping a row's object ID to its color ID."""
+        # Object ID 0 is transparent/background.
+        # Object ID 1 will map to the color of row_color_0, ID 2 to row_color_1, and so on.
+        color_ids = [self.jr.TRANSPARENT_ID]
+        for i in range(22):
+            # Load the color, convert to a tuple, and look up its ID in the generated map.
+            color_rgba = self.jr.loadFrame(
+                f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris/height_colors/h_{i}.npy"
+            )[0, 0]
+            rgb_tuple = tuple(np.array(color_rgba[:3]))
+            color_ids.append(self.COLOR_TO_ID[rgb_tuple])
+        return jnp.array(color_ids)
 
     @partial(jax.jit, static_argnums=(0,))
     def get_piece_shape(self, piece_idx: chex.Array, rotation_idx: chex.Array) -> chex.Array:
         return self.consts.TETROMINOS[piece_idx, rotation_idx]
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        # Base raster and static layers
-        raster = jr.create_initial_frame(width=160, height=210)
-
-        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
-
-        frame_board = jr.get_sprite_frame(self.SPRITE_BOARD, 0)
-        raster = jr.render_at(raster, self.consts.BOARD_X, self.consts.BOARD_Y, frame_board)
-
-        # Vectorized board + piece rasterization (no loops)
-        board = state.board  # (H_board, W_board) {0,1}
-        H_board = board.shape[0]
-        W_board = board.shape[1]
-
-        # Raster grid (xy indexing)
-        H_out, W_out, _ = raster.shape
-        xx, yy = jnp.meshgrid(jnp.arange(W_out, dtype=jnp.int32),
-                              jnp.arange(H_out, dtype=jnp.int32), indexing="xy")
-
-        # Geometry
-        cell_w = jnp.int32(self.consts.CELL_WIDTH)
-        cell_h = jnp.int32(self.consts.CELL_HEIGHT)
-        stride_x = cell_w + jnp.int32(1)
-        stride_y = cell_h + jnp.int32(1)
-        board_x0 = jnp.int32(self.consts.BOARD_X + self.consts.BOARD_PADDING)
-        board_y0 = jnp.int32(self.consts.BOARD_Y)
-
-        # Local board-plane coordinates
-        local_x = xx - board_x0
-        local_y = yy - board_y0
-
-        in_region = (
-            (local_x >= 0)
-            & (local_y >= 0)
-            & (local_x < stride_x * W_board)
-            & (local_y < stride_y * H_board)
+    def render(self, state: TetrisState):
+        # --- 1. Initialize Raster & Static Elements ---
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self.jr.render_at(
+            raster, self.consts.BOARD_X, self.consts.BOARD_Y, self.SHAPE_MASKS['board_overlay']
         )
 
-        # Cell indices and intra-cell offsets
-        cell_c = local_x // stride_x
-        cell_r = local_y // stride_y
-        off_x = local_x - cell_c * stride_x
-        off_y = local_y - cell_r * stride_y
+        # Get the shape of the current piece
+        piece_shape = self.get_piece_shape(state.piece_type, state.rot)
+        H_board, W_board = state.board.shape
 
-        inside_tile = (off_x < cell_w) & (off_y < cell_h)
+        # Create coordinate grids for the entire board
+        board_rows, board_cols = jnp.mgrid[:H_board, :W_board]
 
-        # Safe indices for board gather
-        cell_r_c = jnp.clip(cell_r, 0, H_board - 1)
-        cell_c_c = jnp.clip(cell_c, 0, W_board - 1)
+        # For each board cell, calculate its coordinate relative to the piece's top-left corner
+        relative_rows = board_rows - state.pos[0]
+        relative_cols = board_cols - state.pos[1]
 
-        # Board occupancy per pixel
-        board_on = (board[cell_r_c, cell_c_c] == 1)
+        # Create a mask for which board cells are covered by the piece's 4x4 grid
+        in_piece_grid = (relative_rows >= 0) & (relative_rows < 4) & \
+                        (relative_cols >= 0) & (relative_cols < 4)
 
-        # Piece occupancy per pixel
-        piece = self.get_piece_shape(state.piece_type, state.rot)  # (4,4)
-        pos_y, pos_x = state.pos
-        rel_y = cell_r - jnp.asarray(pos_y, jnp.int32)
-        rel_x = cell_c - jnp.asarray(pos_x, jnp.int32)
-        in_piece = (rel_y >= 0) & (rel_y < 4) & (rel_x >= 0) & (rel_x < 4)
-        rel_y_c = jnp.clip(rel_y, 0, 3)
-        rel_x_c = jnp.clip(rel_x, 0, 3)
-        piece_on = (piece[rel_y_c, rel_x_c] == 1) & in_piece
+        # Safely look up the piece shape for the covered cells
+        safe_rel_rows = jnp.clip(relative_rows, 0, 3)
+        safe_rel_cols = jnp.clip(relative_cols, 0, 3)
+        piece_values = piece_shape[safe_rel_rows, safe_rel_cols]
 
-        # Active pixels to draw (non-overlapping by construction)
-        active = in_region & inside_tile & (board_on | piece_on)
-
-        # Select row-colored sprite pixel per raster pixel
-        row_sel = ((H_board - 1 - cell_r_c) % jnp.int32(self.N_COLOR_ROWS))
-        off_y_c = jnp.clip(off_y, 0, cell_h - 1)
-        off_x_c = jnp.clip(off_x, 0, cell_w - 1)
-        sprite_px_rgba = self.SPRITE_ROW_COLORS[row_sel, off_y_c, off_x_c]  # (...,4)
-
-        # Alpha blend in one pass for all active pixels
-        sprite_rgb = sprite_px_rgba[..., :3].astype(jnp.float32)
-        sprite_a = (sprite_px_rgba[..., 3].astype(jnp.float32) / 255.0)
-        base_rgb = raster[..., :3].astype(jnp.float32)
-
-        a_mask = sprite_a * active.astype(jnp.float32)
-        blended_rgb = sprite_rgb * a_mask[..., None] + base_rgb * (1.0 - a_mask[..., None])
-        raster = jnp.where(active[..., None], blended_rgb.astype(raster.dtype), raster)
-
-        # score (unchanged)
-        score_digits = jr.int_to_digits(state.score, max_digits=4)
-        raster = jr.render_label_selective(
+        # Create the final "piece layer" by applying the mask
+        piece_layer = jnp.where(in_piece_grid, piece_values, 0)
+        
+        # Combine the static board with the new piece layer
+        combined_board_state = jnp.logical_or(state.board, piece_layer).astype(jnp.int32)
+        
+        # Create a grid of object IDs based on the row index (from bottom up)
+        row_indices = jnp.arange(H_board, 0, -1)[:, None] # Shape (H, 1) -> [[22], [21], ..., [1]]
+        object_id_grid = row_indices * combined_board_state
+        
+        # Render the entire grid in one go
+        raster = self.jr.render_grid_inverse(
             raster,
-            95, 27,
-            score_digits,
-            self.SCORE_DIGIT_SPRITES,
-            start_index=0,
-            num_to_render=4,
-            spacing=16
+            grid_state=object_id_grid,
+            grid_origin=(
+                self.consts.BOARD_X + self.consts.BOARD_PADDING,
+                self.consts.BOARD_Y
+            ),
+            cell_size=(self.consts.CELL_WIDTH, self.consts.CELL_HEIGHT),
+            color_map=self.BOARD_COLOR_MAP,
+            cell_padding=(1, 1) # 1 pixel padding between cells
         )
 
-        # -------- NEW: draw ONE / TWO / THREE / TETRIS while banner is active --------
-        # compute a position to the right of the board
-        label_x = 95
-        label_y = 122
+        # --- 3. Render UI (Score and Banners) ---
+        score_digits = self.jr.int_to_digits(state.score, max_digits=4)
+        raster = self.jr.render_label(
+            raster, 95, 27, score_digits, self.SHAPE_MASKS['score_digits'], spacing=16, max_digits=4
+        )
 
-        def draw_with(sprite, r_):
-            frame = jr.get_sprite_frame(sprite, 0)
-            return jr.render_at(r_, label_x, label_y, frame)
-
-        def draw_none(r_):   return r_
-
-        def draw_one(r_):    return draw_with(self.SPRITE_ONE, r_)
-
-        def draw_two(r_):    return draw_with(self.SPRITE_TWO, r_)
-
-        def draw_three(r_):  return draw_with(self.SPRITE_THREE, r_)
-
-        def draw_tetris(r_): return draw_with(self.SPRITE_TETRIS, r_)
-
+        # Draw the ONE/TWO/THREE/TETRIS banner if active
         def draw_banner(r_):
-            # banner_code: 0 none, 1 ONE, 2 TWO, 3 THREE, 4 TETRIS
-            idx = jnp.clip(state.banner_code, jnp.int32(0), jnp.int32(4))
-            fns = [draw_none, draw_one, draw_two, draw_three, draw_tetris]
-            return jax.lax.switch(idx, fns, r_)
+            # Use switch over equal-shaped outputs by returning the raster
+            def drw(mask_key):
+                return lambda r: self.jr.render_at(r, 95, 122, self.SHAPE_MASKS[mask_key])
+
+            branches = [
+                drw('banner_one'),
+                drw('banner_two'),
+                drw('banner_triple'),
+                drw('banner_tetris'),
+            ]
+            idx = jnp.clip(state.banner_code - 1, 0, 3)
+            return jax.lax.switch(idx, branches, r_)
 
         raster = jax.lax.cond(
-            (state.banner_timer > jnp.int32(0)) & (state.banner_code > jnp.int32(0)),
+            (state.banner_timer > 0) & (state.banner_code > 0),
             draw_banner,
             lambda r_: r_,
             raster
         )
 
-        return raster
+        # --- 4. Finalize Frame ---
+        return self.jr.render_from_palette(raster, self.PALETTE)
