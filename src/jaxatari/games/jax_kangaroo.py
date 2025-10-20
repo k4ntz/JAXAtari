@@ -2172,7 +2172,10 @@ class KangarooRenderer(JAXGameRenderer):
 
         # Coconuts
         coconut_offset = self.FLIP_OFFSETS["thrown_coconut"]
-        raster = self.jr.render_at(raster, state.level.falling_coco_position[0].astype(int), state.level.falling_coco_position[1].astype(int), self.SHAPE_MASKS["thrown_coconut"], flip_offset=coconut_offset)
+        should_draw_falling_coco = state.level.falling_coco_dropping
+        raster = jax.lax.cond(should_draw_falling_coco,
+            lambda r: self.jr.render_at(r, state.level.falling_coco_position[0].astype(int), state.level.falling_coco_position[1].astype(int), self.SHAPE_MASKS["thrown_coconut"], flip_offset=coconut_offset),
+            lambda r: r, raster)
         def _draw_coco(i, current_raster):
             should_draw = (state.level.coco_states[i] != 0)
             pos = state.level.coco_positions[i]

@@ -373,7 +373,7 @@ class FreewayRenderer(JAXGameRenderer):
         self.consts = consts or FreewayConstants()
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
-            channels=1,
+            channels=3,
             downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)

@@ -4,6 +4,7 @@ import jax
 from functools import partial
 import numpy as np
 from typing import Dict, Any, List, Tuple, NamedTuple
+from jax.scipy.ndimage import map_coordinates
 
 class RendererConfig(NamedTuple):
     """Configuration for the rendering pipeline."""
@@ -434,9 +435,58 @@ class JaxRenderingUtils:
         scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
         
         target_slice = jax.lax.dynamic_slice(object_raster, (scaled_y, scaled_x), flipped_mask.shape)
-        updated_slice = jnp.where(flipped_mask != self.TRANSPARENT_ID, flipped_mask, target_slice)
+        updated_slice = jnp.where(flipped_mask != self.TRANSPARENT_ID, flipped_mask, target_slice).astype(object_raster.dtype)
     
         return jax.lax.dynamic_update_slice(object_raster, updated_slice, (scaled_y, scaled_x))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_at_clipped(self, object_raster: jnp.ndarray, x: int, y: int, sprite_mask: jnp.ndarray, flip_horizontal: bool = False, flip_vertical: bool = False, flip_offset: jnp.ndarray = jnp.array([0, 0])) -> jnp.ndarray:
+        """
+        Modified version fo render_at that can clip sprites at the edges of the raster.
+        Specifically use this if your sprites clip out of the screen like for example the sharks in seaquest, bullets that can go off-screen, etc.
+        """
+        # --- 1. & 2. Flipping and Position Correction (Unchanged) ---
+        flipped_mask = jax.lax.cond(
+            flip_horizontal, lambda m: jnp.flip(m, axis=1), lambda m: m, sprite_mask
+        )
+        flipped_mask = jax.lax.cond(
+            flip_vertical, lambda m: jnp.flip(m, axis=0), lambda m: m, flipped_mask
+        )
+        corrected_x = jax.lax.select(flip_horizontal, x - flip_offset[0], x)
+        corrected_y = jax.lax.select(flip_vertical, y - flip_offset[1], y)
+
+        # --- 3. Scale Coordinates (Unchanged) ---
+        scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
+        scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
+        
+        # --- 4. NEW: Create Sprite Coordinate Maps for the Full Raster ---
+        # For each pixel on the main raster (self._xx, self._yy), calculate its
+        # corresponding coordinate on the sprite mask.
+        sprite_coords_y = self._yy - scaled_y
+        sprite_coords_x = self._xx - scaled_x
+        
+        # --- 5. NEW: Sample the Sprite Mask using Inverse Mapping ---
+        # map_coordinates will look up the values from flipped_mask at each of the
+        # coordinates we just calculated.
+        # - order=0: Use nearest-neighbor lookup (no interpolation).
+        # - cval=TRANSPARENT_ID: Any coordinate that falls outside the bounds of
+        #   the sprite mask (i.e., is off-screen) gets the transparent value.
+        sampled_sprite_ids = map_coordinates(
+            flipped_mask,
+            [sprite_coords_y, sprite_coords_x],
+            order=0,
+            cval=self.TRANSPARENT_ID
+        ).astype(object_raster.dtype)
+
+        # --- 6. NEW: Merge the Sampled Sprite onto the Raster ---
+        # Where the sampled map is not transparent, use its value. Otherwise,
+        # keep the original raster's value. This works for both on- and off-screen
+        # parts of the sprite in a single, vectorized operation.
+        return jnp.where(
+            sampled_sprite_ids != self.TRANSPARENT_ID,
+            sampled_sprite_ids,
+            object_raster
+        )
 
     # ============= Various sequential rendering functions =============
     @partial(jax.jit, static_argnames=['self', 'spacing', 'max_digits'])
