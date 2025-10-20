@@ -1242,7 +1242,7 @@ class AsteroidsRenderer(JAXGameRenderer):
     def render(self, state: AsteroidsState) -> chex.Array:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # ... (player and missile rendering is unchanged) ...
+        # player and missile rendering (both clipped)
         player_mask = self.PLAYER_MASKS_STACKED[state.player_rotation]
         player_mask = jax.lax.cond(
             (state.respawn_timer == 134) | (state.respawn_timer == 135),
@@ -1257,26 +1257,26 @@ class AsteroidsRenderer(JAXGameRenderer):
                      ((state.respawn_timer >= 126) & (state.respawn_timer < 136) | (state.respawn_timer == 0))
         raster = jax.lax.cond(
             is_visible,
-            lambda r: self.jr.render_at(
+            lambda r: self.jr.render_at_clipped(
                 r, (state.player_x // 256) * 2, (state.player_y // 256) * 2, player_mask),
             lambda r: r,
             raster
         )
         raster = jax.lax.cond(
             (state.step_counter % 2 == 0) & (state.missile_states[0][5] > 0),
-            lambda r: self.jr.render_at(r, state.missile_states[0][0], state.missile_states[0][1], self.SHAPE_MASKS['missile1']),
+            lambda r: self.jr.render_at_clipped(r, state.missile_states[0][0], state.missile_states[0][1], self.SHAPE_MASKS['missile1']),
             lambda r: r, raster
         )
         raster = jax.lax.cond(
             (state.step_counter % 2 == 0) & (state.missile_states[1][5] > 0),
-            lambda r: self.jr.render_at(r, state.missile_states[1][0], state.missile_states[1][1], self.SHAPE_MASKS['missile2']),
+            lambda r: self.jr.render_at_clipped(r, state.missile_states[1][0], state.missile_states[1][1], self.SHAPE_MASKS['missile2']),
             lambda r: r, raster
         )
 
         # --- Render Asteroids ---
         def render_asteroid(i, r):
             asteroid = state.asteroid_states[i]
-            # --- FIX: Use array lookup instead of switch ---
+            
             size_offset = self.ASTEROID_SIZE_OFFSET_MAP[asteroid[3] - 1]
             asteroid_idx = size_offset + asteroid[4]
             mask = self.ASTEROID_MASKS_STACKED[asteroid_idx]
@@ -1284,7 +1284,7 @@ class AsteroidsRenderer(JAXGameRenderer):
             is_active = (state.step_counter % 2 == 1) & (asteroid[3] != self.consts.INACTIVE) & \
                         ~jnp.any(i == state.colliding_asteroids[:,0])
             
-            return jax.lax.cond(is_active, lambda ras: self.jr.render_at(ras, asteroid[0], asteroid[1], mask), lambda ras: ras, r)
+            return jax.lax.cond(is_active, lambda ras: self.jr.render_at_clipped(ras, asteroid[0], asteroid[1], mask), lambda ras: ras, r)
         raster = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ASTEROIDS, render_asteroid, raster)
 
         # --- Render Asteroid Death Animations ---
@@ -1292,7 +1292,7 @@ class AsteroidsRenderer(JAXGameRenderer):
             colliding_asteroid = state.colliding_asteroids[i]
             original_asteroid_idx = colliding_asteroid[0]
             
-            # --- FIX: Use array lookup instead of switch ---
+            # get the current death animation step
             size_offset = self.DEATH_SIZE_OFFSET_MAP[colliding_asteroid[1] - 1]
             death_idx = size_offset + colliding_asteroid[2]
             mask = self.ASTEROID_DEATH_MASKS_STACKED[death_idx]
@@ -1306,7 +1306,7 @@ class AsteroidsRenderer(JAXGameRenderer):
             return jax.lax.cond(is_active, _draw, lambda ras: ras, r)
         raster = jax.lax.fori_loop(0, 3, render_asteroid_death_animation, raster)
 
-        # ... (wall and UI rendering is unchanged) ...
+        # wall and UI rendering.
         wall_color_id = self.COLOR_TO_ID[self.consts.WALL_COLOR]
         wall_positions = jnp.array([[0, 0], [0, self.consts.HEIGHT - self.consts.WALL_BOTTOM_HEIGHT]])
         wall_sizes = jnp.array([[self.consts.WIDTH, self.consts.WALL_TOP_HEIGHT], [self.consts.WIDTH, self.consts.WALL_BOTTOM_HEIGHT]])

@@ -2739,7 +2739,7 @@ class SeaquestRenderer(JAXGameRenderer):
         torp = state.player_missile_position
         raster = jax.lax.cond(
             torp[2] != 0,
-            lambda r: self.jr.render_at(r, torp[0], torp[1], self.SHAPE_MASKS['player_torp'],
+            lambda r: self.jr.render_at_clipped(r, torp[0], torp[1], self.SHAPE_MASKS['player_torp'],
                                         flip_horizontal=torp[2] == self.consts.FACE_LEFT),
             lambda r: r,
             raster

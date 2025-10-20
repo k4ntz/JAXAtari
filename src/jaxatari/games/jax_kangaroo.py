@@ -2127,7 +2127,7 @@ class KangarooRenderer(JAXGameRenderer):
             flip_offset = self.FLIP_OFFSETS["ape"]
             flip_h = (state_idx == 4)
             should_draw = (state_idx != 0)
-            draw_fn = lambda r: self.jr.render_at(r, pos[0].astype(int), pos[1].astype(int), monkey_mask, flip_horizontal=flip_h, flip_offset=flip_offset)
+            draw_fn = lambda r: self.jr.render_at_clipped(r, pos[0].astype(int), pos[1].astype(int), monkey_mask, flip_horizontal=flip_h, flip_offset=flip_offset)
             return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
         raster = jax.lax.fori_loop(0, state.level.monkey_positions.shape[0], _draw_monkey, raster)
 

@@ -563,7 +563,7 @@ class PongRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
-            downscale=(84, 84)
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 1. Create any procedural assets first

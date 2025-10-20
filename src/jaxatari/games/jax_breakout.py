@@ -957,10 +957,26 @@ class BreakoutRenderer(JAXGameRenderer):
         )
         
         # --- 4. Draw UI and Finalize ---
-        # The rest of the rendering (UI, etc.) uses the standard new API
-        score_digits = self.jr.int_to_digits(state.score, max_digits=3)
-        raster = self.jr.render_label(raster, 36, 5, score_digits, self.SHAPE_MASKS['score_digits'], spacing=12)
-        # ... (render lives, players, bottom bar as before) ...
+        player_score_digits = self.jr.int_to_digits(state.score, max_digits=3)
+        player_lifes_digit = self.jr.int_to_digits(state.lives, max_digits=1)
+        number_players_digit = self.jr.int_to_digits(1, max_digits=1)
+
+        raster = self.jr.render_label_selective(raster, 36, 5,
+                                    player_score_digits, self.SHAPE_MASKS['score_digits'],
+                                    0, 3,
+                                    spacing=16)
+
+        raster = self.jr.render_label_selective(raster, 100, 5,
+                                    player_lifes_digit, self.SHAPE_MASKS['score_digits'],
+                                    0, 1,
+                                    spacing=16)
+        
+        # 3. Render number of players
+        raster = self.jr.render_label_selective(raster, 132, 5,
+                                            number_players_digit, self.SHAPE_MASKS['score_digits'],
+                                            0, 1,
+                                            spacing=16)
+
         raster = self.jr.render_at(raster, 0, 196, self.SHAPE_MASKS['bottom_bar'])
 
         # --- 5. Final Palette Lookup ---

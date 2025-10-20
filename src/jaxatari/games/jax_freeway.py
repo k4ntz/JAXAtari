@@ -374,7 +374,7 @@ class FreewayRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
-            downscale=(84, 84)
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
@@ -468,7 +468,7 @@ class FreewayRenderer(JAXGameRenderer):
         ]
         
         for i in range(self.consts.num_lanes):
-            raster = self.jr.render_at(raster, state.cars[i, 0], state.cars[i, 1], car_masks[i])
+            raster = self.jr.render_at_clipped(raster, state.cars[i, 0], state.cars[i, 1], car_masks[i])
 
         # Render score
         score_digits = self.jr.int_to_digits(state.score, max_digits=2)
