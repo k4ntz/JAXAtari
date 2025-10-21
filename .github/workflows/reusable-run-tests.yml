@@ -78,7 +78,7 @@ jobs:
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --forked --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
+          pytest --forked --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/ 2>&1 | tee pytest_output_with_color.txt
         shell: bash
 
       - name: Get pytest output
