@@ -71,13 +71,14 @@ jobs:
         shell: bash
 
       - name: Run tests
+        if: always()
         id: run_tests
         run: |
           set -o pipefail
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
+          pytest --forked --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
         shell: bash
 
       - name: Get pytest output
@@ -95,7 +96,7 @@ jobs:
           matrix-key: ${{ matrix.game }}
           outputs: |-
             test_outcome: ${{ steps.run_tests.outcome }}
-      
+
       - name: Upload report artifact
         if: always()
         uses: actions/upload-artifact@v4

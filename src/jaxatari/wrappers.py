@@ -562,9 +562,10 @@ class NormalizeObservationWrapper(JaxatariWrapper):
     This wrapper is compatible with any observation structure (Pytrees).
     """
 
-    def __init__(self, env, to_neg_one: bool = False):
+    def __init__(self, env, to_neg_one: bool = False, dtype=jnp.float16):
         super().__init__(env)
         self._to_neg_one = to_neg_one
+        self._dtype = dtype
 
         original_space = self._env.observation_space()
 
@@ -587,7 +588,7 @@ class NormalizeObservationWrapper(JaxatariWrapper):
                 low=low_val,
                 high=1.0,
                 shape=space.shape,
-                dtype=jnp.float16
+                dtype=self._dtype
             )
 
         self._observation_space = jax.tree.map(
@@ -602,15 +603,15 @@ class NormalizeObservationWrapper(JaxatariWrapper):
 
     def _normalize_leaf(self, obs_leaf, low_leaf, high_leaf):
         """Helper function to normalize a single leaf array."""
-        obs_leaf = obs_leaf.astype(jnp.float16)
+        obs_leaf = obs_leaf.astype(self._dtype)
         
         # Calculate the range and scale for normalization
-        range_leaf = high_leaf.astype(jnp.float16) - low_leaf.astype(jnp.float16)
+        range_leaf = high_leaf.astype(self._dtype) - low_leaf.astype(self._dtype)
         scale = 1.0 / jnp.where(range_leaf > 1e-8, range_leaf, 1.0)
         
         # Normalize to [0, 1]
-        normalized_0_1 = (obs_leaf - low_leaf.astype(jnp.float16)) * scale
-        
+        normalized_0_1 = (obs_leaf - low_leaf.astype(self._dtype)) * scale
+
         # Conditionally shift to [-1, 1]
         final_normalized = jax.lax.cond(
             self._to_neg_one,
