@@ -511,6 +511,120 @@ class JaxRenderingUtils:
             object_raster
         )
 
+    @partial(jax.jit, static_argnums=(0,))
+    def render_batch(
+        self, 
+        object_raster: jnp.ndarray, 
+        xs: jnp.ndarray, 
+        ys: jnp.ndarray, 
+        sprite_masks: jnp.ndarray, 
+        flip_horizontals: jnp.ndarray, 
+        flip_verticals: jnp.ndarray, 
+        flip_offsets: jnp.ndarray
+    ) -> jnp.ndarray:
+        """
+        Stamps a BATCH of object IDs onto a raster efficiently.
+        
+        Args:
+            object_raster: The initial (H, W) background canvas.
+            xs: (N,) array of x positions.
+            ys: (N,) array of y positions.
+            sprite_masks: (N, sprite_h, sprite_w) array of all sprite masks.
+            ... other args are also batched (N,) ...
+        """
+        
+        def _render_single_layer_to_transparent(base_canvas_shape, sprite_masks, idx, x, y, flip_horizontal, flip_vertical, flip_offset):
+            """
+            Renders a single sprite onto a new, full-size transparent canvas.
+            This function is designed to be vmapped.
+            """
+            # 1. Start with a blank canvas
+            # (Assuming TRANSPARENT_ID is a known constant, e.g., 0)
+            # sprite_mask = sprite_masks[idx]
+            branches = [lambda: arr for arr in sprite_masks]
+            sprite_mask = jax.lax.switch(
+                idx,
+                branches
+            )
+            transparent_canvas = jnp.full(base_canvas_shape, self.TRANSPARENT_ID, dtype=jnp.int32)
+            
+            # 2. Perform all the flip and position correction logic from render_at
+            flipped_mask = jax.lax.cond(
+                flip_horizontal, lambda m: jnp.flip(m, axis=1), lambda m: m, sprite_mask
+            )
+            flipped_mask = jax.lax.cond(
+                flip_vertical, lambda m: jnp.flip(m, axis=0), lambda m: m, flipped_mask
+            ).astype(jnp.int32)
+            corrected_x = jax.lax.cond(
+                flip_horizontal, lambda val: val - flip_offset[0], lambda val: val, x
+            )
+            corrected_y = jax.lax.cond(
+                flip_vertical, lambda val: val - flip_offset[1], lambda val: val, y
+            )
+            
+            # 3. Scale and Stamp
+            scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
+            scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
+
+            # 4. Stamp the mask onto the TRANSPARENT canvas
+            # No need for jnp.where or dynamic_slice, just a direct update.
+            return jax.lax.dynamic_update_slice(transparent_canvas, flipped_mask, (scaled_y, scaled_x))
+        
+        # === STEP 1: PARALLEL STAMPING ===
+        # Vectorize the single-layer render function across all N sprites.
+        # Result is a 3D stack of (N, H, W)
+        idxs = jnp.arange(len(sprite_masks))
+        all_layers = jax.vmap(
+            _render_single_layer_to_transparent,
+            in_axes=(None, None, 0, 0, 0, 0, 0, 0)
+        )(
+            object_raster.shape,
+            sprite_masks,
+            idxs,
+            xs,
+            ys,
+            flip_horizontals,
+            flip_verticals,
+            flip_offsets
+        )
+        
+        # Composite one layer onto the background
+        def _composite_step(background_canvas, foreground_layer):
+            """
+            Blends a single foreground layer onto the background.
+            
+            background_canvas: The canvas so far (from the previous scan step).
+            foreground_layer: The new layer to draw on top.
+            """
+            # Use jnp.where to overlay the new layer.
+            # Where the foreground is NOT transparent, use its pixels.
+            # Otherwise, keep the background pixels.
+            updated_canvas = jnp.where(
+                foreground_layer != self.TRANSPARENT_ID, 
+                foreground_layer, 
+                background_canvas
+            )
+            
+            # The new canvas becomes the "carry" for the next step.
+            # The second element (None) is for the "ys" (outputs) of the scan, which we don't need.
+            return updated_canvas, None 
+            
+        # === STEP 2: SEQUENTIAL COMPOSITING ===
+        # Use jax.lax.scan to "fold" the layers together.
+        # This runs the _composite_step function N times.
+        #
+        # scan args: (function, initial_carry, inputs_to_iterate_over)
+        #
+        # final_canvas is the last "carry" value.
+        final_canvas, _ = jax.lax.scan(
+            _composite_step,
+            object_raster.astype(jnp.int32),  # Start with the initial background
+            all_layers      # Iterate over the (N, H, W) stack
+        )
+        
+        return final_canvas
+    
+
     # ============= Various sequential rendering functions =============
     @partial(jax.jit, static_argnames=['self', 'spacing', 'max_digits'])
     def render_label(self, object_raster: jnp.ndarray, x: int, y: int, digits: jnp.ndarray, digit_masks: jnp.ndarray,

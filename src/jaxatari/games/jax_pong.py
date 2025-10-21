@@ -609,23 +609,64 @@ class PongRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        xs = [] 
+        ys = [] 
+        sprite_masks = []
 
         player_mask = self.SHAPE_MASKS["player"]
-        raster = self.jr.render_at(raster, self.consts.PLAYER_X, state.player_y, player_mask)
+        # raster = self.jr.render_at(raster, self.consts.PLAYER_X, state.player_y, player_mask)
+        xs.append(self.consts.PLAYER_X)
+        ys.append(state.player_y)
+        sprite_masks.append(player_mask)
 
         enemy_mask = self.SHAPE_MASKS["enemy"]
-        raster = self.jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, enemy_mask)
+        # raster = self.jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, enemy_mask)
+        xs.append(self.consts.ENEMY_X)
+        ys.append(state.enemy_y)
+        sprite_masks.append(enemy_mask)
 
         ball_mask = self.SHAPE_MASKS["ball"]
-        raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
+        # raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
+        xs.append(state.ball_x)
+        ys.append(state.ball_y)
+        sprite_masks.append(ball_mask)
+
+        # raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall"])
+        xs.append(0)
+        ys.append(self.consts.WALL_TOP_Y)
+        sprite_masks.append(self.SHAPE_MASKS["wall"])
+        # raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall"])
+        xs.append(0)
+        ys.append(self.consts.WALL_BOTTOM_Y)
+        sprite_masks.append(self.SHAPE_MASKS["wall"])
+
+        sprite_masks = tuple(sprite_masks)
+
+        flip_horizontals = jnp.zeros((len(xs),), dtype=jnp.bool)  # No flipping needed
+        flip_verticals = jnp.zeros((len(xs),), dtype=jnp.bool)  # No flipping needed
+        flip_offsets = jnp.zeros((len(xs),2), dtype=jnp.int32)  # No offsets needed
+        xs = jnp.array(xs, dtype=jnp.int32)
+        ys = jnp.array(ys, dtype=jnp.int32)
+
+        raster = self.jr.render_batch(raster, xs, ys, sprite_masks, flip_horizontals, flip_verticals, flip_offsets)
+
+        # player_mask = self.SHAPE_MASKS["player"]
+        # raster = self.jr.render_at(raster, self.consts.PLAYER_X, state.player_y, player_mask)
+
+        # enemy_mask = self.SHAPE_MASKS["enemy"]
+        # raster = self.jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, enemy_mask)
+
+        # ball_mask = self.SHAPE_MASKS["ball"]
+        # raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
+
+        # # Draw walls (which are now a sprite)
+        # raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall"])
+        # raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall"])
 
         # --- Stamp Walls and Score (using the same color/ID) ---
         score_color_tuple = self.consts.SCORE_COLOR # (236, 236, 236)
         score_id = self.COLOR_TO_ID[score_color_tuple]
 
-        # Draw walls (which are now a sprite)
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall"])
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall"])
 
         # Stamp Score using the label utility
         player_digits = self.jr.int_to_digits(state.player_score, max_digits=2)
