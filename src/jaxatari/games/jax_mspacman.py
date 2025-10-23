@@ -1,55 +1,53 @@
-# Group: Sooraj Rathore, Kadir Özen
+"""
+Group: Sooraj Rathore, Kadir Özen
+Edit: Jan Rafflewski
+"""
 
+"""
+TODO
+1) Fruits
+    1.1) Fruit spawning
+    1.2) Fruit movement
+    1.3) Fruit scoring
+    1.4) Fruit animation
+2) Ghosts
+    2.1) Ghost pathfinding
+    2.2) Ghost movement
+3) Game
+    3.1) Life system
+    3.2) Gameover state
+    3.3) Pacman death animation
+    3.4) Level progression
+"""
+
+
+# --- IMPORTS --- #
 from functools import partial
 from typing import NamedTuple, Tuple
+
+import chex
 import jax
 import jax.numpy as jnp
-import chex
-import pygame
+
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.games.mspacman_mazes import MAZES, load_background, load_score_digits, pacmans_rgba, load_ghosts, precompute_dof, base_pellets
+from jaxatari.games.mspacman_mazes import (
+    MAZES, load_background, load_score_digits, pacmans_rgba, load_ghosts,
+    precompute_dof, base_pellets)
 
-from jax import random, Array
 
-
-
-WIDTH = 160
-HEIGHT = 220
-
+# --- CONSTANTS --- #
+# GENERAL
 RESET_LEVEL = 0 # the starting level, loaded when reset is called
-MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
-BLINKING_DURATION = 10*8
-
-#POWER PELLETS X Y POSITIONS
-ppx0 = 8
-ppx1 = 148
-ppy0 = 20
-ppy1 = 152
-
-GHOST_JAIL_DURATION = 120 # in steps
-POWER_PELLET_POSITIONS = [[ppx0, ppy0], [ppx1, ppy0], [ppx0, ppy1], [ppx1, ppy1]]
-INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
-PELLETS_TO_COLLECT = 155  # Total pellets to collect in the maze (including power pellets)
-# PELLETS_TO_COLLECT = 5  # Total pellets to collect in the maze (including power pellets)
-PELLET_POINTS = 10
-POWER_PELLET_POINTS = 50
-# cherry, strawberry, orange, pretzel, apple, pear, banana
-FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000]  
-EAT_GHOSTS_BASE_POINTS = 200
-BONUS_LIFE_LIMIT = 10000
-NB_INITIAL_LIVES = 2
 RESET_TIMER = 40  # Timer for resetting the game after death
+MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
+PELLETS_TO_COLLECT = 155  # Total pellets to collect in the maze (including power pellets)
+INITIAL_LIFES = 2
+BONUS_LIFE_LIMIT = 10000
 
-PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
-WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
-PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
-POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite 
-
-# GHOSTS MODES
+# GHOST MODES
 GHOST_RANDOM = 0
 GHOST_CHASING = 1
 GHOST_FRIGHTENED = 2
@@ -57,75 +55,43 @@ GHOST_BLINKING = 3
 GHOST_RETURNING = 4
 GHOST_ENJAILED = 5
 
-def last_pressed_action(action, prev_action):
-    """
-    Returns the last pressed action in cases where both actions are pressed
-    """
-    if action == Action.UPRIGHT:
-        if prev_action == Action.UP:
-            return Action.RIGHT
-        else:
-            return Action.UP
-    elif action == Action.UPLEFT:
-        if prev_action == Action.UP:
-            return Action.LEFT
-        else:
-            return Action.UP
-    elif action == Action.DOWNRIGHT:
-        if prev_action == Action.DOWN:
-            return Action.RIGHT
-        else:
-            return Action.DOWN
-    elif action == Action.DOWNLEFT:
-        if prev_action == Action.DOWN:
-            return Action.LEFT
-        else:
-            return Action.DOWN
-    else:
-        return action
+# GHOST TIMINGS
+FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
+BLINKING_DURATION = 10*8
+GHOST_JAIL_DURATION = 120 # in steps
+
+# POSITIONS
+PPX0 = 8
+PPX1 = 148
+PPY0 = 20
+PPY1 = 152
+POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
+INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
+
+# DIRECTIONS
+DIRECTIONS = jnp.array([
+    [0, 0],   # NOOP
+    [0, 0],   # FIRE
+    [0, -1],  # UP
+    [1, 0],   # RIGHT
+    [-1, 0],  # LEFT
+    [0, 1],   # DOWN
+])
+
+# POINTS
+PELLET_POINTS = 10
+POWER_PELLET_POINTS = 50
+FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000] # cherry, strawberry, orange, pretzel, apple, pear, banana
+EAT_GHOSTS_BASE_POINTS = 200
+
+# COLORS
+PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
+POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite 
 
 
-def dof(pos: chex.Array, dofmaze: chex.Array):
-    """
-    Degree of freedom of the object, can it move up, right, left, down
-    """
-    x, y = pos
-    grid_x = (x+5)//4
-    grid_y = (y+3)//4
-    return dofmaze[grid_x][grid_y]
-
-
-def available_directions(pos: chex.Array, dofmaze: chex.Array):
-    """
-    What direction Pacman or the ghosts can take when at an intersection.
-    Returns a tuple of booleans (up, right, left, down) indicating if
-    the character can move in that direction.
-    The character can only change direction if it is on a vertical or horizontal grid.
-
-    Arguments:
-    pos -- (x, y) position of the character
-    dofmaze -- precomputed degree of freedom for a maze level/layout
-
-    Returns:
-    A tuple of booleans (up, right, left, down) indicating if the 
-    character can move in that direction.
-    """
-    x, y = pos
-    on_vertical_grid = x % 4 == 1 # can potentially move up/down
-    on_horizontal_grid = y % 12 == 6 # can potentially move left/right
-    up, right, left, down = dof(pos, dofmaze)
-    return up and on_vertical_grid, right and on_horizontal_grid, left and on_horizontal_grid, down and on_vertical_grid
-
-
-def stop_wall(pos: chex.Array, dofmaze: chex.Array):
-    x, y = pos
-    on_vertical_grid = x % 4 == 1 # can potentially move up/down
-    on_horizontal_grid = y % 12 == 6 # can potentially move left/right
-    up, right, left, down = dof(pos, dofmaze)
-    return not(up) and on_horizontal_grid, not(right) and on_vertical_grid, not(left) and on_vertical_grid, not(down) and on_horizontal_grid
-
-
-
+# --- CLASSES --- #
 class PacmanState(NamedTuple):
     pacman_pos: chex.Array  # (x, y)
     pacman_dir: chex.Array  # (dx, dy)
@@ -158,19 +124,11 @@ class PacmanState(NamedTuple):
 class PacmanObservation(NamedTuple):
     grid: chex.Array  # 2D array showing layout of walls, pellets, pacman, ghosts
 
+
 class PacmanInfo(NamedTuple):
     score: chex.Array
     done: chex.Array
 
-# Example directions
-DIRECTIONS = jnp.array([
-    [0, 0],   # NOOP
-    [0, 0],   # FIRE
-    [0, -1],  # UP
-    [1, 0],   # RIGHT
-    [-1, 0],  # LEFT
-    [0, 1],   # DOWN
-])
 
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def __init__(self):
@@ -188,7 +146,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             Action.DOWNRIGHT,
             Action.DOWNLEFT,
         ]
-
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for MsPacman.
@@ -229,7 +186,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             game_over=jnp.array(False),
             power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
             level=0,
-            lives=jnp.array(NB_INITIAL_LIVES, dtype=jnp.int8),  # Number of lives left
+            lives=jnp.array(INITIAL_LIFES, dtype=jnp.int8),  # Number of lives left
             death_timer=jnp.array(0),
             completed_level=jnp.array(False),
             maze_layout=RESET_LEVEL,
@@ -241,7 +198,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
-        PacmanObservation, PacmanState, Array, Array, PacmanInfo]:
+        PacmanObservation, PacmanState, jax.Array, jax.Array, PacmanInfo]:
         # If in death animation, decrement timer and freeze everything
         power_mode_timer = state.power_mode_timer
         completed_level = False
@@ -294,8 +251,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             done = game_over
             info = PacmanInfo(score=state.score, done=done)
             return obs, new_state, reward, done, info
-
-
 
         action = last_pressed_action(action, state.current_action)
         possible_directions = available_directions(state.pacman_pos, state.dofmaze)
@@ -353,7 +308,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             if state.pellets[x_pellets, y_pellets]:
                 has_pellet = jnp.array(True)
                 pellets = state.pellets.at[x_pellets, y_pellets].set(False)
-        score = state.score + jax.lax.select(has_pellet, 10, 0)
+        score = state.score + jax.lax.select(has_pellet, PELLET_POINTS, 0)
         if has_pellet:
             print(f"Pacman collected a pellet at {new_pacman_pos}, score: {score}")
             collected_pellets = collected_pellets + 1
@@ -445,7 +400,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return obs, new_state, reward, done, info
 
 
-
 class MsPacmanRenderer(AtraJaxisRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
@@ -455,22 +409,13 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         self.SPRITES_GHOSTS = load_ghosts()
         self.SPRITES_DIGITS = load_score_digits()
         # self.reset_bg()
-        
 
     def reset_bg(self):
         """Reset the background for a new level."""
         life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
         self.SPRITE_BG = load_background(RESET_LEVEL)
         self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, MAX_SCORE_DIGITS, MAX_SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.SPRITES_DIGITS)
-        self.SPRITE_BG = render_lives(self.SPRITE_BG, NB_INITIAL_LIVES, life_sprite)
-   
-# # GHOSTS MODES
-# GHOST_RANDOM = 0
-# GHOST_CHASING = 1
-# GHOST_FRIGHTENED = 2
-# GHOST_BLINKING = 3 
-# GHOST_RETURNING = 4
-# GHOST_ENJAILED = 5
+        self.SPRITE_BG = render_lives(self.SPRITE_BG, INITIAL_LIFES, life_sprite)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -519,35 +464,75 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             self.SPRITE_BG = render_lives(self.SPRITE_BG, state.lives, self.SPRITES_PLAYER[1][1])
         return raster
 
-def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
-    """
-    Render the score on the raster at a fixed position.
-    Only updates digits that have changed.
-    """
-    digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-    for idx in range(MAX_SCORE_DIGITS):
-        if score_changed[idx]:
-            d_sprite    = digit_sprites[digits[idx]]
-            bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
-            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
-    return raster
 
-def render_lives(raster, current_lifes, life_sprite, initial_lifes=NB_INITIAL_LIVES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+# --- HELPER FUNCTIONS --- #
+def last_pressed_action(action, prev_action):
     """
-    Render the lives on the raster at a fixed position.
+    Returns the last pressed action in cases where both actions are pressed
     """
-    if current_lifes > initial_lifes:
-        raise ValueError("Number of current lives cannot exceed the number of initial lives!")
-    elif current_lifes < 0:
-        raise ValueError("Number of current lives cannot be negative!")
-    elif current_lifes == initial_lifes:
-        for i in range(current_lifes):
-            raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
+    if action == Action.UPRIGHT:
+        if prev_action == Action.UP:
+            return Action.RIGHT
+        else:
+            return Action.UP
+    elif action == Action.UPLEFT:
+        if prev_action == Action.UP:
+            return Action.LEFT
+        else:
+            return Action.UP
+    elif action == Action.DOWNRIGHT:
+        if prev_action == Action.DOWN:
+            return Action.RIGHT
+        else:
+            return Action.DOWN
+    elif action == Action.DOWNLEFT:
+        if prev_action == Action.DOWN:
+            return Action.LEFT
+        else:
+            return Action.DOWN
     else:
-        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-        raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
-    return raster
+        return action
+
+
+def dof(pos: chex.Array, dofmaze: chex.Array):
+    """
+    Degree of freedom of the object, can it move up, right, left, down
+    """
+    x, y = pos
+    grid_x = (x+5)//4
+    grid_y = (y+3)//4
+    return dofmaze[grid_x][grid_y]
+
+
+def available_directions(pos: chex.Array, dofmaze: chex.Array):
+    """
+    What direction Pacman or the ghosts can take when at an intersection.
+    Returns a tuple of booleans (up, right, left, down) indicating if
+    the character can move in that direction.
+    The character can only change direction if it is on a vertical or horizontal grid.
+
+    Arguments:
+    pos -- (x, y) position of the character
+    dofmaze -- precomputed degree of freedom for a maze level/layout
+
+    Returns:
+    A tuple of booleans (up, right, left, down) indicating if the 
+    character can move in that direction.
+    """
+    x, y = pos
+    on_vertical_grid = x % 4 == 1 # can potentially move up/down
+    on_horizontal_grid = y % 12 == 6 # can potentially move left/right
+    up, right, left, down = dof(pos, dofmaze)
+    return up and on_vertical_grid, right and on_horizontal_grid, left and on_horizontal_grid, down and on_vertical_grid
+
+
+def stop_wall(pos: chex.Array, dofmaze: chex.Array):
+    x, y = pos
+    on_vertical_grid = x % 4 == 1 # can potentially move up/down
+    on_horizontal_grid = y % 12 == 6 # can potentially move left/right
+    up, right, left, down = dof(pos, dofmaze)
+    return not(up) and on_horizontal_grid, not(right) and on_vertical_grid, not(left) and on_vertical_grid, not(down) and on_horizontal_grid
+
 
 def get_direction_index(direction: chex.Array) -> int:
     """
@@ -557,6 +542,7 @@ def get_direction_index(direction: chex.Array) -> int:
         if jnp.all(d == direction):
             return idx
     return 0  # Default to NOOP if not found
+
 
 def get_chase_target(ghost_id: int,
                      pacman_tile: chex.Array,
@@ -658,3 +644,35 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array,
     if ghost_timer > 0:
         ghost_timer = ghost_timer - 1
     return new_pos, next_dir, ghost_mode, ghost_timer
+
+
+def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+    """
+    Render the score on the raster at a fixed position.
+    Only updates digits that have changed.
+    """
+    digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
+    for idx in range(MAX_SCORE_DIGITS):
+        if score_changed[idx]:
+            d_sprite    = digit_sprites[digits[idx]]
+            bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
+            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
+    return raster
+
+
+def render_lives(raster, current_lifes, life_sprite, initial_lifes=INITIAL_LIFES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+    """
+    Render the lives on the raster at a fixed position.
+    """
+    if current_lifes > initial_lifes:
+        raise ValueError("Number of current lives cannot exceed the number of initial lives!")
+    elif current_lifes < 0:
+        raise ValueError("Number of current lives cannot be negative!")
+    elif current_lifes == initial_lifes:
+        for i in range(current_lifes):
+            raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
+    else:
+        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+        raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
+    return raster
