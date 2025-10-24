@@ -218,7 +218,7 @@ class AmidarConstants(NamedTuple):
     PATH_THICKNESS_VERTICAL: int = chosen_maze.PATH_THICKNESS_VERTICAL
 
     # Points
-    PIXELS_PER_POINT_HORIZONTAL: int = 3 # Values to calculate how many points an Edge is worth based on how long it is
+    PIXELS_PER_POINT_HORIZONTAL: int = 4 # Values to calculate how many points an Edge is worth based on how long it is
     PIXELS_PER_POINT_VERTICAL: int = 30 # Each vertical edge is worth 1 point, since they are 30 pixels long
     BONUS_POINTS_PER_RECTANGLE: int = 48 # Bonus points for completing a rectangle
     BONUS_POINTS_PER_CHICKEN: int = 99 # Bonus points for catching a chicken
