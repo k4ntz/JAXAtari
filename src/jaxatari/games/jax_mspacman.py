@@ -67,6 +67,7 @@ PPY0 = 20
 PPY1 = 152
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
+INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 
 # DIRECTIONS
 DIRECTIONS = jnp.array([
@@ -77,6 +78,9 @@ DIRECTIONS = jnp.array([
     [-1, 0],  # LEFT
     [0, 1],   # DOWN
 ])
+INITIAL_PACMAN_DIRECTION = jnp.array([-1, 0])  # LEFT
+INITIAL_LAST_DIR_INT = jnp.array(2) # LEFT
+INITIAL_ACTION = jnp.array(4) # LEFT
 
 # POINTS
 PELLET_POINTS = 10
@@ -133,6 +137,7 @@ class PacmanInfo(NamedTuple):
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def __init__(self):
         super().__init__()
+        self.skipped = False
         self.frame_stack_size = 1
         self.action_set = [
             Action.NOOP,
@@ -164,14 +169,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return spaces.Discrete(10)
 
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
-        pacman_pos = jnp.array([75, 102])
-        pacman_pos = jnp.array([17, 126])
         state = PacmanState(
-            pacman_pos=pacman_pos,
-            pacman_dir=jnp.array([-1, 0]),
-            pacman_last_dir_int=jnp.array(2),  # Default to LEFT
-            current_action = 4,
-            ghost_positions=jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]]),
+            pacman_pos=INITIAL_PACMAN_POSITION,
+            pacman_dir=INITIAL_PACMAN_DIRECTION,
+            pacman_last_dir_int=INITIAL_LAST_DIR_INT,
+            current_action = INITIAL_ACTION,
+            ghost_positions=INITIAL_GHOSTS_POSITIONS,
             ghosts_dirs=jnp.zeros((4, 2), dtype=jnp.int8),  # Ghosts start with no direction
             ghosts_modes=jnp.zeros(4),
             ghosts_timers=jnp.zeros(4),
@@ -199,6 +202,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
         PacmanObservation, PacmanState, jax.Array, jax.Array, PacmanInfo]:
+        # Skip current step if in reset state
+        if state.reset and self.skipped == False:
+            self.skipped = True
+            obs = None
+            reward = 0.0
+            done = jnp.array(False, dtype=jnp.bool_)
+            info = PacmanInfo(score=state.score, done=done)
+            return obs, state, reward, done, info
+        self.skipped = False
+        
         # If in death animation, decrement timer and freeze everything
         power_mode_timer = state.power_mode_timer
         completed_level = False

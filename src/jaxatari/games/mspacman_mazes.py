@@ -258,6 +258,7 @@ def load_background(level):
 				lambda _: PATH_COLOR,
 				operand=None)
 			background = background.at[1+y*SCALE: (y+2)*SCALE, x*SCALE: (x+1)*SCALE, :].set(color)
+	# Render pellets
 	for px in range(18):
 		x_offset = 8 if px < 9 else 12
 		for py in range(14):
