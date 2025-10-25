@@ -6,18 +6,18 @@ Edit: Jan Rafflewski
 """
 TODO
 1) Fruits
-    1.1) Fruit spawning
-    1.2) Fruit movement
-    1.3) Fruit scoring
-    1.4) Fruit animation
+    1.1) [ ] Fruit spawning
+    1.2) [ ] Fruit movement
+    1.3) [ ] Fruit scoring
+    1.4) [ ] Fruit animation
 2) Ghosts
-    2.1) Ghost pathfinding
-    2.2) Ghost movement
+    2.1) [ ] Ghost pathfinding
+    2.2) [ ] Ghost movement
 3) Game
-    3.1) Life system
-    3.2) Gameover state
-    3.3) Pacman death animation
-    3.4) Level progression
+    3.1) [x] Life system
+    3.2) [x] Gameover state
+    3.3) [ ] Pacman death animation
+    3.4) [ ] Level progression
 """
 
 
@@ -202,7 +202,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
         PacmanObservation, PacmanState, jax.Array, jax.Array, PacmanInfo]:
-        # Skip current step if in reset state
+        # Skip current step if in reset state, so the renderer has time to react
         if state.reset and self.skipped == False:
             self.skipped = True
             obs = None
@@ -212,26 +212,30 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return obs, state, reward, done, info
         self.skipped = False
         
-        # If in death animation, decrement timer and freeze everything
-        power_mode_timer = state.power_mode_timer
-        completed_level = False
+        pacman_pos = state.pacman_pos
+        pacman_dir = state.pacman_dir
         pacman_last_dir_int = state.pacman_last_dir_int
+        ghost_positions = state.ghost_positions
+        ghosts_dirs = state.ghosts_dirs
+        power_mode_timer = state.power_mode_timer
         dofmaze = state.dofmaze
+        completed_level = jnp.array(False, dtype=jnp.bool_)
+        game_over = jnp.array(False, dtype=jnp.bool_)
+
+        # If in death animation, decrement timer and freeze everything
         if state.death_timer > 0:
             new_death_timer = state.death_timer - 1
-            # When timer reaches 0, reset positions if lives remain
-            if new_death_timer == 0 and state.lives > 0:
-                power_mode_timer = jnp.array(0).astype(jnp.uint8)  # Reset power mode timer
-                pacman_pos = jnp.array([75, 102])
-                pacman_dir = jnp.array([-1, 0])
-                ghost_positions = INITIAL_GHOSTS_POSITIONS
-                ghosts_dirs = jnp.zeros_like(ghost_positions)
-            else:
-                pacman_pos = state.pacman_pos
-                pacman_dir = state.pacman_dir
-                ghost_positions = state.ghost_positions
-                ghosts_dirs = state.ghosts_dirs
-            game_over = (state.lives == 0) & (new_death_timer == 0)
+            # When timer reaches 0, reset positions if lives remain or set state to game over
+            if new_death_timer == 0:
+                if state.lives >= 0:
+                    power_mode_timer = jnp.array(0).astype(jnp.uint8)  # Reset power mode timer
+                    pacman_pos = INITIAL_PACMAN_POSITION
+                    pacman_dir = INITIAL_PACMAN_DIRECTION
+                    ghost_positions = INITIAL_GHOSTS_POSITIONS
+                    ghosts_dirs = jnp.zeros_like(ghost_positions)
+                else:
+                    game_over = jnp.array(True, dtype=jnp.bool_)
+
             new_state = PacmanState(
                 pacman_pos=pacman_pos,
                 pacman_dir=pacman_dir,
@@ -260,7 +264,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 reset=jnp.array(False, dtype=jnp.bool_)
             )
             obs = None
-            reward = 0.0
+            reward = state.score
             done = game_over
             info = PacmanInfo(score=state.score, done=done)
             return obs, new_state, reward, done, info
@@ -350,7 +354,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             deadly_collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
         new_lives = state.lives - jnp.where(deadly_collision, 1, 0)
         new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
-        game_over = (new_lives == 0) & (new_death_timer > 0)
         maze_layout = state.maze_layout
         if collected_pellets >= PELLETS_TO_COLLECT:
             # If all pellets collected, reset game
@@ -678,14 +681,10 @@ def render_lives(raster, current_lifes, life_sprite, initial_lifes=INITIAL_LIFES
     """
     Render the lives on the raster at a fixed position.
     """
-    if current_lifes > initial_lifes:
-        raise ValueError("Number of current lives cannot exceed the number of initial lives!")
-    elif current_lifes < 0:
-        raise ValueError("Number of current lives cannot be negative!")
-    elif current_lifes == initial_lifes:
+    if current_lifes == initial_lifes:
         for i in range(current_lifes):
             raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
-    else:
+    elif current_lifes >= 0:
         bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
         raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
     return raster
