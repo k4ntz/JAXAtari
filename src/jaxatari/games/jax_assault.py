@@ -9,7 +9,7 @@ import pygame
 import numpy as np
 import jaxatari.spaces as spaces
 
-from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.rendering import jax_rendering_utils_legacy as aj
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
