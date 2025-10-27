@@ -22,8 +22,9 @@ TODO
 
 
 # --- IMPORTS --- #
+import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import chex
 import jax
@@ -33,9 +34,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
-from jaxatari.games.mspacman_mazes import (
-    MAZES, load_background, load_score_digits, pacmans_rgba, load_ghosts,
-    precompute_dof, base_pellets)
+from jaxatari.games.mspacman_mazes import MAZES, load_background, precompute_dof, base_pellets
 
 
 # --- CONSTANTS --- #
@@ -59,6 +58,9 @@ GHOST_ENJAILED = 5
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
 GHOST_JAIL_DURATION = 120 # in steps
+
+# FRUITS
+FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170, 270])
 
 # POSITIONS
 PPX0 = 8
@@ -85,14 +87,16 @@ INITIAL_ACTION = jnp.array(4) # LEFT
 # POINTS
 PELLET_POINTS = 10
 POWER_PELLET_POINTS = 50
-FRUITS_POINTS = [100, 200, 500, 700, 1000, 2000, 5000] # cherry, strawberry, orange, pretzel, apple, pear, banana
+FRUITS_POINTS = jnp.array([100, 200, 500, 700, 1000, 2000, 5000]) # cherry, strawberry, orange, pretzel, apple, pear, banana
 EAT_GHOSTS_BASE_POINTS = 200
 
 # COLORS
 PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
 WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
 PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
-POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite 
+POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite
+PACMAN_COLOR = jnp.array([210, 164, 74, 255], dtype=jnp.uint8)
+TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
 
 # --- CLASSES --- #
@@ -341,7 +345,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             if jnp.all(abs(new_pacman_pos - ghost_positions[i]) < 8):
                 if ghosts_modes[i] == GHOST_FRIGHTENED or ghosts_modes[i] == GHOST_BLINKING:  # If are frighted
                     # Ghost eaten
-                    score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)
+                    score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)   # TODO: Reset eaten_ghosts after power mode ends
                     ghost_positions = ghost_positions.at[i].set((76, 70))  # Reset eaten ghost position
                     ghosts_dirs = ghosts_dirs.at[i].set([0, 0])  # Reset eaten ghost direction
                     ghosts_modes = ghosts_modes.at[i].set(GHOST_ENJAILED)
@@ -421,17 +425,16 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
     def __init__(self):
         super().__init__()
-        self.SPRITES_PLAYER = pacmans_rgba()
-        self.SPRITES_GHOSTS = load_ghosts()
-        self.SPRITES_DIGITS = load_score_digits()
-        # self.reset_bg()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/mspacman"
+        self.sprites = self.load_sprites()
+
 
     def reset_bg(self):
         """Reset the background for a new level."""
-        life_sprite = self.SPRITES_PLAYER[1][1] # Life sprite (right looking pacman)
         self.SPRITE_BG = load_background(RESET_LEVEL)
-        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, MAX_SCORE_DIGITS, MAX_SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.SPRITES_DIGITS)
-        self.SPRITE_BG = render_lives(self.SPRITE_BG, INITIAL_LIFES, life_sprite)
+        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, MAX_SCORE_DIGITS, MAX_SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.sprites["score"])
+        self.SPRITE_BG = render_lives(self.SPRITE_BG, INITIAL_LIFES, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -455,30 +458,92 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             if state.power_pellets[pel_n]:
                 pellet_x, pellet_y = POWER_PELLET_POSITIONS[pel_n]
                 raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
+        # Render pacman
         orientation = state.pacman_last_dir_int
-        pacman_sprite = self.SPRITES_PLAYER[orientation][((state.step_count & 0b1000) >> 2)]
+        pacman_sprite = self.sprites["pacman"][orientation][((state.step_count & 0b1000) >> 2)]
         raster = aj.render_at(raster, state.pacman_pos[0], state.pacman_pos[1], 
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
 
         # Render score if changed
         if jnp.any(state.score_changed):
-            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.SPRITES_DIGITS)
+            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
 
         for i, g_pos in enumerate(state.ghost_positions):
             # Render frightened ghost
             if not (state.ghosts_modes[i] == GHOST_FRIGHTENED or state.ghosts_modes[i] == GHOST_BLINKING):
-                g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][i]
+                g_sprite = self.sprites["ghost"][ghosts_orientation][i]
             elif state.ghosts_modes[i] == GHOST_BLINKING and ((state.step_count & 0b1000) >> 3):
-                g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][5] # white blinking effect
+                g_sprite = self.sprites["ghost"][ghosts_orientation][5] # white blinking effect
             else:
-                g_sprite = self.SPRITES_GHOSTS[ghosts_orientation][4] # blue ghost
+                g_sprite = self.sprites["ghost"][ghosts_orientation][4] # blue ghost
             raster = aj.render_at(raster, g_pos[0], g_pos[1], g_sprite)
 
         # Remove one life if a life is lost
         if state.death_timer == RESET_TIMER-1:
-            self.SPRITE_BG = render_lives(self.SPRITE_BG, state.lives, self.SPRITES_PLAYER[1][1])
+            self.SPRITE_BG = render_lives(self.SPRITE_BG, state.lives, self.sprites["pacman"][1][1])
         return raster
+    
+
+    def load_sprites(self) -> dict[str, Any]:
+        sprites: Dict[str, Any] = {}
+     
+        # Helper function to load a single sprite frame
+        def load_sprite_frame(name: str) -> Optional[chex.Array]:
+            path = os.path.join(self.sprite_path, f'{name}.npy')
+            frame = aj.loadFrame(path)
+            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
+                return frame.astype(jnp.uint8)
+            return None
+    
+        # List of alls sprite names
+        sprite_names = [
+            'fruit_apple','fruit_banana','fruit_cherry',
+            'fruit_orange','fruit_pear','fruit_prezel','fruit_strawberry',
+            'ghost_sue','ghost_inky','ghost_pinky','ghost_blinky','ghost_blue','ghost_white',
+            'pacman_0','pacman_1','pacman_2','pacman_3',
+            'score_0','score_1','score_2','score_3','score_4',
+            'score_5','score_6','score_7','score_8','score_9'
+        ]
+        
+        # Load raw sprites
+        fruits = []
+        ghosts = []
+        pacmans = []
+        score = []
+        for name in sprite_names:
+            loaded_sprite = load_sprite_frame(name)
+            if loaded_sprite is not None:
+                if "fruit" in name:
+                    fruits.append(loaded_sprite)
+                if "ghost" in name:
+                    ghosts.append(loaded_sprite)
+                elif "pacman" in name:
+                    pacmans.append(loaded_sprite)
+                elif "score" in name:
+                    score.append(loaded_sprite)
+
+        # Postprocess fruit sprites
+        padded_fruits = aj.pad_to_match(fruits)
+        jax_fruits = jnp.stack(padded_fruits)
+        # Postprocess ghost sprites
+        symmetric_ghosts = [jnp.flipud(ghost) for ghost in ghosts]
+        jax_ghosts = [jnp.array(ghosts), jnp.array(symmetric_ghosts)]
+        # Postprocess pacman sprites
+        pacmans_right = [jnp.flipud(p) for p in pacmans]
+        pacmans_up = [jnp.rot90(p, 3) for p in pacmans_right]
+        pacmans_down = [jnp.rot90(p) for p in pacmans_right]
+        jax_pacmans = [pacmans_up, pacmans_right, pacmans, pacmans_down]
+        # Postprocess score sprites
+        padded_score = aj.pad_to_match(score)
+        jax_score = jnp.stack(padded_score)
+
+        # Save resulting sprites
+        sprites["fruit"] = jax_fruits
+        sprites["ghost"] = jax_ghosts
+        sprites["pacman"] = jax_pacmans
+        sprites["score"] = jax_score
+        return sprites
 
 
 # --- HELPER FUNCTIONS --- #
