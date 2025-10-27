@@ -4,7 +4,7 @@ import jax.lax
 import jax.numpy as jnp
 from typing import NamedTuple, Tuple
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs, EnvState
-from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils_legacy as jr
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 

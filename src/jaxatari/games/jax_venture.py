@@ -15,7 +15,7 @@ from numpy import ndarray, dtype
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils_legacy as jr
 
 
 class VentureAction(IntEnum):

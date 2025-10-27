@@ -22,7 +22,7 @@ from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.spaces import Space, Discrete, Box, Dict
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as aj
+from jaxatari.rendering import jax_rendering_utils_legacy as aj
 
 
 class QbertConstants(NamedTuple):
