@@ -1,13 +1,14 @@
-from typing import NamedTuple, Tuple, Dict, Any
+import os
 from functools import partial
+from typing import List, NamedTuple, Tuple, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
 import chex
+from jax import Array
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
-import os
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 
 # Group: Kaan Yilmaz, Jonathan Frey
 # Game: Berzerk
@@ -18,12 +19,12 @@ class BerzerkConstants(NamedTuple):
     HEIGHT = 210
     SCALING_FACTOR = 3
 
-    PLAYER_SIZE = (6, 20)
+    PLAYER_SIZE = jnp.array((6, 20), dtype=jnp.float32)
     PLAYER_SPEED = 0.4
 
     EXTRA_LIFE_AT = 1000
 
-    ENEMY_SIZE = (8, 16)
+    ENEMY_SIZE = jnp.array((8, 16), dtype=jnp.float32)
     MAX_NUM_ENEMIES = 7
     MIN_NUM_ENEMIES = 5
     MOVEMENT_PROB = 0.0025  # probability for enemy to move
@@ -31,8 +32,8 @@ class BerzerkConstants(NamedTuple):
     ENEMY_SHOOT_PROB = 0.005
     ENEMY_BULLET_SPEED = 0.47
 
-    BULLET_SIZE_HORIZONTAL = (4, 2)
-    BULLET_SIZE_VERTICAL = (1, 6)
+    BULLET_SIZE_HORIZONTAL = jnp.array((4, 2), dtype=jnp.float32)
+    BULLET_SIZE_VERTICAL = jnp.array((1, 6), dtype=jnp.float32)
     BULLET_SPEED = 2
     MAX_BULLETS = 1
 
@@ -60,9 +61,18 @@ class BerzerkConstants(NamedTuple):
     # Variations Evil Otto 
     ENABLE_EVIL_OTTO = False    # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
-    EVIL_OTTO_SIZE = (8, 7)
+    EVIL_OTTO_SIZE = jnp.array((8, 7), dtype=jnp.float32)
     EVIL_OTTO_SPEED = 0.4
-    EVIL_OTTO_DELAY = 450
+    EVIL_OTTO_SPEED_SLOW = 0.2  # Slower than player (0.4)
+    EVIL_OTTO_SPEED_FAST = 0.5  # "Amazing speed!" - faster than player
+    EVIL_OTTO_DELAY = 422
+    EVIL_OTTO_RESPAWN_DELAY = 222
+    # Otto movement (bounce-phased) parameters
+    OTTO_BOUNCE_CYCLE = 30              # frames per bounce cycle
+    OTTO_BOUNCE_HEIGHT = 1.5            # pixels of peak vertical bounce 
+    OTTO_VERTICAL_DRIFT_SCALE = 0.2 # drift factor towards player's Y
+    OTTO_HORIZ_PHASE_START = 0.25       # start of horizontal move phase in cycle
+    OTTO_HORIZ_PHASE_END = 0.75         # end of horizontal move phase in cycle
     
 class PlayerState(NamedTuple):
     pos: chex.Array                     # (2,)
@@ -93,7 +103,6 @@ class OttoState(NamedTuple):
     active: chex.Array                  # (1,)
     timer: chex.Array                   # (1,)
     anim_counter: chex.Array            # (1,)
-    alive: chex.Array                   # (1,)
 
 class BerzerkState(NamedTuple):
     player: PlayerState             
@@ -134,6 +143,11 @@ class BerzerkInfo(NamedTuple):
     enemies_killed: chex.Array      # (1,)
     level_cleared: chex.Array       # (1,)
 
+class WallGeometry(NamedTuple):
+    outer_walls: chex.Array
+    door_blockers: chex.Array
+    mid_walls: Tuple[chex.Array, ...]
+
 
 class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, BerzerkConstants]):
     def __init__(self, consts: BerzerkConstants = None, frameskip: int = 1, reward_funcs: list[callable]=None):
@@ -166,21 +180,102 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         self.consts = consts or BerzerkConstants()
         self.obs_size = 111
         self.renderer = BerzerkRenderer(self.consts)
+        # Initialize AABB wall geometry
+        self.wall_geometry = self._define_wall_geometry()
+        # Pre-pad mid wall AABBs to a uniform shape for JAX switch/indexing
+        mid_list = list(self.wall_geometry.mid_walls)
+        max_len = max(arr.shape[0] for arr in mid_list)
+        def _pad_to(arr, target_len):
+            cur_len = arr.shape[0]
+            if cur_len == target_len:
+                return arr
+            pad_rows = jnp.zeros((target_len - cur_len, 4), dtype=arr.dtype)
+            return jnp.concatenate([arr, pad_rows], axis=0)
+        self.mid_walls_padded = jnp.stack([_pad_to(a, max_len) for a in mid_list], axis=0)  # (4, K, 4)
 
 
     @staticmethod   # has to be static to work for renderer
     def get_room_index(room_num):
         def get_current_index(room_num):
-            prev = (room_num - 1) % 3
+            prev = (room_num - 1) % 4
             offset = room_num + 1
-            next_idx = (prev + offset) % 3
-            return next_idx + 1
-        
+            next_idx = (prev + offset) % 4
+            return next_idx
         return jax.lax.cond(
             room_num == 0,
             lambda: jnp.array(0, dtype=jnp.int32),
             lambda: jnp.array(get_current_index(room_num), dtype=jnp.int32)
         )
+
+    # AABB collision helpers
+    @partial(jax.jit, static_argnums=(0, ))
+    def check_object_hits_wall_list(self, object_pos, object_size, wall_list: chex.Array) -> chex.Array:
+        def check_single_wall(wall_aabb):
+            wall_pos = wall_aabb[0:2]
+            wall_size = wall_aabb[2:4]
+            return self.rects_overlap(object_pos, object_size, wall_pos, wall_size)
+        return jnp.any(jax.vmap(check_single_wall)(wall_list))
+
+    def _define_wall_geometry(self) -> WallGeometry:
+        C = self.consts
+        WT = C.WALL_THICKNESS
+        WO = C.WALL_OFFSET
+        W = C.WIDTH
+        H = C.HEIGHT
+        EW = C.EXIT_WIDTH
+        EH = C.EXIT_HEIGHT
+        left_bound = WO[0]
+        top_bound = WO[1]
+        right_bound = W - WO[2]
+        bottom_bound = H - WO[3]
+        inner_width = right_bound - left_bound
+        inner_height = bottom_bound - top_bound
+        top_exit_x_start = left_bound + (inner_width - EW) / 2
+        top_exit_x_end = top_exit_x_start + EW
+        bottom_exit_x_start = top_exit_x_start
+        bottom_exit_x_end = top_exit_x_end
+        left_exit_y_start = top_bound + (inner_height - EH) / 2
+        left_exit_y_end = left_exit_y_start + EH
+        right_exit_y_start = left_exit_y_start
+        right_exit_y_end = left_exit_y_end
+        outer = jnp.array([
+            [left_bound, top_bound, top_exit_x_start - left_bound, WT],
+            [top_exit_x_end, top_bound, right_bound - top_exit_x_end, WT],
+            [left_bound, bottom_bound - WT, bottom_exit_x_start - left_bound, WT],
+            [bottom_exit_x_end, bottom_bound - WT, right_bound - bottom_exit_x_end, WT],
+            [left_bound, top_bound + WT, WT, left_exit_y_start - (top_bound + WT)],
+            [left_bound, left_exit_y_end, WT, (bottom_bound - WT) - left_exit_y_end],
+            [right_bound - WT, top_bound + WT, WT, right_exit_y_start - (top_bound + WT)],
+            [right_bound - WT, right_exit_y_end, WT, (bottom_bound - WT) - right_exit_y_end],
+        ], dtype=jnp.float32)
+        blockers = jnp.array([
+            [top_exit_x_start, top_bound, EW, WT],
+            [bottom_exit_x_start, bottom_bound - WT, EW, WT],
+            [left_bound, left_exit_y_start, WT, EH],
+            [right_bound - WT, right_exit_y_start, WT, EH],
+        ], dtype=jnp.float32)
+        mid_walls_1 = jnp.array([[36, 76, 88, 4], [36, 28, 4, 124], [120, 28, 4, 124]], dtype=jnp.float32)
+        mid_walls_2 = jnp.array([[36, 28, 4, 48], [36, 104, 4, 48], [120, 28, 4, 48], [120, 104, 4, 48]], dtype=jnp.float32)
+        mid_walls_3 = jnp.array([[78, 28, 4, 124], [36, 76, 46, 4], [82, 76, 42, 4]], dtype=jnp.float32)
+        mid_walls_4 = jnp.array([[36, 76, 42, 4], [82, 76, 42, 4], [78, 28, 4, 48], [78, 80, 4, 72]], dtype=jnp.float32)
+        return WallGeometry(outer_walls=outer, door_blockers=blockers, mid_walls=(mid_walls_1, mid_walls_2, mid_walls_3, mid_walls_4))
+
+    @partial(jax.jit, static_argnums=(0, ))
+    def _get_current_walls(self, room_counter, entry_direction) -> chex.Array:
+        room_idx = self.get_room_index(room_counter)
+        # Select pre-padded mid walls by index to keep shapes consistent
+        mid_walls_for_room = self.mid_walls_padded[room_idx]
+        base = jnp.concatenate([self.wall_geometry.outer_walls, mid_walls_for_room], axis=0)
+        block_top    = (entry_direction == 1)
+        block_bottom = (entry_direction == 0)
+        block_lr     = (entry_direction == 2) | (entry_direction == 3)
+        zero = jnp.zeros((1, 4), dtype=base.dtype)
+        top_block    = jax.lax.select(block_top,    self.wall_geometry.door_blockers[0:1], zero)
+        bottom_block = jax.lax.select(block_bottom, self.wall_geometry.door_blockers[1:2], zero)
+        left_block   = jax.lax.select(block_lr,     self.wall_geometry.door_blockers[2:3], zero)
+        right_block  = jax.lax.select(block_lr,     self.wall_geometry.door_blockers[3:4], zero)
+        current_walls = jnp.concatenate([base, top_block, bottom_block, left_block, right_block], axis=0)
+        return current_walls
 
 
     @partial(jax.jit, static_argnums=(0, ))
@@ -361,16 +456,16 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         room_idx = JaxBerzerk.get_room_index(room_counter)
 
         # get respective wall mask (True = collision)
-        def load_mask(idx):
-            masks = jnp.array([
-                self.renderer.room_collision_masks['mid_walls_1'],
-                self.renderer.room_collision_masks['mid_walls_2'],
-                self.renderer.room_collision_masks['mid_walls_3'],
-                self.renderer.room_collision_masks['mid_walls_4'],
-            ])
-            return masks[idx]
-
-        mid_mask = load_mask(room_idx)
+        # Use switch since masks have different shapes
+        mid_mask = jax.lax.switch(
+            room_idx,
+            [
+                lambda: self.renderer.room_collision_masks['mid_walls_1'],
+                lambda: self.renderer.room_collision_masks['mid_walls_2'],
+                lambda: self.renderer.room_collision_masks['mid_walls_3'],
+                lambda: self.renderer.room_collision_masks['mid_walls_4'],
+            ]
+        )
         outer_mask = self.renderer.room_collision_masks['level_outer_walls']
 
         # get respective wall mask
@@ -677,44 +772,59 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
     @partial(jax.jit, static_argnums=(0, ))
-    def move_otto(self, otto_pos, player_pos, otto_speed, otto_animation_counter):
-                direction = player_pos - otto_pos
-                norm = jnp.linalg.norm(direction) + 1e-6
-                new_otto_pos = otto_pos + (direction / norm) * otto_speed
+    def move_otto(self, otto_pos, player_pos, otto_speed_slow, otto_speed_fast, otto_animation_counter, walls_to_check: chex.Array, robots_alive: bool):
+        # --- Calculate Direction and Base Speed ---
+        direction = player_pos - otto_pos
+        dx = direction[0]
+        dy = direction[1]
+        norm = jnp.linalg.norm(direction) + 1e-6
+        norm_direction = direction / norm
+        current_otto_speed = jax.lax.select(robots_alive, otto_speed_slow, otto_speed_fast)
 
-                otto_animation_counter += 1
+        # --- Bounce Animation Logic ---
+        otto_animation_counter = otto_animation_counter + 1
+        jump_cycle_length = self.consts.OTTO_BOUNCE_CYCLE
+        jump_phase_float = (otto_animation_counter % jump_cycle_length) / jump_cycle_length
+        vertical_bounce_factor = jnp.sin(jump_phase_float * 2 * jnp.pi)
+        vertical_offset = vertical_bounce_factor * self.consts.OTTO_BOUNCE_HEIGHT
 
-                # jump animation for otto (best-guess-estimate of true values)
-                jump_phase = (otto_animation_counter // 15) % 5
-                jump_offset = jnp.where(jump_phase == 0, 0.5,
-                                        jnp.where(jump_phase == 4, 0.8, 
-                                                  jnp.where(jump_phase == 1, -0.7, -0.3)))
-                otto_pos_with_jump = new_otto_pos.at[1].add(jump_offset)
+        # --- Phased Horizontal Movement ---
+        move_horizontally = (jump_phase_float >= self.consts.OTTO_HORIZ_PHASE_START) & (jump_phase_float < self.consts.OTTO_HORIZ_PHASE_END)
+        horizontal_move = jax.lax.select(
+            move_horizontally,
+            norm_direction[0] * current_otto_speed,
+            0.0,
+        )
 
-                return otto_pos_with_jump
+        # --- Combine Movements ---
+        vertical_drift = norm_direction[1] * current_otto_speed * self.consts.OTTO_VERTICAL_DRIFT_SCALE
+        proposed_move_vec = jnp.array([horizontal_move, vertical_offset + vertical_drift])
+        final_pos = otto_pos + proposed_move_vec
+
+        return final_pos, otto_animation_counter
 
        
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state) -> BerzerkObservation:
         # Player as (2,)
-        player_pos = jnp.array([state.player.pos[0], state.player.pos[1]], dtype=jnp.float64)
-        player_dir = jnp.array([state.player.last_dir[0], state.player.last_dir[1]], dtype=jnp.float64)
+        player_pos = jnp.array([state.player.pos[0], state.player.pos[1]], dtype=jnp.float32)
+        player_dir = jnp.array([state.player.last_dir[0], state.player.last_dir[1]], dtype=jnp.float32)
 
         # Bullet as (1,2)
-        player_bullet = jnp.array([state.player.bullet[0]], dtype=jnp.float64) if state.player.bullet.ndim == 2 else jnp.array([state.player.bullet], dtype=jnp.float64)
-        player_bullet_dir = jnp.array([state.player.bullet_dir[0]], dtype=jnp.float64) if state.player.bullet_dir.ndim == 2 else jnp.array([state.player.bullet_dir], dtype=jnp.float64)
+        player_bullet = jnp.array([state.player.bullet[0]], dtype=jnp.float32) if state.player.bullet.ndim == 2 else jnp.array([state.player.bullet], dtype=jnp.float32)
+        player_bullet_dir = jnp.array([state.player.bullet_dir[0]], dtype=jnp.float32) if state.player.bullet_dir.ndim == 2 else jnp.array([state.player.bullet_dir], dtype=jnp.float32)
 
         # --- Enemies ---
-        enemy_pos = state.enemy.pos.astype(jnp.float64)  # shape (MAX_NUM_ENEMIES, 2)
-        enemy_bullets = state.enemy.bullets.astype(jnp.float64)  # shape (MAX_NUM_ENEMIES, 2)
-        enemy_bullet_dirs = state.enemy.bullet_dirs.astype(jnp.float64)  # shape (MAX_NUM_ENEMIES, 2)
+        enemy_pos = state.enemy.pos.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
+        enemy_bullets = state.enemy.bullets.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
+        enemy_bullet_dirs = state.enemy.bullet_dirs.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
 
         # --- Otto ---
-        otto_pos = state.otto.pos.astype(jnp.float64)
+        otto_pos = state.otto.pos.astype(jnp.float32)
 
         # --- Global ---
-        score = state.score.astype(jnp.float64)
-        lives = state.lives.astype(jnp.float64)
+        score = state.score.astype(jnp.float32)
+        lives = state.lives.astype(jnp.float32)
 
         return BerzerkObservation(
             player_pos=player_pos,
@@ -760,16 +870,16 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BerzerkObservation) -> chex.Array:
         return jnp.concatenate([
-            obs.player_pos.flatten().astype(jnp.float64),
-            obs.player_dir.flatten().astype(jnp.float64),
-            obs.player_bullet.flatten().astype(jnp.float64),
-            obs.player_bullet_dir.flatten().astype(jnp.float64),
-            obs.enemy_pos.flatten().astype(jnp.float64),
-            obs.enemy_bullets.flatten().astype(jnp.float64),
-            obs.enemy_bullet_dirs.flatten().astype(jnp.float64),
-            obs.otto_pos.flatten().astype(jnp.float64),
-            obs.score.flatten().astype(jnp.float64),
-            obs.lives.flatten().astype(jnp.float64),
+            obs.player_pos.flatten().astype(jnp.float32),
+            obs.player_dir.flatten().astype(jnp.float32),
+            obs.player_bullet.flatten().astype(jnp.float32),
+            obs.player_bullet_dir.flatten().astype(jnp.float32),
+            obs.enemy_pos.flatten().astype(jnp.float32),
+            obs.enemy_bullets.flatten().astype(jnp.float32),
+            obs.enemy_bullet_dirs.flatten().astype(jnp.float32),
+            obs.otto_pos.flatten().astype(jnp.float32),
+            obs.score.flatten().astype(jnp.float32),
+            obs.lives.flatten().astype(jnp.float32),
         ])
 
 
@@ -846,19 +956,16 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         otto_active = jnp.array(False)
         otto_timer = self.consts.EVIL_OTTO_DELAY
         otto_anim_counter = jnp.array(0, dtype=jnp.int32)
-        otto_alive = jnp.array(True)
-
         otto_state = OttoState(
             pos=otto_pos,
             active=otto_active,
             timer=otto_timer,
             anim_counter=otto_anim_counter,
-            alive=otto_alive,
         )
 
         # --- Global game state ---
-        lives = jnp.array(2, dtype=jnp.float64)
-        score = jnp.array(0, dtype=jnp.float64)
+        lives = jnp.array(2, dtype=jnp.float32)
+        score = jnp.array(0, dtype=jnp.float32)
         room_counter = jnp.array(0, dtype=jnp.int32)
         extra_life_counter = jnp.array(0, dtype=jnp.int32)
         game_over_timer = jnp.array(0, dtype=jnp.int32)
@@ -1196,48 +1303,72 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             )
 
             # spawn otto after timer has reached 0
-            new_otto_timer = jnp.maximum(state.otto.timer - 1, 0)
-            otto_active = jnp.logical_and(jnp.logical_not(new_otto_timer), jnp.logical_not(state.otto.active))
+            
+            # Only count down the timer if Otto is enabled
+            new_otto_timer = jax.lax.cond(
+                self.consts.ENABLE_EVIL_OTTO,
+                lambda: jnp.maximum(state.otto.timer - 1, 0), # Countdown if enabled
+                lambda: state.otto.timer                          # Hold timer if disabled
+            )
+            
+            # Check if he *should* activate (timer is 0, not already active, AND enabled)
+            otto_should_activate = self.consts.ENABLE_EVIL_OTTO & jnp.logical_and(jnp.logical_not(new_otto_timer), jnp.logical_not(state.otto.active))
 
+            # Define the spawn points for clarity
+            spawn_top = lambda: jnp.array([
+                self.consts.PLAYER_BOUNDS[0][1] // 2, 
+                self.consts.PLAYER_BOUNDS[1][0] + 5], dtype=jnp.float32)
+            
+            spawn_bottom = lambda: jnp.array([
+                self.consts.PLAYER_BOUNDS[0][1] // 2, 
+                self.consts.PLAYER_BOUNDS[1][1] - 25], dtype=jnp.float32)
+            spawn_left = lambda: jnp.array([
+                self.consts.PLAYER_BOUNDS[0][0] + 2,
+                self.consts.PLAYER_BOUNDS[1][1] // 2], dtype=jnp.float32)
+            spawn_right = lambda: jnp.array([
+                self.consts.PLAYER_BOUNDS[0][1] - 12, 
+                self.consts.PLAYER_BOUNDS[1][1] // 2], dtype=jnp.float32)
+
+            # Spawn Otto at the same position the player spawned into the room,
+            # which is opposite of entry_direction (player entered from entry_direction)
             otto_spawn_pos = jax.lax.switch(
-                    state.entry_direction,
-                    [
-                        lambda _: jnp.array([
-                            self.consts.PLAYER_BOUNDS[0][1] // 2,
-                            self.consts.PLAYER_BOUNDS[1][1] - 25
-                            ], dtype=jnp.float32),  # oben → unten spawnen
-                        
-                        lambda _: jnp.array([
-                            self.consts.PLAYER_BOUNDS[0][1] // 2, 
-                            self.consts.PLAYER_BOUNDS[1][0] + 5], dtype=jnp.float32),  # unten → oben spawnen
-                        
-                        lambda _: jnp.array([
-                            self.consts.PLAYER_BOUNDS[0][1] - 12, 
-                            self.consts.PLAYER_BOUNDS[1][1] // 2
-                            ], dtype=jnp.float32),  # links → rechts
-                        
-                        lambda _: jnp.array([
-                            self.consts.PLAYER_BOUNDS[0][0] + 2,
-                            self.consts.PLAYER_BOUNDS[1][1] // 2
-                        ], dtype=jnp.float32),  # rechts → links
-                    ],
-                    jnp.array([
-                            self.consts.PLAYER_BOUNDS[0][0] + 2,
-                            self.consts.PLAYER_BOUNDS[1][1] // 2
-                        ], dtype=jnp.float32)  # fallback
-                )
+                state.entry_direction,
+                [
+                    spawn_bottom, # 0: Entered TOP -> player spawned BOTTOM
+                    spawn_top,    # 1: Entered BOTTOM -> player spawned TOP
+                    spawn_right,  # 2: Entered LEFT -> player spawned RIGHT
+                    spawn_left,   # 3: Entered RIGHT -> player spawned LEFT
+                ]
+            )
 
-            spawn_pos = jnp.where(otto_active, otto_spawn_pos, state.otto.pos)
+            spawn_pos = jnp.where(otto_should_activate, otto_spawn_pos, state.otto.pos)
 
-            # keep otto active after spawn
-            otto_active = jnp.logical_or(state.otto.active, otto_active) 
+            # keep otto active after spawn (if he was already active, or just activated)
+            otto_active = state.otto.active | otto_should_activate
 
             # move to player once active
-            otto_pos = jnp.where(
-                otto_active, 
-                self.move_otto(spawn_pos, new_player_pos, self.consts.EVIL_OTTO_SPEED, state.otto.anim_counter), 
-                spawn_pos)
-            otto_anim_counter = jnp.where(otto_active, state.otto.anim_counter + 1, 0)
+
+            # Prepare walls for Otto collision checks
+            walls_to_check = self._get_current_walls(state.room_counter, state.entry_direction)
+
+            # Check if any robots are alive
+            robots_alive = jnp.any(state.enemy.alive)
+
+            # Call new bounce-phased movement; returns new pos and updated counter
+            otto_pos, otto_anim_counter_next = jax.lax.cond(
+                otto_active,
+                lambda: self.move_otto(
+                    spawn_pos,
+                    new_player_pos,
+                    self.consts.EVIL_OTTO_SPEED_SLOW,
+                    self.consts.EVIL_OTTO_SPEED_FAST,
+                    state.otto.anim_counter,
+                    walls_to_check,
+                    robots_alive,
+                ),
+                lambda: (spawn_pos, state.otto.anim_counter),
+            )
+            otto_anim_counter = jnp.where(otto_active, otto_anim_counter_next, 0)
 
             otto_hit_by_bullet = jnp.any(
                 jax.vmap(lambda b_pos, b_size, b_active:
@@ -1245,23 +1376,34 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 )(player_bullet, player_bullet_size, player_bullet_active)
             )
 
-            otto_alive = jax.lax.cond(
-                self.consts.MORTAL_EVIL_OTTO,
-                lambda _: state.otto.alive & (~otto_hit_by_bullet),
-                lambda _: True,
-                operand=None
+            # Rebound logic for mortal Otto
+            otto_rebound_event = self.consts.MORTAL_EVIL_OTTO & otto_hit_by_bullet
+            otto_respawn_delay = jnp.array(self.consts.EVIL_OTTO_RESPAWN_DELAY, dtype=jnp.int32)
+
+            new_otto_timer = jax.lax.cond(
+                otto_rebound_event,
+                lambda: otto_respawn_delay,
+                lambda: new_otto_timer
             )
 
-            otto_removed = otto_active & (~otto_alive)
+            otto_active = jax.lax.cond(
+                otto_rebound_event,
+                lambda: jnp.array(False),
+                lambda: otto_active
+            )
 
             otto_pos = jax.lax.cond(
-                otto_removed,
-                lambda _: jnp.array([-100.0, -100.0], dtype=jnp.float32),
-                lambda _: state.otto.pos.astype(jnp.float32),
-                operand=None
+                otto_rebound_event,
+                lambda: jnp.array([-100.0, -100.0], dtype=jnp.float32),
+                lambda: otto_pos
             )
 
-            player_bullet_active = jnp.where(self.consts.ENABLE_EVIL_OTTO, ~otto_hit_by_bullet & player_bullet_active, player_bullet_active)
+            # Destroy player's bullet if Otto enabled and was hit
+            player_bullet_active = jnp.where(
+                self.consts.ENABLE_EVIL_OTTO & otto_hit_by_bullet,
+                player_bullet_active & False,
+                player_bullet_active
+            )
 
 
             #######################################################
@@ -1306,8 +1448,19 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_clear_bonus_given = state.enemy.clear_bonus_given | give_bonus
 
             # Handle live logic
-            lives_after = jnp.where((death_timer == 0) & hit_something, state.lives - 1, state.lives)
-            score_after = jnp.where(lives_after == -1, 0, score_after)
+            lives_lost_this_frame = ((death_timer == 0) & hit_something).astype(jnp.int32)
+            lives_after_death = state.lives - lives_lost_this_frame
+            # Extra Life Check using integer division milestones
+            previous_milestone = jnp.floor_divide(state.score.astype(jnp.int32), self.consts.EXTRA_LIFE_AT)
+            current_milestone = jnp.floor_divide(score_after.astype(jnp.int32), self.consts.EXTRA_LIFE_AT)
+            earned_extra_life = (current_milestone > previous_milestone).astype(jnp.int32)
+            lives_after = lives_after_death + earned_extra_life
+            # Keep counter as total milestones reached
+            extra_life_counter_after = current_milestone.astype(jnp.int32)
+            # Reset score if game is over (lives hit -1)
+            game_should_be_over = (lives_after < 0)
+            # Ensure dtype consistency when resetting score
+            score_after = jnp.where(game_should_be_over, jnp.asarray(0, score_after.dtype), score_after)
 
             # Trigger Room Transition oder Game Over automatisch
             transition_timer = jax.lax.cond(
@@ -1325,11 +1478,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 lambda: state.game_over_timer
             )
 
-            extra_lives_given_last_score = state.extra_life_counter * self.consts.EXTRA_LIFE_AT
-            give_extra_life = score_after >= extra_lives_given_last_score + self.consts.EXTRA_LIFE_AT
-
-            lives_after = jnp.where(give_extra_life, state.lives + 1, state.lives)
-            extra_life_counter_after = jnp.where(give_extra_life, state.extra_life_counter + 1, state.extra_life_counter)
 
 
             #######################################################
@@ -1369,7 +1517,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     active=otto_active,
                     timer=new_otto_timer,
                     anim_counter=otto_anim_counter,
-                    alive=otto_alive,
                 ),
                 rng=rng,
                 score=score_after,
@@ -1417,22 +1564,22 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         """Returns the simplified observation space for the agent."""
         return spaces.Dict({
             # Player
-            "player_pos": spaces.Box(0, 255, (2,), jnp.float64),
-            "player_dir": spaces.Box(-1, 1, (2,), jnp.float64),
-            "player_bullet": spaces.Box(0, 255, (1,2), jnp.float64),
-            "player_bullet_dir": spaces.Box(-1, 1, (1,2), jnp.float64),
+            "player_pos": spaces.Box(0, 255, (2,), jnp.float32),
+            "player_dir": spaces.Box(-1, 1, (2,), jnp.float32),
+            "player_bullet": spaces.Box(0, 255, (1,2), jnp.float32),
+            "player_bullet_dir": spaces.Box(-1, 1, (1,2), jnp.float32),
 
             # Enemies
-            "enemy_pos": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float64),
-            "enemy_bullets": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float64),
-            "enemy_bullet_dirs": spaces.Box(-1, 1, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float64),
+            "enemy_pos": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
+            "enemy_bullets": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
+            "enemy_bullet_dirs": spaces.Box(-1, 1, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
 
             # Otto
-            "otto_pos": spaces.Box(-255, 255, (2,), jnp.float64),
+            "otto_pos": spaces.Box(-255, 255, (2,), jnp.float32),
 
             # Global
-            "score": spaces.Box(0, 999999, (), jnp.float64),
-            "lives": spaces.Box(0, 99, (), jnp.float64),
+            "score": spaces.Box(0, 999999, (), jnp.float32),
+            "lives": spaces.Box(0, 99, (), jnp.float32),
         })
 
 
@@ -1450,323 +1597,92 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
 class BerzerkRenderer(JAXGameRenderer):
-    # Type hint for sprites dictionary
+    # Type hints
     sprites: Dict[str, Any]
     pivots: Dict[str, Any]
+    sprite_indices: Dict[str, int]
+    group_offsets: Dict[str, chex.Array]
 
     def __init__(self, consts=None):
         """
-        Initializes the renderer by loading sprites, including level backgrounds.
-
-        Args:
-            sprite_path: Path to the directory containing sprite .npy files.
+        Initializes the renderer by loading sprites using the
+        new palette-based pipeline.
         """
+        super().__init__()
+
         self.consts = consts or BerzerkConstants()
+
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/berzerk"
-        self.sprites, self.pivots = self._load_sprites()
+
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Get the declarative asset manifest
+        asset_config = self._get_asset_config()
+
+        # 3. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+
+        # 4. Store key color IDs needed for rendering
+        self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.WALL_COLOR_TUPLE = (84, 92, 214) # Original wall color
+        self.WALL_ID = self.COLOR_TO_ID.get(self.WALL_COLOR_TUPLE, 0)
+        
+        # Store colors needed for procedural recoloring
+        self.ENEMY_ORIGINAL_COLOR_TUPLE = (210, 210, 64)
+        self.ENEMY_BULLET_ORIGINAL_COLOR_TUPLE = (240, 170, 103)
+        self.ENEMY_ORIGINAL_ID = self.COLOR_TO_ID.get(self.ENEMY_ORIGINAL_COLOR_TUPLE, 0)
+        self.ENEMY_BULLET_ORIGINAL_ID = self.COLOR_TO_ID.get(self.ENEMY_BULLET_ORIGINAL_COLOR_TUPLE, 0)
+
+        # Store the new color IDs in a JAX array for easy lookup
+        color_cycle_tuples = [
+            (210, 210, 91),    # yellow
+            (186, 112, 69),    # orange
+            (214, 214, 214),   # white
+            (109, 210, 111),   # green
+            (239, 127, 128),   # red
+            (102, 158, 193),   # blue
+            (227, 205, 115),   # yellow2
+            (185, 96, 175),    # pink
+        ]
+        self.color_names_ids = jnp.array(
+            [self.COLOR_TO_ID[c] for c in color_cycle_tuples]
+        )
+
+        # 5. Create helper mappings to bridge old logic with new SHAPE_MASKS
+        self._create_helper_mappings()
+
+        # 6. Generate collision masks (uses manual loading)
         self.room_collision_masks = self._generate_room_collision_masks()
 
-    def _load_sprites(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
-        """Loads all necessary sprites from .npy files and returns (padded sprites, render offsets)."""
-        sprites: Dict[str, Any] = {}
-        pad_offsets: Dict[str, Any] = {}
+        # Backward compatibility: map SHAPE_MASKS to old sprites dict
+        self.sprites = self.SHAPE_MASKS
+        self.pivots = {}  # Keep for compatibility but not used in new system
 
-        def _load_sprite_frame(name: str) -> chex.Array:
-            path = os.path.join(self.sprite_path, f'{name}.npy')
-            frame = jr.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim == 2:
-                frame = jnp.stack([frame]*3, axis=-1)  # grayscale → RGB
-            if frame.shape[-1] == 3:
-                frame = jnp.pad(frame, ((0, 0), (0, 0), (0, 1)))  # RGB → RGBA
-            return frame.astype(jnp.uint8)
+    def _get_asset_config(self) -> list[dict[str, Any]]:
+        """
+        Returns the declarative asset manifest for load_and_setup_assets.
+        """
+        # Define procedural assets
+        # 1. A black background
+        procedural_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)
+        procedural_bg = procedural_bg.at[:, :, 3].set(255)
 
-        # Sprites to load
-        sprite_names = [
-            'player_idle', 'player_move_1', 'player_move_2', 'player_death',
-            'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
-            'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left',
-            'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4', 'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
-            'enemy_death_1', 'enemy_death_2', 'enemy_death_3',
-            'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
-            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
-            'bullet_horizontal', 'bullet_vertical',
-            'door_vertical_left', 'door_vertical_right',
-            'door_horizontal_up', 'door_horizontal_down',
-            'level_outer_walls', 'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4',
-            'life', 'start_title',
-            'evil_otto', 'evil_otto_2'
-        ]
-        for name in sprite_names:
-            sprites[name] = _load_sprite_frame(name)
-
-        score_digit_path = os.path.join(self.sprite_path, 'score_{}.npy')
-        digits = jr.load_and_pad_digits(score_digit_path, num_chars=10)
-        sprites['digits'] = digits
-
-        # Add padding to player sprites for same size
-        player_keys = ['player_idle', 'player_move_1', 'player_move_2', 'player_death', 
-                       'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
-                       'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left']
-        player_frames = [sprites[k] for k in player_keys]
-
-        player_sprites_padded, player_offsets = jr.pad_to_match(player_frames)
-        for i, key in enumerate(player_keys):
-            sprites[key] = jnp.expand_dims(player_sprites_padded[i], axis=0)
-            pad_offsets[key] = player_offsets[i]
-
-        # Add padding to enemy sprites for same size
-        def pad_and_store(keys: list[str]):
-            enemy_frames = [sprites[k] for k in keys]
-            padded_frames, offsets = jr.pad_to_match(enemy_frames)
-            for i, key in enumerate(keys):
-                sprites[key] = jnp.expand_dims(padded_frames[i], axis=0)
-                pad_offsets[key] = offsets[i]
-
-        enemy_keys = [
-            'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4',
-            'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
-            'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
-            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
-            'enemy_death_1', 'enemy_death_2', 'enemy_death_3',
-        ]
-        pad_and_store(enemy_keys)
-
-        # Add padding to otto sprites for same size
-        otto_keys = ['evil_otto', 'evil_otto_2']
-        otto_frames = [sprites[k] for k in otto_keys]
-
-        otto_sprites_padded, otto_offsets = jr.pad_to_match(otto_frames)
-        for i, key in enumerate(otto_keys):
-            sprites[key] = jnp.expand_dims(otto_sprites_padded[i], axis=0)
-            pad_offsets[key] = otto_offsets[i]
-
-        # Pad mid_walls sprites to same shape
-        mid_keys = ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 'level_outer_walls', 
-                    'door_vertical_left', 'door_vertical_right', 'door_horizontal_up', 'door_horizontal_down',]
-        mid_frames = [sprites[k] for k in mid_keys]
-        mid_padded, mid_offsets = jr.pad_to_match(mid_frames)
-        for i, key in enumerate(mid_keys):
-            sprites[key] = jnp.expand_dims(mid_padded[i], axis=0)
-            pad_offsets[key] = mid_offsets[i]
-
-        # Expand other sprites
-        for key in sprites.keys():
-            if key not in player_keys and key not in enemy_keys and key not in mid_keys and key not in otto_keys:
-                if isinstance(sprites[key], (list, tuple)):
-                    sprites[key] = [jnp.expand_dims(sprite, axis=0) for sprite in sprites[key]]
-                else:
-                    sprites[key] = jnp.expand_dims(sprites[key], axis=0)
-
-        return sprites, pad_offsets
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: BerzerkState) -> chex.Array:
-        death_anim = state.player.death_timer > 0
-        room_transition_anim = state.room_transition_timer > 0
-        game_over_anim = state.game_over_timer > 0
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
-
-        # Draw walls (assuming fixed positions based on bounds)
-        room_idx = JaxBerzerk.get_room_index(state.room_counter)
-
-        def load_room_sprite(idx):
-            return jax.lax.switch(
-                idx,
-                [
-                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_1"], 0),
-                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_2"], 0),
-                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_3"], 0),
-                    lambda: jr.get_sprite_frame(self.sprites["mid_walls_4"], 0),
-                ]
-            )
-
-        mid_sprite = load_room_sprite(room_idx)
-        raster = jr.render_at(raster, 0, 0, mid_sprite)
-
-        outer_walls = jr.get_sprite_frame(self.sprites['level_outer_walls'], 0)
-        raster = jr.render_at(raster, 0, 0, outer_walls)
-
-
-        def draw_entry_block(raster):
-            wall_vl = jr.get_sprite_frame(self.sprites['door_vertical_left'], 0)
-            wall_hu = jr.get_sprite_frame(self.sprites['door_horizontal_up'], 0)
-            wall_vr = jr.get_sprite_frame(self.sprites['door_vertical_right'], 0)
-            wall_hd = jr.get_sprite_frame(self.sprites['door_horizontal_down'], 0)
-
-            def block_top(r):
-                return jr.render_at(r, 0, 0, wall_hu)
-
-            def block_bottom(r):
-                return jr.render_at(r, 0, 0, wall_hd)
-
-            def block_left(r):
-                return jr.render_at(r, 0, 0, wall_vl)
-
-            def block_right(r):
-                return jr.render_at(r, 0, 0, wall_vr)
-
-            # if player entered from left or right -> block both side entries
-            cond_lr = jnp.logical_and(state.entry_direction == 2, room_transition_anim == 0)
-            raster = jax.lax.cond(cond_lr, lambda r: block_left(block_right(r)), lambda r: r, raster)
-
-            cond_ll = jnp.logical_and(state.entry_direction == 3, room_transition_anim == 0)
-            raster = jax.lax.cond(cond_ll, lambda r: block_left(block_right(r)), lambda r: r, raster)
-
-            # if player entered from top -> block bottom entry
-            cond_top = jnp.logical_and(state.entry_direction == 0, room_transition_anim == 0)
-            raster = jax.lax.cond(cond_top, block_bottom, lambda r: r, raster)
-
-            # if player entered from bottom -> block top entry
-            cond_bottom = jnp.logical_and(state.entry_direction == 1, room_transition_anim == 0)
-            raster = jax.lax.cond(cond_bottom, block_top, lambda r: r, raster)
-
-            return raster
-        
-        raster = draw_entry_block(raster)
-
-
-        def draw_enemy_wall_lines(raster, state):
-            wall_x = 2
-            line_height = 1
-            line_length = 6
-
-            draw_lines = ~room_transition_anim
-
-            def draw_line(raster, enemy_y):
-                y = jnp.clip(enemy_y.astype(jnp.int32) - 1, 0, raster.shape[0] - line_height)
-                line = jnp.zeros((line_height, line_length, raster.shape[-1]), dtype=raster.dtype)
-                return jax.lax.dynamic_update_slice(raster, line, (y, wall_x, 0))
-
-            def maybe_draw(i, raster):
-                is_alive = state.enemy.alive[i]
-                enemy_y = state.enemy.pos[i][1]
-                should_draw = jnp.logical_and(is_alive, draw_lines)
-                return jax.lax.cond(
-                    should_draw,
-                    lambda _: draw_line(raster, enemy_y),
-                    lambda _: raster,
-                    operand=None
-                )
-
-            return jax.lax.fori_loop(0, state.enemy.pos.shape[0], maybe_draw, raster)
-
-        raster = draw_enemy_wall_lines(raster, state)
-
-
-        # Draw player bullet
-        is_active = state.player.bullet_active[0]
-        bullet_pos = state.player.bullet[0]
-        bullet_dir = state.player.bullet_dir[0]
-
-        def draw_bullet(raster):
-            dx = bullet_dir[0]
-
-            type_idx = jax.lax.select(dx != 0, 0, 1)  # 0=horizontal, 1=vertical
-
-            def render_horizontal(r):
-                sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
-                return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
-
-            def render_vertical(r):
-                sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
-                return jr.render_at(r, bullet_pos[0], bullet_pos[1], sprite)
-
-            return jax.lax.switch(
-                type_idx,
-                [render_horizontal, render_vertical],
-                raster
-            )
-
-        cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
-        raster = jax.lax.cond(cond, draw_bullet, lambda r: r, raster)
-
-
-        def get_player_sprite():
-            def death_animation():
-                idx = (state.player.death_timer - 1) % 4
-                return jnp.where(idx < 2, self.sprites['player_idle'], self.sprites['player_death'])
-
-            dir = state.player.last_dir
-
-            shoot_idx = jnp.select(
-                [
-                    (dir[0] == 0) & (dir[1] == -1),     # up
-                    (dir[0] == 1) & (dir[1] == -1),     # upright
-                    (dir[0] == 1) & (dir[1] == 0),      # right
-                    (dir[0] == 1) & (dir[1] == 1),      # downright
-                    (dir[0] == 0) & (dir[1] == 1),      # down
-                    (dir[0] == -1) & (dir[1] == 1),     # downleft
-                    (dir[0] == -1) & (dir[1] == 0),     # left
-                    (dir[0] == -1) & (dir[1] == -1),    # upleft
-                ],
-                jnp.arange(8),
-                default=2
-            )
-
-            shoot_frames = [
-                lambda: self.sprites['player_shoot_up'],
-                lambda: self.sprites['player_shoot_up'],
-                lambda: self.sprites['player_shoot_right'],
-                lambda: self.sprites['player_shoot_down'],
-                lambda: self.sprites['player_shoot_down'],
-                lambda: self.sprites['player_shoot_down_left'],
-                lambda: self.sprites['player_shoot_left'],
-                lambda: self.sprites['player_shoot_up_left'],
-            ]
-
-            move_frames = [
-                lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_1'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_move_2'],
-                lambda: self.sprites['player_idle'],
-                lambda: self.sprites['player_idle'],
-            ]
-
-            def normal_or_shoot():
-                return jax.lax.cond(
-                    state.player.is_firing,
-                    lambda: jax.lax.switch(shoot_idx, shoot_frames),
-                    lambda: jax.lax.cond(
-                        state.player.animation_counter > 0,
-                        lambda: jax.lax.switch((state.player.animation_counter - 1) % 6, move_frames),
-                        lambda: self.sprites['player_idle']
-                    )
-                )
-
-            return jax.lax.cond(death_anim, death_animation, normal_or_shoot)
-
-
-        player_sprite = get_player_sprite()
-
-        player_frame_right = jr.get_sprite_frame(player_sprite, 0)
-
-        player_frame = jax.lax.cond(
-            jnp.logical_and(state.player.last_dir[0] < 0, ~state.player.is_firing),
-            lambda: jnp.flip(player_frame_right, axis=1),  # flip horizontally
-            lambda: player_frame_right
-        )
-        raster = jax.lax.cond(
-            room_transition_anim,
-            lambda r: r,
-            lambda r: jr.render_at(r, state.player.pos[0], state.player.pos[1], player_frame),
-            raster
-        )
-
-
-        # Draw enemies
-        color_cycle = ["yellow", "orange", "white", "green", "red", "blue", "yellow2", "pink"]
-
-        def get_enemy_color_index(room_counter: jnp.ndarray) -> jnp.ndarray:
-            num_colors = len(color_cycle)
-            return jax.lax.cond(
-                room_counter == 0,
-                lambda: jnp.array(0, dtype=jnp.int32),
-                lambda: ((room_counter - 1) // 2 + 1) % num_colors
-            )
-
-        color_names = jnp.array([
+        # 2. A 1x1 pixel for each color used in procedural recoloring
+        #    This ensures they are added to the palette.
+        enemy_recolor_palette = jnp.array([
+            [210, 210, 64, 255],    # Original enemy color
+            [240, 170, 103, 255],   # Original bullet color
             [210, 210, 91, 255],    # yellow
             [186, 112, 69, 255],    # orange
             [214, 214, 214, 255],   # white
@@ -1775,337 +1691,588 @@ class BerzerkRenderer(JAXGameRenderer):
             [102, 158, 193, 255],   # blue
             [227, 205, 115, 255],   # yellow2
             [185, 96, 175, 255],    # pink
-        ], dtype=jnp.uint8)
+        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4) # (N, 1, 1, 4)
 
-        def get_new_color(color_idx: jnp.ndarray) -> jnp.ndarray:
-            return color_names[color_idx]
-
-        def recolor_sprite(sprite, color_idx, original_color):
-            new_color = get_new_color(color_idx)  # e.g. green, red, etc.
-
-            # Mask (compare with original_color to get enemy pixels)
-            mask = jnp.all(sprite == original_color, axis=-1)  # shape (H, W)
-
-            recolored = jnp.where(mask[..., None], new_color, sprite)
-
-            return recolored.astype(jnp.uint8)
+        # Define sprite groups (for auto-padding)
+        player_keys = [
+            'player_idle', 'player_move_1', 'player_move_2', 'player_death',
+            'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
+            'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left'
+        ]
         
-        def maybe_recolor(sprite: chex.Array, color_idx: int, original_color) -> chex.Array:
-            return jax.lax.cond(
-                color_idx == 0,
-                lambda: sprite,
-                lambda: recolor_sprite(sprite, color_idx, original_color)
-            )
+        enemy_keys = [
+            'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4',
+            'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
+            'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
+            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
+            'enemy_death_1', 'enemy_death_2', 'enemy_death_3',
+        ]
+        
+        otto_keys = ['evil_otto']
 
-        def get_enemy_sprite(i):
-            counter = state.enemy.animation_counter[i]
-            axis = state.enemy.move_axis[i]
-            death_timer = state.enemy.death_timer[i]
+        wall_keys = [
+            'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
+            'level_outer_walls', 'door_vertical_left', 'door_vertical_right', 
+            'door_horizontal_up', 'door_horizontal_down',
+        ]
 
-            color_idx = get_enemy_color_index(state.room_counter)
+        # Return the full asset manifest
+        return [
+            # Procedural assets
+            {'name': 'background', 'type': 'background', 'data': procedural_bg},
+            {'name': 'recolor_palette', 'type': 'procedural', 'data': enemy_recolor_palette},
 
-            def recolor(name: str):
-                original_color = jnp.array([210, 210, 64, 255], dtype=jnp.uint8)
-                return maybe_recolor(self.sprites[name], color_idx, original_color)
+            # Groups (will be auto-padded)
+            {'name': 'player_group', 'type': 'group', 'files': [f'{k}.npy' for k in player_keys]},
+            {'name': 'enemy_group', 'type': 'group', 'files': [f'{k}.npy' for k in enemy_keys]},
+            {'name': 'otto_group', 'type': 'group', 'files': [f'{k}.npy' for k in otto_keys]},
+            {'name': 'wall_group', 'type': 'group', 'files': [f'{k}.npy' for k in wall_keys]},
 
-            # Death Animation Frames
-            death_sprites = (
-                [recolor("enemy_death_3")] * 4 +
-                [recolor("enemy_death_2")] * 2 +
-                [recolor("enemy_death_1")] * 2
-            )
-            death_frames = [lambda sprite=s: sprite for s in death_sprites]
+            # Single sprites
+            {'name': 'bullet_horizontal', 'type': 'single', 'file': 'bullet_horizontal.npy'},
+            {'name': 'bullet_vertical', 'type': 'single', 'file': 'bullet_vertical.npy'},
+            {'name': 'life', 'type': 'single', 'file': 'life.npy'},
+            {'name': 'start_title', 'type': 'single', 'file': 'start_title.npy'},
 
-            # Normal Animation Frames
-            idle_sprites = (
-                [recolor("enemy_idle_1")] * 4 +
-                [recolor("enemy_idle_2")] * 4 +
-                [recolor("enemy_idle_3")] * 4 +
-                [recolor("enemy_idle_4")] * 4 +
-                [recolor("enemy_idle_5")] * 4 +
-                [recolor("enemy_idle_6")] * 4 +
-                [recolor("enemy_idle_7")] * 4 +
-                [recolor("enemy_idle_8")] * 4
-            )
-            idle_frames = [lambda sprite=s: sprite for s in idle_sprites]
+            # Digits
+            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        ]
 
-            move_horizontal_sprites = (
-                [recolor("enemy_move_horizontal_1")] * 7 +
-                [recolor("enemy_move_horizontal_2")] * 7
-            )
-            move_horizontal_frames = [lambda sprite=s: sprite for s in move_horizontal_sprites]
+    def _create_helper_mappings(self):
+        """
+        Creates dictionaries to map old string keys to new group indices
+        and to store group-level flip offsets.
+        """
+        # Map sprite name -> index in group
+        self.sprite_indices = {
+            # Player
+            'player_idle': 0, 'player_move_1': 1, 'player_move_2': 2, 'player_death': 3,
+            'player_shoot_up': 4, 'player_shoot_right': 5, 'player_shoot_down': 6,
+            'player_shoot_left': 7, 'player_shoot_up_left': 8, 'player_shoot_down_left': 9,
 
-            move_vertical_sprites = (
-                [recolor("enemy_move_vertical_1")] * 6 +
-                [recolor("enemy_move_vertical_2")] * 6 +
-                [recolor("enemy_move_vertical_1")] * 6 +
-                [recolor("enemy_move_vertical_3")] * 6
-            )
-            move_vertical_frames = [lambda sprite=s: sprite for s in move_vertical_sprites]
+            # Enemy
+            'enemy_idle_1': 0, 'enemy_idle_2': 1, 'enemy_idle_3': 2, 'enemy_idle_4': 3,
+            'enemy_idle_5': 4, 'enemy_idle_6': 5, 'enemy_idle_7': 6, 'enemy_idle_8': 7,
+            'enemy_move_horizontal_1': 8, 'enemy_move_horizontal_2': 9,
+            'enemy_move_vertical_1': 10, 'enemy_move_vertical_2': 11, 'enemy_move_vertical_3': 12,
+            'enemy_death_1': 13, 'enemy_death_2': 14, 'enemy_death_3': 15,
 
-            # Animation functions
-            def death_animation():
-                idx = (death_timer - 1) % 8
-                return jax.lax.switch(idx, death_frames)
+            # Otto
+            'evil_otto': 0, 'evil_otto_2': 1,
 
-            def normal_animation():
-                axis_idx = jnp.clip(axis + 1, 0, 2)  # 0=idle, 1=horizontal, 2=vertical
-                return jax.lax.switch(
-                    axis_idx,
-                    [
-                        lambda: jax.lax.switch((counter - 1) % 32, idle_frames),
-                        lambda: jax.lax.switch((counter - 1) % 14, move_horizontal_frames),
-                        lambda: jax.lax.switch((counter - 1) % 24, move_vertical_frames),
-                    ]
-                )
+            # Walls
+            'mid_walls_1': 0, 'mid_walls_2': 1, 'mid_walls_3': 2, 'mid_walls_4': 3,
+            'level_outer_walls': 4, 'door_vertical_left': 5, 'door_vertical_right': 6,
+            'door_horizontal_up': 7, 'door_horizontal_down': 8,
+        }
 
-            # decide if death or normal animation
-            return jax.lax.cond(death_timer > 0, death_animation, normal_animation)
+        # Map group name -> flip offset
+        self.group_offsets = {
+            'player': self.FLIP_OFFSETS['player_group'],
+            'enemy': self.FLIP_OFFSETS['enemy_group'],
+            'otto': self.FLIP_OFFSETS['otto_group'],
+            'wall': self.FLIP_OFFSETS['wall_group'],
+            'bullet_horizontal': self.FLIP_OFFSETS['bullet_horizontal'],
+            'bullet_vertical': self.FLIP_OFFSETS['bullet_vertical'],
+            'life': self.FLIP_OFFSETS['life'],
+            'start_title': self.FLIP_OFFSETS['start_title'],
+            'digits': self.FLIP_OFFSETS['digits'],
+        }
 
-        for i in range(state.enemy.pos.shape[0]):
-            is_dying = state.enemy.death_timer[i] > 0
-            pos = jax.lax.cond(is_dying, lambda: state.enemy.death_pos[i], lambda: state.enemy.pos[i])
-            sprite = get_enemy_sprite(i)
-            frame = jr.get_sprite_frame(sprite, 0)
+    def _generate_room_collision_masks(self) -> Dict[str, chex.Array]:
+        """
+        Manually loads RGBA sprites to generate boolean collision masks
+        for game logic. This is separate from the rendering pipeline.
+        """
+        
+        # Helper to load/convert frames manually, just for collision mask generation
+        def _load_rgba_frame_for_collision(name: str) -> chex.Array:
+            path = os.path.join(self.sprite_path, f'{name}.npy')
+            frame = jnp.load(path) # Use simple jnp.load
+            if isinstance(frame, jnp.ndarray) and frame.ndim == 2:
+                frame = jnp.stack([frame]*3, axis=-1)  # grayscale → RGB
             
-            frame = jax.lax.cond(
-                state.enemy.move_dir[i] < 0,
-                lambda: jnp.flip(frame, axis=1),
-                lambda: frame
-            )
+            if frame.shape[-1] == 3:
+                # Pad RGB to RGBA, assuming alpha=255 for walls
+                alpha = jnp.full(frame.shape[:2] + (1,), 255, dtype=jnp.uint8)
+                frame = jnp.concatenate([frame, alpha], axis=-1)
+            return frame.astype(jnp.uint8)
 
-            raster = jax.lax.cond(
-                room_transition_anim,
-                lambda r: r,
-                lambda r: jr.render_at(r, pos[0], pos[1], frame),
-                raster
-            )
+        wall_keys = [
+            'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
+            'level_outer_walls', 'door_vertical_left', 'door_horizontal_up', 
+            'door_vertical_right', 'door_horizontal_down'
+        ]
 
+        # The original wall color in the .npy files
+        wall_color_rgba = jnp.array([84, 92, 214, 255], dtype=jnp.uint8) 
+        
+        masks = {}
+        target_height = self.consts.HEIGHT
+        target_width = self.consts.WIDTH
 
-        # Draw enemy bullets
-        color_idx = get_enemy_color_index(state.room_counter)
+        for name in wall_keys:
+            sprite_rgba = _load_rgba_frame_for_collision(name)
+            # Handle sprites that were already padded/expanded in the old logic
+            sprite_frame = sprite_rgba[0] if sprite_rgba.ndim == 5 else sprite_rgba
+            sprite_frame = sprite_frame[0] if sprite_frame.ndim == 4 and sprite_frame.shape[0] == 1 else sprite_frame
+            
+            # Create collision mask from sprite
+            mask = jnp.all(sprite_frame == wall_color_rgba, axis=-1)  # shape (H, W)
+            
+            # Pad mask to game dimensions (top-left aligned)
+            h, w = mask.shape
+            pad_h = target_height - h
+            pad_w = target_width - w
+            
+            # Create full-size mask with False (no collision) and place the actual mask at (0, 0)
+            full_mask = jnp.zeros((target_height, target_width), dtype=jnp.bool_)
+            full_mask = full_mask.at[:h, :w].set(mask)
+            
+            masks[name] = full_mask
+        
+        return masks
 
-        for i in range(state.enemy.bullets.shape[0]):
-            is_active = state.enemy.bullet_active[i]
-            bullet_pos = state.enemy.bullets[i]
-            bullet_dir = state.enemy.bullet_dirs[i]
-
-            def draw_enemy_bullet(raster):
-                dx = bullet_dir[0]
-                original_color = jnp.array([240, 170, 103, 255], dtype=jnp.uint8)
-
-                def draw_horizontal(r):
-                    raw_sprite = jr.get_sprite_frame(self.sprites['bullet_horizontal'], 0)
-                    recolored = recolor_sprite(raw_sprite, color_idx, original_color)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], recolored)
-
-                def draw_vertical(r):
-                    raw_sprite = jr.get_sprite_frame(self.sprites['bullet_vertical'], 0)
-                    recolored = recolor_sprite(raw_sprite, color_idx, original_color)
-                    return jr.render_at(r, bullet_pos[0], bullet_pos[1], recolored)
-
-                return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, raster)
-
-            cond = jnp.logical_and(is_active, jnp.logical_not(room_transition_anim))
-            raster = jax.lax.cond(cond, draw_enemy_bullet, lambda r: r, raster)
-
-
-        otto_sprites = self.sprites.get('evil_otto')
-        otto_sprites = jax.lax.cond(
-            (state.otto.anim_counter // 15) % 5,
-            lambda s: s.get('evil_otto'), 
-            lambda s: s.get('evil_otto_2'),
-            self.sprites)
-
-        otto_frame = jr.get_sprite_frame(otto_sprites, 0)
-        jr.render_at(raster, state.otto.pos[0], state.otto.pos[1], otto_frame)
-
-        raster = jax.lax.cond(
-                state.otto.active,
-                lambda r: jr.render_at(r, state.otto.pos[0], state.otto.pos[1], otto_frame),
-                lambda r: r,
-                raster
-            )
-
-
-        # Draw score
-        score_spacing = 8  # Spacing between digits 
-        max_score_digits = 5  # Maximal displayed digits
-
-        digit_sprites_raw = self.sprites.get('digits', None)
-        digit_sprites = (
-            jnp.squeeze(digit_sprites_raw, axis=0)  # from (1,10,H,W,C) → (10,H,W,C)
-            if digit_sprites_raw is not None else None
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: BerzerkState) -> chex.Array:
+        death_anim = state.player.death_timer > 0
+        room_transition_anim = state.room_transition_timer > 0
+        game_over_anim = state.game_over_timer > 0
+        # --- 1. Create Base Raster & Dynamic Palette ---
+        # Start with the background (all BLACK_ID)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        # Create a dynamic palette for this frame. We'll recolor the enemy
+        # and bullet entries based on the room.
+        color_idx = self._get_enemy_color_index(state.room_counter)
+        new_color_id = self.color_names_ids[color_idx]
+        frame_palette = self.PALETTE
+        
+        # Conditionally update the palette:
+        # If color_idx > 0, set the ENEMY_ORIGINAL_ID slot to the new color.
+        frame_palette = jax.lax.cond(
+            color_idx > 0,
+            lambda p: p.at[self.ENEMY_ORIGINAL_ID].set(p[new_color_id]),
+            lambda p: p,
+            frame_palette
+        )
+        # Bullets match the enemy color
+        frame_palette = jax.lax.cond(
+            color_idx > 0,
+            lambda p: p.at[self.ENEMY_BULLET_ORIGINAL_ID].set(p[new_color_id]),
+            lambda p: p,
+            frame_palette
         )
 
-        def render_scores(raster_to_update):
-            """
-            Render the score on the screen for Berzerk.
+        # --- 2. Draw Static Walls ---
+        room_idx = JaxBerzerk.get_room_index(state.room_counter)
+        wall_group_offset = self.group_offsets['wall']
 
-            Args:
-                raster_to_update: The current frame to update.
-            """
+        # Select and draw the middle wall sprite for the room
+        mid_wall_idx = jnp.array([
+            self.sprite_indices['mid_walls_1'],
+            self.sprite_indices['mid_walls_2'],
+            self.sprite_indices['mid_walls_3'],
+            self.sprite_indices['mid_walls_4'],
+        ])[room_idx]
+        mid_wall_mask = self.SHAPE_MASKS['wall_group'][mid_wall_idx]
+        raster = self.jr.render_at(raster, 0, 0, mid_wall_mask, flip_offset=wall_group_offset)
 
-            def skip_render():
-                return raster_to_update
+        # Draw the outer walls
+        outer_walls_mask = self.SHAPE_MASKS['wall_group'][self.sprite_indices['level_outer_walls']]
+        raster = self.jr.render_at(raster, 0, 0, outer_walls_mask, flip_offset=wall_group_offset)
+        
+        # --- 3. Draw Entry/Exit Blocks ---
+        def draw_entry_block(r):
+            # Get masks
+            vl_mask = self.SHAPE_MASKS['wall_group'][self.sprite_indices['door_vertical_left']]
+            hu_mask = self.SHAPE_MASKS['wall_group'][self.sprite_indices['door_horizontal_up']]
+            vr_mask = self.SHAPE_MASKS['wall_group'][self.sprite_indices['door_vertical_right']]
+            hd_mask = self.SHAPE_MASKS['wall_group'][self.sprite_indices['door_horizontal_down']]
             
-            def draw_score(value, offset_x):
-                # Convert score to digits, zero-padded (e.g. 50 -> [0,0,5,0])
-                value = value.astype(jnp.int32)
-                score_digits = jr.int_to_digits(value, max_digits=max_score_digits)
-
-                # Remove leading zeros
-                def find_start_index(digits):
-                    # Return the first non-zero index (or max_digits-1 if score == 0)
-                    is_non_zero = digits != 0
-                    first_non_zero = jnp.argmax(is_non_zero)
-                    return jax.lax.select(jnp.any(is_non_zero), first_non_zero, max_score_digits - 1)
-
-                start_idx = find_start_index(score_digits)
-
-                # Number of digits to render
-                num_to_render = max_score_digits - start_idx
-
-                # Adjust x-position to align right
-                render_start_x = offset_x - score_spacing * (num_to_render - 1)
-
-                # Render selective digits
-                raster_updated = jr.render_label_selective(
-                    raster_to_update,
-                    render_start_x,
-                    self.consts.SCORE_OFFSET_Y,
-                    score_digits,
-                    digit_sprites,
-                    start_idx,
-                    num_to_render,
-                    spacing=score_spacing
-                )
-
-                return raster_updated
+            # Define render functions
+            block_top = lambda r_in: self.jr.render_at(r_in, 0, 0, hu_mask, flip_offset=wall_group_offset)
+            block_bottom = lambda r_in: self.jr.render_at(r_in, 0, 0, hd_mask, flip_offset=wall_group_offset)
+            block_left = lambda r_in: self.jr.render_at(r_in, 0, 0, vl_mask, flip_offset=wall_group_offset)
+            block_right = lambda r_in: self.jr.render_at(r_in, 0, 0, vr_mask, flip_offset=wall_group_offset)
             
-            show_bonus = state.enemy.clear_bonus_given
-
-            return jax.lax.cond(
-                jnp.logical_and(state.score == 0, ~show_bonus),
-                skip_render,
-                lambda: jax.lax.cond(
-                    show_bonus,
-                    lambda: draw_score(state.num_enemies * 10, self.consts.SCORE_OFFSET_X - 31),  # draw bonus further to left
-                    lambda: draw_score(state.score, self.consts.SCORE_OFFSET_X)
-                )
+            # Apply conditional logic
+            r = jax.lax.cond(
+                (state.entry_direction == 2) | (state.entry_direction == 3),
+                lambda r_in: block_left(block_right(r_in)), 
+                lambda r_in: r_in, 
+                r
             )
+            r = jax.lax.cond(state.entry_direction == 0, block_bottom, lambda r_in: r_in, r)
+            r = jax.lax.cond(state.entry_direction == 1, block_top, lambda r_in: r_in, r)
+            return r
+
+        raster = jax.lax.cond(~room_transition_anim, draw_entry_block, lambda r: r, raster)
+
+        # --- 4. Draw Enemy Wall Lines (Vectorized) ---
+        def draw_wall_lines(r):
+            line_height = 1
+            line_length = 6
+            wall_x = 2
+            
+            is_alive = state.enemy.alive
+            y_coords = jnp.clip(state.enemy.pos[:, 1].astype(jnp.int32) - 1, 0, self.consts.HEIGHT - line_height)
+            x_coords = jnp.full_like(y_coords, wall_x)
+            
+            # Create (x, y) positions and (w, h) sizes
+            positions = jnp.stack([x_coords, y_coords], axis=-1)
+            sizes = jnp.full_like(positions, jnp.array([line_length, line_height]))
+            
+            # Hide inactive enemies by setting their position to -1
+            positions = jnp.where(is_alive[:, None], positions, -1)
+            
+            return self.jr.draw_rects(r, positions, sizes, self.BLACK_ID)
+
+        raster = jax.lax.cond(~room_transition_anim, draw_wall_lines, lambda r: r, raster)
+
+        # --- 5. Draw Player Bullet ---
+        def draw_player_bullet(r):
+            bullet_pos = state.player.bullet[0]
+            dx = state.player.bullet_dir[0][0]
+            
+            def draw_horizontal(r_in):
+                mask = self.SHAPE_MASKS['bullet_horizontal']
+                offset = self.group_offsets['bullet_horizontal']
+                return self.jr.render_at_clipped(r_in, bullet_pos[0], bullet_pos[1], mask, flip_offset=offset)
+            
+            def draw_vertical(r_in):
+                mask = self.SHAPE_MASKS['bullet_vertical']
+                offset = self.group_offsets['bullet_vertical']
+                return self.jr.render_at_clipped(r_in, bullet_pos[0], bullet_pos[1], mask, flip_offset=offset)
+            
+            # Bullets can go off-screen
+            return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, r)
 
         raster = jax.lax.cond(
-            jnp.logical_not(room_transition_anim),
-            render_scores,
-            lambda r: r,
+            state.player.bullet_active[0] & ~room_transition_anim, 
+            draw_player_bullet, 
+            lambda r: r, 
             raster
         )
 
 
-        # Draw title
-        title_sprite = self.sprites.get('start_title', None)
-        title_sprite = jnp.squeeze(title_sprite, axis=0)
+        # --- 6. Draw Player ---
+        def get_player_sprite_idx():
+            def death_animation_idx():
+                idx = (state.player.death_timer - 1) % 4
+                return jnp.where(idx < 2, self.sprite_indices['player_idle'], self.sprite_indices['player_death'])
 
-        x = (self.consts.WIDTH - title_sprite.shape[1]) // 2 + 2
-        y = self.consts.SCORE_OFFSET_Y
+            def normal_or_shoot_idx():
+                dir = state.player.last_dir
+                shoot_dir_idx = jnp.select(
+                    [
+                        (dir[0] == 0) & (dir[1] == -1),     # up
+                        (dir[0] == 1) & (dir[1] == -1),     # upright
+                        (dir[0] == 1) & (dir[1] == 0),      # right
+                        (dir[0] == 1) & (dir[1] == 1),      # downright
+                        (dir[0] == 0) & (dir[1] == 1),      # down
+                        (dir[0] == -1) & (dir[1] == 1),     # downleft
+                        (dir[0] == -1) & (dir[1] == 0),     # left
+                        (dir[0] == -1) & (dir[1] == -1),    # upleft
+                    ],
+                    jnp.arange(8), default=2
+                )
+                shoot_idx_map = jnp.array([
+                    self.sprite_indices['player_shoot_up'],
+                    self.sprite_indices['player_shoot_up'],
+                    self.sprite_indices['player_shoot_right'],
+                    self.sprite_indices['player_shoot_down'],
+                    self.sprite_indices['player_shoot_down'],
+                    self.sprite_indices['player_shoot_down_left'],
+                    self.sprite_indices['player_shoot_left'],
+                    self.sprite_indices['player_shoot_up_left'],
+                ])
+                shoot_sprite_idx = shoot_idx_map[shoot_dir_idx]
+                
+                move_idx_map = jnp.array([
+                    self.sprite_indices['player_move_1'], self.sprite_indices['player_move_1'],
+                    self.sprite_indices['player_move_2'], self.sprite_indices['player_move_2'],
+                    self.sprite_indices['player_idle'], self.sprite_indices['player_idle'],
+                ])
+                move_sprite_idx = move_idx_map[(state.player.animation_counter - 1) % 6]
+                idle_sprite_idx = self.sprite_indices['player_idle']
+                return jax.lax.cond(
+                    state.player.is_firing,
+                    lambda: shoot_sprite_idx,
+                    lambda: jax.lax.cond(
+                        state.player.animation_counter > 0,
+                        lambda: move_sprite_idx,
+                        lambda: idle_sprite_idx
+                    )
+                )
+            
+            return jax.lax.cond(death_anim, death_animation_idx, normal_or_shoot_idx)
 
-        def render_title(r):
-            return jr.render_at(r, x, y, title_sprite)
-
-        raster = jax.lax.cond(state.score == 0, render_title, lambda r: r, raster)
-
-        def apply_bar_overlay(raster, progress: jnp.ndarray, mode_idx: int):
-            total_height, width = raster.shape[0], raster.shape[1]
-            playfield_height = total_height - self.consts.WALL_OFFSET[3]  # ignoring margin at top
-            covered_rows = jnp.floor(progress * playfield_height).astype(jnp.int32)
-            rows = jnp.arange(total_height)
-
-            def top_down_mask():
-                return rows[:, None] < covered_rows
-
-            def bottom_up_mask():
-                return rows[:, None] >= (playfield_height - covered_rows)
-
-            def center_inward_mask():
-                top = rows[:, None] < (covered_rows // 2)
-                bottom = rows[:, None] >= (playfield_height - covered_rows // 2)
-                return top | bottom
-
-            mask = jax.lax.switch(
-                mode_idx,
-                [top_down_mask, bottom_up_mask, center_inward_mask]
+        def draw_player(r):
+            player_idx = get_player_sprite_idx()
+            player_mask = self.SHAPE_MASKS['player_group'][player_idx]
+            flip_h = jnp.logical_and(state.player.last_dir[0] < 0, ~state.player.is_firing)
+            
+            return self.jr.render_at(
+                r, state.player.pos[0], state.player.pos[1], 
+                player_mask, 
+                flip_horizontal=flip_h, 
+                flip_offset=self.group_offsets['player']
             )
 
-            mask_3c = jnp.repeat(mask, width, axis=1)[..., None]
-            return jnp.where(mask_3c, 0, raster)
+        raster = jax.lax.cond(~room_transition_anim, draw_player, lambda r: r, raster)
 
 
-        # draw transition animation
-        progress_transition = 1.0 - (state.room_transition_timer.astype(jnp.float32) / self.consts.TRANSITION_ANIMATION_FRAMES)
+        # --- 7. Draw Enemies ---
+        def get_enemy_sprite_idx(i):
+            counter = state.enemy.animation_counter[i]
+            axis = state.enemy.move_axis[i]
+            death_timer = state.enemy.death_timer[i]
+            
+            death_idx_map = jnp.array([
+                self.sprite_indices['enemy_death_3'], self.sprite_indices['enemy_death_3'],
+                self.sprite_indices['enemy_death_3'], self.sprite_indices['enemy_death_3'],
+                self.sprite_indices['enemy_death_2'], self.sprite_indices['enemy_death_2'],
+                self.sprite_indices['enemy_death_1'], self.sprite_indices['enemy_death_1'],
+            ])
+            death_sprite_idx = death_idx_map[(death_timer - 1) % 8]
+            
+            idle_idx_map = jnp.array([self.sprite_indices[f'enemy_idle_{j}'] for j in range(1, 9) for _ in range(4)])
+            idle_sprite_idx = idle_idx_map[(counter - 1) % 32]
+            
+            move_h_idx_map = jnp.array(
+                [self.sprite_indices['enemy_move_horizontal_1']] * 7 +
+                [self.sprite_indices['enemy_move_horizontal_2']] * 7
+            )
+            move_h_sprite_idx = move_h_idx_map[(counter - 1) % 14]
+            
+            move_v_idx_map = jnp.array(
+                [self.sprite_indices['enemy_move_vertical_1']] * 6 +
+                [self.sprite_indices['enemy_move_vertical_2']] * 6 +
+                [self.sprite_indices['enemy_move_vertical_1']] * 6 +
+                [self.sprite_indices['enemy_move_vertical_3']] * 6
+            )
+            move_v_sprite_idx = move_v_idx_map[(counter - 1) % 24]
+            
+            def normal_animation_idx():
+                axis_idx = jnp.clip(axis + 1, 0, 2)
+                # Select index from: [idle_idx, move_h_idx, move_v_idx]
+                return jax.lax.switch(
+                    axis_idx,
+                    [
+                        lambda: idle_sprite_idx,
+                        lambda: move_h_sprite_idx,
+                        lambda: move_v_sprite_idx,
+                    ]
+                )
+            
+            return jax.lax.cond(
+                death_timer > 0,
+                lambda: death_sprite_idx,
+                normal_animation_idx,
+            )
+
+        def draw_enemy(i, r):
+            is_dying = state.enemy.death_timer[i] > 0
+            pos = jax.lax.cond(is_dying, lambda: state.enemy.death_pos[i], lambda: state.enemy.pos[i])
+            
+            enemy_idx = get_enemy_sprite_idx(i)
+            enemy_mask = self.SHAPE_MASKS['enemy_group'][enemy_idx]
+            flip_h = state.enemy.move_dir[i] < 0
+            
+            draw_fn = lambda r_in: self.jr.render_at(
+                r_in, pos[0], pos[1], enemy_mask, 
+                flip_horizontal=flip_h, 
+                flip_offset=self.group_offsets['enemy']
+            )
+            return jax.lax.cond(state.enemy.alive[i] | is_dying, draw_fn, lambda r_in: r_in, r)
+
         raster = jax.lax.cond(
-            room_transition_anim,
-            lambda _: jax.lax.switch(
-            state.entry_direction,
-            [
-                lambda: apply_bar_overlay(raster, progress_transition, 0),  # top
-                lambda: apply_bar_overlay(raster, progress_transition, 1),  # bottom
-                lambda: apply_bar_overlay(raster, progress_transition, 2),  # right
-                lambda: apply_bar_overlay(raster, progress_transition, 2),  # left
-            ]
+            ~room_transition_anim,
+            lambda r: jax.lax.fori_loop(0, state.enemy.pos.shape[0], draw_enemy, r),
+            lambda r: r,
+            raster
+        )
+
+        # --- 8. Draw Enemy Bullets ---
+        def draw_enemy_bullet(i, r):
+            bullet_pos = state.enemy.bullets[i]
+            dx = state.enemy.bullet_dirs[i][0]
+            
+            def draw_horizontal(r_in):
+                mask = self.SHAPE_MASKS['bullet_horizontal']
+                offset = self.group_offsets['bullet_horizontal']
+                return self.jr.render_at_clipped(r_in, bullet_pos[0], bullet_pos[1], mask, flip_offset=offset)
+            
+            def draw_vertical(r_in):
+                mask = self.SHAPE_MASKS['bullet_vertical']
+                offset = self.group_offsets['bullet_vertical']
+                return self.jr.render_at_clipped(r_in, bullet_pos[0], bullet_pos[1], mask, flip_offset=offset)
+            
+            def draw_bullet(r_in):
+                return jax.lax.cond(dx != 0, draw_horizontal, draw_vertical, r_in)
+            
+            # Use _clipped as bullets can go off-screen
+            return jax.lax.cond(
+                state.enemy.bullet_active[i] & ~room_transition_anim, 
+                draw_bullet, 
+                lambda r_in: r_in, 
+                r
+            )
+        
+        raster = jax.lax.fori_loop(0, state.enemy.bullets.shape[0], draw_enemy_bullet, raster)
+
+        # --- 9. Draw Otto (blink single sprite on cycle) ---
+        def draw_otto(r):
+            # Blink off when cycle is at peak (same cadence as before)
+            is_blink_off = (state.otto.anim_counter // 15) % 5 == 0
+            otto_mask = self.SHAPE_MASKS['otto_group'][self.sprite_indices['evil_otto']]
+            return jax.lax.cond(
+                ~is_blink_off,
+                lambda r_in: self.jr.render_at(r_in, state.otto.pos[0], state.otto.pos[1], otto_mask, flip_offset=self.group_offsets['otto']),
+                lambda r_in: r_in,
+                r,
+            )
+
+        raster = jax.lax.cond(state.otto.active, draw_otto, lambda r: r, raster)
+
+        # --- 10. Draw UI (Score, Title, Lives) ---
+        digit_masks = self.SHAPE_MASKS['digits']
+        
+        def render_scores(r):
+            max_score_digits = 5
+            score_spacing = 8
+            
+            def draw_score(value, offset_x):
+                score_digits = self.jr.int_to_digits(value.astype(jnp.int32), max_digits=max_score_digits)
+                
+                # Find first non-zero digit
+                is_non_zero = score_digits != 0
+                first_non_zero = jnp.argmax(is_non_zero)
+                start_idx = jax.lax.select(jnp.any(is_non_zero), first_non_zero, max_score_digits - 1)
+                num_to_render = max_score_digits - start_idx
+                
+                # Align right
+                render_start_x = offset_x - score_spacing * (num_to_render - 1)
+                
+                return self.jr.render_label_selective(
+                    r, render_start_x, self.consts.SCORE_OFFSET_Y,
+                    score_digits, digit_masks,
+                    start_idx, num_to_render,
+                    spacing=score_spacing,
+                    max_digits_to_render=max_score_digits
+                )
+            
+            show_bonus = state.enemy.clear_bonus_given
+            
+            # Draw bonus if applicable
+            r = jax.lax.cond(
+                show_bonus,
+                lambda r_in: draw_score(state.num_enemies * 10, self.consts.SCORE_OFFSET_X - 31),
+                lambda r_in: r_in,
+                r
+            )
+            # Draw score (if not 0 or if bonus is showing)
+            r = jax.lax.cond(
+                (state.score > 0) | show_bonus,
+                lambda r_in: draw_score(state.score, self.consts.SCORE_OFFSET_X),
+                lambda r_in: r_in,
+                r
+            )
+            return r
+
+        def render_title(r):
+            title_mask = self.SHAPE_MASKS['start_title']
+            x = (self.consts.WIDTH - title_mask.shape[1]) // 2 + 2
+            y = self.consts.SCORE_OFFSET_Y
+            return self.jr.render_at(r, x, y, title_mask, flip_offset=self.group_offsets['start_title'])
+        
+        # Render score or title, but not both
+        raster = jax.lax.cond(
+            ~room_transition_anim,
+            lambda r: jax.lax.cond(
+                state.score == 0,
+                render_title,
+                render_scores,
+                r
             ),
             lambda r: r,
             raster
         )
 
-        # render lives when in transition animation
-        life_sprite = self.sprites.get('life', None)
-        life_sprite = jnp.squeeze(life_sprite, axis=0)
-        def render_lives(raster_to_update):
-            """
-            Render player lives using life_sprite during room transition or death.
-            """
+        # Render lives (during transition or death)
+        def render_lives(r):
+            life_mask = self.SHAPE_MASKS['life']
+            life_offset = self.group_offsets['life']
             life_spacing = 8
             start_x = self.consts.SCORE_OFFSET_X
             start_y = self.consts.SCORE_OFFSET_Y
-
             num_lives_to_draw = jax.lax.cond(
                 death_anim,
                 lambda: jnp.maximum(state.lives - 1, 0).astype(jnp.int32),
                 lambda: state.lives.astype(jnp.int32)
             )
-
-            def draw_life(i, r):
+            def draw_life(i, r_in):
                 x = start_x - i * life_spacing
                 y = start_y
-                return jr.render_at(r, x, y, life_sprite)
+                return self.jr.render_at(r_in, x, y, life_mask, flip_offset=life_offset)
+            
+            # Assuming a reasonable max number of lives to show
+            def body(i, r_in):
+                return jax.lax.cond(
+                    i < num_lives_to_draw,
+                    lambda r0: draw_life(i, r0),
+                    lambda r0: r0,
+                    r_in,
+                )
+            return jax.lax.fori_loop(0, 5, body, r)
 
-            return jax.lax.fori_loop(0, num_lives_to_draw, draw_life, raster_to_update)
+        raster = jax.lax.cond(room_transition_anim | death_anim, render_lives, lambda r: r, raster)
 
+        # --- 11. Draw Transition/Game Over Overlays ---
+        def apply_bar_overlay(r, progress: jnp.ndarray, mode_idx: int):
+            # This function now writes BLACK_ID to the integer raster
+            total_height, width = r.shape
+            playfield_height = total_height - self.consts.WALL_OFFSET[3]
+            covered_rows = jnp.floor(progress * playfield_height).astype(jnp.int32)
+            rows = jnp.arange(total_height)
+            
+            top_down_mask = lambda: rows < covered_rows
+            bottom_up_mask = lambda: rows >= (playfield_height - covered_rows)
+            center_inward_mask = lambda: (rows < (covered_rows // 2)) | (rows >= (playfield_height - covered_rows // 2))
+            mask = jax.lax.switch(
+                mode_idx,
+                [top_down_mask, bottom_up_mask, center_inward_mask, center_inward_mask]
+            )
+            
+            return jnp.where(mask[:, None], self.BLACK_ID, r)
+
+        # Apply transition overlay
+        progress_transition = 1.0 - (state.room_transition_timer.astype(jnp.float32) / self.consts.TRANSITION_ANIMATION_FRAMES)
         raster = jax.lax.cond(
             room_transition_anim,
-            render_lives,
+            lambda r: apply_bar_overlay(r, progress_transition, state.entry_direction),
             lambda r: r,
             raster
         )
-
-        # draw black screen upon game over
+        
+        # Apply game over overlay (full black screen)
         raster = jax.lax.cond(
             game_over_anim,
-            lambda _: jnp.zeros_like(raster),
+            lambda _: jnp.full_like(raster, self.BLACK_ID),
             lambda _: raster,
             operand=None
         )
 
-        return raster
-    
-    def _generate_room_collision_masks(self) -> Dict[str, chex.Array]:
-        def extract_mask(sprite, wall_color=jnp.array([84, 92, 214, 255])):
-            return jnp.all(sprite[0] == wall_color, axis=-1)  # shape (H, W)
+        # --- 12. Final Palette Lookup ---
+        # We use the 'frame_palette' which contains our dynamic enemy/bullet colors
+        return self.jr.render_from_palette(raster, frame_palette)
 
-        return {
-            name: extract_mask(self.sprites[name])
-            for name in ['mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
-                         'level_outer_walls', 
-                         'door_vertical_left', 'door_horizontal_up', 'door_vertical_right', 'door_horizontal_down']
-        }
+    # --- Helper function for recoloring logic ---
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_enemy_color_index(self, room_counter: jnp.ndarray) -> jnp.ndarray:
+        num_colors = self.color_names_ids.shape[0]
+        return jax.lax.cond(
+            room_counter == 0,
+            lambda: jnp.array(0, dtype=jnp.int32),  # Default (yellow)
+            lambda: ((room_counter - 1) // 2 + 1) % num_colors
+        )
