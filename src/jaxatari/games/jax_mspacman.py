@@ -273,6 +273,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             info = PacmanInfo(score=state.score, done=done)
             return obs, new_state, reward, done, info
 
+        # Pacman movement
         action = last_pressed_action(action, state.current_action)
         possible_directions = available_directions(state.pacman_pos, state.dofmaze)
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
@@ -336,7 +337,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
         ghost_positions, ghosts_dirs, ghosts_modes, ghosts_timers = ghosts_step(
             state.ghost_positions, ghosts_dirs, state.ghosts_modes, state.ghosts_timers, 
-            ate_power_pill, dofmaze, key=key
+            ate_power_pill, dofmaze, key, state.pacman_pos
         )
         # Collision detection
         eaten_ghosts = state.eaten_ghosts
@@ -359,7 +360,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         new_lives = state.lives - jnp.where(deadly_collision, 1, 0)
         new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
         maze_layout = state.maze_layout
-        if collected_pellets >= PELLETS_TO_COLLECT:
+        if collected_pellets >= PELLETS_TO_COLLECT: # TODO: Fix! Is never true.
             # If all pellets collected, reset game
             collected_pellets = jnp.array(0, dtype=jnp.uint8)
             ghost_positions = INITIAL_GHOSTS_POSITIONS
@@ -425,16 +426,13 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
     def __init__(self):
         super().__init__()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/mspacman"
-        self.sprites = self.load_sprites()
-
+        self.sprites = MsPacmanRenderer.load_sprites()
 
     def reset_bg(self):
         """Reset the background for a new level."""
         self.SPRITE_BG = load_background(RESET_LEVEL)
-        self.SPRITE_BG = render_score(self.SPRITE_BG, 0, jnp.eye(1, MAX_SCORE_DIGITS, MAX_SCORE_DIGITS-1, dtype=jnp.bool_).ravel(), self.sprites["score"])
-        self.SPRITE_BG = render_lives(self.SPRITE_BG, INITIAL_LIFES, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
-
+        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, 0, jnp.arange(MAX_SCORE_DIGITS) == (MAX_SCORE_DIGITS - 1), self.sprites["score"])
+        self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, INITIAL_LIFES, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -467,7 +465,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         # Render score if changed
         if jnp.any(state.score_changed):
-            self.SPRITE_BG = render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
+            self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
 
         for i, g_pos in enumerate(state.ghost_positions):
             # Render frightened ghost
@@ -481,16 +479,45 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         # Remove one life if a life is lost
         if state.death_timer == RESET_TIMER-1:
-            self.SPRITE_BG = render_lives(self.SPRITE_BG, state.lives, self.sprites["pacman"][1][1])
+            self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, state.lives, self.sprites["pacman"][1][1])
         return raster
     
+    @staticmethod
+    def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+        """
+        Render the score on the raster at a fixed position.
+        Only updates digits that have changed.
+        """
+        digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
+        for idx in range(MAX_SCORE_DIGITS):
+            if score_changed[idx]:
+                d_sprite    = digit_sprites[digits[idx]]
+                bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+                raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
+                raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
+        return raster
 
-    def load_sprites(self) -> dict[str, Any]:
+    @staticmethod
+    def render_lives(raster, current_lifes, life_sprite, initial_lifes=INITIAL_LIFES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+        """
+        Render the lives on the raster at a fixed position.
+        """
+        if current_lifes == initial_lifes:
+            for i in range(current_lifes):
+                raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
+        elif current_lifes >= 0:
+            bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+            raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
+        return raster
+    
+    @staticmethod
+    def load_sprites() -> dict[str, Any]:
+        SPRITE_PATH = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/mspacman"
         sprites: Dict[str, Any] = {}
      
         # Helper function to load a single sprite frame
         def load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f'{name}.npy')
+            path = os.path.join(SPRITE_PATH, f'{name}.npy')
             frame = aj.loadFrame(path)
             if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
                 return frame.astype(jnp.uint8)
@@ -655,7 +682,7 @@ def get_chase_target(ghost_id: int,
 
 def ghosts_step(ghost_positions: chex.Array, ghosts_dirs: chex.Array, 
                 ghosts_modes: chex.Array, ghosts_timers: chex.Array,
-                ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
+                ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array, pacman_pos: chex.Array
                 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Step all ghosts. key can be a PRNGKey or None for deterministic.
@@ -668,7 +695,7 @@ def ghosts_step(ghost_positions: chex.Array, ghosts_dirs: chex.Array,
     timers = []
     for i in range(n_ghosts):
         pos, dir, mode, timer = ghost_step(ghost_positions[i], ghosts_dirs[i], ghosts_modes[i], 
-                                 ghosts_timers[i], ate_power_pill, dofmaze, keys[i])
+                                 ghosts_timers[i], ate_power_pill, dofmaze, keys[i], pacman_pos)
         new_positions.append(pos)
         new_dirs.append(dir)
         modes.append(mode)
@@ -678,7 +705,7 @@ def ghosts_step(ghost_positions: chex.Array, ghosts_dirs: chex.Array,
 
 def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array, 
                 ghost_mode: chex.Array, ghost_timer: chex.Array,
-                ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
+                ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array, pacman_pos: chex.Array
                 ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
@@ -688,7 +715,32 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array,
     x, y = ghost_pos
     if x % 4 == 1 or y % 12 == 6: # on horizontal or vertical grid
         possible = available_directions(ghost_pos, dofmaze)
-        dir_idx = get_direction_index(ghost_dir)
+        ghost_dir_idx = get_direction_index(ghost_dir)
+
+        # next_dir = 0
+        # if ghost_dir_idx < 2:   # Stationary - Choose random direction
+        #     next_dir_idx = jax.random.choice(key, jnp.array(possible))
+        #     next_dir = DIRECTIONS[next_dir_idx]
+        # else:
+        #     if possible.at[ghost_dir_idx - 2]: # Corridor - Continue forward
+        #         print("Corridor")
+        #         next_dir = ghost_dir
+        #     elif jnp.sum(possible) == 2: # Corner - Continue around the corner
+        #         print("Corner")
+        #         for direction, possible in enumerate(possible):
+        #             if possible and DIRECTIONS[direction + 2] != -ghost_dir:
+        #                 next_dir = DIRECTIONS[direction + 2]
+        #     elif jnp.sum(possible) > 2: # Crossing - Choose next path
+        #         print("Crossing")
+        #         cost_map = get_direction_costs(ghost_pos, pacman_pos, possible)
+        #         next_dir_idx = choose_direction(cost_map, key)
+        #         next_dir = DIRECTIONS[next_dir_idx]
+        #     elif jnp.sum(possible) == 1: # Dead end - Reverse
+        #         print("Dead End")
+        #         next_dir = -ghost_dir
+        #     else:
+        #         raise ValueError(f"Movement not possible!")
+
         # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
         direction_indices = [2, 3, 4, 5]
         # Opposite directions: UP<->DOWN, LEFT<->RIGHT
@@ -696,11 +748,11 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array,
         # Build list of allowed directions (not reverse, not blocked)
         allowed = []
         for i, can_go in zip(direction_indices, possible):
-            if can_go and (dir_idx == 0 or i != opposite.get(dir_idx, -1)):
+            if can_go and (ghost_dir_idx == 0 or i != opposite.get(ghost_dir_idx, -1)):
                 allowed.append(i)
         if not allowed:
             # If no allowed (shouldn't happen), keep going forward
-            next_dir_idx = dir_idx
+            next_dir_idx = ghost_dir_idx
         elif len(allowed) == 1:
             next_dir_idx = allowed[0]
         else:
@@ -727,29 +779,44 @@ def ghost_step(ghost_pos: chex.Array, ghost_dir: chex.Array,
     return new_pos, next_dir, ghost_mode, ghost_timer
 
 
-def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+def get_distance(point1: chex.Array, point2: chex.Array, metric='manhattan'):
     """
-    Render the score on the raster at a fixed position.
-    Only updates digits that have changed.
+    Returns the distance between two 2D points.
+    x = point[0], y = point[1]
     """
-    digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-    for idx in range(MAX_SCORE_DIGITS):
-        if score_changed[idx]:
-            d_sprite    = digit_sprites[digits[idx]]
-            bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
-            raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
-    return raster
+    if metric == 'manhattan':
+        return jnp.abs(point1[0] - point2[0]) + jnp.abs(point1[1] - point2[1])
+    elif metric == 'euclid':
+        return jnp.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2) 
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
 
 
-def render_lives(raster, current_lifes, life_sprite, initial_lifes=INITIAL_LIFES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0], dtype=jnp.uint8)):
+def get_direction_costs(position: chex.Array, target: chex.Array, available_directions: chex.Array):
     """
-    Render the lives on the raster at a fixed position.
+    Looks at all possible next steps and returns
+    the respective distances (costs) to the target.
+    Used for very basic pathfinding.
     """
-    if current_lifes == initial_lifes:
-        for i in range(current_lifes):
-            raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
-    elif current_lifes >= 0:
-        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-        raster = aj.render_at(raster, life_x + current_lifes * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
-    return raster
+    cost_map = []
+    for direction, available in enumerate(available_directions):
+        if available:
+            dir_idx = direction + 2     # +2 to skip NOOP and FIRE
+            step = position + DIRECTIONS[dir_idx] 
+            cost = get_distance(step, target)
+            cost_map.append((dir_idx, cost))
+    return jnp.array(cost_map)
+
+
+def choose_direction(cost_map: chex.Array, random_key):
+    """
+    Chooses one of the cheapest directions based on a cost map.
+    Returns a direction index.
+    """
+    min_dirs = []
+    min_cost = jnp.inf
+    for direction, cost in cost_map:
+        if cost <= min_cost:
+            min_dirs.append(direction)
+            min_cost = cost
+    return jax.random.choice(random_key, jnp.array(min_dirs))
