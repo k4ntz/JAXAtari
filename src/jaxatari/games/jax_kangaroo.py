@@ -1896,7 +1896,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             new_coco_positions,
             new_coco_states,
             flip,
-        ) = self._monkey_controller2(state, (punch_left | punch_right))
+        ) = self._monkey_controller(state, (punch_left | punch_right))
 
         (
             new_lives,
