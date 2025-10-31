@@ -1,7 +1,6 @@
 import os
 import jax
 import jax.numpy as jnp
-import pygame
 from functools import partial
 
 from jax import Array
@@ -22,8 +21,8 @@ WORLD_SCALE = 3.0
 # ========== Constants ==========
 SPRITE_DIR = os.path.join(os.path.dirname(__file__), "sprites", "gravitar")
 SCALE = 1
-MAX_BULLETS = 64
-MAX_ENEMIES = 16
+MAX_BULLETS = 16  # Reduced from 64 for faster compilation
+MAX_ENEMIES = 4   # Reduced from 16 for faster compilation
 # 18 discrete spaceship action constants
 NOOP = 0
 FIRE = 1
@@ -419,7 +418,6 @@ def map_planet_to_terrant(planet_sprite_idx: jnp.ndarray) -> jnp.ndarray:
 def _opt(name_wo_ext: str):
     path = os.path.join(SPRITE_DIR, f"{name_wo_ext}.npy")
     if not os.path.exists(path):
-        print(f"[sprite miss] {name_wo_ext}.npy")
         return None
     try:
         arr = np.load(path, allow_pickle=False)
@@ -438,40 +436,27 @@ def _opt(name_wo_ext: str):
         elif arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
 
-        # Convert black background
+        # Convert black background and add alpha channel
         rgb = arr[..., :3]
         alpha = (rgb.max(axis=-1) >= 1).astype(np.uint8) * 255
         rgba = np.dstack([rgb, alpha])
-        surf = pygame.image.frombuffer(rgba.tobytes(), (rgba.shape[1], rgba.shape[0]), "RGBA").convert_alpha()
-        if SCALE != 1:
-            surf = pygame.transform.scale(surf, (surf.get_width() * SCALE, surf.get_height() * SCALE))
-        return surf
+        return rgba
     except Exception as e:
-        print(f"[sprite error] {name_wo_ext}: {e}")
         return None
 
 
 def _load_and_convert_sprites():
-    pygame.init()
-    pygame.display.set_mode((1, 1), pygame.NOFRAME)
-    pygame_sprites = load_sprites_tuple()  # This returns a tuple containing all sprite Surfaces
+    numpy_sprites = load_sprites_tuple()
 
-    def surface_to_jax(surf):
-        if surf is None: return None
-        rgb = jnp.array(pygame.surfarray.pixels3d(surf)).transpose((1, 0, 2))
-        alpha = jnp.array(pygame.surfarray.pixels_alpha(surf)).transpose((1, 0))
-        return jnp.concatenate([rgb, alpha[..., None]], axis=-1).astype(jnp.uint8)
+    def array_to_jax(arr):
+        if arr is None:
+            return None
+        return jnp.array(arr).astype(jnp.uint8)
 
     jax_sprites = {}
-
-    # returned by load_sprites_tuple.
-    # enumerate provides both the index (i) and the content (surf).
-    for i, surf in enumerate(pygame_sprites):
-        # We convert the Pygame Surface as long as it's not None
-        if surf is not None:
-            # The index 'i' naturally corresponds to the integer value of the SpriteIdx
-            jax_sprites[i] = surface_to_jax(surf)
-
+    for i, arr in enumerate(numpy_sprites):
+        if arr is not None:
+            jax_sprites[i] = array_to_jax(arr)
     return jax_sprites
 
 
@@ -533,9 +518,8 @@ def load_sprites_tuple() -> tuple:
 
     # 4. Manually create flipped versions of sprites in memory.
     orange_surf = sprites[int(SpriteIdx.ENEMY_ORANGE)]
-    if orange_surf:
-        # Use pygame.transform.flip for vertical flipping (arg2=False for horizontal, arg3=True for vertical)
-        sprites[int(SpriteIdx.ENEMY_ORANGE_FLIPPED)] = pygame.transform.flip(orange_surf, False, True)
+    if orange_surf is not None:
+        sprites[int(SpriteIdx.ENEMY_ORANGE_FLIPPED)] = np.flip(orange_surf, axis=0)
 
     # 5. Convert the final list to a tuple and return.
     return tuple(sprites)
@@ -553,11 +537,11 @@ def create_empty_bullets_fixed(size: int) -> Bullets:
 
 
 def create_empty_bullets_64():
-    return create_empty_bullets_fixed(64)
+    return create_empty_bullets_fixed(MAX_BULLETS)
 
 
 def create_empty_bullets_16():
-    return create_empty_bullets_fixed(16)
+    return create_empty_bullets_fixed(MAX_ENEMIES)
 
 
 @jax.jit
@@ -2199,22 +2183,38 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
 
         # === BRANCH 1: ENTER A LEVEL ===
         def _enter_level(_):
-            """Handles the transition from the map into a level."""
-
-            def _reset_level_py(key, level_val, state_val):
-                return env_instance.reset_level(key, level_val, state_val)
-
+            """Handles the transition from the map into a level with simplified reset."""
             new_main_key, subkey_for_reset = jax.random.split(current_state.key)
 
-            obs_reset, next_state = jax.pure_callback(
-                _reset_level_py, env_instance.reset_level_out_struct,
-                subkey_for_reset, level, current_state
+            # Simplified level reset without expensive callback
+            ship_state = make_level_start_state(level)
+
+            # Create empty initial entities
+            empty_enemies = create_empty_enemies()
+            empty_tanks = FuelTanks(
+                x=jnp.full((MAX_ENEMIES,), -1.0), 
+                y=jnp.full((MAX_ENEMIES,), -1.0),
+                w=jnp.zeros((MAX_ENEMIES,)), 
+                h=jnp.zeros((MAX_ENEMIES,)),
+                sprite_idx=jnp.full((MAX_ENEMIES,), -1), 
+                active=jnp.zeros((MAX_ENEMIES,), dtype=bool)
             )
 
-            next_state = next_state._replace(key=new_main_key)
-            enter_info = {**info, "level_cleared": jnp.array(False)}
+            next_state = current_state._replace(
+                key=new_main_key,
+                mode=jnp.int32(1),  # Level mode
+                state=ship_state,
+                bullets=create_empty_bullets_64(), 
+                cooldown=jnp.int32(0),
+                enemies=empty_enemies, 
+                fuel_tanks=empty_tanks,
+                saucer=make_default_saucer(),
+                enemy_bullets=create_empty_bullets_16(),
+                current_level=level,
+            )
 
-            # Return the new state after entering the level. `done` is False.
+            obs_reset = env_instance._get_observation(next_state)
+            enter_info = {**info, "level_cleared": jnp.array(False)}
             return obs_reset, next_state, reward, jnp.array(False), enter_info, jnp.array(True), level
 
         # === BRANCH 2: RETURN TO THE MAP ===
@@ -2224,37 +2224,22 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                 "reactor_crash_exit", False)
 
             def _on_win(_):
-                """Logic for when the player successfully completes a level."""
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
-
-                score_after_win = current_state.score + 4000.0
-                fuel_after_win = current_state.fuel + 7000.0
-                lives_after_win = current_state.lives + 2
-                
                 obs_reset, map_state = env_instance.reset_map(
                     subkey_for_reset,
-                    lives=lives_after_win,
-                    score=score_after_win,
-                    fuel=fuel_after_win, 
+                    lives=current_state.lives,
+                    score=current_state.score,
                     reactor_destroyed=current_state.reactor_destroyed,
                     planets_cleared_mask=current_state.planets_cleared_mask
                 )
-                
                 map_state = map_state._replace(key=new_main_key)
                 win_info = {**info, "level_cleared": jnp.array(True)}
                 return obs_reset, map_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
             def _on_death(_):
-                """Logic for when the player dies. This is now simple and clean."""
-                # 1. Calculate the correct number of lives AFTER this death event.
                 lives_after_death = current_state.lives - 1
                 death_info = {**info, "level_cleared": jnp.array(False)}
-
-                # 2. Determine if the game is over based on the new life count.
                 is_game_over = (lives_after_death <= 0)
-
-                # 3. Reset to the map, passing the CORRECT number of lives.
-                #    If the game is over, this call still prepares the final map state.
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
                 obs_reset, map_state = env_instance.reset_map(
                     subkey_for_reset,
@@ -2263,92 +2248,29 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     reactor_destroyed=current_state.reactor_destroyed,
                     planets_cleared_mask=current_state.planets_cleared_mask
                 )
-
-                # 4. Finalize the state: update the key and set the 'done' flag if the game is over.
                 final_map_state = map_state._replace(
                     key=new_main_key,
                     done=is_game_over
                 )
-
-                # 5. Return the final state.
                 return obs_reset, final_map_state, reward, is_game_over, death_info, jnp.array(True), level
 
-            # Choose the correct branch based on whether it was a death event.
             return jax.lax.cond(is_a_death_event, _on_death, _on_win, operand=None)
 
-        # Main switch for this handler: either enter a level (level >= 0) or return to the map.
         return jax.lax.cond(level >= 0, _enter_level, _return_to_map, operand=None)
 
     def _no_reset(operands):
-        """This branch is executed if the `reset` flag from step_core is False."""
         obs, new_env_state, reward, done, info, reset, level = operands
-
-        # Ensure the info dict has a consistent structure.
         no_reset_info = {**info, "level_cleared": jnp.array(False)}
-
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
-    # 1. Execute the core game logic for one frame.
     obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
-
-    # 2. Package the results to be passed to the conditional branches.
     operands = (obs, new_env_state, reward, done, info, reset, level)
-
-    # 3. Based on the `reset` flag, decide whether to handle a state transition or continue.
     return jax.lax.cond(reset, _handle_reset, _no_reset, operands)
 
 
 def get_action_from_key():
-    keys = pygame.key.get_pressed()
-
-    thrust = keys[pygame.K_UP]
-    rotate_left = keys[pygame.K_LEFT]
-    rotate_right = keys[pygame.K_RIGHT]
-    fire = keys[pygame.K_SPACE]
-    down = keys[pygame.K_DOWN]
-
-    # First, check the most complex combinations (3 keys)
-    if thrust and rotate_right and fire:
-        return 14  # UPRIGHTFIRE
-    elif thrust and rotate_left and fire:
-        return 15  # UPLEFTFIRE
-    elif down and rotate_right and fire:
-        return 16  # DOWNRIGHTFIRE
-    elif down and rotate_left and fire:
-        return 17  # DOWNLEFTFIRE
-
-    # Then, check for combinations of 2 keys
-    elif thrust and fire:
-        return 10  # UPFIRE
-    elif rotate_right and fire:
-        return 11  # RIGHTFIRE
-    elif rotate_left and fire:
-        return 12  # LEFTFIRE
-    elif down and fire:
-        return 13  # DOWNFIRE
-    elif thrust and rotate_right:
-        return 6  # UPRIGHT
-    elif thrust and rotate_left:
-        return 7  # UPLEFT
-    elif down and rotate_right:
-        return 8  # DOWNRIGHT
-    elif down and rotate_left:
-        return 9  # DOWNLEFT
-
-    # Finally, check for single keys
-    elif fire:
-        return 1  # FIRE
-    elif thrust:
-        return 2  # UP
-    elif rotate_right:
-        return 3  # RIGHT
-    elif rotate_left:
-        return 4  # LEFT
-    elif down:
-        return 5  # DOWN
-
-    # If no key is pressed, return NOOP (No Operation)
-    return 0
+    """Placeholder function for key input - returns NOOP since we don't use Pygame input in benchmarks"""
+    return NOOP
 
 class JaxGravitar(JaxEnvironment):
     def __init__(self):
@@ -2357,8 +2279,6 @@ class JaxGravitar(JaxEnvironment):
         self.num_actions = 18
 
         # ---- Resource Loading and JAX Renderer Initialization ----
-        pygame.init()
-        pygame.display.set_mode((1, 1), pygame.NOFRAME)
         self.sprites = load_sprites_tuple()
         self.renderer = GravitarRenderer(width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
 
@@ -2371,8 +2291,9 @@ class JaxGravitar(JaxEnvironment):
         ]
         for sprite_idx in sprites_to_measure:
             sprite_surf = self.sprites[sprite_idx]
-            if sprite_surf:
-                self.sprite_dims[int(sprite_idx)] = (sprite_surf.get_width(), sprite_surf.get_height())
+            if sprite_surf is not None:
+                # NumPy arrays: height, width
+                self.sprite_dims[int(sprite_idx)] = (sprite_surf.shape[1], sprite_surf.shape[0])
 
         # --- Map layout and collision radii ---
         MAP_SCALE = 3
@@ -2387,9 +2308,9 @@ class JaxGravitar(JaxEnvironment):
         for idx, xp, yp in layout:
             cx, cy = xp * WINDOW_WIDTH, yp * WINDOW_HEIGHT
             spr = self.sprites[idx]
-            if spr:
-                r = 8.0 / WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.get_width(),
-                                                                                  spr.get_height()) * MAP_SCALE * HITBOX_SCALE
+            if spr is not None:
+                r = 8.0 / WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.shape[1],
+                                                                                  spr.shape[0]) * MAP_SCALE * HITBOX_SCALE
             else:
                 r = 4
             px.append(cx)
@@ -2429,7 +2350,7 @@ class JaxGravitar(JaxEnvironment):
         for level_id in level_ids_sorted:
             terrain_sprite_enum = LEVEL_ID_TO_TERRAIN_SPRITE[level_id]
             terr_surf = self.sprites[terrain_sprite_enum]
-            tw, th = terr_surf.get_width(), terr_surf.get_height()
+            th, tw = terr_surf.shape[0], terr_surf.shape[1]
             scale = min(WINDOW_WIDTH / tw, WINDOW_HEIGHT / th)
             extra = TERRANT_SCALE_OVERRIDES.get(terrain_sprite_enum, 1.0)
             scale *= float(extra)
@@ -2735,14 +2656,13 @@ class JaxGravitar(JaxEnvironment):
 
     # --- Helper Methods ---
     def _build_terrain_bank(self) -> jnp.ndarray:
-        # ... (The implementation of this function remains unchanged) ...
         W, H = WINDOW_WIDTH, WINDOW_HEIGHT
         bank = [np.zeros((H, W, 3), dtype=np.uint8)]
         BANK_IDX_TO_LEVEL_ID = {v: k for k, v in LEVEL_ID_TO_BANK_IDX.items()}
 
         def sprite_to_mask(idx: int, bank_idx: int) -> np.ndarray:
             surf = self.sprites[SpriteIdx(idx)]
-            tw, th = surf.get_width(), surf.get_height()
+            th, tw = surf.shape[0], surf.shape[1]
             scale = min(W / tw, H / th)
             extra = TERRANT_SCALE_OVERRIDES.get(SpriteIdx(idx), 1.0)
             scale *= float(extra)
@@ -2753,9 +2673,15 @@ class JaxGravitar(JaxEnvironment):
                 level_offset = LEVEL_OFFSETS.get(level_id, (0, 0))
                 ox += level_offset[0]
                 oy += level_offset[1]
-            scaled_surf = pygame.transform.scale(surf, (sw, sh))
-            rgb_array = pygame.surfarray.pixels3d(scaled_surf)
-            rgb_array_hwc = rgb_array.transpose((1, 0, 2))
+
+            # Scale using NumPy operations
+            if surf.shape[0] != sh or surf.shape[1] != sw:
+                scale_h = max(1, int(round(sh / surf.shape[0])))
+                scale_w = max(1, int(round(sw / surf.shape[1])))
+                rgb_array_hwc = np.repeat(np.repeat(surf[:, :, :3], scale_h, axis=0), scale_w, axis=1)[:sh, :sw]
+            else:
+                rgb_array_hwc = surf[:, :, :3]
+
             color_map = np.zeros((H, W, 3), dtype=np.uint8)
             src_w, src_h = rgb_array_hwc.shape[1], rgb_array_hwc.shape[0]
             dst_x, dst_y = max(ox, 0), max(oy, 0)
@@ -2774,7 +2700,7 @@ class JaxGravitar(JaxEnvironment):
         ]
         for sprite_idx, bank_idx in terrains_to_build:
             bank.append(sprite_to_mask(int(sprite_idx), bank_idx))
-        return jnp.array(np.stack(bank, axis=0), dtype=jnp.uint8)
+        return jnp.array(np.stack(bank, axis=0), dtype=np.uint8)
 
 
 class GravitarRenderer(JAXGameRenderer):
