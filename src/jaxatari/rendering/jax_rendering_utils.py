@@ -267,8 +267,11 @@ class JaxRenderingUtils:
                     for mask in shape_masks[name]:
                         # Calculate new dimensions based on scaling factors
                         original_h, original_w = mask.shape
-                        scaled_h = int(original_h * self.config.height_scaling)
-                        scaled_w = int(original_w * self.config.width_scaling)
+                        
+                        # --- START OF FIX ---
+                        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
+                        # --- END OF FIX ---
                         
                         scaled_mask = jax.image.resize(
                             mask, 
@@ -280,8 +283,11 @@ class JaxRenderingUtils:
                 else: # Single sprite
                     # Calculate new dimensions based on scaling factors
                     original_h, original_w = shape_masks[name].shape
-                    scaled_h = int(original_h * self.config.height_scaling)
-                    scaled_w = int(original_w * self.config.width_scaling)
+                    
+                    # --- START OF FIX ---
+                    scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                    scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
+                    # --- END OF FIX ---
                     
                     scaled_mask = jax.image.resize(
                         shape_masks[name], 
