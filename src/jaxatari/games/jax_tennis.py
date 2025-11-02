@@ -1,20 +1,73 @@
-import pygame
-from jaxatari.environment import JAXAtariAction
-import chex
+import os
+from functools import partial
+from typing import NamedTuple, Tuple, Dict, Any, Optional, Sequence, Callable
 import jax.lax
+import jax.numpy as jnp
+import chex
 import jax.random as random
 import jax
-import jaxatari.rendering.jax_rendering_utils_legacy as aj
-import os
-import chex
-from jaxatari.environment import JaxEnvironment, EnvState, EnvObs, EnvInfo
-from typing import NamedTuple, Tuple
-import jax.numpy as jnp
+import numpy as np
+import collections
+# Replaced legacy utils with new one
+import jaxatari.rendering.jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
-
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
 rand_key = random.key(0)
+
+
+class TennisConstants(NamedTuple):
+    # frame (window) constants
+    FRAME_WIDTH: int = 160
+    FRAME_HEIGHT: int = 210
+
+    # field constants (the actual tennis court)
+    FIELD_WIDTH_TOP: chex.Array = jnp.array(79)
+    FIELD_WIDTH_BOTTOM: chex.Array = jnp.array(111)
+    FIELD_HEIGHT: chex.Array = jnp.array(130)
+
+    # game constants (these values are used for the actual gameplay calculations)
+    GAME_OFFSET_LEFT_BOTTOM: chex.Array = jnp.array(15 + 1)
+    GAME_OFFSET_TOP: chex.Array = jnp.array(43.0)
+    GAME_WIDTH: chex.Array = jnp.array(FIELD_WIDTH_BOTTOM)
+    GAME_HEIGHT: chex.Array = jnp.array(FIELD_HEIGHT)
+    GAME_MIDDLE: chex.Array = jnp.array(GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT)
+    GAME_OFFSET_BOTTOM: chex.Array = jnp.array(GAME_OFFSET_TOP + GAME_HEIGHT)
+    PAUSE_DURATION: chex.Array = jnp.array(100)
+
+    # player constants
+    PLAYER_CONST: chex.Array = jnp.array(0)
+    PLAYER_WIDTH: chex.Array = jnp.array(13)
+    PLAYER_HEIGHT: chex.Array = jnp.array(23)
+    PLAYER_MIN_X: chex.Array = jnp.array(8)
+    PLAYER_MAX_X: chex.Array = jnp.array(144)
+    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = jnp.array(160)
+    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = jnp.array(109)
+    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = jnp.array(70)
+    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = jnp.array(15)
+
+    START_X: chex.Array = jnp.array(GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH)
+    PLAYER_START_Y: chex.Array = jnp.array(GAME_OFFSET_TOP - PLAYER_HEIGHT)
+    ENEMY_START_Y: chex.Array = jnp.array(GAME_OFFSET_BOTTOM - PLAYER_HEIGHT)
+
+    PLAYER_START_DIRECTION: chex.Array = jnp.array(1)
+    PLAYER_START_FIELD: chex.Array = jnp.array(1)
+
+    # ball constants
+    BALL_GRAVITY_PER_FRAME: chex.Array = jnp.array(1.1)
+    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = jnp.array(21)
+    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(1)
+    BALL_WIDTH: chex.Array = jnp.array(2.0)
+    LONG_HIT_THRESHOLD_TOP: chex.Array = jnp.array(52)
+    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = jnp.array(121)
+    LONG_HIT_DISTANCE: chex.Array = jnp.array(91)
+    SHORT_HIT_DISTANCE: chex.Array = jnp.array(40)
+
+    # enemy constants
+    ENEMY_CONST: chex.Array = jnp.array(1)
+
+    GAME_MIDDLE_HORIZONTAL: chex.Array = jnp.array((FRAME_WIDTH - PLAYER_WIDTH) / 2)
 
 
 class BallState(NamedTuple):
@@ -478,33 +531,33 @@ def player_step(state: TennisState, action: chex.Array, consts) -> PlayerState:
     # does the action contain UP
     up = jnp.any(
         jnp.array(
-            [action == JAXAtariAction.UP, action == JAXAtariAction.UPRIGHT, action == JAXAtariAction.UPLEFT,
-             action == JAXAtariAction.UPFIRE, action == JAXAtariAction.UPRIGHTFIRE,
-             action == JAXAtariAction.UPLEFTFIRE]
+            [action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT,
+             action == Action.UPFIRE, action == Action.UPRIGHTFIRE,
+             action == Action.UPLEFTFIRE]
         )
     )
     # does the action contain DOWN
     down = jnp.any(
         jnp.array(
-            [action == JAXAtariAction.DOWN, action == JAXAtariAction.DOWNRIGHT, action == JAXAtariAction.DOWNLEFT,
-             action == JAXAtariAction.DOWNFIRE, action == JAXAtariAction.DOWNRIGHTFIRE,
-             action == JAXAtariAction.DOWNLEFTFIRE]
+            [action == Action.DOWN, action == Action.DOWNRIGHT, action == Action.DOWNLEFT,
+             action == Action.DOWNFIRE, action == Action.DOWNRIGHTFIRE,
+             action == Action.DOWNLEFTFIRE]
         )
     )
     # does the action contain LEFT
     left = jnp.any(
         jnp.array(
-            [action == JAXAtariAction.LEFT, action == JAXAtariAction.UPLEFT, action == JAXAtariAction.DOWNLEFT,
-             action == JAXAtariAction.LEFTFIRE, action == JAXAtariAction.UPLEFTFIRE,
-             action == JAXAtariAction.DOWNLEFTFIRE]
+            [action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT,
+             action == Action.LEFTFIRE, action == Action.UPLEFTFIRE,
+             action == Action.DOWNLEFTFIRE]
         )
     )
     # does the action contain RIGHT
     right = jnp.any(
         jnp.array(
-            [action == JAXAtariAction.RIGHT, action == JAXAtariAction.UPRIGHT, action == JAXAtariAction.DOWNRIGHT,
-             action == JAXAtariAction.RIGHTFIRE, action == JAXAtariAction.UPRIGHTFIRE,
-             action == JAXAtariAction.DOWNRIGHTFIRE]
+            [action == Action.RIGHT, action == Action.UPRIGHT, action == Action.DOWNRIGHT,
+             action == Action.RIGHTFIRE, action == Action.UPRIGHTFIRE,
+             action == Action.DOWNRIGHTFIRE]
         )
     )
 
@@ -672,11 +725,11 @@ def enemy_step(state: TennisState, consts) -> EnemyState:
             # last hit was player move away from net until baseline is hit then move towards ball
             lambda _: EnemyState(state.enemy_state.enemy_x,
                                  jnp.where(state.player_state.player_field == 1,
-                                           jax.numpy.clip(state.enemy_state.enemy_y +
+                                           jnp.clip(state.enemy_state.enemy_y +
                                                           state.player_state.player_field * state.enemy_state.y_movement_direction,
                                                           consts.PLAYER_Y_UPPER_BOUND_BOTTOM,
                                                           consts.PLAYER_Y_LOWER_BOUND_BOTTOM),
-                                           jax.numpy.clip(state.enemy_state.enemy_y +
+                                           jnp.clip(state.enemy_state.enemy_y +
                                                           state.player_state.player_field * state.enemy_state.y_movement_direction,
                                                           consts.PLAYER_Y_UPPER_BOUND_TOP,
                                                           consts.PLAYER_Y_LOWER_BOUND_TOP)),
@@ -860,11 +913,11 @@ def ball_step(state: TennisState, action, consts) -> TennisState:
 
     # check if fire is pressed
     fire = jnp.any(jnp.array(
-        [action == JAXAtariAction.FIRE, action == JAXAtariAction.LEFTFIRE, action == JAXAtariAction.DOWNLEFTFIRE,
-         action == JAXAtariAction.DOWNFIRE,
-         action == JAXAtariAction.DOWNRIGHTFIRE, action == JAXAtariAction.RIGHTFIRE,
-         action == JAXAtariAction.UPRIGHTFIRE, action == JAXAtariAction.UPFIRE,
-         action == JAXAtariAction.UPLEFTFIRE]))
+        [action == Action.FIRE, action == Action.LEFTFIRE, action == Action.DOWNLEFTFIRE,
+         action == Action.DOWNFIRE,
+         action == Action.DOWNRIGHTFIRE, action == Action.RIGHTFIRE,
+         action == Action.UPRIGHTFIRE, action == Action.UPFIRE,
+         action == Action.UPLEFTFIRE]))
 
     any_entity_ready_to_fire = jnp.logical_or(
         jnp.logical_and(
@@ -1181,259 +1234,6 @@ def tennis_reset(consts) -> TennisState:
     )
 
 
-def switch_blue_and_red(sprite, blue_color=[117, 128, 240, 255], red_color=[240, 128, 128, 255]):
-    # Convert color constants to jax arrays of the same dtype
-    blue_color = jnp.array(blue_color, dtype=sprite.dtype)
-    red_color = jnp.array(red_color, dtype=sprite.dtype)
-
-    # Create a mask: shape (H, W), where each pixel matches the blue color
-    mask_blue = jnp.all(sprite == blue_color, axis=-1)  # shape: (H, W)
-    mask_red = jnp.all(sprite == red_color, axis=-1)  # shape: (H, W)
-
-    # Find the indices of the pixels to replace
-    indices_blue = jnp.argwhere(mask_blue)  # shape: (N, 2)
-    indices_red = jnp.argwhere(mask_red)  # shape: (N, 2)
-
-    # Replace each matching pixel using .at[].set()
-    for idx in indices_blue:
-        sprite = sprite.at[tuple(idx)].set(red_color)
-    for idx in indices_red:
-        sprite = sprite.at[tuple(idx)].set(blue_color)
-
-    return sprite
-
-
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    BG = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/background.npy")), axis=0)
-    BALL = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ball.npy")), axis=0)
-    BALL_SHADOW = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ball_shadow.npy")),
-                                  axis=0)
-    PLAYER_0 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket.npy")), axis=0)
-    PLAYER_1 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_1.npy")), axis=0)
-    PLAYER_2 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_2.npy")), axis=0)
-    PLAYER_3 = jnp.expand_dims(
-        aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/player_no_racket_3.npy")), axis=0)
-    UI_DEUCE = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
-                               axis=0)
-    UI_AD_IN = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
-                               axis=0)
-    UI_AD_OUT = jnp.expand_dims(aj.loadFrame(os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_9.npy")),
-                                axis=0)
-
-    def recolor_rgba(stack, src_rgba, dst_rgba):
-        # stack shape: (10, 1, H, W, 4) or (10, H, W, 4); dtype uint8
-        src = jnp.asarray(src_rgba, dtype=stack.dtype)
-        dst = jnp.asarray(dst_rgba, dtype=stack.dtype)
-        mask = jnp.all(stack == src, axis=-1, keepdims=True)  # shape (...,1)
-        return jnp.where(mask, dst, stack)
-
-    RACKETS_RED = aj.load_and_pad_digits(
-        os.path.join(MODULE_DIR, "games/sprites/tennis/racket_red_{}.npy"), num_chars=4
-    )
-    RACKETS_BLUE = recolor_rgba(RACKETS_RED, [240, 128, 128, 255], [117, 128, 240, 255])
-
-    UI_NUMBERS_BLUE = aj.load_and_pad_digits(
-        os.path.join(MODULE_DIR, "games/sprites/tennis/ui_blue_{}.npy"), num_chars=10
-    )
-    UI_NUMBERS_RED = recolor_rgba(UI_NUMBERS_BLUE, [117, 128, 240, 255], [240, 128, 128, 255])
-
-    return (BG, switch_blue_and_red(BG), BALL, BALL_SHADOW,
-            jnp.asarray([switch_blue_and_red(PLAYER_0), switch_blue_and_red(PLAYER_1), switch_blue_and_red(PLAYER_2),
-                         switch_blue_and_red(PLAYER_3)]), jnp.asarray([PLAYER_0, PLAYER_1, PLAYER_2, PLAYER_3]),
-            RACKETS_BLUE,
-            RACKETS_RED,
-            UI_NUMBERS_BLUE,
-            UI_NUMBERS_RED,
-            UI_DEUCE,
-            UI_AD_IN,
-            UI_AD_OUT)
-
-
-class TennisRenderer:
-
-    def __init__(self, consts):
-        (self.BG_TOP_RED, self.BG_TOP_BLUE, self.BALL, self.BALL_SHADOW, self.PLAYER_BLUE, self.PLAYER_RED,
-         self.RACKET_BLUE, self.RACKET_RED, self.UI_NUMBERS_BLUE,
-         self.UI_NUMBERS_RED, self.UI_DEUCE, self.UI_AD_IN, self.UI_AD_OUT) = load_sprites()
-        self.consts = consts
-
-    def render_number_centered(self, raster, number, position, red=False):
-        digits = aj.int_to_digits(number, max_digits=2)  # or 2
-        sprites = self.UI_NUMBERS_RED if red else self.UI_NUMBERS_BLUE
-
-        n = jnp.asarray(number, jnp.int32)
-
-        # is the value 1 digit?
-        is_single = n < 10
-
-        # For max_digits = 2:
-        start_idx = jax.lax.select(is_single, 1, 0)  # skip leading zero when single digit
-        count = jax.lax.select(is_single, 1, 2)
-
-        raster = aj.render_label_selective(
-            raster, position[0], position[1],
-            digits, sprites,
-            start_idx, count,
-            spacing=7
-        )
-
-        return raster
-
-    def render(self, state: TennisState) -> jnp.ndarray:
-        raster = aj.create_initial_frame(width=self.consts.FRAME_WIDTH, height=self.consts.FRAME_HEIGHT)
-
-        # render background
-        bg_top_red = jnp.where(state.player_state.player_field == 1, True, False)
-
-        raster = jax.lax.cond(
-            bg_top_red,
-            lambda r: aj.render_at(
-                r,
-                0,
-                0,
-                aj.get_sprite_frame(self.BG_TOP_RED, 0),
-            ),
-            lambda r: aj.render_at(
-                r,
-                0,
-                0,
-                aj.get_sprite_frame(self.BG_TOP_BLUE, 0),
-            ),
-            raster,
-        )
-
-        # render ball
-        frame_ball_shadow = aj.get_sprite_frame(self.BALL_SHADOW, 0)
-        raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y, frame_ball_shadow)
-
-        frame_ball = aj.get_sprite_frame(self.BALL, 0)
-        # apply flat y offset depending on z value
-        raster = aj.render_at(raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z,
-                              frame_ball)
-
-        # render player & enemy
-        frame_player = aj.get_sprite_frame(self.PLAYER_RED[state.animator_state.player_frame], 0)
-        frame_enemy = aj.get_sprite_frame(self.PLAYER_BLUE[state.animator_state.enemy_frame], 0)
-
-        player_pos = jnp.where(state.player_state.player_direction == 1,
-                               state.player_state.player_x - 2,
-                               state.player_state.player_x - 4)
-
-        racket_offset_x = jnp.asarray([0, 1, 2, 2])
-        player_racket_pos = jnp.where(state.player_state.player_direction == 1,
-                                      state.player_state.player_x - 4 + racket_offset_x[
-                                          state.animator_state.player_racket_frame],
-                                      state.player_state.player_x - racket_offset_x[
-                                          state.animator_state.player_racket_frame] - 2)
-
-        raster = aj.render_at(raster, player_pos, state.player_state.player_y, frame_player,
-                              flip_horizontal=jnp.where(state.player_state.player_direction == -1, True, False))
-
-        racket_offset = jnp.asarray([1, 8, 8, 4])
-
-        frame_racket_player = aj.get_sprite_frame(self.RACKET_RED, state.animator_state.player_racket_frame)
-
-        raster = aj.render_at(raster, player_racket_pos + state.player_state.player_direction * 8,
-                              state.player_state.player_y + racket_offset[state.animator_state.player_racket_frame],
-                              frame_racket_player,
-                              flip_horizontal=jnp.where(state.player_state.player_direction == -1, True, False))
-
-        enemy_pos = jnp.where(state.enemy_state.enemy_direction == 1,
-                              state.enemy_state.enemy_x - 2,
-                              state.enemy_state.enemy_x - 4)
-        enemy_racket_pos = jnp.where(state.enemy_state.enemy_direction == 1,
-                                     state.enemy_state.enemy_x - 4 + racket_offset_x[
-                                         state.animator_state.enemy_racket_frame],
-                                     state.enemy_state.enemy_x - racket_offset_x[
-                                         state.animator_state.enemy_racket_frame] - 2)
-
-        raster = aj.render_at(raster, enemy_pos, state.enemy_state.enemy_y, frame_enemy,
-                              flip_horizontal=jnp.where(state.enemy_state.enemy_direction == -1, True, False))
-
-        frame_racket_enemy = aj.get_sprite_frame(self.RACKET_BLUE, state.animator_state.enemy_racket_frame)
-
-        raster = aj.render_at(raster, enemy_racket_pos + state.enemy_state.enemy_direction * 8,
-                              state.enemy_state.enemy_y + racket_offset[state.animator_state.enemy_racket_frame],
-                              frame_racket_enemy,
-                              flip_horizontal=jnp.where(state.enemy_state.enemy_direction == -1, True, False))
-
-        # render score UI
-        should_display_overall_score = jnp.logical_and((
-                                                               state.game_state.player_game_score + state.game_state.enemy_game_score) > 0,
-                                                       jnp.logical_and(state.game_state.player_score == 0,
-                                                                       state.game_state.enemy_score == 0))
-
-        def render_overall(r):
-            # display overall score
-            r = self.render_number_centered(r, state.game_state.player_game_score, [self.consts.FRAME_WIDTH / 4, 2],
-                                            red=True)
-            r = self.render_number_centered(r, state.game_state.enemy_game_score, [(self.consts.FRAME_WIDTH / 4) * 3, 2])
-            return r
-
-        def render_current_score(raster):
-            tennis_scores = jnp.array([0, 15, 30, 40], dtype=jnp.int32)
-
-            ps = state.game_state.player_score
-            es = state.game_state.enemy_score
-            serving = state.player_state.player_serving  # bool
-
-            # "deuce-like" phase once both reached 40 (i.e., >= 3 points)
-            deuce_like = (ps >= 3) & (es >= 3)
-
-            def render_deuce(raster_in):
-                # deuce if tied; otherwise advantage
-                is_tied = (ps == es)
-
-                def do_deuce(r):
-                    ui = aj.get_sprite_frame(self.UI_DEUCE, 0)
-                    x = (self.consts.FRAME_WIDTH // 4) - (ui.shape[0] // 2)
-                    return aj.render_at(r, x, 2, ui)
-
-                def do_adv(r):
-                    # AD-IN if leader is the server; otherwise AD-OUT
-                    ad_in = ((ps > es) & serving) | ((es > ps) & (~serving))
-
-                    def render_ad_in(rr):
-                        ui = aj.get_sprite_frame(self.UI_AD_IN, 0)
-                        x = (self.consts.FRAME_WIDTH // 4) - (ui.shape[0] // 2)
-                        return aj.render_at(rr, x, 2, ui)
-
-                    def render_ad_out(rr):
-                        ui = aj.get_sprite_frame(self.UI_AD_OUT, 0)
-                        x = (self.consts.FRAME_WIDTH // 4) - (ui.shape[0] // 2)
-                        return aj.render_at(rr, x, 2, ui)
-
-                    return jax.lax.cond(ad_in, render_ad_in, render_ad_out, r)
-
-                return jax.lax.cond(is_tied, do_deuce, do_adv, raster_in)
-
-            def render_regular(raster_in):
-                # clip score indices to [0..3] and map to 0/15/30/40
-                pid = jnp.minimum(3, ps)
-                eid = jnp.minimum(3, es)
-                pnum = tennis_scores[pid]
-                enum = tennis_scores[eid]
-
-                r = self.render_number_centered(raster_in, pnum, [self.consts.FRAME_WIDTH // 4, 2], red=True)
-                r = self.render_number_centered(r, enum, [(self.consts.FRAME_WIDTH // 4) * 3, 2])
-                return r
-
-            raster = jax.lax.cond(deuce_like, render_deuce, render_regular, raster)
-            return raster
-
-        raster = jax.lax.cond(
-            should_display_overall_score,
-            lambda r: render_overall(r),
-            lambda r: render_current_score(r),
-            raster,
-        )
-
-        return raster
-
 class PlayerObs(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
@@ -1471,78 +1271,12 @@ class TennisInfo(NamedTuple):
     pass 
 
 
-class TennisConstants(NamedTuple):
-    # frame (window) constants
-    FRAME_WIDTH: int = 160  # 152
-    FRAME_HEIGHT: int = 210  # 206
-
-    # field constants (the actual tennis court)
-    # top: (left_x = 32, right_x = 111, width = right_x - left_x = 79)
-    FIELD_WIDTH_TOP: chex.Array = jnp.array(79)
-    # bottom: (left_x = 16, right_x = 127, width = right_x - left_x = 111)
-    FIELD_WIDTH_BOTTOM: chex.Array = jnp.array(111)
-    # top_y = 44, bottom_y = 174, height = bottom_y - top_y = 130
-    FIELD_HEIGHT: chex.Array = jnp.array(130)
-
-    # game constants (these values are used for the actual gameplay calculations)
-    GAME_OFFSET_LEFT_BOTTOM: chex.Array = jnp.array(15 + 1)  # don't use 16, because that is on the line and playing on the line still counts
-    GAME_OFFSET_TOP: chex.Array = jnp.array(43.0)  # don't use 44, because that is on the line and playing on the line still counts
-    GAME_WIDTH: chex.Array = jnp.array(FIELD_WIDTH_BOTTOM)
-    GAME_HEIGHT: chex.Array = jnp.array(FIELD_HEIGHT)
-    GAME_MIDDLE: chex.Array = jnp.array(GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT)
-    GAME_OFFSET_BOTTOM: chex.Array = jnp.array(GAME_OFFSET_TOP + GAME_HEIGHT)
-    PAUSE_DURATION: chex.Array = jnp.array(100)
-
-    # player constants
-    PLAYER_CONST: chex.Array = jnp.array(0)
-    PLAYER_WIDTH: chex.Array = jnp.array(13)  # player flips side so total covered x section is greater
-    PLAYER_HEIGHT: chex.Array = jnp.array(23)
-    PLAYER_MIN_X: chex.Array = jnp.array(8)  # left movement restriction
-    PLAYER_MAX_X: chex.Array = jnp.array(144)  # right movement restriction
-    # lower y-axis values are towards the top in our case, opposite in original game
-    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = jnp.array(160)  # 180  # 206-2-PLAYER_HEIGHT
-    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = jnp.array(109)  # 206-53-PLAYER_HEIGHT
-    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = jnp.array(70)  # 72  # 206-91-PLAYER_HEIGHT
-    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = jnp.array(15)  # 35  # 206-148-PLAYER_HEIGHT
-
-    START_X: chex.Array = jnp.array(GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH)
-    PLAYER_START_Y: chex.Array = jnp.array(GAME_OFFSET_TOP - PLAYER_HEIGHT)
-    ENEMY_START_Y: chex.Array = jnp.array(GAME_OFFSET_BOTTOM - PLAYER_HEIGHT)
-
-    PLAYER_START_DIRECTION: chex.Array = jnp.array(1)  # 1 right, -1 left
-    PLAYER_START_FIELD: chex.Array = jnp.array(1)  # 1 top, -1 bottom
-
-    # ball constants
-    BALL_GRAVITY_PER_FRAME: chex.Array = jnp.array(1.1)
-    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = jnp.array(21)
-    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(1)
-    BALL_WIDTH: chex.Array = jnp.array(2.0)
-    LONG_HIT_THRESHOLD_TOP: chex.Array = jnp.array(52)
-    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = jnp.array(121)
-    LONG_HIT_DISTANCE: chex.Array = jnp.array(91)  # previously 91
-    SHORT_HIT_DISTANCE: chex.Array = jnp.array(40)
-
-    # enemy constants
-    ENEMY_CONST: chex.Array = jnp.array(1)
-
-    GAME_MIDDLE_HORIZONTAL: chex.Array = jnp.array((FRAME_WIDTH - PLAYER_WIDTH) / 2)
-
-class AtraJaxisTennisRenderer(JAXGameRenderer):
-
-    def __init__(self, consts: TennisConstants = None):
-        super().__init__()
-        self.renderer = TennisRenderer(TennisConstants() if consts is None else consts)
-
-    def render(self, state: TennisState):
-        return self.renderer.render(state)
-
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
 
-    def __init__(self, consts: TennisConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: TennisConstants = None):
         if consts is None:
             consts = TennisConstants()
-        self.consts = consts
-        self.reward_funcs = reward_funcs
+        super().__init__(consts)
         self.renderer = TennisRenderer(consts)
 
     def reset(self, key) -> Tuple[TennisObs, TennisState]:
@@ -1551,6 +1285,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
         return reset_obs, reset_state
 
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TennisState, action) -> Tuple[TennisObs, TennisState, float, bool, TennisInfo]:
         new_state = tennis_step(state, action, self.consts)
         new_obs = self._get_observation(new_state)
@@ -1655,3 +1390,290 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
     def _get_done(self, state: TennisState) -> bool:
         return state.game_state.is_finished
+
+
+class TennisRenderer(JAXGameRenderer):
+
+    def __init__(self, consts: NamedTuple = None):
+        super().__init__()
+        self.consts = consts or TennisConstants()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tennis"
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # 2. Load and pad background
+        background_rgba = self.jr.loadFrame(os.path.join(self.sprite_path, 'background.npy'))
+        bg_h, bg_w = background_rgba.shape[0], background_rgba.shape[1]
+        frame_h, frame_w = self.config.game_dimensions
+        if bg_h != frame_h or bg_w != frame_w:
+            pad_h_total = frame_h - bg_h
+            pad_w_total = frame_w - bg_w
+            pad_h_before = pad_h_total // 2
+            pad_h_after = pad_h_total - pad_h_before
+            pad_w_before = pad_w_total // 2
+            pad_w_after = pad_w_total - pad_w_before
+            padded_bg = jnp.zeros((frame_h, frame_w, 4), dtype=jnp.uint8)
+            padded_bg = padded_bg.at[:, :, 3].set(255)
+            padded_bg = padded_bg.at[pad_h_before:pad_h_before+bg_h, pad_w_before:pad_w_before+bg_w, :].set(background_rgba)
+            background_rgba = padded_bg
+        # 3. Get asset manifest
+        asset_config = self._get_asset_config(background_rgba)
+        # 4. Load assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        # 5. Get color IDs
+        self.BLUE_ID = self.COLOR_TO_ID.get((117, 128, 240), 0)
+        self.RED_ID = self.COLOR_TO_ID.get((240, 128, 128), 0)
+        
+        if self.BLUE_ID == 0 or self.RED_ID == 0:
+            blue_rgb = np.array([117, 128, 240], dtype=np.uint8)
+            red_rgb = np.array([240, 128, 128], dtype=np.uint8)
+            palette_np = np.array(self.PALETTE)
+            palette_rgb = palette_np[:, :3] if palette_np.shape[1] >= 3 else palette_np
+            if self.BLUE_ID == 0:
+                blue_dists = np.sum(np.abs(palette_rgb.astype(np.int32) - blue_rgb.astype(np.int32)), axis=1)
+                self.BLUE_ID = int(np.argmin(blue_dists))
+            if self.RED_ID == 0:
+                red_dists = np.sum(np.abs(palette_rgb.astype(np.int32) - red_rgb.astype(np.int32)), axis=1)
+                self.RED_ID = int(np.argmin(red_dists))
+        # 6. Create color-swapped assets
+        def swap_colors(mask):
+            return jnp.where(mask == self.BLUE_ID, self.RED_ID, 
+                   jnp.where(mask == self.RED_ID, self.BLUE_ID, mask))
+        vmap_swap = jax.vmap(swap_colors)
+        
+        self.BG_TOP_MASK = self.BACKGROUND
+        self.BG_BOTTOM_MASK = swap_colors(self.BG_TOP_MASK)
+        
+        self.PLAYER_STACK = self.SHAPE_MASKS['player_anim']
+        self.ENEMY_STACK = vmap_swap(self.PLAYER_STACK)
+        
+        self.PLAYER_RACKET_STACK = self.SHAPE_MASKS['racket_anim']
+        self.ENEMY_RACKET_STACK = vmap_swap(self.PLAYER_RACKET_STACK)
+        
+        self.PLAYER_DIGITS_STACK = self.SHAPE_MASKS['digits']
+        self.ENEMY_DIGITS_STACK = vmap_swap(self.PLAYER_DIGITS_STACK)
+        
+        self.PLAYER_UI_A = self.SHAPE_MASKS['ui_a']
+        self.ENEMY_UI_A = swap_colors(self.PLAYER_UI_A)
+        # 7. Store animation lengths
+        self.anim_len = {
+            'player': self.ENEMY_STACK.shape[0],
+            'racket': self.ENEMY_RACKET_STACK.shape[0],
+        }
+
+    def _get_asset_config(self, background_rgba: jnp.ndarray = None) -> list[dict[str, Any]]:
+        procedural_colors = jnp.array([
+            [117, 128, 240, 255],
+            [240, 128, 128, 255],
+        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+        
+        background_config = {'name': 'background', 'type': 'background'}
+        if background_rgba is not None:
+            background_config['data'] = background_rgba
+        else:
+            background_config['file'] = 'background.npy'
+        
+        return [
+            background_config,
+            {'name': 'swatch', 'type': 'procedural', 'data': procedural_colors},
+            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+            {'name': 'ball_shadow', 'type': 'single', 'file': 'ball_shadow.npy'},
+            {'name': 'player_anim', 'type': 'group', 'files': [
+                'player_no_racket.npy',
+                'player_no_racket_1.npy',
+                'player_no_racket_2.npy',
+                'player_no_racket_3.npy'
+            ]},
+            {'name': 'racket_anim', 'type': 'group', 'files': [
+                'racket_red_0.npy',
+                'racket_red_1.npy',
+                'racket_red_2.npy',
+                'racket_red_3.npy'
+            ]},
+            {'name': 'digits', 'type': 'digits', 'pattern': 'ui_blue_{}.npy'},
+            {'name': 'ui_a', 'type': 'single', 'file': 'ui_blue_9.npy'},
+        ]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_score(self, raster, state: TennisState, bg_top_red: bool) -> jnp.ndarray:
+        digit_stack, ui_a_mask = jax.lax.cond(
+            bg_top_red,
+            lambda: (self.ENEMY_DIGITS_STACK, self.ENEMY_UI_A),
+            lambda: (self.PLAYER_DIGITS_STACK, self.PLAYER_UI_A)
+        )
+        
+        should_display_overall_score = (
+            (state.game_state.player_game_score + state.game_state.enemy_game_score) > 0
+        ) & (
+            (state.game_state.player_score == 0) & (state.game_state.enemy_score == 0)
+        )
+        def render_overall(r):
+            player_digit_stack = self.PLAYER_DIGITS_STACK
+            enemy_digit_stack = self.ENEMY_DIGITS_STACK
+            r = self._render_number_centered(r, state.game_state.player_game_score, 
+                                             (self.consts.FRAME_WIDTH // 4) * 3, 2, 
+                                             player_digit_stack)
+            r = self._render_number_centered(r, state.game_state.enemy_game_score,
+                                             self.consts.FRAME_WIDTH // 4, 2,
+                                             enemy_digit_stack)
+            return r
+        def render_current_score(r):
+            tennis_scores = jnp.array([0, 15, 30, 40], dtype=jnp.int32)
+            ps = state.game_state.player_score
+            es = state.game_state.enemy_score
+            serving = state.player_state.player_serving
+            deuce_like = (ps >= 3) & (es >= 3)
+            def render_deuce(r_in):
+                is_tied = (ps == es)
+                ad_in = ((ps > es) & serving) | ((es > ps) & (~serving))
+                ui_mask = jax.lax.select(ad_in, self.PLAYER_UI_A, self.ENEMY_UI_A)
+                x_pos = (self.consts.FRAME_WIDTH // 4) - (ui_mask.shape[1] // 2)
+                r_out = jax.lax.cond(
+                    is_tied,
+                    lambda r_l: self.jr.render_at(r_l, x_pos, 2, self.ENEMY_UI_A, flip_offset=self.FLIP_OFFSETS['ui_a']),
+                    lambda r_l: self.jr.render_at(r_l, x_pos, 2, ui_mask, flip_offset=self.FLIP_OFFSETS['ui_a']),
+                    r_in
+                )
+                return r_out
+            def render_regular(r_in):
+                pid = jnp.minimum(3, ps)
+                eid = jnp.minimum(3, es)
+                pnum = tennis_scores[pid]
+                enum = tennis_scores[eid]
+                player_digit_stack = self.PLAYER_DIGITS_STACK
+                enemy_digit_stack = self.ENEMY_DIGITS_STACK
+                r_out = self._render_number_centered(r_in, pnum, (self.consts.FRAME_WIDTH // 4) * 3, 2, player_digit_stack)
+                r_out = self._render_number_centered(r_out, enum, self.consts.FRAME_WIDTH // 4, 2, enemy_digit_stack)
+                return r_out
+            return jax.lax.cond(deuce_like, render_deuce, render_regular, r)
+        return jax.lax.cond(
+            should_display_overall_score,
+            render_overall,
+            render_current_score,
+            raster,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_number_centered(self, raster, number, center_x, y_pos, digit_stack):
+        digits = self.jr.int_to_digits(number, max_digits=2)
+        n = jnp.asarray(number, jnp.int32)
+        is_single = n < 10
+        start_idx = jax.lax.select(is_single, 1, 0)
+        count = jax.lax.select(is_single, 1, 2)
+        
+        digit_width = self.SHAPE_MASKS['digits'].shape[2]
+        spacing = 7
+        total_width = count * digit_width + (count - 1) * (spacing - digit_width)
+        x_start = center_x - (total_width // 2)
+        return self.jr.render_label_selective(
+            raster, x_start, y_pos,
+            digits, digit_stack,
+            start_idx, count,
+            spacing=spacing,
+            max_digits_to_render=2
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: TennisState) -> jnp.ndarray:
+        # 1. Select background mask
+        bg_top_red = True
+        bg_mask = self.BG_TOP_MASK
+        
+        raster = self.jr.create_object_raster(bg_mask)
+        # 2. Render Ball Shadow
+        raster = self.jr.render_at_clipped(
+            raster, state.ball_state.ball_x, state.ball_state.ball_y,
+            self.SHAPE_MASKS['ball_shadow'], 
+            flip_offset=self.FLIP_OFFSETS['ball_shadow']
+        )
+        
+        # 3. Render Player & Enemy
+        player_mask_stack = self.PLAYER_STACK
+        player_racket_stack = self.PLAYER_RACKET_STACK
+        enemy_mask_stack = self.ENEMY_STACK
+        enemy_racket_stack = self.ENEMY_RACKET_STACK
+        
+        player_anim_idx = state.animator_state.player_frame % self.anim_len['player']
+        player_racket_idx = state.animator_state.player_racket_frame
+        player_mask = player_mask_stack[player_anim_idx]
+        player_racket_mask = player_racket_stack[player_racket_idx]
+        
+        enemy_anim_idx = state.animator_state.enemy_frame % self.anim_len['player']
+        enemy_racket_idx = state.animator_state.enemy_racket_frame
+        enemy_mask = enemy_mask_stack[enemy_anim_idx]
+        enemy_racket_mask = enemy_racket_stack[enemy_racket_idx]
+
+        # --- Player ---
+        player_pos_x = jnp.where(state.player_state.player_direction == 1,
+                                 state.player_state.player_x - 2,
+                                 state.player_state.player_x - 4)
+        flip_player = state.player_state.player_direction == -1
+        
+        raster = self.jr.render_at_clipped(
+            raster, player_pos_x, state.player_state.player_y, player_mask,
+            flip_horizontal=flip_player, flip_offset=self.FLIP_OFFSETS['player_anim']
+        )
+        
+        racket_offset_x_map = jnp.asarray([0, 1, 2, 2])
+        racket_offset_y_map = jnp.asarray([1, 8, 8, 4])
+        
+        base_hand_x_right = 5
+        flip_offset_x = self.FLIP_OFFSETS['racket_anim'][0]
+        player_racket_pos_x = jnp.where(
+            state.player_state.player_direction == 1,
+            player_pos_x + base_hand_x_right + racket_offset_x_map[player_racket_idx],
+            player_pos_x - racket_offset_x_map[player_racket_idx] - 5 + flip_offset_x
+        )
+        player_racket_pos_y = state.player_state.player_y + racket_offset_y_map[player_racket_idx]
+        raster = self.jr.render_at_clipped(
+            raster, player_racket_pos_x, player_racket_pos_y,
+            player_racket_mask,
+            flip_horizontal=flip_player, flip_offset=self.FLIP_OFFSETS['racket_anim']
+        )
+
+        # --- Enemy ---
+        enemy_pos_x = jnp.where(state.enemy_state.enemy_direction == 1,
+                                state.enemy_state.enemy_x - 2,
+                                state.enemy_state.enemy_x - 4)
+        flip_enemy = state.enemy_state.enemy_direction == -1
+        
+        raster = self.jr.render_at_clipped(
+            raster, enemy_pos_x, state.enemy_state.enemy_y, enemy_mask,
+            flip_horizontal=flip_enemy, flip_offset=self.FLIP_OFFSETS['player_anim']
+        )
+        
+        base_hand_x_right = 5
+        flip_offset_x = self.FLIP_OFFSETS['racket_anim'][0]
+        enemy_racket_pos_x = jnp.where(
+            state.enemy_state.enemy_direction == 1,
+            enemy_pos_x + base_hand_x_right + racket_offset_x_map[enemy_racket_idx],
+            enemy_pos_x - racket_offset_x_map[enemy_racket_idx] - 5 + flip_offset_x
+        )
+        enemy_racket_pos_y = state.enemy_state.enemy_y + racket_offset_y_map[enemy_racket_idx]
+        
+        raster = self.jr.render_at_clipped(
+            raster, enemy_racket_pos_x, enemy_racket_pos_y,
+            enemy_racket_mask,
+            flip_horizontal=flip_enemy, flip_offset=self.FLIP_OFFSETS['racket_anim']
+        )
+        
+        # 4. Render Ball
+        raster = self.jr.render_at_clipped(
+            raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z,
+            self.SHAPE_MASKS['ball'], flip_offset=self.FLIP_OFFSETS['ball']
+        )
+        
+        # 5. Render Score UI
+        raster = self._render_score(raster, state, bg_top_red)
+
+        # 6. Final Palette Lookup
+        return self.jr.render_from_palette(raster, self.PALETTE)
