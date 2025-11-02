@@ -1,8 +1,9 @@
 from jaxatari.renderers import JAXGameRenderer
 from typing import NamedTuple, Tuple, TypeVar, Dict, Any
-from jax import Array, jit, random, numpy as jnp
+from jax import Array, jit, random, numpy as jnp, vmap
+import jax
 from functools import partial
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
 import jax.lax
@@ -148,7 +149,7 @@ class TronConstants(NamedTuple):
     #  LIGHT GREEN,  DARK GREEN,     BLUE,           WHITE,
     #  YELLOW,       BLACK,          RED,            GOLD
     wave_enemy_colors_rgba: Tuple[Tuple[int, int, int, int], ...] = (
-        (144, 238, 144, 255),  # light green
+        (151, 163, 67, 255),  # light green
         (0, 100, 0, 255),  # dark  green
         (0, 128, 255, 255),  # blue
         (255, 255, 255, 255),  # white
@@ -673,8 +674,83 @@ def parse_action(action: Array) -> UserAction:
     )
 
 
+# --- Helper functions for procedural asset creation ---
 def _solid_sprite(h: int, w: int, rgba: Tuple[int, int, int, int]) -> Array:
+    """Creates a JAX array for a solid color sprite."""
     return jnp.broadcast_to(jnp.asarray(rgba, dtype=jnp.uint8), (h, w, 4))
+
+def _normalize_rgba(arr: jnp.ndarray) -> jnp.ndarray:
+    """Ensure sprite is RGBA uint8."""
+    if arr.ndim == 2:  # Grayscale
+        mask = (arr > 0).astype(jnp.uint8)
+        arr_3c = jnp.stack([arr, arr, arr], axis=-1)
+        alpha = mask * 255
+        return jnp.concatenate([arr_3c, alpha[..., None]], axis=-1).astype(jnp.uint8)
+    if arr.shape[-1] == 3:  # RGB
+        a = (jnp.max(arr, axis=-1, keepdims=True) > 0).astype(jnp.uint8) * 255
+        return jnp.concatenate([arr, a], axis=-1).astype(jnp.uint8)
+    return arr.astype(jnp.uint8)
+
+def _load_and_normalize_seq(sprite_path: str, prefix: str) -> jnp.ndarray:
+    """Loads a sequence of 4 sprites (e.g., 'player1.npy'...) and normalizes to RGBA."""
+    frames = []
+    for i in range(1, 5):
+        path = os.path.join(sprite_path, f"{prefix}{i}.npy")
+        frame = jnp.load(path)
+        if not isinstance(frame, jnp.ndarray):
+            raise FileNotFoundError(path)
+        frames.append(_normalize_rgba(frame))
+    return jnp.stack(frames, axis=0)
+
+def _load_base_digit_sprites(sprite_path: str) -> Tuple[Array, int, int]:
+    """Loads 0..9.npy files, normalizes to RGBA, and stacks them."""
+    frames = []
+    for d in range(10):
+        path = os.path.join(sprite_path, f"{d}.npy")
+        frame = jnp.load(path)
+        if not isinstance(frame, jnp.ndarray):
+            raise FileNotFoundError(path)
+        frames.append(_normalize_rgba(frame))
+    
+    arr = jnp.stack(frames, axis=0)  # (10, H, W, 4)
+    H = int(arr.shape[1])
+    W = int(arr.shape[2])
+    return arr, W, H
+
+@jit
+def _tint_rgba(sprite_rgba: Array, rgba_any: Array) -> Array:
+    """Colorizes a base sprite by multiplying channels (alpha preserved)."""
+    base_rgb = sprite_rgba[..., :3].astype(jnp.float32)
+    alpha = sprite_rgba[..., 3:4].astype(jnp.uint8)
+    color_rgb = jnp.asarray(rgba_any, dtype=jnp.float32)[:3]  # (3,)
+    
+    rgb_tinted = jnp.clip(jnp.round((base_rgb / 255.0) * color_rgb), 0, 255).astype(
+        jnp.uint8
+    )
+    return jnp.concatenate([rgb_tinted, alpha], axis=-1)
+
+@partial(jit, static_argnames=("h", "w"))
+def _make_solid_sprites(colors: Array, h: int, w: int) -> Array:
+    """Build one solid color sprite (h, w, 4) for each color in colors (N, 4)."""
+    # colors shape (N, 4) -> reshape to (N, 1, 1, 4)
+    # broadcast to (N, h, w, 4)
+    return jnp.broadcast_to(colors[:, None, None, :], (colors.shape[0], h, w, 4))
+
+@jit
+def _precompute_tints(seq: Array, colors: Array) -> Array:
+    """
+    Tints a sprite sequence (F, H, W, 4) by a color array (C, 4).
+    Returns (C, F, H, W, 4).
+    """
+    def tint_one(color, frame):
+        return _tint_rgba(frame, color)
+    # vmap over frames (F), then vmap over colors (C)
+    # Result shape (F, C, H, W, 4)
+    tinted = vmap(
+        lambda frame: vmap(lambda col: tint_one(col, frame))(colors)
+    )(seq)
+    # Reorder to (C, F, H, W, 4)
+    return jnp.transpose(tinted, (1, 0, 2, 3, 4))
 
 
 class TronRenderer(JAXGameRenderer):
@@ -682,293 +758,226 @@ class TronRenderer(JAXGameRenderer):
     def __init__(self, consts: TronConstants = None) -> None:
         super().__init__()
         self.consts = consts or TronConstants()
+        c = self.consts
+        
+        # 1. Configure the new renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(c.screen_height, c.screen_width),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tron"
-
-        # Precompute arena rects once
+        
+        # 1.5. Compute arena geometry (needed for background generation)
         (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
             _ArenaOps.compute_arena(self.consts)
         )
-
-        # Load base sprite animations
-        self.sprites = self._load_sprites()
-        self.player_seq = self.sprites["player_seq"]  # (F,H,W,4) uint8
-        self.enemy_seq = self.sprites["enemy_seq"]  # (F,H,W,4) uint8
-
-        # Player /Enemy width any height (from sprite)
-        self.PLAYER_H, self.PLAYER_W = map(int, self.player_seq.shape[1:3])
-        self.ENEMY_H, self.ENEMY_W = map(int, self.enemy_seq.shape[1:3])
-
-        # The moving-animation of the player and enemies consists of multiple frames
-        self.N_PLAYER_FRAMES = int(self.player_seq.shape[0])
-        self.N_ENEMY_FRAMES = int(self.enemy_seq.shape[0])
-
-        # Color tables for the different waves / numbers of player lives
-        self.wave_colors = jnp.asarray(
-            self.consts.wave_enemy_colors_rgba, dtype=jnp.uint8
-        )
-        self.player_colors = jnp.asarray(
-            self.consts.player_life_colors_rgba, dtype=jnp.uint8
-        )  # (6,4)
-
-        # Digits (0..9) for the scorebar
-        self.digit_seq, self.DIGIT_W, self.DIGIT_H = self._load_digit_sprites()
-
-        # Score color (tint)
-        self.digit_seq_tinted = jax.vmap(
-            lambda fr: TronRenderer._tint_rgba(fr, self.consts.rgba_score_color)
-        )(self.digit_seq)
-
-        # Static background (gray field + green scorebar + purple borders)
-        self.background = self._build_static_background()
-
-        # Pre-tinted sprites of the wave/live sprites
-        self.player_frames_by_color = self._precompute_tints(
-            self.player_seq, self.player_colors
-        )  # (6,F,H,W,4)
-        self.enemy_frames_by_wave = self._precompute_tints(
-            self.enemy_seq, self.wave_colors
-        )  # (W,F,H,W,4)
-
-        # Precached door sprites
-        self.door_spawn_sprite = _solid_sprite(
-            self.consts.door_h, self.consts.door_w, self.consts.rgba_door_spawn
-        )
-        self.door_locked_sprite = _solid_sprite(
-            self.consts.door_h, self.consts.door_w, self.consts.rgba_door_locked
-        )
-
-        self.player_disc_outbound = self._make_solid_sprites(
-            self.player_colors,
-            self.consts.disc_size_out[1],
-            self.consts.disc_size_out[0],
-        )  # (6,2,4,4)
-        self.player_disc_returning = self._make_solid_sprites(
-            self.player_colors,
-            self.consts.disc_size_ret[1],
-            self.consts.disc_size_ret[0],
-        )  # (6,2,2,4)
-        self.enemy_disc_outbound = self._make_solid_sprites(
-            self.wave_colors, self.consts.disc_size_out[1], self.consts.disc_size_out[0]
-        )  # (W,2,4,4)
-
-    def _build_static_background(self) -> Array:
+        
+        # 2. Create procedural background (RGBA array)
+        procedural_background = self._build_static_background(c)
+        
+        # 3. Load base (grayscale/white) sprites
+        player_seq = _load_and_normalize_seq(self.sprite_path, "player")
+        enemy_seq = _load_and_normalize_seq(self.sprite_path, "enemy")
+        base_digits, digit_w, digit_h = _load_base_digit_sprites(self.sprite_path)
+        
+        # 4. Create color arrays
+        player_colors = jnp.asarray(c.player_life_colors_rgba, dtype=jnp.uint8)
+        wave_colors = jnp.asarray(c.wave_enemy_colors_rgba, dtype=jnp.uint8)
+        score_color = jnp.asarray(c.rgba_score_color, dtype=jnp.uint8)
+        
+        # 5. Pre-tint all procedural assets
+        player_frames_by_color = _precompute_tints(player_seq, player_colors)  # (C, F, H, W, 4)
+        enemy_frames_by_wave = _precompute_tints(enemy_seq, wave_colors)  # (W, F, H, W, 4)
+        tinted_digits = vmap(lambda fr: _tint_rgba(fr, score_color))(base_digits)  # (10, H, W, 4)
+        player_disc_out = _make_solid_sprites(
+            player_colors, c.disc_size_out[1], c.disc_size_out[0]
+        )  # (C, H, W, 4)
+        player_disc_ret = _make_solid_sprites(
+            player_colors, c.disc_size_ret[1], c.disc_size_ret[0]
+        )  # (C, H, W, 4)
+        enemy_disc_out = _make_solid_sprites(
+            wave_colors, c.disc_size_out[1], c.disc_size_out[0]
+        )  # (W, H, W, 4)
+        door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
+        door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
+        
+        # Reshape 5D arrays to 4D for asset loading (flatten color and frame dimensions)
+        # player_frames_by_color: (C, F, H, W, 4) -> (C*F, H, W, 4)
+        n_player_colors = player_frames_by_color.shape[0]
+        n_player_frames = player_frames_by_color.shape[1]
+        player_frames_flat = player_frames_by_color.reshape(-1, *player_frames_by_color.shape[2:])
+        
+        # enemy_frames_by_wave: (W, F, H, W, 4) -> (W*F, H, W, 4)
+        n_waves = enemy_frames_by_wave.shape[0]
+        n_enemy_frames = enemy_frames_by_wave.shape[1]
+        enemy_frames_flat = enemy_frames_by_wave.reshape(-1, *enemy_frames_by_wave.shape[2:])
+        
+        # 6. Define the asset manifest
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'data': procedural_background},
+            
+            # Pre-tinted animation stacks (reshaped to 4D for asset loading)
+            {'name': 'player_all_tints', 'type': 'procedural', 'data': player_frames_flat},
+            {'name': 'enemy_all_tints', 'type': 'procedural', 'data': enemy_frames_flat},
+            
+            # Pre-tinted digits
+            {'name': 'digits_tinted', 'type': 'procedural', 'data': tinted_digits},
+            
+            # Doors
+            {'name': 'door_spawn', 'type': 'procedural', 'data': door_spawn_sprite},
+            {'name': 'door_locked', 'type': 'procedural', 'data': door_locked_sprite},
+            
+            # Pre-tinted disc stacks
+            {'name': 'player_disc_out_all_tints', 'type': 'procedural', 'data': player_disc_out},
+            {'name': 'player_disc_ret_all_tints', 'type': 'procedural', 'data': player_disc_ret},
+            {'name': 'enemy_disc_out_all_tints', 'type': 'procedural', 'data': enemy_disc_out},
+        ]
+        
+        # 7. Load all assets and build palette/masks
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        
+        # 8. Store sprite dimensions
+        # player_all_tints mask shape is (C*F, H, W) after flattening
+        self.PLAYER_H, self.PLAYER_W = self.SHAPE_MASKS["player_all_tints"].shape[1:3]
+        self.N_PLAYER_FRAMES = n_player_frames
+        self.N_PLAYER_COLORS = n_player_colors
+        
+        # enemy_all_tints mask shape is (W*F, H, W) after flattening
+        self.ENEMY_H, self.ENEMY_W = self.SHAPE_MASKS["enemy_all_tints"].shape[1:3]
+        self.N_ENEMY_FRAMES = n_enemy_frames
+        self.N_WAVES = n_waves
+        
+        # digits_tinted mask shape is (10, H, W)
+        self.DIGIT_H, self.DIGIT_W = self.SHAPE_MASKS["digits_tinted"].shape[1:3]
+    
+    def _build_static_background(self, c: TronConstants) -> Array:
         """
-        Compose the static background layer for the game:
-          - gray gamefield rectangle
-          - green scorebar at the top
-          - purple border bands (top, bottom, left, right)
-        This is cached and used as the starting raster every render() call.
+        Compose the static background layer for the game as an RGBA array.
         """
-        c = self.consts
-        raster = jr.create_initial_frame(width=c.screen_width, height=c.screen_height)
+        # Initialize with black background (alpha = 255)
+        background = jnp.zeros((c.screen_height, c.screen_width, 4), dtype=jnp.uint8)
+        background = background.at[:, :, 3].set(255)
+        
         game, score = self.game_rect, self.score_rect
         top, bottom, left, right = self.border_rects
 
-        # gray gamefield
-        raster = jr.render_at(
-            raster, game.x, game.y, _solid_sprite(game.h, game.w, c.rgba_gray)
-        )
+        # Fill gray gamefield
+        background = background.at[
+            game.y : game.y + game.h,
+            game.x : game.x + game.w,
+            :
+        ].set(jnp.asarray(c.rgba_gray, dtype=jnp.uint8))
 
-        # green scorebar
-        raster = jr.render_at(
-            raster, score.x, score.y, _solid_sprite(score.h, score.w, c.rgba_green)
-        )
+        # Fill green scorebar
+        background = background.at[
+            score.y : score.y + score.h,
+            score.x : score.x + score.w,
+            :
+        ].set(jnp.asarray(c.rgba_green, dtype=jnp.uint8))
 
-        # purple borders
-        raster = jr.render_at(
-            raster, top.x, top.y, _solid_sprite(top.h, top.w, c.rgba_purple)
-        )
-        raster = jr.render_at(
-            raster, bottom.x, bottom.y, _solid_sprite(bottom.h, bottom.w, c.rgba_purple)
-        )
-        raster = jr.render_at(
-            raster, left.x, left.y, _solid_sprite(left.h, left.w, c.rgba_purple)
-        )
-        raster = jr.render_at(
-            raster, right.x, right.y, _solid_sprite(right.h, right.w, c.rgba_purple)
-        )
-        return raster
-
-    def _precompute_tints(self, seq: Array, colors: Array) -> Array:
-        # Small wrapper so we can pass (color, frame) to the tint function.
-        # Keeping it as a nested function makes vmap signatures explicit
-        def tint_one(color, frame):
-            return TronRenderer._tint_rgba(frame, color)
-
-        # First vmap over frames (outer): for each frame in seq, produce
-        # a stack over all colors. Inside that, vmap over colors to tint
-        # the single frame by every color. The result has shape (F, C, H, W, 4).
-        tinted = jax.vmap(
-            lambda frame: jax.vmap(lambda col: tint_one(col, frame))(colors)
-        )(seq)
-
-        # Reorder axes to (C, F, H, W, 4) so the first index selects color
-        return jnp.transpose(tinted, (1, 0, 2, 3, 4))
-
-    def _make_solid_sprites(self, colors: Array, h: int, w: int) -> Array:
-        """
-        Build one solid color sprite per color.
-        """
-        return jnp.broadcast_to(colors[:, None, None, :], (colors.shape[0], h, w, 4))
-        # return jax.vmap(lambda col: jnp.broadcast_to(col[None, None, :], (h, w, 4)))(
-        #     colors
-        # )
-
-    def _normalize_rgba(self, arr: jnp.ndarray) -> jnp.ndarray:
-        """Convert an image array to RGBA uint8. Accepts grayscale, RGB, or RGBA input;
-        for grayscale/RGB, alpha is 255 where pixels (or any channel) are > 0, otherwise 0.
-        """
-        if arr.ndim == 2:
-            mask = (arr > 0).astype(jnp.uint8)
-            return jnp.stack([arr, arr, arr, mask * 255], axis=-1).astype(jnp.uint8)
-        if arr.shape[-1] == 3:
-            a = (jnp.max(arr, axis=-1, keepdims=True) > 0).astype(jnp.uint8) * 255
-            return jnp.concatenate([arr, a], axis=-1).astype(jnp.uint8)
-        return arr.astype(jnp.uint8)
-
-    def _load_digit_sprites(self) -> Tuple[Array, int, int]:
-        """
-        Loads 10 digit sprites (0..9) from self.sprite_path: '0.npy' ... '9.npy'.
-        Returns (digits, W, H) with digits.shape == (10, H, W, 4).
-        """
-        frames = []
-        for d in range(10):
-            path = os.path.join(self.sprite_path, f"{d}.npy")
-            frame = jr.loadFrame(path)
-            if not isinstance(frame, jnp.ndarray):
-                raise FileNotFoundError(path)
-            frames.append(self._normalize_rgba(frame))
-        arr = jnp.stack(frames, axis=0)  # (10, H, W, 4)
-        H = int(arr.shape[1])
-        W = int(arr.shape[2])
-        return arr, W, H
-
-    def _load_sprites(self) -> Dict[str, Any]:
-        sprites: Dict[str, Any] = {}
-
-        def _load_seq(prefix: str) -> jnp.ndarray:
-            frames = []
-            for i in range(1, 5):
-                path = os.path.join(self.sprite_path, f"{prefix}{i}.npy")
-                frame = jr.loadFrame(path)
-                if not isinstance(frame, jnp.ndarray):
-                    raise FileNotFoundError(path)
-                frames.append(self._normalize_rgba(frame))
-            return jnp.stack(frames, axis=0)
-
-        sprites["player_seq"] = _load_seq("player")
-        sprites["enemy_seq"] = _load_seq("enemy")
-        sprites["player"] = sprites["player_seq"][0]
-        return sprites
-
-    @staticmethod
-    @jit
-    def _tint_rgba(sprite_rgba: Array, rgba_any: Array) -> Array:
-        """
-        Colorize a base sprite by multiplying channels (alpha preserved).
-        Use white/gray bases to keep shading.
-        """
-        base_rgb = sprite_rgba[..., :3].astype(jnp.float32)
-        alpha = sprite_rgba[..., 3:4].astype(jnp.uint8)
-        # Robustly turn whatever we got (tuple/list/array) into a JAX array.
-        # Using float math for the multiply; clamp back to uint8.
-        color_rgb = jnp.asarray(rgba_any, dtype=jnp.float32)[:3]  # (3,)
-
-        rgb_tinted = jnp.clip(jnp.round((base_rgb / 255.0) * color_rgb), 0, 255).astype(
-            jnp.uint8
-        )
-
-        return jnp.concatenate([rgb_tinted, alpha], axis=-1)
+        # Fill purple borders
+        background = background.at[
+            top.y : top.y + top.h,
+            top.x : top.x + top.w,
+            :
+        ].set(jnp.asarray(c.rgba_purple, dtype=jnp.uint8))
+        
+        background = background.at[
+            bottom.y : bottom.y + bottom.h,
+            bottom.x : bottom.x + bottom.w,
+            :
+        ].set(jnp.asarray(c.rgba_purple, dtype=jnp.uint8))
+        
+        background = background.at[
+            left.y : left.y + left.h,
+            left.x : left.x + left.w,
+            :
+        ].set(jnp.asarray(c.rgba_purple, dtype=jnp.uint8))
+        
+        background = background.at[
+            right.y : right.y + right.h,
+            right.x : right.x + right.w,
+            :
+        ].set(jnp.asarray(c.rgba_purple, dtype=jnp.uint8))
+        
+        return background
 
     @partial(jit, static_argnums=(0,))
-    def render(self, state) -> Array:
+    def render(self, state: TronState) -> Array:
         c = self.consts
-
-        # Start from cached background
-        raster = self.background
-
-        ###########
-        # Digits
-        ###########
-
-        # Use modulo so it rolls over after 999999
+        
+        # 1. Start from cached background ID raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        
+        # 2. Render Score Digits
         s = jnp.mod(state.score, jnp.int32(1_000_000))
-
-        # Extracts each decimal digit from the 6-digit value s (right to left)
         d0 = s % 10
         d1 = (s // 10) % 10
         d2 = (s // 100) % 10
         d3 = (s // 1_000) % 10
         d4 = (s // 10_000) % 10
         d5 = (s // 100_000) % 10
-
-        # Stacks digits in display order (left to right)
         digits_idx = jnp.stack([d5, d4, d3, d2, d1, d0], axis=0)
-
         digit_w = jnp.int32(self.DIGIT_W)
         digit_h = jnp.int32(self.DIGIT_H)
-        spacing = jnp.int32(c.score_spacing)
+        spacing_val = jnp.int32(c.score_spacing)
         count = jnp.int32(c.score_digits)
-
-        # Total width of the 6 digits + 5 gaps
-        # compute left x so row is centered in score bar
-        total_w = count * digit_w + (count - 1) * spacing
+        total_w = count * digit_w + (count - 1) * spacing_val
         x0 = jnp.int32(self.score_rect.x) + (
             jnp.int32(self.score_rect.w) - total_w
         ) // jnp.int32(2)
-
-        # vertical centering + small nudge down
+        
         y0_centered = jnp.int32(self.score_rect.y) + (
             jnp.int32(self.score_rect.h) - digit_h
         ) // jnp.int32(2)
         y0 = y0_centered + c.score_y_offset
-
-        def draw_digit(i, ras):
-            # Pick the i-th digits index and its x position
-            idx = digits_idx[i]
-            xi = x0 + jnp.int32(i) * (digit_w + spacing)
-
-            spr = self.digit_seq_tinted[idx]
-            return jr.render_at(ras, xi, y0, spr)
-
-        raster = jax.lax.fori_loop(0, c.score_digits, draw_digit, raster)
-
-        ###########
-        # Doors
-        ###########
-
+        
+        # Use the new render_label function
+        # spacing and max_digits must be Python ints (static args)
+        raster = self.jr.render_label(
+            raster, 
+            x0, 
+            y0, 
+            digits_idx, 
+            self.SHAPE_MASKS["digits_tinted"], 
+            spacing=self.DIGIT_W + c.score_spacing,  # Python int computation
+            max_digits=c.score_digits  # Python int from constants
+        )
+        
+        # 3. Render Doors
         def render_door(i, ras):
             doors = state.doors
             active = doors.is_spawned[i]
-
             def draw(r):
-                spr = jax.lax.select(
+                # Select the correct ID mask
+                mask = jax.lax.select(
                     doors.is_locked_open[i],
-                    self.door_locked_sprite,
-                    self.door_spawn_sprite,
+                    self.SHAPE_MASKS["door_locked"],
+                    self.SHAPE_MASKS["door_spawn"],
                 )
-                return jr.render_at(r, doors.x[i], doors.y[i], spr)
-
-            # if this door slot is active, draw it. Otherwise leave raster unchanged
+                # Use the new render_at
+                return self.jr.render_at(r, doors.x[i], doors.y[i], mask)
             return jax.lax.cond(active, draw, lambda r: r, ras)
-
         raster = jax.lax.fori_loop(0, c.max_doors, render_door, raster)
-
-        ###########
-        # Player
-        ###########
-
+        
+        # 4. Render Player
         def draw_player(r):
+            # Get correct color index
             color_idx = player_color_index(
                 state.player.lives[0],
                 c.player_lives,
                 state.player_blink_ticks_remaining,
                 c.player_blink_period_frames,
             )
-
-            # Choose animation frame:
-            # - If moving, advance frames every "player_animation_steps" ticks
-            # - if not moving, stay on frame 0 (idle)
+            
+            # Get correct animation frame index
             moving = jnp.any((state.player.vx != 0) | (state.player.vy != 0))
             step = jnp.int32(c.player_animation_steps)
             fidx = jax.lax.select(
@@ -976,102 +985,83 @@ class TronRenderer(JAXGameRenderer):
                 jnp.mod(state.frame_idx // step, jnp.int32(self.N_PLAYER_FRAMES)),
                 jnp.int32(0),
             )
-
-            base_sprite = self.player_frames_by_color[color_idx, fidx]
-
-            # mirror if the player walks left
+            
+            # Select the pre-tinted mask (flattened index: color_idx * n_frames + frame_idx)
+            flat_idx = color_idx * jnp.int32(self.N_PLAYER_FRAMES) + fidx
+            player_mask = self.SHAPE_MASKS["player_all_tints"][flat_idx]
+            
+            # Flipping logic
             face_left = state.facing_dx < jnp.int32(0)
-
-            def draw_normal(rr):
-                return jr.render_at(
-                    rr, state.player.x[0], state.player.y[0], base_sprite
-                )
-
-            def draw_flipped(rr):
-                # horizontal mirror over width axis (H, W, 4) -> axis=1
-                return jr.render_at(
-                    rr,
-                    state.player.x[0],
-                    state.player.y[0],
-                    jnp.flip(base_sprite, axis=1),
-                )
-
-            return jax.lax.cond(face_left, draw_flipped, draw_normal, r)
-
+            
+            return self.jr.render_at(
+                r, 
+                state.player.x[0], 
+                state.player.y[0], 
+                player_mask, 
+                flip_horizontal=face_left,
+                flip_offset=self.FLIP_OFFSETS["player_all_tints"]
+            )
         raster = jax.lax.cond(state.player_gone, lambda r: r, draw_player, raster)
-
-        ###########
-        # Discs
-        ###########
-
+        
+        # 5. Render Discs
+        # Get target color indices for this frame
         player_color_idx = player_color_index(
             state.player.lives[0],
             c.player_lives,
             state.player_blink_ticks_remaining,
             c.player_blink_period_frames,
         )
-
-        # Clamp the wave index to a valid range (0..num_waves-1) for enemy tint selection.
         wave_idx = jnp.clip(state.wave_index, 0, jnp.int32(c.num_waves - 1))
-
+        
         def render_disc(i, ras):
-            # Only draw active discs
             active = state.discs.phase[i] > jnp.int32(0)
             xi = state.discs.x[i]
             yi = state.discs.y[i]
-
             def draw(r):
-                owner = state.discs.owner[i]  # 0=player, 1=enemy
-                phase = state.discs.phase[i]  # 1=outbound, 2=returning (player only)
-
-                # Player-owned disc: choose sprite size by phase (outbound 4x2, returning 3x3/2x2).
+                owner = state.discs.owner[i]
+                phase = state.discs.phase[i]
+                is_player = owner == jnp.int32(0)
+                
+                # Player discs have different shapes for outbound vs returning
                 def draw_player(rr):
                     return jax.lax.cond(
-                        phase == jnp.int32(1),  # outbound -> 4x2
-                        lambda r2: jr.render_at(
-                            r2, xi, yi, self.player_disc_outbound[player_color_idx]
-                        ),
-                        lambda r2: jr.render_at(
-                            r2, xi, yi, self.player_disc_returning[player_color_idx]
-                        ),  # returning -> 2x2
-                        rr,
+                        phase == jnp.int32(1),  # outbound
+                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_out_all_tints"][player_color_idx]),
+                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_ret_all_tints"][player_color_idx]),
+                        rr
                     )
-
-                # Enemy-owned disc: always outbound size (4x2), tinted by wave color
+                
+                # Enemy discs always use the same shape
                 def draw_enemy(rr):
-                    spr = self.enemy_disc_outbound[wave_idx]
-                    return jr.render_at(rr, xi, yi, spr)
-
-                return jax.lax.cond(owner == jnp.int32(0), draw_player, draw_enemy, r)
-
+                    mask = self.SHAPE_MASKS["enemy_disc_out_all_tints"][wave_idx]
+                    return self.jr.render_at(rr, xi, yi, mask)
+                
+                return jax.lax.cond(is_player, draw_player, draw_enemy, r)
             return jax.lax.cond(active, draw, lambda r: r, ras)
-
         raster = jax.lax.fori_loop(0, c.max_discs, render_disc, raster)
-
-        ###########
-        # Enemies
-        ###########
-
+        
+        # 6. Render Enemies
         e_step = jnp.int32(c.enemy_animation_steps)
-
-        # get current animation frame index
         e_idx = jnp.mod(state.frame_idx // e_step, jnp.int32(self.N_ENEMY_FRAMES))
-
-        # select the enemy sprite for this wave color and this animation frame
-        enemy_frame = self.enemy_frames_by_wave[wave_idx, e_idx]
-
+        
+        # Get the pre-tinted mask for this wave color and anim frame (flattened index)
+        enemy_flat_idx = wave_idx * jnp.int32(self.N_ENEMY_FRAMES) + e_idx
+        enemy_mask = self.SHAPE_MASKS["enemy_all_tints"][enemy_flat_idx]
         def render_enemy(i, ras):
-            # Only draw enimies that are alive in slot i
             alive = state.enemies.alive[i]
             ex = state.enemies.x[i]
             ey = state.enemies.y[i]
+            
             return jax.lax.cond(
-                alive, lambda r: jr.render_at(r, ex, ey, enemy_frame), lambda r: r, ras
+                alive, 
+                lambda r: self.jr.render_at(r, ex, ey, enemy_mask, flip_offset=self.FLIP_OFFSETS["enemy_all_tints"]), 
+                lambda r: r, 
+                ras
             )
-
         raster = jax.lax.fori_loop(0, c.max_enemies, render_enemy, raster)
-
-        return raster
+        
+        # 7. Final Palette Lookup (NO color swapping needed)
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
 
 ####
