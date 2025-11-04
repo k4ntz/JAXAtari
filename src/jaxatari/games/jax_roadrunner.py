@@ -18,6 +18,7 @@ class RoadRunnerConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
     PLAYER_MOVE_SPEED: int = 4
+    PLAYER_ANIMATION_SPEED: int = 2
     ENEMY_MOVE_SPEED: int = 1
     PLAYER_START_X: int = 140
     PLAYER_START_Y: int = 96
@@ -42,6 +43,8 @@ class RoadRunnerState(NamedTuple):
     enemy_x: chex.Array
     enemy_y: chex.Array
     step_counter: chex.Array
+    player_is_moving: chex.Array
+    player_looks_right: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -83,10 +86,26 @@ class JaxRoadRunner(
         for both cardinal and diagonal movements.
         """
         # Define movement components based on the selected action
-        is_up = (action == Action.UP) | (action == Action.UPRIGHT) | (action == Action.UPLEFT)
-        is_down = (action == Action.DOWN) | (action == Action.DOWNRIGHT) | (action == Action.DOWNLEFT)
-        is_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
-        is_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
+        is_up = (
+            (action == Action.UP)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPLEFT)
+        )
+        is_down = (
+            (action == Action.DOWN)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNLEFT)
+        )
+        is_left = (
+            (action == Action.LEFT)
+            | (action == Action.UPLEFT)
+            | (action == Action.DOWNLEFT)
+        )
+        is_right = (
+            (action == Action.RIGHT)
+            | (action == Action.UPRIGHT)
+            | (action == Action.DOWNRIGHT)
+        )
 
         # Create a raw direction vector (dx, dy)
         dx = is_right.astype(jnp.float32) - is_left.astype(jnp.float32)
@@ -99,10 +118,7 @@ class JaxRoadRunner(
         # Normalize the vector to have a magnitude of 1 if moving.
         # This is done conditionally to avoid division by zero and is JIT-friendly.
         normalized_vel = jax.lax.cond(
-            is_moving,
-            lambda v: v / jnp.linalg.norm(v),
-            lambda v: v,
-            vel_vec
+            is_moving, lambda v: v / jnp.linalg.norm(v), lambda v: v, vel_vec
         )
 
         # Scale the normalized vector by the player's move speed
@@ -132,7 +148,23 @@ class JaxRoadRunner(
             self.consts.WIDTH - self.consts.PLAYER_SIZE[0],
         )
 
-        return state._replace(player_x=player_x, player_y=player_y)
+        is_moving = (vel_x != 0) | (vel_y != 0)
+
+        # Update player orientation based on horizontal movement
+        player_looks_right = jax.lax.cond(
+            vel_x > 0,
+            lambda: True,
+            lambda: jax.lax.cond(
+                vel_x < 0, lambda: False, lambda: state.player_looks_right
+            ),
+        )
+
+        return state._replace(
+            player_x=player_x,
+            player_y=player_y,
+            player_is_moving=is_moving,
+            player_looks_right=player_looks_right,
+        )
 
     def _enemy_step(self, state: RoadRunnerState) -> RoadRunnerState:
         # Get the direction vector towards the player
@@ -164,6 +196,8 @@ class JaxRoadRunner(
             enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
             enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
+            player_is_moving=jnp.array(False, dtype=jnp.bool_),
+            player_looks_right=jnp.array(False, dtype=jnp.bool_),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -289,6 +323,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return [
             {"name": "background", "type": "background", "file": "background.npy"},
             {"name": "player", "type": "single", "file": "roadrunner_stand.npy"},
+            {"name": "player_run1", "type": "single", "file": "roadrunner_run1.npy"},
+            {"name": "player_run2", "type": "single", "file": "roadrunner_run2.npy"},
             {"name": "enemy", "type": "single", "file": "enemy.npy"},
             {"name": "wall_top", "type": "procedural", "data": wall_sprite_top},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
@@ -298,8 +334,42 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Render Player
-        player_mask = self.SHAPE_MASKS["player"]
+        # Group player sprites for selection
+        player_sprites = (
+            self.SHAPE_MASKS["player"],
+            self.SHAPE_MASKS["player_run1"],
+            self.SHAPE_MASKS["player_run2"],
+        )
+
+        # Select animation frame based on movement
+        # If moving, cycle between run1 and run2.
+        run_frame_idx = (
+            state.step_counter // self.consts.PLAYER_ANIMATION_SPEED % 2
+        ) + 1
+
+        # Use lax.cond to select sprite index: 0 for stand, 1 or 2 for run
+        sprite_idx = jax.lax.cond(
+            state.player_is_moving,
+            lambda: run_frame_idx,
+            lambda: 0,
+        )
+
+        # Select the sprite mask. jax.lax.switch is efficient for this.
+        player_mask = jax.lax.switch(
+            sprite_idx,
+            [
+                lambda: player_sprites[0],
+                lambda: player_sprites[1],
+                lambda: player_sprites[2],
+            ],
+        )
+
+        # Flip the sprite if player_looks_right is True
+        player_mask = jax.lax.cond(
+            state.player_looks_right,
+            lambda: jnp.fliplr(player_mask),
+            lambda: player_mask,
+        )
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         # Render Enemy
