@@ -39,3 +39,10 @@ gh_ci = [
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
 ]
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+reportOptionalOperand = false
