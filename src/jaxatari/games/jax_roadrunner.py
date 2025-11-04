@@ -70,24 +70,55 @@ class JaxRoadRunner(
             Action.DOWN,
             Action.LEFT,
             Action.RIGHT,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
         ]
         self.obs_size = 2 * 4  # Simplified
+
+    def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array]:
+        """
+        Handles user input to determine player velocity, ensuring constant speed
+        for both cardinal and diagonal movements.
+        """
+        # Define movement components based on the selected action
+        is_up = (action == Action.UP) | (action == Action.UPRIGHT) | (action == Action.UPLEFT)
+        is_down = (action == Action.DOWN) | (action == Action.DOWNRIGHT) | (action == Action.DOWNLEFT)
+        is_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
+        is_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
+
+        # Create a raw direction vector (dx, dy)
+        dx = is_right.astype(jnp.float32) - is_left.astype(jnp.float32)
+        dy = is_down.astype(jnp.float32) - is_up.astype(jnp.float32)
+        vel_vec = jnp.array([dx, dy])
+
+        # Check if there is any movement
+        is_moving = jnp.any(vel_vec != 0)
+
+        # Normalize the vector to have a magnitude of 1 if moving.
+        # This is done conditionally to avoid division by zero and is JIT-friendly.
+        normalized_vel = jax.lax.cond(
+            is_moving,
+            lambda v: v / jnp.linalg.norm(v),
+            lambda v: v,
+            vel_vec
+        )
+
+        # Scale the normalized vector by the player's move speed
+        scaled_vel = normalized_vel * self.consts.PLAYER_MOVE_SPEED
+        x_vel, y_vel = scaled_vel[0], scaled_vel[1]
+
+        return x_vel, y_vel
 
     def _player_step(
         self, state: RoadRunnerState, action: chex.Array
     ) -> RoadRunnerState:
-        # --- Simplified Input Logic ---
-        up = action == Action.UP
-        down = action == Action.DOWN
-        left = action == Action.LEFT
-        right = action == Action.RIGHT
 
         # --- Update Player Position ---
-        player_y = state.player_y - up * self.consts.PLAYER_MOVE_SPEED
-        player_y = player_y + down * self.consts.PLAYER_MOVE_SPEED
-
-        player_x = state.player_x - left * self.consts.PLAYER_MOVE_SPEED
-        player_x = player_x + right * self.consts.PLAYER_MOVE_SPEED
+        vel_x, vel_y = self._handle_input(action)
+        player_x = state.player_x + vel_x
+        player_y = state.player_y + vel_y
 
         # --- Boundary Checks ---
         player_y = jnp.clip(
