@@ -4,14 +4,15 @@ authors: Paula Troszt, Ernst Christian Böhringer, Aiman Sammy Rahlf
 
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, Dict, Any, Optional
+from typing import NamedTuple, Tuple, Dict, Any, Optional, List
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
 import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class SpaceWarConstants(NamedTuple):
@@ -35,7 +36,7 @@ class SpaceWarConstants(NamedTuple):
     ENEMY_STATS_COLOR: Tuple[int, int, int, int] = (104, 186, 220, 255)
     WALL_TOP_HEIGHT: int = 12
     BLACK_BORDER_TOP_HEIGHT: int = 29
-    BLACK_BORDER_BOTTOM_HEIGHT: int = 12
+    BLACK_BORDER_BOTTOM_HEIGHT: int = 21
 
     # Positions
     INITIAL_PLAYER_X: int = int(43 * 256/2)
@@ -783,200 +784,316 @@ class SpaceWarRenderer(JAXGameRenderer):
 
     def __init__(self, consts: SpaceWarConstants = None):
         """
-        Initializes the renderer by loading sprites, including background.
+        Initializes the renderer by loading and pre-processing all assets.
         """
         super().__init__()
         self.consts = consts or SpaceWarConstants()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spacewar"
-        self.sprites = self._load_sprites()
-        # store background sprite directly for use in render function
-        self.background = self.sprites.get('background')
-
-    def _load_sprites(self) -> dict[str, Any]:
-        """Loads all necessary sprites from .npy files."""
-        sprites: Dict[str, Any] = {}
-
-        # helper function to load a single sprite frame
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f'{name}.npy')
-            frame = jr.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
-
-        # background
-        sprites['background'] = _load_sprite_frame('background')
-
-        # living player
-        player_sprites = []
-        for i in range(16):
-            player_sprites.append(_load_sprite_frame(f'player_pos{i}'))
         
-        # player death animation
-        for i in list(range(2, 6)) + list(range(10, 14)):
-            player_sprites.append(_load_sprite_frame(f'playerdeath_pos{i}'))
-
-        # pad the player and death animation sprites since they have to be used interchangeably 
-        # (and jax enforces same sizes)
-        player_sprites, _ = jr.pad_to_match(player_sprites)
-
-        sprites['player_pos'] = player_sprites[:16]
-        sprites['playerdeath_pos'] = player_sprites[:2] + player_sprites[16:20] + player_sprites[6:10] + player_sprites[20:24] + player_sprites[14:16]
-
-        # enemy (including death animation)
-        enemy_sprites = []
-        for i in range(16):
-            enemy_sprites.append(_load_sprite_frame(f'enemy_pos{i}'))
-
-        # pad the enemy sprites since they have to be used interchangeably 
-        # (and jax enforces same sizes)
-        enemy_sprites, _ = jr.pad_to_match(enemy_sprites)
-
-        sprites['enemy_pos'] = [enemy_sprites[i] for i in [0]+list(range(15, 0, -1))]
-
-        # missile
-        sprites['missile'] = _load_sprite_frame('missile')
-
-        # star base
-        sprites['star_base'] = _load_sprite_frame('star_base')
+        # 1. Configure the renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # 2. Define sprite path
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spacewar"
         
-        # digits for player score
-        digit_path = os.path.join(self.sprite_path, 'digit_{}.npy')
-        digit_sprites = jr.load_and_pad_digits(digit_path, num_chars=10)
-        sprites['digits'] = digit_sprites
+        # 3. Get the declarative asset manifest
+        asset_config = self._get_asset_config()
+        
+        # 4. Load all assets, create palette, and generate ID masks
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        
+        # 5. Pad the background to match full game dimensions
+        # The background sprite is smaller and needs padding on top and bottom
+        self.BACKGROUND = self._pad_background(self.BACKGROUND)
+        
+        # 6. Pre-compute/cache values for rendering
+        self._cache_sprite_stacks()
 
-        # digits for enemy score
-        digit_path = os.path.join(self.sprite_path, 'enemyDigit_{}.npy')
-        digit_sprites = jr.load_and_pad_digits(digit_path, num_chars=10)
-        sprites['enemy_digits'] = digit_sprites
+    def _get_asset_config(self) -> list:
+        """Returns the declarative manifest of all assets for the game."""
+        
+        # Player sprites (16 move + 8 death)
+        player_files = [f'player_pos{i}.npy' for i in range(16)]
+        player_death_files = [f'playerdeath_pos{i}.npy' for i in list(range(2, 6)) + list(range(10, 14))]
+        
+        # Enemy sprites (16 frames)
+        enemy_files = [f'enemy_pos{i}.npy' for i in range(16)]
+        
+        return [
+            # Background
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            
+            # Player (group all frames to pad them together)
+            {'name': 'player_all', 'type': 'group', 'files': player_files + player_death_files},
+            
+            # Enemy (group all frames to pad them together)
+            {'name': 'enemy_all', 'type': 'group', 'files': enemy_files},
+            
+            # Other single sprites
+            {'name': 'missile', 'type': 'single', 'file': 'missile.npy'},
+            {'name': 'star_base', 'type': 'single', 'file': 'star_base.npy'},
+            
+            # Digits
+            {'name': 'digits', 'type': 'digits', 'pattern': 'digit_{}.npy'},
+            {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemyDigit_{}.npy'},
+            # --- Procedural sprites to ensure colors are in the palette ---
+            # Player stats color
+            {'name': 'player_stats_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.PLAYER_STATS_COLOR)]], dtype=jnp.uint8)},
+            # Enemy stats color
+            {'name': 'enemy_stats_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.ENEMY_STATS_COLOR)]], dtype=jnp.uint8)},
+            # Enemy victory background colors
+            {'name': 'victory_color_1', 'type': 'procedural', 'data': jnp.array([[[212,252,144,255]]], dtype=jnp.uint8)},
+            {'name': 'victory_color_2', 'type': 'procedural', 'data': jnp.array([[[198,128,236,255]]], dtype=jnp.uint8)},
+            # Black for player stats bar
+            {'name': 'black', 'type': 'procedural', 'data': jnp.array([[[0,0,0,255]]], dtype=jnp.uint8)},
+        ]
 
-        # expand all sprites
-        for key, value in sprites.items():
-            if isinstance(value, (list, tuple)):
-                sprites[key] = jnp.array([jnp.expand_dims(sprite, axis=0) for sprite in value])
-            else:
-                sprites[key] = jnp.expand_dims(value, axis=0)
+    def _pad_background(self, background):
+        """Pads the background with black borders on top and bottom to match target dimensions."""
+        bg_height, bg_width = background.shape
+        
+        # Determine target dimensions (downscaled if configured, else game dimensions)
+        if self.config.downscale:
+            target_h, target_w = self.config.downscale[0], self.config.downscale[1]
+        else:
+            target_h, target_w = self.config.game_dimensions[0], self.config.game_dimensions[1]
+        
+        # Scale border heights if downscaling is enabled, otherwise use constants directly
+        if self.config.downscale:
+            height_scale = self.config.height_scaling
+            top_padding = int(round(self.consts.BLACK_BORDER_TOP_HEIGHT * height_scale))
+            bottom_padding = int(round(self.consts.BLACK_BORDER_BOTTOM_HEIGHT * height_scale))
+        else:
+            top_padding = self.consts.BLACK_BORDER_TOP_HEIGHT
+            bottom_padding = self.consts.BLACK_BORDER_BOTTOM_HEIGHT
+        
+        # Get black color ID from the palette
+        black_id = self.COLOR_TO_ID[(0, 0, 0)]
+        
+        # Pad top
+        top_pad = jnp.full((top_padding, bg_width), black_id, dtype=background.dtype)
+        # Pad bottom  
+        bottom_pad = jnp.full((bottom_padding, bg_width), black_id, dtype=background.dtype)
+        
+        # Concatenate: top padding + background + bottom padding
+        padded_bg = jnp.concatenate([top_pad, background, bottom_pad], axis=0)
+        
+        # Ensure we match target dimensions exactly (resize if needed due to rounding)
+        if padded_bg.shape[0] != target_h:
+            padded_bg = jax.image.resize(padded_bg[None, :, :], (1, target_h, target_w), method='nearest')[0]
+        
+        return padded_bg
 
-        return sprites
+    def _cache_sprite_stacks(self):
+        """Caches the correctly ordered sprite stacks from the loaded assets."""
+        all_player = self.SHAPE_MASKS['player_all']
+        
+        # Player move sprites (first 16)
+        self.player_sprites = all_player[:16]
+        
+        # Player death sprites (last 8, re-ordered)
+        death_sprites = all_player[16:]
+        self.player_death_sprites = jnp.stack([
+            all_player[2], all_player[3], # Original pos2, pos3
+            death_sprites[0], death_sprites[1], death_sprites[2], death_sprites[3], # death 4-5
+            all_player[6], all_player[7], all_player[8], all_player[9], # Original pos6-9
+            death_sprites[4], death_sprites[5], death_sprites[6], death_sprites[7], # death 10-13
+            all_player[14], all_player[15] # Original pos14-15
+        ])
+        
+        # Enemy sprites (re-ordered as per original logic)
+        all_enemy = self.SHAPE_MASKS['enemy_all']
+        enemy_order = jnp.array([0] + list(range(15, 0, -1)))
+        self.enemy_sprites = all_enemy[enemy_order]
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_background(self, state):
+        """Selects and renders the correct background (static or victory animation)."""
+        
+        # Get the actual target dimensions (downscaled if configured, else game dimensions)
+        # This matches what the static BACKGROUND uses
+        target_h, target_w = self.BACKGROUND.shape
+        
+        # Get color IDs from procedural sprite shape masks (single pixel sprites)
+        # Extract color ID from the center pixel of each procedural sprite
+        victory_color_1_id = self.SHAPE_MASKS['victory_color_1'][0, 0]
+        victory_color_2_id = self.SHAPE_MASKS['victory_color_2'][0, 0]
+        black_id = self.SHAPE_MASKS['black'][0, 0]
+        
+        # Determine the correct palette ID for the background
+        alternative_bg_id = jax.lax.cond(
+            (state.step_counter - 116) % 512 >= 256,
+            lambda: victory_color_1_id,
+            lambda: victory_color_2_id
+        )
+        
+        # Scale border heights if downscaling is enabled
+        height_scale = target_h / self.consts.HEIGHT
+        scaled_top_border = jnp.round(self.consts.BLACK_BORDER_TOP_HEIGHT * height_scale).astype(jnp.int32)
+        scaled_bottom_border = jnp.round(self.consts.BLACK_BORDER_BOTTOM_HEIGHT * height_scale).astype(jnp.int32)
+        
+        # Create coordinate grids for masking
+        yy = jnp.arange(target_h)[:, None]  # (H, 1)
+        
+        # Create masks for border areas
+        top_border_mask = yy < scaled_top_border  # (H, 1)
+        bottom_border_mask = yy >= (target_h - scaled_bottom_border)  # (H, 1)
+        border_mask = (top_border_mask | bottom_border_mask)  # (H, 1)
+        
+        # Create the dynamic background raster with correct target dimensions
+        victory_bg_raster = jnp.full((target_h, target_w), alternative_bg_id, dtype=self.BACKGROUND.dtype)
+        
+        # Black out the border areas using where (JAX-compatible)
+        # Broadcast mask from (H, 1) to (H, W) to match raster shape
+        border_mask_broadcast = jnp.broadcast_to(border_mask, (target_h, target_w))
+        victory_bg_raster = jnp.where(border_mask_broadcast, black_id, victory_bg_raster)
+        
+        # Choose between the pre-rendered static BG or the dynamic victory BG
+        # Both should now have the same shape (target_h, target_w)
+        return jax.lax.cond(
+            state.enemy_won_animation_has_started == 1,
+            lambda: victory_bg_raster,
+            lambda: self.BACKGROUND
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_stats(self, state, raster):
+        """Renders all player and enemy stats (score and bars)."""
+        
+        # Get color IDs from procedural sprite shape masks (single pixel sprites)
+        black_id = self.SHAPE_MASKS['black'][0, 0]
+        player_stats_id = self.SHAPE_MASKS['player_stats_color'][0, 0]
+        enemy_stats_id = self.SHAPE_MASKS['enemy_stats_color'][0, 0]
+        
+        # --- Player Score ---
+        player_digit_sprites = self.SHAPE_MASKS['digits']
+        player_score_digits = self.jr.int_to_digits(state.player_score, max_digits=2)
+        
+        is_single_digit = state.player_score < 10
+        start_idx = jax.lax.select(is_single_digit, 1, 0)
+        num_to_render = jax.lax.select(is_single_digit, 1, 2)
+        render_x = jax.lax.select(is_single_digit, 32, 32 - 12) # 32 or (32-12)
+        
+        raster = self.jr.render_label_selective(raster,
+                                           render_x,
+                                           1 + self.consts.BLACK_BORDER_TOP_HEIGHT,
+                                           player_score_digits,
+                                           player_digit_sprites,
+                                           start_idx,
+                                           num_to_render,
+                                           spacing = 12,
+                                           max_digits_to_render=2)
+        
+        # --- Player Fuel (inverted fill) ---
+        player_fuel_val = (self.consts.MAX_FUEL+1)//256 - (state.player_fuel + 255)//256
+        raster = self.jr.render_bar(raster, 48, 1 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
+                               player_fuel_val, 
+                               (self.consts.MAX_FUEL+1)//256, # max_val
+                               32, 4, # w, h
+                               black_id, # "fill" color (black)
+                               player_stats_id) # "background" color (player)
+        
+        # --- Player Ammo (inverted fill) ---
+        player_ammo_val = self.consts.MAX_AMMO - state.player_ammo
+        raster = self.jr.render_bar(raster, 48, 7 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
+                               player_ammo_val,
+                               self.consts.MAX_AMMO, # max_val
+                               32, 4, # w, h
+                               black_id, # "fill" color
+                               player_stats_id) # "background" color
+
+        # --- Enemy Score ---
+        enemy_digit_sprites = self.SHAPE_MASKS['enemy_digits']
+        enemy_score_digits = self.jr.int_to_digits(state.enemy_score, max_digits=2)
+        
+        is_single_digit_enemy = state.enemy_score < 10
+        start_idx_enemy = jax.lax.select(is_single_digit_enemy, 1, 0)
+        num_to_render_enemy = jax.lax.select(is_single_digit_enemy, 1, 2)
+        render_x_enemy = jax.lax.select(is_single_digit_enemy, 112, 112 - 12) # 112 or (112-12)
+        raster = self.jr.render_label_selective(raster,
+                                           render_x_enemy,
+                                           1 + self.consts.BLACK_BORDER_TOP_HEIGHT,
+                                           enemy_score_digits,
+                                           enemy_digit_sprites,
+                                           start_idx_enemy,
+                                           num_to_render_enemy,
+                                           spacing = 12,
+                                           max_digits_to_render=2)
+        
+        # --- Enemy Fuel ---
+        raster = self.jr.render_bar(raster, 128, 1 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
+                               8, (self.consts.MAX_FUEL+1)//256, # val, max_val
+                               32, 4, # w, h
+                               enemy_stats_id, # "fill" color
+                               black_id) # "background" color
+        
+        # --- Enemy Ammo ---
+        raster = self.jr.render_bar(raster, 128, 7 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
+                               self.consts.MAX_AMMO, self.consts.MAX_AMMO, # val, max_val
+                               32, 4, # w, h
+                               enemy_stats_id, # "fill" color
+                               black_id) # "background" color
+        
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SpaceWarState) -> chex.Array:
         """
         Renders the current game state using JAX operations.
-
-        Args:
-            state: A SpaceWarState object containing the current game state.
-
-        Returns:
-            A JAX array representing the rendered frame.
         """
-        # empty raster
-        raster = jr.create_initial_frame(width=self.consts.WIDTH, height=self.consts.HEIGHT)
+        # 1. Start with the correct background (static or victory animation)
+        raster = self._render_background(state)
 
-        # background
-        frame_bg = jr.get_sprite_frame(self.background, 0)
-        # for enemy victory animation
-        alternative_bg_color = jax.lax.cond(
-            (state.step_counter-116)%512 >= 256,
-            lambda: jnp.asarray((212,252,144), dtype=jnp.uint8),
-            lambda: jnp.asarray((198,128,236), dtype=jnp.uint8)
-        )
-        
-        # alternate backgrounds if enemy has won
-        raster = jax.lax.cond(
-            state.enemy_won_animation_has_started == 1,
-            lambda: raster.at[self.consts.BLACK_BORDER_TOP_HEIGHT:self.consts.HEIGHT - self.consts.BLACK_BORDER_BOTTOM_HEIGHT, :, :].set(alternative_bg_color),
-            lambda: jr.render_at(raster, 0, self.consts.BLACK_BORDER_TOP_HEIGHT, frame_bg)
-        )
+        # 2. Render Star Base (static object)
+        raster = self.jr.render_at_clipped(raster, self.consts.STAR_BASE_X, self.consts.STAR_BASE_Y, self.SHAPE_MASKS['star_base'])
 
-        # player
-        # set player sprite (normal sprite if player is alive, otherwise sprite of death animation)
-        player_sprite = jax.lax.cond(
+        # 3. Render Player
+        player_sprite_stack = jax.lax.cond(
             state.player_death_timer <= 0,
-            lambda: self.sprites['player_pos'][state.player_state[4]],
-            lambda: self.sprites['playerdeath_pos'][state.player_state[4]]
+            lambda: self.player_sprites,
+            lambda: self.player_death_sprites
         )
-
-        frame_player = jr.get_sprite_frame(player_sprite, state.step_counter)
-        # do not render player when in hyperspace
+        player_sprite = player_sprite_stack[state.player_state[4]]
+        
+        # Convert game coordinates to screen coordinates
+        player_x = jnp.sign(state.player_state[0])*(jnp.abs(state.player_state[0]//256))*2
+        player_y = jnp.sign(state.player_state[1])*(jnp.abs(state.player_state[1]//256))*2
+        
+        # Render player if not in hyperspace
         raster = jax.lax.cond(
             state.player_state[5] < 0,
-            lambda: jr.render_at( # convert x and y position to screen coordinates again
-                raster, 
-                jnp.sign(state.player_state[0])*(jnp.abs(state.player_state[0]//256))*2,
-                jnp.sign(state.player_state[1])*(jnp.abs(state.player_state[1])//256)*2, 
-                frame_player),
-            lambda: raster
+            lambda r: self.jr.render_at_clipped(r, player_x, player_y, player_sprite),
+            lambda r: r,
+            raster
         )
 
-        # enemy
-        # set enemy sprite
-        enemy_sprite = self.sprites['enemy_pos'][state.enemy_death_timer%16]
-        frame_enemy = jr.get_sprite_frame(enemy_sprite, state.step_counter)
-        raster = jr.render_at(raster, self.consts.ENEMY_X, self.consts.ENEMY_Y, frame_enemy)
+        # 4. Render Enemy
+        enemy_sprite = self.enemy_sprites[state.enemy_death_timer % 16]
+        raster = self.jr.render_at_clipped(raster, self.consts.ENEMY_X, self.consts.ENEMY_Y, enemy_sprite)
 
-        # missile
-        # set missile sprite
-        frame_missile = jr.get_sprite_frame(self.sprites['missile'], state.step_counter)
-        # only render missile if it is active
+        # 5. Render Missile
+        missile_x = jnp.sign(state.player_missile_state[0])*(jnp.abs(state.player_missile_state[0]//256))*2
+        missile_y = jnp.sign(state.player_missile_state[1])*(jnp.abs(state.player_missile_state[1]//256))*2
+        
         raster = jax.lax.cond(
             state.player_missile_state[4] > 0,
-            lambda: jr.render_at( # convert x and y position to screen coordinates again
-                raster, 
-                jnp.sign(state.player_missile_state[0])*(jnp.abs(state.player_missile_state[0]//256))*2,
-                jnp.sign(state.player_missile_state[1])*(jnp.abs(state.player_missile_state[1]//256))*2,
-                frame_missile),
-            lambda: raster
+            lambda r: self.jr.render_at_clipped(r, missile_x, missile_y, self.SHAPE_MASKS['missile']),
+            lambda r: r,
+            raster
         )
 
-        # star base
-        # set star base sprite
-        frame_star_base = jr.get_sprite_frame(self.sprites['star_base'], state.step_counter)
-        raster = jr.render_at(raster, self.consts.STAR_BASE_X, self.consts.STAR_BASE_Y, frame_star_base)
+        # 6. Render Stats (Score and Bars)
+        raster = self._render_stats(state, raster)
 
-        # numbers
-        def _get_number_of_digits(val):
-            return jax.lax.cond(val < 10, lambda: 1, lambda: 2)
-
-        # player score
-        player_digit_sprites = self.sprites.get('digits', None)
-        player_score_digits = jr.int_to_digits(state.player_score, max_digits = 2)
-        number_of_additional_score_digits = _get_number_of_digits(state.player_score) - 1
-        raster = jr.render_label_selective(raster,
-                                           32 - 12 * number_of_additional_score_digits,
-                                           1 + self.consts.BLACK_BORDER_TOP_HEIGHT,
-                                           player_score_digits,
-                                           player_digit_sprites[0],
-                                           1 - number_of_additional_score_digits,
-                                           number_of_additional_score_digits + 1,
-                                           spacing = 12)
-        
-        # player fuel (mirrored because bar is growing to the left)
-        raster = jr.render_bar(raster, 48, 1 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
-                               (self.consts.MAX_FUEL+1)//256 - (state.player_fuel + 255)//256, 
-                               (self.consts.MAX_FUEL+1)//256, 32, 4, (0, 0, 0, 0), self.consts.PLAYER_STATS_COLOR)
-        # player ammo (mirrored because bar is growing to the left)
-        raster = jr.render_bar(raster, 48, 7 + self.consts.BLACK_BORDER_TOP_HEIGHT, 
-                               self.consts.MAX_AMMO - state.player_ammo, 
-                               self.consts.MAX_AMMO, 32, 4, (0, 0, 0, 0), self.consts.PLAYER_STATS_COLOR)
-
-        # enemy score
-        enemy_digit_sprites = self.sprites.get('enemy_digits', None)
-        enemy_score_digits = jr.int_to_digits(state.enemy_score, max_digits = 2)
-        number_of_additional_score_digits = _get_number_of_digits(state.enemy_score) - 1
-        raster = jr.render_label_selective(raster,
-                                           112 - 12 * number_of_additional_score_digits,
-                                           1 + self.consts.BLACK_BORDER_TOP_HEIGHT,
-                                           enemy_score_digits,
-                                           enemy_digit_sprites[0],
-                                           1 - number_of_additional_score_digits,
-                                           number_of_additional_score_digits + 1,
-                                           spacing = 12)
-        
-        # enemy fuel (mirrored because bar is growing to the left)
-        raster = jr.render_bar(raster, 128, 1 + self.consts.BLACK_BORDER_TOP_HEIGHT, 8, 
-                               self.consts.MAX_FUEL//256, 32, 4, self.consts.ENEMY_STATS_COLOR, (0, 0, 0, 0))
-        # enemy ammo (mirrored because bar is growing to the left)
-        raster = jr.render_bar(raster, 128, 7 + self.consts.BLACK_BORDER_TOP_HEIGHT, 8, 
-                               self.consts.MAX_AMMO, 32, 4, self.consts.ENEMY_STATS_COLOR, (0, 0, 0, 0))
-
-        return raster
+        # 7. Final conversion from palette IDs to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)
