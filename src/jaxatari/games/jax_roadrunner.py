@@ -30,7 +30,7 @@ class RoadRunnerConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 10
     WALL_BOTTOM_Y: int = 194
     WALL_BOTTOM_HEIGHT: int = 16
-    BACKGROUND_COLOR: Tuple[int, int, int] = (144, 72, 17)
+    BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
@@ -297,9 +297,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        background_sprite = self._create_background_sprite()
         wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
-        asset_config = self._get_asset_config(wall_sprite_top, wall_sprite_bottom)
+        asset_config = self._get_asset_config(
+            background_sprite, wall_sprite_top, wall_sprite_bottom
+        )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
         (
@@ -310,6 +313,13 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+    def _create_background_sprite(self) -> jnp.ndarray:
+        background_color_rgba = (*self.consts.BACKGROUND_COLOR, 255)
+        background_shape = (self.consts.HEIGHT, self.consts.WIDTH, 4)
+        return jnp.tile(
+            jnp.array(background_color_rgba, dtype=jnp.uint8), (*background_shape[:2], 1)
+        )
+
     def _create_wall_sprite(self, height: int) -> jnp.ndarray:
         wall_color_rgba = (*self.consts.WALL_COLOR, 255)
         wall_shape = (height, self.consts.WIDTH, 4)
@@ -318,10 +328,13 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
 
     def _get_asset_config(
-        self, wall_sprite_top: jnp.ndarray, wall_sprite_bottom: jnp.ndarray
+        self,
+        background_sprite: jnp.ndarray,
+        wall_sprite_top: jnp.ndarray,
+        wall_sprite_bottom: jnp.ndarray,
     ) -> list:
         return [
-            {"name": "background", "type": "background", "file": "background.npy"},
+            {"name": "background", "type": "background", "data": background_sprite},
             {"name": "player", "type": "single", "file": "roadrunner_stand.npy"},
             {"name": "player_run1", "type": "single", "file": "roadrunner_run1.npy"},
             {"name": "player_run2", "type": "single", "file": "roadrunner_run2.npy"},
