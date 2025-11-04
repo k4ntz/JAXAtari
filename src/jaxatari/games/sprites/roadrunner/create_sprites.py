@@ -101,20 +101,20 @@ roadrunner_run1_mask = np.array(
 # Corrected Sprite 4: Road Runner Running (Frame 2)
 roadrunner_run2_mask = np.array(
     [
-        [0, 0, 0, 0, 1, 1, 0, 0],
-        [0, 0, 0, 1, 1, 1, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1, 1, 0],
         [0, 0, 1, 1, 1, 0, 0, 0],
-        [0, 0, 1, 1, 0, 0, 1, 1],
-        [0, 0, 1, 0, 0, 1, 1, 1],
-        [0, 0, 0, 0, 0, 1, 1, 0],
-        [0, 0, 1, 0, 1, 1, 1, 1],
+        [0, 0, 1, 0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0, 1, 1, 1],
+        [0, 0, 1, 0, 1, 1, 1, 0],
         [0, 1, 0, 0, 1, 1, 1, 1],
         [0, 0, 1, 1, 0, 1, 1, 0],
         [1, 1, 1, 0, 0, 1, 0, 0],
         [0, 0, 0, 0, 1, 0, 1, 1],
         [0, 0, 1, 0, 1, 1, 1, 1],
-        [0, 1, 1, 0, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 1, 1],
+        [0, 1, 1, 0, 0, 1, 1, 0],
+        [0, 1, 0, 0, 1, 1, 1, 1],
         [0, 1, 0, 0, 1, 1, 1, 0],
         [0, 1, 1, 0, 0, 1, 1, 0],
         [0, 0, 1, 1, 1, 0, 0, 0],
@@ -139,8 +139,8 @@ roadrunner_run2_mask = np.array(
 
 if __name__ == "__main__":
     # Define the colors from the game's constants
-    PLAYER_COLOR = (92, 186, 92)
-    ENEMY_COLOR = (213, 130, 74)
+    PLAYER_COLOR = (73, 81, 209)
+    ENEMY_COLOR = (174, 72, 30)
 
     # Create the full RGBA sprites
     roadrunner_stand_rgba = create_rgba_sprite(roadrunner_stand_mask, PLAYER_COLOR)
