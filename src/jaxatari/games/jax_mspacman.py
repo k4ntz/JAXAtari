@@ -16,12 +16,14 @@ TODO
 3) Game
     3.1) [x] Life system
     3.2) [x] Gameover state
-    3.3) [ ] Pacman death animation
-    3.4) [ ] Level progression
+    3.3) [ ] Level progression
+    3.4) [ ] Correct speed
+    3.5) [ ] Pacman death animation
 """
 
 
 # --- IMPORTS --- #
+from enum import IntEnum, auto
 import os
 from functools import partial
 from typing import Any, Dict, NamedTuple, Optional, Tuple
@@ -47,23 +49,28 @@ INITIAL_LIVES = 2
 BONUS_LIFE_LIMIT = 10000
 
 # GHOST TYPES
-GHOST_BLINKY = 0
-GHOST_PINKY = 1
-GHOST_INKY = 2
-GHOST_SUE = 3
+class GhostType(IntEnum):
+    BLINKY = auto()
+    PINKY = auto()
+    INKY = auto()
+    SUE = auto()
 
 # GHOST MODES
-GHOST_RANDOM = 0
-GHOST_CHASING = 1
-GHOST_FRIGHTENED = 2
-GHOST_BLINKING = 3
-GHOST_RETURNING = 4
-GHOST_ENJAILED = 5
+class GhostMode(IntEnum):
+    RANDOM = auto()
+    CHASE = auto()
+    SCATTER = auto()
+    FRIGHTENED = auto()
+    BLINKING = auto()
+    RETURNING = auto()
+    ENJAILED = auto()
 
 # GHOST TIMINGS
+CHASE_DURATION = 200*8 # Chosen randomly for now, should be 20s  TODO: Adjust value
+SCATTER_DURATION = 70*8 # Chosen randomly for now, should be 7s  TODO: Adjust value
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
-GHOST_JAIL_DURATION = 120 # in steps
+ENJAILED_DURATION = 120 # in steps
 
 # FRUITS
 FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170, 270])
@@ -305,6 +312,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # Pacman movement
         action = last_pressed_action(action, state.current_action)
         possible_directions = available_directions(state.player.position, state.level.dofmaze)
+        if action < 0 or action > len(DIRECTIONS) - 1: # Ignore illegal actions
+            action = Action.NOOP
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
             new_pacman_dir = DIRECTIONS[action]
             executed_action = action
@@ -371,13 +380,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         deadly_collision = False
         for i in range(4): 
             if jnp.all(abs(new_pacman_pos - ghost_positions[i]) < 8):
-                if ghosts_modes[i] == GHOST_FRIGHTENED or ghosts_modes[i] == GHOST_BLINKING:  # If are frighted
+                if ghosts_modes[i] == GhostMode.FRIGHTENED or ghosts_modes[i] == GhostMode.BLINKING:  # If are frighted
                     # Ghost eaten
                     score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)   # TODO: Reset eaten_ghosts after power mode ends
                     ghost_positions = ghost_positions.at[i].set((76, 70))  # Reset eaten ghost position
                     ghosts_dirs = ghosts_dirs.at[i].set([0, 0])  # Reset eaten ghost direction
-                    ghosts_modes = ghosts_modes.at[i].set(GHOST_ENJAILED)
-                    ghosts_timers = ghosts_timers.at[i].set(GHOST_JAIL_DURATION)
+                    ghosts_modes = ghosts_modes.at[i].set(GhostMode.ENJAILED.value)
+                    ghosts_timers = ghosts_timers.at[i].set(ENJAILED_DURATION)
                     eaten_ghosts = eaten_ghosts + 1
                 else:
                     deadly_collision = True  # Collision with an already eaten and respawned ghost
@@ -504,9 +513,9 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         for i, ghost in enumerate(state.ghosts):
             # Render frightened ghost
-            if not (state.ghosts[i].mode == GHOST_FRIGHTENED or state.ghosts[i].mode == GHOST_BLINKING):
+            if not (state.ghosts[i].mode == GhostMode.FRIGHTENED or state.ghosts[i].mode == GhostMode.BLINKING):
                 g_sprite = self.sprites["ghost"][ghosts_orientation][i]
-            elif state.ghosts[i].mode == GHOST_BLINKING and ((state.step_count & 0b1000) >> 3):
+            elif state.ghosts[i].mode == GhostMode.BLINKING and ((state.step_count & 0b1000) >> 3):
                 g_sprite = self.sprites["ghost"][ghosts_orientation][5] # white blinking effect
             else:
                 g_sprite = self.sprites["ghost"][ghosts_orientation][4] # blue ghost
@@ -745,29 +754,52 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     -   All Ghosts always aim for a specific target
     -   They try to minimize their horizontal and vertical distance to this target
     -   They prioritizes the longer one of those two distances - If equal, they choose randomly
+    -   They can only change direction when they are on a vertical or horizontal grid
+    -   They cannot reverse direction without a mode change
+
+    MODES
+    -   CHASE: Aim for their specific target
+    -   SCATTER: Aim for their specific corner target (BLINKY and PINKY move randomly for the first scatter of each game)   (EXAMINE FURTHER)
+    -   FRIGHTENED: Move randomly
+    -   Every mode change causes a reversal of direction
+    -   Mode changes happen on a timer with some additional randomness
 
     BLINKY (Red)
     -   Aims for Ms Pacman directly
 
     PINKY (Pink)
-    -   Aims for a spot ~4 dots in front of Ms Pacman
-    -   If Ms Pacman is looking up it aims for a spot ~4 dots up and left of Ms Pacman
+    -   Aims for a spot 4 tiles in front of Ms Pacman
+    -   If Ms Pacman is looking up it aims for a spot 4 tiles up and 4 tiles left of Ms Pacman
         (due to a bug in the original game)
 
     INKY (Teal)
     -   Aims for a spot determined by Blinkys position relative to Ms Pacman
-    -   Draw a straight line from Blinkys position to the spot ~2 dots in front of Ms Pacman
-        and extend it equally as far onwardsto determine the aiming point
+    -   Draw a straight line from Blinkys position to the spot 2 tiles in front of Ms Pacman
+        and extend it equally as far onwards to determine the aiming point
 
     SUE (Orange)
-    -   Aims for Ms Pacman directly if further away than ~8 dots (euclidian distance)
-    -   When closer than ~8 dots it aims for the lower left corner
+    -   Aims for Ms Pacman directly if further away than 8 tiles (euclidian distance)
+    -   When closer than 8 tiles it aims for the lower left corner
 
-    SOURCE: https://www.youtube.com/watch?v=sQK7PmR8kpQ
+    SOURCES:
+    https://www.classicarcadegaming.com/forums/index.php?topic=6701.0
+    https://en.wikipedia.org/wiki/Ms._Pac-Man?utm_source=chatgpt.com
+    https://www.youtube.com/watch?v=ICwzQ0_RCcQ&t
+    https://www.youtube.com/watch?v=sQK7PmR8kpQ
+    https://www.youtube.com/watch?v=VV4_kVIV9WE
+
+    ADDITIONAL RESOURCES:
+    https://www.gamedeveloper.com/design/the-pac-man-dossier
+    https://www.researchgate.net/publication/224180057_Ghost_Direction_Detection_and_other_Innovations_for_Ms_Pac-Man
+    https://nn.cs.utexas.edu/downloads/papers/schrum.tciaig16.pdf?utm_source=chatgpt.com
+    http://donhodges.com/pacman_pinky_explanation.htm
+    http://donhodges.com/ms_pacman_bugs.htm
+    http://donhodges.com/how_high_can_you_get3.htm
+    http://cubeman.org/arcade-source/mspac.asm
     """
     
-    if ate_power_pill and not(ghost.mode == GHOST_ENJAILED or ghost.mode == GHOST_RETURNING):
-        return ghost.position-ghost.direction, -ghost.direction, GHOST_FRIGHTENED, FRIGHTENED_DURATION-BLINKING_DURATION
+    if ate_power_pill and not(ghost.mode == GhostMode.ENJAILED or ghost.mode == GhostMode.RETURNING):
+        return ghost.position-ghost.direction, -ghost.direction, GhostMode.FRIGHTENED.value, FRIGHTENED_DURATION-BLINKING_DURATION
     x, y = ghost.position
     if x % 4 == 1 or y % 12 == 6: # on horizontal or vertical grid
         possible = available_directions(ghost.position, dofmaze)
@@ -824,14 +856,14 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     new_pos = new_pos.at[0].set(new_pos[0] % 160)  # wrap horizontally
     new_timer = ghost.timer
     new_mode = ghost.mode
-    if ghost.mode == GHOST_ENJAILED and ghost.timer == 0:
+    if ghost.mode == GhostMode.ENJAILED and ghost.timer == 0:
         next_dir = jnp.array([0, -1])  # Reset direction to escape the center box
-        new_mode = GHOST_RANDOM
-    if ghost.mode == GHOST_FRIGHTENED and ghost.timer == 0:
-        new_mode = GHOST_BLINKING
+        new_mode = GhostMode.RANDOM.value
+    if ghost.mode == GhostMode.FRIGHTENED and ghost.timer == 0:
+        new_mode = GhostMode.BLINKING.value
         new_timer = BLINKING_DURATION
-    if ghost.mode == GHOST_BLINKING and ghost.timer == 0:
-        new_mode = GHOST_RANDOM
+    if ghost.mode == GhostMode.BLINKING and ghost.timer == 0:
+        new_mode = GhostMode.RANDOM.value
     if ghost.timer > 0:
         new_timer = new_timer - 1
     return new_pos, next_dir, new_mode, new_timer
