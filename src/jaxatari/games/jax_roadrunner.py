@@ -30,7 +30,10 @@ class RoadRunnerConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 10
     WALL_BOTTOM_Y: int = 194
     WALL_BOTTOM_HEIGHT: int = 16
+    ROAD_HEIGHT: int = 90
+    ROAD_TOP_Y: int = 110
     BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
+    ROAD_COLOR: Tuple[int, int, int] = (0, 0, 0)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
@@ -300,8 +303,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         background_sprite = self._create_background_sprite()
         wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
+        road_sprite = self._create_road_sprite()
         asset_config = self._get_asset_config(
-            background_sprite, wall_sprite_top, wall_sprite_bottom
+            background_sprite, road_sprite, wall_sprite_bottom
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -317,7 +321,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
         background_color_rgba = (*self.consts.BACKGROUND_COLOR, 255)
         background_shape = (self.consts.HEIGHT, self.consts.WIDTH, 4)
         return jnp.tile(
-            jnp.array(background_color_rgba, dtype=jnp.uint8), (*background_shape[:2], 1)
+            jnp.array(background_color_rgba, dtype=jnp.uint8),
+            (*background_shape[:2], 1),
+        )
+
+    def _create_road_sprite(self) -> jnp.ndarray:
+        ROAD_WIDTH = self.consts.WIDTH
+        road_color_rgba = (*self.consts.ROAD_COLOR, 255)
+        road_shape = (self.consts.ROAD_HEIGHT, ROAD_WIDTH, 4)
+        # TODO procedurally add road markings
+
+        return jnp.tile(
+            jnp.array(road_color_rgba, dtype=jnp.uint8), (*road_shape[:2], 1)
         )
 
     def _create_wall_sprite(self, height: int) -> jnp.ndarray:
@@ -330,7 +345,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def _get_asset_config(
         self,
         background_sprite: jnp.ndarray,
-        wall_sprite_top: jnp.ndarray,
+        road_sprite: jnp.ndarray,
         wall_sprite_bottom: jnp.ndarray,
     ) -> list:
         return [
@@ -339,13 +354,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "player_run1", "type": "single", "file": "roadrunner_run1.npy"},
             {"name": "player_run2", "type": "single", "file": "roadrunner_run2.npy"},
             {"name": "enemy", "type": "single", "file": "enemy.npy"},
-            {"name": "wall_top", "type": "procedural", "data": wall_sprite_top},
+            {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Render Road
+        raster = self.jr.render_at(
+            raster, 0, self.consts.ROAD_TOP_Y, self.SHAPE_MASKS["road"]
+        )
 
         # Group player sprites for selection
         player_sprites = (
@@ -388,13 +408,5 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Render Enemy
         enemy_mask = self.SHAPE_MASKS["enemy"]
         raster = self.jr.render_at(raster, state.enemy_x, state.enemy_y, enemy_mask)
-
-        # Render Walls
-        raster = self.jr.render_at(
-            raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall_top"]
-        )
-        raster = self.jr.render_at(
-            raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall_bottom"]
-        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
