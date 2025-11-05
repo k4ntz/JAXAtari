@@ -33,7 +33,6 @@ class RoadRunnerConstants(NamedTuple):
     ROAD_HEIGHT: int = 90
     ROAD_TOP_Y: int = 110
     BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
-    ROAD_COLOR: Tuple[int, int, int] = (0, 0, 0)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
@@ -331,14 +330,46 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
 
     def _create_road_sprite(self) -> jnp.ndarray:
-        ROAD_WIDTH = self.consts.WIDTH
-        road_color_rgba = (*self.consts.ROAD_COLOR, 255)
-        road_shape = (self.consts.ROAD_HEIGHT, ROAD_WIDTH, 4)
-        # TODO procedurally add road markings
 
-        return jnp.tile(
-            jnp.array(road_color_rgba, dtype=jnp.uint8), (*road_shape[:2], 1)
+        ROAD_HEIGHT = self.consts.ROAD_HEIGHT  # 90
+        DASH_LENGTH = 5
+        GAP_HEIGHT = 17
+
+        assert ROAD_HEIGHT % (GAP_HEIGHT + 1) == 0
+        assert self.consts.WIDTH % (DASH_LENGTH * 4) == 0
+
+        road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        marking_color_rgba = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)  # White
+
+        solid_black_strip = jnp.tile(road_color_rgba, (ROAD_HEIGHT, DASH_LENGTH, 1))
+        gap_rect = jnp.tile(road_color_rgba, (GAP_HEIGHT, DASH_LENGTH, 1))
+        dash_rect = jnp.tile(marking_color_rgba, (1, DASH_LENGTH, 1))
+        dash_pattern_unit = jnp.concatenate([gap_rect, dash_rect], axis=0)
+
+        num_reps = int(ROAD_HEIGHT / (GAP_HEIGHT + 1)) - 1
+        gap_rect = jnp.tile(road_color_rgba, (GAP_HEIGHT + 1, DASH_LENGTH, 1))
+        dashed_line_strip = jnp.tile(dash_pattern_unit, (num_reps, 1, 1))
+        dashed_line_strip = jnp.concatenate([dashed_line_strip, gap_rect], axis=0)
+
+        base_pattern = jnp.concatenate(
+            [
+                solid_black_strip,
+                solid_black_strip,
+                solid_black_strip,
+                dashed_line_strip,
+            ],
+            axis=1,
         )
+
+        num_reps = int(self.consts.WIDTH / (DASH_LENGTH * 4))
+
+        solid_black_strip = jnp.tile(
+            road_color_rgba, (GAP_HEIGHT + 1, self.consts.WIDTH, 1)
+        )
+
+        final_road = jnp.tile(base_pattern, (1, num_reps, 1))
+
+        return final_road
 
     def _create_wall_sprite(self, height: int) -> jnp.ndarray:
         wall_color_rgba = (*self.consts.WALL_COLOR, 255)
