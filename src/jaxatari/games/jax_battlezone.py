@@ -6,7 +6,7 @@ gym.register_envs(ale_py)
 
 if __name__ == "__main__":
     #print(sorted(gym.envs.registry.keys()))
-    env = gym.make("ALE/BattleZone", render_mode="rgb_array", frameskip=1)
+    env = gym.make("ALE/BattleZone-v5", render_mode="rgb_array", frameskip=1)
 
     # Reset the environment to generate the first observation
     #trained_agent_test(env)
