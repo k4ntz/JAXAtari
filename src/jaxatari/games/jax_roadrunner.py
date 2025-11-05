@@ -130,6 +130,24 @@ class JaxRoadRunner(
 
         return x_vel, y_vel
 
+    def _check_bounds(
+        self, x_pos: chex.Array, y_pos: chex.Array
+    ) -> tuple[chex.Array, chex.Array]:
+        # This assumes player and enemy have the same size
+        checked_y = jnp.clip(
+            y_pos,
+            self.consts.ROAD_TOP_Y - (self.consts.PLAYER_SIZE[1] / 3),
+            self.consts.ROAD_TOP_Y
+            + self.consts.ROAD_HEIGHT
+            - self.consts.PLAYER_SIZE[1],
+        )
+        checked_x = jnp.clip(
+            x_pos,
+            0,
+            self.consts.WIDTH - self.consts.PLAYER_SIZE[0],
+        )
+        return (checked_x, checked_y)
+
     def _player_step(
         self, state: RoadRunnerState, action: chex.Array
     ) -> RoadRunnerState:
@@ -139,17 +157,7 @@ class JaxRoadRunner(
         player_x = state.player_x + vel_x
         player_y = state.player_y + vel_y
 
-        # --- Boundary Checks ---
-        player_y = jnp.clip(
-            player_y,
-            self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT,
-            self.consts.WALL_BOTTOM_Y - self.consts.PLAYER_SIZE[1],
-        )
-        player_x = jnp.clip(
-            player_x,
-            0,
-            self.consts.WIDTH - self.consts.PLAYER_SIZE[0],
-        )
+        player_x, player_y = self._check_bounds(player_x, player_y)
 
         is_moving = (vel_x != 0) | (vel_y != 0)
 
@@ -178,18 +186,7 @@ class JaxRoadRunner(
         new_enemy_x = state.enemy_x + dir_x * self.consts.ENEMY_MOVE_SPEED
         new_enemy_y = state.enemy_y + dir_y * self.consts.ENEMY_MOVE_SPEED
 
-        # Boundary Checks
-        new_enemy_x = jnp.clip(
-            new_enemy_x,
-            0,
-            self.consts.WIDTH - self.consts.ENEMY_SIZE[0],
-        )
-        new_enemy_y = jnp.clip(
-            new_enemy_y,
-            self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT,
-            self.consts.WALL_BOTTOM_Y + self.consts.WALL_TOP_HEIGHT,
-        )
-
+        new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
         return state._replace(enemy_x=new_enemy_x, enemy_y=new_enemy_y)
 
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
