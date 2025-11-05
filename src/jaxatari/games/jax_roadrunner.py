@@ -48,6 +48,7 @@ class RoadRunnerState(NamedTuple):
     step_counter: chex.Array
     player_is_moving: chex.Array
     player_looks_right: chex.Array
+    score: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -60,6 +61,7 @@ class EntityPosition(NamedTuple):
 class RoadRunnerObservation(NamedTuple):
     player: EntityPosition
     enemy: EntityPosition
+    score: jnp.ndarray
 
 
 # --- Main Environment Class ---
@@ -198,6 +200,7 @@ class JaxRoadRunner(
             step_counter=jnp.array(0, dtype=jnp.int32),
             player_is_moving=jnp.array(False, dtype=jnp.bool_),
             player_looks_right=jnp.array(False, dtype=jnp.bool_),
+            score=jnp.array(0, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -208,7 +211,9 @@ class JaxRoadRunner(
     ) -> Tuple[RoadRunnerObservation, RoadRunnerState, float, bool, None]:
         state = self._player_step(state, action)
         state = self._enemy_step(state)
-        state = state._replace(step_counter=state.step_counter + 1)
+        state = state._replace(
+            step_counter=state.step_counter + 1, score=state.score + 1
+        )
 
         done = False  # Game never ends
         reward = 0.0  # No reward
@@ -233,7 +238,7 @@ class JaxRoadRunner(
             width=jnp.array(self.consts.ENEMY_SIZE[0]),
             height=jnp.array(self.consts.ENEMY_SIZE[1]),
         )
-        return RoadRunnerObservation(player=player, enemy=enemy)
+        return RoadRunnerObservation(player=player, enemy=enemy, score=state.score)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -269,10 +274,13 @@ class JaxRoadRunner(
                         "width": spaces.Box(
                             low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
                         ),
-                        "height": spaces.Box(
+                        height: spaces.Box(
                             low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
                         ),
                     }
+                ),
+                "score": spaces.Box(
+                    low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32
                 ),
             }
         )
@@ -345,7 +353,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_sprite: jnp.ndarray,
         wall_sprite_bottom: jnp.ndarray,
     ) -> list:
-        return [
+        asset_config = [
             {"name": "background", "type": "background", "data": background_sprite},
             {"name": "player", "type": "single", "file": "roadrunner_stand.npy"},
             {"name": "player_run1", "type": "single", "file": "roadrunner_run1.npy"},
@@ -353,7 +361,33 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy", "type": "single", "file": "enemy.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
+            {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
         ]
+
+        return asset_config
+
+    def _render_score(self, raster: jnp.ndarray, score: jnp.ndarray) -> jnp.ndarray:
+        score_digits = self.jr.int_to_digits(score, max_digits=6)
+        score_digit_masks = self.SHAPE_MASKS["score_digits"]
+
+        # Position the score at the top center
+        score_x = (
+            self.consts.WIDTH // 2 - (score_digits.shape[0] * 12) // 2
+        )  # Assuming digit width of 12
+        score_y = 16
+
+        raster = self.jr.render_label_selective(
+            raster,
+            score_x,
+            score_y,
+            score_digits,
+            score_digit_masks,
+            0,
+            score_digits.shape[0],
+            spacing=14,
+            max_digits_to_render=6,
+        )
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
@@ -363,6 +397,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         raster = self.jr.render_at(
             raster, 0, self.consts.ROAD_TOP_Y, self.SHAPE_MASKS["road"]
         )
+
+        # Render score
+        raster = self._render_score(raster, state.score)
 
         # Group player sprites for selection
         player_sprites = (
