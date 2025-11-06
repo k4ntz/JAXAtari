@@ -21,7 +21,8 @@ class RoadRunnerConstants(NamedTuple):
     PLAYER_ANIMATION_SPEED: int = 2
     # If the players x coordinate would be below this value after applying movement, we move everything one to the right to simulate movement.
     X_SCROLL_THRESHOLD: int = 50
-    ENEMY_MOVE_SPEED: int = 1
+    ENEMY_MOVE_SPEED: int = 3
+    ENEMY_REACTION_DELAY: int = 6
     PLAYER_START_X: int = 140
     PLAYER_START_Y: int = 96
     ENEMY_X: int = 16
@@ -47,11 +48,15 @@ class RoadRunnerConstants(NamedTuple):
 class RoadRunnerState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
+    player_x_history: chex.Array
+    player_y_history: chex.Array
     enemy_x: chex.Array
     enemy_y: chex.Array
     step_counter: chex.Array
     player_is_moving: chex.Array
     player_looks_right: chex.Array
+    enemy_is_moving: chex.Array
+    enemy_looks_right: chex.Array
     score: chex.Array
     is_scrolling: chex.Array
     scrolling_step_counter: chex.Array
@@ -189,36 +194,63 @@ class JaxRoadRunner(
         # Apply the scroll offset to the player's final position.
         player_x = self._handle_scrolling(state, player_x)
 
+        # Update player position history for enemy AI
+        new_x_history = jnp.roll(state.player_x_history, shift=1)
+        new_x_history = new_x_history.at[0].set(state.player_x)
+        new_y_history = jnp.roll(state.player_y_history, shift=1)
+        new_y_history = new_y_history.at[0].set(state.player_y)
+
         return state._replace(
-            player_x=player_x,
-            player_y=player_y,
+            player_x=player_x.astype(jnp.int32),
+            player_y=player_y.astype(jnp.int32),
             player_is_moving=is_moving,
             player_looks_right=player_looks_right,
+            player_x_history=new_x_history,
+            player_y_history=new_y_history,
         )
 
     def _enemy_step(self, state: RoadRunnerState) -> RoadRunnerState:
-        # Get the direction vector towards the player
-        dir_x = jnp.sign(state.player_x - state.enemy_x)
-        dir_y = jnp.sign(state.player_y - state.enemy_y)
+        # Get the distance to the player, with a configurable frame delay.
+        delayed_player_x = state.player_x_history[self.consts.ENEMY_REACTION_DELAY - 1]
+        delayed_player_y = state.player_y_history[self.consts.ENEMY_REACTION_DELAY - 1]
+        delta_x = delayed_player_x - state.enemy_x
+        delta_y = delayed_player_y - state.enemy_y
 
-        # Update enemy position
-        new_enemy_x = state.enemy_x + dir_x * self.consts.ENEMY_MOVE_SPEED
-        new_enemy_y = state.enemy_y + dir_y * self.consts.ENEMY_MOVE_SPEED
+        # Determine enemy movement and orientation
+        enemy_is_moving = (delta_x != 0) | (delta_y != 0)
+        enemy_looks_right = jax.lax.cond(
+            delta_x > 0,
+            lambda: True,
+            lambda: jax.lax.cond(delta_x < 0, lambda: False, lambda: state.enemy_looks_right),
+        )
+
+        # Update enemy position, clipping movement to ENEMY_MOVE_SPEED to prevent jittering
+        new_enemy_x = state.enemy_x + jnp.clip(delta_x, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED)
+        new_enemy_y = state.enemy_y + jnp.clip(delta_y, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED)
 
         new_enemy_x = self._handle_scrolling(state, new_enemy_x)
 
         new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
-        return state._replace(enemy_x=new_enemy_x, enemy_y=new_enemy_y)
+        return state._replace(
+            enemy_x=new_enemy_x,
+            enemy_y=new_enemy_y,
+            enemy_is_moving=enemy_is_moving,
+            enemy_looks_right=enemy_looks_right,
+        )
 
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
         state = RoadRunnerState(
             player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+            player_x_history=jnp.array([self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY, dtype=jnp.int32),
+            player_y_history=jnp.array([self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY, dtype=jnp.int32),
             enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
             enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
             player_is_moving=jnp.array(False, dtype=jnp.bool_),
             player_looks_right=jnp.array(False, dtype=jnp.bool_),
+            enemy_is_moving=jnp.array(False, dtype=jnp.bool_),
+            enemy_looks_right=jnp.array(False, dtype=jnp.bool_),
             score=jnp.array(0, dtype=jnp.int32),
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
@@ -400,7 +432,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "player", "type": "single", "file": "roadrunner_stand.npy"},
             {"name": "player_run1", "type": "single", "file": "roadrunner_run1.npy"},
             {"name": "player_run2", "type": "single", "file": "roadrunner_run2.npy"},
-            {"name": "enemy", "type": "single", "file": "enemy.npy"},
+            {"name": "enemy", "type": "single", "file": "enemy_stand.npy"},
+            {"name": "enemy_run1", "type": "single", "file": "enemy_run1.npy"},
+            {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
@@ -431,6 +465,37 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
         return raster
 
+    def _get_animated_sprite(
+        self,
+        is_moving: chex.Array,
+        looks_right: chex.Array,
+        step_counter: chex.Array,
+        animation_speed: int,
+        stand_sprite: jnp.ndarray,
+        run1_sprite: jnp.ndarray,
+        run2_sprite: jnp.ndarray,
+    ) -> jnp.ndarray:
+        sprites = (stand_sprite, run1_sprite, run2_sprite)
+        run_frame_idx = (step_counter // animation_speed % 2) + 1
+        sprite_idx = jax.lax.cond(
+            is_moving,
+            lambda: run_frame_idx,
+            lambda: 0,
+        )
+        mask = jax.lax.switch(
+            sprite_idx,
+            [
+                lambda: sprites[0],
+                lambda: sprites[1],
+                lambda: sprites[2],
+            ],
+        )
+        return jax.lax.cond(
+            looks_right,
+            lambda: jnp.fliplr(mask),
+            lambda: mask,
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
@@ -457,46 +522,28 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Render score
         raster = self._render_score(raster, state.score)
 
-        # Group player sprites for selection
-        player_sprites = (
+        # Render Player
+        player_mask = self._get_animated_sprite(
+            state.player_is_moving,
+            state.player_looks_right,
+            state.step_counter,
+            self.consts.PLAYER_ANIMATION_SPEED,
             self.SHAPE_MASKS["player"],
             self.SHAPE_MASKS["player_run1"],
             self.SHAPE_MASKS["player_run2"],
         )
-
-        # Select animation frame based on movement
-        # If moving, cycle between run1 and run2.
-        run_frame_idx = (
-            state.step_counter // self.consts.PLAYER_ANIMATION_SPEED % 2
-        ) + 1
-
-        # Use lax.cond to select sprite index: 0 for stand, 1 or 2 for run
-        sprite_idx = jax.lax.cond(
-            state.player_is_moving,
-            lambda: run_frame_idx,
-            lambda: 0,
-        )
-
-        # Select the sprite mask. jax.lax.switch is efficient for this.
-        player_mask = jax.lax.switch(
-            sprite_idx,
-            [
-                lambda: player_sprites[0],
-                lambda: player_sprites[1],
-                lambda: player_sprites[2],
-            ],
-        )
-
-        # Flip the sprite if player_looks_right is True
-        player_mask = jax.lax.cond(
-            state.player_looks_right,
-            lambda: jnp.fliplr(player_mask),
-            lambda: player_mask,
-        )
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         # Render Enemy
-        enemy_mask = self.SHAPE_MASKS["enemy"]
+        enemy_mask = self._get_animated_sprite(
+            state.enemy_is_moving,
+            state.enemy_looks_right,
+            state.step_counter,
+            self.consts.PLAYER_ANIMATION_SPEED,  # Assuming same speed for now
+            self.SHAPE_MASKS["enemy"],
+            self.SHAPE_MASKS["enemy_run1"],
+            self.SHAPE_MASKS["enemy_run2"],
+        )
         raster = self.jr.render_at(raster, state.enemy_x, state.enemy_y, enemy_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)

@@ -18,9 +18,6 @@ def create_rgba_sprite(mask, color):
     return rgba_sprite
 
 
-# --- Corrected Sprite Masks ---
-
-# Corrected Sprite 1: Road Runner Standing
 roadrunner_stand_mask = np.array(
     [
         [0, 0, 0, 1, 1, 0, 0, 0],
@@ -59,7 +56,6 @@ roadrunner_stand_mask = np.array(
     dtype=np.uint8,
 )
 
-# Corrected Sprite 3: Road Runner Running (Frame 1)
 roadrunner_run1_mask = np.array(
     [
         [0, 0, 0, 0, 1, 1, 0, 0],
@@ -98,7 +94,6 @@ roadrunner_run1_mask = np.array(
     dtype=np.uint8,
 )
 
-# Corrected Sprite 4: Road Runner Running (Frame 2)
 roadrunner_run2_mask = np.array(
     [
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -137,6 +132,120 @@ roadrunner_run2_mask = np.array(
     dtype=np.uint8,
 )
 
+enemy_stand_mask = np.array(
+    [
+        [0, 1, 1, 0, 0, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0, 0, 0],
+        [1, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 1, 1],
+        [0, 1, 1, 1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 0, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [1, 1, 0, 1, 1, 0, 0, 0],
+        [1, 1, 0, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 0],
+    ],
+    dtype=np.uint8,
+)
+
+enemy_run1_mask = np.array(
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 1, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0, 1, 0],
+        [1, 0, 0, 1, 1, 1, 1, 0],
+        [1, 0, 0, 0, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 0, 1, 1, 0, 0],
+        [1, 1, 0, 1, 1, 1, 0, 0],
+        [1, 1, 0, 1, 1, 1, 0, 0],
+        [0, 1, 1, 0, 1, 1, 0, 0],
+        [0, 0, 1, 1, 0, 1, 0, 0],
+        [1, 1, 0, 0, 1, 1, 0, 0],
+        [0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 0],
+        [0, 1, 1, 0, 0, 1, 1, 0],
+        [0, 1, 0, 0, 0, 0, 1, 0],
+        [1, 1, 0, 0, 0, 0, 1, 0],
+        [1, 0, 0, 0, 0, 1, 1, 0],
+        [1, 0, 0, 0, 0, 1, 0, 0],
+        [1, 0, 0, 0, 1, 1, 0, 0],
+        [1, 1, 0, 0, 1, 0, 0, 0],
+        [1, 1, 0, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    dtype=np.uint8,
+)
+
+enemy_run2_mask = np.array(
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 1, 1, 0, 0, 0, 1, 0],
+        [1, 1, 0, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 0, 1, 1, 0, 0],
+        [1, 1, 0, 1, 1, 1, 0, 0],
+        [1, 1, 0, 1, 1, 0, 1, 0],
+        [1, 1, 0, 1, 1, 0, 1, 0],
+        [0, 1, 0, 1, 1, 0, 1, 0],
+        [1, 0, 1, 1, 1, 1, 0, 0],
+        [1, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 1, 1, 1, 1, 0, 0],
+        [0, 1, 1, 0, 0, 1, 1, 0],
+        [0, 1, 0, 0, 0, 0, 1, 0],
+        [1, 1, 0, 0, 0, 0, 1, 0],
+        [1, 0, 0, 0, 0, 1, 1, 0],
+        [1, 0, 0, 0, 0, 1, 0, 0],
+        [1, 0, 0, 0, 1, 1, 0, 0],
+        [1, 1, 0, 1, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    dtype=np.uint8,
+)
+
 if __name__ == "__main__":
     # Define the colors from the game's constants
     PLAYER_COLOR = (73, 81, 209)
@@ -147,10 +256,18 @@ if __name__ == "__main__":
     roadrunner_run1_rgba = create_rgba_sprite(roadrunner_run1_mask, PLAYER_COLOR)
     roadrunner_run2_rgba = create_rgba_sprite(roadrunner_run2_mask, PLAYER_COLOR)
 
+    enemy_stand_rgba = create_rgba_sprite(np.fliplr(enemy_stand_mask), ENEMY_COLOR)
+    enemy_run1_rgba = create_rgba_sprite(np.fliplr(enemy_run1_mask), ENEMY_COLOR)
+    enemy_run2_rgba = create_rgba_sprite(np.fliplr(enemy_run2_mask), ENEMY_COLOR)
+
     # Save the RGBA sprites
     np.save("roadrunner_stand.npy", roadrunner_stand_rgba)
     np.save("roadrunner_run1.npy", roadrunner_run1_rgba)
     np.save("roadrunner_run2.npy", roadrunner_run2_rgba)
+
+    np.save("enemy_stand.npy", enemy_stand_rgba)
+    np.save("enemy_run1.npy", enemy_run1_rgba)
+    np.save("enemy_run2.npy", enemy_run2_rgba)
 
     print(
         "Saved corrected RGBA sprites to roadrunner_stand.npy, roadrunner_run1.npy, and roadrunner_run2.npy"
