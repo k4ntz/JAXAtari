@@ -169,7 +169,21 @@ class JaxRoadRunner(
 
         # --- Update Player Position ---
         vel_x, vel_y = self._handle_input(action)
-        player_x = state.player_x + vel_x
+
+        # Determine if scrolling should happen based on the potential next position.
+        tentative_player_x = state.player_x + vel_x
+        is_scrolling = tentative_player_x < self.consts.X_SCROLL_THRESHOLD
+
+        # When scrolling, the player's horizontal velocity should perfectly counteract the scroll.
+        # This ensures the player stays at a fixed horizontal position on the screen, preventing stutter.
+        # We use the original vel_x for non-scrolling movement.
+        final_vel_x = jax.lax.cond(
+            is_scrolling,
+            lambda: -float(self.consts.PLAYER_MOVE_SPEED),
+            lambda: vel_x,
+        )
+
+        player_x = state.player_x + final_vel_x
         player_y = state.player_y + vel_y
 
         player_x, player_y = self._check_bounds(player_x, player_y)
@@ -185,14 +199,15 @@ class JaxRoadRunner(
             ),
         )
 
-        is_scrolling = player_x < self.consts.X_SCROLL_THRESHOLD
+        # Update the state with the scrolling flag for other parts of the game (e.g., rendering).
         state = state._replace(is_scrolling=is_scrolling)
         state = jax.lax.cond(
             state.is_scrolling,
-            lambda: state._replace(scrolling_step_counter=state.scrolling_step_counter+1),
+            lambda: state._replace(scrolling_step_counter=state.scrolling_step_counter + 1),
             lambda: state,
         )
 
+        # Apply the scroll offset to the player's final position.
         player_x = self._handle_scrolling(state, player_x)
 
         return state._replace(
