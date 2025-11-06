@@ -20,12 +20,13 @@ from jaxatari.environment import (
 )
 from jaxatari.spaces import Space
 
+
 class DefenderConstants(NamedTuple):
     MAX_SPEED: int = 12
     ENEMY_STEP_SIZE: int = 2
     WIDTH: int = 160
     HEIGHT: int = 210
-    PLAYER_ACCELERATION: chex.Array = 1
+    PLAYER_ACCELERATION: int = 1
     BACKGROUND_COLOR: Tuple[int, int, int] = (144, 72, 17)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     SCORE_COLOR: Tuple[int, int, int] = (236, 236, 236)
@@ -37,6 +38,10 @@ class DefenderConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 10
     WALL_BOTTOM_Y: int = 194
     WALL_BOTTOM_HEIGHT: int = 16
+    CAMERA_OFFSET_MAX: int = 40
+    CAMERA_WIDTH: int = 160
+    CAMERA_X: int = 80
+    CAMERA_Y: int = 80
 
 
 # immutable state container
@@ -44,6 +49,8 @@ class DefenderState(NamedTuple):
     space_ship_speed: chex.Array
     space_ship_x: chex.Array
     space_ship_y: chex.Array
+    space_ship_facing_right: chex.Array
+    camera_offset: chex.Array
     step_counter: chex.Array
 
 
@@ -64,11 +71,11 @@ class DefenderInfo(NamedTuple):
 
 
 class DefenderRenderer(JAXGameRenderer):
-    def __init__(self, consts: DefenderConstants  = None):
+    def __init__(self, consts: DefenderConstants = None):
         super().__init__()
         self.consts = consts or DefenderConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(210, 320),
             channels=3,
             # downscale=(84, 84)
         )
@@ -86,21 +93,22 @@ class DefenderRenderer(JAXGameRenderer):
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
-            self.FLIP_OFFSETS
+            self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-
 
     def _get_space_ship_sprite(self) -> jnp.ndarray:
         space_ship_color = (*self.consts.SCORE_COLOR, 255)
-        space_ship_sprite = jnp.tile(jnp.array(space_ship_color, dtype=jnp.uint8), (5, 5, 1))
+        space_ship_sprite = jnp.tile(
+            jnp.array(space_ship_color, dtype=jnp.uint8), (5, 5, 1)
+        )
         return space_ship_sprite
 
     def _get_asset_config(self, space_ship_sprite: jnp.ndarray) -> list:
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {"name": "background", "type": "background", "file": "background.npy"},
             # Add the procedurally created sprites to the manifest
-            {'name': 'space_ship', 'type': 'procedural', 'data': space_ship_sprite},
+            {"name": "space_ship", "type": "procedural", "data": space_ship_sprite},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -109,17 +117,21 @@ class DefenderRenderer(JAXGameRenderer):
 
         space_ship_mask = self.SHAPE_MASKS["space_ship"]
 
-        raster = self.jr.render_at(raster, state.space_ship_x, state.space_ship_y, space_ship_mask)
+        raster = self.jr.render_at(
+            raster,
+            self.consts.CAMERA_X - state.camera_offset,
+            state.space_ship_y,
+            space_ship_mask,
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
-           
 
 
 class JaxDefender(
     JaxEnvironment[DefenderState, DefenderObservation, DefenderInfo, DefenderConstants]
 ):
 
-    def __init__(self, consts: DefenderConstants  = None):
+    def __init__(self, consts: DefenderConstants = None):
         consts = consts or DefenderConstants()
         super().__init__(consts)
         self.renderer = DefenderRenderer(self.consts)
@@ -145,16 +157,72 @@ class JaxDefender(
         ]
 
     def _player_step(self, state: DefenderState, action: chex.Array) -> DefenderState:
-        left = jnp.any(jnp.array([action == Action.LEFT, action == Action.LEFTFIRE, action == Action.UPLEFT, action == Action.DOWNLEFT, action == Action.UPLEFTFIRE, action == Action.DOWNLEFTFIRE]))
-        right = jnp.any(jnp.array([action == Action.RIGHT, action == Action.RIGHTFIRE, action == Action.UPRIGHT, action == Action.DOWNRIGHT, action == Action.UPRIGHTFIRE, action == Action.DOWNRIGHTFIRE]))
-        up = jnp.any(jnp.array([action == Action.UP, action == Action.UPFIRE, action == Action.UPRIGHT, action == Action.UPLEFT, action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE]))
-        down = jnp.any(jnp.array([action == Action.DOWN, action == Action.DOWNFIRE, action == Action.DOWNRIGHT, action == Action.DOWNLEFT, action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE]))
+        left = jnp.any(
+            jnp.array(
+                [
+                    action == Action.LEFT,
+                    action == Action.LEFTFIRE,
+                    action == Action.UPLEFT,
+                    action == Action.DOWNLEFT,
+                    action == Action.UPLEFTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                ]
+            )
+        )
+        right = jnp.any(
+            jnp.array(
+                [
+                    action == Action.RIGHT,
+                    action == Action.RIGHTFIRE,
+                    action == Action.UPRIGHT,
+                    action == Action.DOWNRIGHT,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.DOWNRIGHTFIRE,
+                ]
+            )
+        )
+        up = jnp.any(
+            jnp.array(
+                [
+                    action == Action.UP,
+                    action == Action.UPFIRE,
+                    action == Action.UPRIGHT,
+                    action == Action.UPLEFT,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.UPLEFTFIRE,
+                ]
+            )
+        )
+        down = jnp.any(
+            jnp.array(
+                [
+                    action == Action.DOWN,
+                    action == Action.DOWNFIRE,
+                    action == Action.DOWNRIGHT,
+                    action == Action.DOWNLEFT,
+                    action == Action.DOWNRIGHTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                ]
+            )
+        )
 
         direction_x = jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
         direction_y = jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
 
-        space_ship_speed = state.space_ship_speed + direction_x * self.consts.PLAYER_ACCELERATION
-        space_ship_speed = jnp.clip(space_ship_speed, -self.consts.MAX_SPEED, self.consts.MAX_SPEED)
+        space_ship_facing_right = state.space_ship_facing_right
+        space_ship_facing_right = jax.lax.cond(
+            direction_x != 0,
+            lambda _: direction_x > 0,
+            lambda _: state.space_ship_facing_right,
+            operand=None,
+        )
+
+        space_ship_speed = (
+            state.space_ship_speed + direction_x * self.consts.PLAYER_ACCELERATION
+        )
+        space_ship_speed = jnp.clip(
+            space_ship_speed, -self.consts.MAX_SPEED, self.consts.MAX_SPEED
+        )
 
         space_ship_x = state.space_ship_x + space_ship_speed
         space_ship_y = state.space_ship_y + direction_y
@@ -163,7 +231,29 @@ class JaxDefender(
             space_ship_speed=space_ship_speed,
             space_ship_x=space_ship_x,
             space_ship_y=space_ship_y,
+            space_ship_facing_right=space_ship_facing_right,
+            camera_offset=state.camera_offset,
             step_counter=state.step_counter + 1,
+        )
+
+    def _camera_step(self, state: DefenderState) -> DefenderState:
+        offset_gain = 2
+        camera_offset = state.camera_offset
+        camera_offset += jnp.where(state.space_ship_facing_right, 1, -1) * offset_gain
+
+        camera_offset = jnp.clip(
+            camera_offset,
+            -self.consts.CAMERA_OFFSET_MAX,
+            self.consts.CAMERA_OFFSET_MAX,
+        )
+
+        return DefenderState(
+            space_ship_speed=state.space_ship_speed,
+            space_ship_x=state.space_ship_x,
+            space_ship_y=state.space_ship_y,
+            space_ship_facing_right=state.space_ship_facing_right,
+            camera_offset=camera_offset,
+            step_counter=state.step_counter,
         )
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
@@ -171,20 +261,24 @@ class JaxDefender(
             space_ship_speed=jnp.array(0).astype(jnp.int32),
             space_ship_x=jnp.array(20).astype(jnp.int32),
             space_ship_y=jnp.array(100).astype(jnp.int32),
+            space_ship_facing_right=jnp.array(True, dtype=jnp.bool_),
             step_counter=jnp.array(0).astype(jnp.int32),
+            camera_offset=jnp.array(0).astype(jnp.int32),
         )
         observation = self._get_observation(initial_state)
         return observation, initial_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: DefenderState, action: chex.Array) -> Tuple[DefenderObservation, DefenderState, float, bool, DefenderInfo]:
+    def step(
+        self, state: DefenderState, action: chex.Array
+    ) -> Tuple[DefenderObservation, DefenderState, float, bool, DefenderInfo]:
         state = self._player_step(state, action)
+        state = self._camera_step(state)
         observation = self._get_observation(state)
         env_reward = self._get_reward(state, state)
         done = self._get_done(state)
         info = self._get_info(state)
         return observation, state, env_reward, done, info
-
 
     def render(self, state: DefenderState) -> jnp.ndarray:
         return self.renderer.render(state)
