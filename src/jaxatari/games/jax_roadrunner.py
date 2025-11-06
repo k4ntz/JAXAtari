@@ -19,6 +19,8 @@ class RoadRunnerConstants(NamedTuple):
     HEIGHT: int = 210
     PLAYER_MOVE_SPEED: int = 4
     PLAYER_ANIMATION_SPEED: int = 2
+    # If the players x coordinate would be below this value after applying movement, we move everything one to the right to simulate movement.
+    X_SCROLL_THRESHOLD: int = 50
     ENEMY_MOVE_SPEED: int = 1
     PLAYER_START_X: int = 140
     PLAYER_START_Y: int = 96
@@ -32,7 +34,6 @@ class RoadRunnerConstants(NamedTuple):
     WALL_BOTTOM_HEIGHT: int = 16
     ROAD_HEIGHT: int = 90
     ROAD_TOP_Y: int = 110
-    ROAD_ANIMATION_SPEED: int = 1
     ROAD_DASH_LENGTH: int = 5
     ROAD_GAP_HEIGHT: int = 17
     ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
@@ -52,6 +53,8 @@ class RoadRunnerState(NamedTuple):
     player_is_moving: chex.Array
     player_looks_right: chex.Array
     score: chex.Array
+    is_scrolling: chex.Array
+    scrolling_step_counter: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -153,6 +156,11 @@ class JaxRoadRunner(
         )
         return (checked_x, checked_y)
 
+    def _handle_scrolling(self, state: RoadRunnerState, player_x):
+        state = state._replace(scrolling_step_counter=state.scrolling_step_counter + 1)
+        player_x = player_x + self.consts.PLAYER_MOVE_SPEED
+        return state, player_x
+
     def _player_step(
         self, state: RoadRunnerState, action: chex.Array
     ) -> RoadRunnerState:
@@ -175,6 +183,15 @@ class JaxRoadRunner(
             ),
         )
 
+        is_scrolling = player_x < self.consts.X_SCROLL_THRESHOLD
+        state = state._replace(is_scrolling=is_scrolling)
+
+        state, player_x = jax.lax.cond(
+            state.is_scrolling,
+            lambda: self._handle_scrolling(state, player_x),
+            lambda: (state, player_x),
+        )
+
         return state._replace(
             player_x=player_x,
             player_y=player_y,
@@ -191,6 +208,14 @@ class JaxRoadRunner(
         new_enemy_x = state.enemy_x + dir_x * self.consts.ENEMY_MOVE_SPEED
         new_enemy_y = state.enemy_y + dir_y * self.consts.ENEMY_MOVE_SPEED
 
+        # Handle scrolling
+        new_enemy_x = jax.lax.cond(
+            state.is_scrolling,
+            # move the enemy backwards by the player speed to simulate moving down the road
+            lambda: new_enemy_x + self.consts.PLAYER_MOVE_SPEED,
+            lambda: new_enemy_x,
+        )
+
         new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
         return state._replace(enemy_x=new_enemy_x, enemy_y=new_enemy_y)
 
@@ -204,6 +229,8 @@ class JaxRoadRunner(
             player_is_moving=jnp.array(False, dtype=jnp.bool_),
             player_looks_right=jnp.array(False, dtype=jnp.bool_),
             score=jnp.array(0, dtype=jnp.int32),
+            is_scrolling=jnp.array(False, dtype=jnp.bool_),
+            scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -422,7 +449,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Calculate the horizontal offset for scrolling
         offset = PATTERN_WIDTH - (
-            (state.step_counter * self.consts.ROAD_ANIMATION_SPEED) % PATTERN_WIDTH
+            (state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED)
+            % PATTERN_WIDTH
         )
 
         # Slice the wide road mask to get the current frame's view
