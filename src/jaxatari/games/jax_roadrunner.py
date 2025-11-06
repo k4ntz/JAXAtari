@@ -156,10 +156,12 @@ class JaxRoadRunner(
         )
         return (checked_x, checked_y)
 
-    def _handle_scrolling(self, state: RoadRunnerState, player_x):
-        state = state._replace(scrolling_step_counter=state.scrolling_step_counter + 1)
-        player_x = player_x + self.consts.PLAYER_MOVE_SPEED
-        return state, player_x
+    def _handle_scrolling(self, state: RoadRunnerState, x_pos: chex.Array):
+        return jax.lax.cond(
+            state.is_scrolling,
+            lambda: x_pos + self.consts.PLAYER_MOVE_SPEED,
+            lambda: x_pos,
+        )
 
     def _player_step(
         self, state: RoadRunnerState, action: chex.Array
@@ -185,12 +187,13 @@ class JaxRoadRunner(
 
         is_scrolling = player_x < self.consts.X_SCROLL_THRESHOLD
         state = state._replace(is_scrolling=is_scrolling)
-
-        state, player_x = jax.lax.cond(
+        state = jax.lax.cond(
             state.is_scrolling,
-            lambda: self._handle_scrolling(state, player_x),
-            lambda: (state, player_x),
+            lambda: state._replace(scrolling_step_counter=state.scrolling_step_counter+1),
+            lambda: state,
         )
+
+        player_x = self._handle_scrolling(state, player_x)
 
         return state._replace(
             player_x=player_x,
@@ -208,13 +211,7 @@ class JaxRoadRunner(
         new_enemy_x = state.enemy_x + dir_x * self.consts.ENEMY_MOVE_SPEED
         new_enemy_y = state.enemy_y + dir_y * self.consts.ENEMY_MOVE_SPEED
 
-        # Handle scrolling
-        new_enemy_x = jax.lax.cond(
-            state.is_scrolling,
-            # move the enemy backwards by the player speed to simulate moving down the road
-            lambda: new_enemy_x + self.consts.PLAYER_MOVE_SPEED,
-            lambda: new_enemy_x,
-        )
+        new_enemy_x = self._handle_scrolling(state, new_enemy_x)
 
         new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
         return state._replace(enemy_x=new_enemy_x, enemy_y=new_enemy_y)
