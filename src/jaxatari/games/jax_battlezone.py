@@ -23,10 +23,10 @@ class BattlezoneConstants(NamedTuple):
     WIDTH: int = 160  #rgb_array size
     HEIGHT: int = 210
     SCORE_COLOR: Tuple[int, int, int] = (236, 236, 236)#(45, 129, 105) but we need to change pallette first
-    WALL_TOP_Y: int = 24
-    WALL_TOP_HEIGHT: int = 10
-    WALL_BOTTOM_Y: int = 194
-    WALL_BOTTOM_HEIGHT: int = 16
+    WALL_TOP_Y: int = 0     #correct
+    WALL_TOP_HEIGHT: int = 36   #correct
+    WALL_BOTTOM_Y: int = 177    #correct
+    WALL_BOTTOM_HEIGHT: int = 33    #correct
 
 
 # immutable state container
@@ -80,8 +80,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         return BattlezoneState(
-            score=jnp.array(0),
-            step_counter=jnp.array(0),
+            score=state.step_counter,
+            step_counter=state.step_counter,
         )
 
 
@@ -98,15 +98,15 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
     def step(self, state: BattlezoneState, action: chex.Array) -> Tuple[BattlezoneObservation, BattlezoneState,\
                 float, bool, BattlezoneInfo]:
         previous_state = state
-        state.step_counter +=1
-        state = self._player_step(state, action)
+        new_state = state._replace(step_counter=state.step_counter+1)
+        new_state = self._player_step(new_state, action)
 
-        done = self._get_done(state)
-        env_reward = self._get_reward(previous_state, state)
-        info = self._get_info(state)
-        observation = self._get_observation(state)
+        done = self._get_done(new_state)
+        env_reward = self._get_reward(previous_state, new_state)
+        info = self._get_info(new_state)
+        observation = self._get_observation(new_state)
 
-        return observation, state, env_reward, done, info
+        return observation, new_state, env_reward, done, info
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
@@ -228,17 +228,17 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #---------------------------player score--------------------change later cuz we have 3 digits
         # Stamp Score using the label utility
-        player_digits = self.jr.int_to_digits(state.score, max_digits=2)
+        score = state.step_counter #:)
+        player_digits = self.jr.int_to_digits(score, max_digits=2)
         # Note: The logic for single/double digits is complex for a jitted function.
         player_digit_masks = self.SHAPE_MASKS["player_digits"]  # Assumes single color
 
-        is_player_single_digit = state.score < 10
+        is_player_single_digit = score < 10
         player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
         player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
         player_render_x = jax.lax.select(is_player_single_digit,
                                          120 + 16 // 2,
                                          120)
-
         raster = self.jr.render_label_selective(raster, player_render_x, 3, player_digits, player_digit_masks,
                                                 player_start_index, player_num_to_render, spacing=16)
         #--------------------------------------------------------------------
@@ -278,4 +278,9 @@ def try_gym_battlezone_pixel():
 if __name__ == "__main__":
     env = JaxBattlezone()
     initial_obs, state = env.reset()
-    obs, state, env_reward, done, info = env.step(state, 0)
+    for i in range(10):
+        obs, state, env_reward, done, info = env.step(state, 0)
+        print(state.step_counter)
+
+
+    #try_gym_battlezone_pixel()
