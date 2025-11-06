@@ -11,12 +11,32 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+"""Per-lane car movement timing (frames per pixel, sign = direction).
+Negative values move left, positive values move right. Absolute value is the
+frame interval at which the car advances by one pixel.
+THIS IS THE CONSTANT THAT DEFINES THE 10 DIFFERENT PATTERNS.
+"""
+CAR_UPDATE: List[int] = [
+    -5,  # Lane 0
+    -4,  # Lane 1
+    -3,  # Lane 2
+    -2,  # Lane 3
+    -1,  # Lane 4
+    1,   # Lane 5
+    2,   # Lane 6
+    3,   # Lane 7
+    4,   # Lane 8
+    5,   # Lane 9
+]
+
+ 
+
 class FreewayConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     chicken_width: int = 6
     chicken_height: int = 8
-    chicken_x: int = 40  # Fixed x position
+    chicken_x: int = 44  # Fixed x position
     car_width: int = 8
     car_height: int = 10
     num_lanes: int = 10
@@ -26,19 +46,45 @@ class FreewayConstants(NamedTuple):
     top_border: int = 15
     top_path: int = 8
     bottom_border: int = 180
-    # Upper 5 lanes move left (-), lower 5 lanes move right (+)
-    # Value at i is the frequency in which car at lane i moves one pixel
-    car_update = [
-        -5,  # Lane 0
-        -4,  # Lane 1
-        -3,  # Lane 2
-        -2,  # Lane 3
-        -1,  # Lane 4
-        1,  # Lane 5
-        2,  # Lane 6
-        3,  # Lane 7
-        4,  # Lane 8
-        5,  # Lane 9
+    # Collision response tuning
+    throw_back_frames: int = 24  # frames the chicken is pushed back after hit
+    stun_frames: int = 28        # frames the chicken cannot move after hit
+    # After scoring (reaching the top and resetting), prevent movement for N frames
+    post_score_stun_frames: int = 28
+    # Vertical offset to apply to chicken spawn after scoring (positive = lower on screen)
+    post_score_spawn_offset_y: int = 1
+    # Collision box insets (shrink AABB without changing render sizes)
+    chicken_hit_inset_x: int = 1
+    chicken_hit_inset_y_top: int = -2    # Top edge of chicken (when cars approach from above)
+    chicken_hit_inset_y_bottom: int = 0 # Bottom edge of chicken (when cars approach from below)
+    car_hit_inset_x: int = 0
+    car_hit_inset_y_top: int = 2        # Top edge of car (for cars approaching from above)
+    car_hit_inset_y_bottom: int = 0     # Bottom edge of car (for cars approaching from below)
+    # Fine-tune horizontal respawn offset applied when wrapping
+    # Positive shifts right-moving lanes further right on re-entry (and vice versa for left-moving)
+    respawn_offset: int = 8
+    # Fine-tune vertical car alignment within each lane (applied at reset)
+    car_y_offset: int = 1
+    # Per-lane cadence phase offset (frames) for N-frame movement; allows aligning cadence to reference
+    cadence_phase_offset: List[int] = (
+        -2, -2, -2, 0, 0,
+        0, 0, -2, -2, 3
+    )
+    # This list defines the period and direction for each lane's pattern
+    car_update = CAR_UPDATE
+    # Per-lane initial phase offsets in pixels to align with ALE (applied to x at reset)
+    # Lanes 0-4 move left; lanes 5-9 move right
+    lane_phase_offset = [
+        5,  # lane 0 (+5 px)
+        5,  # lane 1
+        5,  # lane 2
+        5,  # lane 3
+        6,  # lane 4
+        156, # lane 5 (+157 px)
+        157, # lane 6
+        157, # lane 7
+        157, # lane 8
+        157, # lane 9
     ]
     # Upper 5 lanes move left (-), lower 5 lanes move right (+)
     # Value at i is the frequency in which car at lane i moves one pixel
@@ -63,7 +109,9 @@ class FreewayState(NamedTuple):
     """Represents the current state of the game"""
 
     chicken_y: chex.Array
-    cars: chex.Array  # Shape: (num_lanes, 2) for x,y positions
+    cars: chex.Array  # Shape: (num_lanes, 2) for x,y positions (ints for render/collide)
+    # Per-lane cadence counters (frames), advance independently to sync movement patterns per lane
+    lane_time: chex.Array
     score: chex.Array
     time: chex.Array
     cooldown: chex.Array  # Cooldown after collision
@@ -110,7 +158,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 self.consts.lane_borders[lane]
                 + int(self.consts.lane_spacing / 2)
                 - int(self.consts.car_height / 2)
-            )
+            ) + int(self.consts.car_y_offset)
             # Upper 5 lanes start from right, lower 5 lanes start from left
             if lane < 5:
                 x = (
@@ -120,9 +168,19 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 x = 0  # Start from left
             cars.append([x, lane_y])
 
+        cars = jnp.array(cars, dtype=jnp.int32)
+        # Apply per-lane phase offsets
+        phase = jnp.array(self.consts.lane_phase_offset, dtype=jnp.int32)
+        cars = cars.at[:, 0].add(phase)
+
+        # Initialize per-lane cadence counters using configured phase offsets
+        periods0 = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        phases0 = jnp.array(self.consts.cadence_phase_offset, dtype=jnp.int32) % periods0
+
         state = FreewayState(
             chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
-            cars=jnp.array(cars, dtype=jnp.int32),
+            cars=cars,
+            lane_time=phases0,
             score=jnp.array(0, dtype=jnp.int32),
             time=jnp.array(0, dtype=jnp.int32),
             cooldown=jnp.array(0, dtype=jnp.int32),
@@ -138,13 +196,16 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         """Take a step in the game given an action"""
         # Update chicken position if not in cooldown
         dy = jnp.where(
-            jnp.logical_and(state.cooldown > 30, state.cooldown < 54), # throw the chicken back for 24 frames
+            jnp.logical_and(
+                state.cooldown > self.consts.stun_frames,
+                state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
+            ),
             1.0,
             jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
         )
 
         dy = jnp.where(
-            jnp.logical_and(state.cooldown > 0, state.cooldown < 30), # stun the chicken for 30 frames
+            jnp.logical_and(state.cooldown > 0, state.cooldown <= self.consts.stun_frames),
             0.0,
             dy,
         )
@@ -161,45 +222,62 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             self.consts.bottom_border + self.consts.chicken_height - 1,
         ).astype(jnp.int32)
 
-        # Update car positions
-        new_cars = state.cars
-        for lane in range(self.consts.num_lanes):
-            # Update x position based on lane speed
-            dir = (
-                self.consts.car_update[lane] / jnp.abs(self.consts.car_update[lane])
-            ).astype(jnp.int32)
-            new_x = jax.lax.cond(
-                jnp.equal(jnp.mod(state.time, self.consts.car_update[lane]), 0),
-                lambda: state.cars[lane, 0] + dir,
-                lambda: state.cars[lane, 0],
-            )
+        # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATE
+        periods = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        signs = jnp.sign(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        # Per-lane cadence counters: move when the counter reaches period-1, then keep advancing
+        should_move_mask = (state.lane_time == (periods - 1))
+        delta_x = jnp.where(should_move_mask, signs, 0).astype(jnp.int32)
 
-            # Wrap around screen
-            new_x = jnp.where(
-                self.consts.car_update[lane] > 0,
-                jnp.where(
-                    new_x > self.consts.screen_width, -self.consts.car_width, new_x
-                ),
-                jnp.where(
-                    new_x < -self.consts.car_width, self.consts.screen_width, new_x
-                ),
-            ).astype(jnp.int32)
+        # Apply moves to integer x positions
+        pre_x = state.cars[:, 0]
+        x_int = pre_x + delta_x
 
-            new_cars = new_cars.at[lane, 0].set(new_x)
+        # Wrap positions to [-car_width, screen_width)
+        range_len_i = self.consts.screen_width + self.consts.car_width
+        x_int_wrapped = ((x_int + self.consts.car_width) % range_len_i) - self.consts.car_width
+
+        # Apply respawn offset only to entries that wrapped this frame
+        wrapped_right = jnp.logical_and(signs > 0, x_int >= self.consts.screen_width)
+        wrapped_left = jnp.logical_and(signs < 0, x_int < -self.consts.car_width)
+
+        offset = jnp.asarray(self.consts.respawn_offset, dtype=jnp.int32)
+        adjusted = x_int_wrapped
+        adjusted = jnp.where(wrapped_right, x_int_wrapped + offset, adjusted)
+        adjusted = jnp.where(wrapped_left, x_int_wrapped - offset, adjusted)
+        # Keep within valid range after offset
+        adjusted = jnp.clip(adjusted, -self.consts.car_width, self.consts.screen_width - 1)
+
+        # Update integer car positions
+        new_cars = state.cars.at[:, 0].set(adjusted.astype(jnp.int32))
+
+        # Advance per-lane cadence counters
+        new_lane_time = (state.lane_time + 1) % periods
 
         # Check for collisions
         def check_collision(car_pos):
             car_x, car_y = car_pos
-            return jnp.logical_and(
-                self.consts.chicken_x < car_x + self.consts.car_width,
-                jnp.logical_and(
-                    self.consts.chicken_x + self.consts.chicken_width > car_x,
-                    jnp.logical_and(
-                        state.chicken_y - self.consts.chicken_height < car_y,
-                        state.chicken_y > car_y - self.consts.car_height,
-                    ),
-                ),
-            )
+            # Chicken AABB with insets
+            cxi = jnp.asarray(self.consts.chicken_hit_inset_x, dtype=jnp.int32)
+            cyi_top = jnp.asarray(self.consts.chicken_hit_inset_y_top, dtype=jnp.int32)
+            cyi_bottom = jnp.asarray(self.consts.chicken_hit_inset_y_bottom, dtype=jnp.int32)
+            ch_x0 = self.consts.chicken_x + cxi
+            ch_x1 = self.consts.chicken_x + self.consts.chicken_width - cxi
+            ch_y0 = state.chicken_y - self.consts.chicken_height + cyi_top
+            ch_y1 = state.chicken_y - cyi_bottom
+
+            # Car AABB with insets
+            kxi = jnp.asarray(self.consts.car_hit_inset_x, dtype=jnp.int32)
+            kyi_top = jnp.asarray(self.consts.car_hit_inset_y_top, dtype=jnp.int32)
+            kyi_bottom = jnp.asarray(self.consts.car_hit_inset_y_bottom, dtype=jnp.int32)
+            car_x0 = car_x + kxi
+            car_x1 = car_x + self.consts.car_width - kxi
+            car_y0 = car_y - self.consts.car_height + kyi_top
+            car_y1 = car_y - kyi_bottom
+
+            overlap_x = jnp.logical_and(ch_x0 < car_x1, ch_x1 > car_x0)
+            overlap_y = jnp.logical_and(ch_y0 < car_y1, ch_y1 > car_y0)
+            return jnp.logical_and(overlap_x, overlap_y)
 
         # Check collisions for all cars
         collisions = jax.vmap(check_collision)(new_cars)
@@ -211,7 +289,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         # Update cooldown
         new_cooldown = jnp.where(
             any_collision,
-            24 + 30,  # Set cooldown frames after collision (24 frames of flying backwards, 30 frames of being "stunned")
+            self.consts.throw_back_frames + self.consts.stun_frames,
             jnp.maximum(0, state.cooldown - 1),
         ).astype(jnp.int32)
 
@@ -221,11 +299,19 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         ).astype(jnp.int32)
 
         # Reset chicken position if scored
+        scored = new_y <= self.consts.top_border
         new_y = jnp.where(
-            new_y <= self.consts.top_border,
-            self.consts.bottom_border + self.consts.chicken_height - 1,
+            scored,
+            self.consts.bottom_border + self.consts.chicken_height - 1 + self.consts.post_score_spawn_offset_y,
             new_y,
         ).astype(jnp.int32)
+
+        # Apply a post-score stun to prevent immediate movement after crossing once
+        new_cooldown = jnp.where(
+            scored,
+            jnp.maximum(new_cooldown, jnp.asarray(self.consts.post_score_stun_frames, dtype=jnp.int32)),
+            new_cooldown,
+        )
 
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
@@ -246,6 +332,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         new_state = FreewayState(
             chicken_y=new_y,
             cars=new_cars,
+            lane_time=new_lane_time,
             score=new_score,
             time=new_time,
             cooldown=new_cooldown,
