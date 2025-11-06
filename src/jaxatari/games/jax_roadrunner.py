@@ -32,6 +32,10 @@ class RoadRunnerConstants(NamedTuple):
     WALL_BOTTOM_HEIGHT: int = 16
     ROAD_HEIGHT: int = 90
     ROAD_TOP_Y: int = 110
+    ROAD_ANIMATION_SPEED: int = 1
+    ROAD_DASH_LENGTH: int = 5
+    ROAD_GAP_HEIGHT: int = 17
+    ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
     BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
@@ -330,46 +334,35 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
 
     def _create_road_sprite(self) -> jnp.ndarray:
+        ROAD_HEIGHT = self.consts.ROAD_HEIGHT
+        WIDTH = self.consts.WIDTH
+        DASH_LENGTH = self.consts.ROAD_DASH_LENGTH
+        GAP_HEIGHT = self.consts.ROAD_GAP_HEIGHT
+        PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
 
-        ROAD_HEIGHT = self.consts.ROAD_HEIGHT  # 90
-        DASH_LENGTH = 5
-        GAP_HEIGHT = 17
-
-        assert ROAD_HEIGHT % (GAP_HEIGHT + 1) == 0
-        assert self.consts.WIDTH % (DASH_LENGTH * 4) == 0
+        # Create a wider road for scrolling
+        SCROLL_WIDTH = WIDTH + PATTERN_WIDTH
 
         road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
-        marking_color_rgba = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)  # White
+        marking_color_rgba = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
 
-        solid_black_strip = jnp.tile(road_color_rgba, (ROAD_HEIGHT, DASH_LENGTH, 1))
-        gap_rect = jnp.tile(road_color_rgba, (GAP_HEIGHT, DASH_LENGTH, 1))
-        dash_rect = jnp.tile(marking_color_rgba, (1, DASH_LENGTH, 1))
-        dash_pattern_unit = jnp.concatenate([gap_rect, dash_rect], axis=0)
+        # Create a coordinate grid for the wider sprite
+        y, x = jnp.indices((ROAD_HEIGHT, SCROLL_WIDTH))
 
-        num_reps = int(ROAD_HEIGHT / (GAP_HEIGHT + 1)) - 1
-        gap_rect = jnp.tile(road_color_rgba, (GAP_HEIGHT + 1, DASH_LENGTH, 1))
-        dashed_line_strip = jnp.tile(dash_pattern_unit, (num_reps, 1, 1))
-        dashed_line_strip = jnp.concatenate([dashed_line_strip, gap_rect], axis=0)
+        # Define the pattern using modular arithmetic
+        is_marking_col = (x % PATTERN_WIDTH) >= (3 * DASH_LENGTH)
+        is_marking_row = (y % (GAP_HEIGHT + 1)) == GAP_HEIGHT
+        is_not_last_row = y < (ROAD_HEIGHT - 1)
+        is_marking = is_marking_col & is_marking_row & is_not_last_row
 
-        base_pattern = jnp.concatenate(
-            [
-                solid_black_strip,
-                solid_black_strip,
-                solid_black_strip,
-                dashed_line_strip,
-            ],
-            axis=1,
+        # Use jnp.where to create the sprite from the pattern
+        road_sprite = jnp.where(
+            is_marking[:, :, jnp.newaxis],
+            marking_color_rgba,
+            road_color_rgba,
         )
 
-        num_reps = int(self.consts.WIDTH / (DASH_LENGTH * 4))
-
-        solid_black_strip = jnp.tile(
-            road_color_rgba, (GAP_HEIGHT + 1, self.consts.WIDTH, 1)
-        )
-
-        final_road = jnp.tile(base_pattern, (1, num_reps, 1))
-
-        return final_road
+        return road_sprite
 
     def _create_wall_sprite(self, height: int) -> jnp.ndarray:
         wall_color_rgba = (*self.consts.WALL_COLOR, 255)
@@ -424,10 +417,23 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Render Road
-        raster = self.jr.render_at(
-            raster, 0, self.consts.ROAD_TOP_Y, self.SHAPE_MASKS["road"]
+        # --- Animate Road ---
+        PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
+
+        # Calculate the horizontal offset for scrolling
+        offset = PATTERN_WIDTH - (
+            (state.step_counter * self.consts.ROAD_ANIMATION_SPEED) % PATTERN_WIDTH
         )
+
+        # Slice the wide road mask to get the current frame's view
+        road_mask = jax.lax.dynamic_slice(
+            self.SHAPE_MASKS["road"],
+            (0, offset),
+            (self.consts.ROAD_HEIGHT, self.consts.WIDTH),
+        )
+
+        # Render the sliced road portion
+        raster = self.jr.render_at(raster, 0, self.consts.ROAD_TOP_Y, road_mask)
 
         # Render score
         raster = self._render_score(raster, state.score)
