@@ -27,6 +27,8 @@ class BattlezoneConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 36   #correct
     WALL_BOTTOM_Y: int = 177    #correct
     WALL_BOTTOM_HEIGHT: int = 33    #correct
+    TANK_SPRITE_POS_X: int = 155
+    TANK_SPRITE_POS_Y: int = 52
 
 
 # immutable state container
@@ -269,18 +271,59 @@ def try_gym_battlezone_pixel():
     for i in range(1000):
         action = 3
         obs, reward, terminated, truncated, info = env.step(action)
+        extract_sprite(obs, [[26,102,26], [0,68,0], [111,111,111]])
         if i%stepsize==0:
             im = plt.imshow(obs, interpolation='none', aspect='auto')
             plt.show()
     env.close()
 
 
+import numpy as np
+
+
+def extract_sprite(rgb_array, color_list, filename="output_rgba.npy"):
+    h, w = rgb_array.shape[:2]
+    if rgb_array.shape[-1] == 3: #we need rgba
+        rgba = np.concatenate([rgb_array, np.full((h, w, 1), 255, dtype=np.uint8)], axis=-1)
+    else:
+        rgba = rgb_array.copy()
+
+    # Create a mask for all pixels matching any color in color_list
+    mask = np.zeros((h, w), dtype=bool)
+    for color in color_list:
+        color = np.array(color)
+        mask |= np.all(rgba[..., :3] == color, axis=-1)
+
+    # Set alpha=0 where mask is False
+    #rgba[~mask] = np.zeros((4), dtype=np.uint8)
+    rgba[~mask, 3] = 0
+
+    # Find the bounding box of the mask
+    ys, xs = np.where(mask)
+    if ys.size == 0 or xs.size == 0:
+        print("No matching colors found.")
+        return np.zeros((0, 0, 4), dtype=np.uint8)
+
+    y_min, y_max = ys.min(), ys.max()
+    x_min, x_max = xs.min(), xs.max()
+
+    # Crop the region
+    cropped = rgba[y_min:y_max + 1, x_min:x_max + 1]
+
+    # Print the starting position
+    print(f"New array begins at position (row={y_min}, col={x_min}) in the original array.")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    save_path = os.path.join(script_dir, filename)
+    np.save(save_path, cropped)
+    return cropped
+
 if __name__ == "__main__":
-    env = JaxBattlezone()
-    initial_obs, state = env.reset()
-    for i in range(10):
-        obs, state, env_reward, done, info = env.step(state, 0)
-        print(state.step_counter)
+    #env = JaxBattlezone()
+    #initial_obs, state = env.reset()
+    #for i in range(10):
+        #obs, state, env_reward, done, info = env.step(state, 0)
+        #print(state.step_counter)
 
 
-    #try_gym_battlezone_pixel()
+    try_gym_battlezone_pixel()
