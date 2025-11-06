@@ -101,6 +101,6 @@ def evaluate(
                 if capture_video and episode == 0:
                     clip = ImageSequenceClip(recorded_frames, fps=24)
                     os.makedirs(f"videos/{run_name}", exist_ok=True)
-                    clip.write_videofile("videos/{run_name}/{episode}.mp4", logger="bar")
+                    clip.write_videofile(f"videos/{run_name}/{episode}.mp4", logger="bar")
 
     return episodic_returns

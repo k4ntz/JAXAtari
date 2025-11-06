@@ -196,7 +196,8 @@ class AtariWrapper(JaxatariWrapper):
         new_obs_stack = jax.tree.map(lambda stack, obs_leaf: jnp.concatenate([stack[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0), state.obs_stack, latest_obs)
 
         reward = jnp.sum(rewards)
-        done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        real_done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        done = real_done
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
@@ -223,13 +224,31 @@ class AtariWrapper(JaxatariWrapper):
         def _reset_fn(_):
             # When done, reset. The new state will contain the properly advanced next_state_key.
             return self.reset(next_state_key)
+        
+        def _softreset_fn(_):
+            # When just done (not real_done, episodic_life) we keep the env_state but reset the step counter
+            next_state = AtariState(new_env_state, next_state_key, 0, new_action, new_obs_stack)
+            return new_obs_stack, next_state
 
         def _step_fn(_):
             # When not done, create the next state, passing next_state_key for the *next* step.
             next_state = AtariState(new_env_state, next_state_key, state.step + 1, new_action, new_obs_stack)
             return new_obs_stack, next_state
 
-        new_obs, new_state = jax.lax.cond(done, _reset_fn, _step_fn, operand=None)
+        #Note: Using real_done here, since we don't want to reset the game if it's just a life lost. (only send done signal)
+        # new_obs, new_state = jax.lax.cond(real_done, _reset_fn, _step_fn, operand=None)
+        new_obs, new_state = jax.lax.cond(
+            real_done,
+            _reset_fn,
+            lambda _: jax.lax.cond(
+                done, # done, but not real_done
+                _softreset_fn,
+                _step_fn, # not done at all
+                operand=None
+            ),
+            operand=None)
+
+        # But if just done (not real_done), we keep the env_state but reset the step counter and obs stack
 
         reward = jax.lax.cond(
             self.clip_reward,

@@ -201,7 +201,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
             ),
             1.0,
-            jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
+            # jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
+            jnp.where(action == 1, -1.0, jnp.where(action == 2, 1.0, 0.0)),
         )
 
         dy = jnp.where(

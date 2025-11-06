@@ -82,7 +82,7 @@ class Args:
     """Toggles advantages normalization"""
     clip_coef: float = 0.1
     """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
+    clip_vloss: bool = False # True in original paper, but envpool impl. used False (don't think this setting does something here, actually.)
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
     ent_coef: float = 0.01
     """coefficient of the entropy"""
@@ -107,11 +107,12 @@ def make_env(env_id, seed, num_envs):
         env = jaxatari.make(env_id)
         env = PixelObsWrapper(AtariWrapper(
                 env,
-                episodic_life=True,
-                clip_reward=True,
+                episodic_life=True, # explicitly set in cleanRL-envpool
+                clip_reward=True, # explicitly set in cleanRL-envpool
                 max_episode_length=108000,
                 frame_stack_size=4,
-                frame_skip=4,
+                max_pooling=True,
+                frame_skip=1, # seems to be default in envpool
                 noop_reset=30,
                 sticky_actions=False, # seems to be default in envpool
                 first_fire=True,
@@ -252,10 +253,10 @@ if __name__ == "__main__":
         return obs.squeeze(), state
     
     @jax.jit
-    def wrapped_step(handle, action):
-        next_obs, handle, reward, next_done, info = jax.vmap(env.step)(handle, action)
-        return next_obs.squeeze(), handle, reward, next_done, info
-    
+    def wrapped_step(state, action):
+        next_obs, state, reward, next_done, info = jax.vmap(env.step)(state, action)
+        return next_obs.squeeze(), state, reward, next_done, info
+
     vmap_reset = wrapped_reset
     vmap_step = wrapped_step
     
@@ -432,15 +433,15 @@ if __name__ == "__main__":
     key, reset_key = jax.random.split(key)
     global_step = 0
     start_time = time.time()
-    next_obs, handle = vmap_reset(jax.random.split(reset_key, args.num_envs))
+    next_obs, env_state = vmap_reset(jax.random.split(reset_key, args.num_envs))
     next_done = jnp.zeros(args.num_envs, dtype=jax.numpy.bool_)
 
     # based on https://github.dev/google/evojax/blob/0625d875262011d8e1b6aa32566b236f44b4da66/evojax/sim_mgr.py
     def step_once(carry, step, env_step_fn):
-        agent_state, obs, done, key, handle = carry
+        agent_state, obs, done, key, env_state = carry
         action, logprob, value, key = get_action_and_value(agent_state, obs, key)
 
-        next_obs, handle, reward, next_done, _ = env_step_fn(handle, action)
+        next_obs, env_state, reward, next_done, _ = env_step_fn(env_state, action)
         storage = Storage(
             obs=obs,
             actions=action,
@@ -451,13 +452,13 @@ if __name__ == "__main__":
             returns=jnp.zeros_like(reward),
             advantages=jnp.zeros_like(reward),
         )
-        return ((agent_state, next_obs, next_done, key, handle), storage)
+        return ((agent_state, next_obs, next_done, key, env_state), storage)
 
-    def rollout(agent_state, next_obs, next_done, key, handle, step_once_fn, max_steps):
-        (agent_state, next_obs, next_done, key, handle), storage = jax.lax.scan(
-            step_once_fn, (agent_state, next_obs, next_done, key, handle), (), max_steps
+    def rollout(agent_state, next_obs, next_done, key, env_state, step_once_fn, max_steps):
+        (agent_state, next_obs, next_done, key, env_state), storage = jax.lax.scan(
+            step_once_fn, (agent_state, next_obs, next_done, key, env_state), (), max_steps
         )
-        return agent_state, next_obs, next_done, storage, key, handle
+        return agent_state, next_obs, next_done, storage, key, env_state
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=args.num_steps)
 
@@ -466,23 +467,27 @@ if __name__ == "__main__":
         # agent_state, episode_stats, next_obs, next_done, storage, key, handle = rollout(
         #     agent_state, episode_stats, next_obs, next_done, key, handle
         # )
-        agent_state, next_obs, next_done, storage, key, handle = rollout(
-            agent_state, next_obs, next_done, key, handle
+        agent_state, next_obs, next_done, storage, key, env_state = rollout(
+            agent_state, next_obs, next_done, key, env_state
         )
         global_step += args.num_steps * args.num_envs
+        print(global_step, args.num_steps, args.num_envs, iteration)
         storage = compute_gae(agent_state, next_obs, next_done, storage)
         agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo(
             agent_state,
             storage,
             key,
         )
-        avg_episodic_return = np.mean(jax.device_get(handle.returned_episode_returns))
+        episodic_returns = jax.device_get(env_state.returned_episode_returns) 
+        print("Episodic returns:", episodic_returns)
+        avg_episodic_return = np.mean(jax.device_get(episodic_returns))
+        print(avg_episodic_return)
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
         writer.add_scalar(
-            "charts/avg_episodic_length", np.mean(jax.device_get(handle.returned_episode_lengths)), global_step
+            "charts/avg_episodic_length", np.mean(jax.device_get(env_state.returned_episode_lengths)), global_step
         )
         writer.add_scalar("charts/learning_rate", agent_state.opt_state[1].hyperparams["learning_rate"].item(), global_step)
         writer.add_scalar("losses/value_loss", v_loss[-1, -1].item(), global_step)
