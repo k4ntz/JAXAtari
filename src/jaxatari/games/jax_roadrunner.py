@@ -91,52 +91,31 @@ class JaxRoadRunner(
         ]
         self.obs_size = 2 * 4  # Simplified
 
+        # Pre-calculate normalized velocities
+        sqrt2_inv = 1 / jnp.sqrt(2)
+        self._velocities = (
+            jnp.array(
+                [
+                    [0, 0],  # NOOP
+                    [0, -1],  # UP
+                    [0, 1],  # DOWN
+                    [-1, 0],  # LEFT
+                    [1, 0],  # RIGHT
+                    [sqrt2_inv, -sqrt2_inv],  # UPRIGHT
+                    [-sqrt2_inv, -sqrt2_inv],  # UPLEFT
+                    [sqrt2_inv, sqrt2_inv],  # DOWNRIGHT
+                    [-sqrt2_inv, sqrt2_inv],  # DOWNLEFT
+                ]
+            )
+            * self.consts.PLAYER_MOVE_SPEED
+        )
+
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array]:
-        """
-        Handles user input to determine player velocity, ensuring constant speed
-        for both cardinal and diagonal movements.
-        """
-        # Define movement components based on the selected action
-        is_up = (
-            (action == Action.UP)
-            | (action == Action.UPRIGHT)
-            | (action == Action.UPLEFT)
-        )
-        is_down = (
-            (action == Action.DOWN)
-            | (action == Action.DOWNRIGHT)
-            | (action == Action.DOWNLEFT)
-        )
-        is_left = (
-            (action == Action.LEFT)
-            | (action == Action.UPLEFT)
-            | (action == Action.DOWNLEFT)
-        )
-        is_right = (
-            (action == Action.RIGHT)
-            | (action == Action.UPRIGHT)
-            | (action == Action.DOWNRIGHT)
-        )
-
-        # Create a raw direction vector (dx, dy)
-        dx = is_right.astype(jnp.float32) - is_left.astype(jnp.float32)
-        dy = is_down.astype(jnp.float32) - is_up.astype(jnp.float32)
-        vel_vec = jnp.array([dx, dy])
-
-        # Check if there is any movement
-        is_moving = jnp.any(vel_vec != 0)
-
-        # Normalize the vector to have a magnitude of 1 if moving.
-        # This is done conditionally to avoid division by zero and is JIT-friendly.
-        normalized_vel = jax.lax.cond(
-            is_moving, lambda v: v / jnp.linalg.norm(v), lambda v: v, vel_vec
-        )
-
-        # Scale the normalized vector by the player's move speed
-        scaled_vel = normalized_vel * self.consts.PLAYER_MOVE_SPEED
-        x_vel, y_vel = scaled_vel[0], scaled_vel[1]
-
-        return x_vel, y_vel
+        """Handles user input to determine player velocity."""
+        # Map action to the corresponding index in the action_set
+        action_idx = jnp.argmax(jnp.array(self.action_set) == action)
+        vel = self._velocities[action_idx]
+        return vel[0], vel[1]
 
     def _check_bounds(
         self, x_pos: chex.Array, y_pos: chex.Array
@@ -316,7 +295,7 @@ class JaxRoadRunner(
                         "width": spaces.Box(
                             low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
                         ),
-                        height: spaces.Box(
+                        "height": spaces.Box(
                             low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
                         ),
                     }
