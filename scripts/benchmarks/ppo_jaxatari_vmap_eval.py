@@ -73,34 +73,32 @@ def evaluate(
         action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
         return action, key
 
-    # a simple non-vectorized version
+    def step_fn(carry, input):
+        next_obs, env_state, keys = carry
+        actions, keys = jax.vmap(get_action_and_value, in_axes=(None, None, 0, 0))(network_params, actor_params, next_obs, keys)
+        next_obs, env_state, reward, done, infos = jax.vmap(wrapped_step)(env_state, jnp.array(actions))
+        return (next_obs, env_state, keys), (next_obs[0], done, reward)
 
-    episodic_returns = []
-    for episode in range(eval_episodes):
-        episodic_return = 0
-        key, reset_key = jax.random.split(key)
-        next_obs, handle = wrapped_reset(reset_key)
-        terminated = False
+    # evaluate eval_episodes concurrently
+    reset_keys = jax.random.split(key, eval_episodes)
+    next_obs, env_states = jax.vmap(wrapped_reset)(reset_keys)
+    _, (first_obs, dones, rewards) = jax.lax.scan(step_fn, (next_obs, env_states, reset_keys), None, length=10_000)
+    
+    # obs shape: (time, eval_episodes, 1, H, W)
+    first_done = jnp.argmax(dones, axis=0)  # shape: (eval_episodes,)
+    reward_mask = jnp.arange(dones.shape[0])[:, None] <= first_done[None, :]  # shape: (time, eval_episodes)
+    rewards = rewards * reward_mask  # shape: (time, eval_episodes)
 
-        if capture_video:
-            recorded_frames = []
-            # conversion from grayscale into rgb
-            recorded_frames.append(cv2.cvtColor(np.array(jax.device_get(next_obs[0][-1]))[..., None], cv2.COLOR_GRAY2RGB))
-        while not terminated:
-            actions, key = get_action_and_value(network_params, actor_params, next_obs, key)
-            next_obs, handle, reward, done, infos = wrapped_step(handle, jnp.array(actions))
-            episodic_return += reward
-            terminated = done
+    episodic_returns = jnp.sum(rewards, axis=0)  # shape: (eval_episodes,)
 
-            if capture_video and episode == 0:
-                recorded_frames.append(cv2.cvtColor(np.array(jax.device_get(next_obs[0][-1]))[..., None], cv2.COLOR_GRAY2RGB))
-
-            if terminated:
-                print(f"eval_episode={len(episodic_returns)}, episodic_return={episodic_return}")
-                episodic_returns.append(episodic_return)
-                if capture_video and episode == 0:
-                    clip = ImageSequenceClip(recorded_frames, fps=24)
-                    os.makedirs(f"videos/{run_name}", exist_ok=True)
-                    clip.write_videofile(f"videos/{run_name}/{episode}.mp4", logger="bar")
+    # first episode video capture
+    obs_until_done = first_obs[:first_done[0] + 1, 0]  # shape: (time_until_done, 1, H, W)
+    if capture_video:
+        recorded_frames = []
+        for t in range(obs_until_done.shape[0]):
+            recorded_frames.append(cv2.cvtColor(np.array(jax.device_get(obs_until_done[t, -1]))[..., None], cv2.COLOR_GRAY2RGB))
+        clip = ImageSequenceClip(recorded_frames, fps=30)
+        os.makedirs(f"videos/{run_name}", exist_ok=True)
+        clip.write_videofile(f"videos/{run_name}/0.mp4", logger="bar")
 
     return episodic_returns

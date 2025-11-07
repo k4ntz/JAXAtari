@@ -36,7 +36,7 @@ os.environ["TF_CUDNN DETERMINISTIC"] = "1"
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 1
+    seed: int = 42
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -112,11 +112,11 @@ def make_env(env_id, seed, num_envs):
                 max_episode_length=108000,
                 frame_stack_size=4,
                 max_pooling=True,
-                frame_skip=1, # seems to be default in envpool
+                frame_skip=4,
                 noop_reset=30,
                 sticky_actions=False, # seems to be default in envpool
                 first_fire=True,
-                #full_action_space=False # TODO: this is missing in jaxatari
+                #full_action_space=False # TODO: this is missing in jaxatari, although default is reduced action space
             ),
             do_pixel_resize=True,
             pixel_resize_shape=(84, 84),
@@ -471,17 +471,13 @@ if __name__ == "__main__":
             agent_state, next_obs, next_done, key, env_state
         )
         global_step += args.num_steps * args.num_envs
-        print(global_step, args.num_steps, args.num_envs, iteration)
         storage = compute_gae(agent_state, next_obs, next_done, storage)
         agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo(
             agent_state,
             storage,
             key,
         )
-        episodic_returns = jax.device_get(env_state.returned_episode_returns) 
-        print("Episodic returns:", episodic_returns)
-        avg_episodic_return = np.mean(jax.device_get(episodic_returns))
-        print(avg_episodic_return)
+        avg_episodic_return = np.mean(jax.device_get(env_state.returned_episode_returns))
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes

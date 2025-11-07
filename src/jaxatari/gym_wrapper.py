@@ -127,6 +127,11 @@ class JaxAtariFuncEnv:
         """Closes the renderer."""
         pass
 
+#TODO: This is a dirty hack, required for gymnasium EpisodicLifeEnv wrapper
+class FakeALE:
+    def lives(self):
+        return 0
+
 class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
     """
     A 'thin' Gymnasium-compatible wrapper for raw jaxatari environments.
@@ -207,6 +212,9 @@ class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
         
         # Keep a reference to the raw env for rendering
         self._jaxatari_env = jaxatari_env
+
+        # TODO: This is a place-holder for now
+        self.ale = FakeALE()
 
     @property
     def unwrapped(self):
