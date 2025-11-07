@@ -15,28 +15,44 @@ class UpNDownConstants(NamedTuple):
     FRAME_SKIP: int = 4
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
     ACTION_REPEAT_PROBS: float = 0.25
+    MAX_SPEED: int = 4
+    JUMP_FRAMES: int = 10
+    LANDING_ZONE: int = 15
+    FIRST_ROAD_LENGTH: int = 4
+    SECOND_ROAD_LENGTH: int = 4
+    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+    SECOND_TRACK_CORNERS_Y: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+
 
 
 # immutable state container
-class UpNDownState(NamedTuple):
-    player_y: chex.Array
-    player_speed: chex.Array
-    score: chex.Array
-    difficulty: chex.Array
-
-
-
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-
-class EnemyCar(NamedTuple):
+class Car(NamedTuple):
     position: EntityPosition
     speed: chex.Array
     type: chex.Array
+    current_road: chex.Array
+    road_index_A: chex.Array
+    road_index_B: chex.Array
+    direction_x: chex.Array
+
+class UpNDownState(NamedTuple):
+    score: chex.Array
+    difficulty: chex.Array
+    road_index: chex.Array
+    jump_cooldown: chex.Array
+    is_jumping: chex.Array
+    is_on_road: chex.Array
+    player_car: Car
+
+
 
 
 class UpNDownObservation(NamedTuple):
@@ -65,270 +81,186 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
+            Action.UPFIRE,
+            Action.UP,
+            Action.DOWN,
+            Action.DOWNFIRE,
         ]
         self.obs_size = 3*4+1+1
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _car_past_corner(self, car: Car, state: UpNDownState) -> chex.Array:
+        direction_change_A = jnp.logical_or(jnp.logical_and(car.speed > 0, car.position.y + car.speed > self.consts.FIRST_TRACK_CORNERS_Y[car.road_index+1]), jnp.logical_and(car.speed < 0, car.position.y + car.speed < self.consts.FIRST_TRACK_CORNERS_Y[car.road_index]))
+        direction_change_B = jnp.logical_or(jnp.logical_and(car.speed > 0, car.position.y + car.speed > self.consts.SECOND_TRACK_CORNERS_Y[car.road_index+1]), jnp.logical_and(car.speed < 0, car.position.y + car.speed < self.consts.SECOND_TRACK_CORNERS_Y[car.road_index])),
+           
+        road_index_A = jax.lax.cond(jnp.logical_and(direction_change_A, car.speed > 0),
+            lambda s: s + 1,
+            lambda s: s,
+            operand=car.road_index_A,
+        )
+        road_index_A = jax.lax.cond(jnp.logical_and(direction_change_A, car.speed < 0),
+            lambda s: s - 1,
+            lambda s: s,
+            operand=car.road_index_A,
+        )
+
+        road_index_B = jax.lax.cond(jnp.logical_and(direction_change_B, car.speed > 0),
+            lambda s: s + 1,
+            lambda s: s,
+            operand=car.road_index_B,
+        )
+        road_index_B = jax.lax.cond(jnp.logical_and(direction_change_B, car.speed < 0),
+            lambda s: s - 1,
+            lambda s: s,
+            operand=car.road_index_B,
+        )
+        current_road_length_A = self.consts.FIRST_ROAD_LENGTH
+        current_road_length_B = self.consts.SECOND_ROAD_LENGTH
+
+        road_index_A = jax.lax.cond(road_index_A < 0,
+            lambda s: current_road_length_A - 1,
+            lambda s: s,
+            operand=road_index_A,
+        )
+
+        road_index_A = jax.lax.cond(road_index_A >= current_road_length_A,
+            lambda s: 0,
+            lambda s: s,
+            operand=road_index_A,
+        )
+
+        road_index_B = jax.lax.cond(road_index_B < 0,
+            lambda s: current_road_length_B - 1,
+            lambda s: s,
+            operand=road_index_B,
+        )
+
+        road_index_B = jax.lax.cond(road_index_B >= current_road_length_B,
+            lambda s: 0,
+            lambda s: s,
+            operand=road_index_B,
+        )
+
+        return road_index_A, road_index_B
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _landing_in_water(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
+        road_A_x = ((new_position_y - self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A]) / (self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]
+        road_B_x = ((new_position_y - self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B]) / (self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]
+        distance_to_road_A = jnp.abs(new_position_x - road_A_x)
+        distance_to_road_B = jnp.abs(new_position_x - road_B_x)
+        landing_in_Water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_ZONE, distance_to_road_B > self.consts.LANDING_ZONE)
+        between_roads = jnp.logical_and(new_position_x > jnp.minimum(road_A_x, road_B_x), new_position_x < jnp.maximum(road_A_x, road_B_x))
+        return landing_in_Water, between_roads
+
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
-        up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
+        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+        jump = jnp.logical_or(action == Action.FIRE, action == Action.UPFIRE, action == Action.DOWNFIRE)
 
-        acceleration = self.consts.PLAYER_ACCELERATION[state.acceleration_counter]
 
-        touches_wall = jnp.logical_or(
-            state.player_y < self.consts.WALL_TOP_Y,
-            state.player_y + self.consts.PLAYER_SIZE[1] > self.consts.WALL_BOTTOM_Y,
-        )
 
-        player_speed = state.player_speed
+        player_speed = state.player_car.speed
 
         player_speed = jax.lax.cond(
-            jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
-            lambda s: jnp.round(s / 2).astype(jnp.int32),
+            jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
+            lambda s: s + 1,
             lambda s: s,
             operand=player_speed,
         )
 
-        direction_change_up = jnp.logical_and(up, state.player_speed > 0)
         player_speed = jax.lax.cond(
-            direction_change_up,
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
-        )
-        direction_change_down = jnp.logical_and(down, state.player_speed < 0)
-
-        player_speed = jax.lax.cond(
-            direction_change_down,
-            lambda s: 0,
+            jnp.logical_and(state.player_car.speed > -self.consts.MAX_SPEED, down),
+            lambda s: s - 1,
             lambda s: s,
             operand=player_speed,
         )
 
-        direction_change = jnp.logical_or(direction_change_up, direction_change_down)
-        acceleration_counter = jax.lax.cond(
+
+        is_jumping = jnp.logical_or(jnp.logical_and(state.is_jumping, state.jump_cooldown > 0), jnp.logical_and(is_on_road, jnp.logical_and(player_speed > 0, state.jump_cooldown == 0)))
+        jump_cooldown = jax.lax.cond(
+            state.jump_cooldown > 0,
+            lambda s: s - 1,
+            lambda s: jnp.cond(jnp.logical_and(is_jumping),
+                               lambda _: state.JUMP_FRAMES,
+                               lambda _: 0, 
+                               operand=None),
+            operand=state.jump_cooldown,
+        )
+
+
+
+
+        ##check if player is on the the road
+        is_on_road = ~state.is_jumping
+
+        road_index_A, road_index_B = self._car_past_corner(state.player_car, state)
+
+        direction_change = jax.lax.cond(
+            jnp.logical_and(is_on_road, jnp.logical_or(jnp.logical_and(jnp.equal(road_index_A, state.player_car.road_index_A)) , state.player_car.current_road == 0), (jnp.logical_and(jnp.equal(road_index_B, state.player_car.road_index_B)) , state.player_car.current_road == 1) ),
+            lambda s: False,
+            lambda s: True,
+            operand=None,
+        )
+
+
+        car_direction_x = jax.lax.cond(
             direction_change,
-            lambda _: 0,
+            lambda s: jax.lax.cond(state.player_car.current_road == 0,
+                lambda s: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
+                lambda s: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
+                operand=None),
             lambda s: s,
-            operand=state.acceleration_counter,
+            operand=state.player_car.direction_x,
         )
+        
+        is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
 
-        player_speed = jax.lax.cond(
-            up,
-            lambda s: jnp.maximum(s - acceleration, -self.consts.MAX_SPEED),
-            lambda s: s,
-            operand=player_speed,
-        )
+        ##calculate new position with speed (TODO: calculate better speed)
+        player_y = state.player_car.position.y + player_speed
+        player_x = state.player_car.position.x + player_speed * car_direction_x
 
-        player_speed = jax.lax.cond(
-            down,
-            lambda s: jnp.minimum(s + acceleration, self.consts.MAX_SPEED),
-            lambda s: s,
-            operand=player_speed,
-        )
+        landing_in_Water, between_roads, road_A_x, road_B_x = self._landing_in_water(state, player_x, player_y)
+        landing_in_Water = jnp.logical_and(is_landing, landing_in_Water)
+        
 
-        new_acceleration_counter = jax.lax.cond(
-            jnp.logical_or(up, down),
-            lambda s: jnp.minimum(s + 1, 15),
-            lambda s: 0,
-            operand=acceleration_counter,
-        )
-
-        proposed_player_y = jnp.clip(
-            state.player_y + player_speed,
-            self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - 10,
-            self.consts.WALL_BOTTOM_Y - 4,
-        )
-
-        # Match original timing/buffering behavior
-        new_player_y, new_player_speed, new_acc_counter = jax.lax.cond(
-            state.step_counter % 2 == 0,
-            lambda _: (proposed_player_y, player_speed, new_acceleration_counter),
-            lambda _: (state.player_y, state.player_speed, state.acceleration_counter),
+        current_road = jax.lax.cond(
+            landing_in_Water,
+            lambda s: 2,
+            lambda s: jax.lax.cond(
+                is_on_road,
+                lambda s: state.player_car.current_road,
+                lambda s: jax.lax.cond(
+                    jnp.abs(player_x - road_A_x) < jnp.abs(player_x - road_B_x),
+                    lambda s: 0,
+                    lambda s: 1,
+                    operand=None,
+                ),
+                operand=None,
+            ),
             operand=None,
         )
-
-        buffer = jax.lax.cond(
-            jax.lax.eq(state.buffer, state.player_y),
-            lambda _: new_player_y,
-            lambda _: state.buffer,
-            operand=None,
-        )
-        final_player_y = state.buffer
-
         return UpNDownState(
-            player_y=final_player_y,
-            player_speed=new_player_speed,
-            ball_x=state.ball_x,
-            ball_y=state.ball_y,
-            enemy_y=state.enemy_y,
-            enemy_speed=state.enemy_speed,
-            ball_vel_x=state.ball_vel_x,
-            ball_vel_y=state.ball_vel_y,
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            step_counter=state.step_counter,
-            acceleration_counter=new_acc_counter,
-            buffer=buffer,
-        )
-
-    def _ball_step(self, state: UpNDownState, action) -> UpNDownState:
-        ball_x = state.ball_x + state.ball_vel_x
-        ball_y = state.ball_y + state.ball_vel_y
-
-        wall_bounce = jnp.logical_or(
-            ball_y <= self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - self.consts.BALL_SIZE[1],
-            ball_y >= self.consts.WALL_BOTTOM_Y,
-        )
-        ball_vel_y = jnp.where(wall_bounce, -state.ball_vel_y, state.ball_vel_y)
-
-        player_paddle_hit = jnp.logical_and(
-            jnp.logical_and(self.consts.PLAYER_X <= ball_x, ball_x <= self.consts.PLAYER_X + self.consts.PLAYER_SIZE[0]),
-            state.ball_vel_x > 0,
-        )
-
-        player_paddle_hit = jnp.logical_and(
-            player_paddle_hit,
-            jnp.logical_and(
-                state.player_y - self.consts.BALL_SIZE[1] <= ball_y,
-                ball_y <= state.player_y + self.consts.PLAYER_SIZE[1] + self.consts.BALL_SIZE[1],
-            ),
-        )
-
-        enemy_paddle_hit = jnp.logical_and(
-            jnp.logical_and(self.consts.ENEMY_X <= ball_x, ball_x <= self.consts.ENEMY_X + self.consts.ENEMY_SIZE[0] - 1),
-            state.ball_vel_x < 0,
-        )
-
-        enemy_paddle_hit = jnp.logical_and(
-            enemy_paddle_hit,
-            jnp.logical_and(
-                state.enemy_y - self.consts.BALL_SIZE[1] <= ball_y,
-                ball_y <= state.enemy_y + self.consts.ENEMY_SIZE[1] + self.consts.BALL_SIZE[1],
-            ),
-        )
-
-        paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
-
-        section_height = self.consts.PLAYER_SIZE[1] / 5
-
-        hit_position = jnp.where(
-            paddle_hit,
-            jnp.where(
-                player_paddle_hit,
-                jnp.where(
-                    ball_y < state.player_y + section_height,
-                    -2.0,
-                    jnp.where(
-                        ball_y < state.player_y + 2 * section_height,
-                        -1.0,
-                        jnp.where(
-                            ball_y < state.player_y + 3 * section_height,
-                            0.0,
-                            jnp.where(
-                                ball_y < state.player_y + 4 * section_height,
-                                1.0,
-                                2.0,
-                            ),
-                        ),
-                    ),
+            score=state.score,
+            difficulty=state.difficulty,
+            road_index=state.road_index,
+            jump_cooldown=jump_cooldown,
+            is_jumping=is_jumping,
+            is_on_road=is_on_road,
+            player_car=Car(
+                position=EntityPosition(
+                    x=player_x,
+                    y=player_y,
+                    width=state.player_car.position.width,
+                    height=state.player_car.position.height,
                 ),
-                jnp.where(
-                    ball_y < state.enemy_y + section_height,
-                    -2.0,
-                    jnp.where(
-                        ball_y < state.enemy_y + 2 * section_height,
-                        -1.0,
-                        jnp.where(
-                            ball_y < state.enemy_y + 3 * section_height,
-                            0.0,
-                            jnp.where(
-                                ball_y < state.enemy_y + 4 * section_height,
-                                1.0,
-                                2.0,
-                            ),
-                        ),
-                    ),
-                ),
+                speed=player_speed,
+                direction_x=car_direction_x,
+                current_road=current_road,
+                road_index_A=road_index_A,
+                road_index_B=road_index_B,
+                type=state.player_car.type,
             ),
-            0.0,
-        )
-
-        paddle_speed = jnp.where(
-            player_paddle_hit,
-            state.player_speed,
-            jnp.where(
-                enemy_paddle_hit,
-                state.enemy_speed,
-                0.0,
-            ),
-        )
-
-        ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
-
-        boost_triggered = jnp.logical_and(
-            player_paddle_hit,
-            jnp.logical_or(
-                jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
-                action == Action.FIRE,
-            ),
-        )
-        player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == self.consts.MAX_SPEED)
-        ball_vel_x = jnp.where(
-            jnp.logical_or(boost_triggered, player_max_hit),
-            state.ball_vel_x
-            + jnp.sign(state.ball_vel_x),
-            state.ball_vel_x,
-        )
-
-        ball_vel_x = jnp.where(
-            paddle_hit,
-            -ball_vel_x,
-            ball_vel_x,
-        )
-
-        return UpNDownState(
-            player_y=state.player_y,
-            player_speed=state.player_speed,
-            ball_x=ball_x.astype(jnp.int32),
-            ball_y=ball_y.astype(jnp.int32),
-            enemy_y=state.enemy_y,
-            enemy_speed=state.enemy_speed,
-            ball_vel_x=ball_vel_x.astype(jnp.int32),
-            ball_vel_y=ball_vel_y.astype(jnp.int32),
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            step_counter=state.step_counter,
-            acceleration_counter=state.acceleration_counter,
-            buffer=state.buffer,
-        )
-
-    def _enemy_step(self, state: UpNDownState) -> UpNDownState:
-        should_move = state.step_counter % 8 != 0
-
-        direction = jnp.sign(state.ball_y - state.enemy_y)
-
-        new_y = state.enemy_y + (direction * self.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
-        enemy_y = jax.lax.cond(
-            should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
-        )
-        return UpNDownState(
-            player_y=state.player_y,
-            player_speed=state.player_speed,
-            ball_x=state.ball_x,
-            ball_y=state.ball_y,
-            enemy_y=enemy_y.astype(jnp.int32),
-            enemy_speed=state.enemy_speed,
-            ball_vel_x=state.ball_vel_x,
-            ball_vel_y=state.ball_vel_y,
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            step_counter=state.step_counter,
-            acceleration_counter=state.acceleration_counter,
-            buffer=state.buffer,
         )
 
     def _score_and_reset(self, state: UpNDownState) -> UpNDownState:
@@ -403,26 +335,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             step_counter=step_counter,
             acceleration_counter=state.acceleration_counter,
             buffer=state.buffer,
-        )
-
-    def _reset_ball_after_goal(self, state_and_goal: Tuple[UpNDownState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        state, scored_right = state_and_goal
-
-        ball_vel_y = jnp.where(
-            state.ball_y > self.consts.BALL_START_Y,
-            1,
-            -1,
-        ).astype(jnp.int32)
-
-        ball_vel_x = jnp.where(
-            scored_right, 1, -1
-        ).astype(jnp.int32)
-
-        return (
-            self.consts.BALL_START_X.astype(jnp.int32),
-            self.consts.BALL_START_Y.astype(jnp.int32),
-            ball_vel_x.astype(jnp.int32),
-            ball_vel_y.astype(jnp.int32),
         )
 
     def reset(self, key=None) -> Tuple[UpNDownObservation, UpNDownState]:
