@@ -283,7 +283,11 @@ class JaxRoadRunner(
 
         return jax.lax.cond(
             collision,
-            lambda st: st._replace(is_round_over=True),
+            lambda st: st._replace(
+                is_round_over=True,
+                player_x=(st.enemy_x + self.consts.ENEMY_SIZE[0] + 2).astype(jnp.int32),
+                player_y=st.enemy_y.astype(jnp.int32),
+            ),
             lambda st: st,
             state,
         )
