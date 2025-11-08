@@ -1,6 +1,7 @@
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -40,6 +41,8 @@ class RoadRunnerConstants(NamedTuple):
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    SEED_SPAWN_MIN_INTERVAL: int = 5
+    SEED_SPAWN_MAX_INTERVAL: int = 20
 
 
 # --- State and Observation ---
@@ -59,7 +62,9 @@ class RoadRunnerState(NamedTuple):
     is_scrolling: chex.Array
     scrolling_step_counter: chex.Array
     is_round_over: chex.Array
-
+    seeds: chex.Array # 2D array of shape (4, 2)
+    next_seed_spawn_scroll_step: chex.Array # Scrolling step counter value at which to spawn next seed
+    rng: chex.Array # PRNG state
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -72,7 +77,6 @@ class RoadRunnerObservation(NamedTuple):
     player: EntityPosition
     enemy: EntityPosition
     score: jnp.ndarray
-
 
 # --- Main Environment Class ---
 class JaxRoadRunner(
@@ -291,7 +295,73 @@ class JaxRoadRunner(
             lambda st: st,
             state,
         )
+    def _update_and_spawn_seeds(self, state: RoadRunnerState) -> RoadRunnerState:
+        """
+        Update seed positions (apply scrolling, despawn off-screen) and spawn new seeds.
+        Combined function for efficiency - seeds update and spawn logic together.
+        """
+        consts = self.consts
+        # Update seed positions: apply scrolling and despawn off-screen seeds
+        seed_x = state.seeds[:, 0]
+        # Move active seeds when scrolling, then despawn off-screen ones
+        scroll_offset = jnp.where(state.is_scrolling, consts.PLAYER_MOVE_SPEED, 0)
+        updated_x = jnp.where(seed_x >= 0, seed_x + scroll_offset, seed_x)
+        # Mark seeds as inactive if they moved off-screen (x >= WIDTH)
+        seed_active = (updated_x >= 0) & (updated_x < consts.WIDTH)
+        updated_x = jnp.where(seed_active, updated_x, -1)
+        updated_seeds = state.seeds.at[:, 0].set(updated_x).at[:, 1].set(
+            jnp.where(seed_active, state.seeds[:, 1], -1)
+        )
+
+        # Prepare for spawning: split RNG and check conditions
+        rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        available_slots = updated_x == -1
+        should_spawn = (
+            state.is_scrolling
+            & (state.scrolling_step_counter >= state.next_seed_spawn_scroll_step)
+            & jnp.any(available_slots)
+        )
+
+        def _spawn(st: RoadRunnerState) -> RoadRunnerState:
+            slot_idx = jnp.argmax(available_slots)
+            # Generate random Y position within road bounds
+            seed_y = jnp.clip(
+                consts.ROAD_TOP_Y + consts.ROAD_HEIGHT // 2 + jax.random.randint(
+                    rng_spawn_y, (), -20, 21, dtype=jnp.int32
+                ),
+                consts.ROAD_TOP_Y,
+                consts.ROAD_TOP_Y + consts.ROAD_HEIGHT - 4,
+            )
+            # Spawn at x=0, update next spawn step
+            next_spawn_step = state.scrolling_step_counter + jax.random.randint(
+                rng_interval, (), consts.SEED_SPAWN_MIN_INTERVAL,
+                consts.SEED_SPAWN_MAX_INTERVAL + 1, dtype=jnp.int32
+            )
+            return st._replace(
+                seeds=updated_seeds.at[slot_idx].set(jnp.array([0, seed_y], dtype=jnp.int32)),
+                next_seed_spawn_scroll_step=next_spawn_step,
+                rng=rng_after,
+            )
+
+        return jax.lax.cond(
+            should_spawn,
+            _spawn,
+            lambda st: st._replace(seeds=updated_seeds, rng=rng_after),
+            state,
+        )
+
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
+        # Initialize RNG key
+        if key is None:
+            key = jax.random.PRNGKey(42)
+
+        # Initialize next seed spawn scroll step with random interval
+        key, sub = jax.random.split(key)
+        next_seed_spawn_scroll_step = jax.random.randint(
+            sub, (), self.consts.SEED_SPAWN_MIN_INTERVAL,
+            self.consts.SEED_SPAWN_MAX_INTERVAL + 1, dtype=jnp.int32
+        )
+
         state = RoadRunnerState(
             player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
@@ -314,6 +384,9 @@ class JaxRoadRunner(
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
             is_round_over=jnp.array(False, dtype=jnp.bool_),
+            seeds=jnp.full((4, 2), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
+            next_seed_spawn_scroll_step=jnp.array(next_seed_spawn_scroll_step, dtype=jnp.int32),
+            rng=key,
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -325,8 +398,16 @@ class JaxRoadRunner(
         state = self._player_step(state, action)
         state = self._enemy_step(state)
         state = self._check_game_over(state)
+        # Update seed positions and spawn new seeds
+        state = self._update_and_spawn_seeds(state)
 
         def reset_round(st: RoadRunnerState) -> RoadRunnerState:
+            # Reset seed spawn step and RNG for new round
+            key, sub = jax.random.split(st.rng)
+            next_seed_spawn_scroll_step = jax.random.randint(
+                sub, (), self.consts.SEED_SPAWN_MIN_INTERVAL,
+                self.consts.SEED_SPAWN_MAX_INTERVAL + 1, dtype=jnp.int32
+            )
             return st._replace(
                 player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
                 player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
@@ -341,6 +422,10 @@ class JaxRoadRunner(
                 enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
                 enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
                 is_round_over=jnp.array(False, dtype=jnp.bool_),
+                next_seed_spawn_scroll_step=jnp.array(next_seed_spawn_scroll_step, dtype=jnp.int32),
+                rng=key,
+                seeds=jnp.full((4, 2), -1, dtype=jnp.int32),  # Reset all seeds as inactive
+                scrolling_step_counter=jnp.array(0, dtype=jnp.int32),  # Reset scrolling counter
             )
 
         player_at_end = state.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
@@ -504,6 +589,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return jnp.tile(
             jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1)
         )
+    def _create_seed_sprite(self) -> jnp.ndarray:
+        seed_color_rgba = (0, 0, 255, 255)
+        seed_shape = (4, 2, 4)
+        return jnp.tile(
+            jnp.array(seed_color_rgba, dtype=jnp.uint8), (*seed_shape[:2], 1)
+        )
 
     def _get_asset_config(
         self,
@@ -522,6 +613,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
+            {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
         ]
 
         return asset_config
@@ -548,6 +640,21 @@ class RoadRunnerRenderer(JAXGameRenderer):
             max_digits_to_render=6,
         )
         return raster
+
+    def _render_seeds(self, raster: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
+        # Only render active seeds (x >= 0)
+        def render_seed(i, r):
+            seed_x = seeds[i, 0]
+            seed_y = seeds[i, 1]
+            # Only render if seed is active (x >= 0)
+            return jax.lax.cond(
+                seed_x >= 0,
+                lambda ras: self.jr.render_at(ras, seed_x, seed_y, self.SHAPE_MASKS["seed"]),
+                lambda ras: ras,
+                r,
+            )
+        # Use fori_loop to render all seeds
+        return jax.lax.fori_loop(0, seeds.shape[0], render_seed, raster)
 
     def _get_animated_sprite(
         self,
@@ -629,5 +736,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["enemy_run2"],
         )
         raster = self.jr.render_at(raster, state.enemy_x, state.enemy_y, enemy_mask)
+
+        # Render Seeds
+        raster = self._render_seeds(raster, state.seeds)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
