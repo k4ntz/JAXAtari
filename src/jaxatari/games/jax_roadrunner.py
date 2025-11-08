@@ -1,5 +1,3 @@
-# Simplified jax_roadrunner.py
-
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
@@ -60,6 +58,7 @@ class RoadRunnerState(NamedTuple):
     score: chex.Array
     is_scrolling: chex.Array
     scrolling_step_counter: chex.Array
+    is_round_over: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -128,7 +127,7 @@ class JaxRoadRunner(
         # This assumes player and enemy have the same size
         checked_y = jnp.clip(
             y_pos,
-            self.consts.ROAD_TOP_Y - (self.consts.PLAYER_SIZE[1] / 3),
+            self.consts.ROAD_TOP_Y - (self.consts.PLAYER_SIZE[1] // 3),
             self.consts.ROAD_TOP_Y
             + self.consts.ROAD_HEIGHT
             - self.consts.PLAYER_SIZE[1],
@@ -152,14 +151,21 @@ class JaxRoadRunner(
     ) -> RoadRunnerState:
 
         # --- Update Player Position ---
-        vel_x, vel_y = self._handle_input(action)
+        input_vel_x, input_vel_y = self._handle_input(action)
+
+        # If round is over, player is forced to move right.
+        vel_x = jax.lax.cond(
+            state.is_round_over,
+            lambda: jnp.array(self.consts.PLAYER_MOVE_SPEED, dtype=jnp.float32),
+            lambda: input_vel_x,
+        )
+        vel_y = jax.lax.cond(state.is_round_over, lambda: 0.0, lambda: input_vel_y)
 
         # Determine if scrolling should happen based on the potential next position.
         tentative_player_x = state.player_x + vel_x
         is_scrolling = tentative_player_x < self.consts.X_SCROLL_THRESHOLD
 
-        # When scrolling, the player's horizontal velocity should perfectly counteract the scroll.
-        # This ensures the player stays at a fixed horizontal position on the screen, preventing stutter.
+        # When scrolling, the player's horizontal velocity should counteract the scroll.
         # We use the original vel_x for non-scrolling movement.
         final_vel_x = jax.lax.cond(
             is_scrolling,
@@ -210,40 +216,89 @@ class JaxRoadRunner(
         )
 
     def _enemy_step(self, state: RoadRunnerState) -> RoadRunnerState:
-        # Get the distance to the player, with a configurable frame delay.
-        delayed_player_x = state.player_x_history[self.consts.ENEMY_REACTION_DELAY - 1]
-        delayed_player_y = state.player_y_history[self.consts.ENEMY_REACTION_DELAY - 1]
-        delta_x = delayed_player_x - state.enemy_x
-        delta_y = delayed_player_y - state.enemy_y
+        def game_over_logic(st: RoadRunnerState) -> RoadRunnerState:
+            new_enemy_x = st.enemy_x + self.consts.PLAYER_MOVE_SPEED
+            new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, st.enemy_y)
+            return st._replace(
+                enemy_x=new_enemy_x,
+                enemy_y=new_enemy_y,
+                enemy_is_moving=True,
+                enemy_looks_right=True,
+            )
 
-        # Determine enemy movement and orientation
-        enemy_is_moving = (delta_x != 0) | (delta_y != 0)
-        enemy_looks_right = jax.lax.cond(
-            delta_x > 0,
-            lambda: True,
-            lambda: jax.lax.cond(delta_x < 0, lambda: False, lambda: state.enemy_looks_right),
+        def normal_logic(st: RoadRunnerState) -> RoadRunnerState:
+            # Get the distance to the player, with a configurable frame delay.
+            delayed_player_x = st.player_x_history[
+                self.consts.ENEMY_REACTION_DELAY - 1
+            ]
+            delayed_player_y = st.player_y_history[
+                self.consts.ENEMY_REACTION_DELAY - 1
+            ]
+            delta_x = delayed_player_x - st.enemy_x
+            delta_y = delayed_player_y - st.enemy_y
+
+            # Determine enemy movement and orientation
+            enemy_is_moving = (delta_x != 0) | (delta_y != 0)
+            enemy_looks_right = jax.lax.cond(
+                delta_x > 0,
+                lambda: True,
+                lambda: jax.lax.cond(
+                    delta_x < 0, lambda: False, lambda: st.enemy_looks_right
+                ),
+            )
+
+            # Update enemy position, clipping movement to ENEMY_MOVE_SPEED to prevent jittering
+            new_enemy_x = st.enemy_x + jnp.clip(
+                delta_x, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED
+            )
+            new_enemy_y = st.enemy_y + jnp.clip(
+                delta_y, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED
+            )
+
+            new_enemy_x = self._handle_scrolling(st, new_enemy_x)
+
+            new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
+            return st._replace(
+                enemy_x=new_enemy_x,
+                enemy_y=new_enemy_y,
+                enemy_is_moving=enemy_is_moving,
+                enemy_looks_right=enemy_looks_right,
+            )
+
+        return jax.lax.cond(state.is_round_over, game_over_logic, normal_logic, state)
+
+    def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
+        # Here we check if the enemy and the player overlap
+        player_x2 = state.player_x + self.consts.PLAYER_SIZE[0]
+        player_y2 = state.player_y + self.consts.PLAYER_SIZE[1]
+        enemy_x2 = state.enemy_x + self.consts.ENEMY_SIZE[0]
+        enemy_y2 = state.enemy_y + self.consts.ENEMY_SIZE[1]
+
+        # Check for overlap on both axes
+        overlap_x = (state.player_x < enemy_x2) & (player_x2 > state.enemy_x)
+        overlap_y = (state.player_y < enemy_y2) & (player_y2 > state.enemy_y)
+
+        # Collision happens if there is overlap on both axes
+        collision = overlap_x & overlap_y
+
+        return jax.lax.cond(
+            collision,
+            lambda st: st._replace(is_round_over=True),
+            lambda st: st,
+            state,
         )
-
-        # Update enemy position, clipping movement to ENEMY_MOVE_SPEED to prevent jittering
-        new_enemy_x = state.enemy_x + jnp.clip(delta_x, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED)
-        new_enemy_y = state.enemy_y + jnp.clip(delta_y, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED)
-
-        new_enemy_x = self._handle_scrolling(state, new_enemy_x)
-
-        new_enemy_x, new_enemy_y = self._check_bounds(new_enemy_x, new_enemy_y)
-        return state._replace(
-            enemy_x=new_enemy_x,
-            enemy_y=new_enemy_y,
-            enemy_is_moving=enemy_is_moving,
-            enemy_looks_right=enemy_looks_right,
-        )
-
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
         state = RoadRunnerState(
             player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
-            player_x_history=jnp.array([self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY, dtype=jnp.int32),
-            player_y_history=jnp.array([self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY, dtype=jnp.int32),
+            player_x_history=jnp.array(
+                [self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY,
+                dtype=jnp.int32,
+            ),
+            player_y_history=jnp.array(
+                [self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY,
+                dtype=jnp.int32,
+            ),
             enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
             enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
@@ -254,6 +309,7 @@ class JaxRoadRunner(
             score=jnp.array(0, dtype=jnp.int32),
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
+            is_round_over=jnp.array(False, dtype=jnp.bool_),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -264,6 +320,30 @@ class JaxRoadRunner(
     ) -> Tuple[RoadRunnerObservation, RoadRunnerState, float, bool, None]:
         state = self._player_step(state, action)
         state = self._enemy_step(state)
+        state = self._check_game_over(state)
+
+        def reset_round(st: RoadRunnerState) -> RoadRunnerState:
+            return st._replace(
+                player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
+                player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+                player_x_history=jnp.array(
+                    [self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY,
+                    dtype=jnp.int32,
+                ),
+                player_y_history=jnp.array(
+                    [self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY,
+                    dtype=jnp.int32,
+                ),
+                enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
+                enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
+                is_round_over=jnp.array(False, dtype=jnp.bool_),
+            )
+
+        player_at_end = state.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
+        state = jax.lax.cond(
+            state.is_round_over & player_at_end, reset_round, lambda st: st, state
+        )
+
         state = state._replace(
             step_counter=state.step_counter + 1, score=state.score + 1
         )
