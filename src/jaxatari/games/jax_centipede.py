@@ -20,6 +20,66 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural black background
+    procedural_bg = jnp.zeros((210, 160, 4), dtype=jnp.uint8).at[:, :, 3].set(255)
+
+    # Procedural colors for palette swapping (constant colors from CentipedeConstants) [redefinition due to current limitation of sprite loading]
+    all_colors = [
+        [181, 83, 40],    # ORANGE 
+        [184, 70, 162],   # PINK
+        [146, 70, 192],   # PURPLE
+        [45, 50, 184],    # DARK_BLUE
+        [187, 187, 53],   # YELLOW
+        [184, 50, 50],    # RED
+        [110, 156, 66],   # GREEN
+        [84, 138, 210],   # LIGHT_BLUE
+        [66, 72, 200],    # DARK_PURPLE
+        [162, 162, 42],   # DARK_YELLOW
+    ]
+    procedural_colors_data = jnp.array(
+        [list(c) + [255] for c in all_colors], dtype=jnp.uint8
+    ).reshape(-1, 1, 1, 4)
+    
+    return {
+        'background': procedural_bg,
+        'recolor_palette': procedural_colors_data,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Centipede.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Poisoned mushroom files
+    pmush_files = [f'poisoned_mushrooms/{i}.npy' for i in range(1, 17)]
+
+    return (
+        # Procedural assets
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'recolor_palette', 'type': 'procedural', 'data': static_procedural['recolor_palette']},
+        # Single sprites
+        {'name': 'player', 'type': 'single', 'file': 'player/player.npy'},
+        {'name': 'player_spell', 'type': 'single', 'file': 'player_spell/player_spell.npy'},
+        {'name': 'mushroom', 'type': 'single', 'file': 'mushrooms/mushroom.npy'},
+        {'name': 'centipede', 'type': 'single', 'file': 'centipede/segment.npy'},
+        {'name': 'spider_300', 'type': 'single', 'file': 'spider_scores/300.npy'},
+        {'name': 'spider_600', 'type': 'single', 'file': 'spider_scores/600.npy'},
+        {'name': 'spider_900', 'type': 'single', 'file': 'spider_scores/900.npy'},
+        {'name': 'bottom_border', 'type': 'single', 'file': 'ui/bottom_border.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'ui/wand.npy'},
+        # Groups (for auto-padding)
+        {'name': 'spider_group', 'type': 'group', 'files': ['spider/1.npy', 'spider/2.npy', 'spider/3.npy', 'spider/4.npy']},
+        {'name': 'flea_group', 'type': 'group', 'files': ['flea/1.npy', 'flea/2.npy']},
+        {'name': 'scorpion_group', 'type': 'group', 'files': ['scorpion/1.npy', 'scorpion/2.npy']},
+        {'name': 'sparks', 'type': 'group', 'files': ['sparks/1.npy', 'sparks/2.npy', 'sparks/3.npy', 'sparks/4.npy']},
+        {'name': 'poisoned_mushroom_group', 'type': 'group', 'files': pmush_files},
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'big_numbers/{}.npy'},
+    )
 
 class CentipedeConstants:
     # -------- Game constants --------
@@ -134,6 +194,9 @@ class CentipedeConstants:
     SPRITE_SPARKS_FRAMES = 4
     SPRITE_BOTTOM_BORDER_FRAMES = 1
     SPRITE_POISONED_MUSHROOMS_FRAMES = 16
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
     # -------- Centipede States --------
 
@@ -2130,13 +2193,13 @@ class CentipedeRenderer(JAXGameRenderer):
         # 1. Configure the rendering utility
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=1,
-            downscale=(84, 84)
+            channels=3,
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
 
         # 3. Make one call to load and process all assets
         (
@@ -2145,7 +2208,7 @@ class CentipedeRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 4. Store original sprite color IDs (for palette swapping)
         # These are based on the first frame/color in the original game
@@ -2265,50 +2328,6 @@ class CentipedeRenderer(JAXGameRenderer):
             return jnp.where(spark_mask == PLACEHOLDER_ID, color_id, spark_mask)
 
         self.COLORED_SPARK_MASKS = jax.vmap(create_colored_mask)(self.SHAPE_MASKS['sparks'], spark_colors)
-
-    def _get_asset_config(self) -> list[dict[str, Any]]:
-        """
-        Returns the declarative asset manifest based on the old load_sprites() function.
-        """
-        # Procedural black background
-        procedural_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8).at[:, :, 3].set(255)
-
-        # Procedural colors for palette swapping
-        all_colors = [
-            self.consts.ORANGE, self.consts.PINK, self.consts.PURPLE, self.consts.DARK_BLUE,
-            self.consts.YELLOW, self.consts.RED, self.consts.GREEN, self.consts.LIGHT_BLUE,
-            self.consts.DARK_PURPLE, self.consts.DARK_YELLOW
-        ]
-        procedural_colors_data = jnp.array(
-            [list(c) + [255] for c in all_colors], dtype=jnp.uint8
-        ).reshape(-1, 1, 1, 4)
-
-        # Poisoned mushroom files
-        pmush_files = [f'poisoned_mushrooms/{i}.npy' for i in range(1, 17)]
-
-        return [
-            # Procedural assets
-            {'name': 'background', 'type': 'background', 'data': procedural_bg},
-            {'name': 'recolor_palette', 'type': 'procedural', 'data': procedural_colors_data},
-            # Single sprites
-            {'name': 'player', 'type': 'single', 'file': 'player/player.npy'},
-            {'name': 'player_spell', 'type': 'single', 'file': 'player_spell/player_spell.npy'},
-            {'name': 'mushroom', 'type': 'single', 'file': 'mushrooms/mushroom.npy'},
-            {'name': 'centipede', 'type': 'single', 'file': 'centipede/segment.npy'},
-            {'name': 'spider_300', 'type': 'single', 'file': 'spider_scores/300.npy'},
-            {'name': 'spider_600', 'type': 'single', 'file': 'spider_scores/600.npy'},
-            {'name': 'spider_900', 'type': 'single', 'file': 'spider_scores/900.npy'},
-            {'name': 'bottom_border', 'type': 'single', 'file': 'ui/bottom_border.npy'},
-            {'name': 'life_indicator', 'type': 'single', 'file': 'ui/wand.npy'},
-            # Groups (for auto-padding)
-            {'name': 'spider_group', 'type': 'group', 'files': ['spider/1.npy', 'spider/2.npy', 'spider/3.npy', 'spider/4.npy']},
-            {'name': 'flea_group', 'type': 'group', 'files': ['flea/1.npy', 'flea/2.npy']},
-            {'name': 'scorpion_group', 'type': 'group', 'files': ['scorpion/1.npy', 'scorpion/2.npy']},
-            {'name': 'sparks', 'type': 'group', 'files': ['sparks/1.npy', 'sparks/2.npy', 'sparks/3.npy', 'sparks/4.npy']},
-            {'name': 'poisoned_mushroom_group', 'type': 'group', 'files': pmush_files},
-            # Digits
-            {'name': 'digits', 'type': 'digits', 'pattern': 'big_numbers/{}.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_frame_palette(self, wave: chex.Array) -> chex.Array:

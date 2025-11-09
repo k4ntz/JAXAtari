@@ -29,6 +29,82 @@ def _load_collision_masks():
 
 _COLLISION_WALL, _COLLISION_LIGHT = _load_collision_masks()
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural colors for wall palette swapping
+    wall_colors = jnp.array([
+        [24, 26, 167, 255],   # Blue (original)
+        [163, 57, 21, 255],   # Red
+        [24, 98, 78, 255],    # Green
+        [162, 134, 56, 255],  # Yellow
+        [255, 255, 255, 255], # White
+        [198, 108, 58, 255],  # Light Color
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    return {
+        'wall_colors': wall_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for HauntedHouse.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define item files for grouping
+    ground_item_files = [
+        'SpriteItemScepter.npy',
+        'SpriteItemUrnLeft.npy',
+        'SpriteItemUrnMiddle.npy',
+        'SpriteItemUrnRight.npy',
+        'SpriteItemUrnLeftMiddle.npy',
+        'SpriteItemUrnMiddleRight.npy',
+        'SpriteItemUrnLeftRight.npy',
+        'SpriteItemUrn.npy'
+    ]
+    
+    held_item_files = [
+        'SpriteHeldItemScepter.npy',
+        'SpriteHeldItemUrnLeft.npy',
+        'SpriteHeldItemUrnMiddle.npy',
+        'SpriteHeldItemUrnRight.npy',
+        'SpriteHeldItemUrnLeftMiddle.npy',
+        'SpriteHeldItemUrnMiddleRight.npy',
+        'SpriteHeldItemUrnLeftRight.npy',
+        'SpriteHeldItemUrn.npy'
+    ]
+
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'file': 'SpriteBackground.npy'},
+        
+        # Procedural Colors
+        {'name': 'wall_colors', 'type': 'procedural', 'data': static_procedural['wall_colors']},
+        
+        # Sprites (as groups for padding)
+        {'name': 'player_group', 'type': 'group', 'files': [
+            'SpriteEyesMiddle.npy', 'SpriteEyesUp.npy', 'SpriteEyesUpLeft.npy',
+            'SpriteEyesLeft.npy', 'SpriteEyesDownLeft.npy', 'SpriteEyesDown.npy',
+            'SpriteEyesDownRight.npy', 'SpriteEyesRight.npy', 'SpriteEyesUpRight.npy'
+        ]},
+        {'name': 'ghost_group', 'type': 'group', 'files': ['SpriteGhost1.npy', 'SpriteGhost2.npy']},
+        {'name': 'spider_group', 'type': 'group', 'files': ['SpriteSpider1.npy', 'SpriteSpider2.npy']},
+        {'name': 'bat_group', 'type': 'group', 'files': ['SpriteBat1.npy', 'SpriteBat2.npy']},
+        {'name': 'light_group', 'type': 'group', 'files': ['SpriteLight1.npy', 'SpriteLight2.npy']},
+        # Wall & UI
+        {'name': 'wall', 'type': 'single', 'file': 'Wall.npy'},
+        {'name': 'scoreboard', 'type': 'single', 'file': 'SpriteScoreboard.npy'},
+        {'name': 'blackbar', 'type': 'single', 'file': 'SpriteBlackBar.npy'},
+        {'name': 'stairsthintop', 'type': 'single', 'file': 'SpriteStairsThin.npy'},
+        {'name': 'stairswide', 'type': 'single', 'file': 'SpriteStairsWide.npy'},
+        # Items (Ground) - Load as groups for uniform padding
+        {'name': 'ground_item_group', 'type': 'group', 'files': ground_item_files},
+        # Items (Held) - Load as groups for uniform padding
+        {'name': 'held_item_group', 'type': 'group', 'files': held_item_files},
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'SpriteNumber{}.npy'},
+    )
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -144,6 +220,9 @@ class HauntedHouseConstants(NamedTuple):
     LIGHT: chex.Array = _COLLISION_LIGHT
 
     INVISIBLE_ENTITY: EntityPosition = EntityPosition(x=jnp.array(-1), y=jnp.array(-1), floor=jnp.array(-1), width=jnp.array(-1), height=jnp.array(-1))
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # immutable state container
@@ -1277,10 +1356,10 @@ class HauntedHouseRenderer(JAXGameRenderer):
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
-        
+
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
         # 3. Make one call to load and process all assets
         (
             self.PALETTE,
@@ -1288,7 +1367,7 @@ class HauntedHouseRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
         
         # 4. Store key color IDs for wall palette swapping
         self.BLUE_WALL_ID = self.COLOR_TO_ID.get((24, 26, 167), 0)
@@ -1313,74 +1392,6 @@ class HauntedHouseRenderer(JAXGameRenderer):
         # 7. Get the single, uniform offset for each group
         self.HELD_ITEM_OFFSET = self.FLIP_OFFSETS['held_item_group']
         self.ITEM_OFFSET = self.FLIP_OFFSETS['ground_item_group']
-
-    def _get_asset_config(self):
-        """
-        Returns the declarative asset manifest based on the old load_sprites() function.
-        """
-        # Procedural colors for wall palette swapping
-        wall_colors = jnp.array([
-            [24, 26, 167, 255],   # Blue (original)
-            [163, 57, 21, 255],   # Red
-            [24, 98, 78, 255],    # Green
-            [162, 134, 56, 255],  # Yellow
-            [255, 255, 255, 255], # White
-            [198, 108, 58, 255],  # Light Color
-        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
-
-        # Define item files for grouping
-        ground_item_files = [
-            'SpriteItemScepter.npy',
-            'SpriteItemUrnLeft.npy',
-            'SpriteItemUrnMiddle.npy',
-            'SpriteItemUrnRight.npy',
-            'SpriteItemUrnLeftMiddle.npy',
-            'SpriteItemUrnMiddleRight.npy',
-            'SpriteItemUrnLeftRight.npy',
-            'SpriteItemUrn.npy'
-        ]
-        
-        held_item_files = [
-            'SpriteHeldItemScepter.npy',
-            'SpriteHeldItemUrnLeft.npy',
-            'SpriteHeldItemUrnMiddle.npy',
-            'SpriteHeldItemUrnRight.npy',
-            'SpriteHeldItemUrnLeftMiddle.npy',
-            'SpriteHeldItemUrnMiddleRight.npy',
-            'SpriteHeldItemUrnLeftRight.npy',
-            'SpriteHeldItemUrn.npy'
-        ]
-
-        return [
-            # Background
-            {'name': 'background', 'type': 'background', 'file': 'SpriteBackground.npy'},
-            
-            # Procedural Colors
-            {'name': 'wall_colors', 'type': 'procedural', 'data': wall_colors},
-            
-            # Sprites (as groups for padding)
-            {'name': 'player_group', 'type': 'group', 'files': [
-                'SpriteEyesMiddle.npy', 'SpriteEyesUp.npy', 'SpriteEyesUpLeft.npy',
-                'SpriteEyesLeft.npy', 'SpriteEyesDownLeft.npy', 'SpriteEyesDown.npy',
-                'SpriteEyesDownRight.npy', 'SpriteEyesRight.npy', 'SpriteEyesUpRight.npy'
-            ]},
-            {'name': 'ghost_group', 'type': 'group', 'files': ['SpriteGhost1.npy', 'SpriteGhost2.npy']},
-            {'name': 'spider_group', 'type': 'group', 'files': ['SpriteSpider1.npy', 'SpriteSpider2.npy']},
-            {'name': 'bat_group', 'type': 'group', 'files': ['SpriteBat1.npy', 'SpriteBat2.npy']},
-            {'name': 'light_group', 'type': 'group', 'files': ['SpriteLight1.npy', 'SpriteLight2.npy']},
-            # Wall & UI
-            {'name': 'wall', 'type': 'single', 'file': 'Wall.npy'},
-            {'name': 'scoreboard', 'type': 'single', 'file': 'SpriteScoreboard.npy'},
-            {'name': 'blackbar', 'type': 'single', 'file': 'SpriteBlackBar.npy'},
-            {'name': 'stairsthintop', 'type': 'single', 'file': 'SpriteStairsThin.npy'},
-            {'name': 'stairswide', 'type': 'single', 'file': 'SpriteStairsWide.npy'},
-            # Items (Ground) - Load as groups for uniform padding
-            {'name': 'ground_item_group', 'type': 'group', 'files': ground_item_files},
-            # Items (Held) - Load as groups for uniform padding
-            {'name': 'held_item_group', 'type': 'group', 'files': held_item_files},
-            # Digits
-            {'name': 'digits', 'type': 'digits', 'pattern': 'SpriteNumber{}.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:HauntedHouseState):

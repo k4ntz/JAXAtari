@@ -10,6 +10,13 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Surround.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Surround uses mostly procedural sprites, so this is empty.
+    """
+    return ()
 
 class SurroundConstants(NamedTuple):
     """Parameters defining the Surround grid and visuals."""
@@ -65,6 +72,9 @@ class SurroundConstants(NamedTuple):
     # Rough logic rate control when caller steps at ~60 FPS
     # Move only every N calls to step (e.g., 60/4 = 15 for ~4 Hz)
     MOVE_EVERY_N_STEPS: int = 15
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
     # --- Speed-up schedule (game accelerates over time) ---
     # Every SPEEDUP_STEPS logic ticks, reduce the effective MOVE_EVERY by SPEEDUP_DELTA, but not below MIN_MOVE_EVERY.
     # SPEEDUP_STEPS: int = 200          # how many logic ticks until next speed bump
@@ -604,26 +614,10 @@ class SurroundRenderer(JAXGameRenderer):
         self.BORDER_COLOR_TUPLE = (214, 92, 92)      # Pink
         self.DIVIDER_COLOR_TUPLE = (142, 142, 142)   # Grey
 
-        asset_config = self._get_asset_config()
-        (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(asset_config, "")
-
-        self.TRAIL_COLOR_MAP = jnp.array([
-            self.jr.TRANSPARENT_ID,
-            self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR],
-            self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR],
-        ])
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        config = []
-
-        # --- FIX: Use the instance attributes defined in __init__ ---
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 2. Create procedural assets using modded constants
         procedural_sprites = {
             'p1_head': jnp.array(list(self.P1_HEAD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
             'p2_head': jnp.array(list(self.P2_HEAD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
@@ -634,10 +628,10 @@ class SurroundRenderer(JAXGameRenderer):
             'playfield': jnp.array(list(self.PLAYFIELD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
         }
 
-        config.append({'name': 'background', 'type': 'background', 'data': jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)})
+        final_asset_config.append({'name': 'background', 'type': 'background', 'data': jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)})
 
         for name, data in procedural_sprites.items():
-            config.append({'name': name, 'type': 'procedural', 'data': data})
+            final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
 
         module_dir = os.path.dirname(os.path.abspath(__file__))
         digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
@@ -650,10 +644,23 @@ class SurroundRenderer(JAXGameRenderer):
         p1_digits_rgba = jnp.concatenate([jnp.where(alpha_mask, jnp.array(self.P1_HEAD_COLOR_TUPLE), 0), scaled_digits[..., 3:]], axis=-1)
         p2_digits_rgba = jnp.concatenate([jnp.where(alpha_mask, jnp.array(self.P2_HEAD_COLOR_TUPLE), 0), scaled_digits[..., 3:]], axis=-1)
 
-        config.append({'name': 'p1_digits', 'type': 'procedural', 'data': p1_digits_rgba})
-        config.append({'name': 'p2_digits', 'type': 'procedural', 'data': p2_digits_rgba})
+        final_asset_config.append({'name': 'p1_digits', 'type': 'procedural', 'data': p1_digits_rgba})
+        final_asset_config.append({'name': 'p2_digits', 'type': 'procedural', 'data': p2_digits_rgba})
+        
+        # 3. Load all assets, create palette, and generate ID masks
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, "")
 
-        return config
+        self.TRAIL_COLOR_MAP = jnp.array([
+            self.jr.TRANSPARENT_ID,
+            self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR],
+            self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR],
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SurroundState) -> jnp.ndarray:

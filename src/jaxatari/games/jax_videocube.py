@@ -27,6 +27,66 @@ import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space, Discrete, Box, Dict
 
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for VideoCube.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # Helper lists for generating file paths
+    label_files = [f'label/label_{i}.npy' for i in range(1, 65)]
+    
+    score_digit_files = []
+    for i in range(1, 65):
+        for k in range(10):
+            score_digit_files.append(f'score/score_{k}/score_{k}_{i}.npy')
+    
+    player_anim_files = []
+    orientations = ["down_up", "right", "left"]
+    colors = ["red", "green", "blue", "orange", "purple", "white"]
+    for orientation in orientations:
+        for color in colors:
+            for i in range(1, 7):
+                player_anim_files.append(f'player_animation/{orientation}/{color}/{orientation}_{color}_{i}.npy')
+    horiz_anim_files = []
+    widths = [7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24]
+    for color in colors:
+        for width in widths:
+            horiz_anim_files.append(f'switch_sides_animation/left_right/tile_{color}_width_{width}.npy')
+    
+    vert_anim_files = []
+    heights = [15, 24, 30, 36, 41]
+    for color in colors:
+        for height in heights:
+            vert_anim_files.append(f'switch_sides_animation/up_down/tile_{color}_hight_{height}.npy')
+
+    return (
+        # Backgrounds
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'background_switch', 'type': 'single', 'file': 'background_switch_sides_vertically.npy'},
+        
+        # Tile colors (Indices 0-6 match game logic: R,G,B,O,P,W,Black)
+        {'name': 'tiles', 'type': 'group', 'files': [
+            'tile/tile_red.npy',
+            'tile/tile_green.npy',
+            'tile/tile_blue.npy',
+            'tile/tile_orange.npy',
+            'tile/tile_purple.npy',
+            'tile/tile_white.npy',
+            'tile/tile_black.npy'
+        ]},
+        
+        # Digits
+        {'name': 'cube_digits', 'type': 'digits', 'pattern': 'cube_digit/cube_digit_{}.npy'},
+        
+        # Groups of sprites
+        {'name': 'labels', 'type': 'group', 'files': label_files},
+        {'name': 'score_digits_all', 'type': 'group', 'files': score_digit_files},
+        {'name': 'player_anims', 'type': 'group', 'files': player_anim_files},
+        {'name': 'horiz_anims', 'type': 'group', 'files': horiz_anim_files},
+        {'name': 'vert_anims', 'type': 'group', 'files': vert_anim_files},
+    )
+
+
 class VideoCubeConstants(NamedTuple):
     WIDTH = 160
     HEIGHT = 210
@@ -316,6 +376,8 @@ class VideoCubeConstants(NamedTuple):
         [69, 70, 71, 59, 47, 46, 45, 57, 58],
         [96, 97, 98, 86, 74, 73, 72, 84, 85]
     ])
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class MovementState(NamedTuple):
     is_moving_on_one_side: chex.Numeric
@@ -392,16 +454,12 @@ class VideoCubeInfo(NamedTuple):
 
 
 @jax.jit
-def get_player_position(cube_current_side, cube_orientation, player_pos, consts):
-    """ Computes from the global player position the position of the player on one side of the cube
-
-    :param cube_current_side: the number of the side the player is looking at
-    :param cube_orientation: the rotation of the current side
-    :param player_pos: the global player position
+def get_player_position_helper(cube_current_side, cube_orientation, player_pos, cube_sides):
+    """ Helper function for renderer to compute player position.
+    The main implementation is in JaxVideoCube.get_player_position.
     """
-
     # Get the current side of the cube as an array
-    current_side = consts.CUBE_SIDES[cube_current_side]
+    current_side = cube_sides[cube_current_side]
     # Shifts the array by cube_orientation
     rotated_array = jnp.roll(current_side[0:8], -cube_orientation * 2)
     # Organizes the output matrix correctly
@@ -506,8 +564,8 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.renderer = VideoCubeRenderer()
         self.consts = consts or VideoCubeConstants()
+        self.renderer = VideoCubeRenderer(self.consts)
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -768,6 +826,32 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
     def _get_reward(self, previous_state: VideoCubeState, state: VideoCubeState):
         return previous_state.player_score - state.player_score
 
+    @partial(jax.jit, static_argnums=(0,))
+    def get_player_position(self, cube_current_side, cube_orientation, player_pos):
+        """ Computes from the global player position the position of the player on one side of the cube
+
+        :param cube_current_side: the number of the side the player is looking at
+        :param cube_orientation: the rotation of the current side
+        :param player_pos: the global player position
+        """
+        # Get the current side of the cube as an array
+        current_side = self.consts.CUBE_SIDES[cube_current_side]
+        # Shifts the array by cube_orientation
+        rotated_array = jnp.roll(current_side[0:8], -cube_orientation * 2)
+        # Organizes the output matrix correctly
+        result = jnp.array([
+            [rotated_array[0], rotated_array[1], rotated_array[2]],
+            [rotated_array[7], current_side[8], rotated_array[3]],
+            [rotated_array[6], rotated_array[5], rotated_array[4]],
+        ])
+        # Compute the position localy as x,y coordinate
+        flat_index = jnp.argmax(result == player_pos)
+        index = jnp.unravel_index(flat_index, result.shape)
+
+        x_coordinate = index[0].astype(jnp.int32)
+        y_coordinate = index[1].astype(jnp.int32)
+        return y_coordinate, x_coordinate
+
     def render(self, state: VideoCubeState) -> jnp.ndarray:
         return self.renderer.render(state)
 
@@ -802,8 +886,8 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             cube_current_view=get_view(state.cube, state.cube_current_side, state.cube_orientation, self.consts.GAME_VARIATION, state.movement_state.is_moving_between_two_sides),
             player_score=state.player_score.astype(jnp.int32),
             player_color=state.player_color.astype(jnp.int32),
-            player_x=get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)[0],
-            player_y=get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)[1]
+            player_x=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[0],
+            player_y=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[1]
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -840,66 +924,13 @@ class VideoCubeRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
-            downscale=(84, 84)
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocube"
-        # 2. Define the asset manifest
         
-        # Helper lists for generating file paths
-        label_files = [f'label/label_{i}.npy' for i in range(1, 65)]
-        
-        score_digit_files = []
-        for i in range(1, 65):
-            for k in range(10):
-                score_digit_files.append(f'score/score_{k}/score_{k}_{i}.npy')
-        
-        player_anim_files = []
-        orientations = ["down_up", "right", "left"]
-        colors = ["red", "green", "blue", "orange", "purple", "white"]
-        for orientation in orientations:
-            for color in colors:
-                for i in range(1, 7):
-                    player_anim_files.append(f'player_animation/{orientation}/{color}/{orientation}_{color}_{i}.npy')
-        horiz_anim_files = []
-        widths = [7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24]
-        for color in colors:
-            for width in widths:
-                horiz_anim_files.append(f'switch_sides_animation/left_right/tile_{color}_width_{width}.npy')
-        
-        vert_anim_files = []
-        heights = [15, 24, 30, 36, 41]
-        for color in colors:
-            for height in heights:
-                vert_anim_files.append(f'switch_sides_animation/up_down/tile_{color}_hight_{height}.npy')
-
-        asset_config = [
-            # Backgrounds
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'background_switch', 'type': 'single', 'file': 'background_switch_sides_vertically.npy'},
-            
-            # Tile colors (Indices 0-6 match game logic: R,G,B,O,P,W,Black)
-            {'name': 'tiles', 'type': 'group', 'files': [
-                'tile/tile_red.npy',
-                'tile/tile_green.npy',
-                'tile/tile_blue.npy',
-                'tile/tile_orange.npy',
-                'tile/tile_purple.npy',
-                'tile/tile_white.npy',
-                'tile/tile_black.npy'
-            ]},
-            
-            # Digits
-            {'name': 'cube_digits', 'type': 'digits', 'pattern': 'cube_digit/cube_digit_{}.npy'},
-            
-            # Groups of sprites
-            {'name': 'labels', 'type': 'group', 'files': label_files},
-            {'name': 'score_digits_all', 'type': 'group', 'files': score_digit_files},
-            {'name': 'player_anims', 'type': 'group', 'files': player_anim_files},
-            {'name': 'horiz_anims', 'type': 'group', 'files': horiz_anim_files},
-            {'name': 'vert_anims', 'type': 'group', 'files': vert_anim_files},
-        ]
-
+        # 2. Asset manifest is now loaded from constants
+        # The large local 'asset_config' list has been removed.
         # 3. Load all assets
         (
             self.PALETTE,
@@ -907,7 +938,7 @@ class VideoCubeRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), self.sprite_path)
 
         # 4. Store animation helper arrays (unchanged game logic)
         self.TILE_POSITIONS_HORIZONTAL_ROTATION = jnp.array([
@@ -1228,8 +1259,8 @@ class VideoCubeRenderer(JAXGameRenderer):
         )
         
         # Render player
-        player_position = get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)
-        last_player_position = get_player_position(state.last_cube_current_side, state.last_cube_orientation, state.last_player_pos, self.consts)
+        player_position = get_player_position_helper(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts.CUBE_SIDES)
+        last_player_position = get_player_position_helper(state.last_cube_current_side, state.last_cube_orientation, state.last_player_pos, self.consts.CUBE_SIDES)
         sprite_on_one_side_indices = jnp.array([0, 1, 2, 0])
         
         @jax.jit

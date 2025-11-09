@@ -10,6 +10,65 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create procedural black background (same as original jr.create_initial_frame)
+    black_bg = jnp.zeros((210, 160, 4), dtype=jnp.uint8)
+    black_bg = black_bg.at[:, :, 3].set(255)  # Set alpha to 255
+    return {
+        'black_bg': black_bg,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Turmoil.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # A list of all 15 base enemy frames, to be padded together
+    all_enemy_files = [
+        'enemy/3lines/1.npy',         # 0
+        'enemy/arrow/1.npy',          # 1
+        'enemy/tank/1.npy',           # 2
+        'enemy/tank/2.npy',           # 3
+        'enemy/L/1.npy',              # 4
+        'enemy/L/2.npy',              # 5
+        'enemy/T/1.npy',              # 6
+        'enemy/T/2.npy',              # 7
+        'enemy/rocket/1.npy',         # 8
+        'enemy/rocket/2.npy',         # 9
+        'enemy/triangle_hollow/1.npy',# 10
+        'enemy/x_shape/1.npy',        # 11
+        'enemy/x_shape/2.npy',        # 12
+        'enemy/boom/1.npy',            # 13
+        'enemy/boom/2.npy',           # 14
+    ]
+
+    return (
+        # Background - procedural black background (base layer)
+        {'name': 'black_bg', 'type': 'background', 'data': static_procedural['black_bg']},
+
+        # Game background sprite (drawn conditionally on top of black background)
+        {'name': 'game_bg', 'type': 'single', 'file': 'bg/1.npy'},
+
+        # Player
+        {'name': 'player', 'type': 'single', 'file': 'player/1.npy'},
+        {'name': 'bullet', 'type': 'single', 'file': 'player/bullet/1.npy'},
+        {'name': 'player_shrink', 'type': 'group', 'files': [
+            'player/shrink/1.npy', 'player/shrink/2.npy', 'player/shrink/3.npy',
+            'player/shrink/4.npy', 'player/shrink/5.npy', 'player/shrink/6.npy'
+        ]},
+
+        # Enemies (All base frames in one group for uniform padding)
+        {'name': 'all_enemies', 'type': 'group', 'files': all_enemy_files},
+
+        # Explosion
+        {'name': 'explosion_group', 'type': 'group', 'files': ['enemy/explosion/1.npy', 'enemy/explosion/2.npy']},
+
+        # UI
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+    )
 
 class TurmoilConstants(NamedTuple):
     # pre-defined movement lanes
@@ -129,6 +188,9 @@ class TurmoilConstants(NamedTuple):
     HEIGHT: int = 210
     MAX_ENEMIES: int = 7
     MAX_EXPLOSIONS: int = 7
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class TurmoilState(NamedTuple):
@@ -1796,8 +1858,8 @@ class TurmoilRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
 
         # 3. Make one call to load and process all assets
         (
@@ -1806,7 +1868,7 @@ class TurmoilRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 4. Replicate Animation Stack Logic (from old load_sprites)
 
@@ -1886,58 +1948,6 @@ class TurmoilRenderer(JAXGameRenderer):
 
         # Store the single, uniform flip offset for all enemies
         self.ENEMY_FLIP_OFFSET = self.FLIP_OFFSETS['all_enemies']
-
-    def _get_asset_config(self) -> list[dict[str, Any]]:
-        """
-        Returns the declarative asset manifest based on the old load_sprites() function.
-        """
-        # A list of all 15 base enemy frames, to be padded together
-        all_enemy_files = [
-            'enemy/3lines/1.npy',         # 0
-            'enemy/arrow/1.npy',          # 1
-            'enemy/tank/1.npy',           # 2
-            'enemy/tank/2.npy',           # 3
-            'enemy/L/1.npy',              # 4
-            'enemy/L/2.npy',              # 5
-            'enemy/T/1.npy',              # 6
-            'enemy/T/2.npy',              # 7
-            'enemy/rocket/1.npy',         # 8
-            'enemy/rocket/2.npy',         # 9
-            'enemy/triangle_hollow/1.npy',# 10
-            'enemy/x_shape/1.npy',        # 11
-            'enemy/x_shape/2.npy',        # 12
-            'enemy/boom/1.npy',            # 13
-            'enemy/boom/2.npy',           # 14
-        ]
-
-        # Create procedural black background (same as original jr.create_initial_frame)
-        black_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)
-        black_bg = black_bg.at[:, :, 3].set(255)  # Set alpha to 255
-
-        return [
-            # Background - procedural black background (base layer)
-            {'name': 'black_bg', 'type': 'background', 'data': black_bg},
-
-            # Game background sprite (drawn conditionally on top of black background)
-            {'name': 'game_bg', 'type': 'single', 'file': 'bg/1.npy'},
-
-            # Player
-            {'name': 'player', 'type': 'single', 'file': 'player/1.npy'},
-            {'name': 'bullet', 'type': 'single', 'file': 'player/bullet/1.npy'},
-            {'name': 'player_shrink', 'type': 'group', 'files': [
-                'player/shrink/1.npy', 'player/shrink/2.npy', 'player/shrink/3.npy',
-                'player/shrink/4.npy', 'player/shrink/5.npy', 'player/shrink/6.npy'
-            ]},
-
-            # Enemies (All base frames in one group for uniform padding)
-            {'name': 'all_enemies', 'type': 'group', 'files': all_enemy_files},
-
-            # Explosion
-            {'name': 'explosion_group', 'type': 'group', 'files': ['enemy/explosion/1.npy', 'enemy/explosion/2.npy']},
-
-            # UI
-            {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_normal_game_step(self, raster, state: TurmoilState):

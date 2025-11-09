@@ -15,6 +15,60 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Use default constants for procedural colors
+    PLAYER_STATS_COLOR = (111, 217, 158, 255)
+    ENEMY_STATS_COLOR = (104, 186, 220, 255)
+    
+    return {
+        'player_stats_color': jnp.array([[list(PLAYER_STATS_COLOR)]], dtype=jnp.uint8),
+        'enemy_stats_color': jnp.array([[list(ENEMY_STATS_COLOR)]], dtype=jnp.uint8),
+        'victory_color_1': jnp.array([[[212,252,144,255]]], dtype=jnp.uint8),
+        'victory_color_2': jnp.array([[[198,128,236,255]]], dtype=jnp.uint8),
+        'black': jnp.array([[[0,0,0,255]]], dtype=jnp.uint8),
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for SpaceWar.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Player sprites (16 move + 8 death)
+    player_files = [f'player_pos{i}.npy' for i in range(16)]
+    player_death_files = [f'playerdeath_pos{i}.npy' for i in list(range(2, 6)) + list(range(10, 14))]
+    
+    # Enemy sprites (16 frames)
+    enemy_files = [f'enemy_pos{i}.npy' for i in range(16)]
+    
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        
+        # Player (group all frames to pad them together)
+        {'name': 'player_all', 'type': 'group', 'files': player_files + player_death_files},
+        
+        # Enemy (group all frames to pad them together)
+        {'name': 'enemy_all', 'type': 'group', 'files': enemy_files},
+        
+        # Other single sprites
+        {'name': 'missile', 'type': 'single', 'file': 'missile.npy'},
+        {'name': 'star_base', 'type': 'single', 'file': 'star_base.npy'},
+        
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digit_{}.npy'},
+        {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemyDigit_{}.npy'},
+        
+        # Procedural sprites to ensure colors are in the palette
+        {'name': 'player_stats_color', 'type': 'procedural', 'data': static_procedural['player_stats_color']},
+        {'name': 'enemy_stats_color', 'type': 'procedural', 'data': static_procedural['enemy_stats_color']},
+        {'name': 'victory_color_1', 'type': 'procedural', 'data': static_procedural['victory_color_1']},
+        {'name': 'victory_color_2', 'type': 'procedural', 'data': static_procedural['victory_color_2']},
+        {'name': 'black', 'type': 'procedural', 'data': static_procedural['black']},
+    )
+
 class SpaceWarConstants(NamedTuple):
     # Constants for game environment
     WIDTH: int = 160
@@ -103,6 +157,8 @@ class SpaceWarConstants(NamedTuple):
         (416, -416),
         (224, -528)
     ])
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 # immutable state container
 class SpaceWarState(NamedTuple):
@@ -799,8 +855,8 @@ class SpaceWarRenderer(JAXGameRenderer):
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spacewar"
         
-        # 3. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 3. Use asset config from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 4. Load all assets, create palette, and generate ID masks
         (
@@ -809,7 +865,7 @@ class SpaceWarRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         # 5. Pad the background to match full game dimensions
         # The background sprite is smaller and needs padding on top and bottom
@@ -818,44 +874,6 @@ class SpaceWarRenderer(JAXGameRenderer):
         # 6. Pre-compute/cache values for rendering
         self._cache_sprite_stacks()
 
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        
-        # Player sprites (16 move + 8 death)
-        player_files = [f'player_pos{i}.npy' for i in range(16)]
-        player_death_files = [f'playerdeath_pos{i}.npy' for i in list(range(2, 6)) + list(range(10, 14))]
-        
-        # Enemy sprites (16 frames)
-        enemy_files = [f'enemy_pos{i}.npy' for i in range(16)]
-        
-        return [
-            # Background
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            
-            # Player (group all frames to pad them together)
-            {'name': 'player_all', 'type': 'group', 'files': player_files + player_death_files},
-            
-            # Enemy (group all frames to pad them together)
-            {'name': 'enemy_all', 'type': 'group', 'files': enemy_files},
-            
-            # Other single sprites
-            {'name': 'missile', 'type': 'single', 'file': 'missile.npy'},
-            {'name': 'star_base', 'type': 'single', 'file': 'star_base.npy'},
-            
-            # Digits
-            {'name': 'digits', 'type': 'digits', 'pattern': 'digit_{}.npy'},
-            {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemyDigit_{}.npy'},
-            # --- Procedural sprites to ensure colors are in the palette ---
-            # Player stats color
-            {'name': 'player_stats_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.PLAYER_STATS_COLOR)]], dtype=jnp.uint8)},
-            # Enemy stats color
-            {'name': 'enemy_stats_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.ENEMY_STATS_COLOR)]], dtype=jnp.uint8)},
-            # Enemy victory background colors
-            {'name': 'victory_color_1', 'type': 'procedural', 'data': jnp.array([[[212,252,144,255]]], dtype=jnp.uint8)},
-            {'name': 'victory_color_2', 'type': 'procedural', 'data': jnp.array([[[198,128,236,255]]], dtype=jnp.uint8)},
-            # Black for player stats bar
-            {'name': 'black', 'type': 'procedural', 'data': jnp.array([[[0,0,0,255]]], dtype=jnp.uint8)},
-        ]
 
     def _pad_background(self, background):
         """Pads the background with black borders on top and bottom to match target dimensions."""

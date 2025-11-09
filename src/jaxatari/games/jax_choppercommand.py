@@ -18,6 +18,59 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvSt
 from jaxatari.renderers import JAXGameRenderer
 import time
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural black background (the sky)
+    background = jnp.zeros((210, 160, 4), dtype=jnp.uint8).at[:,:,3].set(255)
+    return {
+        'background': background,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for ChopperCommand.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Load all 160 background files (1.npy to 160.npy)
+    bg_scroll_files = [f'bg/{i}.npy' for i in range(1, 161)]
+    
+    # Player missile animation (missile_0.npy to missile_15.npy)
+    pl_missile_files = [f'player_missiles/missile_{i}.npy' for i in range(16)]
+    
+    # Minimap mountains (1.npy to 8.npy)
+    minimap_mountain_files = [f'minimap/mountains/{i}.npy' for i in range(1, 9)]
+    
+    return (
+        # Procedural black background (the sky)
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        # Define the group for all 160 background slices
+        {'name': 'background_scroll', 'type': 'group', 'files': bg_scroll_files},
+        
+        # --- Main Game Sprites ---
+        {'name': 'player_chopper', 'type': 'group', 'files': ['player_chopper/1.npy', 'player_chopper/2.npy']},
+        {'name': 'friendly_truck', 'type': 'group', 'files': ['friendly_truck/1.npy', 'friendly_truck/2.npy']},
+        {'name': 'enemy_jet', 'type': 'single', 'file': 'enemy_jet/normal.npy'},
+        {'name': 'enemy_heli', 'type': 'group', 'files': ['enemy_chopper/1.npy', 'enemy_chopper/2.npy']},
+        {'name': 'enemy_missile', 'type': 'single', 'file': 'bomb/1.npy'},
+        {'name': 'player_missile', 'type': 'group', 'files': pl_missile_files},
+        
+        # Death animations
+        {'name': 'player_death', 'type': 'group', 'files': ['player_chopper/death_1.npy', 'player_chopper/death_2.npy', 'player_chopper/death_3.npy']},
+        {'name': 'enemy_death', 'type': 'group', 'files': ['enemy_death/death_1.npy', 'enemy_death/death_2.npy', 'enemy_death/death_3.npy']},
+        # --- UI Sprites ---
+        {'name': 'digits', 'type': 'digits', 'pattern': 'score/{}.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'score/chopper.npy'},
+        # --- Minimap Sprites ---
+        {'name': 'minimap_bg', 'type': 'single', 'file': 'minimap/background.npy'},
+        {'name': 'minimap_mountains', 'type': 'group', 'files': minimap_mountain_files},
+        {'name': 'minimap_truck', 'type': 'single', 'file': 'minimap/truck.npy'},
+        {'name': 'minimap_enemy', 'type': 'single', 'file': 'minimap/enemy.npy'},
+        {'name': 'minimap_player', 'type': 'single', 'file': 'minimap/player.npy'},
+        {'name': 'minimap_logo', 'type': 'single', 'file': 'minimap/activision_logo.npy'},
+    )
+
 class ChopperCommandConstants:
     # Game Constants
     WINDOW_WIDTH = 160 * 3
@@ -169,6 +222,9 @@ class ChopperCommandConstants:
 
     ENABLE_PLAYER_COLLISION = True
     ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class ChopperCommandState(NamedTuple):
@@ -1795,13 +1851,13 @@ class ChopperCommandRenderer(JAXGameRenderer):
         # 1. Configure the rendering utility
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=1,
-            downscale=(84,84)
+            channels=3,
+            #downscale=(84,84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config() 
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 3. Make one call to load and process all assets
         (
@@ -1810,7 +1866,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
         
         # --- 4. Replicate Animation Stack Logic (from old load_sprites) ---
         # Player Chopper (2 frames -> 6 frames)
@@ -1843,48 +1899,6 @@ class ChopperCommandRenderer(JAXGameRenderer):
             'player_missile': self.SHAPE_MASKS['player_missile'].shape[0], # 16
             'minimap_mountains': self.SHAPE_MASKS['minimap_mountains'].shape[0], # 8
         }
-
-    def _get_asset_config(self) -> list[dict]:
-        """
-        Returns the declarative asset manifest based on the old load_sprites() function.
-        """
-        # Load all 160 background files (1.npy to 160.npy)
-        bg_scroll_files = [f'bg/{i}.npy' for i in range(1, 161)]
-        
-        # Player missile animation (missile_0.npy to missile_15.npy)
-        pl_missile_files = [f'player_missiles/missile_{i}.npy' for i in range(16)]
-        
-        # Minimap mountains (1.npy to 8.npy)
-        minimap_mountain_files = [f'minimap/mountains/{i}.npy' for i in range(1, 9)]
-        
-        return [
-            # Procedural black background (the sky)
-            {'name': 'background', 'type': 'background', 'data': jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8).at[:,:,3].set(255)},
-            # Define the group for all 160 background slices
-            {'name': 'background_scroll', 'type': 'group', 'files': bg_scroll_files},
-            
-            # --- Main Game Sprites ---
-            {'name': 'player_chopper', 'type': 'group', 'files': ['player_chopper/1.npy', 'player_chopper/2.npy']},
-            {'name': 'friendly_truck', 'type': 'group', 'files': ['friendly_truck/1.npy', 'friendly_truck/2.npy']},
-            {'name': 'enemy_jet', 'type': 'single', 'file': 'enemy_jet/normal.npy'},
-            {'name': 'enemy_heli', 'type': 'group', 'files': ['enemy_chopper/1.npy', 'enemy_chopper/2.npy']},
-            {'name': 'enemy_missile', 'type': 'single', 'file': 'bomb/1.npy'},
-            {'name': 'player_missile', 'type': 'group', 'files': pl_missile_files},
-            
-            # Death animations
-            {'name': 'player_death', 'type': 'group', 'files': ['player_chopper/death_1.npy', 'player_chopper/death_2.npy', 'player_chopper/death_3.npy']},
-            {'name': 'enemy_death', 'type': 'group', 'files': ['enemy_death/death_1.npy', 'enemy_death/death_2.npy', 'enemy_death/death_3.npy']},
-            # --- UI Sprites ---
-            {'name': 'digits', 'type': 'digits', 'pattern': 'score/{}.npy'},
-            {'name': 'life_indicator', 'type': 'single', 'file': 'score/chopper.npy'},
-            # --- Minimap Sprites ---
-            {'name': 'minimap_bg', 'type': 'single', 'file': 'minimap/background.npy'},
-            {'name': 'minimap_mountains', 'type': 'group', 'files': minimap_mountain_files},
-            {'name': 'minimap_truck', 'type': 'single', 'file': 'minimap/truck.npy'},
-            {'name': 'minimap_enemy', 'type': 'single', 'file': 'minimap/enemy.npy'},
-            {'name': 'minimap_player', 'type': 'single', 'file': 'minimap/player.npy'},
-            {'name': 'minimap_logo', 'type': 'single', 'file': 'minimap/activision_logo.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: ChopperCommandState) -> chex.Array:

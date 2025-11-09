@@ -11,6 +11,73 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural assets
+    procedural_bg = jnp.zeros((250, 160, 4), dtype=jnp.uint8).at[:,:,3].set(255) # Opaque Black
+    
+    # Death flash colors (constant array from KingKongConstants)
+    DEATH_FLASH_COLORS = jnp.array([
+        [82, 82, 82], [151, 151, 151], [210, 210, 210], [0, 0, 0],
+        [82, 82, 82], [151, 151, 151], [210, 210, 210], [128, 88, 0],
+        [171, 135, 50], [207, 175, 92], [238, 209, 128], [68, 92, 0],
+        [118, 147, 50], [160, 194, 92], [196, 234, 128], [112, 52, 0],
+        [160, 107, 50], [201, 154, 92], [236, 194, 128], [0, 100, 20],
+        [50, 152, 82], [92, 197, 135], [128, 235, 180], [112, 0, 20]
+    ], dtype=jnp.uint8)
+    
+    # Add flash colors and UI colors to palette
+    procedural_colors = jnp.array(
+        [[201, 92, 135, 255]] + [list(c) + [255] for c in DEATH_FLASH_COLORS], 
+        dtype=jnp.uint8
+    ).reshape(-1, 1, 1, 4)
+    debug_colors = jnp.array([
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+        [0, 255, 0, 255],
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    return {
+        'background': procedural_bg,
+        'ui_colors': procedural_colors,
+        'debug_colors': debug_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for KingKong.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define sprite groups (for auto-padding)
+    player_keys = [
+        'player_idle.npy', 'player_move1.npy', 'player_move2.npy',
+        'player_dead.npy', 'player_jump.npy', 'player_fall.npy',
+        'player_climb1.npy', 'player_climb2.npy'
+    ]
+    
+    bomb_keys = ['bomb.npy', 'magic_bomb.npy']
+    princess_keys = ['princess_closed.npy', 'princess_open.npy']
+    
+    return (
+        # Procedural assets
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'ui_colors', 'type': 'procedural', 'data': static_procedural['ui_colors']},
+        {'name': 'debug_colors', 'type': 'procedural', 'data': static_procedural['debug_colors']},
+        # Groups (will be auto-padded)
+        {'name': 'player_group', 'type': 'group', 'files': player_keys},
+        {'name': 'bomb_group', 'type': 'group', 'files': bomb_keys},
+        {'name': 'princess_group', 'type': 'group', 'files': princess_keys},
+        # Single sprites
+        {'name': 'level', 'type': 'single', 'file': 'level.npy'},
+        {'name': 'kong', 'type': 'single', 'file': 'kingkong_idle.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'player_move2.npy'}, # Was a copy of player_move2
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': '{}.npy'},
+    )
+
 class KingKongConstants(NamedTuple):
 	### Screen
 	WIDTH: int = 160
@@ -290,6 +357,9 @@ class KingKongConstants(NamedTuple):
 	PLAYER_GOAL = 11
 	PLAYER_CATAPULT_LEFT = 44
 	PLAYER_CATAPULT_RIGHT = 45 
+
+	# Asset config baked into constants (immutable default) for asset overrides
+	ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class KingKongState(NamedTuple):
 	# Game state management
@@ -2157,8 +2227,8 @@ class KingKongRenderer(JAXGameRenderer):
 		)
 		self.jr = render_utils.JaxRenderingUtils(self.config)
 		
-		# 2. Get the declarative asset manifest
-		asset_config = self._get_asset_config()
+		# 2. Start from (possibly modded) asset config provided via constants
+		final_asset_config = list(self.consts.ASSET_CONFIG)
 		
 		# 3. Make one call to load and process all assets
 		(
@@ -2167,7 +2237,7 @@ class KingKongRenderer(JAXGameRenderer):
 			self.BACKGROUND,
 			self.COLOR_TO_ID,
 			self.FLIP_OFFSETS
-		) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+		) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 		
 		# 4. Store key color IDs
 		self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
@@ -2199,52 +2269,6 @@ class KingKongRenderer(JAXGameRenderer):
 		self.LIFE_X = int(self.consts.LIFE_LOCATION[0])
 		self.LIFE_Y = int(self.consts.LIFE_LOCATION[1] - self.consts.PLAYER_SIZE[1])
 		self.LIFE_SPACING = int(self.consts.LIFE_SPACE_BETWEEN)
-
-	def _get_asset_config(self) -> list[dict[str, Any]]:
-		"""
-		Returns the declarative asset manifest for load_and_setup_assets.
-		"""
-		# Define procedural assets
-		procedural_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8).at[:,:,3].set(255) # Opaque Black
-		
-		# Add flash colors and UI colors to palette
-		procedural_colors = jnp.array([
-			[201, 92, 135, 255], # Bar color
-		] + [list(c) + [255] for c in self.consts.DEATH_FLASH_COLORS], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
-		debug_colors = jnp.array([
-			[255, 0, 0, 255],
-			[0, 0, 255, 255],
-			[255, 255, 255, 255],
-			[0, 255, 0, 255],
-		], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
-		
-		# Define sprite groups (for auto-padding)
-		player_keys = [
-			'player_idle.npy', 'player_move1.npy', 'player_move2.npy',
-			'player_dead.npy', 'player_jump.npy', 'player_fall.npy',
-			'player_climb1.npy', 'player_climb2.npy'
-		]
-		
-		bomb_keys = ['bomb.npy', 'magic_bomb.npy']
-		princess_keys = ['princess_closed.npy', 'princess_open.npy']
-		
-		# Return the full asset manifest
-		return [
-			# Procedural assets
-			{'name': 'background', 'type': 'background', 'data': procedural_bg},
-			{'name': 'ui_colors', 'type': 'procedural', 'data': procedural_colors},
-			{'name': 'debug_colors', 'type': 'procedural', 'data': debug_colors},
-			# Groups (will be auto-padded)
-			{'name': 'player_group', 'type': 'group', 'files': player_keys},
-			{'name': 'bomb_group', 'type': 'group', 'files': bomb_keys},
-			{'name': 'princess_group', 'type': 'group', 'files': princess_keys},
-			# Single sprites
-			{'name': 'level', 'type': 'single', 'file': 'level.npy'},
-			{'name': 'kong', 'type': 'single', 'file': 'kingkong_idle.npy'},
-			{'name': 'life', 'type': 'single', 'file': 'player_move2.npy'}, # Was a copy of player_move2
-			# Digits
-			{'name': 'digits', 'type': 'digits', 'pattern': '{}.npy'},
-		]
 
 	def _create_helper_mappings(self):
 		"""Creates dicts to map old sprite names to new group indices/offsets."""

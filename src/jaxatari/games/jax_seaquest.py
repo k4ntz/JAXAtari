@@ -11,6 +11,24 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Seaquest.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'bg/1.npy'},
+        {'name': 'player_sub', 'type': 'group', 'files': ['player_sub/1.npy', 'player_sub/2.npy', 'player_sub/3.npy']},
+        {'name': 'diver', 'type': 'group', 'files': ['diver/1.npy', 'diver/2.npy']},
+        {'name': 'shark_base', 'type': 'group', 'files': ['shark/1.npy', 'shark/2.npy']},
+        {'name': 'enemy_sub', 'type': 'group', 'files': ['enemy_sub/1.npy', 'enemy_sub/2.npy', 'enemy_sub/3.npy']},
+        {'name': 'player_torp', 'type': 'single', 'file': 'player_torp/1.npy'},
+        {'name': 'enemy_torp', 'type': 'single', 'file': 'enemy_torp/1.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator/1.npy'},
+        {'name': 'diver_indicator', 'type': 'single', 'file': 'diver_indicator/1.npy'},
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+    )
+
 
 class SeaquestConstants(NamedTuple):
     # Colors
@@ -70,6 +88,9 @@ class SeaquestConstants(NamedTuple):
 
     # First wave directions from original code
     FIRST_WAVE_DIRS = jnp.array([False, False, False, True])
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class SpawnState(NamedTuple):
     difficulty: chex.Array  # Current difficulty level (0-7)
@@ -2660,17 +2681,26 @@ class SeaquestRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 2. Create procedural assets using modded constants
         procedural_sprites = self._create_procedural_sprites()
-        asset_config = self._get_asset_config(procedural_sprites)
+        
+        # 3. Append procedural assets
+        for name, data in procedural_sprites.items():
+            final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
+        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/seaquest"
 
+        # 4. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
 
@@ -2684,24 +2714,6 @@ class SeaquestRenderer(JAXGameRenderer):
         rgba_oxy = jnp.array(list(self.consts.OXYGEN_BAR_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_color'] = rgba_oxy
         return procedural_sprites
-
-    def _get_asset_config(self, procedural_sprites: dict) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        config = [
-            {'name': 'background', 'type': 'background', 'file': 'bg/1.npy'},
-            {'name': 'player_sub', 'type': 'group', 'files': ['player_sub/1.npy', 'player_sub/2.npy', 'player_sub/3.npy']},
-            {'name': 'diver', 'type': 'group', 'files': ['diver/1.npy', 'diver/2.npy']},
-            {'name': 'shark_base', 'type': 'group', 'files': ['shark/1.npy', 'shark/2.npy']},
-            {'name': 'enemy_sub', 'type': 'group', 'files': ['enemy_sub/1.npy', 'enemy_sub/2.npy', 'enemy_sub/3.npy']},
-            {'name': 'player_torp', 'type': 'single', 'file': 'player_torp/1.npy'},
-            {'name': 'enemy_torp', 'type': 'single', 'file': 'enemy_torp/1.npy'},
-            {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator/1.npy'},
-            {'name': 'diver_indicator', 'type': 'single', 'file': 'diver_indicator/1.npy'},
-            {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
-        ]
-        for name, data in procedural_sprites.items():
-            config.append({'name': name, 'type': 'procedural', 'data': data})
-        return config
 
     def _precompute_shark_color_map(self) -> jnp.ndarray:
         """Creates a lookup table mapping difficulty (0-7) to a shark color ID."""

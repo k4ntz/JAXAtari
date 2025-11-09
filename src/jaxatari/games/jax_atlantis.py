@@ -20,6 +20,47 @@ from jaxatari.environment import (
 )
 import jaxatari.spaces as spaces
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:
+        color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
+        return jnp.tile(color, (height, width, 1))
+    
+    return {
+        'beam_green': _solid_sprite_data(3, 50, (61, 151, 60)),
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Atlantis.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    config = (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'small_enemy', 'type': 'single', 'file': 'small_enemy.npy'},
+        {'name': 'round_enemy', 'type': 'single', 'file': 'round_enemy.npy'},
+        {'name': 'long_enemy', 'type': 'single', 'file': 'long_enemy.npy'},
+        {'name': 'cannon_left', 'type': 'single', 'file': 'cannon_left.npy'},
+        {'name': 'cannon_right', 'type': 'single', 'file': 'cannon_right.npy'},
+        {'name': 'cannon_middle', 'type': 'single', 'file': 'cannon_middle.npy'},
+        {'name': 'installation_1', 'type': 'single', 'file': 'installation_1.npy'},
+        {'name': 'installation_2', 'type': 'single', 'file': 'installation_2.npy'},
+        {'name': 'installation_3', 'type': 'single', 'file': 'installation_3.npy'},
+        {'name': 'installation_4', 'type': 'single', 'file': 'installation_4.npy'},
+        {'name': 'installation_5', 'type': 'single', 'file': 'installation_5.npy'},
+        {'name': 'installation_6', 'type': 'single', 'file': 'installation_6.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+    )
+    
+    # Add static procedural sprites
+    config = config + tuple(
+        {'name': name, 'type': 'procedural', 'data': data}
+        for name, data in static_procedural.items()
+    )
+    
+    return config
 
 @dataclass(frozen=True)
 class GameConfig: # TODO: move this into the constants..
@@ -157,7 +198,8 @@ class AtlantisInfo(NamedTuple):
 
 
 class AtlantisConstants(NamedTuple):
-    pass
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class JaxAtlantis(
@@ -1390,15 +1432,34 @@ class AtlantisRenderer(JAXGameRenderer):
             )
         )
 
-        asset_config = self._get_asset_config()
+        # Create a dummy constants object to access ASSET_CONFIG
+        # Since Atlantis uses GameConfig instead of Constants, we'll use the default
+        dummy_consts = AtlantisConstants()
+        
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(dummy_consts.ASSET_CONFIG)
+        
+        # 2. Create procedural assets that depend on dynamic values (config)
+        def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:
+            color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
+            return jnp.tile(color, (height, width, 1))
+        dynamic_procedural_assets = [
+            {'name': 'bullet', 'data': _solid_sprite_data(self.config.bullet_width, self.config.bullet_height, (255, 255, 255))},
+            {'name': 'beam_light_blue', 'data': _solid_sprite_data(3, self.config.height_upper_beam, (90, 204, 165))},
+        ]
+        for asset in dynamic_procedural_assets:
+            final_asset_config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
+        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
+        
+        # 3. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
         # --- FIX: Pad installation masks to the same size before stacking ---
         inst_masks = [
@@ -1425,37 +1486,6 @@ class AtlantisRenderer(JAXGameRenderer):
 
         # Now that all masks are the same shape, stack them
         self.INSTALLATION_MASKS_STACKED = jnp.stack(padded_masks)
-
-
-    # ... The _get_asset_config method remains unchanged ...
-    def _get_asset_config(self) -> list:
-        config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'small_enemy', 'type': 'single', 'file': 'small_enemy.npy'},
-            {'name': 'round_enemy', 'type': 'single', 'file': 'round_enemy.npy'},
-            {'name': 'long_enemy', 'type': 'single', 'file': 'long_enemy.npy'},
-            {'name': 'cannon_left', 'type': 'single', 'file': 'cannon_left.npy'},
-            {'name': 'cannon_right', 'type': 'single', 'file': 'cannon_right.npy'},
-            {'name': 'cannon_middle', 'type': 'single', 'file': 'cannon_middle.npy'},
-            {'name': 'installation_1', 'type': 'single', 'file': 'installation_1.npy'},
-            {'name': 'installation_2', 'type': 'single', 'file': 'installation_2.npy'},
-            {'name': 'installation_3', 'type': 'single', 'file': 'installation_3.npy'},
-            {'name': 'installation_4', 'type': 'single', 'file': 'installation_4.npy'},
-            {'name': 'installation_5', 'type': 'single', 'file': 'installation_5.npy'},
-            {'name': 'installation_6', 'type': 'single', 'file': 'installation_6.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        ]
-        def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:
-            color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
-            return jnp.tile(color, (height, width, 1))
-        procedural_assets = [
-            {'name': 'bullet', 'data': _solid_sprite_data(self.config.bullet_width, self.config.bullet_height, (255, 255, 255))},
-            {'name': 'beam_light_blue', 'data': _solid_sprite_data(3, self.config.height_upper_beam, (90, 204, 165))},
-            {'name': 'beam_green', 'data': _solid_sprite_data(3, 50, (61, 151, 60))},
-        ]
-        for asset in procedural_assets:
-            config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
-        return config
 
 
     @partial(jax.jit, static_argnums=(0,))

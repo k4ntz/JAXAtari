@@ -12,6 +12,102 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural white background
+    white_bg = jnp.full((210, 160, 4), 255, dtype=jnp.uint8)
+    
+    # Procedurally create text colors
+    text_colors = jnp.array([
+        [0, 0, 0, 255], # Black text
+        [255, 0, 0, 255] # Red text
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    # Create procedural digits from _GLYPHS_BITS
+    def upsample(bits):
+        b = bits.astype(jnp.uint8)
+        scale = 2
+        one = jnp.ones((scale, scale), dtype=jnp.uint8)
+        up = jnp.kron(b, one)  # (H*scale, W*scale)
+        
+        # Create an RGBA sprite: Black (0,0,0) where bits=1, Transparent (0,0,0,0) where bits=0
+        color = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        transparent = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
+        
+        # Broadcast up to (H*scale, W*scale, 1) for comparison
+        up_mask = up[..., None] > 0  # (H*scale, W*scale, 1) boolean
+        return jnp.where(up_mask, color, transparent)
+    
+    # _GLYPHS_BITS is defined later in the file, but we'll reference it
+    # For now, we'll create the digits in the function that uses it
+    procedural_digits = None  # Will be set in _get_default_asset_config
+    
+    return {
+        'background': white_bg,
+        'ui_colors': text_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Skiing.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Flag sprites need to be loaded from files, so they're added in renderer.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Create procedural digits from _GLYPHS_BITS
+    def upsample(bits):
+        b = bits.astype(jnp.uint8)
+        scale = 2
+        one = jnp.ones((scale, scale), dtype=jnp.uint8)
+        up = jnp.kron(b, one)  # (H*scale, W*scale)
+        
+        color = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        transparent = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
+        up_mask = up[..., None] > 0
+        return jnp.where(up_mask, color, transparent)
+    
+    # Import _GLYPHS_BITS - it's defined later in the file
+    # We need to reference it, but it's defined after this function
+    # So we'll create it inline here
+    _GLYPHS_BITS = jnp.array([
+        [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],  # 0
+        [[0,1,0],[1,1,0],[0,1,0],[0,1,0],[1,1,1]],  # 1
+        [[1,1,1],[0,0,1],[1,1,1],[1,0,0],[1,1,1]],  # 2
+        [[1,1,1],[0,0,1],[0,1,1],[0,0,1],[1,1,1]],  # 3
+        [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],  # 4
+        [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],  # 5
+        [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],  # 6
+        [[1,1,1],[0,0,1],[0,1,0],[1,0,0],[1,0,0]],  # 7
+        [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],  # 8
+        [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],  # 9
+        [[0,0,0],[0,1,0],[0,0,0],[0,1,0],[0,0,0]],  # : (10)
+        [[0,0,0],[0,0,0],[0,0,0],[0,1,0],[0,1,0]],  # . (11)
+    ], dtype=jnp.uint8)
+    
+    procedural_digits = jax.vmap(upsample)(_GLYPHS_BITS)  # (12, hs, ws, 4)
+    
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+
+        # Skier Sprites (as a group for padding)
+        {'name': 'skier_group', 'type': 'group', 'files': [
+            "skiier_right.npy", # 0: skier_left
+            "skiier_front.npy", # 1: skier_front
+            "skiier_left.npy",  # 2: skier_right
+            "skier_fallen.npy"  # 3: skier_fallen
+        ]},
+
+        # Obstacles
+        {'name': 'tree', 'type': 'single', 'file': 'tree.npy'},
+        {'name': 'rock', 'type': 'single', 'file': 'stone.npy'},
+        
+        # UI
+        {'name': 'digits', 'type': 'procedural', 'data': procedural_digits},
+        {'name': 'ui_colors', 'type': 'procedural', 'data': static_procedural['ui_colors']}
+    )
+
 class SkiingConstants(NamedTuple):
     NOOP = 0
     LEFT = 1
@@ -47,6 +143,9 @@ class GameConfig:
     max_num_trees: int = 4
     max_num_rocks: int = 3
     speed: float = 1.0
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class GameState(NamedTuple):
@@ -834,11 +933,14 @@ class SkiingRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.render_config)
 
-        # 2. Create procedural assets BEFORE getting the config
-        self.procedural_digits = self._create_procedural_digits(scale=2)
-
-        # 3. Get the declarative asset manifest
-        asset_config = self._get_asset_config() 
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.config.ASSET_CONFIG)
+        
+        # 3. Load and recolor flags (needs sprite path, so done here)
+        flag_red_rgba = self._load_rgba_sprite("checkered_flag.npy")
+        flag_blue_rgba = self._recolor_rgba(flag_red_rgba, (0, 96, 255))
+        final_asset_config.append({'name': 'flag_red', 'type': 'procedural', 'data': flag_red_rgba})
+        final_asset_config.append({'name': 'flag_blue', 'type': 'procedural', 'data': flag_blue_rgba})
 
         # 4. Make one call to load and process all assets
         (
@@ -847,7 +949,7 @@ class SkiingRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 5. Store key color/shape IDs
         self.RED_FLAG_MASK = self.SHAPE_MASKS['flag_red']
@@ -876,70 +978,6 @@ class SkiingRenderer(JAXGameRenderer):
         rgb_arr = np.array(rgb, dtype=np.uint8)[None, None, :]
         new_rgb = np.where(mask, rgb_arr, sprite_rgba[..., :3])
         return np.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
-
-    def _create_procedural_digits(self, scale: int = 2) -> jnp.ndarray:
-        """
-        Re-implements _glyph_rgba to create procedural digit sprites.
-        The original text was black (0,0,0) on a transparent background.
-        """
-        def upsample(bits):
-            b = bits.astype(jnp.uint8)
-            one = jnp.ones((scale, scale), dtype=jnp.uint8)
-            up = jnp.kron(b, one)  # (H*scale, W*scale)
-            
-            # Create an RGBA sprite: Black (0,0,0) where bits=1, Transparent (0,0,0,0) where bits=0
-            # Note: We use (0,0,0) as the color so it's added to the palette
-            color = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
-            transparent = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
-            
-            # Broadcast up to (H*scale, W*scale, 1) for comparison
-            up_mask = up[..., None] > 0  # (H*scale, W*scale, 1) boolean
-            return jnp.where(up_mask, color, transparent)
-
-        sprites = jax.vmap(upsample)(_GLYPHS_BITS)  # (12, hs, ws, 4)
-        return sprites
-
-    def _get_asset_config(self) -> list[dict[str, Any]]:
-        """
-        Returns the declarative asset manifest for load_and_setup_assets.
-        """
-        # Procedural white background
-        white_bg = jnp.full((self.config.screen_height, self.config.screen_width, 4), 255, dtype=jnp.uint8)
-
-        # Manually load and recolor the blue flag
-        flag_red_rgba = self._load_rgba_sprite("checkered_flag.npy")
-        flag_blue_rgba = self._recolor_rgba(flag_red_rgba, (0, 96, 255))
-        
-        # Procedurally create text colors
-        text_colors = jnp.array([
-            [0, 0, 0, 255], # Black text
-            [255, 0, 0, 255] # Red text
-        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
-
-        return [
-            # Background
-            {'name': 'background', 'type': 'background', 'data': white_bg},
-
-            # Skier Sprites (as a group for padding)
-            {'name': 'skier_group', 'type': 'group', 'files': [
-                "skiier_right.npy", # 0: skier_left
-                "skiier_front.npy", # 1: skier_front
-                "skiier_left.npy",  # 2: skier_right
-                "skier_fallen.npy"  # 3: skier_fallen
-            ]},
-
-            # Flags (loaded procedurally to handle recolor)
-            {'name': 'flag_red', 'type': 'procedural', 'data': flag_red_rgba},
-            {'name': 'flag_blue', 'type': 'procedural', 'data': flag_blue_rgba},
-
-            # Obstacles
-            {'name': 'tree', 'type': 'single', 'file': 'tree.npy'},
-            {'name': 'rock', 'type': 'single', 'file': 'stone.npy'},
-            
-            # UI
-            {'name': 'digits', 'type': 'procedural', 'data': self.procedural_digits},
-            {'name': 'ui_colors', 'type': 'procedural', 'data': text_colors}
-        ]
         
     @partial(jax.jit, static_argnums=(0,))
     def _format_score_digits(self, score: jnp.ndarray) -> jnp.ndarray:

@@ -39,6 +39,108 @@ from jaxatari.games.videopinball_constants import VideoPinballConstants
 HitPointSelector = HitPointSelector()
 
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Use default constants for procedural colors
+    TILT_MODE_COLOR = (167, 26, 26)
+    BG_COLOR = (0, 0, 0)
+    BACKGROUND_COLOR_CYCLING = [
+        [74, 74, 74], [111, 111, 111], [142, 142, 142], [170, 170, 170],
+        [192, 192, 192], [214, 214, 214], [236, 236, 236], [72, 72, 0],
+    ]
+    WALL_COLOR_CYCLING = [
+        [78, 50, 181], [51, 26, 163], [20, 0, 144], [188, 144, 252],
+        [169, 128, 240], [149, 111, 227], [127, 92, 213], [146, 70, 192],
+    ]
+    GROUP3_COLOR_CYCLING = [
+        [210, 182, 86], [232, 204, 99], [252, 224, 112], [72, 44, 0],
+        [105, 77, 20], [134, 106, 38], [162, 134, 56], [160, 171, 79],
+    ]
+    GROUP4_COLOR_CYCLING = [
+        [195, 144, 61], [236, 200, 96], [223, 183, 85], [144, 72, 17],
+        [124, 44, 0], [180, 122, 48], [162, 98, 33], [227, 151, 89],
+    ]
+    GROUP5_COLOR_CYCLING = [
+        [214, 214, 214], [192, 192, 192], [170, 170, 170], [142, 142, 142],
+        [111, 111, 111], [74, 74, 74], [0, 0, 0], [252, 252, 84],
+    ]
+    
+    procedural_sprites = {
+        'tilt_color': jnp.array([[list(TILT_MODE_COLOR) + [255]]], dtype=jnp.uint8),
+        'bg_color': jnp.array([[list(BG_COLOR) + [255]]], dtype=jnp.uint8),
+    }
+    
+    # Add cycling colors
+    for i, c in enumerate(BACKGROUND_COLOR_CYCLING):
+        procedural_sprites[f'cycle_bg_{i}'] = jnp.array([[list(c) + [255]]], dtype=jnp.uint8)
+    for i, c in enumerate(WALL_COLOR_CYCLING):
+        procedural_sprites[f'cycle_wall_{i}'] = jnp.array([[list(c) + [255]]], dtype=jnp.uint8)
+    for i, c in enumerate(GROUP3_COLOR_CYCLING):
+        procedural_sprites[f'cycle_g3_{i}'] = jnp.array([[list(c) + [255]]], dtype=jnp.uint8)
+    for i, c in enumerate(GROUP4_COLOR_CYCLING):
+        procedural_sprites[f'cycle_g4_{i}'] = jnp.array([[list(c) + [255]]], dtype=jnp.uint8)
+    for i, c in enumerate(GROUP5_COLOR_CYCLING):
+        procedural_sprites[f'cycle_g5_{i}'] = jnp.array([[list(c) + [255]]], dtype=jnp.uint8)
+    
+    return procedural_sprites
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for VideoPinball.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define sprite groups
+    spinner_files = ["SpinnerBottom.npy", "SpinnerRight.npy", "SpinnerTop.npy", "SpinnerLeft.npy"]
+    plunger_files = [f"Launcher{i}.npy" for i in range(19)]
+    plunger_files[5] = "Launcher4.npy"
+    flipper_left_files = [f"FlipperLeft{i}.npy" for i in range(4)]
+    flipper_right_files = [f"FlipperRight{i}.npy" for i in range(4)]
+    
+    config_list = [
+        # Background
+        {'name': 'background', 'type': 'background', 'file': 'Background.npy'},
+        
+        # Static Playfield Elements
+        {'name': 'walls', 'type': 'single', 'file': 'Walls.npy'},
+        {'name': 'atari_logo', 'type': 'single', 'file': 'AtariLogo.npy'},
+        {'name': 'x', 'type': 'single', 'file': 'X.npy'},
+        {'name': 'yellow_diamond_bottom', 'type': 'single', 'file': 'YellowDiamondBottom.npy'},
+        {'name': 'yellow_diamond_top', 'type': 'single', 'file': 'YellowDiamondTop.npy'},
+        
+        # Ball
+        {'name': 'ball', 'type': 'single', 'file': 'Ball.npy'},
+        
+        # Animated Groups (for padding)
+        {'name': 'spinner_base', 'type': 'group', 'files': spinner_files},
+        {'name': 'plunger_base', 'type': 'group', 'files': plunger_files},
+        {'name': 'flipper_left', 'type': 'group', 'files': flipper_left_files},
+        {'name': 'flipper_right', 'type': 'group', 'files': flipper_right_files},
+        
+        # Digits
+        {'name': 'score_number_digits', 'type': 'digits', 'pattern': 'ScoreNumber{}.npy'},
+        {'name': 'field_number_digits', 'type': 'digits', 'pattern': 'FieldNumber{}.npy'},
+        
+        # Procedural colors for cycling and bars
+        {'name': 'tilt_color', 'type': 'procedural', 'data': static_procedural['tilt_color']},
+        {'name': 'bg_color', 'type': 'procedural', 'data': static_procedural['bg_color']},
+    ]
+    
+    # Add all cycling colors
+    for i in range(8):
+        config_list.append({'name': f'cycle_bg_{i}', 'type': 'procedural', 'data': static_procedural[f'cycle_bg_{i}']})
+        config_list.append({'name': f'cycle_wall_{i}', 'type': 'procedural', 'data': static_procedural[f'cycle_wall_{i}']})
+        config_list.append({'name': f'cycle_g3_{i}', 'type': 'procedural', 'data': static_procedural[f'cycle_g3_{i}']})
+        config_list.append({'name': f'cycle_g4_{i}', 'type': 'procedural', 'data': static_procedural[f'cycle_g4_{i}']})
+        config_list.append({'name': f'cycle_g5_{i}', 'type': 'procedural', 'data': static_procedural[f'cycle_g5_{i}']})
+    
+    return tuple(config_list)
+
+# Monkey-patch ASSET_CONFIG into VideoPinballConstants
+# This is done here to avoid circular imports since VideoPinballConstants is in a separate file
+VideoPinballConstants.ASSET_CONFIG = _get_default_asset_config()
+
 def get_human_action() -> chex.Array:
     """
     Records any relevant button is being pressed and returns the corresponding action.
@@ -4127,8 +4229,8 @@ class VideoPinballRenderer(JAXGameRenderer):
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videopinball"
         
-        # 3. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 3. Use asset config from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 4. Load all assets, create palette, and generate ID masks
         (
@@ -4137,71 +4239,13 @@ class VideoPinballRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         # 5. Pre-compute/cache values for rendering
         self._cache_color_ids_and_cycles()
         self._cache_sprite_stacks()
         self.PRE_RENDERED_BOARD = self._precompute_static_board()
 
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        
-        # Define sprite groups from original code
-        spinner_files = ["SpinnerBottom.npy", "SpinnerRight.npy", "SpinnerTop.npy", "SpinnerLeft.npy"]
-        plunger_files = [f"Launcher{i}.npy" for i in range(19)]
-        plunger_files[5] = "Launcher4.npy"
-        flipper_left_files = [f"FlipperLeft{i}.npy" for i in range(4)]
-        flipper_right_files = [f"FlipperRight{i}.npy" for i in range(4)]
-        
-        return [
-            # Background
-            {'name': 'background', 'type': 'background', 'file': 'Background.npy'},
-            
-            # Static Playfield Elements
-            {'name': 'walls', 'type': 'single', 'file': 'Walls.npy'},
-            {'name': 'atari_logo', 'type': 'single', 'file': 'AtariLogo.npy'},
-            {'name': 'x', 'type': 'single', 'file': 'X.npy'},
-            {'name': 'yellow_diamond_bottom', 'type': 'single', 'file': 'YellowDiamondBottom.npy'},
-            {'name': 'yellow_diamond_top', 'type': 'single', 'file': 'YellowDiamondTop.npy'},
-            
-            # Ball
-            {'name': 'ball', 'type': 'single', 'file': 'Ball.npy'},
-            
-            # Animated Groups (for padding)
-            {'name': 'spinner_base', 'type': 'group', 'files': spinner_files},
-            {'name': 'plunger_base', 'type': 'group', 'files': plunger_files},
-            {'name': 'flipper_left', 'type': 'group', 'files': flipper_left_files},
-            {'name': 'flipper_right', 'type': 'group', 'files': flipper_right_files},
-            
-            # Digits
-            {'name': 'score_number_digits', 'type': 'digits', 'pattern': 'ScoreNumber{}.npy'},
-            {'name': 'field_number_digits', 'type': 'digits', 'pattern': 'FieldNumber{}.npy'},
-            # --- Procedural colors for cycling and bars ---
-            {'name': 'tilt_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.TILT_MODE_COLOR) + [255]]], dtype=jnp.uint8)},
-            {'name': 'bg_color', 'type': 'procedural', 'data': jnp.array([[list(self.consts.BG_COLOR) + [255]]], dtype=jnp.uint8)},
-            # Add all cycling colors to ensure they are in the palette
-            *[
-                {'name': f'cycle_bg_{i}', 'type': 'procedural', 'data': jnp.array([[list(c) + [255]]], dtype=jnp.uint8)}
-                for i, c in enumerate(self.consts.BACKGROUND_COLOR_CYCLING)
-            ],
-            *[
-                {'name': f'cycle_wall_{i}', 'type': 'procedural', 'data': jnp.array([[list(c) + [255]]], dtype=jnp.uint8)}
-                for i, c in enumerate(self.consts.WALL_COLOR_CYCLING)
-            ],
-            *[
-                {'name': f'cycle_g3_{i}', 'type': 'procedural', 'data': jnp.array([[list(c) + [255]]], dtype=jnp.uint8)}
-                for i, c in enumerate(self.consts.GROUP3_COLOR_CYCLING)
-            ],
-            *[
-                {'name': f'cycle_g4_{i}', 'type': 'procedural', 'data': jnp.array([[list(c) + [255]]], dtype=jnp.uint8)}
-                for i, c in enumerate(self.consts.GROUP4_COLOR_CYCLING)
-            ],
-            *[
-                {'name': f'cycle_g5_{i}', 'type': 'procedural', 'data': jnp.array([[list(c) + [255]]], dtype=jnp.uint8)}
-                for i, c in enumerate(self.consts.GROUP5_COLOR_CYCLING)
-            ],
-        ]
 
     def _cache_color_ids_and_cycles(self):
         """Caches palette IDs for all colors used in procedural rendering."""

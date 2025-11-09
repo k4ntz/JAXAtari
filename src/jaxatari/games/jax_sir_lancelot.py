@@ -12,6 +12,36 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for SirLancelot.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Backgrounds are loaded and resized dynamically in renderer.
+    """
+    return (
+        # Backgrounds will be added dynamically (bg_outdoor, bg_castle)
+        {'name': 'player', 'type': 'group', 'files': ['SirLancelot_lvl1_neutral.npy', 'SirLancelot_lvl1_fly.npy']},
+        
+        {'name': 'beast_1', 'type': 'group', 'files': ['Beast_1_animation_1.npy', 'Beast_1_animation_2.npy']},
+        {'name': 'beast_2', 'type': 'group', 'files': ['Beast_2_animation_1.npy', 'Beast_2_animation_2.npy']},
+        {'name': 'beast_3', 'type': 'group', 'files': ['Beast_3_animation_1.npy', 'Beast_3_animation_2.npy']},
+        {'name': 'beast_4', 'type': 'group', 'files': ['Beast_4_animation_1.npy', 'Beast_4_animation_1.npy']},
+        
+        {'name': 'dragon', 'type': 'group', 'files': [
+            'Dragon_lvl2_Wing_Up.npy', 'Dragon_lvl2_wing_middle.npy',
+            'Dragon_lvl2_wing_down.npy', 'Dragon_lvl2_wing_middle.npy'
+        ]},
+        {'name': 'dragon_fire', 'type': 'group', 'files': [
+            'Dragon_lvl2_wing_up_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy',
+            'Dragon_lvl2_wing_down_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy'
+        ]},
+        
+        {'name': 'fireball', 'type': 'group', 'files': ['Dragon_lvl2_fire_animation_1.npy', 'Dragon_lvl2_fire_animation_2.npy']},
+        
+        {'name': 'digits', 'type': 'digits', 'pattern': 'number_{}.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'Life.npy'},
+    )
+
 # -----------------------------------------------------------------------------
 # CONSTANTS
 # -----------------------------------------------------------------------------
@@ -224,6 +254,8 @@ class SirLancelotConstants(NamedTuple):
 
     # Starting level
     START_LEVEL: int = 1  # Start at level 1
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # -----------------------------------------------------------------------------
@@ -2654,7 +2686,11 @@ class SirLancelotRenderer(JAXGameRenderer):
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "sir_lancelot")
         
         preprocessed_assets = self._load_and_preprocess_assets(sprite_path)
-        asset_config = self._get_asset_config(preprocessed_assets)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # Add preprocessed backgrounds at the beginning
+        final_asset_config.insert(0, {'name': 'bg_outdoor', 'type': 'background', 'data': preprocessed_assets['bg_outdoor']})
+        final_asset_config.insert(1, {'name': 'bg_castle', 'type': 'single', 'data': preprocessed_assets['bg_castle']})
         
         (
             self.PALETTE,
@@ -2662,7 +2698,7 @@ class SirLancelotRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         (
             self.PRE_RENDERED_OUTDOOR,
@@ -2686,32 +2722,6 @@ class SirLancelotRenderer(JAXGameRenderer):
             'bg_castle': bg2_resized,
         }
 
-    def _get_asset_config(self, preprocessed_assets: dict) -> list:
-        return [
-            {'name': 'bg_outdoor', 'type': 'background', 'data': preprocessed_assets['bg_outdoor']},
-            {'name': 'bg_castle', 'type': 'single', 'data': preprocessed_assets['bg_castle']},
-            
-            {'name': 'player', 'type': 'group', 'files': ['SirLancelot_lvl1_neutral.npy', 'SirLancelot_lvl1_fly.npy']},
-            
-            {'name': 'beast_1', 'type': 'group', 'files': ['Beast_1_animation_1.npy', 'Beast_1_animation_2.npy']},
-            {'name': 'beast_2', 'type': 'group', 'files': ['Beast_2_animation_1.npy', 'Beast_2_animation_2.npy']},
-            {'name': 'beast_3', 'type': 'group', 'files': ['Beast_3_animation_1.npy', 'Beast_3_animation_2.npy']},
-            {'name': 'beast_4', 'type': 'group', 'files': ['Beast_4_animation_1.npy', 'Beast_4_animation_1.npy']},
-            
-            {'name': 'dragon', 'type': 'group', 'files': [
-                'Dragon_lvl2_Wing_Up.npy', 'Dragon_lvl2_wing_middle.npy',
-                'Dragon_lvl2_wing_down.npy', 'Dragon_lvl2_wing_middle.npy'
-            ]},
-            {'name': 'dragon_fire', 'type': 'group', 'files': [
-                'Dragon_lvl2_wing_up_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy',
-                'Dragon_lvl2_wing_down_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy'
-            ]},
-            
-            {'name': 'fireball', 'type': 'group', 'files': ['Dragon_lvl2_fire_animation_1.npy', 'Dragon_lvl2_fire_animation_2.npy']},
-            
-            {'name': 'digits', 'type': 'digits', 'pattern': 'number_{}.npy'},
-            {'name': 'life', 'type': 'single', 'file': 'Life.npy'},
-        ]
 
     def _precompute_static_frames(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         raster_outdoor = self.BACKGROUND

@@ -14,6 +14,52 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create a procedural sprite for the wall color to ensure it's in the palette
+    wall_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)
+    return {
+        'wall_color': wall_color_rgba,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Asteroids.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # --- Player Sprites ---
+    # Load player rotation and death sprites into the same group for uniform padding
+    player_files = [f'player_pos{i}.npy' for i in range(16)] + [f'death_player{i}.npy' for i in range(3)]
+    
+    # --- Asteroid Sprites ---
+    # Load all asteroid variations and their death animations into one group for padding
+    asteroid_files = []
+    for size in ['big1', 'big2', 'medium', 'small']:
+        for color in ['brown', 'grey', 'lightblue', 'lightyellow', 'pink', 'purple', 'red', 'yellow']:
+            asteroid_files.append(f'asteroid_{size}_{color}.npy')
+    for size in ['big', 'medium', 'small']:
+        for color in ['pink', 'yellow']:
+            asteroid_files.append(f'death_{size}_{color}.npy')
+    
+    config = (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player_group', 'type': 'group', 'files': player_files},
+        {'name': 'digits', 'type': 'digits', 'pattern': '{}.npy'},
+        {'name': 'missile1', 'type': 'single', 'file': 'missile1.npy'},
+        {'name': 'missile2', 'type': 'single', 'file': 'missile2.npy'},
+        {'name': 'asteroid_group', 'type': 'group', 'files': asteroid_files},
+    )
+    
+    # Add static procedural sprites
+    config = config + tuple(
+        {'name': name, 'type': 'procedural', 'data': data}
+        for name, data in static_procedural.items()
+    )
+    
+    return config
+
 class AsteroidsConstants(NamedTuple):
     # Constants for game environment
     WIDTH: int = 160
@@ -160,6 +206,9 @@ class AsteroidsConstants(NamedTuple):
     ASTEROID_BORDER_RIGHT: int = int(MAX_ENTITY_X - (MAX_ENTITY_X-MIN_ENTITY_X)/3)
     MAX_NUMBER_OF_ASTEROIDS: int = 17
     NEW_ASTEROIDS_COUNT: int = 6
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 # immutable state container
 class AsteroidsState(NamedTuple):
@@ -1159,15 +1208,19 @@ class AsteroidsRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        asset_config = self._get_asset_config()
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/asteroids"
+        
+        # 2. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
         # Pre-stack all related sprites for easy indexing in the render loop
         self.PLAYER_MASKS_STACKED = self._stack_player_masks()
@@ -1179,38 +1232,6 @@ class AsteroidsRenderer(JAXGameRenderer):
         self.ASTEROID_SIZE_OFFSET_MAP = jnp.array([0, 8, 16, 24])
         # Maps asteroid size (1-4) to death animation offset (0, 0, 2, 4)
         self.DEATH_SIZE_OFFSET_MAP = jnp.array([0, 0, 2, 4])
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        config = [{'name': 'background', 'type': 'background', 'file': 'background.npy'}]
-
-        # --- Player Sprites ---
-        # Load player rotation and death sprites into the same group for uniform padding
-        player_files = [f'player_pos{i}.npy' for i in range(16)] + [f'death_player{i}.npy' for i in range(3)]
-        config.append({'name': 'player_group', 'type': 'group', 'files': player_files})
-        
-        # --- Other Sprites ---
-        config.append({'name': 'digits', 'type': 'digits', 'pattern': '{}.npy'})
-        config.append({'name': 'missile1', 'type': 'single', 'file': 'missile1.npy'})
-        config.append({'name': 'missile2', 'type': 'single', 'file': 'missile2.npy'})
-
-        # --- Asteroid Sprites ---
-        # Load all asteroid variations and their death animations into one group for padding
-        asteroid_files = []
-        for size in ['big1', 'big2', 'medium', 'small']:
-            for color in ['brown', 'grey', 'lightblue', 'lightyellow', 'pink', 'purple', 'red', 'yellow']:
-                asteroid_files.append(f'asteroid_{size}_{color}.npy')
-        for size in ['big', 'medium', 'small']:
-            for color in ['pink', 'yellow']:
-                asteroid_files.append(f'death_{size}_{color}.npy')
-        config.append({'name': 'asteroid_group', 'type': 'group', 'files': asteroid_files})
-
-        # --- Procedural Sprites ---
-        # Create a procedural sprite for the wall color to ensure it's in the palette
-        wall_color_rgba = jnp.array(list(self.consts.WALL_COLOR) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
-        config.append({'name': 'wall_color', 'type': 'procedural', 'data': wall_color_rgba})
-
-        return config
 
     def _stack_player_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""

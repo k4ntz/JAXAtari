@@ -19,6 +19,54 @@ def max_delay(level, base_max=60, spawn_accel=2, min_delay_clamp=20, max_delay_c
     return jnp.clip(base_max - level * spawn_accel, min_delay_clamp, max_delay_clamp)
 
 
+def _create_static_procedural_sprites(screen_height: int, screen_width: int) -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create a black background
+    bg_data = jnp.zeros((screen_height, screen_width, 4), dtype=jnp.uint8)
+    bg_data = bg_data.at[0, 0, 3].set(255)  # Add one black, opaque pixel
+    return {
+        'background': bg_data
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Asterix.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Background is created procedurally and will be added in renderer.
+    """
+    asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
+    obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG']
+    points_names = ['POINTS50', 'POINTS100', 'POINTS200', 'POINTS300', 'POINTS400', 'POINTS500']
+    
+    config_list = [
+        {'name': 'STAGE', 'type': 'single', 'file': 'STAGE.npy'},
+        {'name': 'TOP', 'type': 'single', 'file': 'TOP.npy'},
+        {'name': 'BOTTOM', 'type': 'single', 'file': 'BOTTOM.npy'},
+        
+        {'name': 'ASTERIX_SPRITES', 'type': 'group', 'files': [
+            'ASTERIX_LEFT.npy', 'ASTERIX_RIGHT.npy',
+            'ASTERIX_LEFT_HIT.npy', 'ASTERIX_RIGHT_HIT.npy',
+        ]},
+        {'name': 'OBELIX_SPRITES', 'type': 'group', 'files': [
+            'OBELIX_LEFT.npy', 'OBELIX_RIGHT.npy',
+            'OBELIX_LEFT_HIT.npy', 'OBELIX_RIGHT_HIT.npy',
+        ]},
+        
+        {'name': 'LYRE_LEFT', 'type': 'single', 'file': 'LYRE_LEFT.npy'},
+        {'name': 'LYRE_RIGHT', 'type': 'single', 'file': 'LYRE_RIGHT.npy'},
+        
+        {'name': 'digit', 'type': 'digits', 'pattern': 'DIGIT_{}.npy'},
+        
+        {'name': 'points', 'type': 'group', 'files': [f'{n}.npy' for n in points_names]},
+        
+        {'name': 'OBELIX_WAVE_SCREEN', 'type': 'single', 'file': 'OBELIX_WAVE_SCREEN.npy'},
+    ]
+    
+    for name in asterix_item_names + obelix_item_names:
+        config_list.append({'name': name, 'type': 'single', 'file': f'{name}.npy'})
+    
+    return tuple(config_list)
+
 class AsterixConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
@@ -56,6 +104,8 @@ class AsterixConstants(NamedTuple):
         7 * stage_spacing + top_border,  # Stage 7
         8 * stage_spacing + top_border,  # BOTTOM
     ]
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class CollectibleEnt(NamedTuple):
     x: jnp.ndarray
@@ -752,14 +802,19 @@ class AsterixRenderer(JAXGameRenderer):
         self._sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/asterix")
 
         # Load all assets via declarative manifest
-        asset_config = self._get_asset_config()
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # Add procedural background
+        static_procedural = _create_static_procedural_sprites(self.consts.screen_height, self.consts.screen_width)
+        final_asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': static_procedural['background']})
+        
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(asset_config, self._sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self._sprite_path)
 
         # Ensure player sprite stacks have identical shapes across characters
         def _pad_stack_to(hwc_stack, target_h, target_w):
@@ -826,40 +881,6 @@ class AsterixRenderer(JAXGameRenderer):
         self.collectible_y_coords = lane_y_centers - (collectible_height // 2)
         self.popup_y_coords = lane_y_centers - (popup_height // 2)
 
-    def _get_asset_config(self) -> list:
-        asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
-        obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG']
-        points_names = ['POINTS50', 'POINTS100', 'POINTS200', 'POINTS300', 'POINTS400', 'POINTS500']
-
-        config = [
-            {'name': 'background', 'type': 'background', 'data': jnp.zeros((self.consts.screen_height, self.consts.screen_width, 4), dtype=jnp.uint8).at[0,0,3].set(255)},
-
-            {'name': 'STAGE', 'type': 'single', 'file': 'STAGE.npy'},
-            {'name': 'TOP', 'type': 'single', 'file': 'TOP.npy'},
-            {'name': 'BOTTOM', 'type': 'single', 'file': 'BOTTOM.npy'},
-
-            {'name': 'ASTERIX_SPRITES', 'type': 'group', 'files': [
-                'ASTERIX_LEFT.npy', 'ASTERIX_RIGHT.npy',
-                'ASTERIX_LEFT_HIT.npy', 'ASTERIX_RIGHT_HIT.npy',
-            ]},
-            {'name': 'OBELIX_SPRITES', 'type': 'group', 'files': [
-                'OBELIX_LEFT.npy', 'OBELIX_RIGHT.npy',
-                'OBELIX_LEFT_HIT.npy', 'OBELIX_RIGHT_HIT.npy',
-            ]},
-
-            {'name': 'LYRE_LEFT', 'type': 'single', 'file': 'LYRE_LEFT.npy'},
-            {'name': 'LYRE_RIGHT', 'type': 'single', 'file': 'LYRE_RIGHT.npy'},
-
-            {'name': 'digit', 'type': 'digits', 'pattern': 'DIGIT_{}.npy'},
-
-            {'name': 'points', 'type': 'group', 'files': [f'{n}.npy' for n in points_names]},
-
-            {'name': 'OBELIX_WAVE_SCREEN', 'type': 'single', 'file': 'OBELIX_WAVE_SCREEN.npy'},
-        ]
-
-        for name in asterix_item_names + obelix_item_names:
-            config.append({'name': name, 'type': 'single', 'file': f'{name}.npy'})
-        return config
 
     def _precompute_static_frames(self) -> Tuple[jnp.ndarray, jnp.ndarray]:
         # Start from background ID raster

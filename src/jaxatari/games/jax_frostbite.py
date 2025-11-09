@@ -16,6 +16,28 @@ import jaxatari.rendering.jax_rendering_utils as render_utils
 import jaxatari.rendering.jax_rendering_utils_legacy as jr_legacy
 
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Black bar for left gutter (procedural)
+    # Using constants: SCREEN_HEIGHT=210, PLAYFIELD_LEFT=8
+    black_bar = jnp.zeros((210, 8, 4), dtype=jnp.uint8)
+    black_bar = black_bar.at[:, :, 3].set(255)
+    return {
+        'black_bar': black_bar,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Frostbite.
+    Most assets are loaded from files and processed dynamically, so this returns
+    only the procedural assets that can be statically defined.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    return (
+        {'name': 'black_bar', 'type': 'procedural', 'data': static_procedural['black_bar']},
+    )
+
 
 # ==========================================================================================
 # CONSTANTS
@@ -170,6 +192,8 @@ class FrostbiteConstants(NamedTuple):
     SPACING_NARROW: int = 16
     SPACING_MEDIUM: int = 32
     SPACING_WIDE: int = 32
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # ==========================================================================================
@@ -2859,9 +2883,6 @@ class FrostbiteRenderer(JAXGameRenderer):
         igloo_door = self._load_frame_legacy("igloo_door.npy")
         degree_symbol = self._load_frame_legacy("degree_symbol.npy")
         
-        # Create black bar for left gutter
-        black_bar = self._create_black_bar_sprite()
-        
         # Use legacy digit loader
         digit_path_pattern = os.path.join(self.sprite_path, "digit_{}.npy")
         digits_array = jr_legacy.load_and_pad_digits(digit_path_pattern, num_chars=10)
@@ -2895,8 +2916,18 @@ class FrostbiteRenderer(JAXGameRenderer):
         clam_0_floats = create_float_variations(clam_0)     # (5, H, W, 4)
         clam_1_floats = create_float_variations(clam_1)     # (5, H, W, 4)
         
-        # 3. Define the asset manifest
-        asset_config = [
+        # 3. Start from asset config in constants and extend with dynamically loaded assets
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # Get black_bar from constants (already in ASSET_CONFIG)
+        black_bar = None
+        for asset in final_asset_config:
+            if asset['name'] == 'black_bar':
+                black_bar = asset['data']
+                break
+        
+        # Add dynamically loaded and processed assets
+        final_asset_config.extend([
             {'name': 'background_day', 'type': 'background', 'data': bg_day},
             {'name': 'background_night', 'type': 'procedural', 'data': bg_night},
             
@@ -2921,8 +2952,9 @@ class FrostbiteRenderer(JAXGameRenderer):
             {'name': 'igloo', 'type': 'group', 'data': [igloo_block, igloo_door]},
             {'name': 'degree', 'type': 'procedural', 'data': degree_symbol},
             {'name': 'digits', 'type': 'group', 'data': digits_list},
-            {'name': 'black_bar', 'type': 'procedural', 'data': black_bar},
-        ]
+        ])
+        
+        asset_config = final_asset_config
         
         # 4. Load all assets and build palette/masks
         (
@@ -2951,15 +2983,6 @@ class FrostbiteRenderer(JAXGameRenderer):
         
         # Convert ICE_ROW_Y tuple to JAX array for dynamic indexing
         self.ICE_ROW_Y_ARRAY = jnp.array(self.consts.ICE_ROW_Y, dtype=jnp.int32)
-    
-    def _create_black_bar_sprite(self) -> jnp.ndarray:
-        """Procedurally creates a black bar for the left gutter."""
-        bar_height = self.consts.SCREEN_HEIGHT
-        bar_width = self.consts.PLAYFIELD_LEFT  # This is 8
-        # Black sprite with full alpha to ensure it's in the palette
-        black_bar = jnp.zeros((bar_height, bar_width, 4), dtype=jnp.uint8)
-        black_bar = black_bar.at[:, :, 3].set(255)
-        return black_bar
     
     @staticmethod
     def _decode_sprite_duplication(consts, code: jnp.ndarray):

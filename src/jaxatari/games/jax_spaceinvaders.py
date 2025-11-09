@@ -18,6 +18,50 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for SpaceInvaders.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        
+        # Player (0=visible, 1=invisible)
+        {'name': 'player', 'type': 'group', 'files': ['player.npy', 'player_invisible.npy']},
+        
+        # Score
+        {'name': 'digits_green', 'type': 'digits', 'pattern': 'numbers/{}_green.npy'},
+        {'name': 'zero_yellow', 'type': 'single', 'file': 'numbers/0_yellow.npy'},
+        
+        # Defense
+        {'name': 'defense', 'type': 'single', 'file': 'defense.npy'},
+        
+        # Enemies (A/B animation frames)
+        {'name': 'opponent_1', 'type': 'group', 'files': ['opponents/opponent_1_a.npy', 'opponents/opponent_1_b.npy']},
+        {'name': 'opponent_2', 'type': 'group', 'files': ['opponents/opponent_2_a.npy', 'opponents/opponent_2_b.npy']},
+        {'name': 'opponent_3', 'type': 'group', 'files': ['opponents/opponent_3_a.npy', 'opponents/opponent_3_b.npy']},
+        {'name': 'opponent_4', 'type': 'group', 'files': ['opponents/opponent_4_a.npy', 'opponents/opponent_4_b.npy']},
+        # Opponent 5 doesn't change, so we duplicate its file for the A/B structure
+        {'name': 'opponent_5', 'type': 'group', 'files': ['opponents/opponent_5.npy', 'opponents/opponent_5.npy']},
+        {'name': 'opponent_6', 'type': 'group', 'files': ['opponents/opponent_6_a.npy', 'opponents/opponent_6_b.npy']},
+        {'name': 'ufo', 'type': 'single', 'file': 'opponents/ufo.npy'},
+        
+        # Bullet
+        {'name': 'bullet', 'type': 'single', 'file': 'bullet.npy'},
+        
+        # Explosions
+        {'name': 'enemy_explosion', 'type': 'group', 'files': [
+            'explosions/explosion_1.npy', 'explosions/explosion_2.npy', 
+            'explosions/explosion_3.npy', 'explosions/explosion_4.npy'
+        ]},
+        {'name': 'ufo_explosion', 'type': 'group', 'files': ['explosions/exp_ufo_1.npy', 'explosions/exp_ufo_2.npy']},
+        {'name': 'player_explosion', 'type': 'group', 'files': ['explosions/exp_player_1.npy', 'explosions/exp_player_2.npy']},
+        
+        # Lives
+        {'name': 'lives', 'type': 'group', 'files': ['lifes/one.npy', 'lifes/two.npy', 'lifes/three.npy']},
+    )
+
 class SpaceInvadersConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
@@ -96,6 +140,8 @@ class SpaceInvadersConstants(NamedTuple):
     # Initial health per chunk and damage per bullet
     BARRICADE_HEALTH_INITIAL: int = 6
     BARRICADE_BULLET_DAMAGE: int = 6
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 C = SpaceInvadersConstants()
 default_mask = jnp.array([
@@ -1031,16 +1077,16 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         # 1. Configure the renderer
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160), # H, W
-            channels=1,
-            downscale=(84, 84)
+            channels=3,
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spaceinvaders"
         
-        # 3. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 3. Use asset config from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 4. Load all assets, create palette, and generate ID masks
         (
@@ -1049,7 +1095,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         # Replace opaque black (ID 0) pixels in player sprites with TRANSPARENT_ID
         player_masks = self.SHAPE_MASKS['player']
@@ -1112,46 +1158,6 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         # Precompute barricade pixel -> chunk lookup for health-grid masking
         self._precompute_barricade_pixel_map()
 
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        return [
-            # Background
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            
-            # Player (0=visible, 1=invisible)
-            {'name': 'player', 'type': 'group', 'files': ['player.npy', 'player_invisible.npy']},
-            
-            # Score
-            {'name': 'digits_green', 'type': 'digits', 'pattern': 'numbers/{}_green.npy'},
-            {'name': 'zero_yellow', 'type': 'single', 'file': 'numbers/0_yellow.npy'},
-            
-            # Defense
-            {'name': 'defense', 'type': 'single', 'file': 'defense.npy'},
-            
-            # Enemies (A/B animation frames)
-            {'name': 'opponent_1', 'type': 'group', 'files': ['opponents/opponent_1_a.npy', 'opponents/opponent_1_b.npy']},
-            {'name': 'opponent_2', 'type': 'group', 'files': ['opponents/opponent_2_a.npy', 'opponents/opponent_2_b.npy']},
-            {'name': 'opponent_3', 'type': 'group', 'files': ['opponents/opponent_3_a.npy', 'opponents/opponent_3_b.npy']},
-            {'name': 'opponent_4', 'type': 'group', 'files': ['opponents/opponent_4_a.npy', 'opponents/opponent_4_b.npy']},
-            # Opponent 5 doesn't change, so we duplicate its file for the A/B structure
-            {'name': 'opponent_5', 'type': 'group', 'files': ['opponents/opponent_5.npy', 'opponents/opponent_5.npy']},
-            {'name': 'opponent_6', 'type': 'group', 'files': ['opponents/opponent_6_a.npy', 'opponents/opponent_6_b.npy']},
-            {'name': 'ufo', 'type': 'single', 'file': 'opponents/ufo.npy'},
-            
-            # Bullet
-            {'name': 'bullet', 'type': 'single', 'file': 'bullet.npy'},
-            
-            # Explosions
-            {'name': 'enemy_explosion', 'type': 'group', 'files': [
-                'explosions/explosion_1.npy', 'explosions/explosion_2.npy', 
-                'explosions/explosion_3.npy', 'explosions/explosion_4.npy'
-            ]},
-            {'name': 'ufo_explosion', 'type': 'group', 'files': ['explosions/exp_ufo_1.npy', 'explosions/exp_ufo_2.npy']},
-            {'name': 'player_explosion', 'type': 'group', 'files': ['explosions/exp_player_1.npy', 'explosions/exp_player_2.npy']},
-            
-            # Lives
-            {'name': 'lives', 'type': 'group', 'files': ['lifes/one.npy', 'lifes/two.npy', 'lifes/three.npy']},
-        ]
 
     def _precompute_barricade_coords(self) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """

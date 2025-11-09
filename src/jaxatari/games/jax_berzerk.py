@@ -14,6 +14,85 @@ import jaxatari.rendering.jax_rendering_utils as render_utils
 # Game: Berzerk
 # Tested on Ubuntu Virtual Machine
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # A black background
+    procedural_bg = jnp.zeros((210, 160, 4), dtype=jnp.uint8)
+    procedural_bg = procedural_bg.at[:, :, 3].set(255)
+
+    # A 1x1 pixel for each color used in procedural recoloring
+    # This ensures they are added to the palette.
+    enemy_recolor_palette = jnp.array([
+        [210, 210, 64, 255],    # Original enemy color
+        [240, 170, 103, 255],   # Original bullet color
+        [210, 210, 91, 255],    # yellow
+        [186, 112, 69, 255],    # orange
+        [214, 214, 214, 255],   # white
+        [109, 210, 111, 255],   # green
+        [239, 127, 128, 255],   # red
+        [102, 158, 193, 255],   # blue
+        [227, 205, 115, 255],   # yellow2
+        [185, 96, 175, 255],    # pink
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4) # (N, 1, 1, 4)
+    
+    return {
+        'background': procedural_bg,
+        'recolor_palette': enemy_recolor_palette,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Berzerk.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define sprite groups (for auto-padding)
+    player_keys = [
+        'player_idle', 'player_move_1', 'player_move_2', 'player_death',
+        'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
+        'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left'
+    ]
+    
+    enemy_keys = [
+        'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4',
+        'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
+        'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
+        'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
+        'enemy_death_1', 'enemy_death_2', 'enemy_death_3',
+    ]
+    
+    otto_keys = ['evil_otto']
+
+    wall_keys = [
+        'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
+        'level_outer_walls', 'door_vertical_left', 'door_vertical_right', 
+        'door_horizontal_up', 'door_horizontal_down',
+    ]
+
+    config = (
+        # Procedural assets
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'recolor_palette', 'type': 'procedural', 'data': static_procedural['recolor_palette']},
+
+        # Groups (will be auto-padded)
+        {'name': 'player_group', 'type': 'group', 'files': [f'{k}.npy' for k in player_keys]},
+        {'name': 'enemy_group', 'type': 'group', 'files': [f'{k}.npy' for k in enemy_keys]},
+        {'name': 'otto_group', 'type': 'group', 'files': [f'{k}.npy' for k in otto_keys]},
+        {'name': 'wall_group', 'type': 'group', 'files': [f'{k}.npy' for k in wall_keys]},
+
+        # Single sprites
+        {'name': 'bullet_horizontal', 'type': 'single', 'file': 'bullet_horizontal.npy'},
+        {'name': 'bullet_vertical', 'type': 'single', 'file': 'bullet_vertical.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'life.npy'},
+        {'name': 'start_title', 'type': 'single', 'file': 'start_title.npy'},
+
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+    )
+    
+    return config
+
 class BerzerkConstants(NamedTuple):
     WIDTH = 160
     HEIGHT = 210
@@ -73,6 +152,9 @@ class BerzerkConstants(NamedTuple):
     OTTO_VERTICAL_DRIFT_SCALE = 0.2 # drift factor towards player's Y
     OTTO_HORIZ_PHASE_START = 0.25       # start of horizontal move phase in cycle
     OTTO_HORIZ_PHASE_END = 0.75         # end of horizontal move phase in cycle
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
     
 class PlayerState(NamedTuple):
     pos: chex.Array                     # (2,)
@@ -1621,8 +1703,8 @@ class BerzerkRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
 
         # 3. Make one call to load and process all assets
         (
@@ -1631,7 +1713,7 @@ class BerzerkRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 4. Store key color IDs needed for rendering
         self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
@@ -1668,75 +1750,6 @@ class BerzerkRenderer(JAXGameRenderer):
         # Backward compatibility: map SHAPE_MASKS to old sprites dict
         self.sprites = self.SHAPE_MASKS
         self.pivots = {}  # Keep for compatibility but not used in new system
-
-    def _get_asset_config(self) -> list[dict[str, Any]]:
-        """
-        Returns the declarative asset manifest for load_and_setup_assets.
-        """
-        # Define procedural assets
-        # 1. A black background
-        procedural_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)
-        procedural_bg = procedural_bg.at[:, :, 3].set(255)
-
-        # 2. A 1x1 pixel for each color used in procedural recoloring
-        #    This ensures they are added to the palette.
-        enemy_recolor_palette = jnp.array([
-            [210, 210, 64, 255],    # Original enemy color
-            [240, 170, 103, 255],   # Original bullet color
-            [210, 210, 91, 255],    # yellow
-            [186, 112, 69, 255],    # orange
-            [214, 214, 214, 255],   # white
-            [109, 210, 111, 255],   # green
-            [239, 127, 128, 255],   # red
-            [102, 158, 193, 255],   # blue
-            [227, 205, 115, 255],   # yellow2
-            [185, 96, 175, 255],    # pink
-        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4) # (N, 1, 1, 4)
-
-        # Define sprite groups (for auto-padding)
-        player_keys = [
-            'player_idle', 'player_move_1', 'player_move_2', 'player_death',
-            'player_shoot_up', 'player_shoot_right', 'player_shoot_down',
-            'player_shoot_left', 'player_shoot_up_left', 'player_shoot_down_left'
-        ]
-        
-        enemy_keys = [
-            'enemy_idle_1', 'enemy_idle_2', 'enemy_idle_3', 'enemy_idle_4',
-            'enemy_idle_5', 'enemy_idle_6', 'enemy_idle_7', 'enemy_idle_8',
-            'enemy_move_horizontal_1', 'enemy_move_horizontal_2',
-            'enemy_move_vertical_1', 'enemy_move_vertical_2', 'enemy_move_vertical_3',
-            'enemy_death_1', 'enemy_death_2', 'enemy_death_3',
-        ]
-        
-        otto_keys = ['evil_otto']
-
-        wall_keys = [
-            'mid_walls_1', 'mid_walls_2', 'mid_walls_3', 'mid_walls_4', 
-            'level_outer_walls', 'door_vertical_left', 'door_vertical_right', 
-            'door_horizontal_up', 'door_horizontal_down',
-        ]
-
-        # Return the full asset manifest
-        return [
-            # Procedural assets
-            {'name': 'background', 'type': 'background', 'data': procedural_bg},
-            {'name': 'recolor_palette', 'type': 'procedural', 'data': enemy_recolor_palette},
-
-            # Groups (will be auto-padded)
-            {'name': 'player_group', 'type': 'group', 'files': [f'{k}.npy' for k in player_keys]},
-            {'name': 'enemy_group', 'type': 'group', 'files': [f'{k}.npy' for k in enemy_keys]},
-            {'name': 'otto_group', 'type': 'group', 'files': [f'{k}.npy' for k in otto_keys]},
-            {'name': 'wall_group', 'type': 'group', 'files': [f'{k}.npy' for k in wall_keys]},
-
-            # Single sprites
-            {'name': 'bullet_horizontal', 'type': 'single', 'file': 'bullet_horizontal.npy'},
-            {'name': 'bullet_vertical', 'type': 'single', 'file': 'bullet_vertical.npy'},
-            {'name': 'life', 'type': 'single', 'file': 'life.npy'},
-            {'name': 'start_title', 'type': 'single', 'file': 'start_title.npy'},
-
-            # Digits
-            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        ]
 
     def _create_helper_mappings(self):
         """

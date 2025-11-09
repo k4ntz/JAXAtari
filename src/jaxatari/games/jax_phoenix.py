@@ -12,6 +12,106 @@ from jaxatari.spaces import Space
 
 
 # Phoenix Game by: Florian Schmidt, Finn Keller
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create a black background (210x160)
+    # We must add at least one pixel with alpha > 0
+    # so the color (0,0,0) is added to the palette.
+    bg_data = jnp.zeros((210, 160, 4), dtype=jnp.uint8)
+    bg_data = bg_data.at[0, 0, 3].set(255) # Add one black, opaque pixel
+    
+    return {
+        'background': bg_data
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Phoenix.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    return (
+        # --- Background & Field ---
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'floor', 'type': 'single', 'file': 'floor.npy'},
+        
+        # --- UI ---
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator.npy'},
+        
+        # --- Player ---
+        # This group's order must match the logic in render()
+        # 0: idle, 1: death_1, 2: death_2, 3: death_3, 4: move
+        {'name': 'player', 'type': 'group', 'files': [
+            'player/player.npy', 
+            'player/player_death_1.npy', 
+            'player/player_death_2.npy', 
+            'player/player_death_3.npy', 
+            'player/player_move.npy'
+        ]},
+        {'name': 'player_ability', 'type': 'single', 'file': 'ability.npy'},
+        
+        # --- Projectiles ---
+        {'name': 'player_projectile', 'type': 'single', 'file': 'projectiles/player_projectile.npy'},
+        {'name': 'enemy_projectile', 'type': 'single', 'file': 'projectiles/enemy_projectile.npy'},
+        
+        # --- Phoenix ---
+        # This group's order must match the logic in render()
+        # 0: phoenix_1, 1: phoenix_2, 2: attack, 3: death_1, 4: death_2
+        {'name': 'phoenix', 'type': 'group', 'files': [
+            'enemy_phoenix/enemy_phoenix.npy',
+            'enemy_phoenix/enemy_phoenix_2.npy',
+            'enemy_phoenix/enemy_phoenix_attack.npy',
+            'enemy_phoenix/enemy_phoenix_death_1.npy',
+            'enemy_phoenix/enemy_phoenix_death_2.npy'
+        ]},
+        
+        # --- Bat Blue ---
+        # 0: main, 1: death_1, 2: death_2, 3: death_3
+        {'name': 'bat_blue_body', 'type': 'group', 'files': [
+            'enemy_bats/bats_blue/bat_blue_main.npy',
+            'enemy_bats/bats_blue/bat_blue_death_1.npy',
+            'enemy_bats/bats_blue/bat_blue_death_2.npy',
+            'enemy_bats/bats_blue/bat_blue_death_3.npy'
+        ]},
+        # 0: left_mid, 1: right_mid, 2: left_up, 3: right_up, ...
+        {'name': 'bat_blue_wings', 'type': 'group', 'files': [
+            'enemy_bats/bats_blue/bat_blue_left_wing_middle.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_middle.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_up.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_up.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_down.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_down.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_down_2.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_down_2.npy'
+        ]},
+        
+        # --- Bat Red ---
+        {'name': 'bat_red_body', 'type': 'group', 'files': [
+            'enemy_bats/bats_red/bat_red_main.npy',
+            'enemy_bats/bats_red/bat_red_death_1.npy',
+            'enemy_bats/bats_red/bat_red_death_2.npy',
+            'enemy_bats/bats_red/bat_red_death_3.npy'
+        ]},
+        {'name': 'bat_red_wings', 'type': 'group', 'files': [
+            'enemy_bats/bats_red/bat_red_left_wing_middle.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_middle.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_up.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_up.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_down.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_down.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_down_2.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_down_2.npy'
+        ]},
+
+        # --- Boss ---
+        {'name': 'boss', 'type': 'single', 'file': 'boss/boss.npy'},
+        {'name': 'boss_block_red', 'type': 'single', 'file': 'boss/red_block.npy'},
+        {'name': 'boss_block_blue', 'type': 'single', 'file': 'boss/blue_block.npy'},
+        {'name': 'boss_block_green', 'type': 'single', 'file': 'boss/green_block.npy'},
+    )
+
 # new Constant class
 class PhoenixConstants(NamedTuple):
     """Game constants for Phoenix."""
@@ -164,6 +264,8 @@ class PhoenixConstants(NamedTuple):
 
         ]
     )
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 # === GAME STATE ===
 class PhoenixState(NamedTuple):
@@ -1159,115 +1261,17 @@ class PhoenixRenderer(JAXGameRenderer):
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/phoenix"
         
-        # 3. Create any procedural assets (like the black background)
-        procedural_assets = self._create_procedural_assets()
+        # 3. Use asset config from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        # 4. Get the declarative asset manifest
-        asset_config = self._get_asset_config(procedural_assets)
-        
-        # 5. Load all assets, create palette, and generate ID masks in one call
+        # 4. Load all assets, create palette, and generate ID masks in one call
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-
-    def _create_procedural_assets(self) -> dict:
-        """Creates procedural assets, like the background."""
-        # Create a black background.
-        # We must add at least one pixel with alpha > 0
-        # so the color (0,0,0) is added to the palette.
-        bg_data = jnp.zeros((self.config.game_dimensions[0], self.config.game_dimensions[1], 4), dtype=jnp.uint8)
-        bg_data = bg_data.at[0, 0, 3].set(255) # Add one black, opaque pixel
-        
-        return {
-            'background': bg_data
-        }
-
-    def _get_asset_config(self, procedural_assets: dict) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        return [
-            # --- Background & Field ---
-            {'name': 'background', 'type': 'background', 'data': procedural_assets['background']},
-            {'name': 'floor', 'type': 'single', 'file': 'floor.npy'},
-            
-            # --- UI ---
-            {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
-            {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator.npy'},
-            
-            # --- Player ---
-            # This group's order must match the logic in render()
-            # 0: idle, 1: death_1, 2: death_2, 3: death_3, 4: move
-            {'name': 'player', 'type': 'group', 'files': [
-                'player/player.npy', 
-                'player/player_death_1.npy', 
-                'player/player_death_2.npy', 
-                'player/player_death_3.npy', 
-                'player/player_move.npy'
-            ]},
-            {'name': 'player_ability', 'type': 'single', 'file': 'ability.npy'},
-            
-            # --- Projectiles ---
-            {'name': 'player_projectile', 'type': 'single', 'file': 'projectiles/player_projectile.npy'},
-            {'name': 'enemy_projectile', 'type': 'single', 'file': 'projectiles/enemy_projectile.npy'},
-            
-            # --- Phoenix ---
-            # This group's order must match the logic in render()
-            # 0: phoenix_1, 1: phoenix_2, 2: attack, 3: death_1, 4: death_2
-            {'name': 'phoenix', 'type': 'group', 'files': [
-                'enemy_phoenix/enemy_phoenix.npy',
-                'enemy_phoenix/enemy_phoenix_2.npy',
-                'enemy_phoenix/enemy_phoenix_attack.npy',
-                'enemy_phoenix/enemy_phoenix_death_1.npy',
-                'enemy_phoenix/enemy_phoenix_death_2.npy'
-            ]},
-            
-            # --- Bat Blue ---
-            # 0: main, 1: death_1, 2: death_2, 3: death_3
-            {'name': 'bat_blue_body', 'type': 'group', 'files': [
-                'enemy_bats/bats_blue/bat_blue_main.npy',
-                'enemy_bats/bats_blue/bat_blue_death_1.npy',
-                'enemy_bats/bats_blue/bat_blue_death_2.npy',
-                'enemy_bats/bats_blue/bat_blue_death_3.npy'
-            ]},
-            # 0: left_mid, 1: right_mid, 2: left_up, 3: right_up, ...
-            {'name': 'bat_blue_wings', 'type': 'group', 'files': [
-                'enemy_bats/bats_blue/bat_blue_left_wing_middle.npy',
-                'enemy_bats/bats_blue/bat_blue_right_wing_middle.npy',
-                'enemy_bats/bats_blue/bat_blue_left_wing_up.npy',
-                'enemy_bats/bats_blue/bat_blue_right_wing_up.npy',
-                'enemy_bats/bats_blue/bat_blue_left_wing_down.npy',
-                'enemy_bats/bats_blue/bat_blue_right_wing_down.npy',
-                'enemy_bats/bats_blue/bat_blue_left_wing_down_2.npy',
-                'enemy_bats/bats_blue/bat_blue_right_wing_down_2.npy'
-            ]},
-            
-            # --- Bat Red ---
-            {'name': 'bat_red_body', 'type': 'group', 'files': [
-                'enemy_bats/bats_red/bat_red_main.npy',
-                'enemy_bats/bats_red/bat_red_death_1.npy',
-                'enemy_bats/bats_red/bat_red_death_2.npy',
-                'enemy_bats/bats_red/bat_red_death_3.npy'
-            ]},
-            {'name': 'bat_red_wings', 'type': 'group', 'files': [
-                'enemy_bats/bats_red/bat_red_left_wing_middle.npy',
-                'enemy_bats/bats_red/bat_red_right_wing_middle.npy',
-                'enemy_bats/bats_red/bat_red_left_wing_up.npy',
-                'enemy_bats/bats_red/bat_red_right_wing_up.npy',
-                'enemy_bats/bats_red/bat_red_left_wing_down.npy',
-                'enemy_bats/bats_red/bat_red_right_wing_down.npy',
-                'enemy_bats/bats_red/bat_red_left_wing_down_2.npy',
-                'enemy_bats/bats_red/bat_red_right_wing_down_2.npy'
-            ]},
-
-            # --- Boss ---
-            {'name': 'boss', 'type': 'single', 'file': 'boss/boss.npy'},
-            {'name': 'boss_block_red', 'type': 'single', 'file': 'boss/red_block.npy'},
-            {'name': 'boss_block_blue', 'type': 'single', 'file': 'boss/blue_block.npy'},
-            {'name': 'boss_block_green', 'type': 'single', 'file': 'boss/green_block.npy'},
-        ]
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):

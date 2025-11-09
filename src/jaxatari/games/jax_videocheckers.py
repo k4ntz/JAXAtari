@@ -26,6 +26,31 @@ from jaxatari.spaces import Space
 # SHOW_OPPONENT_MOVE -> SELECT_PIECE: # Player makes an input to select a piece after the opponent's move
 
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for VideoCheckers.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # Pieces: 0=EMPTY, 1=WHITE_PIECE, 2=BLACK_PIECE, 3=WHITE_KING, 4=BLACK_KING, 5=BLACK_CURSOR, 6=WHITE_CURSOR
+    piece_files = [
+        f"pieces/{i}.npy" for i in range(7)
+    ]
+    
+    # Text sprites: 0-11
+    text_files = [f"text/{i}.npy" for i in range(12)]
+    
+    return (
+        # The checkerboard pattern
+        {'name': 'board', 'type': 'single', 'file': 'background.npy', 'transpose': True},
+        
+        # Group for all piece types
+        {'name': 'pieces', 'type': 'group', 'files': piece_files},
+        
+        # Group for text sprites
+        {'name': 'text', 'type': 'group', 'files': text_files},
+    )
+
+
 class VideoCheckersConstants:
     MAX_PIECES = 12
 
@@ -75,6 +100,9 @@ class VideoCheckersConstants:
     GAME_OVER_PHASE = 3
 
     ANIMATION_FRAME_RATE = 30
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class OpponentMove(NamedTuple):
@@ -1222,25 +1250,31 @@ class VideoCheckersRenderer(JAXGameRenderer):
         # 1. Configure the renderer
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=1,
-            downscale=(84, 84)
+            channels=3,
+            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocheckers"
         
-        # 3. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 3. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        # 4. Load all assets, create palette, and generate ID masks
+        # 4. Create procedural assets using modded constants
+        background_sprite = jnp.array([[[160, 96, 64, 255]]], dtype=jnp.uint8)
+        
+        # 5. Append procedural assets
+        final_asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': background_sprite})
+        
+        # 6. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         # 5. Expand background to full size if it's procedural (1x1)
         # The procedural background creates a 1x1 raster, but we need full game dimensions
@@ -1256,34 +1290,9 @@ class VideoCheckersRenderer(JAXGameRenderer):
             # Create full-size background filled with that color ID
             self.BACKGROUND = jnp.full((target_h, target_w), bg_color_id, dtype=self.BACKGROUND.dtype)
         
-        # 6. Pre-compute/cache values for rendering
+        # 7. Pre-compute/cache values for rendering
         self._cache_sprite_stacks()
         self.PRE_RENDERED_BOARD = self._precompute_static_board()
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        
-        # Pieces: 0=EMPTY, 1=WHITE_PIECE, 2=BLACK_PIECE, 3=WHITE_KING, 4=BLACK_KING, 5=BLACK_CURSOR, 6=WHITE_CURSOR
-        piece_files = [
-            f"pieces/{i}.npy" for i in range(7)
-        ]
-        
-        # Text sprites: 0-11
-        text_files = [f"text/{i}.npy" for i in range(12)]
-        
-        return [
-            # Procedural background (solid color)
-            {'name': 'background', 'type': 'background', 'data': jnp.array([[[160, 96, 64, 255]]], dtype=jnp.uint8)},
-            
-            # The checkerboard pattern
-            {'name': 'board', 'type': 'single', 'file': 'background.npy', 'transpose': True},
-            
-            # Group for all piece types
-            {'name': 'pieces', 'type': 'group', 'files': piece_files},
-            
-            # Group for text sprites
-            {'name': 'text', 'type': 'group', 'files': text_files},
-        ]
 
     def _cache_sprite_stacks(self):
         """Caches the sprite stacks for easy access."""

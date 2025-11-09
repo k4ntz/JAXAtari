@@ -11,6 +11,28 @@ import os
 
 SIDE_TOP, SIDE_BOTTOM, SIDE_LEFT, SIDE_RIGHT = 0, 1, 2, 3
 
+def _create_static_procedural_sprites(c: 'TronConstants') -> dict:
+    """Creates procedural sprites that don't depend on dynamic values or file loading."""
+    # Door sprites (solid color sprites)
+    door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
+    door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
+    
+    return {
+        'door_spawn': door_spawn_sprite,
+        'door_locked': door_locked_sprite,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Tron.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Most assets are procedurally generated from loaded sprites in the renderer.
+    This returns an empty config that will be populated in the renderer.
+    """
+    # Tron's asset config is mostly built dynamically from loaded sprites
+    # We return an empty tuple here, and the renderer will build the full config
+    # This allows the structure to be in constants while keeping file-dependent logic in renderer
+    return ()
 
 class TronConstants(NamedTuple):
     screen_width: int = 160
@@ -112,6 +134,11 @@ class TronConstants(NamedTuple):
     enemy_target_radius: int = (
         50  # radius (px) around player to sample target (where to walk)
     )
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    # Note: Tron's assets are mostly procedurally generated from loaded sprites,
+    # so the renderer builds the full config from loaded files
+    ASSET_CONFIG: tuple = _get_default_asset_config()
     enemy_min_dist: int = 32  # min distance between the enemies
     enemy_firing_cooldown_range: Tuple[int, int] = (
         30,
@@ -813,8 +840,14 @@ class TronRenderer(JAXGameRenderer):
         n_enemy_frames = enemy_frames_by_wave.shape[1]
         enemy_frames_flat = enemy_frames_by_wave.reshape(-1, *enemy_frames_by_wave.shape[2:])
         
-        # 6. Define the asset manifest
-        asset_config = [
+        # 6. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 6.1. Build the full asset manifest from loaded sprites
+        # Note: Most assets are procedurally generated from loaded files
+        static_procedural = _create_static_procedural_sprites(c)
+        
+        final_asset_config.extend([
             {'name': 'background', 'type': 'background', 'data': procedural_background},
             
             # Pre-tinted animation stacks (reshaped to 4D for asset loading)
@@ -824,15 +857,15 @@ class TronRenderer(JAXGameRenderer):
             # Pre-tinted digits
             {'name': 'digits_tinted', 'type': 'procedural', 'data': tinted_digits},
             
-            # Doors
-            {'name': 'door_spawn', 'type': 'procedural', 'data': door_spawn_sprite},
-            {'name': 'door_locked', 'type': 'procedural', 'data': door_locked_sprite},
+            # Doors (from static procedural)
+            {'name': 'door_spawn', 'type': 'procedural', 'data': static_procedural['door_spawn']},
+            {'name': 'door_locked', 'type': 'procedural', 'data': static_procedural['door_locked']},
             
             # Pre-tinted disc stacks
             {'name': 'player_disc_out_all_tints', 'type': 'procedural', 'data': player_disc_out},
             {'name': 'player_disc_ret_all_tints', 'type': 'procedural', 'data': player_disc_ret},
             {'name': 'enemy_disc_out_all_tints', 'type': 'procedural', 'data': enemy_disc_out},
-        ]
+        ])
         
         # 7. Load all assets and build palette/masks
         (
@@ -841,7 +874,7 @@ class TronRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
         
         # 8. Store sprite dimensions
         # player_all_tints mask shape is (C*F, H, W) after flattening

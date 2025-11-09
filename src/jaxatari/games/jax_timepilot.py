@@ -23,6 +23,95 @@ from jaxatari.games.timepilot_levels import (
     TimePilot_Level_5
 )
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for TimePilot.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # --- Define file lists for large groups ---
+    # 59 files: 5 levels * (8 pos + 2 death) + (8 transition + 1 transition death)
+    all_player_sprites_files = [
+        # L1
+        *(f'L1/L1_Player_Pos{i}.npy' for i in range(8)),
+        'L1/L1_Player_Death1.npy', 'L1/L1_Player_Death2.npy',
+        # L2
+        *(f'L2/L2_Player_Pos{i}.npy' for i in range(8)),
+        'L2/L2_Player_Death1.npy', 'L2/L2_Player_Death2.npy',
+        # L3
+        *(f'L3/L3_Player_Pos{i}.npy' for i in range(8)),
+        'L3/L3_Player_Death1.npy', 'L3/L3_Player_Death2.npy',
+        # L4
+        *(f'L4/L4_Player_Pos{i}.npy' for i in range(8)),
+        'L4/L4_Player_Death1.npy', 'L4/L4_Player_Death2.npy',
+        # L5
+        *(f'L5/L5_Player_Pos{i}.npy' for i in range(8)),
+        'L5/L5_Player_Death1.npy', 'L5/L5_Player_Death2.npy',
+        # Transition
+        *(f'L-All/TP_Player_Pos{i}.npy' for i in range(8)),
+        'L-All/TP_Player_Death.npy',
+    ]
+
+    # 75 files: 5 levels * 15 sprites (pos + death + boss)
+    all_enemy_sprites_files = [
+        # L1 (15 files)
+        *(f'L1/L1_Enemy_Pos{i}.npy' for i in range(8)),
+        'L1/L1_Enemy_Pos0.npy', 'L1/L1_Enemy_Pos1.npy', # 2 extra
+        'L1/L1_Enemy_Death.npy',
+        'L1/L1_Boss_Pos0.npy', 'L1/L1_Boss_Pos0.npy', # 2 boss_0
+        'L1/L1_Boss_Pos1.npy', 'L1/L1_Boss_Pos1.npy', # 2 boss_1
+        # L2 (15 files)
+        *(f'L2/L2_Enemy_Pos{i}.npy' for i in range(8)),
+        'L2/L2_Enemy_Pos0.npy', 'L2/L2_Enemy_Pos1.npy',
+        'L2/L2_Enemy_Death.npy',
+        'L2/L2_Boss_Pos0.npy', 'L2/L2_Boss_Pos0.npy',
+        'L2/L2_Boss_Pos1.npy', 'L2/L2_Boss_Pos1.npy',
+        # L3 (15 files)
+        *(f'L3/L3_Enemy_Pos{i}.npy' for i in ["01", "02", "11", "12", "21", "22", "31", "32", "41", "42"]),
+        'L3/L3_Enemy_Death.npy',
+        *(f'L3/L3_Boss_Pos{i}.npy' for i in ["01", "02", "11", "12"]),
+        # L4 (15 files)
+        *(f'L4/L4_Enemy_Pos{i}.npy' for i in range(8)),
+        'L4/L4_Enemy_Pos0.npy', 'L4/L4_Enemy_Pos1.npy',
+        'L4/L4_Enemy_Death.npy',
+        'L4/L4_Boss_Pos0.npy', 'L4/L4_Boss_Pos0.npy',
+        'L4/L4_Boss_Pos1.npy', 'L4/L4_Boss_Pos1.npy',
+        # L5 (15 files)
+        *(f'L5/L5_Enemy_Pos{j}.npy' for i in range(5) for j in range(2)), # 10 pos
+        'L5/L5_Enemy_Death.npy',
+        'L5/L5_Boss_Pos0.npy', 'L5/L5_Boss_Pos0.npy',
+        'L5/L5_Boss_Pos1.npy', 'L5/L5_Boss_Pos1.npy',
+    ]
+
+    return (
+        # Procedural background (empty black screen)
+        {'name': 'background', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
+        # Procedural pixel to ensure white is in the palette
+        {'name': 'white_pixel', 'type': 'procedural', 'data': jnp.array([[[255,255,255,255]]], dtype=jnp.uint8)},
+        # General Sprites (Single)
+        {'name': 'top_wall', 'type': 'single', 'file': 'L-All/Top.npy'},
+        {'name': 'bottom_wall', 'type': 'single', 'file': 'L-All/Bottom.npy'},
+        {'name': 'respawn_bottom_wall', 'type': 'single', 'file': 'L-All/Respawn_Bottom.npy'},
+        {'name': 'start_screen', 'type': 'single', 'file': 'L-All/First.npy'},
+        {'name': 'player_life', 'type': 'single', 'file': 'L-All/Player_Life.npy'},
+        {'name': 'black_line', 'type': 'single', 'file': 'L-All/BlackLine.npy'},
+        # General Sprites (Group)
+        {'name': 'transition_bar', 'type': 'group', 'files': ['L-All/TeleportBar.npy', 'L-All/TeleportBar2.npy']},
+        # General Sprites (Digits)
+        {'name': 'digits', 'type': 'digits', 'pattern': 'L-All/Digit{}.npy'},
+        # --- Level-Dependent Groups (for unified padding) ---
+        {'name': 'all_clouds', 'type': 'group', 'files': [f'L{i}/L{i}_Cloud.npy' for i in range(1, 6)]},
+        {'name': 'all_backgrounds', 'type': 'group', 'files': [f'L{i}/L{i}_Background.npy' for i in range(1, 6)]},
+        {'name': 'all_respawn_top_walls', 'type': 'group', 'files': [f'L{i}/L{i}_Top.npy' for i in range(1, 6)]},
+        {'name': 'all_player_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Player_Bullet.npy' for i in range(1, 6)]},
+        {'name': 'all_enemy_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Enemy_Bullet.npy' for i in range(1, 6)]},
+        {'name': 'all_enemy_remaining', 'type': 'group', 'files': [
+            item for i in range(1, 6) for item in (f'L{i}/L{i}_Enemy_Life.npy', f'L{i}/L{i}_Enemy_Death_Life.npy')
+        ]},
+        # Massive groups
+        {'name': 'all_player_sprites', 'type': 'group', 'files': all_player_sprites_files},
+        {'name': 'all_enemy_sprites', 'type': 'group', 'files': all_enemy_sprites_files},
+    )
+
 class TimePilotConstants(NamedTuple):
     # Constants for game environment
     WIDTH: int = 160
@@ -126,6 +215,9 @@ class TimePilotConstants(NamedTuple):
     LEVEL_3: LevelConstants = TimePilot_Level_3
     LEVEL_4: LevelConstants = TimePilot_Level_4
     LEVEL_5: LevelConstants = TimePilot_Level_5
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 # immutable state container
 class TimePilotState(NamedTuple):
@@ -1349,8 +1441,8 @@ class TimePilotRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 2. Get the declarative asset manifest
-        asset_config = self._get_asset_config()
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
 
         # 3. Load, process, and set up all assets in one call
         (
@@ -1359,7 +1451,7 @@ class TimePilotRenderer(JAXGameRenderer):
             self.BACKGROUND, # This will be our empty (black) raster
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 4. Get specific color IDs we'll need for procedural drawing
         self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
@@ -1368,98 +1460,6 @@ class TimePilotRenderer(JAXGameRenderer):
         # 5. Organize loaded masks/offsets into the nested structure
         #    the render() function expects.
         self._post_process_sprites()
-
-    def _get_asset_config(self) -> list[dict[str, Any]]:
-        """
-        Returns the declarative asset manifest for load_and_setup_assets.
-        We use the "massive group" strategy to ensure sprites from different
-        levels are padded to be compatible with each other.
-        """
-
-        # --- Define file lists for large groups ---
-        # 59 files: 5 levels * (8 pos + 2 death) + (8 transition + 1 transition death)
-        all_player_sprites_files = [
-            # L1
-            *(f'L1/L1_Player_Pos{i}.npy' for i in range(8)),
-            'L1/L1_Player_Death1.npy', 'L1/L1_Player_Death2.npy',
-            # L2
-            *(f'L2/L2_Player_Pos{i}.npy' for i in range(8)),
-            'L2/L2_Player_Death1.npy', 'L2/L2_Player_Death2.npy',
-            # L3
-            *(f'L3/L3_Player_Pos{i}.npy' for i in range(8)),
-            'L3/L3_Player_Death1.npy', 'L3/L3_Player_Death2.npy',
-            # L4
-            *(f'L4/L4_Player_Pos{i}.npy' for i in range(8)),
-            'L4/L4_Player_Death1.npy', 'L4/L4_Player_Death2.npy',
-            # L5
-            *(f'L5/L5_Player_Pos{i}.npy' for i in range(8)),
-            'L5/L5_Player_Death1.npy', 'L5/L5_Player_Death2.npy',
-            # Transition
-            *(f'L-All/TP_Player_Pos{i}.npy' for i in range(8)),
-            'L-All/TP_Player_Death.npy',
-        ]
-
-        # 75 files: 5 levels * 15 sprites (pos + death + boss)
-        all_enemy_sprites_files = [
-            # L1 (15 files)
-            *(f'L1/L1_Enemy_Pos{i}.npy' for i in range(8)),
-            'L1/L1_Enemy_Pos0.npy', 'L1/L1_Enemy_Pos1.npy', # 2 extra
-            'L1/L1_Enemy_Death.npy',
-            'L1/L1_Boss_Pos0.npy', 'L1/L1_Boss_Pos0.npy', # 2 boss_0
-            'L1/L1_Boss_Pos1.npy', 'L1/L1_Boss_Pos1.npy', # 2 boss_1
-            # L2 (15 files)
-            *(f'L2/L2_Enemy_Pos{i}.npy' for i in range(8)),
-            'L2/L2_Enemy_Pos0.npy', 'L2/L2_Enemy_Pos1.npy',
-            'L2/L2_Enemy_Death.npy',
-            'L2/L2_Boss_Pos0.npy', 'L2/L2_Boss_Pos0.npy',
-            'L2/L2_Boss_Pos1.npy', 'L2/L2_Boss_Pos1.npy',
-            # L3 (15 files)
-            *(f'L3/L3_Enemy_Pos{i}.npy' for i in ["01", "02", "11", "12", "21", "22", "31", "32", "41", "42"]),
-            'L3/L3_Enemy_Death.npy',
-            *(f'L3/L3_Boss_Pos{i}.npy' for i in ["01", "02", "11", "12"]),
-            # L4 (15 files)
-            *(f'L4/L4_Enemy_Pos{i}.npy' for i in range(8)),
-            'L4/L4_Enemy_Pos0.npy', 'L4/L4_Enemy_Pos1.npy',
-            'L4/L4_Enemy_Death.npy',
-            'L4/L4_Boss_Pos0.npy', 'L4/L4_Boss_Pos0.npy',
-            'L4/L4_Boss_Pos1.npy', 'L4/L4_Boss_Pos1.npy',
-            # L5 (15 files)
-            *(f'L5/L5_Enemy_Pos{j}.npy' for i in range(5) for j in range(2)), # 10 pos
-            'L5/L5_Enemy_Death.npy',
-            'L5/L5_Boss_Pos0.npy', 'L5/L5_Boss_Pos0.npy',
-            'L5/L5_Boss_Pos1.npy', 'L5/L5_Boss_Pos1.npy',
-        ]
-
-        # --- Asset Manifest ---
-        return [
-            # Procedural background (empty black screen)
-            {'name': 'background', 'type': 'background', 'data': jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)},
-            # Procedural pixel to ensure white is in the palette
-            {'name': 'white_pixel', 'type': 'procedural', 'data': jnp.array([[[255,255,255,255]]], dtype=jnp.uint8)},
-            # General Sprites (Single)
-            {'name': 'top_wall', 'type': 'single', 'file': 'L-All/Top.npy'},
-            {'name': 'bottom_wall', 'type': 'single', 'file': 'L-All/Bottom.npy'},
-            {'name': 'respawn_bottom_wall', 'type': 'single', 'file': 'L-All/Respawn_Bottom.npy'},
-            {'name': 'start_screen', 'type': 'single', 'file': 'L-All/First.npy'},
-            {'name': 'player_life', 'type': 'single', 'file': 'L-All/Player_Life.npy'},
-            {'name': 'black_line', 'type': 'single', 'file': 'L-All/BlackLine.npy'},
-            # General Sprites (Group)
-            {'name': 'transition_bar', 'type': 'group', 'files': ['L-All/TeleportBar.npy', 'L-All/TeleportBar2.npy']},
-            # General Sprites (Digits)
-            {'name': 'digits', 'type': 'digits', 'pattern': 'L-All/Digit{}.npy'},
-            # --- Level-Dependent Groups (for unified padding) ---
-            {'name': 'all_clouds', 'type': 'group', 'files': [f'L{i}/L{i}_Cloud.npy' for i in range(1, 6)]},
-            {'name': 'all_backgrounds', 'type': 'group', 'files': [f'L{i}/L{i}_Background.npy' for i in range(1, 6)]},
-            {'name': 'all_respawn_top_walls', 'type': 'group', 'files': [f'L{i}/L{i}_Top.npy' for i in range(1, 6)]},
-            {'name': 'all_player_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Player_Bullet.npy' for i in range(1, 6)]},
-            {'name': 'all_enemy_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Enemy_Bullet.npy' for i in range(1, 6)]},
-            {'name': 'all_enemy_remaining', 'type': 'group', 'files': [
-                item for i in range(1, 6) for item in (f'L{i}/L{i}_Enemy_Life.npy', f'L{i}/L{i}_Enemy_Death_Life.npy')
-            ]},
-            # Massive groups
-            {'name': 'all_player_sprites', 'type': 'group', 'files': all_player_sprites_files},
-            {'name': 'all_enemy_sprites', 'type': 'group', 'files': all_enemy_sprites_files},
-        ]
 
     def _post_process_sprites(self):
         """
