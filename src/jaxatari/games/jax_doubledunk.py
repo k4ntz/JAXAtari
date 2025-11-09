@@ -22,6 +22,7 @@ class DunkConstants:
     PLAYER2_COLOR: Tuple[int, int, int] = (72, 72, 200)
     BALL_COLOR: Tuple[int, int, int] = (204, 102, 0)
     BALL_SIZE: Tuple[int, int] = (3,3)
+    BALL_START: Tuple [int, int] = (100, 70)
     WALL_COLOR: Tuple[int, int, int] = (142, 142, 142)
     FIELD_COLOR: Tuple[int, int, int] = (128, 128, 128)
     JUMP_HEIGHT: int = 5 #adjustable if necessary and more of a placeholder value
