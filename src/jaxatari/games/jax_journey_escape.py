@@ -234,7 +234,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             dx,
         )
 
-
         # add one to the walking frames if dy != 0, if it is 0 reset to 0 => ?
         new_walking_frames = jnp.where(dy != 0, state.walking_frames + 1, 0)
 
@@ -292,8 +291,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             cxi = jnp.asarray(self.consts.chicken_hit_inset_x, dtype=jnp.int32)
             cyi_top = jnp.asarray(self.consts.chicken_hit_inset_y_top, dtype=jnp.int32)
             cyi_bottom = jnp.asarray(self.consts.chicken_hit_inset_y_bottom, dtype=jnp.int32)
-            ch_x0 = self.consts.start_chicken_x + cxi
-            ch_x1 = self.consts.start_chicken_x + self.consts.chicken_width - cxi
+            ch_x0 = state.chicken_x + cxi
+            ch_x1 = state.chicken_x + self.consts.chicken_width - cxi
             ch_y0 = state.chicken_y - self.consts.chicken_height + cyi_top
             ch_y1 = state.chicken_y - cyi_bottom
 
@@ -383,7 +382,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     def _get_observation(self, state: FreewayState):
         # create chicken
         chicken = EntityPosition(
-            x=state.chicken_x, # jnp.array(self.consts.start_chicken_x, dtype=jnp.int32),
+            x=state.chicken_x,
             y=state.chicken_y,
             width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
