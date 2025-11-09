@@ -36,7 +36,7 @@ class FreewayConstants(NamedTuple):
     screen_height: int = 210
     chicken_width: int = 6
     chicken_height: int = 8
-    chicken_x: int = 44  # Fixed x position
+    start_chicken_x: int = 44  # Fixed x position
     car_width: int = 8
     car_height: int = 10
     num_lanes: int = 10
@@ -46,6 +46,8 @@ class FreewayConstants(NamedTuple):
     top_border: int = 15
     top_path: int = 8
     bottom_border: int = 180
+    left_border: int = 5
+    right_border: int = 210
     # Collision response tuning
     throw_back_frames: int = 24  # frames the chicken is pushed back after hit
     stun_frames: int = 28        # frames the chicken cannot move after hit
@@ -109,6 +111,7 @@ class FreewayState(NamedTuple):
     """Represents the current state of the game"""
 
     chicken_y: chex.Array
+    chicken_x: chex.Array
     cars: chex.Array  # Shape: (num_lanes, 2) for x,y positions (ints for render/collide)
     # Per-lane cadence counters (frames), advance independently to sync movement patterns per lane
     lane_time: chex.Array
@@ -151,6 +154,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         """Initialize a new game state"""
         # Start chicken at bottom
         chicken_y = self.consts.bottom_border + self.consts.chicken_height - 1
+        chicken_x = self.consts.start_chicken_x
         # Initialize one car per lane
         cars = []
         for lane in range(self.consts.num_lanes):
@@ -179,6 +183,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
 
         state = FreewayState(
             chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
+            chicken_x=jnp.array(chicken_x, dtype=jnp.int32),
             cars=cars,
             lane_time=phases0,
             score=jnp.array(0, dtype=jnp.int32),
@@ -201,25 +206,50 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
             ),
             1.0,
-            jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
+            jnp.where((action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT), 
+                      -1.0, 
+                      jnp.where((action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT), 
+                                1.0, 
+                                0.0)),
         )
-
         dy = jnp.where(
             jnp.logical_and(state.cooldown > 0, state.cooldown <= self.consts.stun_frames),
             0.0,
             dy,
         )
 
-        # add one to the walking frames if dy != 0, if it is 0 reset to 0
+        dx = jnp.where(
+            jnp.logical_and(
+                state.cooldown > self.consts.stun_frames,
+                state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
+            ),
+            1.0,
+            jnp.where((action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT) , 
+                      -1.0, 
+                      jnp.where((action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT), 1.0, 0.0)),
+        )
+        dx = jnp.where(
+            jnp.logical_and(state.cooldown > 0, state.cooldown <= self.consts.stun_frames),
+            0.0,
+            dx,
+        )
+
+        # add one to the walking frames if dy != 0, if it is 0 reset to 0 => ?
         new_walking_frames = jnp.where(dy != 0, state.walking_frames + 1, 0)
 
-        # reset new_walking frames at 8
+        # reset new_walking frames at 8 => ?
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
 
         new_y = jnp.clip(
             state.chicken_y + dy.astype(jnp.int32),
             self.consts.top_border,
             self.consts.bottom_border + self.consts.chicken_height - 1,
+        ).astype(jnp.int32)
+
+        new_x = jnp.clip(
+            state.chicken_x + dx.astype(jnp.int32),
+            self.consts.left_border,
+            self.consts.right_border + self.consts.chicken_width - 1,
         ).astype(jnp.int32)
 
         # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATE
@@ -261,8 +291,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             cxi = jnp.asarray(self.consts.chicken_hit_inset_x, dtype=jnp.int32)
             cyi_top = jnp.asarray(self.consts.chicken_hit_inset_y_top, dtype=jnp.int32)
             cyi_bottom = jnp.asarray(self.consts.chicken_hit_inset_y_bottom, dtype=jnp.int32)
-            ch_x0 = self.consts.chicken_x + cxi
-            ch_x1 = self.consts.chicken_x + self.consts.chicken_width - cxi
+            ch_x0 = state.chicken_x + cxi
+            ch_x1 = state.chicken_x + self.consts.chicken_width - cxi
             ch_y0 = state.chicken_y - self.consts.chicken_height + cyi_top
             ch_y1 = state.chicken_y - cyi_bottom
 
@@ -331,6 +361,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
 
         new_state = FreewayState(
             chicken_y=new_y,
+            chicken_x=new_x,
             cars=new_cars,
             lane_time=new_lane_time,
             score=new_score,
@@ -351,7 +382,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     def _get_observation(self, state: FreewayState):
         # create chicken
         chicken = EntityPosition(
-            x=jnp.array(self.consts.chicken_x, dtype=jnp.int32),
+            x=state.chicken_x,
             y=state.chicken_y,
             width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
@@ -527,7 +558,7 @@ class FreewayRenderer(JAXGameRenderer):
         )
         
         chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
-        raster = self.jr.render_at(raster, self.consts.chicken_x, state.chicken_y, chicken_mask)
+        raster = self.jr.render_at(raster, state.chicken_x, state.chicken_y, chicken_mask)
 
         # Render cars in the correct colors
         car_masks = [
