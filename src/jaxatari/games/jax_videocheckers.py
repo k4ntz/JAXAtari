@@ -395,9 +395,10 @@ class BoardHandler:
             move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces
             can jump.
         """
-        own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
-                                  lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
-                                  lambda: [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING], )
+        if colour == VideoCheckersConstants.COLOUR_WHITE:
+            own_pieces = [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING]
+        else:
+            own_pieces = [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING]
         own_pieces_mask = jnp.zeros_like(board, dtype=bool)
         for piece in own_pieces:
             own_pieces_mask |= (board == piece)
@@ -556,14 +557,6 @@ class JaxVideoCheckers(
                                                                     captured_positions=jnp.array([[-1, -1]])
                                                                     ))"""
 
-        # if the phase is not SELECT_PIECE_PHASE, print a debug message
-        jax.lax.cond(
-            state.game_phase != self.consts.SELECT_PIECE_PHASE,
-            lambda: jax.debug.print("Warning: Game phase is not SELECT_PIECE_PHASE, it is {game_phase}",
-                                    game_phase=state.game_phase),
-            lambda: None,
-
-        )
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -694,8 +687,6 @@ class JaxVideoCheckers(
         best_move = jnp.where(all_illegal, jnp.array([0, 0], moves.dtype), moves[best_idx])
         best_score = jnp.where(all_illegal, -jnp.inf, scores[best_idx])
 
-        jax.debug.print("Piece {p} best move {m} score {s}", p=piece, m=best_move, s=best_score)
-
         return best_move, best_score
 
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
@@ -753,8 +744,6 @@ class JaxVideoCheckers(
         Returns:
             new state with updated opponent_move and has_jumped fields
         """
-        jax.debug.print("Computing further opponent move...")
-
         def while_cond_fun(state: VideoCheckersState) -> bool:
             # Continue looping as long as the AI has a jump
             return state.has_jumped
@@ -766,8 +755,6 @@ class JaxVideoCheckers(
             board = state.opponent_move.resulting_board
 
             best_move, best_score = self.calculate_best_move_per_piece(piece, splitkey, board)
-            jax.debug.print("Best move for piece {piece}: {best_move}, score: {best_score}",
-                            piece=piece, best_move=best_move, best_score=best_score)
             new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
                 row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
             new_pos = piece + best_move
@@ -1102,32 +1089,30 @@ class JaxVideoCheckers(
         """
         # Switch between game phases to choose which function handles the step
         # So separate function for each game phase
+        def _run_phase_logic(state, action):
+            # Define operands to pass to the branch functions
+            # Note: We create simple lambda wrappers to match the required
+            # function signature for jax.lax.switch, which is (operand,).
+            # Here, our "operand" is the tuple (state, action).
+            
+            # We pass 'state' and 'action' as a tuple (the operand)
+            operands = (state, action)
+            # List of functions to call based on the index (game_phase)
+            # Each function must accept the (state, action) operand
+            phase_functions = [
+                lambda op: self.step_select_piece_phase(op[0], op[1]),
+                lambda op: self.step_move_piece_phase(op[0], op[1]),
+                lambda op: self.step_show_opponent_move_phase(op[0], op[1]),
+                lambda op: self.step_game_over_phase(op[0], op[1]),
+            ]
+            
+            return jax.lax.switch(state.game_phase, phase_functions, operands)
+
         new_state = jax.lax.cond(
             (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (action != Action.NOOP),
-            lambda: jax.lax.cond(
-                state.game_phase == self.consts.SELECT_PIECE_PHASE,
-                lambda: self.step_select_piece_phase(state, action),
-                lambda: jax.lax.cond(
-                    state.game_phase == self.consts.MOVE_PIECE_PHASE,
-                    lambda: self.step_move_piece_phase(state, action),
-                    lambda: jax.lax.cond(
-                        state.game_phase == self.consts.SHOW_OPPONENT_MOVE_PHASE,
-                        lambda: self.step_show_opponent_move_phase(state, action),
-                        lambda: self.step_game_over_phase(state, action),
-                    ),
-                ),
-            ),
+            lambda: _run_phase_logic(state, action),  # Call the new switch logic
             lambda: state,
         )
-
-        # if the new_state phase is not equal to the old state phase,
-        # print what the old phase was and what the new phase is
-
-        jax.lax.cond(
-            new_state.game_phase != state.game_phase,
-            lambda: jax.debug.print("Game phase changed from {old_phase} to {new_phase}",
-                                    old_phase=state.game_phase, new_phase=new_state.game_phase),
-            lambda: None)
 
         new_state = new_state._replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
 
@@ -1237,7 +1222,8 @@ class VideoCheckersRenderer(JAXGameRenderer):
         # 1. Configure the renderer
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
+            channels=1,
+            downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
@@ -1259,7 +1245,11 @@ class VideoCheckersRenderer(JAXGameRenderer):
         # 5. Expand background to full size if it's procedural (1x1)
         # The procedural background creates a 1x1 raster, but we need full game dimensions
         bg_h, bg_w = self.BACKGROUND.shape
-        target_h, target_w = self.config.game_dimensions
+        # Determine the correct target size (use downscaled dimensions if downscaling is enabled)
+        if self.config.downscale:
+            target_h, target_w = self.config.downscale
+        else:
+            target_h, target_w = self.config.game_dimensions
         if bg_h != target_h or bg_w != target_w:
             # Get the background color ID from the 1x1 background
             bg_color_id = self.BACKGROUND[0, 0]
@@ -1286,7 +1276,7 @@ class VideoCheckersRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'data': jnp.array([[[160, 96, 64, 255]]], dtype=jnp.uint8)},
             
             # The checkerboard pattern
-            {'name': 'board', 'type': 'single', 'file': 'background.npy'},
+            {'name': 'board', 'type': 'single', 'file': 'background.npy', 'transpose': True},
             
             # Group for all piece types
             {'name': 'pieces', 'type': 'group', 'files': piece_files},

@@ -356,7 +356,10 @@ class JaxRenderingUtils:
             if asset_type == 'single':
                 if 'file' in asset:
                     path = os.path.join(base_path, asset['file'])
-                    raw_sprites_dict[name] = self.loadFrame(path)
+                    # Check for the 'transpose' flag from the config, default to False
+                    should_transpose = asset.get('transpose', False)
+                    # Pass the flag to loadFrame
+                    raw_sprites_dict[name] = self.loadFrame(path, transpose=should_transpose)
                 elif 'data' in asset:
                     raw_sprites_dict[name] = asset['data']
                 else:
