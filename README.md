@@ -154,12 +154,13 @@ python3 scripts/play.py -g Pong
 
 ## Supported Games
 
-| Game     | Supported |
-|----------|-----------|
-| Freeway  |    ✅     |
-| Kangaroo |    ✅     |
-| Pong     |    ✅     |
-| Seaquest |    ✅     |
+| Game           | Supported |
+|----------------|-----------|
+| Freeway        |    ✅     |
+| Kangaroo       |    ✅     |
+| Pong           |    ✅     |
+| Seaquest       |    ✅     |
+| Journey Escape |    🔜     |
 
 > More games can be added via the uniform wrapper system.
 
