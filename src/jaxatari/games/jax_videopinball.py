@@ -4565,21 +4565,17 @@ class VideoPinballRenderer(JAXGameRenderer):
         plunger_frame_index = state.plunger_position
         plunger_mask = self.PLUNGER_STACK[plunger_frame_index]
         
-        # Get the original height of this frame (before padding)
-        original_height = self.PLUNGER_ORIGINAL_HEIGHTS[plunger_frame_index]
+        # Get the pre-calculated offset [pad_w, pad_h] for this frame.
+        plunger_offset = self.PLUNGER_OFFSETS[plunger_frame_index]
         
-        # Get the maximum possible plunger height (cached in _cache_sprite_stacks)
-        max_plunger_height = self.PLUNGER_MAX_HEIGHT
+        # The base y=10 is for the longest sprite (pad_h=0).
+        # For shorter sprites, we must add their vertical padding (plunger_offset[1])
+        # to the y-coordinate to "push" them down, anchoring their bottom edge.
+        plunger_y = 133 + plunger_offset[1]
         
-        # The logic Y_BOTTOM_ANCHOR - original_height is correct.
-        # '198' was "halfway".
-        # '202' was "too far".
-        # Let's try 200.
-        Y_BOTTOM_ANCHOR = 200
-
-        plunger_y = Y_BOTTOM_ANCHOR - original_height
-        
-        raster = self.jr.render_at(raster, 148, plunger_y, plunger_mask)
+        # We still pass the offset in case you fix render_at later,
+        # but the key change is using the dynamic plunger_y.
+        raster = self.jr.render_at_clipped(raster, 148, plunger_y, plunger_mask, flip_offset=plunger_offset)
         
         # Spinners
         spinner_mask = self.SPINNER_STACK[state.step_counter % 8]
