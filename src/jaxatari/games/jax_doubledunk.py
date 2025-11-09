@@ -1,23 +1,93 @@
 from dataclasses import dataclass
 from jax import numpy as jnp
-from jaxatari.core import JAXAtariGame 
+from jaxatari.core import JAXAtariGame
+import os
+from functools import partial
+from typing import NamedTuple, Tuple
+import jax.lax
+import chex
 
 # =============================================================================
 # TASK 1: Define Constants and Game State
 # =============================================================================
 
-class Constants:
+class DunkConstants:
     """
     Holds all static values for the game like screen dimensions, player speeds, colors, etc.
     """
-    pass
+    WINDOW_WIDTH: int = 200
+    WINDOW_HEIGHT: int = 240
+    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
+    PLAYER1_COLOR: Tuple[int, int, int] = (200, 72, 72)
+    PLAYER2_COLOR: Tuple[int, int, int] = (72, 72, 200)
+    BALL_COLOR: Tuple[int, int, int] = (204, 102, 0)
+    BALL_SIZE: Tuple[int, int] = (3,3)
+    WALL_COLOR: Tuple[int, int, int] = (142, 142, 142)
+    FIELD_COLOR: Tuple[int, int, int] = (128, 128, 128)
+    JUMP_HEIGHT: int = 5 #adjustable if necessary and more of a placeholder value
+    PLAYER_MAX_SPEED: int = 6 #adjustable if necessary and more of a placeholder value
+    PLAYER_Y_MIN: int = 50
+    PLAYER_Y_MAX: int = 100
+    PLAYER_X_MIN: int  = 20
+    PLAYER_X_MAX: int = 180
+    PLAYER_ROLES: Tuple[int,int] = (0,1) #0 = Offence, 1 = Defence (might be doable with booleans as well)
+    BASKET_POSITION: Tuple[int,int] = (100,130)
+    BASKET_BUFFER: int = 3 #this should translate to [BASKET_POSITION[0]-buffer:BASKET_POSITION[0]+buffer] being the valid goal area width-wise
+    AREA_3_POINT: Tuple[int,int] #We need a way to determine whether a player is in a 3-point area (might be easier to define the two-point area and the rest
+                                # will be considered 3-point by process of elimination)
+
 
 @dataclass
-class GameState:
-    """
-    Holds the entire dynamic state of the game.
-    """
-    pass
+class DunkGameState:
+    player1_inside_x: chex.Array
+    player1_inside_y: chex.Array
+    player1_outside_x: chex.Array
+    player1_outside_y: chex.Array
+    player2_inside_x: chex.Array
+    player2_inside_y: chex.Array
+    player2_outside_x: chex.Array
+    player2_outside_y: chex.Array
+
+    player1_vel_inside_x: chex.Array
+    player1_vel_inside_y: chex.Array
+    player1_vel_outside_x: chex.Array
+    player1_vel_outside_y: chex.Array
+    player2_vel_inside_x: chex.Array
+    player2_vel_inside_y: chex.Array
+    player2_vel_outside_x: chex.Array
+    player2_vel_outside_y: chex.Array
+
+    player1_role: chex.Array
+    player2_role: chex.Array
+
+    ball_x: chex.Array
+    ball_y: chex.Array
+    ball_vel_x: chex.Array
+    ball_vel_y: chex.Array
+    player_score: chex.Array
+    enemy_score: chex.Array
+    step_counter: chex.Array
+    acceleration_counter: chex.Array
+
+
+
+class EntityPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
+
+class DunkObservation(NamedTuple):
+    player: EntityPosition
+    enemy: EntityPosition
+    ball: EntityPosition
+    score_player: jnp.ndarray
+    score_enemy: jnp.ndarray
+
+
+class DunkInfo(NamedTuple):
+    time: jnp.ndarray
 
 class DoubleDunk(JAXAtariGame):
     
