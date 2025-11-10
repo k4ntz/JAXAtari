@@ -13,7 +13,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
  
 
-class FreewayConstants(NamedTuple):
+class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     chicken_width: int = 6
@@ -43,7 +43,7 @@ class FreewayConstants(NamedTuple):
 
 
 
-class FreewayState(NamedTuple):
+class JourneyEscapeState(NamedTuple):
     """Represents the current state of the game"""
 
     chicken_y: chex.Array
@@ -61,33 +61,33 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
-class FreewayObservation(NamedTuple):
+class JourneyEscapeObservation(NamedTuple):
     chicken: EntityPosition
 
 
-class FreewayInfo(NamedTuple):
+class JourneyEscapeInfo(NamedTuple):
     time: jnp.ndarray
 
 
-class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
-    def __init__(self, consts: FreewayConstants = None, reward_funcs: list[callable]=None):
+class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservation, JourneyEscapeInfo, JourneyEscapeConstants]):
+    def __init__(self, consts: JourneyEscapeConstants = None, reward_funcs: list[callable]=None):
         if consts is None:
-            consts = FreewayConstants()
+            consts = JourneyEscapeConstants()
         super().__init__(consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.state = self.reset()
-        self.renderer = FreewayRenderer()
+        self.renderer = JourneyEscapeRenderer()
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FreewayObservation, FreewayState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[JourneyEscapeObservation, JourneyEscapeState]:
         """Initialize a new game state"""
         # Start chicken at bottom
         chicken_y = self.consts.bottom_border + self.consts.chicken_height - 1
         chicken_x = self.consts.start_chicken_x
 
 
-        state = FreewayState(
+        state = JourneyEscapeState(
             chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
             chicken_x=jnp.array(chicken_x, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32),
@@ -99,7 +99,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FreewayState, action: int) -> tuple[FreewayObservation, FreewayState, float, bool, FreewayInfo]:
+    def step(self, state: JourneyEscapeState, action: int) -> tuple[JourneyEscapeObservation, JourneyEscapeState, float, bool, JourneyEscapeInfo]:
         """Take a step in the game given an action"""
         # Compute vertical movement
         dy = jnp.where(
@@ -164,7 +164,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             state.game_over,
         )
 
-        new_state = FreewayState(
+        new_state = JourneyEscapeState(
             chicken_y=new_y,
             chicken_x=new_x,
             score=new_score,
@@ -180,7 +180,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return obs, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: FreewayState):
+    def _get_observation(self, state: JourneyEscapeState):
         # create chicken
         chicken = EntityPosition(
             x=state.chicken_x,
@@ -190,22 +190,22 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         )
 
 
-        return FreewayObservation(chicken=chicken)
+        return JourneyEscapeObservation(chicken=chicken)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: FreewayState) -> FreewayInfo:
-        return FreewayInfo(time=state.time)
+    def _get_info(self, state: JourneyEscapeState) -> JourneyEscapeInfo:
+        return JourneyEscapeInfo(time=state.time)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: FreewayState, state: FreewayState):
+    def _get_reward(self, previous_state: JourneyEscapeState, state: JourneyEscapeState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: FreewayState) -> bool:
+    def _get_done(self, state: JourneyEscapeState) -> bool:
         return state.game_over
 
     def action_space(self) -> spaces.Discrete:
-        """Returns the action space for Freeway.
+        """Returns the action space for JourneyEscape.
         Actions are:
         0: NOOP
         1: UP
@@ -214,7 +214,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return spaces.Discrete(3)
 
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for Freeway.
+        """Returns the observation space for JourneyEscape.
         The observation contains:
         - chicken: EntityPosition (x, y, width, height)
         - car: array of shape (10, 4) with x,y,width,height for each car
@@ -230,7 +230,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         })
 
     def image_space(self) -> spaces.Box:
-        """Returns the image space for Freeway.
+        """Returns the image space for JourneyEscape.
         The image is a RGB image with shape (210, 160, 3).
         """
         return spaces.Box(
@@ -240,11 +240,11 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             dtype=jnp.uint8
         )
     
-    def render(self, state: FreewayState) -> jnp.ndarray:
+    def render(self, state: JourneyEscapeState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: FreewayObservation) -> jnp.ndarray:
+    def obs_to_flat_array(self, obs: JourneyEscapeObservation) -> jnp.ndarray:
         """Convert observation to a flat array."""
         # Flatten chicken position and dimensions
         chicken_flat = jnp.concatenate([
@@ -259,10 +259,10 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return jnp.concatenate([chicken_flat]).astype(jnp.int32)
 
 
-class FreewayRenderer(JAXGameRenderer):
-    def __init__(self, consts: FreewayConstants = None):
+class JourneyEscapeRenderer(JAXGameRenderer):
+    def __init__(self, consts: JourneyEscapeConstants = None):
         super().__init__()
-        self.consts = consts or FreewayConstants()
+        self.consts = consts or JourneyEscapeConstants()
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
@@ -272,7 +272,7 @@ class FreewayRenderer(JAXGameRenderer):
         
         # Load and setup assets using the new pattern
         asset_config = self._get_asset_config()
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
         
         # Create black bar sprite at initialization time
         black_bar_sprite = self._create_black_bar_sprite()
