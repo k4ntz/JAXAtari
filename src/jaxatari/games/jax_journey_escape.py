@@ -123,8 +123,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             ),
         )
 
-        # add one to the walking frames if dy != 0, if it is 0 reset to 0 => ?
-        new_walking_frames = jnp.where(dy != 0, state.walking_frames + 1, 0)
+        # advance walking animation every frame, independent of input
+        new_walking_frames = (state.walking_frames + 1) % 8
 
         # reset new_walking frames at 8 => ?
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
@@ -326,10 +326,6 @@ class FreewayRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
-
-        # Draw fixed chicken at x=110
-        chicken_idle_mask = self.SHAPE_MASKS["player"][2]  # player_idle is index 2
-        raster = self.jr.render_at(raster, 110, self.consts.bottom_border + self.consts.chicken_height - 1, chicken_idle_mask)
 
         # Select chicken sprite based on walking frames and hit state
         use_idle = state.walking_frames < 4
