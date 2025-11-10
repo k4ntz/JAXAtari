@@ -6,9 +6,9 @@ import jax.numpy as jnp
 import chex
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction, EnvObs
+from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils as render_utils  # UPDATED IMPORT
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space
 
 
@@ -699,8 +699,6 @@ class FlagCaptureRenderer(JAXGameRenderer):
         # 5. Final Palette Lookup
         return self.jr.render_from_palette(raster, self.PALETTE)
 
-    # Renamed the old render_header to a private helper to avoid namespace conflict
-    # and match the style of the reference examples.
     @partial(jax.jit, static_argnums=(0, 4, 5, 6, 7))
     def _render_header(self, number, raster, digit_masks, single_digit_x, double_digit_x, y, max_digits):
         """Uses the new utility methods to render a score/timer header."""
@@ -708,12 +706,13 @@ class FlagCaptureRenderer(JAXGameRenderer):
         # New: Use self.jr.int_to_digits
         digits = self.jr.int_to_digits(number, max_digits=max_digits)
 
-        is_single_digit = number < 10
-        start_index = jax.lax.select(is_single_digit, 1, 0)
-        num_to_render = jax.lax.select(is_single_digit, 1, 2)
-        render_x = jax.lax.select(is_single_digit, single_digit_x, double_digit_x)
+        num_to_render = jnp.where(number < 10, 1, jnp.where(number < 100, 2, max_digits))
 
-        # New: Use self.jr.render_label_selective
+        start_index = max_digits - num_to_render
+
+        render_x = jnp.where(num_to_render == 1, single_digit_x, double_digit_x)
+
+        # Use the existing selective label renderer with korrekten Indizes
         raster = self.jr.render_label_selective(
             raster,
             render_x,
@@ -726,3 +725,4 @@ class FlagCaptureRenderer(JAXGameRenderer):
             max_digits_to_render=max_digits
         )
         return raster
+
