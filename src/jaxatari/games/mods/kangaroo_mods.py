@@ -8,7 +8,7 @@ from jaxatari.games.jax_kangaroo import KangarooState
 
 from jaxatari.wrappers import JaxatariWrapper
 
-class DisableThreadsWrapper(JaxatariWrapper):
+class DisableThreatsWrapper(JaxatariWrapper):
     """Disable enemies in the environment."""
     @functools.partial(jax.jit, static_argnums=(0,))
     def disable_enemies(self, state: KangarooState) -> KangarooState:

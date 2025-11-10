@@ -5,19 +5,19 @@ description = "GPU-accelerated, object-centric Atari environments for reinforcem
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "absl-py>=2.3,<3",
-    "ale-py==0.11.1",
-    "chex==0.1.87",
-    "flax==0.10.6",
-    "gymnasium==1.2.0",
-    "gymnax==0.0.8",
-    "jax==0.6.0",
-    "ml-dtypes==0.5.1",
-    "numpy==2.2.6",
-    "opt-einsum==3.4.0",
-    "scipy==1.15.3",
-    "toolz==1.0.0",
-    "typing-extensions==4.14.0",
+    "absl-py>=2.3",
+    "ale-py>=0.11.1",
+    "chex>=0.1.87",
+    "flax>=0.10.6",
+    "gymnasium>=1.2.0",
+    "gymnax>=0.0.8",
+    "jax>=0.6.0",
+    "ml-dtypes>=0.5.1",
+    "numpy>=2.2.6",
+    "opt-einsum>=3.4.0",
+    "scipy>=1.15.3",
+    "toolz>=1.0.0",
+    "typing-extensions>=4.14.0",
 ]
 
 [build-system]
