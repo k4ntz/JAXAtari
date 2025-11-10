@@ -146,7 +146,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             player_y=jnp.array(0).astype(jnp.int32),
             time=jnp.array(75 * self.consts.STEPS_PER_SECOND).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
-            is_checking=jnp.array(1).astype(jnp.int32),
+            is_checking=jnp.array(0).astype(jnp.int32),
             player_move_cooldown=jnp.array(0).astype(jnp.int32),
             animation_cooldown=jnp.array(0).astype(jnp.int32),
             animation_type=jnp.array(0).astype(jnp.int32),
