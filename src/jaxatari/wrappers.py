@@ -236,7 +236,6 @@ class AtariWrapper(JaxatariWrapper):
             return new_obs_stack, next_state
 
         #Note: Using real_done here, since we don't want to reset the game if it's just a life lost. (only send done signal)
-        # new_obs, new_state = jax.lax.cond(real_done, _reset_fn, _step_fn, operand=None)
         new_obs, new_state = jax.lax.cond(
             real_done,
             _reset_fn,
@@ -248,8 +247,8 @@ class AtariWrapper(JaxatariWrapper):
             ),
             operand=None)
 
-        # But if just done (not real_done), we keep the env_state but reset the step counter and obs stack
-
+        # store actual reward in info dict before clipping
+        info_dict["env_reward"] = reward
         reward = jax.lax.cond(
             self.clip_reward,
             lambda reward: jnp.sign(reward),
@@ -735,7 +734,8 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return = state.episode_returns + reward
+        # use env_reward (not clipped) for logging
+        new_episode_return = state.episode_returns + info.get("env_reward", reward) 
         new_episode_length = state.episode_lengths + 1
         state = LogState(
             atari_state=atari_state,
@@ -786,7 +786,7 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return_env = state.episode_returns_env + reward
+        new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward) 
         # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
         all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
         new_episode_return = state.episode_returns + all_rewards_step
