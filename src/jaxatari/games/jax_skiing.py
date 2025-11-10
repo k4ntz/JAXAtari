@@ -128,7 +128,7 @@ class GameConfig:
     flag_width: int = 10
     flag_height: int = 28
     flag_distance: int = 20
-    gate_vertical_spacing: int = 90  # fixed vertical spacing between gates (in pixels)
+    gate_vertical_spacing: int = 90
     tree_width: int = 16
     tree_height: int = 30
     rock_width: int = 16
@@ -292,7 +292,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         base_ty = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.5
         step_ty = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
         trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
-        # --- FIX: ensure integer pixels & uniqueness stays (no rounding collisions)
         trees_y = jnp.round(trees_y).astype(jnp.float32)
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
@@ -334,8 +333,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         base_ry = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.25
         step_ry = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_rocks))
         rocks_y = (base_ry + jnp.arange(c.max_num_rocks, dtype=jnp.float32) * step_ry).astype(jnp.float32)
-
-        # --- FIX: remove initial subpixel jitter for rocks by rounding Y to integer pixels
         rocks_y = jnp.round(rocks_y).astype(jnp.float32)
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
@@ -440,8 +437,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             step_tx = 17
             x_tree = (min_tx + (((state.gates_seen + i) * step_tx) % span_tx)).astype(jnp.float32)
 
-            # --- FIX (requested): ensure trees never spawn at the same Y height.
-            # Base Y just behind the deepest flag, then stagger each tree by a small delta.
             base_y = (jnp.max(new_flags[:, 1]) 
                       + jnp.float32(self.config.gate_vertical_spacing) / 2.0 
                       + jnp.float32(self.config.min_y_offset_tree_vs_rock))

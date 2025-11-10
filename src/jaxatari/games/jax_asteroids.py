@@ -1226,11 +1226,8 @@ class AsteroidsRenderer(JAXGameRenderer):
         self.PLAYER_MASKS_STACKED = self._stack_player_masks()
         self.ASTEROID_MASKS_STACKED = self._stack_asteroid_masks()
         self.ASTEROID_DEATH_MASKS_STACKED = self._stack_asteroid_death_masks()
-        
-        # --- FIX: Create lookup tables for sprite offsets ---
-        # Maps asteroid size (1-4) to index offset (0, 8, 16, 24)
+
         self.ASTEROID_SIZE_OFFSET_MAP = jnp.array([0, 8, 16, 24])
-        # Maps asteroid size (1-4) to death animation offset (0, 0, 2, 4)
         self.DEATH_SIZE_OFFSET_MAP = jnp.array([0, 0, 2, 4])
 
     def _stack_player_masks(self) -> jnp.ndarray:

@@ -195,10 +195,7 @@ class JaxRenderingUtils:
                 constant_values=0
             )
             padded_sprites.append(padded_sprite)
-            
-            # --- THE FINAL, CRITICAL FIX ---
-            # The flip_offset for EACH sprite is its OWN padding amount,
-            # not the maximum padding of the group.
+
             flip_offset = jnp.array([pad_w, pad_h], dtype=jnp.int32)
             flip_offsets.append(flip_offset)
 
@@ -267,11 +264,9 @@ class JaxRenderingUtils:
                     for mask in shape_masks[name]:
                         # Calculate new dimensions based on scaling factors
                         original_h, original_w = mask.shape
-                        
-                        # --- START OF FIX ---
+
                         scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
                         scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-                        # --- END OF FIX ---
                         
                         scaled_mask = jax.image.resize(
                             mask, 
@@ -283,11 +278,9 @@ class JaxRenderingUtils:
                 else: # Single sprite
                     # Calculate new dimensions based on scaling factors
                     original_h, original_w = shape_masks[name].shape
-                    
-                    # --- START OF FIX ---
+
                     scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
                     scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-                    # --- END OF FIX ---
                     
                     scaled_mask = jax.image.resize(
                         shape_masks[name], 

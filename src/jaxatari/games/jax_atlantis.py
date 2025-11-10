@@ -1461,7 +1461,6 @@ class AtlantisRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-        # --- FIX: Pad installation masks to the same size before stacking ---
         inst_masks = [
             self.SHAPE_MASKS["installation_1"], self.SHAPE_MASKS["installation_2"],
             self.SHAPE_MASKS["installation_3"], self.SHAPE_MASKS["installation_4"],
@@ -1504,7 +1503,6 @@ class AtlantisRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, cfg.cannon_x[2], cfg.cannon_y[2], self.SHAPE_MASKS["cannon_right"])
 
         # --- Render Installations ---
-        # --- FIX: The logic is now valid because it uses the padded and stacked array ---
         def _draw_installation(i, r):
             return jax.lax.cond(
                 state.installations[i],

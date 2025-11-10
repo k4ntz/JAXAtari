@@ -607,7 +607,6 @@ class SurroundRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # --- FIX: Centralize all estimated colors as instance attributes ---
         self.P1_HEAD_COLOR_TUPLE = (214, 214, 42)    # Yellow
         self.P2_HEAD_COLOR_TUPLE = (198, 89, 179)    # Red/Pink
         self.PLAYFIELD_COLOR_TUPLE = (181, 119, 181) # Lavender
@@ -686,7 +685,6 @@ class SurroundRenderer(JAXGameRenderer):
         by = self.consts.BORDER_CELLS_Y * cell_h
         border_positions = jnp.array([[0, y_off], [0, y_off + field_h - by], [0, y_off], [field_w - bx, y_off]])
         border_sizes = jnp.array([[field_w, by], [field_w, by], [bx, field_h], [bx, field_h]])
-        # --- FIX: Use the consistent color attribute for the border ---
         raster = self.jr.draw_rects(raster, border_positions, border_sizes, self.COLOR_TO_ID[self.BORDER_COLOR_TUPLE])
 
         occupied_grid = jnp.logical_or(state.trail != 0, state.border).T.astype(jnp.int32)
@@ -700,7 +698,6 @@ class SurroundRenderer(JAXGameRenderer):
         divider_thickness = max(1, self.consts.DIVIDER_THICKNESS)
         band_mask = (relative_y % cell_h >= mid) & (relative_y % cell_h < mid + divider_thickness)
         final_divider_mask = jnp.logical_and(grid_mask_raster, band_mask)
-        # --- FIX: Use the consistent color attribute for the divider ---
         raster = jnp.where(final_divider_mask, self.COLOR_TO_ID[self.DIVIDER_COLOR_TUPLE], raster)
 
         p1x = state.pos0[0] * cell_w
@@ -710,7 +707,6 @@ class SurroundRenderer(JAXGameRenderer):
 
         p1_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR]
         p2_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR]
-        # --- FIX: Use the consistent color attributes for the heads ---
         p1_head_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.P1_HEAD_COLOR_TUPLE]
         p2_head_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.P2_HEAD_COLOR_TUPLE]
 
