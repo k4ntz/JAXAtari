@@ -11,7 +11,6 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
- 
 
 class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
@@ -20,10 +19,11 @@ class JourneyEscapeConstants(NamedTuple):
     chicken_height: int = 8
     start_chicken_x: int = 44  # Fixed x position
 
-    num_lanes: int = 10
-    lane_spacing: int = 16
-    car_speeds: List[float] = None
-    lane_borders: List[int] = None
+    obstacle_width: int = 8
+    obstacle_height: int = 10
+    obstacle_speed_px_per_frame: int = 1  # constant downward speed
+    row_spawn_period_frames: int = 16  # spawn every N frames (tweakable)
+
     top_border: int = 15
     top_path: int = 8
     bottom_border: int = 180
@@ -31,16 +31,22 @@ class JourneyEscapeConstants(NamedTuple):
     right_border: int = 210
     # Collision response tuning
     throw_back_frames: int = 24  # frames the chicken is pushed back after hit
-    stun_frames: int = 28        # frames the chicken cannot move after hit
+    stun_frames: int = 28  # frames the chicken cannot move after hit
     # After scoring (reaching the top and resetting), prevent movement for N frames
     post_score_stun_frames: int = 28
     # Vertical offset to apply to chicken spawn after scoring (positive = lower on screen)
     post_score_spawn_offset_y: int = 1
     # Collision box insets (shrink AABB without changing render sizes)
     chicken_hit_inset_x: int = 1
-    chicken_hit_inset_y_top: int = -2    # Top edge of chicken (when cars approach from above)
-    chicken_hit_inset_y_bottom: int = 0 # Bottom edge of chicken (when cars approach from below)
+    chicken_hit_inset_y_top: int = -2  # Top edge of chicken (when cars approach from above)
+    chicken_hit_inset_y_bottom: int = 0  # Bottom edge of chicken (when cars approach from below)
 
+    # predefined groups: [type, amount, spacing in px]
+    obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
+        (0, 1, 0),  # single
+        (0, 2, 35),  # two with 10px spacing
+        (0, 3, 8),  # three with 8px spacing
+    )
 
 
 class JourneyEscapeState(NamedTuple):
@@ -52,6 +58,10 @@ class JourneyEscapeState(NamedTuple):
     time: chex.Array
     walking_frames: chex.Array
     game_over: chex.Array
+
+    row_timer: chex.Array  # int32
+    obstacles: chex.Array  # (MAX_OBS, 5) -> x, y, w, h, type_idx | [pool]
+    rng_key: chex.Array  # PRNGKey
 
 
 class EntityPosition(NamedTuple):
@@ -69,8 +79,9 @@ class JourneyEscapeInfo(NamedTuple):
     time: jnp.ndarray
 
 
-class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservation, JourneyEscapeInfo, JourneyEscapeConstants]):
-    def __init__(self, consts: JourneyEscapeConstants = None, reward_funcs: list[callable]=None):
+class JaxJourneyEscape(
+    JaxEnvironment[JourneyEscapeState, JourneyEscapeObservation, JourneyEscapeInfo, JourneyEscapeConstants]):
+    def __init__(self, consts: JourneyEscapeConstants = None, reward_funcs: list[callable] = None):
         if consts is None:
             consts = JourneyEscapeConstants()
         super().__init__(consts)
@@ -86,6 +97,9 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
         chicken_y = self.consts.bottom_border + self.consts.chicken_height - 1
         chicken_x = self.consts.start_chicken_x
 
+        MAX_OBS = 64
+        empty_boxes = jnp.zeros((MAX_OBS, 5), dtype=jnp.int32)
+        rng_key = jax.random.PRNGKey(0)
 
         state = JourneyEscapeState(
             chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
@@ -94,13 +108,19 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             time=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
+            row_timer=jnp.array(0, dtype=jnp.int32),
+            obstacles=empty_boxes,
+            rng_key=rng_key,
         )
 
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: JourneyEscapeState, action: int) -> tuple[JourneyEscapeObservation, JourneyEscapeState, float, bool, JourneyEscapeInfo]:
+    def step(self, state: JourneyEscapeState, action: int) -> tuple[
+        JourneyEscapeObservation, JourneyEscapeState, float, bool, JourneyEscapeInfo]:
         """Take a step in the game given an action"""
+
+        # ---CHICKEN---
         # Compute vertical movement
         dy = jnp.where(
             (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT),
@@ -141,6 +161,99 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             self.consts.right_border + self.consts.chicken_width - 1,
         ).astype(jnp.int32)
 
+        #---OBSTACLES---
+
+        # move & cull obstacles (no spawns yet) ---
+
+        boxes = state.obstacles
+        active = boxes[:, 3] > 0  # Active mask: entries with height > 0 are “alive”
+
+        # Move down by constant speed only for active entries
+        dy_obs = jnp.where(active, self.consts.obstacle_speed_px_per_frame, 0)  # speed for active, 0 for inactive
+        boxes = boxes.at[:, 1].set(boxes[:, 1] + dy_obs)
+
+        # Cull: if baseline y >= screen_height, deactivate by zeroing height
+        cull_y = self.consts.bottom_border + self.consts.obstacle_height - 1
+        offscreen = boxes[:, 1] >= cull_y
+        new_heights = jnp.where(offscreen, 0, boxes[:, 3])  # int32[N]
+        boxes = boxes.at[:, 3].set(new_heights)
+
+        # carry-through for new fields (no behavior change yet)
+        new_row_timer = (state.row_timer + 1) % self.consts.row_spawn_period_frames
+        new_rng = state.rng_key  # unchanged key
+
+        # Trigger: every row_spawn_period_frames frames
+        spawn_now = (new_row_timer == 0)
+
+        def spawn_if_cadence(carry):
+            boxes_in, rng_in = carry
+            rng_in, r1, r2 = jax.random.split(rng_in, 3)
+
+            # Presets: (type, amount, spacing)
+            presets = jnp.array(self.consts.obstacle_groups, dtype=jnp.int32)  # (K, 3)
+            K = presets.shape[0]
+            idx = jax.random.randint(r1, (), 0, K)
+            type_idx = presets[idx, 0]
+            amount = presets[idx, 1]
+            spacing = presets[idx, 2]
+
+            # Total width of the whole group
+            w = self.consts.obstacle_width
+            total_w = (w + spacing) * (amount - 1) + w
+
+            # Choose spawn_x so the whole row is inside the screen horizontally.
+            # We assume presets ALWAYS allow at least one valid position.
+            min_x = self.consts.left_border
+            max_x = self.consts.screen_width - total_w
+            # span must be positive; we don't treat "doesn't fit" as an option.
+            span = (max_x - min_x) + 1
+            spawn_x = min_x + jax.random.randint(r2, (), 0, span)
+
+            # Pool capacity check: if not enough free slots, skip this spawn entirely.
+            inactive = boxes_in[:, 3] == 0
+            available = jnp.sum(inactive)
+            enough_space = available >= amount
+
+            def do_spawn(_):
+                # Fixed loop bound to keep JAX happy (your presets have up to 3)
+                MAX_GROUP = 3  # This might change later, when > 3 obstacles should be in one group
+
+                # First MAX_GROUP free indices (static shape)
+                free_idx = jnp.nonzero(inactive, size=MAX_GROUP, fill_value=0)[0]
+
+                # Build row positions
+                xs = spawn_x + jnp.arange(MAX_GROUP) * (w + spacing)
+                ys = jnp.full((MAX_GROUP,), self.consts.top_border, dtype=jnp.int32)
+                ws = jnp.full((MAX_GROUP,), w, dtype=jnp.int32)
+                hs = jnp.full((MAX_GROUP,), self.consts.obstacle_height, dtype=jnp.int32)
+                ts = jnp.full((MAX_GROUP,), type_idx, dtype=jnp.int32)
+
+                # Place exactly `amount` entries; for t >= amount, do nothing
+                def body(t, b):
+                    def place_one(bb):
+                        i = free_idx[t]
+                        return bb.at[i].set(jnp.array([xs[t], ys[t], ws[t], hs[t], ts[t]], dtype=jnp.int32))
+
+                    return jax.lax.cond(t < amount, place_one, lambda bb: bb, b)
+
+                boxes_out = jax.lax.fori_loop(0, MAX_GROUP, body, boxes_in)
+                return (boxes_out, rng_in)
+
+            def skip_spawn(_):
+                return (boxes_in, rng_in)
+
+            return jax.lax.cond(enough_space, do_spawn, skip_spawn, operand=None)
+
+        def no_spawn(carry):
+            return carry
+
+        boxes, new_rng = jax.lax.cond(
+            spawn_now,
+            spawn_if_cadence,
+            no_spawn,
+            operand=(boxes, state.rng_key)
+        )
+
         # Update score if chicken reaches top
         new_score = jnp.where(
             new_y <= self.consts.top_border, state.score + 1, state.score
@@ -171,6 +284,9 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             time=new_time,
             walking_frames=new_walking_frames.astype(jnp.int32),
             game_over=game_over,
+            row_timer=new_row_timer.astype(jnp.int32),
+            obstacles=boxes.astype(jnp.int32),  # updated pool
+            rng_key=new_rng,
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -188,7 +304,6 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
         )
-
 
         return JourneyEscapeObservation(chicken=chicken)
 
@@ -239,7 +354,7 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             shape=(210, 160, 3),
             dtype=jnp.uint8
         )
-    
+
     def render(self, state: JourneyEscapeState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
@@ -253,7 +368,6 @@ class JaxJourneyEscape(JaxEnvironment[JourneyEscapeState, JourneyEscapeObservati
             obs.chicken.width.reshape(-1),
             obs.chicken.height.reshape(-1)
         ])
-        
 
         # Concatenate all components
         return jnp.concatenate([chicken_flat]).astype(jnp.int32)
@@ -269,21 +383,21 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        
+
         # Load and setup assets using the new pattern
         asset_config = self._get_asset_config()
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
-        
+
         # Create black bar sprite at initialization time
         black_bar_sprite = self._create_black_bar_sprite()
-        
+
         # Add black bar sprite to the asset config as procedural asset
         asset_config.append({
-            'name': 'black_bar', 
-            'type': 'procedural', 
+            'name': 'black_bar',
+            'type': 'procedural',
             'data': black_bar_sprite
         })
-        
+
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -291,6 +405,15 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # --- rotate all car sprites by 90 degrees (clockwise) just for fun ---
+        rotated_masks = {}
+        for name, mask in self.SHAPE_MASKS.items():
+            if "car_" in name:
+                rotated_masks[name] = jnp.rot90(mask, k=1, axes=(0, 1))
+            else:
+                rotated_masks[name] = mask
+        self.SHAPE_MASKS = rotated_masks
 
     def _create_black_bar_sprite(self) -> jnp.ndarray:
         """Create a black bar sprite for the left side of the screen."""
@@ -330,20 +453,41 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # Select chicken sprite based on walking frames and hit state
         use_idle = state.walking_frames < 4
         chicken_frame_index = jax.lax.select(use_idle, 2, 1)  # 2=idle, 1=walk
-        
+
         chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
         raster = self.jr.render_at(raster, state.chicken_x, state.chicken_y, chicken_mask)
+
+        # Render obstacles
+        # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
+        # We consider entries with h > 0 as "active".
+        obs_boxes = state.obstacles  # (MAX_OBS, 5)
+        car_mask = self.SHAPE_MASKS["car_light_green"]  # placeholder sprite for all obstacles
+
+        # Guards for the case MAX_OBS == 0 (unlikely, but keeps it robust)
+        def draw_one(r, box):
+            # box[0]=x, box[1]=y; we ignore w/h/type for rendering here
+            return self.jr.render_at_clipped(r, box[0], box[1], car_mask)
+
+        def body(i, r):
+            # If h > 0, draw; else keep raster unchanged
+            box = obs_boxes[i]
+            is_active = box[3] > 0
+            return jax.lax.cond(is_active, lambda rr: draw_one(rr, box), lambda rr: rr, r)
+
+        # Iterate all possible slots in a JAX-friendly loop
+        raster = jax.lax.fori_loop(0, obs_boxes.shape[0], body, raster)
 
         # Render score
         score_digits = self.jr.int_to_digits(state.score, max_digits=2)
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
-        
+
         is_single_digit = state.score < 10
         start_index = jax.lax.select(is_single_digit, 1, 0)
         num_to_render = jax.lax.select(is_single_digit, 1, 2)
         render_x = jax.lax.select(is_single_digit, 49 + 8 // 2, 49)
-        
-        raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index, num_to_render, spacing=8)
+
+        raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index,
+                                                num_to_render, spacing=8)
 
         # Render black bar on the left side
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
