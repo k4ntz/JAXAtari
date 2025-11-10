@@ -7,7 +7,7 @@ import os
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 
 
 class KlaxConstants(NamedTuple):
@@ -983,76 +983,79 @@ class KlaxRenderer(JAXGameRenderer):
     def __init__(self, consts: KlaxConstants = None):
         super().__init__()
         self.consts = consts or KlaxConstants()
-        (self.SPRITE_BG, self.SPRITE_PLAYER, self.SPRITES_TILE,
-         self.SCORE_DIGITS, self.TOGO_DIGITS, self.LIVES_REMAINING, self.SPRITES_LABELS) = self.load_sprites()
 
-    def load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(MODULE_DIR, "sprites/klax")
-
-        # background & player
-        bg = jr.loadFrame(os.path.join(sprite_dir, "background.npy"))
-        player = jr.loadFrame(os.path.join(sprite_dir, "player.npy"))
-
-        # tile sprites
-        tile_files = (
-            "tile_blue.npy",
-            "tile_purple.npy",
-            "tile_yellow.npy",
-            "tile_white.npy",
-            "tile_green.npy",
-            "tile_pink.npy",
-            "tile_red.npy",
+        self.rendering_config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            channels=3,
         )
-        tiles_list = [jr.loadFrame(os.path.join(sprite_dir, f)) for f in tile_files]
-        tiles_stack = jnp.stack(tiles_list, axis=0)
 
-        SPRITE_BG = jnp.expand_dims(bg, axis=0)
-        SPRITE_PLAYER = jnp.expand_dims(player, axis=0)
-        SPRITES_TILE = tiles_stack
+        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
 
-        # Digits for SCORE
-        score_digit_files = [f"{d}_score.npy" for d in range(10)]
-        score_digits = [jr.loadFrame(os.path.join(sprite_dir, f)) for f in score_digit_files]
-        SCORE_DIGITS = jnp.stack(score_digits, axis=0)
+        # Load and process all sprites
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self._load_sprites()
 
-        # Digits for TO-GO
-        togo_digit_files = [f"{d}_to_go.npy" for d in range(10)]
-        togo_digits = []
-        for d, fname in enumerate(togo_digit_files):
-            path = os.path.join(sprite_dir, fname)
-            togo_digits.append(jr.loadFrame(path))
-        TOGO_DIGITS = jnp.stack(togo_digits, axis=0)
+    def _load_sprites(self):
+        """Defines the asset manifest for Klax and loads them via the utility function."""
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/klax"
 
-        # n_lives_remaining
-        lives_files = [f"{d}_lives_remaining.npy" for d in range(4)]
-        lives_sprites = [jr.loadFrame(os.path.join(sprite_dir, f)) for f in lives_files]
-        LIVES_REMAINING = jnp.stack(lives_sprites, axis=0)
+        # Define the game-specific asset manifest in a clear, declarative way.
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+            {
+                'name': 'tile', 'type': 'group',
+                'files': [
+                    'tile_blue.npy',
+                    'tile_purple.npy',
+                    'tile_yellow.npy',
+                    'tile_white.npy',
+                    'tile_green.npy',
+                    'tile_pink.npy',
+                    'tile_red.npy',
+                ]
+            },
+            {
+                'name': 'score_digits', 'type': 'digits',
+                'pattern': '{}_score.npy'
+            },
+            {
+                'name': 'togo_digits', 'type': 'digits',
+                'pattern': '{}_to_go.npy'
+            },
+            {
+                'name': 'lives_remaining', 'type': 'group',
+                'files': [
+                    '0_lives_remaining.npy',
+                    '1_lives_remaining.npy',
+                    '2_lives_remaining.npy',
+                    '3_lives_remaining.npy',
+                ]
+            },
+            {
+                'name': 'task_labels', 'type': 'group',
+                'files': [
+                    'klaxs_to_go.npy',
+                    'diagonals_to_go.npy',
+                    'tiles_to_go.npy',
+                    'points_to_go.npy',
+                    'horizontal_to_go.npy',
+                ]
+            },
+        ]
 
-        # Task label sprites
-        label_map = {
-            0: "klaxs_to_go.npy",
-            1: "diagonals_to_go.npy",
-            2: "tiles_to_go.npy",
-            3: "points_to_go.npy",
-            4: "horizontal_to_go.npy",
-        }
-        labels_list = []
-        for tid in range(5):
-            fname = label_map[tid]
-            labels_list.append(jr.loadFrame(os.path.join(sprite_dir, fname)))
-        SPRITES_LABELS = tuple(labels_list)
-
-        return (SPRITE_BG, SPRITE_PLAYER, SPRITES_TILE, SCORE_DIGITS, TOGO_DIGITS, LIVES_REMAINING, SPRITES_LABELS)
+        # Make one call to the utility function. Done.
+        return self.jr.load_and_setup_assets(asset_config, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KlaxState) -> jnp.ndarray:
-        # background sprite
-        raster = jr.create_initial_frame(
-            width=self.consts.SCREEN_WIDTH, height=self.consts.SCREEN_HEIGHT
-        )
-        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
+        # --- 1. Initialize Raster ---
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # dims
         tile_h: int = int(self.consts.TILE_SIZE[1])
@@ -1065,8 +1068,9 @@ class KlaxRenderer(JAXGameRenderer):
             active = (state.tiles_active[i] == 1)
 
             def draw(r):
-                frame = jr.get_sprite_frame(self.SPRITES_TILE, state.tiles_color[i])
-                return jr.render_at(r, state.tiles_x[i], state.tiles_y[i], frame)
+                tile_mask = self.SHAPE_MASKS["tile"][state.tiles_color[i]]
+                tile_offset = self.FLIP_OFFSETS["tile"]
+                return self.jr.render_at(r, state.tiles_x[i], state.tiles_y[i], tile_mask, flip_offset=tile_offset)
 
             return jax.lax.cond(active, draw, lambda r: r, rast)
 
@@ -1080,20 +1084,22 @@ class KlaxRenderer(JAXGameRenderer):
 
             def draw(raster_):
                 color_idx = val - 1
-                frame = jr.get_sprite_frame(self.SPRITES_TILE, color_idx)
+                tile_mask = self.SHAPE_MASKS["tile"][color_idx]
+                tile_offset = self.FLIP_OFFSETS["tile"]
                 x = jnp.int32(col_start + c * col_step)
                 bottom_edge = jnp.int32(self.consts.BOARD_BOTTOM_Y) - r * jnp.int32(tile_h + gap)
                 y = bottom_edge - jnp.int32(tile_h)
-                return jr.render_at(raster_, x, y, frame)
+                return self.jr.render_at(raster_, x, y, tile_mask, flip_offset=tile_offset)
 
             return jax.lax.cond(val > 0, draw, lambda rr: rr, rast)
 
         raster = jax.lax.fori_loop(0, self.consts.BOARD_ROWS * self.consts.BOARD_COLS, draw_cell, raster)
 
         # ---- player ----
-        frame_player = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
+        player_mask = self.SHAPE_MASKS["player"]
+        player_offset = self.FLIP_OFFSETS["player"]
         base_y = jnp.int32(self.consts.PLAYER_Y + state.player_backpack_count * (tile_h+1))
-        raster = jr.render_at(raster, state.player_x, base_y, frame_player)
+        raster = self.jr.render_at(raster, state.player_x, base_y, player_mask, flip_offset=player_offset)
 
         # ---- backpack (tiles the player is carrying) ----
         def body_stack(k, rast):
@@ -1101,31 +1107,33 @@ class KlaxRenderer(JAXGameRenderer):
 
             def draw(r):
                 idx = state.player_backpack_colors[k]
-                frame = jr.get_sprite_frame(self.SPRITES_TILE, idx)
+                tile_mask = self.SHAPE_MASKS["tile"][idx]
+                tile_offset = self.FLIP_OFFSETS["tile"]
                 y = jnp.int32(base_y - (k + 1) * (tile_h + gap))
-                return jr.render_at(r, state.player_x, y, frame)
+                return self.jr.render_at(r, state.player_x, y, tile_mask, flip_offset=tile_offset)
 
             return jax.lax.cond(cond, draw, lambda r: r, rast)
 
         raster = jax.lax.fori_loop(0, self.consts.PLAYER_BACKPACK_MAX, body_stack, raster)
 
         # --- helper: draws right-aligned number with 1px gap between each digit ---
-        def draw_number_right_aligned(rast, value_i32, digits_stack, x_right, y_top, max_digits):
-            W = digits_stack.shape[2]
+        def draw_number_right_aligned(rast, value_i32, digit_masks, x_right, y_top, max_digits: int):
+            max_digits_int = int(max_digits)
+            digits = self.jr.int_to_digits(value_i32, max_digits=max_digits_int)
+            digits = digits.reshape((max_digits_int,))
+            digit_width = int(digit_masks.shape[2])
             gap = jnp.int32(1)
 
-            def body(i, carry):
-                r, val = carry
-                d = jnp.mod(val, jnp.int32(10))
-                val = val // jnp.int32(10)
-                x = jnp.int32(x_right) - (jnp.int32(i) + 1) * jnp.int32(W) - jnp.int32(i) * gap
+            def body(i, current_raster):
+                digit_idx = digits[max_digits_int - 1 - i]
+                digit_mask = digit_masks[digit_idx]
+                i_jnp = jnp.int32(i)
+                x_offset = (i_jnp + jnp.int32(1)) * jnp.int32(digit_width) + i_jnp * gap
+                x = jnp.int32(x_right) - x_offset
                 y = jnp.int32(y_top)
-                frame = jr.get_sprite_frame(digits_stack, d)
-                r = jr.render_at(r, x, y, frame)
-                return (r, val)
+                return self.jr.render_at(current_raster, x, y, digit_mask)
 
-            out_raster, _ = jax.lax.fori_loop(0, jnp.int32(max_digits), body, (rast, jnp.maximum(value_i32, 0)))
-            return out_raster
+            return jax.lax.fori_loop(0, max_digits_int, body, rast)
 
         # --- compute value displayed under "to go" ---
         tid = state.wave_task_id
@@ -1141,7 +1149,9 @@ class KlaxRenderer(JAXGameRenderer):
         def draw_task_label(r):
             def draw_idx(idx):
                 def _inner(rr):
-                    return jr.render_at(rr, jnp.int32(54), jnp.int32(186), self.SPRITES_LABELS[idx])
+                    label_mask = self.SHAPE_MASKS["task_labels"][idx]
+                    label_offset = self.FLIP_OFFSETS["task_labels"]
+                    return self.jr.render_at(rr, jnp.int32(54), jnp.int32(186), label_mask, flip_offset=label_offset)
                 return _inner
             noop = lambda rr: rr
             return jax.lax.switch(jnp.clip(tid, 0, 5).astype(jnp.int32),
@@ -1151,17 +1161,19 @@ class KlaxRenderer(JAXGameRenderer):
 
         # --- draw {n}_to_go, right-aligned, max value=250.000 ---
         n_to_go_clamped = jnp.minimum(n_to_go, jnp.int32(250000))
-        raster = draw_number_right_aligned(raster, n_to_go_clamped, self.TOGO_DIGITS,
-                                           x_right=jnp.int32(101), y_top=jnp.int32(199), max_digits=jnp.int32(6))
+        raster = draw_number_right_aligned(raster, n_to_go_clamped, self.SHAPE_MASKS["togo_digits"],
+                                           x_right=jnp.int32(101), y_top=jnp.int32(199), max_digits=6)
 
         # --- draw {n}_lives_remaining ---
-        lives_idx = jnp.clip(state.lives, 0, jnp.int32(self.LIVES_REMAINING.shape[0] - 1))
-        lives_frame = jr.get_sprite_frame(self.LIVES_REMAINING, lives_idx)
-        raster = jr.render_at(raster, jnp.int32(78), jnp.int32(32), lives_frame)
+        lives_idx = jnp.clip(state.lives, 0, jnp.int32(self.SHAPE_MASKS["lives_remaining"].shape[0] - 1))
+        lives_mask = self.SHAPE_MASKS["lives_remaining"][lives_idx]
+        lives_offset = self.FLIP_OFFSETS["lives_remaining"]
+        raster = self.jr.render_at(raster, jnp.int32(78), jnp.int32(32), lives_mask, flip_offset=lives_offset)
 
         # --- draw {n}_score, right-aligned, max value=9.999.999 ---
         score_clamped = jnp.minimum(state.score, jnp.int32(9_999_999))
-        raster = draw_number_right_aligned(raster, score_clamped, self.SCORE_DIGITS,
-                                           x_right=jnp.int32(101), y_top=jnp.int32(19), max_digits=jnp.int32(7))
+        raster = draw_number_right_aligned(raster, score_clamped, self.SHAPE_MASKS["score_digits"],
+                                           x_right=jnp.int32(101), y_top=jnp.int32(19), max_digits=7)
 
-        return raster
+        # --- Final Palette Lookup ---
+        return self.jr.render_from_palette(raster, self.PALETTE)
