@@ -174,8 +174,6 @@ class JaxVideoPinball(
     def __init__(
         self,
         consts: VideoPinballConstants | None = None,
-        frameskip: int = 0,
-        reward_funcs: list[Callable] | None = None,
     ):
         """
         Initialize the VideoPinball environment.
@@ -213,9 +211,6 @@ class JaxVideoPinball(
         """
         consts = consts or VideoPinballConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = {
             Action.NOOP,
             Action.FIRE,
