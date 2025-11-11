@@ -33,11 +33,11 @@ class MsPackmanInfo(NamedTuple):
 
 
 class MsPackmanConstants(NamedTuple):
-    screen_width: int = 160
+    screen_width: int = 190
     screen_height: int = 210
     cell_size: int = 10
-    grid_width: int = 15
-    grid_height: int = 13
+    grid_width: int = 19
+    grid_height: int = 21
     num_ghosts: int = 2
     pellet_reward: int = 1
     power_pellet_reward: int = 5
@@ -58,19 +58,27 @@ class MsPackmanConstants(NamedTuple):
         (255, 128, 0),
     )
     maze_layout: Tuple[str, ...] = (
-        "###############",
-        "#P....#....G..#",
-        "#.###.#.###.#.#",
-        "#o#.......#.#o#",
-        "#.###.#.###.#.#",
-        "#.....#.....#.#",
-        "###.#.###.#.#.#",
-        "#...#.....#...#",
-        "#.#.#####.#.###",
-        "#.#.....#.#...#",
-        "#.#####.#.###.#",
-        "#.....G.......#",
-        "###############",
+        "###################",
+        "#P..#.....#.....o.#",
+        "#.#.#.###.#.###.#.#",
+        "#.#.#.###.#.###.#.#",
+        "#.#.#.....#.....#.#",
+        "#.#.#####.#.#####.#",
+        "#...#.#####.#...#.#",
+        "#.#.....###.....#.#",
+        "#.###.#.....#.###.#",
+        "#.....#.###.#.....#",
+        "###.###.#.#.###..##",
+        "....#...GG..#.##...",
+        "###.###.#.#.###..##",
+        "#.....#.###.#.....#",
+        "#.###.#.....#.###.#",
+        "#.#.....###.....#.#",
+        "#.#.#####.#.#####.#",
+        "#.#.#.....#.....#.#",
+        "#.#.#.###.#.###.#.#",
+        "#o..#.....#.....o.#",
+        "###################",
     )
 
 
@@ -206,7 +214,7 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         action_idx = jnp.clip(action, 0, self._action_deltas.shape[0] - 1)
         delta = self._action_deltas[action_idx]
 
-        tentative_x = jnp.clip(state.pacman_x + delta[0], 0, self.consts.grid_width - 1)
+        tentative_x = jnp.mod(state.pacman_x + delta[0], self.consts.grid_width)
         tentative_y = jnp.clip(state.pacman_y + delta[1], 0, self.consts.grid_height - 1)
 
         hit_wall = self.wall_grid[tentative_y, tentative_x] == 1
@@ -319,11 +327,11 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         secondary_dx = jnp.where(prefer_x, 0, dx_sign)
         secondary_dy = jnp.where(prefer_x, dy_sign, 0)
 
-        cand1_x = jnp.clip(gx + primary_dx, 0, self.consts.grid_width - 1)
+        cand1_x = jnp.mod(gx + primary_dx, self.consts.grid_width)
         cand1_y = jnp.clip(gy + primary_dy, 0, self.consts.grid_height - 1)
         blocked1 = self.wall_grid[cand1_y, cand1_x] == 1
 
-        cand2_x = jnp.clip(gx + secondary_dx, 0, self.consts.grid_width - 1)
+        cand2_x = jnp.mod(gx + secondary_dx, self.consts.grid_width)
         cand2_y = jnp.clip(gy + secondary_dy, 0, self.consts.grid_height - 1)
         blocked2 = self.wall_grid[cand2_y, cand2_x] == 1
 
@@ -447,23 +455,47 @@ class MsPackmanRenderer(JAXGameRenderer):
     def render(self, state: MsPackmanState) -> jnp.ndarray:
         cell = self.consts.cell_size
 
-        base_grid = jnp.ones((self.consts.grid_height, self.consts.grid_width, 3), dtype=jnp.uint8)
-        base_grid = base_grid * self.background_color
-
+        base_shape = (self.consts.grid_height, self.consts.grid_width, 3)
         wall_mask = (self.wall_grid == 1)[..., None]
-        wall_layer = jnp.ones_like(base_grid) * self.wall_color
-        grid = jnp.where(wall_mask, wall_layer, base_grid)
+        background_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.background_color
+        wall_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.wall_color
+        grid = jnp.where(wall_mask, wall_layer, background_layer)
 
-        pellet_mask = (state.pellets == 1)[..., None]
-        pellet_layer = jnp.ones_like(base_grid) * self.pellet_color
-        grid = jnp.where(pellet_mask, pellet_layer, grid)
-
-        power_mask = (state.pellets == 2)[..., None]
-        power_layer = jnp.ones_like(base_grid) * self.power_pellet_color
-        grid = jnp.where(power_mask, power_layer, grid)
+        pellet_tiles = (state.pellets == 1)[..., None]
+        power_tiles = (state.pellets == 2)[..., None]
 
         grid_pixels = jnp.repeat(grid, cell, axis=0)
         grid_pixels = jnp.repeat(grid_pixels, cell, axis=1)
+
+        pellet_pixels = jnp.repeat(pellet_tiles, cell, axis=0)
+        pellet_pixels = jnp.repeat(pellet_pixels, cell, axis=1)
+        power_pixels = jnp.repeat(power_tiles, cell, axis=0)
+        power_pixels = jnp.repeat(power_pixels, cell, axis=1)
+
+        row_idx = jnp.arange(grid_pixels.shape[0]) % cell
+        col_idx = jnp.arange(grid_pixels.shape[1]) % cell
+        row_idx = row_idx[:, None]
+        col_idx = col_idx[None, :]
+
+        pellet_half = jnp.maximum(cell // 6, 1)
+        power_half = jnp.maximum(cell // 4, 2)
+
+        pellet_center = jnp.logical_and(
+            jnp.abs(row_idx - cell // 2) < pellet_half,
+            jnp.abs(col_idx - cell // 2) < pellet_half,
+        )[..., None]
+        power_center = jnp.logical_and(
+            jnp.abs(row_idx - cell // 2) < power_half,
+            jnp.abs(col_idx - cell // 2) < power_half,
+        )[..., None]
+
+        pellet_pixels = jnp.logical_and(pellet_pixels, pellet_center)
+        power_pixels = jnp.logical_and(power_pixels, power_center)
+
+        pellet_layer_px = jnp.ones_like(grid_pixels) * self.pellet_color
+        power_layer_px = jnp.ones_like(grid_pixels) * self.power_pellet_color
+        grid_pixels = jnp.where(pellet_pixels, pellet_layer_px, grid_pixels)
+        grid_pixels = jnp.where(power_pixels, power_layer_px, grid_pixels)
 
         canvas = jnp.ones((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8) * self.background_color
 
@@ -527,7 +559,7 @@ from jaxatari.games.jax_mspackman import JaxMsPackman
 from jaxatari.environment import JAXAtariAction as Action
 
 UPSCALE = 4
-FPS = 15
+FPS = 8
 
 def main():
     pygame.init()
@@ -552,16 +584,18 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_UP:
-                    action = Action.UP
-                elif event.key == pygame.K_DOWN:
-                    action = Action.DOWN
-                elif event.key == pygame.K_LEFT:
-                    action = Action.LEFT
-                elif event.key == pygame.K_RIGHT:
-                    action = Action.RIGHT
-            elif event.type == pygame.KEYUP:
-                action = Action.NOOP
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_UP]:
+            action = Action.UP
+        elif keys[pygame.K_DOWN]:
+            action = Action.DOWN
+        elif keys[pygame.K_LEFT]:
+            action = Action.LEFT
+        elif keys[pygame.K_RIGHT]:
+            action = Action.RIGHT
+        else:
+            action = Action.NOOP
 
         obs, state, reward, done, info = step(state, action)
         if done:
