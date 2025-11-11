@@ -397,14 +397,11 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         - Extra life every 100k points (up to max)
     """
     
-    def __init__(self, consts: SirLancelotConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: SirLancelotConstants = None):
         consts = consts or SirLancelotConstants()
         super().__init__(consts)
         self.action_set = Action.get_all_values()
         self.renderer = SirLancelotRenderer(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         
     def reset(self, key: jax.random.PRNGKey = None):
         """Reset the game to initial state.

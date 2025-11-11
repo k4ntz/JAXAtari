@@ -272,13 +272,9 @@ class TimePilotInfo(NamedTuple):
     enemies_remaining: chex.Array
 
 class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilotInfo, TimePilotConstants]):
-    def __init__(self, consts: TimePilotConstants|None = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: TimePilotConstants|None = None):
         consts = consts or TimePilotConstants()
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = jnp.array([
             Action.NOOP,
             Action.FIRE,

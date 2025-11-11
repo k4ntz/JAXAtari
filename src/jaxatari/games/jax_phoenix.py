@@ -330,13 +330,10 @@ class EntityPosition(NamedTuple):## not sure
     y: chex.Array
 
 class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, None]):
-    def __init__(self, consts: PhoenixConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: PhoenixConstants = None):
         consts = consts or PhoenixConstants()
         super().__init__(consts)
         self.renderer = PhoenixRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.step_counter = 0
         self.action_set = [
             Action.NOOP,
@@ -1209,9 +1206,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_respawn_timer = player_respawn_timer,
             level = level,
             vertical_direction_enemies=new_vertical_direction_enemies,
-            blue_blocks=blue_blocks.astype(jnp.int32),
-            red_blocks=red_blocks.astype(jnp.int32),
-            green_blocks=green_blocks.astype(jnp.int32),
+            blue_blocks=blue_blocks.astype(jnp.float32),
+            red_blocks=red_blocks.astype(jnp.float32),
+            green_blocks=green_blocks.astype(jnp.float32),
             invincibility=state.invincibility,
             invincibility_timer=state.invincibility_timer,
             bat_wings=new_bat_wings,

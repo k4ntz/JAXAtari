@@ -256,12 +256,9 @@ class TurmoilInfo(NamedTuple):
 
 
 class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, TurmoilConstants]):
-    def __init__(self, consts: TurmoilConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: TurmoilConstants = None):
         consts = consts or TurmoilConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -282,7 +279,6 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.obs_size = 6 + 1 + 7 * 6 + 5 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 

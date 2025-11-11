@@ -256,12 +256,9 @@ class CentipedeInfo(NamedTuple):
 # -------- Game Logic --------
 
 class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, CentipedeInfo, CentipedeConstants]):
-    def __init__(self, consts: CentipedeConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: CentipedeConstants = None):
         consts = consts or CentipedeConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -282,7 +279,6 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.obs_size = 6 + 304 * 5 + 9 * 5 + 5 + 5 + 5 + 5 + 1 + 1
         self.renderer = CentipedeRenderer(self.consts)
 

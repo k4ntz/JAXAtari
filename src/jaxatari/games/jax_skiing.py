@@ -190,11 +190,10 @@ class SkiingInfo(NamedTuple):
 
 
 class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingConstants]):
-    def __init__(self, consts: SkiingConstants | None = None, reward_funcs: Optional[Sequence[Callable[[GameState, GameState], jnp.ndarray]]] = None,):
+    def __init__(self, consts: SkiingConstants | None = None):
         consts = consts or SkiingConstants()
         super().__init__(consts)
         self.config = GameConfig()
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
         self.state = self.reset()
         self.renderer = SkiingRenderer(self.config)
 

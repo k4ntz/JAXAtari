@@ -502,15 +502,10 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
 
 # Main Environment Class
 class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienConstants]):
-    def __init__(self, consts: AlienConstants = None,frameskip: int = 1, reward_funcs: list[callable]=None):
+    def __init__(self, consts: AlienConstants = None):
         consts = consts or AlienConstants()
         super().__init__(consts)
-        self.frameskip = frameskip # frameskip is not used in the current implementation
-        self.frame_stack_size = 4 # frame stack size is not used in the current implementation
         self.renderer = AlienRenderer(consts=self.consts) # renderer for the game
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs) 
-        self.reward_funcs = reward_funcs # list of reward functions to be used in the game
 
         traverse_enemy_step = traverse_multiple_enemy_(partial(enemy_step, cnsts=consts), 1) # vectorized enemy step function
         self.enemy_step = jax.jit(traverse_enemy_step) # jit compiled enemy step function

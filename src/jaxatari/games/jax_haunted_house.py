@@ -285,13 +285,10 @@ class HauntedHouseInfo(NamedTuple):
 
 
 class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation, HauntedHouseInfo, HauntedHouseConstants]):
-    def __init__(self, consts: HauntedHouseConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: HauntedHouseConstants = None):
         consts = consts or HauntedHouseConstants()
         super().__init__(consts)
         self.renderer = HauntedHouseRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,

@@ -2343,7 +2343,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
 class TennisRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: NamedTuple = None):
+    def __init__(self, consts: TennisConstants = None):
         super().__init__()
         self.consts = consts or TennisConstants()
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tennis"

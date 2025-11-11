@@ -309,12 +309,9 @@ class JaxNameThisGame(
     - Tentacles update round-robin (grow or shuffle laterally with adjacency).
     """
 
-    def __init__(self, frameskip: int = 1, reward_funcs: list = None, consts: NameThisGameConstants = None):
+    def __init__(self, consts: NameThisGameConstants = None):
         super().__init__()
         self.consts = consts or NameThisGameConstants()
-        self.frameskip = frameskip
-        self.frame_stack_size = 4
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
         self.renderer = Renderer_NameThisGame(consts=self.consts)
         self.action_set = [Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE]
 
@@ -1354,26 +1351,8 @@ class JaxNameThisGame(
     def step(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
-        """Frameskip wrapper over `_step_once` that accumulates reward within a macro-step."""
-
-        def body(i, carry):
-            st, total_r, done_flag = carry
-
-            def do_step(c):
-                st0, tr0, df0 = c
-                _obs_i, st1, r_i, done_i, _info_i = self._step_once(st0, action)
-                return (st1, tr0 + r_i, jnp.logical_or(df0, done_i))
-
-            return jax.lax.cond(done_flag, lambda c: c, do_step, (st, total_r, done_flag))
-
-        init_carry = (state, jnp.array(0.0, jnp.float32), jnp.array(False, jnp.bool_))
-        state_fs, total_reward, _ = jax.lax.fori_loop(0, int(self.frameskip), body, init_carry)
-
-        obs_final = self._get_observation(state_fs)
-        done_final = self._get_done(state_fs)
-        state_fs = state_fs._replace(reward=total_reward)
-        info_final = self._get_info(state_fs)
-        return obs_final, state_fs, total_reward, done_final, info_final
+        """Step function - frameskip is handled by the wrapper."""
+        return self._step_once(state, action)
 
 
 # -------------------------- Human control (optional) -----------------------

@@ -671,7 +671,7 @@ class HangmanRenderer(JAXGameRenderer):
 #environment
 
 class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, Action]):
-    def __init__(self, reward_funcs: Optional[list] = None, *,
+    def __init__(self, *,
                  max_misses: int = MAX_MISSES,
                  step_penalty: float = STEP_PENALTY,
                  difficulty_mode: str = "B",
@@ -687,7 +687,6 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
         self.action_set = [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.UPFIRE, Action.DOWNFIRE]
         self.obs_size = L_MAX + L_MAX + ALPHABET_SIZE + 3
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
 
         self._rng_key = jrandom.PRNGKey(0)
 

@@ -552,19 +552,14 @@ def movement_controller(state: VideoCubeState):
 
 
 class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCubeInfo, VideoCubeConstants]):
-    def __init__(self, consts: VideoCubeConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: VideoCubeConstants = None):
         """ Initialisation of VideoCube Game
 
         :param consts: all constants needed for the game
-        :param reward_funcs: list of functions used to compute rewards
         """
-
-        super().__init__()
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.consts = consts or VideoCubeConstants()
+        consts = consts or VideoCubeConstants()
+        super().__init__(consts)
+        self.consts = consts
         self.renderer = VideoCubeRenderer(self.consts)
         self.action_set = [
             Action.NOOP,

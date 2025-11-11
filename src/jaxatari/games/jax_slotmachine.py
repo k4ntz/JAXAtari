@@ -781,18 +781,13 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
     def __init__(
             self,
-            config: SlotMachineConstants = None,
-            reward_funcs: list[callable] = None,
+            consts: SlotMachineConstants = None,
     ):
         """Instantiate the environment and its renderer."""
-        consts = config or SlotMachineConstants()
+        consts = consts or SlotMachineConstants()
         super().__init__(consts)
     
         self.renderer = SlotMachineRenderer(consts)
-
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
 
         # Define available actions
         self.action_set = [
@@ -1464,7 +1459,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
     def image_space(self) -> spaces.Space:
         """Image space describing rendered RGB frames."""
-        cfg = self.config
+        cfg = self.consts
         return spaces.Box(
             low=0,
             high=255,

@@ -164,13 +164,10 @@ class FreewayInfo(NamedTuple):
 
 
 class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
-    def __init__(self, consts: FreewayConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: FreewayConstants = None):
         if consts is None:
             consts = FreewayConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.state = self.reset()
         self.renderer = FreewayRenderer()
 

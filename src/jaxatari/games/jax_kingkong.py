@@ -446,13 +446,10 @@ class KingKongInfo(NamedTuple):
 	time: chex.Array
 
 class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInfo, KingKongConstants]):
-	def __init__(self, consts: KingKongConstants = None, reward_funcs: list[callable]=None):
+	def __init__(self, consts: KingKongConstants = None):
 		consts = consts or KingKongConstants()
 		super().__init__(consts)
 		self.renderer = KingKongRenderer(self.consts)
-		if reward_funcs is not None:
-			reward_funcs = tuple(reward_funcs)
-		self.reward_funcs = reward_funcs
 		self.action_set = [
 			Action.NOOP,
 			Action.LEFT,

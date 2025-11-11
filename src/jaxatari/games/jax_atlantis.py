@@ -251,26 +251,16 @@ class JaxAtlantis(
     Attributes:
         config (GameConfig): Current game configuration
         frameskip (int): Frame skipping factor
-        frame_stack_size (int): Number of frames to stack for observations
         reward_funcs (tuple): Tuple of reward functions for multi-objective RL
     """
 
     def __init__(
         self,
-        frameskip: int = 1,
-        reward_funcs: list[callable] = None,
-        config: GameConfig | None = None,
+        consts: AtlantisConstants | None = None,
     ):
-        super().__init__()
-        # Use provided config or create default configuration
-        self.config = config or GameConfig()
-        self.frameskip = frameskip
-        self.frame_stack_size = 4  # Standard for Atari environments
-
-        # Convert reward functions to tuple for JAX compatibility
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
+        consts = consts or AtlantisConstants()
+        super().__init__(consts)
+        self.config = GameConfig()  # Keep for backward compatibility if needed
         self.renderer = AtlantisRenderer(config=self.config)
         self.action_set = [
             Action.NOOP,

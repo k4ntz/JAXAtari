@@ -415,17 +415,14 @@ class FrostbiteInfo(NamedTuple):
 class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, FrostbiteInfo, FrostbiteConstants]):
     """Bailey-only Frostbite implementation"""
     
-    def __init__(self, consts: FrostbiteConstants = None, reward_funcs: list = None, engine_fps: int = 30):
+    def __init__(self, consts: FrostbiteConstants = None):
         if consts is None:
             consts = FrostbiteConstants()
         super().__init__(consts)
 
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-
         # how many simulation ticks to run per external step
-        self._substeps = max(1, 60 // int(engine_fps))  # 2 when engine_fps=30, 1 when =60
+        # Default to 2 (equivalent to engine_fps=30)
+        self._substeps = 2
 
         self.renderer = FrostbiteRenderer(self.consts)
         

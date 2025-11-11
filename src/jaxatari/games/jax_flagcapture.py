@@ -99,13 +99,10 @@ class FlagCaptureInfo(NamedTuple):
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo,FlagCaptureConstants]):
-    def __init__(self,consts:FlagCaptureConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self,consts:FlagCaptureConstants = None):
         consts = consts or FlagCaptureConstants()
         super().__init__(consts)
         self.renderer = FlagCaptureRenderer(consts=consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             JAXAtariAction.NOOP,
             JAXAtariAction.FIRE,

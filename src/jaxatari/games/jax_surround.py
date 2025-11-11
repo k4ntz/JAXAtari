@@ -133,7 +133,6 @@ class JaxSurround(
     def __init__(
         self,
         consts: Optional[SurroundConstants] = None,
-        reward_funcs: Optional[Sequence[Callable[[SurroundState, SurroundState], jnp.ndarray]]] = None,
     ):
         consts = consts or SurroundConstants()
         super().__init__(consts)
@@ -146,8 +145,6 @@ class JaxSurround(
             Action.LEFT,
             Action.DOWN,
         ]
-        # Bleibt während der Laufzeit statisch -> JAX-jit-freundlich.
-        self.reward_funcs = reward_funcs
 
     # --- Internal AI helper for P1 (left player) ---
 

@@ -187,12 +187,8 @@ class KangarooInfo(NamedTuple):
 
 
 class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo, KangarooConstants]):
-    def __init__(self, consts: KangarooConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: KangarooConstants = None):
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -1976,7 +1972,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    def __init__(self, consts=None):
+    def __init__(self, consts: KangarooConstants = None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
 

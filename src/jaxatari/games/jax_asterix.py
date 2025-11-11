@@ -165,7 +165,7 @@ class AsterixInfo(NamedTuple):
     pass 
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
-    def __init__(self, consts: AsterixConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: AsterixConstants = None):
         if consts is None:
             consts = AsterixConstants()
         
@@ -174,10 +174,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
         
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-
         self.renderer = AsterixRenderer()
 
         stage_borders = self.consts.stage_positions

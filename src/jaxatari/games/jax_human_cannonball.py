@@ -74,9 +74,15 @@ class HumanCannonballConstants:
     ANGLE_BUFFER: int = 16   # Only update the angle if the action is held for this many steps
 
     # Starting positions of the human
-    HUMAN_START_LOW: chex.Array = jnp.array([84.0, 128.0], dtype=jnp.float32)
-    HUMAN_START_MED: chex.Array = jnp.array([84.0, 121.0], dtype=jnp.float32)
-    HUMAN_START_HIGH: chex.Array = jnp.array([80.0, 118.0], dtype=jnp.float32)
+    HUMAN_START_LOW: chex.Array = field(
+        default_factory=lambda: jnp.array([84.0, 128.0], dtype=jnp.float32)
+    )
+    HUMAN_START_MED: chex.Array = field(
+        default_factory=lambda: jnp.array([84.0, 121.0], dtype=jnp.float32)
+    )
+    HUMAN_START_HIGH: chex.Array = field(
+        default_factory=lambda: jnp.array([80.0, 118.0], dtype=jnp.float32)
+    )
 
     # Top left corner of the low-aiming cannon
     CANNON_X: int = 68
@@ -157,14 +163,10 @@ class HumanCannonballInfo(NamedTuple):
     time: jnp.ndarray
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
-    def __init__(self, consts: HumanCannonballConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: HumanCannonballConstants = None):
         consts = consts or HumanCannonballConstants()
         super().__init__(consts)
         self.renderer = HumanCannonballRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.frame_stack_size = 4
         self.action_set = [
             Action.NOOP,
             Action.FIRE,

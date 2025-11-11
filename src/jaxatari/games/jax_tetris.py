@@ -152,14 +152,13 @@ class TetrisInfo(NamedTuple):
 # ======================= Environment =====================
 
 class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, TetrisConstants]):
-    def __init__(self, consts: TetrisConstants = None, reward_funcs: list[callable]=None, instant_drop: bool = False):
+    def __init__(self, consts: TetrisConstants = None):
         """ Initialize the JaxTetris environment"""
 
         consts = consts or TetrisConstants()
         super().__init__(consts)
         self.renderer = TetrisRenderer(self.consts)
-        self.instant_drop = instant_drop
-        self.reward_funcs = reward_funcs
+        self.instant_drop = False
 
     # ----- Helpers -----
     @partial(jax.jit, static_argnums=0)

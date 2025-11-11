@@ -254,13 +254,9 @@ class AsteroidsInfo(NamedTuple):
     step_counter: chex.Array
 
 class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, AsteroidsInfo, AsteroidsConstants]):
-    def __init__(self, consts: AsteroidsConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: AsteroidsConstants = None):
         consts = consts or AsteroidsConstants()
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = jnp.array([
             Action.NOOP,
             Action.FIRE,

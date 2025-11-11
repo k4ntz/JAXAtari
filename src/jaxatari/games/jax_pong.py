@@ -77,13 +77,10 @@ class PongInfo(NamedTuple):
 
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
-    def __init__(self, consts: PongConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: PongConstants = None):
         consts = consts or PongConstants()
         super().__init__(consts)
         self.renderer = PongRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -92,7 +89,6 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
         ]
-        self.obs_size = 3*4+1+1
 
     def _player_step(self, state: PongState, action: chex.Array) -> PongState:
         up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)

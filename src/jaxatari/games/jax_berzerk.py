@@ -232,13 +232,8 @@ class WallGeometry(NamedTuple):
 
 
 class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, BerzerkConstants]):
-    def __init__(self, consts: BerzerkConstants = None, frameskip: int = 1, reward_funcs: list[callable]=None):
+    def __init__(self, consts: BerzerkConstants = None):
         super().__init__(consts)
-        self.frameskip = frameskip
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -1685,7 +1680,7 @@ class BerzerkRenderer(JAXGameRenderer):
     sprite_indices: Dict[str, int]
     group_offsets: Dict[str, chex.Array]
 
-    def __init__(self, consts=None):
+    def __init__(self, consts: BerzerkConstants = None):
         """
         Initializes the renderer by loading sprites using the
         new palette-based pipeline.

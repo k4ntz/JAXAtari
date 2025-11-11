@@ -604,13 +604,9 @@ def load_sprites():
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
 
-    def __init__(self, consts: LaserGatesConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
+    def __init__(self, consts: LaserGatesConstants = None):
         consts = consts or LaserGatesConstants()
         super().__init__(consts)
-        self.frameskip = frameskip
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -631,7 +627,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.num_obs_slots = 23
         self.features_per_slot = 5  # x, y, w, h, active
         self.obs_size = self.num_obs_slots * self.features_per_slot

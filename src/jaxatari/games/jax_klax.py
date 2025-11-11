@@ -243,7 +243,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
     ORIENT_D2: int = 3    # diagonal up-right
 
 
-    def __init__(self, consts: KlaxConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: KlaxConstants = None):
         consts = consts or KlaxConstants()
         super().__init__(consts)
         self.renderer = KlaxRenderer(self.consts)
@@ -252,15 +252,12 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         self._waves = jnp.array(KlaxConstants.klax_waves, dtype=jnp.int32)
         self._n_waves = int(self._waves.shape[0])
 
-        rf = tuple(reward_funcs) if reward_funcs is not None else tuple()
-        self.reward_funcs = rf
-        self._rf_count: int = len(rf)
-        self._rf_eff_len: int = max(1, self._rf_count)
+        # Default: no reward functions (handled by wrapper)
+        rf = tuple()
+        self._rf_count: int = 0
+        self._rf_eff_len: int = 1
 
-        rf_branches = tuple(
-            (lambda op, _f=f: _f(op[0], op[1]).astype(jnp.float32))
-            for f in rf
-        )
+        rf_branches = tuple()
         fallback_branch = (lambda op: op[2].astype(jnp.float32),)
 
         self._rf_branches = rf_branches + fallback_branch

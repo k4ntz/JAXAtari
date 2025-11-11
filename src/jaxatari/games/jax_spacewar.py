@@ -213,13 +213,9 @@ class SpaceWarInfo(NamedTuple):
     step_counter: chex.Array
 
 class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInfo, SpaceWarConstants]):
-    def __init__(self, consts: SpaceWarConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: SpaceWarConstants = None):
         consts = consts or SpaceWarConstants()
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = jnp.array([
             Action.NOOP,
             Action.FIRE,

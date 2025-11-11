@@ -279,12 +279,9 @@ class ChopperCommandInfo(NamedTuple):
 
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
-    def __init__(self, consts: ChopperCommandConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: ChopperCommandConstants = None):
         consts = consts or ChopperCommandConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -305,7 +302,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
 
         self.obs_size = (
             6  # player: x,y,o,width,height,active

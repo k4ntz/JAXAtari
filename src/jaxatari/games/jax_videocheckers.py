@@ -474,14 +474,10 @@ class BoardHandler:
 
 class JaxVideoCheckers(
     JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
-    def __init__(self, consts: VideoCheckersConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: VideoCheckersConstants = None):
         consts = consts or VideoCheckersConstants()
         super().__init__(consts)
         self.renderer = VideoCheckersRenderer(self.consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = {
             Action.FIRE,
             Action.UPRIGHT,
@@ -1229,6 +1225,17 @@ class JaxVideoCheckers(
         new_counts = BoardHandler.count_pieces(state.board)
         new_lead_black = new_counts[1] - new_counts[0]
         return new_lead_black - previous_lead_black
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
+        """
+        Calculates the reward from the environment state.
+        Args:
+            previous_state: The previous environment state.
+            state: The environment state.
+        Returns: reward
+        """
+        return self._get_env_reward(previous_state, state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoCheckersState) -> bool:

@@ -667,14 +667,10 @@ def check_winner(state_action_tuple) -> BlackjackState:
 
 
 class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, BlackjackInfo, BlackjackConstants]):
-    def __init__(self, consts: BlackjackConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: BlackjackConstants = None):
         super().__init__()
         self.consts = consts or BlackjackConstants()
-        self.frame_stack_size = 4
         self.renderer = BlackjackRenderer()
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,

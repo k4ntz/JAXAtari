@@ -208,14 +208,10 @@ class SpaceInvadersInfo(NamedTuple):
     time: jnp.ndarray
 
 class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservation, SpaceInvadersInfo, SpaceInvadersConstants]):
-    def __init__(self, consts: SpaceInvadersConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: SpaceInvadersConstants = None):
         consts = consts or SpaceInvadersConstants()
         super().__init__(consts)
         self.renderer = SpaceInvadersRenderer(self.consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,

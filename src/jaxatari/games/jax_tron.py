@@ -1215,14 +1215,10 @@ def _select_door_for_spawn(
 
 class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants]):
     def __init__(
-        self, consts: TronConstants = None, reward_funcs: list[callable] = None
+        self, consts: TronConstants = None
     ) -> None:
         consts = consts or TronConstants()
         super().__init__(consts)
-        # Convert reward functions to tuple for JAX compatibility
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.renderer = TronRenderer(consts)
         self.action_set = [
             Action.NOOP,
