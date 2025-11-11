@@ -51,9 +51,21 @@ class JaxRenderingUtils:
             JAX array of shape (Height, Width, 4).
         """
         frame = jnp.load(fileName)
-        if frame.ndim != 3 or frame.shape[2] != 4:
+        if frame.ndim != 3:
             raise ValueError(
-                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels (RGBA)."
+                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."
+            )
+        
+        # Handle RGB (3 channels) by converting to RGBA
+        if frame.shape[2] == 3:
+            # Convert RGB to RGBA
+            # Pixels with (0,0,0) are treated as transparent (alpha=0), others are opaque (alpha=255)
+            is_transparent = (frame[:, :, 0] == 0) & (frame[:, :, 1] == 0) & (frame[:, :, 2] == 0)
+            alpha_channel = jnp.where(is_transparent, 0, 255).astype(frame.dtype)
+            frame = jnp.concatenate([frame, alpha_channel[:, :, None]], axis=2)
+        elif frame.shape[2] != 4:
+            raise ValueError(
+                f"Invalid frame format in {fileName}. Source .npy must have 3 channels (RGB) or 4 channels (RGBA)."
             )
 
         if transpose:

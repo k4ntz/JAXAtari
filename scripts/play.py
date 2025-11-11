@@ -7,7 +7,8 @@ import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, load_game_environment, load_game_mod, update_pygame
+from utils import get_human_action, update_pygame
+from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
 
@@ -31,10 +32,17 @@ def main():
         help="Name of the game to play (e.g. 'freeway', 'pong'). The game must be in the src/jaxatari/games directory.",
     )
     parser.add_argument(
-        "-m", "--mod",
+        "-m", "--mods",
+        nargs='+',
         type=str,
         required=False,
-        help="Name of the mod class.",
+        help="Name of the mods class.",
+    )
+
+    parser.add_argument(
+        "--allow_conflicts",
+        action="store_true",
+        help="Allow loading conflicting mods (last mod in list takes priority).",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=False)
@@ -77,19 +85,20 @@ def main():
     args = parser.parse_args()
 
     execute_without_rendering = False
-    # Load the game environment
+    # Load the game environment using the core.make() entry point
     try:
-        env, renderer = load_game_environment(args.game)
-        if args.mod is not None:
-            mod = load_game_mod(args.game, args.mod)
-            env = mod(env)
+        env = jaxatari_make(
+            game_name=args.game,
+            mods_config=args.mods,
+            allow_conflicts=args.allow_conflicts
+        )
 
-        if renderer is None:
+        if not hasattr(env, "renderer"):
             execute_without_rendering = True
             print("No renderer found, running without rendering.")
 
-    except (FileNotFoundError, ImportError) as e:
-        print(f"Error loading game: {e}")
+    except (FileNotFoundError, ImportError, ValueError, AttributeError, NotImplementedError) as e:
+        print(f"Error loading game or mods: {e}")
         sys.exit(1)
 
     # Initialize the environment
