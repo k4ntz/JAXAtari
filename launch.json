@@ -1,0 +1,16 @@
+{
+    // Use VS Code launch configurations to run/debug the Python script
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Play Defender",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/play.py",
+            "args": ["-g", "Defender"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        }
+    ]
+}
