@@ -2,8 +2,9 @@ import importlib
 import inspect
 
 from jaxatari.environment import JaxEnvironment
-from jaxatari.games.mods.breakout_mods import JaxatariWrapper
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.wrappers import JaxatariWrapper
+
 
 
 # Map of game names to their module paths
@@ -22,7 +23,6 @@ MOD_MODULES = {
     "kangaroo": "jaxatari.games.mods.kangaroo_mods",
     "freeway": "jaxatari.games.mods.freeway_mods",
     "breakout": "jaxatari.games.mods.breakout_mods",
-    # Add new mods here
 }
 
 def list_available_games() -> list[str]:
@@ -72,8 +72,7 @@ def make(game_name: str, mode: int = 0, difficulty: int = 0) -> JaxEnvironment:
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Failed to load game '{game_name}': {e}") from e
 
-
-def make_renderer(game_name: str) -> JaxEnvironment:
+def make_renderer(game_name: str) -> JAXGameRenderer:
     """
     Creates and returns a JaxAtari game environment renderer.
 
@@ -124,7 +123,7 @@ def modify(env: JaxEnvironment, game_name: str, mod_name: str) -> JaxatariWrappe
         module = importlib.import_module(MOD_MODULES[game_name])
         
         # 2. Find the correct environment class within the module
-        env_class = None
+        wrapper_class = None
         for _, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, JaxatariWrapper) and obj.__name__.lower() == mod_name.lower():
                 wrapper_class = obj

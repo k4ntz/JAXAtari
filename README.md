@@ -1,13 +1,14 @@
 # 🎮 JAXAtari: JAX-Based Object-Centric Atari Environments
 
-Quentin Delfosse, Paul Seitz, Sebastian Wette, Daniel Kirn, Dominik Mandok, Lars Teubner
-[Machine Learning Lab – TU Darmstadt](https://www.ml.informatik.tu-darmstadt.de/)
+Quentin Delfosse, Raban Emunds, Jannis Blüml, Paul Seitz, Sebastian Wette, Dominik Mandok
+[AI/ML Lab – TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
 
 > A GPU-accelerated, object-centric Atari environment suite built with JAX for fast, scalable reinforcement learning research.
 
 ---
 
 **JAXAtari** introduces a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), this framework enables up to **16,000x faster training speeds** through just-in-time (JIT) compilation, vectorization, and massive parallelization on GPU.
+Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it implements a number of small **game modifications** , for simple testing of the generalization capabilities of agents. 
 
 <!-- --- -->
 
@@ -15,7 +16,7 @@ Quentin Delfosse, Paul Seitz, Sebastian Wette, Daniel Kirn, Dominik Mandok, Lars
 - **Object-centric extraction** of Atari game states with structured observations
 - **JAX-based vectorized execution** with full GPU support and JIT compilation
 - **Comprehensive wrapper system** for different observation types (pixel, object-centric, combined)
-
+- **Game modifications** to test agent generalization across distribution shifts (+ simple implementation of custom modifications).
 
 📘 [Read the Documentation](https://jaxatari.readthedocs.io/en/latest/) 
 
@@ -56,6 +57,20 @@ env = jaxatari.make("pong")  # or "seaquest", "kangaroo", "freeway", etc.
 # Get available games
 available_games = jaxatari.list_available_games()
 print(f"Available games: {available_games}")
+```
+
+### Using Modifications
+
+JAXAtari provides some pre-implemented game modifications: 
+
+```python
+import jax
+import jaxatari
+
+# Create base environment
+base_env = jaxatari.make("pong")
+# Apply LazyEnemy modification
+mod_env = jaxatari.modify(base_env, "pong", "LazyEnemyWrapper")
 ```
 
 ### Using Wrappers
@@ -101,28 +116,21 @@ from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper
 # Create environment with wrappers
 base_env = jaxatari.make("pong")
 env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))
-
+n_envs = 1024
 rng = jax.random.PRNGKey(0)
+reset_keys = jax.random.split(rng, n_envs)
 
-# Vectorized reset and step functions
-vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset)(
-    jax.random.split(rng, n_envs)
-)
-vmap_step = lambda n_envs: lambda env_state, action: jax.vmap(
-    env.step
-)(env_state, action)
+# Initialize n_envs parallel environments
+init_obs, env_state = jax.vmap(env.reset)(reset_keys)
 
-# Initialize 128 parallel environments
-init_obs, env_state = vmap_reset(128)(rng)
-action = jax.random.randint(rng, (128,), 0, env.action_space().n)
-
-# Take one step
-new_obs, new_env_state, reward, done, info = vmap_step(128)(env_state, action)
+# Take one random step in each env
+action = jax.random.randint(rng, (n_envs,), 0, env.action_space().n)
+new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
 
 # Take 100 steps with scan
 def step_fn(carry, unused):
     _, env_state = carry
-    new_obs, new_env_state, reward, done, info = vmap_step(128)(env_state, action)
+    new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
     return (new_obs, new_env_state), (reward, done, info)
 
 carry = (init_obs, env_state)

@@ -597,11 +597,12 @@ class PongRenderer(JAXGameRenderer):
             #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        # 1. Create any procedural assets first
-        wall_sprite = self._create_wall_sprite()
+        # 1. Create procedural assets for both walls
+        wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
+        wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         
-        # 2. Define the full asset manifest, mixing file-based and procedural assets
-        asset_config = self._get_asset_config(wall_sprite)
+        # 2. Update asset config to include both walls
+        asset_config = self._get_asset_config(wall_sprite_top, wall_sprite_bottom)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/pong"
 
         # 3. Make a single call to the setup function
@@ -613,18 +614,15 @@ class PongRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-    def _create_wall_sprite(self) -> jnp.ndarray:
-        """Procedurally creates an RGBA sprite for the top/bottom walls."""
-        # The wall color must match a color used elsewhere (e.g., the score)
-        # so it gets added to the palette correctly.
+    def _create_wall_sprite(self, height: int) -> jnp.ndarray:
+        """Procedurally creates an RGBA sprite for a wall of given height."""
         wall_color_rgba = (*self.consts.SCORE_COLOR, 255) # e.g., (236, 236, 236, 255)
-        
-        wall_shape = (self.consts.WALL_BOTTOM_HEIGHT, self.consts.WIDTH, 4)
+        wall_shape = (height, self.consts.WIDTH, 4)
         wall_sprite = jnp.tile(jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1))
         return wall_sprite
 
-    def _get_asset_config(self, wall_sprite_data: jnp.ndarray) -> list:
-        """Returns the declarative manifest of all assets for the game."""
+    def _get_asset_config(self, wall_sprite_top: jnp.ndarray, wall_sprite_bottom: jnp.ndarray) -> list:
+        """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {'name': 'player', 'type': 'single', 'file': 'player.npy'},
@@ -632,9 +630,9 @@ class PongRenderer(JAXGameRenderer):
             {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
             {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'},
-            
-            # Add the procedurally created sprite to the manifest
-            {'name': 'wall', 'type': 'procedural', 'data': wall_sprite_data},
+            # Add the procedurally created sprites to the manifest
+            {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
+            {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -654,9 +652,9 @@ class PongRenderer(JAXGameRenderer):
         score_color_tuple = self.consts.SCORE_COLOR # (236, 236, 236)
         score_id = self.COLOR_TO_ID[score_color_tuple]
 
-        # Draw walls (which are now a sprite)
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall"])
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall"])
+        # Draw walls (using separate sprites for top and bottom)
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall_top"])
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall_bottom"])
 
         # Stamp Score using the label utility
         player_digits = self.jr.int_to_digits(state.player_score, max_digits=2)
