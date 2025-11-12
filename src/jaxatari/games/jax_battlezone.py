@@ -53,13 +53,16 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 class BattlezoneConstants(NamedTuple):
     WIDTH: int = 160  #rgb_array size
     HEIGHT: int = 210
-    SCORE_COLOR: Tuple[int, int, int] = (236, 236, 236)#(45, 129, 105) but we need to change pallette first
+    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)#(45, 129, 105) but we need to change pallette first
     WALL_TOP_Y: int = 0     #correct
     WALL_TOP_HEIGHT: int = 36   #correct
     WALL_BOTTOM_Y: int = 177    #correct
     WALL_BOTTOM_HEIGHT: int = 33    #correct
-    TANK_SPRITE_POS_X: int = 155
-    TANK_SPRITE_POS_Y: int = 52
+    TANK_SPRITE_POS_X: int = 43
+    TANK_SPRITE_POS_Y: int = 140
+    CHAINS_POS_Y:int = 158
+    CHAINS_L_POS_X:int = 19
+    CHAINS_R_POS_X: int = 109
 
 
 # immutable state container
@@ -214,7 +217,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         # 2. Update asset config to include both walls
         asset_config = self._get_asset_config(wall_sprite_top, wall_sprite_bottom)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/pong" #change later when we have sprites
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/battlezone" #change later when we have sprites
 
         # 3. Make a single call to the setup function
         (
@@ -236,11 +239,10 @@ class BattlezoneRenderer(JAXGameRenderer):
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [ #change later when we have assets
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
-            {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-            {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
-            {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'},
+            {'name': 'tank', 'type': 'single', 'file': 'tank.npy'},
+            {'name': 'chainsLeft', 'type': 'single', 'file': 'chainsLeft.npy'},
+            {'name': 'chainsRight', 'type': 'single', 'file': 'chainsRight.npy'},
+            {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
@@ -248,15 +250,26 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        #-----------------background
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        tank_mask = self.SHAPE_MASKS["tank"]
+        raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
+                                   self.consts.TANK_SPRITE_POS_Y, tank_mask)
+
+
+        #--------------chains---------
+        chainsL_mask = self.SHAPE_MASKS["chainsLeft"]
+        raster = self.jr.render_at(raster, self.consts.CHAINS_L_POS_X,
+                                   self.consts.CHAINS_POS_Y, chainsL_mask)
+
+        chainsR_mask = self.SHAPE_MASKS["chainsRight"]
+        raster = self.jr.render_at(raster, self.consts.CHAINS_R_POS_X,
+                                   self.consts.CHAINS_POS_Y, chainsR_mask)
+
 
         # --- Stamp Walls and Score (using the same color/ID) ---
         score_color_tuple = self.consts.SCORE_COLOR  # (236, 236, 236)
         score_id = self.COLOR_TO_ID[score_color_tuple]
-
-        # Draw walls (using separate sprites for top and bottom)
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall_top"])
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall_bottom"])
 
 
         #---------------------------player score--------------------change later cuz we have 3 digits
@@ -302,8 +315,9 @@ def try_gym_battlezone_pixel():
     for i in range(1000):
         action = 3
         obs, reward, terminated, truncated, info = env.step(action)
-        extract_sprite(obs, [[26,102,26], [0,68,0], [111,111,111]])
+        extract_sprite(obs, [[111,111,111], [74,74,74]])
         if i%stepsize==0:
+            print(np.shape(obs))
             im = plt.imshow(obs, interpolation='none', aspect='auto')
             plt.show()
     env.close()
@@ -349,12 +363,14 @@ def extract_sprite(rgb_array, color_list, filename="output_rgba.npy"):
     np.save(save_path, cropped)
     return cropped
 
+
 if __name__ == "__main__":
-    #env = JaxBattlezone()
-    #initial_obs, state = env.reset()
-    #for i in range(10):
-        #obs, state, env_reward, done, info = env.step(state, 0)
-        #print(state.step_counter)
+    env = JaxBattlezone()
+    initial_obs, state = env.reset()
+    for i in range(10):
+        obs, state, env_reward, done, info = env.step(state, 0)
+        print(state.step_counter)
+
 
 
     try_gym_battlezone_pixel()
