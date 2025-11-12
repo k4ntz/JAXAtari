@@ -85,6 +85,12 @@ PPY1 = 152
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
+SCATTER_TARGETS = jnp.array([
+    [MsPacmanMaze.MAZE_WIDTH - 1, 0],                               # Upper right corner - Blinky
+    [0, 0],                                                         # Upper left corner - Pinky
+    [MsPacmanMaze.MAZE_WIDTH - 1, MsPacmanMaze.MAZE_HEIGHT - 1],    # Lower right corner - Inky
+    [0, MsPacmanMaze.MAZE_HEIGHT - 1]                               # Lower left corner - Sue
+])
 
 # DIRECTIONS
 DIRECTIONS = jnp.array([
@@ -715,32 +721,30 @@ def get_direction_index(direction: chex.Array) -> int:
     return 0  # Default to NOOP if not found
 
 
-def get_chase_target(ghost_id: int,
-                     pacman_tile: chex.Array,
-                     pacman_dir: chex.Array,
-                     blinky_tile: chex.Array) -> chex.Array:
+def get_chase_target(ghost: GhostType,
+                     ghost_position: chex.Array, blinky_pos: chex.Array,
+                     player_pos: chex.Array, player_dir: chex.Array) -> chex.Array:
     """
-    Compute the chase-mode target tile for each ghost by ID:
-     0=Red (Blinky), 1=Pink (Pinky), 2=Blue (Inky), 3=Orange (Clyde)
+    Compute the chase-mode target for each ghost:
+    0=Red (Blinky), 1=Pink (Pinky), 2=Blue (Inky), 3=Orange (Sue)
     """
-    if ghost_id == 0:
-        # Blinky: target Pac-Man's current tile
-        return pacman_tile
-    elif ghost_id == 1:
-        # Pinky: 4 tiles ahead of Pac-Man
-        ahead = pacman_tile + 4 * pacman_dir
-        return ahead
-    elif ghost_id == 2:
-        # Inky: vector from Blinky to two tiles ahead of Pac-Man, doubled
-        two_ahead = pacman_tile + 2 * pacman_dir
-        vect = two_ahead - blinky_tile
-        return blinky_tile + 2 * vect
-    else:
-        # Clyde: if >8 tiles away, chase Pac-Man, else scatter corner
-        dist = jnp.linalg.norm(ghost_id_tile - pacman_tile)
-        chase = pacman_tile
-        corner = SCATTER_TARGETS[3]
-        return jnp.where(dist > 8, chase, corner)
+    match ghost:
+        case GhostType.BLINKY:
+            # Target Pac-Man's current tile
+            return player_pos
+        case GhostType.PINKY:
+            # Target 4 tiles ahead of Pac-Man
+            ahead = player_pos + 4 * player_dir
+            return ahead
+        case GhostType.INKY:
+            # Target the tip of the vector from Blinky to two tiles ahead of Pac-Man, doubled
+            two_ahead = player_pos + 2 * player_dir
+            vect = two_ahead - blinky_pos
+            return blinky_pos + 2 * vect
+        case GhostType.SUE:
+            # Target Pac-Man if >8 tiles away, else target corner
+            dist = jnp.linalg.norm(ghost_position - player_pos)
+            return jnp.where(dist > 8, player_pos, SCATTER_TARGETS[GhostType.SUE])
 
 
 def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
@@ -877,25 +881,11 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
             else:
                 match new_mode:
                     case GhostMode.CHASE:
-                        match ghost.type:
-                            case GhostType.BLINKY:
-                                new_dir = get_direction_blinky(ghost, player, allowed, key)
-                            case GhostType.PINKY:
-                                new_dir = get_direction_pinky(ghost, player, allowed, key)
-                            case GhostType.INKY:
-                                new_dir = get_direction_inky(ghost, ghost, player, allowed, key) # TODO: Needs blinkys position!
-                            case GhostType.SUE:
-                                new_dir = get_direction_sue(ghost, player, allowed, key)
+                        target = get_chase_target(ghost.type, ghost.position, ghost.position, player.position, player.direction) # TODO: Needs blinkys position!
+                        directions = get_target_direction_indices(ghost.position, target)
+                        new_dir = select_target_direction(directions, allowed, key)
                     case GhostMode.SCATTER:
-                        match ghost.type:
-                            case GhostType.BLINKY:
-                                target = jnp.array([MsPacmanMaze.MAZE_WIDTH - 1, 0]) # Upper right corner
-                            case GhostType.PINKY:
-                                target = jnp.array([0, 0]) # Upper left corner
-                            case GhostType.INKY:
-                                target = jnp.array([MsPacmanMaze.MAZE_WIDTH - 1, MsPacmanMaze.MAZE_HEIGHT - 1]) # Lower right corner
-                            case GhostType.SUE:
-                                target = jnp.array([0, MsPacmanMaze.MAZE_HEIGHT - 1]) # Lower left corner
+                        target = SCATTER_TARGETS[ghost.type]
                         directions = get_target_direction_indices(ghost.position, target)
                         new_dir = select_target_direction(directions, allowed, key)
                     case GhostMode.FRIGHTENED | GhostMode.BLINKING | GhostMode.RANDOM:
@@ -952,52 +942,6 @@ def choose_direction(cost_map: chex.Array, random_key):
             min_dirs.append(direction)
             min_cost = cost
     return jax.random.choice(random_key, jnp.array(min_dirs))
-
-
-def get_direction_blinky(blinky: GhostState, player: PlayerState, allowed: chex.Array, key: chex.Array):
-    """
-    Aims for Ms Pacman directly.
-    """
-    directions  = get_target_direction_indices(blinky.position, player.position)
-    direction   = select_target_direction(directions, allowed, key)
-    return direction
-
-
-def get_direction_pinky(pinky: GhostState, player: PlayerState, allowed: chex.Array, key: chex.Array):
-    """
-    Aims for a spot 4 tiles in front of Ms Pacman.
-    """
-    target_position = player.position + 4 * player.direction    # 4 tiles in front of the player
-    directions  = get_target_direction_indices(pinky.position, target_position)
-    direction   = select_target_direction(directions, allowed, key)
-    return direction
-
-
-def get_direction_inky(inky: GhostState, blinky: GhostState, player: PlayerState, allowed: chex.Array, key: chex.Array):
-    """
-    Aims for a spot determined by Blinkys position relative to Ms Pacman:
-    Draw a straight line from Blinkys position to the spot 2 tiles in front of Ms Pacman
-    and extend it equally as far onwards to determine the aiming point.
-    """
-    pivot_position  = player.position + 2 * player.direction    # 2 tiles in front of the player
-    target_vector   = 2 * ((pivot_position) - blinky.position)  # Points from blinky, through the pivot, to the target
-    target_position = blinky.position + target_vector           # Translates the relative target position to an absolute one
-    directions  = get_target_direction_indices(inky.position, target_position)
-    direction   = select_target_direction(directions, allowed, key)
-    return direction
-
-
-def get_direction_sue(sue: GhostState, player: PlayerState, allowed: chex.Array, key: chex.Array):
-    """
-    Aims for Ms Pacman directly if further away than 8 tiles (euclidian distance)
-    and aims for the lower left corner if closer than 8 tiles.
-    """
-    target_distance = get_distance(sue.position, player.position, metric='euclidian')
-    if target_distance > 8: target_position = player.position               # Chase the player if more than 8 tiles away
-    else:                   target_position = [0, MsPacmanMaze.MAZE_HEIGHT - 1] # Target the lower left corner if closer than 8 tiles
-    directions  = get_target_direction_indices(sue.position, target_position)
-    direction   = select_target_direction(directions, allowed, key)
-    return direction
 
 
 def get_target_direction_indices(position: chex.Array, target: chex.Array) -> list:
