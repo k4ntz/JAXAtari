@@ -67,13 +67,13 @@ class DefenderConstants(NamedTuple):
     BOMBER_Y_SPEED: float = -0.2
     INIT_LANDER_STATES: chex.Array = jnp.array([
         # active, pos_x, pos_y, speed,
-        [1, random.randint(0, 480), random.randint(39, 160)]
+        [1, random.randint(130, 480), random.randint(39, 160)]
         for _ in range(MAX_LANDER_AMOUNT)
     ]).reshape(MAX_LANDER_AMOUNT, 3)
     
     INIT_BOMBER_STATES: chex.Array = jnp.array([
         # active, pos_x, pos_y, direction_right
-        [1, random.randint(0, 80), 70, 1]
+        [1, 120, 70, 0]
         for _ in range(MAX_BOMBER_AMOUNT)
     ]).reshape(MAX_BOMBER_AMOUNT, 4)
 
@@ -476,8 +476,8 @@ class JaxDefender(
         # acceleration in x direction
         speed = jax.lax.cond(
             direction_right,
-            lambda s: -s,
             lambda s: s,
+            lambda s: -s,
             operand=speed,
         )
         x_pos = x_pos + speed
@@ -490,18 +490,19 @@ class JaxDefender(
                 direction_right,
                 x_pos > state.space_ship_x + 30
             ),
-            lambda _: 1.0,
+            lambda _: 0.0,
             lambda _: jax.lax.cond(
                 jnp.logical_and(
                     jnp.logical_not(direction_right),
                     x_pos < state.space_ship_x - 30
                 ),
-                lambda _: 0.0,
+                lambda _: 1.0,
                 lambda _: direction_right,
                 operand=None,
             ),
             operand=None,
         )
+        jax.debug.print("Bomber pos_x: {}, pos_y: {}, dir_right: {} X-pos - 30 {}", x_pos, y_pos, direction_right,(state.space_ship_x - 30) )
                 
         bomber = bomber.at[1].set(x_pos)
         bomber = bomber.at[2].set(y_pos)
