@@ -63,12 +63,15 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_POS_Y:int = 158
     CHAINS_L_POS_X:int = 19
     CHAINS_R_POS_X: int = 109
+    CHAINS_SPEED:float=1.0
 
 
 # immutable state container
 class BattlezoneState(NamedTuple):
     score: chex.Array
     step_counter: chex.Array
+    chains_l_anim_counter: chex.Array
+    chains_r_anim_counter: chex.Array
 
 
 class BattlezoneObservation(NamedTuple):
@@ -110,14 +113,33 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         self.obs_size = 3*4+1+1  #?? change later from pong currently
 
     def _player_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
-        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+        forward = np.any(jnp.stack([action==Action.UP,action==Action.UPFIRE,
+                        action==Action.UPLEFT, action==Action.UPLEFTFIRE,
+                        action==Action.UPRIGHT, action==Action.UPRIGHTFIRE]), axis=0)
+        backward = np.any(jnp.stack([action==Action.DOWN,action==Action.DOWNFIRE,
+                        action==Action.DOWNLEFT, action==Action.DOWNLEFTFIRE,
+                        action==Action.DOWNRIGHT, action==Action.DOWNRIGHTFIRE]), axis=0)
+        right = np.any(jnp.stack([action==Action.RIGHT,action==Action.RIGHTFIRE,
+                        action==Action.UPRIGHT, action==Action.UPRIGHTFIRE,
+                        action==Action.DOWNRIGHT, action==Action.DOWNRIGHTFIRE]), axis=0)
+        left = np.any(jnp.stack([action == Action.LEFT, action == Action.LEFTFIRE,
+                        action == Action.UPLEFT, action == Action.UPLEFTFIRE,
+                        action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE]), axis=0)
+        fire = np.any(jnp.stack([action == Action.FIRE, action == Action.LEFTFIRE,
+                                 action == Action.UPFIRE, action == Action.UPLEFTFIRE,
+                                 action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
+        #--------------------anims--------------------
+        chain_l_offset = jnp.where(jnp.logical_or(forward, left),1,0) - \
+                         jnp.where(jnp.logical_or(backward, right),1,0)
 
-
+        chain_r_offset = jnp.where(jnp.logical_or(forward, right),1,0) - \
+                         jnp.where(jnp.logical_or(backward, left),1,0)
 
         return BattlezoneState(
             score=state.step_counter,
             step_counter=state.step_counter,
+            chains_l_anim_counter=state.chains_l_anim_counter + chain_l_offset,
+            chains_r_anim_counter=state.chains_r_anim_counter + chain_r_offset,
         )
 
 
@@ -125,6 +147,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         state = BattlezoneState(
             score=jnp.array(0),
             step_counter=jnp.array(0),
+            chains_l_anim_counter=jnp.array(0),
+            chains_r_anim_counter=jnp.array(0),
         )
         initial_obs = self._get_observation(state)
 
@@ -274,7 +298,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #---------------------------player score--------------------change later cuz we have 3 digits
         # Stamp Score using the label utility
-        score = state.step_counter #:)
+        score = state.chains_l_anim_counter #:)
         player_digits = self.jr.int_to_digits(score, max_digits=2)
         # Note: The logic for single/double digits is complex for a jitted function.
         player_digit_masks = self.SHAPE_MASKS["player_digits"]  # Assumes single color
