@@ -66,6 +66,9 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
     MOUNTAINS_Y: int = 36
+    GRASS_BACK_Y: int = 90
+    GRASS_FRONT_Y: int = 137
+    GRASS_FRONT_SWAP_INDEX:int = 15 #number of frames the player presses forward to swap the grass
 
 
 # immutable state container
@@ -75,6 +78,7 @@ class BattlezoneState(NamedTuple):
     chains_l_anim_counter: chex.Array
     chains_r_anim_counter: chex.Array
     mountains_anim_counter:chex.Array
+    grass_anim_counter:chex.Array
 
 
 class BattlezoneObservation(NamedTuple):
@@ -137,13 +141,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                           - jnp.where(upLeft, 0.7, 0.0) + jnp.where(downRight, 0.7, 0.0))%32
         mountains_offset = (jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
                             -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))%160
+        grass_offset = (jnp.where(jnp.any(jnp.stack([up, upLeft, upRight])), 1.0, 0.0)
+                        -jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))%30
 
         return BattlezoneState(
             score=state.step_counter,
             step_counter=state.step_counter,
             chains_l_anim_counter=state.chains_l_anim_counter + chain_l_offset,
             chains_r_anim_counter=state.chains_r_anim_counter + chain_r_offset,
-            mountains_anim_counter=state.mountains_anim_counter + mountains_offset
+            mountains_anim_counter=state.mountains_anim_counter + mountains_offset,
+            grass_anim_counter=state.grass_anim_counter + grass_offset
         )
 
 
@@ -153,7 +160,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             step_counter=jnp.array(0),
             chains_l_anim_counter=jnp.array(0),
             chains_r_anim_counter=jnp.array(0),
-            mountains_anim_counter=jnp.array(0)
+            mountains_anim_counter=jnp.array(0),
+            grass_anim_counter=jnp.array(0)
         )
         initial_obs = self._get_observation(state)
 
@@ -271,6 +279,8 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'chainsLeft', 'type': 'single', 'file': 'chainsLeft.npy'},
             {'name': 'chainsRight', 'type': 'single', 'file': 'chainsRight.npy'},
             {'name': 'mountains', 'type': 'single', 'file': 'mountains.npy'},
+            {'name': 'grass_front_1', 'type': 'single', 'file': 'grass_front_1.npy'},
+            {'name': 'grass_front_2', 'type': 'single', 'file': 'grass_front_2.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
@@ -298,14 +308,21 @@ class BattlezoneRenderer(JAXGameRenderer):
     def render(self, state):
         #-----------------background
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        tank_mask = self.SHAPE_MASKS["tank"]
-        raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
-                                   self.consts.TANK_SPRITE_POS_Y, tank_mask)
 
         mountains_mask = self.SHAPE_MASKS["mountains"]
         mountains_mask_scrolled = jnp.roll(mountains_mask, shift=state.mountains_anim_counter, axis=1)
         raster = self.jr.render_at(raster, 0,
                                    self.consts.MOUNTAINS_Y, mountains_mask_scrolled)
+
+        grass_front_mask = jnp.where((state.grass_anim_counter % 30) < 15, self.SHAPE_MASKS["grass_front_1"],
+                                      self.SHAPE_MASKS["grass_front_2"])
+        raster = self.jr.render_at(raster, 0,
+                                   self.consts.GRASS_FRONT_Y, grass_front_mask)
+
+
+        tank_mask = self.SHAPE_MASKS["tank"]
+        raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
+                                   self.consts.TANK_SPRITE_POS_Y, tank_mask)
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
@@ -363,16 +380,15 @@ def try_gym_battlezone_pixel():
     env = gym.make("ALE/BattleZone-v5", render_mode="rgb_array", frameskip=1)
     # Reset the environment to generate the first observation
     observation, info = env.reset(seed=42)
-    stepsize = 100
+    stepsize = 5
     for i in range(1000):
-        action = 3
+        action = 2
         obs, reward, terminated, truncated, info = env.step(action)
         #extract_sprite(obs, [[111,111,111], [74,74,74]])
         script_dir = os.path.dirname(os.path.abspath(__file__))
         save_path = os.path.join(script_dir, "observation.npy")
         np.save(save_path, obs)
-        if i%stepsize==0:
-            print(np.shape(obs))
+        if i%stepsize==0 and i >= 500:
             im = plt.imshow(obs, interpolation='none', aspect='auto')
             plt.show()
     env.close()
