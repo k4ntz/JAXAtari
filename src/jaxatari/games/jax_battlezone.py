@@ -65,6 +65,7 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_R_POS_X: int = 109
     CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
+    MOUNTAINS_Y: int = 36
 
 
 # immutable state container
@@ -73,6 +74,7 @@ class BattlezoneState(NamedTuple):
     step_counter: chex.Array
     chains_l_anim_counter: chex.Array
     chains_r_anim_counter: chex.Array
+    mountains_anim_counter:chex.Array
 
 
 class BattlezoneObservation(NamedTuple):
@@ -126,19 +128,22 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                  action == Action.UPFIRE, action == Action.UPLEFTFIRE,
                                  action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
         #--------------------anims--------------------
-        chain_r_offset = (jnp.where(jnp.any(jnp.stack([upLeft, up, left])), 1.0, 0.0)
-                          -jnp.where(jnp.any(jnp.stack([right, down, downRight])), 1.0, 0.0)
-                          +jnp.where(upRight, 0.8, 0.0) - jnp.where(downLeft, 0.8, 0.0))
+        chain_r_offset = (-jnp.where(jnp.any(jnp.stack([upLeft, up, left])), 1.0, 0.0)
+                          +jnp.where(jnp.any(jnp.stack([right, down, downRight])), 1.0, 0.0)
+                          -jnp.where(upRight, 0.7, 0.0) + jnp.where(downLeft, 0.7, 0.0))%32
                             #i love magic numbers
-        chain_l_offset = (jnp.where(jnp.any(jnp.stack([upRight, up, right])), 1.0, 0.0)
-                          - jnp.where(jnp.any(jnp.stack([left, down, downLeft])), 1.0, 0.0)
-                          + jnp.where(upLeft, 0.8, 0.0) - jnp.where(downRight, 0.8, 0.0))
+        chain_l_offset = (-jnp.where(jnp.any(jnp.stack([upRight, up, right])), 1.0, 0.0)
+                          + jnp.where(jnp.any(jnp.stack([left, down, downLeft])), 1.0, 0.0)
+                          - jnp.where(upLeft, 0.7, 0.0) + jnp.where(downRight, 0.7, 0.0))%32
+        mountains_offset = (jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
+                            -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))%160
 
         return BattlezoneState(
             score=state.step_counter,
             step_counter=state.step_counter,
             chains_l_anim_counter=state.chains_l_anim_counter + chain_l_offset,
             chains_r_anim_counter=state.chains_r_anim_counter + chain_r_offset,
+            mountains_anim_counter=state.mountains_anim_counter + mountains_offset
         )
 
 
@@ -148,6 +153,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             step_counter=jnp.array(0),
             chains_l_anim_counter=jnp.array(0),
             chains_r_anim_counter=jnp.array(0),
+            mountains_anim_counter=jnp.array(0)
         )
         initial_obs = self._get_observation(state)
 
@@ -264,6 +270,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'tank', 'type': 'single', 'file': 'tank.npy'},
             {'name': 'chainsLeft', 'type': 'single', 'file': 'chainsLeft.npy'},
             {'name': 'chainsRight', 'type': 'single', 'file': 'chainsRight.npy'},
+            {'name': 'mountains', 'type': 'single', 'file': 'mountains.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
@@ -294,6 +301,11 @@ class BattlezoneRenderer(JAXGameRenderer):
         tank_mask = self.SHAPE_MASKS["tank"]
         raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
                                    self.consts.TANK_SPRITE_POS_Y, tank_mask)
+
+        mountains_mask = self.SHAPE_MASKS["mountains"]
+        mountains_mask_scrolled = jnp.roll(mountains_mask, shift=state.mountains_anim_counter, axis=1)
+        raster = self.jr.render_at(raster, 0,
+                                   self.consts.MOUNTAINS_Y, mountains_mask_scrolled)
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
@@ -355,7 +367,10 @@ def try_gym_battlezone_pixel():
     for i in range(1000):
         action = 3
         obs, reward, terminated, truncated, info = env.step(action)
-        extract_sprite(obs, [[111,111,111], [74,74,74]])
+        #extract_sprite(obs, [[111,111,111], [74,74,74]])
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        save_path = os.path.join(script_dir, "observation.npy")
+        np.save(save_path, obs)
         if i%stepsize==0:
             print(np.shape(obs))
             im = plt.imshow(obs, interpolation='none', aspect='auto')
@@ -405,11 +420,11 @@ def extract_sprite(rgb_array, color_list, filename="output_rgba.npy"):
 
 
 if __name__ == "__main__":
-    env = JaxBattlezone()
-    initial_obs, state = env.reset()
-    for i in range(100):
-        obs, state, env_reward, done, info = env.step(state, 0)
+    #env = JaxBattlezone()
+    #initial_obs, state = env.reset()
+    #for i in range(100):
+        #obs, state, env_reward, done, info = env.step(state, 0)
 
 
 
-    #try_gym_battlezone()
+    try_gym_battlezone_pixel()
