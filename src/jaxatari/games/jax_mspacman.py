@@ -12,7 +12,7 @@ TODO
     1.4) [ ] Fruit animation
 2) Ghosts
     2.1) [x] Ghost pathfinding
-    2.2) [ ] Ghost movement
+    2.2) [x] Ghost movement
 3) Game
     3.1) [x] Life system
     3.2) [x] Gameover state
@@ -83,7 +83,7 @@ PPX1 = 148
 PPY0 = 20
 PPY1 = 152
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
-INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
+INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], [50, 78], [40, 78], [120, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 SCATTER_TARGETS = jnp.array([
     [MsPacmanMaze.MAZE_WIDTH - 1, 0],                               # Upper right corner - Blinky
@@ -594,7 +594,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         sprite_names = [
             'fruit_apple','fruit_banana','fruit_cherry',
             'fruit_orange','fruit_pear','fruit_prezel','fruit_strawberry',
-            'ghost_sue','ghost_inky','ghost_pinky','ghost_blinky','ghost_blue','ghost_white',
+            'ghost_blinky','ghost_pinky','ghost_inky','ghost_sue','ghost_blue','ghost_white',
             'pacman_0','pacman_1','pacman_2','pacman_3',
             'score_0','score_1','score_2','score_3','score_4',
             'score_5','score_6','score_7','score_8','score_9'
@@ -756,9 +756,13 @@ def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex
     new_dirs = []
     modes = []
     timers = []
+    chase_offset = jax.random.randint(keys[0], (), 0, MAX_CHASE_OFFSET)
+    scatter_offset = jax.random.randint(keys[0], (), 0, MAX_SCATTER_OFFSET)
     for i in range(n_ghosts):
-        chase_target = get_chase_target(ghosts[i].type, ghosts[i].position, ghosts[GhostType.BLINKY].position, player.position, player.direction)
-        pos, dir, mode, timer = ghost_step(ghosts[i], chase_target, ate_power_pill, dofmaze, keys[i])
+        chase_target = get_chase_target(ghosts[i].type, ghosts[i].position, ghosts[GhostType.BLINKY].position,
+                                        player.position, player.direction)
+        pos, dir, mode, timer = ghost_step(ghosts[i], ate_power_pill, dofmaze, keys[i],
+                                           chase_target, chase_offset, scatter_offset)
         new_positions.append(pos)
         new_dirs.append(dir)
         modes.append(mode)
@@ -766,7 +770,8 @@ def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex
     return jnp.stack(new_positions), jnp.stack(new_dirs), jnp.array(modes), jnp.array(timers)
 
 
-def ghost_step(ghost: GhostState, chase_target: chex.Array, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
+def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array,
+               chase_target: chex.Array, chase_offset: chex.Array, scatter_offset: chex.Array
                ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
@@ -839,11 +844,11 @@ def ghost_step(ghost: GhostState, chase_target: chex.Array, ate_power_pill: chex
         match ghost.mode:
             case GhostMode.CHASE:
                 new_mode = GhostMode.SCATTER
-                new_timer = SCATTER_DURATION + jax.random.randint(key, (), 0, MAX_SCATTER_OFFSET)
+                new_timer = SCATTER_DURATION + chase_offset
                 revert = True
             case GhostMode.SCATTER:
                 new_mode = GhostMode.CHASE
-                new_timer = CHASE_DURATION + jax.random.randint(key, (), 0, MAX_CHASE_OFFSET)
+                new_timer = CHASE_DURATION + scatter_offset
                 revert = True
             case GhostMode.FRIGHTENED:
                 new_mode = GhostMode.BLINKING
@@ -864,18 +869,17 @@ def ghost_step(ghost: GhostState, chase_target: chex.Array, ate_power_pill: chex
         if ghost.position[0] % 4 == 1 or ghost.position[1] % 12 == 6: # on horizontal or vertical grid
             # 2.1) Get allowed direction indices
             allowed = []
-            direction_indices = [2, 3, 4, 5]
-            opposite = {2:5, 3:4, 4:3, 5:2}
+            direction_indices = [DIR_UP, DIR_RIGHT, DIR_LEFT, DIR_DOWN]
             possible = available_directions(ghost.position, dofmaze)
             ghost_dir_idx = get_direction_index(ghost.direction) 
             for i, can_go in zip(direction_indices, possible):
-                if can_go and (ghost_dir_idx == 0 or i != opposite.get(ghost_dir_idx, -1)):
+                if can_go and (ghost_dir_idx == 0 or i != INV_DIR.get(ghost_dir_idx, -1)):
                     allowed.append(i)
 
             # 2.2) Choose new direction
-            if not allowed:
+            if not allowed: # If no allowed direction - continue forward
                 pass
-            elif len(allowed) == 1:
+            elif len(allowed) == 1: # If only one allowed direction - take it
                 new_dir = DIRECTIONS[allowed[0]]
             else:
                 match new_mode:
