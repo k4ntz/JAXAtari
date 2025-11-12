@@ -49,6 +49,7 @@ class DefenderConstants(NamedTuple):
     CAMERA_Y: int = 80
     BOMBER_AMOUNT: Tuple[int, int, int, int, int] = (1, 2, 2, 2, 2)
     LANDER_AMOUNT: Tuple[int, int, int, int, int] = (18, 18, 19, 20, 20)
+    MAX_LANDER_AMOUNT: int = 5
     POD_AMOUNT: Tuple[int, int, int, int, int] = (2, 2, 3, 3, 3)
     BAITER_TIME_SEC: int = 20
     SWARM_SPAWN_MIN: int = 1
@@ -61,12 +62,9 @@ class DefenderConstants(NamedTuple):
     MAX_LANDER_SPEED: float = 0.6
     LANDER_ACCELERATION: float = 0.002
     INIT_LANDER_STATES: chex.Array = jnp.array([
-        [1, random.randint(0, 480), random.randint(39, 160), 0, 0, 0.0, 0.0]
-        for _ in range(LANDER_AMOUNT[0])
-    ] + [
-        [0, 0, 0, 0, 0, 0, 0]
-        for _ in range(max(LANDER_AMOUNT) - LANDER_AMOUNT[0])
-    ]).reshape(max(LANDER_AMOUNT), 7)
+        [1, random.randint(0, 480), random.randint(39, 160), 0.6, 0, 0.0, 0.0]
+        for _ in range(MAX_LANDER_AMOUNT)
+    ]).reshape(MAX_LANDER_AMOUNT, 7)
 
 
 # immutable state container
@@ -324,12 +322,17 @@ class JaxDefender(
         
         # acceleration in x direction
         speed = jax.lax.cond(
+            jnp.abs(dx) < 50,
+            lambda s: jax.lax.cond(
             dx > 0,
-            lambda s: jnp.minimum(s + self.consts.LANDER_ACCELERATION, self.consts.MAX_LANDER_SPEED),
-            lambda s: jnp.maximum(s - self.consts.LANDER_ACCELERATION, -self.consts.MAX_LANDER_SPEED),
+            lambda s2: jnp.minimum(s2 + self.consts.LANDER_ACCELERATION, self.consts.MAX_LANDER_SPEED),
+            lambda s2: jnp.maximum(s2 - self.consts.LANDER_ACCELERATION, -self.consts.MAX_LANDER_SPEED),
+            operand=s,
+            ),
+            lambda s: s,
             operand=speed,
         )
-        jax.debug.print("Lander pos: (\t{},\t {}), \tspeed: {}", x_pos, y_pos, speed)
+        
         x_pos = x_pos + speed
         
         # movement in y direction
