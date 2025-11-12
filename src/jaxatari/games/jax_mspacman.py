@@ -101,19 +101,17 @@ DIRECTIONS = jnp.array([
     (-1, 0),  # LEFT
     (0, 1)    # DOWN
 ])
-DIR_MAP = {
-    "UP": 2,
-    "RIGHT": 3,
-    "LEFT": 4,
-    "DOWN": 5
-}
+DIR_UP = 2
+DIR_RIGHT = 3
+DIR_LEFT = 4
+DIR_DOWN = 5
 INV_DIR = {
     2:5,
     3:4,
     4:3,
     5:2
 }
-INITIAL_PACMAN_DIRECTION = DIRECTIONS[DIR_MAP["LEFT"]]
+INITIAL_PACMAN_DIRECTION = DIRECTIONS[DIR_LEFT]
 INITIAL_LAST_DIR_INT = jnp.array(2) # LEFT
 INITIAL_ACTION = jnp.array(4) # LEFT
 
@@ -897,72 +895,25 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
     return new_pos, new_dir, new_mode, new_timer
 
 
-def get_distance(point1: chex.Array, point2: chex.Array, metric='manhattan'):
-    """
-    Returns the distance between two 2D points.
-    x = point[0], y = point[1]
-    """
-    if metric == 'manhattan':
-        return jnp.abs(point1[0] - point2[0]) + jnp.abs(point1[1] - point2[1])
-    elif metric == 'euclidian':
-        return jnp.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
-    elif metric == 'horizontal':
-        return jnp.abs(point1[0] - point2[0])
-    elif metric == 'vertical':
-        return jnp.abs(point1[1] - point2[1])
-    else:
-        raise ValueError(f"Unknown metric: {metric}")
-
-
-def get_direction_costs(position: chex.Array, target: chex.Array, available_directions: chex.Array):
-    """
-    Looks at all possible next steps and returns
-    the respective distances (costs) to the target.
-    Used for very basic pathfinding.
-    """
-    cost_map = []
-    for direction, available in enumerate(available_directions):
-        if available:
-            dir_idx = direction + 2     # +2 to skip NOOP and FIRE
-            step = position + DIRECTIONS[dir_idx] 
-            cost = get_distance(step, target)
-            cost_map.append((dir_idx, cost))
-    return jnp.array(cost_map)
-
-
-def choose_direction(cost_map: chex.Array, random_key):
-    """
-    Chooses one of the cheapest directions based on a cost map.
-    Returns a direction index.
-    """
-    min_dirs = []
-    min_cost = jnp.inf
-    for direction, cost in cost_map:
-        if cost <= min_cost:
-            min_dirs.append(direction)
-            min_cost = cost
-    return jax.random.choice(random_key, jnp.array(min_dirs))
-
-
 def get_target_direction_indices(position: chex.Array, target: chex.Array) -> list:
     """
     Returns the directions (indices) which should be taken to minimize the horizontal or vertical distance to the target.
     Prioritizes the bigger distance and returns both possible directions they are equal.
     """
-    horizontal_distance = get_distance(position, target, metric='horizontal')
-    vertical_distance = get_distance(position, target, metric='vertical')
+    horizontal_distance = jnp.abs(position[0] - target[0])
+    vertical_distance = jnp.abs(position[1] - target[1])
     directions = []
 
     if horizontal_distance >= vertical_distance:
         if position[0] < target[0]:
-            directions.append(DIR_MAP["RIGHT"])
+            directions.append(DIR_RIGHT)
         else:
-            directions.append(DIR_MAP["LEFT"])
+            directions.append(DIR_LEFT)
     elif vertical_distance >= horizontal_distance:
         if position[1] < target[1]:
-            directions.append(DIR_MAP["DOWN"])
+            directions.append(DIR_DOWN)
         else:
-            directions.append(DIR_MAP["UP"])
+            directions.append(DIR_UP)
     return directions
 
 
