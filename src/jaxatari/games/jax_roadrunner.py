@@ -45,6 +45,8 @@ class RoadRunnerConstants(NamedTuple):
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
     SEED_SPAWN_MIN_INTERVAL: int = 5
     SEED_SPAWN_MAX_INTERVAL: int = 20
+    MAX_STREAK: int = 10
+    SEED_BASE_VALUE: int = 100
 
 
 # --- State and Observation ---
@@ -64,9 +66,12 @@ class RoadRunnerState(NamedTuple):
     is_scrolling: chex.Array
     scrolling_step_counter: chex.Array
     is_round_over: chex.Array
-    seeds: chex.Array # 2D array of shape (4, 2)
+    seeds: chex.Array # 2D array of shape (4, 3)
     next_seed_spawn_scroll_step: chex.Array # Scrolling step counter value at which to spawn next seed
     rng: chex.Array # PRNG state
+    seed_pickup_streak: chex.Array
+    last_picked_up_seed_id: chex.Array
+    next_seed_id: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -299,13 +304,32 @@ class JaxRoadRunner(
             state,
         )
 
+
+    def update_streak(self, state: RoadRunnerState, seed_idx: int, max_streak: int) -> RoadRunnerState:
+        def restart_streak(state:RoadRunnerState) -> RoadRunnerState:
+            return state._replace(seed_pickup_streak=1)
+
+        def advance_streak(state:RoadRunnerState, max_streak: int) -> RoadRunnerState:
+            new_streak = jax.lax.min(state.seed_pickup_streak+1, max_streak)
+            return state._replace(seed_pickup_streak=new_streak)
+
+        last_picked_up_seed_id = state.last_picked_up_seed_id
+        state = state._replace(last_picked_up_seed_id=state.seeds[seed_idx, 2])
+        return jax.lax.cond(
+            state.seeds[seed_idx, 2] == last_picked_up_seed_id+1,
+            lambda: advance_streak(state, max_streak),
+            lambda: restart_streak(state),
+        )
+
     def _seed_picked_up(self, state: RoadRunnerState, seed_idx: int) -> RoadRunnerState:
+        state = self.update_streak(state, seed_idx, self.consts.MAX_STREAK)
+
         # Set seed to inactive (-1, -1)
         updated_seeds = state.seeds.at[seed_idx].set(
-            jnp.array([-1, -1], dtype=jnp.int32)
+            jnp.array([-1, -1, -1], dtype=jnp.int32)
         )
         # Increment score by 100 Placeholder value
-        new_score = state.score + 100
+        new_score = state.score + self.consts.SEED_BASE_VALUE * state.seed_pickup_streak
         return state._replace(
             seeds=updated_seeds,
             score=new_score.astype(jnp.int32),
@@ -417,9 +441,13 @@ class JaxRoadRunner(
                 consts.SEED_SPAWN_MAX_INTERVAL + 1,
                 dtype=jnp.int32,
             )
+            # Get the seeds id, then increment the next id in the state
+            seed_id = st.next_seed_id
+            st = st._replace(next_seed_id=seed_id+1)
+
             return st._replace(
                 seeds=updated_seeds.at[slot_idx].set(
-                    jnp.array([0, seed_y], dtype=jnp.int32)
+                    jnp.array([0, seed_y, seed_id], dtype=jnp.int32)
                 ),
                 next_seed_spawn_scroll_step=next_spawn_step,
                 rng=rng_after,
@@ -469,9 +497,12 @@ class JaxRoadRunner(
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
             is_round_over=jnp.array(False, dtype=jnp.bool_),
-            seeds=jnp.full((4, 2), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
+            seeds=jnp.full((4, 3), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
             next_seed_spawn_scroll_step=jnp.array(next_seed_spawn_scroll_step, dtype=jnp.int32),
             rng=key,
+            seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
+            next_seed_id=jnp.array(0, dtype=jnp.int32),
+            last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -514,8 +545,11 @@ class JaxRoadRunner(
                 is_round_over=jnp.array(False, dtype=jnp.bool_),
                 next_seed_spawn_scroll_step=jnp.array(next_seed_spawn_scroll_step, dtype=jnp.int32),
                 rng=key,
-                seeds=jnp.full((4, 2), -1, dtype=jnp.int32),  # Reset all seeds as inactive
+                seeds=jnp.full((4, 3), -1, dtype=jnp.int32),  # Reset all seeds as inactive
                 scrolling_step_counter=jnp.array(0, dtype=jnp.int32),  # Reset scrolling counter
+                seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
+                last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
+                next_seed_id=jnp.array(0, dtype=jnp.int32),
             )
 
         player_at_end = state.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
