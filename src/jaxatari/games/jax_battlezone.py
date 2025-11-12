@@ -1,6 +1,37 @@
 import gymnasium as gym
 import ale_py
 from gymnasium.utils import play
+
+"""
+Collecting necessary information about BattleZone.
+===============================================================
+
+Entities:
+    - Player
+    - Enemies
+        - Tank
+        - Flying Saucer
+        - Supertank
+        - Fighter
+    - Projectiles
+
+    
+What do we need to research about each enemy (+player)?
+- movement speed
+- turn speed
+- firing rate
+- movement patterns
+- score points worth
+- sprite (extract from gym version)
+- projectile speed and range
+
+- how many enemies can be in game at once
+- how does acceleration work? is there acceleration or do we just go straight into max speed? are there jerk/snap/crackle/pop?
+- is there friction?
+- is there a world size? 
+- is there friendly fire for enemies?
+- what is the radar range?
+"""
 import matplotlib.pyplot as plt
 
 import os
