@@ -403,7 +403,7 @@ class JaxDefender(
         speed = self.consts.ENEMY_SPEED 
         # acceleration in x direction
         speed = jax.lax.cond(
-            state.space_ship_facing_right,
+            state.space_ship_speed > 0,
             lambda s: -s,
             lambda s: s,
             operand=speed,
@@ -442,7 +442,7 @@ class JaxDefender(
         speed = self.consts.ENEMY_SPEED 
         # acceleration in x direction
         speed = jax.lax.cond(
-            state.space_ship_facing_right,
+            state.state.space_ship_speed > 0,
             lambda s: -s,
             lambda s: s,
             operand=speed,
