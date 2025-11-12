@@ -757,7 +757,8 @@ def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex
     modes = []
     timers = []
     for i in range(n_ghosts):
-        pos, dir, mode, timer = ghost_step(ghosts[i], player, ate_power_pill, dofmaze, keys[i])
+        chase_target = get_chase_target(ghosts[i].type, ghosts[i].position, ghosts[GhostType.BLINKY].position, player.position, player.direction)
+        pos, dir, mode, timer = ghost_step(ghosts[i], chase_target, ate_power_pill, dofmaze, keys[i])
         new_positions.append(pos)
         new_dirs.append(dir)
         modes.append(mode)
@@ -765,7 +766,7 @@ def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex
     return jnp.stack(new_positions), jnp.stack(new_dirs), jnp.array(modes), jnp.array(timers)
 
 
-def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
+def ghost_step(ghost: GhostState, chase_target: chex.Array, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
                ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
     """
     Step function for a single ghost. Never stops, never reverses, can change direction at intersections.
@@ -879,8 +880,7 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
             else:
                 match new_mode:
                     case GhostMode.CHASE:
-                        target = get_chase_target(ghost.type, ghost.position, ghost.position, player.position, player.direction) # TODO: Needs blinkys position!
-                        directions = get_target_direction_indices(ghost.position, target)
+                        directions = get_target_direction_indices(ghost.position, chase_target)
                         new_dir = select_target_direction(directions, allowed, key)
                     case GhostMode.SCATTER:
                         target = SCATTER_TARGETS[ghost.type]
