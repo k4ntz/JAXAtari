@@ -220,7 +220,7 @@ class MsPacmanMaze:
        MAZES = [MAZE1, MAZE2, MAZE3, MAZE4]
        MAZE_HEIGHT, MAZE_WIDTH = MAZE1.shape # All mazes must have the same dimensions!
 
-
+       @staticmethod
        def precompute_dof(maze: np.ndarray):
               """
               Precompute the degree of freedom for each position in the maze
@@ -236,7 +236,7 @@ class MsPacmanMaze:
                             dof_grid[x, y] = [no_wall_above, no_wall_right, no_wall_left, no_wall_bellow]
               return jnp.array(dof_grid)
 
-
+       @staticmethod
        def load_background(level: int, mazes = MAZES, pellets = BASE_PELLETS,
                            scale = TILE_SCALE, height = MAZE_HEIGHT, width = MAZE_WIDTH,
                            wall_color = WALL_COLOR, path_color = PATH_COLOR):

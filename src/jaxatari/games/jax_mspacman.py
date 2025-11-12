@@ -67,7 +67,9 @@ class GhostMode(IntEnum):
 
 # GHOST TIMINGS
 CHASE_DURATION = 200*8 # Chosen randomly for now, should be 20s  TODO: Adjust value
+MAX_CHASE_OFFSET = CHASE_DURATION / 10 # Maximum value that can be added to the chase duration
 SCATTER_DURATION = 70*8 # Chosen randomly for now, should be 7s  TODO: Adjust value
+MAX_SCATTER_OFFSET = SCATTER_DURATION / 10 # Maximum value that can be added to the scatter duration
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
 ENJAILED_DURATION = 120 # in steps
@@ -84,21 +86,20 @@ POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[40, 78], [50, 78], [75, 54], [120, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 
-# TODO: Create a class for movement data structures, constants and conversion methods
 # DIRECTIONS
 DIRECTIONS = jnp.array([
-    [0, 0],   # NOOP
-    [0, 0],   # FIRE
-    [0, -1],  # UP
-    [1, 0],   # RIGHT
-    [-1, 0],  # LEFT
-    [0, 1],   # DOWN
+    (0, 0),   # NOOP
+    (0, 0),   # FIRE
+    (0, -1),  # UP
+    (1, 0),   # RIGHT
+    (-1, 0),  # LEFT
+    (0, 1)    # DOWN
 ])
 DIR_MAP = {
-    "UP": 2,    # UP
-    "RIGHT": 3, # RIGHT
-    "LEFT": 4,  # LEFT
-    "DOWN": 5   # DOWN
+    "UP": 2,
+    "RIGHT": 3,
+    "LEFT": 4,
+    "DOWN": 5
 }
 INV_DIR = {
     2:5,
@@ -106,7 +107,7 @@ INV_DIR = {
     4:3,
     5:2
 }
-INITIAL_PACMAN_DIRECTION = jnp.array([-1, 0])  # LEFT
+INITIAL_PACMAN_DIRECTION = DIRECTIONS[DIR_MAP["LEFT"]]
 INITIAL_LAST_DIR_INT = jnp.array(2) # LEFT
 INITIAL_ACTION = jnp.array(4) # LEFT
 
@@ -826,11 +827,7 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
         new_timer = ghost.timer - 1
     revert = False
 
-    # 1) Update ghost mode
-    # 1.1) FRIGHTENED (event: ate_power_pill)       PASSIVE
-    # 1.2) RETURNING & ENJAILED & BLINKING (timer)  PASSIVE
-    # 1.3) RANDOM (timer + condition)               ACTIVE
-    # 1.4) SCATTER & CHASE (timer + random)         ACTIVE
+    # 1) Update ghost mode and timer
     if ate_power_pill and ghost.mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
         new_mode = GhostMode.FRIGHTENED
         new_timer = FRIGHTENED_DURATION
@@ -839,11 +836,11 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
         match ghost.mode:
             case GhostMode.CHASE:
                 new_mode = GhostMode.SCATTER
-                new_timer = SCATTER_DURATION
+                new_timer = SCATTER_DURATION + jax.random.randint(key, (), 0, MAX_SCATTER_OFFSET)
                 revert = True
             case GhostMode.SCATTER:
                 new_mode = GhostMode.CHASE
-                new_timer = CHASE_DURATION
+                new_timer = CHASE_DURATION + jax.random.randint(key, (), 0, MAX_CHASE_OFFSET)
                 revert = True
             case GhostMode.FRIGHTENED:
                 new_mode = GhostMode.BLINKING
@@ -855,15 +852,14 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
                 new_mode = GhostMode.CHASE
                 new_timer = CHASE_DURATION
 
-    # 2) Check mode
+    # 2) Update ghost direction
     if revert:
-        new_dir = INV_DIR[ghost.direction]
-        new_pos = ghost.position + new_dir
+        new_dir = DIRECTIONS[INV_DIR[get_direction_index(ghost.direction)]]
     elif new_mode == GhostMode.ENJAILED | new_mode == GhostMode.RETURNING:
-        ...
+        pass
     else:
         if ghost.position[0] % 4 == 1 or ghost.position[1] % 12 == 6: # on horizontal or vertical grid
-            # 2.1) Get allowed directions
+            # 2.1) Get allowed direction indices
             allowed = []
             direction_indices = [2, 3, 4, 5]
             opposite = {2:5, 3:4, 4:3, 5:2}
@@ -875,8 +871,7 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
 
             # 2.2) Choose new direction
             if not allowed:
-                ...
-                # raise ValueError("Ghost got trapped!")
+                pass
             elif len(allowed) == 1:
                 new_dir = DIRECTIONS[allowed[0]]
             else:
@@ -905,58 +900,11 @@ def ghost_step(ghost: GhostState, player: PlayerState, ate_power_pill: chex.Arra
                         new_dir = select_target_direction(directions, allowed, key)
                     case GhostMode.FRIGHTENED | GhostMode.BLINKING | GhostMode.RANDOM:
                         new_dir = DIRECTIONS[jax.random.choice(key, jnp.array(allowed))]
-            new_pos = ghost.position + new_dir
+
+    # 3) Update ghost position
+    new_pos = ghost.position + new_dir
     new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
-
     return new_pos, new_dir, new_mode, new_timer
-
-    
-    if ate_power_pill and not(ghost.mode == GhostMode.ENJAILED or ghost.mode == GhostMode.RETURNING):
-        return ghost.position-ghost.direction, -ghost.direction, GhostMode.FRIGHTENED.value, FRIGHTENED_DURATION-BLINKING_DURATION
-    x, y = ghost.position
-    if x % 4 == 1 or y % 12 == 6: # on horizontal or vertical grid
-        possible = available_directions(ghost.position, dofmaze)
-        ghost_dir_idx = get_direction_index(ghost.direction)
-
-        # Map: 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN
-        direction_indices = [2, 3, 4, 5]
-        # Opposite directions: UP<->DOWN, LEFT<->RIGHT
-        opposite = {2:5, 3:4, 4:3, 5:2}
-        # Build list of allowed directions (not reverse, not blocked)
-        allowed = []
-        for i, can_go in zip(direction_indices, possible):
-            if can_go and (ghost_dir_idx == 0 or i != opposite.get(ghost_dir_idx, -1)):
-                allowed.append(i)
-        if not allowed:
-            # If no allowed (shouldn't happen), keep going forward
-            next_dir_idx = ghost_dir_idx
-        elif len(allowed) == 1:
-            next_dir_idx = allowed[0]
-        else:
-            # Randomly pick one (except reverse)
-            if key is not None:
-                next_dir_idx = jax.random.choice(key, jnp.array(allowed))
-            else:
-                next_dir_idx = allowed[0]  # deterministic fallback
-        next_dir = DIRECTIONS[next_dir_idx]
-    else:
-        next_dir = ghost.direction
-    new_pos = ghost.position + next_dir
-    new_pos = new_pos.at[0].set(new_pos[0] % 160)  # wrap horizontally
-
-    new_timer = ghost.timer
-    new_mode = ghost.mode
-    if ghost.mode == GhostMode.ENJAILED and ghost.timer == 0:
-        next_dir = jnp.array([0, -1])  # Reset direction to escape the center box
-        new_mode = GhostMode.RANDOM.value
-    if ghost.mode == GhostMode.FRIGHTENED and ghost.timer == 0:
-        new_mode = GhostMode.BLINKING.value
-        new_timer = BLINKING_DURATION
-    if ghost.mode == GhostMode.BLINKING and ghost.timer == 0:
-        new_mode = GhostMode.RANDOM.value
-    if ghost.timer > 0:
-        new_timer = new_timer - 1
-    return new_pos, next_dir, new_mode, new_timer
 
 
 def get_distance(point1: chex.Array, point2: chex.Array, metric='manhattan'):
@@ -966,7 +914,7 @@ def get_distance(point1: chex.Array, point2: chex.Array, metric='manhattan'):
     """
     if metric == 'manhattan':
         return jnp.abs(point1[0] - point2[0]) + jnp.abs(point1[1] - point2[1])
-    elif metric == 'euclid':
+    elif metric == 'euclidian':
         return jnp.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
     elif metric == 'horizontal':
         return jnp.abs(point1[0] - point2[0])
