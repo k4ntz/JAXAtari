@@ -39,6 +39,8 @@ class RoadRunnerConstants(NamedTuple):
     ROAD_DASH_LENGTH: int = 5
     ROAD_GAP_HEIGHT: int = 17
     ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
+    SPAWN_Y_RANDOM_OFFSET_MIN: int = -20
+    SPAWN_Y_RANDOM_OFFSET_MAX: int = 20
     BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
@@ -47,6 +49,12 @@ class RoadRunnerConstants(NamedTuple):
     SEED_SPAWN_MAX_INTERVAL: int = 20
     MAX_STREAK: int = 10
     SEED_BASE_VALUE: int = 100
+    TRUCK_SIZE: Tuple[int, int] = (15, 15)
+    TRUCK_COLLISION_OFFSET: int = TRUCK_SIZE[1] // 2  # Bottom half of truck height
+    TRUCK_COLOR: Tuple[int, int, int] = (255, 0, 0)
+    TRUCK_SPEED: int = 5
+    TRUCK_SPAWN_MIN_INTERVAL: int = 30
+    TRUCK_SPAWN_MAX_INTERVAL: int = 80
 
 
 # --- State and Observation ---
@@ -72,6 +80,9 @@ class RoadRunnerState(NamedTuple):
     seed_pickup_streak: chex.Array
     last_picked_up_seed_id: chex.Array
     next_seed_id: chex.Array
+    truck_x: chex.Array
+    truck_y: chex.Array
+    next_truck_spawn_step: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -429,7 +440,13 @@ class JaxRoadRunner(
             seed_y = jnp.clip(
                 consts.ROAD_TOP_Y
                 + consts.ROAD_HEIGHT // 2
-                + jax.random.randint(rng_spawn_y, (), -20, 21, dtype=jnp.int32),
+                + jax.random.randint(
+                    rng_spawn_y,
+                    (),
+                    consts.SPAWN_Y_RANDOM_OFFSET_MIN,
+                    consts.SPAWN_Y_RANDOM_OFFSET_MAX + 1,
+                    dtype=jnp.int32,
+                ),
                 consts.ROAD_TOP_Y,
                 consts.ROAD_TOP_Y + consts.ROAD_HEIGHT - 4,
             )
@@ -460,6 +477,151 @@ class JaxRoadRunner(
             state,
         )
 
+    def _update_and_spawn_truck(self, state: RoadRunnerState) -> RoadRunnerState:
+        """
+        Update truck position (move right at TRUCK_SPEED + scroll offset) and spawn new truck.
+        Trucks spawn regardless of scrolling state, using step_counter.
+        Trucks are affected by road scrolling - they move with the scroll offset.
+        """
+        consts = self.consts
+        
+        # Update truck position: move active truck right, apply scrolling offset
+        # Move by TRUCK_SPEED, plus scroll offset when scrolling is active
+        scroll_offset = jnp.where(state.is_scrolling, consts.PLAYER_MOVE_SPEED, 0)
+        updated_truck_x = jnp.where(
+            state.truck_x >= 0,
+            state.truck_x + consts.TRUCK_SPEED + scroll_offset,
+            state.truck_x
+        )
+        # Despawn if off-screen
+        truck_active = (updated_truck_x >= 0) & (updated_truck_x < consts.WIDTH)
+        updated_truck_x = jnp.where(truck_active, updated_truck_x, -1)
+        updated_truck_y = jnp.where(truck_active, state.truck_y, -1)
+        
+        # Prepare for spawning: split RNG and check conditions
+        rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        should_spawn = (
+            (updated_truck_x < 0)  # No truck currently active
+            & (state.step_counter >= state.next_truck_spawn_step)
+        )
+        
+        def _spawn(st: RoadRunnerState) -> RoadRunnerState:
+            # Generate random Y position within road bounds
+            truck_y = jnp.clip(
+                consts.ROAD_TOP_Y
+                + consts.ROAD_HEIGHT // 2
+                + jax.random.randint(
+                    rng_spawn_y,
+                    (),
+                    consts.SPAWN_Y_RANDOM_OFFSET_MIN,
+                    consts.SPAWN_Y_RANDOM_OFFSET_MAX + 1,
+                    dtype=jnp.int32,
+                ),
+                consts.ROAD_TOP_Y,
+                consts.ROAD_TOP_Y + consts.ROAD_HEIGHT - consts.TRUCK_SIZE[1],
+            )
+            # Spawn at x=0, update next spawn step
+            next_spawn_step = st.step_counter + jax.random.randint(
+                rng_interval,
+                (),
+                consts.TRUCK_SPAWN_MIN_INTERVAL,
+                consts.TRUCK_SPAWN_MAX_INTERVAL + 1,
+                dtype=jnp.int32,
+            )
+            
+            return st._replace(
+                truck_x=jnp.array(0, dtype=jnp.int32),
+                truck_y=truck_y,
+                next_truck_spawn_step=next_spawn_step,
+                rng=rng_after,
+            )
+        
+        return jax.lax.cond(
+            should_spawn,
+            _spawn,
+            lambda st: st._replace(
+                truck_x=updated_truck_x,
+                truck_y=updated_truck_y,
+                rng=rng_after
+            ),
+            state,
+        )
+
+    def _check_truck_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
+        """
+        Check for collisions between truck and player/enemy.
+        Uses AABB (Axis-Aligned Bounding Box) collision detection.
+        """
+        # Early return if truck is inactive
+        truck_active = state.truck_x >= 0
+        return jax.lax.cond(
+            truck_active,
+            lambda st: self._check_truck_collisions_active(st),
+            lambda st: st,
+            state,
+        )
+    
+    def _check_truck_collisions_active(self, state: RoadRunnerState) -> RoadRunnerState:
+        """Check collisions when truck is active."""
+        # Calculate truck collision area (only lower half, using TRUCK_COLLISION_OFFSET)
+        truck_left_x = state.truck_x
+        truck_right_x = state.truck_x + self.consts.TRUCK_SIZE[0]
+        # Collision area starts at TRUCK_COLLISION_OFFSET from top of truck (lower half)
+        truck_collision_y = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
+        truck_bottom_y = state.truck_y + self.consts.TRUCK_SIZE[1]
+        
+        # Calculate player pickup area bounding box (same as seeds)
+        player_left_x = state.player_x
+        player_right_x = state.player_x + self.consts.PLAYER_SIZE[0]
+        # Pickup area starts at PLAYER_PICKUP_OFFSET from top of player
+        player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
+        player_bottom_y = state.player_y + self.consts.PLAYER_SIZE[1]
+        
+        # Calculate enemy bounding box
+        enemy_left_x = state.enemy_x
+        enemy_right_x = state.enemy_x + self.consts.ENEMY_SIZE[0]
+        enemy_top_y = state.enemy_y
+        enemy_bottom_y = state.enemy_y + self.consts.ENEMY_SIZE[1]
+        
+        # Check player-truck collision (player uses pickup area, truck uses collision area)
+        player_overlap_x = (player_left_x < truck_right_x) & (player_right_x > truck_left_x)
+        player_overlap_y = (player_pickup_y < truck_bottom_y) & (player_bottom_y > truck_collision_y)
+        player_collision = player_overlap_x & player_overlap_y
+        
+        # Check enemy-truck collision (truck uses collision area)
+        enemy_overlap_x = (enemy_left_x < truck_right_x) & (enemy_right_x > truck_left_x)
+        enemy_overlap_y = (enemy_top_y < truck_bottom_y) & (enemy_bottom_y > truck_collision_y)
+        enemy_collision = enemy_overlap_x & enemy_overlap_y
+        
+        # Handle player collision (triggers round reset)
+        def handle_player_collision(st: RoadRunnerState) -> RoadRunnerState:
+            return st._replace(
+                is_round_over=True,
+                player_x=(st.truck_x + self.consts.TRUCK_SIZE[0] + 2).astype(jnp.int32),
+                player_y=st.player_y,
+            )
+        
+        state_after_player = jax.lax.cond(
+            player_collision,
+            handle_player_collision,
+            lambda st: st,
+            state,
+        )
+        
+        # Handle enemy collision (print debug message)
+        def handle_enemy_collision(st: RoadRunnerState) -> RoadRunnerState:
+            jax.debug.print("Enemy hit by truck!")
+            return st
+        
+        state_after_enemy = jax.lax.cond(
+            enemy_collision,
+            handle_enemy_collision,
+            lambda st: st,
+            state_after_player,
+        )
+        
+        return state_after_enemy
+
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
         # Initialize RNG key
         if key is None:
@@ -472,6 +634,16 @@ class JaxRoadRunner(
             (),
             self.consts.SEED_SPAWN_MIN_INTERVAL,
             self.consts.SEED_SPAWN_MAX_INTERVAL + 1,
+            dtype=jnp.int32,
+        )
+        
+        # Initialize next truck spawn step with random interval
+        key, sub = jax.random.split(key)
+        next_truck_spawn_step = jax.random.randint(
+            sub,
+            (),
+            self.consts.TRUCK_SPAWN_MIN_INTERVAL,
+            self.consts.TRUCK_SPAWN_MAX_INTERVAL + 1,
             dtype=jnp.int32,
         )
 
@@ -503,6 +675,9 @@ class JaxRoadRunner(
             seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
             next_seed_id=jnp.array(0, dtype=jnp.int32),
             last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
+            truck_x=jnp.array(-1, dtype=jnp.int32),
+            truck_y=jnp.array(-1, dtype=jnp.int32),
+            next_truck_spawn_step=jnp.array(next_truck_spawn_step, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -518,6 +693,10 @@ class JaxRoadRunner(
         state = self._update_and_spawn_seeds(state)
         # Check for seed collisions and handle pickups
         state = self._check_seed_collisions(state)
+        # Update truck position and spawn new truck
+        state = self._update_and_spawn_truck(state)
+        # Check for truck collisions
+        state = self._check_truck_collisions(state)
 
         def reset_round(st: RoadRunnerState) -> RoadRunnerState:
             # Reset seed spawn step and RNG for new round
@@ -527,6 +706,15 @@ class JaxRoadRunner(
                 (),
                 self.consts.SEED_SPAWN_MIN_INTERVAL,
                 self.consts.SEED_SPAWN_MAX_INTERVAL + 1,
+                dtype=jnp.int32,
+            )
+            # Reset truck spawn step
+            key, sub = jax.random.split(key)
+            next_truck_spawn_step = st.step_counter + jax.random.randint(
+                sub,
+                (),
+                self.consts.TRUCK_SPAWN_MIN_INTERVAL,
+                self.consts.TRUCK_SPAWN_MAX_INTERVAL + 1,
                 dtype=jnp.int32,
             )
             return st._replace(
@@ -550,6 +738,9 @@ class JaxRoadRunner(
                 seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
                 last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
                 next_seed_id=jnp.array(0, dtype=jnp.int32),
+                truck_x=jnp.array(-1, dtype=jnp.int32),
+                truck_y=jnp.array(-1, dtype=jnp.int32),
+                next_truck_spawn_step=jnp.array(next_truck_spawn_step, dtype=jnp.int32),
             )
 
         player_at_end = state.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
@@ -653,8 +844,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         road_sprite = self._create_road_sprite()
+        truck_sprite = self._create_truck_sprite()
         asset_config = self._get_asset_config(
-            background_sprite, road_sprite, wall_sprite_bottom
+            background_sprite, road_sprite, wall_sprite_bottom, truck_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -719,11 +911,19 @@ class RoadRunnerRenderer(JAXGameRenderer):
             jnp.array(seed_color_rgba, dtype=jnp.uint8), (*seed_shape[:2], 1)
         )
 
+    def _create_truck_sprite(self) -> jnp.ndarray:
+        truck_color_rgba = (*self.consts.TRUCK_COLOR, 255)
+        truck_shape = (self.consts.TRUCK_SIZE[0], self.consts.TRUCK_SIZE[1], 4)
+        return jnp.tile(
+            jnp.array(truck_color_rgba, dtype=jnp.uint8), (*truck_shape[:2], 1)
+        )
+
     def _get_asset_config(
         self,
         background_sprite: jnp.ndarray,
         road_sprite: jnp.ndarray,
         wall_sprite_bottom: jnp.ndarray,
+        truck_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
             {"name": "background", "type": "background", "data": background_sprite},
@@ -737,6 +937,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
+            {"name": "truck", "type": "procedural", "data": truck_sprite},
         ]
 
         return asset_config
@@ -781,6 +982,15 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Use fori_loop to render all seeds
         return jax.lax.fori_loop(0, seeds.shape[0], render_seed, raster)
+
+    def _render_truck(self, raster: jnp.ndarray, truck_x: chex.Array, truck_y: chex.Array) -> jnp.ndarray:
+        # Only render if truck is active (x >= 0)
+        return jax.lax.cond(
+            truck_x >= 0,
+            lambda ras: self.jr.render_at(ras, truck_x, truck_y, self.SHAPE_MASKS["truck"]),
+            lambda ras: ras,
+            raster,
+        )
 
     def _get_animated_sprite(
         self,
@@ -865,5 +1075,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render Seeds
         raster = self._render_seeds(raster, state.seeds)
+
+        # Render Truck
+        raster = self._render_truck(raster, state.truck_x, state.truck_y)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
