@@ -369,12 +369,28 @@ class BattlezoneRenderer(JAXGameRenderer):
         return im
 
 
-    def _render_radar(self, img, state, center_x, center_y, radius, colorID):
+    def _render_radar(self, img, state, center_x, center_y, radius, colorID_1, colorID_2):
+        h, w = jnp.shape(img)
+        #------------------draw line------------------
         alpha = state.radar_rotation_counter
         dir_x = jnp.sin(alpha)
         dir_y = jnp.cos(alpha)
         img = BattlezoneRenderer._draw_line(img, center_x, center_y,center_x+dir_x*radius,
-                                            center_y+dir_y*radius, colorID)
+                                            center_y+dir_y*radius, colorID_2)
+
+        #-------------------draw circle-------------
+        y = jnp.arange(h)[:, None]  #construct index coordinate mapping
+        x = jnp.arange(w)[None, :]
+        # Compute squared distance from center
+        dist_sq = (y - center_y) ** 2 + (x - center_x) ** 2
+        extended_radius = radius+1
+        mask = jnp.logical_and(dist_sq >= extended_radius ** 2, dist_sq < (extended_radius + 1) ** 2)
+        img = jnp.where(mask, colorID_1, img)
+
+        #------------------draw enemy dots----------------
+
+
+
         return img
 
 
@@ -403,7 +419,8 @@ class BattlezoneRenderer(JAXGameRenderer):
                                    self.consts.TANK_SPRITE_POS_Y, tank_mask)
 
         raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
-                                    self.consts.RADAR_RADIUS, 0)
+                                    self.consts.RADAR_RADIUS, self.COLOR_TO_ID[self.consts.RADAR_COLOR_1],
+                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2])
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
