@@ -67,9 +67,8 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
     MOUNTAINS_Y: int = 36
-    GRASS_BACK_Y: int = 90
+    GRASS_BACK_Y: int = 95
     GRASS_FRONT_Y: int = 137
-    GRASS_FRONT_SWAP_INDEX:int = 15 #number of frames the player presses forward to swap the grass
 
 
 # immutable state container
@@ -144,26 +143,27 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #--------------------anims--------------------
         chain_r_offset = (-jnp.where(jnp.any(jnp.stack([upLeft, up, left])), 1.0, 0.0)
                           +jnp.where(jnp.any(jnp.stack([right, down, downRight])), 1.0, 0.0)
-                          -jnp.where(upRight, 0.7, 0.0) + jnp.where(downLeft, 0.7, 0.0))%32
+                          -jnp.where(upRight, 0.7, 0.0) + jnp.where(downLeft, 0.7, 0.0))
                             #i love magic numbers
         chain_l_offset = (-jnp.where(jnp.any(jnp.stack([upRight, up, right])), 1.0, 0.0)
                           + jnp.where(jnp.any(jnp.stack([left, down, downLeft])), 1.0, 0.0)
-                          - jnp.where(upLeft, 0.7, 0.0) + jnp.where(downRight, 0.7, 0.0))%32
+                          - jnp.where(upLeft, 0.7, 0.0) + jnp.where(downRight, 0.7, 0.0))
         mountains_offset = (jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
-                            -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))%160
+                            -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))
         grass_offset = (jnp.where(jnp.any(jnp.stack([up, upLeft, upRight])), 1.0, 0.0)
-                        -jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))%30
+                        - jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))
         # --------------------enemies--------------------
         # updating enemy x and z
+
 
         return BattlezoneState(
             score=state.step_counter,
             step_counter=state.step_counter,
-            chains_l_anim_counter=state.chains_l_anim_counter + chain_l_offset,
-            chains_r_anim_counter=state.chains_r_anim_counter + chain_r_offset,
-            mountains_anim_counter=state.mountains_anim_counter + mountains_offset,
-            grass_anim_counter=state.grass_anim_counter + grass_offset,
-            enemies=state.enemies
+            enemies=state.enemies,
+            chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
+            chains_r_anim_counter=(state.chains_r_anim_counter + chain_r_offset)%32,
+            mountains_anim_counter=(state.mountains_anim_counter + mountains_offset)%160,
+            grass_anim_counter= (state.grass_anim_counter + grass_offset)%30
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -314,6 +314,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'mountains', 'type': 'single', 'file': 'mountains.npy'},
             {'name': 'grass_front_1', 'type': 'single', 'file': 'grass_front_1.npy'},
             {'name': 'grass_front_2', 'type': 'single', 'file': 'grass_front_2.npy'},
+            {'name': 'grass_back', 'type': 'single', 'file': 'grass_back_1.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
@@ -337,6 +338,16 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jnp.where(chainMask==255, chainMask, scrolled)
 
 
+    def _scroll_grass_back(self, grass_mask, scroll):
+        grass_fill_color_id = grass_mask[0, 0]
+        grass_back_shift = jnp.floor_divide(scroll, 2) % 4
+        grass_back_scrolled_mask = jnp.roll(grass_mask, shift=grass_back_shift, axis=0)
+        mask = jnp.arange(grass_back_scrolled_mask.shape[0]) < grass_back_shift
+        mask = mask[:, None]  # broadcast across columns
+
+        return jnp.where(mask, grass_fill_color_id, grass_back_scrolled_mask)
+
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         #-----------------background
@@ -351,6 +362,10 @@ class BattlezoneRenderer(JAXGameRenderer):
                                       self.SHAPE_MASKS["grass_front_2"])
         raster = self.jr.render_at(raster, 0,
                                    self.consts.GRASS_FRONT_Y, grass_front_mask)
+
+        grass_back_mask = self._scroll_grass_back(self.SHAPE_MASKS["grass_back"], state.grass_anim_counter)
+        raster = self.jr.render_at(raster, 0,
+                                   self.consts.GRASS_BACK_Y, grass_back_mask)
 
 
         tank_mask = self.SHAPE_MASKS["tank"]
@@ -376,7 +391,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #---------------------------player score--------------------change later cuz we have 3 digits
         # Stamp Score using the label utility
-        score = jnp.array(state.chains_l_anim_counter, int) #:)
+        score = jnp.array(state.grass_anim_counter, int) #:)
         player_digits = self.jr.int_to_digits(score, max_digits=2)
         # Note: The logic for single/double digits is complex for a jitted function.
         player_digit_masks = self.SHAPE_MASKS["player_digits"]  # Assumes single color
@@ -476,4 +491,4 @@ if __name__ == "__main__":
 
 
 
-    try_gym_battlezone_pixel()
+    try_gym_battlezone()
