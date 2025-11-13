@@ -33,6 +33,7 @@ What do we need to research about each enemy (+player)?
 - what is the radar range?
 """
 import matplotlib.pyplot as plt
+from enum import IntEnum, unique
 
 import os
 from functools import partial
@@ -44,7 +45,7 @@ import chex
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnemyType
 
 
 
@@ -79,6 +80,7 @@ class BattlezoneState(NamedTuple):
     chains_r_anim_counter: chex.Array
     mountains_anim_counter:chex.Array
     grass_anim_counter:chex.Array
+    enemies: chex.Array
 
 
 class BattlezoneObservation(NamedTuple):
@@ -87,6 +89,14 @@ class BattlezoneObservation(NamedTuple):
 
 class BattlezoneInfo(NamedTuple):
     time: jnp.ndarray
+
+
+class Enemy(NamedTuple):
+    x: chex.Array
+    z: chex.Array
+    distance: chex.Array
+    enemy_type: chex.Array
+    orientation_angle: chex.Array
 
 
 #----------------------------Battlezone Environment------------------------
@@ -143,6 +153,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                             -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))%160
         grass_offset = (jnp.where(jnp.any(jnp.stack([up, upLeft, upRight])), 1.0, 0.0)
                         -jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))%30
+        # --------------------enemies--------------------
+        # updating enemy x and z
 
         return BattlezoneState(
             score=state.step_counter,
@@ -150,8 +162,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             chains_l_anim_counter=state.chains_l_anim_counter + chain_l_offset,
             chains_r_anim_counter=state.chains_r_anim_counter + chain_r_offset,
             mountains_anim_counter=state.mountains_anim_counter + mountains_offset,
-            grass_anim_counter=state.grass_anim_counter + grass_offset
+            grass_anim_counter=state.grass_anim_counter + grass_offset,
+            enemies=state.enemies
         )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _enemy_step(self, state: BattlezoneState) -> BattlezoneState:
+        update_all_enemies = jax.vmap(self._single_enemy_update, in_axes=(None, 0))(state, state.enemies)
+        return state._replace(enemies=update_all_enemies)
+
+
 
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
@@ -161,7 +181,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             chains_l_anim_counter=jnp.array(0),
             chains_r_anim_counter=jnp.array(0),
             mountains_anim_counter=jnp.array(0),
-            grass_anim_counter=jnp.array(0)
+            grass_anim_counter=jnp.array(0),
+            enemies=Enemy(
+                x=jnp.empty((0,), dtype=jnp.float32),
+                z=jnp.empty((0,), dtype=jnp.float32),
+                distance=jnp.empty((0,), dtype=jnp.float32),
+                enemy_type=jnp.empty((0,), dtype=jnp.float32),
+                orientation_angle=jnp.empty((0,), dtype=jnp.float32),
+            )
         )
         initial_obs = self._get_observation(state)
 
@@ -173,6 +200,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         previous_state = state
         new_state = state._replace(step_counter=state.step_counter+1)
         new_state = self._player_step(new_state, action)
+        new_state = self._enemy_step(new_state)
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(previous_state, new_state)
@@ -180,6 +208,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
+
+    def _single_enemy_update(self, state: BattlezoneState, enemy: Enemy) -> Enemy:
+        new_distance = jnp.sqrt(enemy.x ** 2 + enemy.z ** 2)
+        #Room for distance specific actions
+        return enemy._replace(distance=new_distance)
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
