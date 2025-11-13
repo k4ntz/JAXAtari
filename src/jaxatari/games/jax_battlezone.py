@@ -69,7 +69,12 @@ class BattlezoneConstants(NamedTuple):
     MOUNTAINS_Y: int = 36
     GRASS_BACK_Y: int = 95
     GRASS_FRONT_Y: int = 137
-
+    RADAR_ROTATION_SPEED:float = -0.1
+    RADAR_CENTER_X:int = 80
+    RADAR_CENTER_Y:int = 18
+    RADAR_RADIUS:int = 10
+    RADAR_COLOR_1:Tuple[int, int, int] = (111,210,111)
+    RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
 
 # immutable state container
 class BattlezoneState(NamedTuple):
@@ -79,6 +84,7 @@ class BattlezoneState(NamedTuple):
     chains_r_anim_counter: chex.Array
     mountains_anim_counter:chex.Array
     grass_anim_counter:chex.Array
+    radar_rotation_counter:chex.Array
     enemies: chex.Array
 
 
@@ -102,7 +108,7 @@ class Enemy(NamedTuple):
 class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, BattlezoneInfo, BattlezoneConstants]):
     def __init__(self, consts: BattlezoneConstants = None, reward_funcs: list[callable]=None):
         self.consts = consts or BattlezoneConstants()
-        super().__init__(consts)
+        super().__init__(self.consts)
         self.renderer = BattlezoneRenderer(self.consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -163,7 +169,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
             chains_r_anim_counter=(state.chains_r_anim_counter + chain_r_offset)%32,
             mountains_anim_counter=(state.mountains_anim_counter + mountains_offset)%160,
-            grass_anim_counter= (state.grass_anim_counter + grass_offset)%30
+            grass_anim_counter= (state.grass_anim_counter + grass_offset)%30,
+            radar_rotation_counter=state.radar_rotation_counter
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -182,6 +189,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             chains_r_anim_counter=jnp.array(0),
             mountains_anim_counter=jnp.array(0),
             grass_anim_counter=jnp.array(0),
+            radar_rotation_counter=jnp.array(0),
             enemies=Enemy(
                 x=jnp.empty((0,), dtype=jnp.float32),
                 z=jnp.empty((0,), dtype=jnp.float32),
@@ -199,6 +207,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 float, bool, BattlezoneInfo]:
         previous_state = state
         new_state = state._replace(step_counter=state.step_counter+1)
+        new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
+                                                           +self.consts.RADAR_ROTATION_SPEED)%360)
         new_state = self._player_step(new_state, action)
         new_state = self._enemy_step(new_state)
 
@@ -347,6 +357,26 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         return jnp.where(mask, grass_fill_color_id, grass_back_scrolled_mask)
 
+    @staticmethod
+    def _draw_line(img, x0, y0, x1, y1, colorID, samples=256):
+        #taken from experimental branch + some changes needs to be overworked maybe
+        # Parametric line sampling (jit-friendly; Bresenham avoids floats but needs while loops)
+        t = jnp.linspace(0.0, 1.0, samples)
+        xs = jnp.round(x0 + (x1 - x0) * t).astype(jnp.int32)
+        ys = jnp.round(y0 + (y1 - y0) * t).astype(jnp.int32)
+        im = img
+        im = im.at[ys.clip(0, im.shape[0] - 1), xs.clip(0, im.shape[1] - 1)].set(colorID)
+        return im
+
+
+    def _render_radar(self, img, state, center_x, center_y, radius, colorID):
+        alpha = state.radar_rotation_counter
+        dir_x = jnp.sin(alpha)
+        dir_y = jnp.cos(alpha)
+        img = BattlezoneRenderer._draw_line(img, center_x, center_y,center_x+dir_x*radius,
+                                            center_y+dir_y*radius, colorID)
+        return img
+
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -371,6 +401,9 @@ class BattlezoneRenderer(JAXGameRenderer):
         tank_mask = self.SHAPE_MASKS["tank"]
         raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
                                    self.consts.TANK_SPRITE_POS_Y, tank_mask)
+
+        raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
+                                    self.consts.RADAR_RADIUS, 0)
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
@@ -491,4 +524,4 @@ if __name__ == "__main__":
 
 
 
-    try_gym_battlezone()
+    try_gym_battlezone_pixel()

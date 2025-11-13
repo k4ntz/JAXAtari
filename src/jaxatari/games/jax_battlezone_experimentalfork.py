@@ -1559,7 +1559,7 @@ class BattleZoneRenderer(JAXGameRenderer):
 
         # Sprite laden (Masken- oder RGBA-Variante wird unterstützt)
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(base_dir, "sprites", "battlezone")
+        sprite_dir = os.path.join(base_dir, "sprites", "battlezone/old")
         life_sprite_np = np.load(os.path.join(sprite_dir, "tank_life.npy"))
         # Downscale overly large life sprite once (outside JIT) to avoid huge constant folding
         if life_sprite_np.ndim >= 2:
@@ -2326,9 +2326,9 @@ class BattleZoneRenderer(JAXGameRenderer):
         sy = jnp.int32(jnp.round(cy + (radar_radius - 2) * jnp.sin(angle - jnp.pi / 2)))
         im = self._draw_line(im, cx, cy, sx, sy, (255, 255, 255), samples=radar_radius)
         # ticks
-        left_ang = -jnp.pi / 2 - 0.6;
+        left_ang = -jnp.pi / 2 - 0.6
         right_ang = -jnp.pi / 2 + 0.6
-        edge_r = radar_radius - 2;
+        edge_r = radar_radius - 2
         tick_len = jnp.maximum(4, jnp.int32(12 * 0.6))
 
         def tick(a, imc):
