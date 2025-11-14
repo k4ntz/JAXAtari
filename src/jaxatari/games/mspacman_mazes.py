@@ -218,8 +218,10 @@ class MsPacmanMaze:
        ], dtype=bool)
 
        MAZES = [MAZE0, MAZE1, MAZE2, MAZE3]
-       TUNNEL_HEIGHTS = jnp.array([[14, 26], [17, 41], [26, 0], [20, 26]]) # y coordinates of every tunnel - 0 means no tunnel
-       MAZE_HEIGHT, MAZE_WIDTH = MAZE0.shape # All mazes must have the same dimensions!
+       TUNNEL_HEIGHTS = TILE_SCALE * jnp.array([[14, 26], [17, 41], [26, 0], [20, 26]]) # y coordinates of every tunnel - 0 means no tunnel
+       HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
+       TILE_HEIGHT, TILE_WIDTH = MAZE0.shape
+
 
        @staticmethod
        def precompute_dof(maze: np.ndarray):
@@ -239,7 +241,7 @@ class MsPacmanMaze:
 
        @staticmethod
        def load_background(level: int, mazes = MAZES, pellets = BASE_PELLETS,
-                           scale = TILE_SCALE, height = MAZE_HEIGHT, width = MAZE_WIDTH,
+                           scale = TILE_SCALE, height = TILE_HEIGHT, width = TILE_WIDTH,
                            wall_color = WALL_COLOR, path_color = PATH_COLOR):
               """
               Constructs the background based on the level.
