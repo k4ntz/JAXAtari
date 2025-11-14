@@ -456,13 +456,12 @@ class BattlezoneRenderer(JAXGameRenderer):
         #---------------------------player score--------------------
         #primarily taken from pong + changes
         player_digit_masks = self.SHAPE_MASKS["player_digits"]  # Assumes single color
-        player_num_to_render = jnp.where(state.score<=999, 3, jnp.floor(jnp.log10(state.score))+1)
-        player_digits = self.jr.int_to_digits(state.score, max_digits=7)
+        player_digits = self.jr.int_to_digits(state.score, max_digits=8)
         #this does not correctly work currently (only when max_digits==exactly amount digits)
 
         raster = self.jr.render_label_selective(raster, self.consts.SCORE_POS_X, self.consts.SCORE_POS_Y, player_digits,
-                                                player_digit_masks, 0, player_num_to_render,
-                                                spacing=6, max_digits_to_render=7)
+                                                player_digit_masks, 0, 8,
+                                                spacing=6, max_digits_to_render=8)
                                                 #best highscore i can find is 6 digits
         #--------------------------------------------------------------------
 
