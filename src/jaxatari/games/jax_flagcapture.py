@@ -50,7 +50,7 @@ class FlagCaptureConstants:
     NUM_FIELDS_Y = 7
 
     FIELD_PADDING_LEFT = 12
-    FIELD_PADDING_TOP = 11
+    FIELD_PADDING_TOP = 26
     FIELD_GAP_X = 8
     FIELD_GAP_Y = 4
     FIELD_WIDTH = FIELD_HEIGHT = 8
@@ -585,7 +585,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
         self.consts = consts or FlagCaptureConstants()
 
         self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH), # TODO window size?
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
@@ -604,7 +604,6 @@ class FlagCaptureRenderer(JAXGameRenderer):
         sprite_base = os.path.join(MODULE_DIR, "sprites/flagcapture")
 
         # Player states: player_0.npy (Normal) to player_18.npy (19 total)
-        # We need a list of file paths for the 'group' type
         player_files = [f"player_states/player_{i}.npy" for i in range(19)]
 
         asset_config = [
@@ -627,7 +626,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
         # 1. Initialize Raster from the pre-rendered Background ID Raster
         raster: jnp.ndarray = self.jr.create_object_raster(self.BACKGROUND_RASTER)
 
-        # 2. Calculate Player Position (unchanged)
+        # 2. Calculate Player Position
         player_x = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (
                     state.player_x * self.consts.FIELD_GAP_X)
         player_y = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (
@@ -703,7 +702,6 @@ class FlagCaptureRenderer(JAXGameRenderer):
     def _render_header(self, number, raster, digit_masks, single_digit_x, double_digit_x, y, max_digits):
         """Uses the new utility methods to render a score/timer header."""
 
-        # New: Use self.jr.int_to_digits
         digits = self.jr.int_to_digits(number, max_digits=max_digits)
 
         num_to_render = jnp.where(number < 10, 1, jnp.where(number < 100, 2, max_digits))
