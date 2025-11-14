@@ -6,9 +6,9 @@ Edit: Jan Rafflewski
 """
 TODO
 1) Fruits
-    1.1) [ ] Fruit spawning
-    1.2) [ ] Fruit movement
-    1.3) [ ] Fruit scoring
+    1.1) [x] Fruit spawning
+    1.2) [x] Fruit movement
+    1.3) [x] Fruit scoring
     1.4) [ ] Fruit animation
 2) Ghosts
     2.1) [x] Ghost pathfinding
@@ -83,9 +83,9 @@ class FruitType(IntEnum):
     PEAR = 5
     BANANA = 6
     NONE = 7
-FRUIT_SCORES = jnp.array((100, 200, 500, 700, 1000, 2000, 5000))
-FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170])
-FRUIT_ESCAPE_TIMEOUT = 10*8 # Chosen randomly for now, should follow a hardcoded path instead
+# FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170])
+FRUIT_SPAWN_THRESHOLDS = jnp.array([10, 30])
+FRUIT_WANDER_DURATION = 40*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
 PPX0 = 8
@@ -96,10 +96,10 @@ POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], [50, 78], [40, 78], [120, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 SCATTER_TARGETS = jnp.array([
-    [MsPacmanMaze.MAZE_WIDTH - 1, 0],                               # Upper right corner - Blinky
+    [MsPacmanMaze.WIDTH - 1, 0],                               # Upper right corner - Blinky
     [0, 0],                                                         # Upper left corner - Pinky
-    [MsPacmanMaze.MAZE_WIDTH - 1, MsPacmanMaze.MAZE_HEIGHT - 1],    # Lower right corner - Inky
-    [0, MsPacmanMaze.MAZE_HEIGHT - 1]                               # Lower left corner - Sue
+    [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1],    # Lower right corner - Inky
+    [0, MsPacmanMaze.HEIGHT - 1]                               # Lower left corner - Sue
 ])
 
 # DIRECTIONS
@@ -128,7 +128,7 @@ INITIAL_ACTION = jnp.array(4) # LEFT
 # POINTS
 PELLET_POINTS = 10
 POWER_PELLET_POINTS = 50
-FRUITS_POINTS = jnp.array([100, 200, 500, 700, 1000, 2000, 5000]) # cherry, strawberry, orange, pretzel, apple, pear, banana
+FRUIT_REWARDS = jnp.array([100, 200, 500, 700, 1000, 2000, 5000]) # cherry, strawberry, orange, pretzel, apple, pear, banana
 EAT_GHOSTS_BASE_POINTS = 200
 
 # COLORS
@@ -147,7 +147,6 @@ class LevelState(NamedTuple):
     pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
     collected_pellets: chex.Array  # the number of pellets collected
     power_pellets: chex.Array
-    current_fruit: chex.Array # The reward for the current fruit - if 0 no fruit is present
     completed_level: chex.Array  # Whether the level is completed
 
 class GhostState(NamedTuple):
@@ -166,10 +165,18 @@ class PlayerState(NamedTuple):
     power_mode_timer: chex.Array # Timer for power mode, decrements every 8 steps
     death_timer: chex.Array  # Frames left in death animation
 
+class FruitState(NamedTuple):
+    type: chex.Array # Type of the fruit
+    position: chex.Array # (x, y)
+    direction: chex.Array # (dx, dy)
+    timer: chex.Array # Time until leaving through the closest tunnel
+    exit: chex.Array # Tunnel number through which it will exit
+
 class PacmanState(NamedTuple):
     level: LevelState
     player: PlayerState
     ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # 4 ghosts
+    fruit: FruitState
     current_action: chex.Array # 0: NOOP, 1: NOOP, 2: UP ...
     step_count: chex.Array
     level_num: chex.Array
@@ -224,12 +231,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
         state = PacmanState(
             level = LevelState(
-                maze_layout=RESET_MAZE,
+                maze_layout=jnp.array(RESET_MAZE).astype(jnp.uint8),
                 dofmaze=MsPacmanMaze.precompute_dof(MsPacmanMaze.MAZES[RESET_MAZE]), # Precompute degree of freedom maze layout
                 pellets=jnp.copy(MsPacmanMaze.BASE_PELLETS),
                 collected_pellets=jnp.array(0).astype(jnp.uint8),
                 power_pellets=jnp.ones(4, dtype=jnp.bool_),
-                current_fruit=jnp.array(FruitType.NONE).astype(jnp.uint8),
                 completed_level=jnp.array(False, dtype=jnp.bool_)
             ),
             player = PlayerState(
@@ -243,7 +249,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             ),
             ghosts = tuple(
                 GhostState(
-                    type=GhostType(i),
+                    type=jnp.array(GhostType(i)).astype(jnp.uint8),
                     position=INITIAL_GHOSTS_POSITIONS[i],
                     direction=jnp.zeros(2, dtype=jnp.int8),
                     mode=(jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
@@ -251,12 +257,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     timer=jnp.array(SCATTER_DURATION).astype(jnp.uint8),
                 ) for i in range(4)
             ),
+            fruit = FruitState(
+                type=jnp.array(FruitType.NONE).astype(jnp.uint8),
+                position=jnp.zeros(2, dtype=jnp.int8),
+                direction=jnp.zeros(2, dtype=jnp.int8),
+                timer=jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8),
+                exit=jnp.zeros(2, dtype=jnp.int8)
+            ),
             current_action = INITIAL_ACTION,
             score=jnp.array(0),
             score_changed=jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_), # indicates which score digit changed since the last step
             step_count=jnp.array(0),
             game_over=jnp.array(False),
-            level_num=1,
+            level_num=jnp.array([1], dtype=jnp.uint8),
             lives=jnp.array(INITIAL_LIVES, dtype=jnp.int8),  # Number of lives left
             reset=jnp.array(True, dtype=jnp.bool_) # to reload the background
         )
@@ -308,7 +321,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     pellets=state.level.pellets,
                     collected_pellets=state.level.collected_pellets,
                     power_pellets=state.level.power_pellets,
-                    current_fruit=state.level.current_fruit,
                     completed_level=completed_level
                 ),
                 player = PlayerState(
@@ -328,6 +340,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                         mode=jnp.array(0),
                         timer=jnp.array(0),
                     ) for i in range(4)
+                ),
+                fruit = FruitState(
+                    fruit_type=state.fruit.type,
+                    position=state.fruit.position,
+                    direction=state.fruit.direction,
+                    timer=state.fruit.timer,
+                    exit=state.fruit.exit
                 ),
                 current_action=state.current_action,
                 score=state.score,
@@ -371,7 +390,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # power pellets 
         collected_pellets = state.level.collected_pellets
         power_pellets = state.level.power_pellets
-        current_fruit = state.level.current_fruit
+        fruit_type = state.fruit.type
+        fruit_position = state.fruit.position
+        fruit_direction = state.fruit.direction
+        fruit_timer = state.fruit.timer
+        fruit_exit = state.fruit.exit
         px, py = new_pacman_pos // 4
         ate_power_pill = False
         if px == 1:
@@ -408,11 +431,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             print(f"Pacman collected a pellet at {new_pacman_pos}, score: {score}")
             collected_pellets += 1
 
-        # TODO: Optionally implement 'previous_fruit' with special orange/banana only once per level (only cited by one source)
-        # TODO: Implement fruit consumption 
+        # Fruit handling
         for threshold in FRUIT_SPAWN_THRESHOLDS:
-            if collected_pellets == threshold:
-                current_fruit = get_level_fruit(state.level, key)
+            if collected_pellets == threshold: # Spawn fruit
+                fruit_type = get_level_fruit(state.level_num, key)
+                fruit_position, fruit_direction = get_random_tunnel(state.level_num, key)
+                fruit_exit, _ = get_random_tunnel(state.level_num, key)
+        if state.fruit.type != FruitType.NONE:
+            if jnp.all(new_pacman_pos == jnp.array(state.fruit.position)): # Consume fruit
+                score = score + FRUIT_REWARDS[state.fruit.type]
+                fruit_type = FruitType.NONE
+                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
+            if state.fruit.timer == 0 and jnp.all(state.fruit.position == jnp.array(state.fruit.exit)): # Remove fruit
+                fruit_type = FruitType.NONE
+                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
+            else:
+                fruit_position, fruit_direction, fruit_timer = fruit_step(state.fruit, dofmaze, key) # Move fruit
 
         ghost_positions, ghosts_dirs, ghosts_modes, ghosts_timers = ghosts_step(
             state.ghosts, state.player, ate_power_pill, dofmaze, key
@@ -472,7 +506,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 pellets=pellets,
                 collected_pellets=collected_pellets,
                 power_pellets=power_pellets,
-                current_fruit=current_fruit,
                 completed_level=completed_level
             ),
             player = PlayerState(
@@ -492,6 +525,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     mode=ghosts_modes[i],
                     timer=ghosts_timers[i],
                 ) for i in range(4)
+            ),
+            fruit = FruitState(
+                type=fruit_type,
+                position=fruit_position,
+                direction=fruit_direction,
+                timer=fruit_timer,
+                exit=fruit_exit
             ),
             current_action=executed_action,
             score=score,
@@ -551,10 +591,6 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
 
-        # Render score if changed
-        if jnp.any(state.score_changed):
-            self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
-
         for i, ghost in enumerate(state.ghosts):
             # Render frightened ghost
             if not (state.ghosts[i].mode == GhostMode.FRIGHTENED or state.ghosts[i].mode == GhostMode.BLINKING):
@@ -564,6 +600,14 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             else:
                 g_sprite = self.sprites["ghost"][ghosts_orientation][4] # blue ghost
             raster = aj.render_at(raster, ghost.position[0], ghost.position[1], g_sprite)
+
+        # Render fruit if present
+        if state.fruit.type != FruitType.NONE:
+            raster = MsPacmanRenderer.render_fruit(raster, state.fruit, self.sprites["fruit"])
+
+        # Render score if changed
+        if jnp.any(state.score_changed):
+            self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
 
         # Remove one life if a life is lost
         if state.player.death_timer == RESET_TIMER-1:
@@ -598,10 +642,10 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             raster = aj.render_at(raster, life_x + current_lives * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
         return raster
     
-    # TODO: Implement!
     @staticmethod
-    def render_fruit(raster, level, fruit_timer,  fruit_sprites):
-        ...
+    def render_fruit(raster, fruit: FruitState, fruit_sprites):
+        raster = aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
+        return raster
     
     @staticmethod
     def load_sprites() -> dict[str, Any]:
@@ -934,10 +978,29 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     return new_pos, new_dir, new_mode, new_timer
 
 
+def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
+               ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+    allowed = get_allowed_directions(fruit.position, fruit.direction, dofmaze)
+    if len(allowed) == 1:
+        new_dir = DIRECTIONS[allowed[0]]
+    elif fruit.timer == 0:
+        directions = get_target_direction_indices(fruit.position, fruit.exit)
+        new_dir = select_target_direction(directions, allowed, key)
+    else:
+        new_dir = jax.random.choice(key, DIRECTIONS[2:])
+
+    new_timer = fruit.timer
+    if fruit.timer > 0:
+        new_timer -= 1
+    new_pos = jnp.array(fruit.position) + new_dir
+    new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
+    return new_pos, new_dir, new_timer
+
+
 def get_target_direction_indices(position: chex.Array, target: chex.Array) -> list:
     """
     Returns the directions (indices) which should be taken to minimize the horizontal or vertical distance to the target.
-    Prioritizes the bigger distance and returns both possible directions they are equal.
+    Prioritizes the bigger distance and returns both possible directions if they are equal.
     """
     horizontal_distance = jnp.abs(position[0] - target[0])
     vertical_distance = jnp.abs(position[1] - target[1])
@@ -1008,15 +1071,17 @@ def get_level_fruit(level: chex, key: chex.Array):
         case _: return jax.random.randint(key, (), 1, 8)
 
 
-def get_fruit_spawn(level: chex.Array, key: chex.Array):
-    fruit = get_level_fruit(level, key)
+def get_random_tunnel(level: chex.Array, key: chex.Array):
     maze = get_level_maze(level)
     tunnel_heights = MsPacmanMaze.TUNNEL_HEIGHTS[maze]
-    tunnel_positions = [[0, tunnel_heights[0]], [MsPacmanMaze.MAZE_WIDTH - 1, tunnel_heights[0]],
-                        [0, tunnel_heights[1]], [MsPacmanMaze.MAZE_WIDTH - 1, tunnel_heights[1]]]
-    if tunnel_heights[1] == 0:
+    tunnels = [[0, tunnel_heights[0], DIR_RIGHT], [MsPacmanMaze.WIDTH - 1, tunnel_heights[0], DIR_LEFT], 
+               [0, tunnel_heights[1], DIR_RIGHT], [MsPacmanMaze.WIDTH - 1, tunnel_heights[1], DIR_LEFT]]
+    if tunnel_heights[1] == 0: # If the second element is 0, there is only one pair of tunnels
         tunnel_idx = jax.random.randint(key, (), 0, 2)
     else:
         tunnel_idx = jax.random.randint(key, (), 0, 4)
-    spawn_point = tunnel_positions[tunnel_idx]
-    return spawn_point, fruit
+
+    tunnel = tunnels[tunnel_idx]
+    tunnel_pos = tunnel[:2]
+    tunnel_dir = DIRECTIONS[tunnel[2]]
+    return tunnel_pos, tunnel_dir
