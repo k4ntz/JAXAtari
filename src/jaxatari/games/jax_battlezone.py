@@ -80,7 +80,7 @@ class BattlezoneConstants(NamedTuple):
     LIFE_POS_Y:int = 189
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
-    SCORE_POS_Y:int = 180
+    SCORE_POS_Y:int = 179
 
 # immutable state container
 class BattlezoneState(NamedTuple):
@@ -170,7 +170,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         return BattlezoneState(
-            score=state.step_counter,
+            score=state.score,
             life=state.life,
             step_counter=state.step_counter,
             enemies=state.enemies,
@@ -191,7 +191,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
         state = BattlezoneState(
-            score=jnp.array(0),
+            score=jnp.array(123400),
             life=jnp.array(5),
             step_counter=jnp.array(0),
             chains_l_anim_counter=jnp.array(0),
@@ -452,26 +452,18 @@ class BattlezoneRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, state.life, render_single_life, raster)
 
 
-        # --- Stamp Walls and Score (using the same color/ID) ---
-        score_color_tuple = self.consts.SCORE_COLOR  # (236, 236, 236)
-        score_id = self.COLOR_TO_ID[score_color_tuple]
 
-
-        #---------------------------player score--------------------change later cuz we have 3 digits
-        # Stamp Score using the label utility
-        score = jnp.array(state.grass_anim_counter, int) #:)
-        player_digits = self.jr.int_to_digits(score, max_digits=2)
-        # Note: The logic for single/double digits is complex for a jitted function.
+        #---------------------------player score--------------------
+        #primarily taken from pong + changes
         player_digit_masks = self.SHAPE_MASKS["player_digits"]  # Assumes single color
+        player_num_to_render = jnp.where(state.score<=999, 3, jnp.floor(jnp.log10(state.score))+1)
+        player_digits = self.jr.int_to_digits(state.score, max_digits=7)
+        #this does not correctly work currently (only when max_digits==exactly amount digits)
 
-        is_player_single_digit = score < 10
-        player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
-        player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
-        player_render_x = jax.lax.select(is_player_single_digit,
-                                         120 + 16 // 2,
-                                         120)
-        raster = self.jr.render_label_selective(raster, player_render_x, 3, player_digits, player_digit_masks,
-                                                player_start_index, player_num_to_render, spacing=16)
+        raster = self.jr.render_label_selective(raster, self.consts.SCORE_POS_X, self.consts.SCORE_POS_Y, player_digits,
+                                                player_digit_masks, 0, player_num_to_render,
+                                                spacing=6, max_digits_to_render=7)
+                                                #best highscore i can find is 6 digits
         #--------------------------------------------------------------------
 
 
@@ -559,4 +551,4 @@ if __name__ == "__main__":
 
 
 
-    try_gym_battlezone_pixel()
+    try_gym_battlezone()
