@@ -73,12 +73,19 @@ class BattlezoneConstants(NamedTuple):
     RADAR_CENTER_X:int = 80
     RADAR_CENTER_Y:int = 18
     RADAR_RADIUS:int = 10
-    RADAR_COLOR_1:Tuple[int, int, int] = (111,210,111)
+    RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
     RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
+    LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
+    LIFE_POS_X:int = 64
+    LIFE_POS_Y:int = 189
+    LIFE_X_OFFSET:int = 8
+    SCORE_POS_X:int = 89
+    SCORE_POS_Y:int = 180
 
 # immutable state container
 class BattlezoneState(NamedTuple):
     score: chex.Array
+    life: chex.Array
     step_counter: chex.Array
     chains_l_anim_counter: chex.Array
     chains_r_anim_counter: chex.Array
@@ -164,6 +171,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         return BattlezoneState(
             score=state.step_counter,
+            life=state.life,
             step_counter=state.step_counter,
             enemies=state.enemies,
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
@@ -184,6 +192,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
         state = BattlezoneState(
             score=jnp.array(0),
+            life=jnp.array(5),
             step_counter=jnp.array(0),
             chains_l_anim_counter=jnp.array(0),
             chains_r_anim_counter=jnp.array(0),
@@ -325,6 +334,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'grass_front_1', 'type': 'single', 'file': 'grass_front_1.npy'},
             {'name': 'grass_front_2', 'type': 'single', 'file': 'grass_front_2.npy'},
             {'name': 'grass_back', 'type': 'single', 'file': 'grass_back_1.npy'},
+            {'name': 'life', 'type': 'single', 'file': 'life.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
@@ -432,6 +442,14 @@ class BattlezoneRenderer(JAXGameRenderer):
         color_shifted_chain_r = self._scroll_chain_colors(chains_r_mask, state.chains_r_anim_counter)
         raster = self.jr.render_at(raster, self.consts.CHAINS_R_POS_X,
                                    self.consts.CHAINS_POS_Y, color_shifted_chain_r)
+
+        #----------------life---------------------------
+        life_mask = self.SHAPE_MASKS["life"]
+        def render_single_life(i, raster):
+            return self.jr.render_at(raster, self.consts.LIFE_POS_X+(self.consts.LIFE_X_OFFSET*i),
+                                       self.consts.LIFE_POS_Y, life_mask)
+
+        raster = jax.lax.fori_loop(0, state.life, render_single_life, raster)
 
 
         # --- Stamp Walls and Score (using the same color/ID) ---
