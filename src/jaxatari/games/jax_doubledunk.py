@@ -88,7 +88,7 @@ class DunkConstants:
     BASKET_POSITION: Tuple[int,int] = (100,130)
     BASKET_BUFFER: int = 3 #this should translate to [BASKET_POSITION[0]-buffer:BASKET_POSITION[0]+buffer] being the valid goal area width-wise
     GRAVITY: int = 1 # Downward acceleration due to gravity
-    AREA_3_POINT: Tuple[int,int] #We need a way to determine whether a player is in a 3-point area (might be easier to define the two-point area and the rest
+    AREA_3_POINT: Tuple[int,int] = (0,0) #We need a way to determine whether a player is in a 3-point area (might be easier to define the two-point area and the rest
                                 # will be considered 3-point by process of elimination)
 
 
@@ -165,13 +165,39 @@ class DoubleDunk(JAXAtariGame):
         Creates the very first state of the game.
         Use values from self.constants.
         """
-        pass
+        return DunkGameState(
+            player1_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player1_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player2_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player2_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.NONE),
+            player_score=0,
+            enemy_score=0,
+            step_counter=0,
+            acceleration_counter=0,
+            game_mode=GameMode.PLAY_SELECTION,
+            offensive_play=OffensivePlay.NONE,
+            defensive_play=DefensivePlay.NONE,
+            play_step=0,
+        )
 
     def _reset_state(self, state: DunkGameState) -> DunkGameState:
         """
         Resets the state after a point is scored or for a new round.
         """
-        pass
+        return DunkGameState(
+            player1_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player1_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player2_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            player2_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
+            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.NONE),
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            game_mode=state.game_mode,
+            offensive_play=state.offensive_play,
+            defensive_play=state.defensive_play,
+            play_step=0,
+        )
 
     def _get_player_action_effects(self, action: int, player_z: chex.Array, constants: DunkConstants) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """
@@ -269,6 +295,3 @@ class DoubleDunk(JAXAtariGame):
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
         )
-
-
-
