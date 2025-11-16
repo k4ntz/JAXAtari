@@ -44,6 +44,8 @@ class JourneyEscapeConstants(NamedTuple):
     chicken_hit_inset_x: int = 1
     chicken_hit_inset_y_top: int = -2  # Top edge of chicken (when cars approach from above)
     chicken_hit_inset_y_bottom: int = 0  # Bottom edge of chicken (when cars approach from below)
+    # chicken position rules
+    max_chicken_position_y: int = top_border + (screen_height//3)
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
@@ -137,12 +139,13 @@ class JaxJourneyEscape(
         )
 
         # Compute horizontal movement
+        # faster movement if chicken on the top_maximum_position
         dx = jnp.where(
             (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
-            -1.0,
+            jnp.where(state.chicken_y == self.consts.max_chicken_position_y, -2, -1.0),
             jnp.where(
                 (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT),
-                1.0,
+                jnp.where(state.chicken_y == self.consts.max_chicken_position_y, 2, 1.0),
                 0.0
             ),
         )
@@ -155,7 +158,7 @@ class JaxJourneyEscape(
 
         new_y = jnp.clip(
             state.chicken_y + dy.astype(jnp.int32),
-            self.consts.top_border,
+            self.consts.max_chicken_position_y,
             self.consts.bottom_border + self.consts.chicken_height - 1,
         ).astype(jnp.int32)
 
@@ -261,14 +264,6 @@ class JaxJourneyEscape(
         # Update score if chicken reaches top
         new_score = jnp.where(
             new_y <= self.consts.top_border, state.score + 1, state.score
-        ).astype(jnp.int32)
-
-        # Reset chicken position if scored
-        scored = new_y <= self.consts.top_border
-        new_y = jnp.where(
-            scored,
-            self.consts.bottom_border + self.consts.chicken_height - 1 + self.consts.post_score_spawn_offset_y,
-            new_y,
         ).astype(jnp.int32)
 
         # Update time
