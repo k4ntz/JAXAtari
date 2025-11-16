@@ -136,7 +136,6 @@ class JaxJourneyEscape(
         )
 
         # Compute horizontal movement
-        # faster movement if chicken on the top_maximum_position
         dx_int = jnp.where(
             (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
             -self.consts.chicken_speed,
