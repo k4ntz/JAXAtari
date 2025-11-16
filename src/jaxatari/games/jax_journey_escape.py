@@ -18,11 +18,15 @@ class JourneyEscapeConstants(NamedTuple):
     chicken_width: int = 6
     chicken_height: int = 8
     start_chicken_x: int = 44  # Fixed x position
+    start_chicken_y: int = 170  # Fixed x position
 
     obstacle_width: int = 8
     obstacle_height: int = 10
     obstacle_speed_px_per_frame: int = 1  # constant downward speed
     row_spawn_period_frames: int = 16  # spawn every N frames (tweakable)
+
+    top_bar_height: int = 40
+    bottom_bar_height: int = 5
 
     top_border: int = 15
     top_path: int = 8
@@ -94,7 +98,7 @@ class JaxJourneyEscape(
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[JourneyEscapeObservation, JourneyEscapeState]:
         """Initialize a new game state"""
         # Start chicken at bottom
-        chicken_y = self.consts.bottom_border + self.consts.chicken_height - 1
+        chicken_y = self.consts.start_chicken_y
         chicken_x = self.consts.start_chicken_x
 
         MAX_OBS = 64
@@ -431,7 +435,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {
                 'name': 'player', 'type': 'group',
-                'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
+                'files': ['player_hit.npy', 'player_walk_straight0.npy', 'player_walk_straight1.npy']
             },
             {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
             {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
