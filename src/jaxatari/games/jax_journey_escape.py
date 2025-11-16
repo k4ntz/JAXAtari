@@ -25,14 +25,14 @@ class JourneyEscapeConstants(NamedTuple):
     obstacle_speed_px_per_frame: int = 1  # constant downward speed
     row_spawn_period_frames: int = 16  # spawn every N frames (tweakable)
 
-    top_bar_height: int = 40
+    top_bar_height: int = 18
     bottom_bar_height: int = 5
 
     top_border: int = 15
     top_path: int = 8
-    bottom_border: int = 162
-    left_border: int = 10
-    right_border: int = 138
+    bottom_border: int = 170
+    left_border: int = 8
+    right_border: int = 145
     # Collision response tuning
     throw_back_frames: int = 24  # frames the chicken is pushed back after hit
     stun_frames: int = 28  # frames the chicken cannot move after hit
@@ -159,13 +159,13 @@ class JaxJourneyEscape(
         new_y = jnp.clip(
             state.chicken_y + dy.astype(jnp.int32),
             self.consts.max_chicken_position_y,
-            self.consts.bottom_border + self.consts.chicken_height - 1,
+            self.consts.bottom_border
         ).astype(jnp.int32)
 
         new_x = jnp.clip(
             state.chicken_x + dx.astype(jnp.int32),
             self.consts.left_border,
-            self.consts.right_border + self.consts.chicken_width - 1,
+            self.consts.right_border  # + self.consts.chicken_width - 5,
         ).astype(jnp.int32)
 
         #---OBSTACLES---
@@ -211,7 +211,7 @@ class JaxJourneyEscape(
             # Choose spawn_x so the whole row is inside the screen horizontally.
             # We assume presets ALWAYS allow at least one valid position.
             min_x = self.consts.left_border
-            max_x = self.consts.screen_width - total_w
+            max_x = self.consts.right_border - total_w
             # span must be positive; we don't treat "doesn't fit" as an option.
             span = (max_x - min_x) + 1
             spawn_x = min_x + jax.random.randint(r2, (), 0, span)
@@ -230,7 +230,7 @@ class JaxJourneyEscape(
 
                 # Build row positions
                 xs = spawn_x + jnp.arange(MAX_GROUP) * (w + spacing)
-                ys = jnp.full((MAX_GROUP,), self.consts.top_border, dtype=jnp.int32)
+                ys = jnp.full((MAX_GROUP,), self.consts.top_border + self.consts.top_bar_height, dtype=jnp.int32)
                 ws = jnp.full((MAX_GROUP,), w, dtype=jnp.int32)
                 hs = jnp.full((MAX_GROUP,), self.consts.obstacle_height, dtype=jnp.int32)
                 ts = jnp.full((MAX_GROUP,), type_idx, dtype=jnp.int32)
