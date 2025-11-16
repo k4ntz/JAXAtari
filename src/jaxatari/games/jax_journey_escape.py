@@ -254,7 +254,7 @@ class JaxJourneyEscape(
             operand=(boxes, state.rng_key)
         )
 
-        # --- COLLISIONS: chicken vs. falling obstacles ---
+        # --- COLLISIONS---
 
         # We treat any obstacle with h > 0 as active.
         # boxes has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
@@ -281,7 +281,6 @@ class JaxJourneyEscape(
             ch_y1 = new_y - cyi_bottom
 
             # --- Obstacle AABB ---
-            # Same coordinate convention: box_y is the bottom edge of the sprite.
             ob_x0 = box_x
             ob_x1 = box_x + box_w
             ob_y0 = box_y - box_h
@@ -298,12 +297,10 @@ class JaxJourneyEscape(
         collisions = jax.vmap(check_collision)(boxes)
         any_collision = jnp.any(collisions)
 
-        # --- SCORE + SMALL COOLDOWN ---
-
-        # We want:
+        # --- SCORE + COOLDOWN ---
         # - collision detected every frame (any_collision)
         # - score decremented only when NOT in cooldown
-        # - after a "scoring hit", start a short cooldown
+        # - after a "scoring hit", start the cooldown
 
         prev_cd = state.hit_cooldown
         cooling_down = prev_cd > 0
@@ -313,13 +310,9 @@ class JaxJourneyEscape(
 
         # Apply hit only if we're currently NOT cooling down
         apply_hit = jnp.logical_and(any_collision, jnp.logical_not(cooling_down))
-
-        # One point per scoring hit
         hit_penalty = jnp.where(apply_hit, 1, 0).astype(jnp.int32)
         new_score = (state.score - hit_penalty).astype(jnp.int32)
-
-        # Optional clamp: don't go below 0
-        new_score = jnp.maximum(new_score, 0)
+        new_score = jnp.maximum(new_score, 0) # don't go below 0
 
         # If we scored a hit this frame, reset cooldown to N frames.
         # Otherwise, keep ticking it down.
@@ -329,14 +322,10 @@ class JaxJourneyEscape(
             cd_after_tick,
         )
 
-        # Optional safety: keep score from going below 0
-        # (feel free to remove this if you want negative scores)
-        new_score = jnp.maximum(new_score, 0)
-
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
 
-        # Check game over (optional: could be based on time or score limit)
+        # Check game over
         game_over = jnp.where(
             new_time >= 255 * 32,  # 2 minute time limit
             jnp.array(True),
