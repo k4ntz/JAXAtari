@@ -20,11 +20,12 @@ class UpNDownConstants(NamedTuple):
     LANDING_ZONE: int = 15
     FIRST_ROAD_LENGTH: int = 4
     SECOND_ROAD_LENGTH: int = 4
-    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
-    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 80, 140, 100]) #get actual values
+    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([105, 80, 25, 100]) #get actual values
     SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
     SECOND_TRACK_CORNERS_Y: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
+    INITIAL_ROAD_POS_Y: int = 25 
 
 
 
@@ -51,6 +52,7 @@ class UpNDownState(NamedTuple):
     is_jumping: chex.Array
     is_on_road: chex.Array
     player_car: Car
+    road_diff: chex.Array
 
 
 
@@ -175,7 +177,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
 
-        is_jumping = jnp.logical_or(jnp.logical_and(state.is_jumping, state.jump_cooldown > 0), jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed > 0, state.jump_cooldown == 0)))
+        is_jumping = jnp.logical_or(jnp.logical_and(state.is_jumping, state.jump_cooldown > 0), jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed >= 0, jnp.logical_and(state.jump_cooldown == 0, jump))))
         jump_cooldown = jax.lax.cond(
             state.jump_cooldown > 0,
             lambda s: s - 1,
@@ -202,21 +204,24 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
 
+        car_direction_x = jax.lax.cond(state.player_car.current_road == 0,
+            lambda s: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
+            lambda s: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
+            operand=None),
         car_direction_x = jax.lax.cond(
-            direction_change,
-            lambda s: jax.lax.cond(state.player_car.current_road == 0,
-                lambda s: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
-                lambda s: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
-                operand=None),
-            lambda s: s,
-            operand=state.player_car.direction_x,
+            car_direction_x[0] > 0,
+            lambda s: 1,
+            lambda s: -1,
+            operand=car_direction_x,
         )
+
         
         is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
 
         ##calculate new position with speed (TODO: calculate better speed)
         player_y = state.player_car.position.y + player_speed
         player_x = state.player_car.position.x + player_speed * car_direction_x
+        jax.debug.print("Player X: {}, Player Y: {}, car_direction_x: {}", player_x, player_y, car_direction_x)
 
         landing_in_Water, between_roads, road_A_x, road_B_x = self._landing_in_water(state, player_x, player_y)
         landing_in_Water = jnp.logical_and(is_landing, landing_in_Water)
@@ -238,6 +243,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             ),
             operand=None,
         )
+        road_diff = state.road_diff + player_speed
+        jax.debug.print("road_diff: {}", road_diff)
+        #jax.debug.print("Player X: {}, Player Y: {}, on road: {}, jumping: {}, speed: {}, road index A: {}, road index B: {}, current road: {}", player_x, player_y, is_on_road, is_jumping, player_speed, road_index_A, road_index_B, current_road)
         return UpNDownState(
             score=state.score,
             difficulty=state.difficulty,
@@ -258,6 +266,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 road_index_B=road_index_B,
                 type=state.player_car.type,
             ),
+            road_diff=state.road_diff + player_speed,
         )
 
 
@@ -282,6 +291,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 road_index_B=0,
                 type=0,
             ),
+            road_diff=0,
         )
         initial_obs = self._get_observation(state)
 
@@ -371,9 +381,10 @@ class UpNDownRenderer(JAXGameRenderer):
         background = self._createBackgroundSprite(self.config.game_dimensions)
         top_block = self._createBackgroundSprite((25, self.config.game_dimensions[1]))
         bottom_block = self._createBackgroundSprite((16, self.config.game_dimensions[1]))
+        temp_pointer = self._createBackgroundSprite((1, 1))
         
         # 2. Update asset config to include both walls
-        asset_config = self._get_asset_config(background, top_block, bottom_block)
+        asset_config = self._get_asset_config(background, top_block, bottom_block, temp_pointer)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
 
         # 3. Make a single call to the setup function
@@ -393,7 +404,7 @@ class UpNDownRenderer(JAXGameRenderer):
         sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
         return sprite
 
-    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray) -> list:
+    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray) -> list:
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
@@ -401,13 +412,14 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
             {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
+            {'name': 'tempPointer', 'type': 'procedural', 'data': tempPointer},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         road1_mask = self.SHAPE_MASKS["road1"]
-        raster = self.jr.render_at(raster, 10, 25, road1_mask)
+        raster = self.jr.render_at_clipped(raster, 10, self.consts.INITIAL_ROAD_POS_Y + state.road_diff, road1_mask)
 
         player_mask = self.SHAPE_MASKS["player"]
         raster = self.jr.render_at(raster, state.player_car.position.x, 105, player_mask)
@@ -417,5 +429,8 @@ class UpNDownRenderer(JAXGameRenderer):
 
         wall_bottom_mask = self.SHAPE_MASKS["wall_bottom"]
         raster = self.jr.render_at(raster, 0, 210 - wall_bottom_mask.shape[0], wall_bottom_mask)
+
+        wall_bottom_mask = self.SHAPE_MASKS["tempPointer"]
+        raster = self.jr.render_at(raster, 140, 26, wall_bottom_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
