@@ -18,11 +18,12 @@ class JourneyEscapeConstants(NamedTuple):
     chicken_width: int = 6
     chicken_height: int = 8
     start_chicken_x: int = 44  # Fixed x position
+    chicken_speed: int = 2  # constant downward speed
 
     obstacle_width: int = 8
     obstacle_height: int = 10
-    obstacle_speed_px_per_frame: int = 1  # constant downward speed
-    row_spawn_period_frames: int = 16  # spawn every N frames (tweakable)
+    obstacle_speed_px_per_frame: int = 2  # constant downward speed
+    row_spawn_period_frames: int = 25  # spawn every N frames (tweakable)
 
     top_border: int = 15
     bottom_border: int = 180
@@ -31,18 +32,16 @@ class JourneyEscapeConstants(NamedTuple):
 
     starting_score: int = 99
 
-    # Collision box insets (shrink AABB without changing render sizes)
-    chicken_hit_inset_x: int = 1
-    chicken_hit_inset_y_top: int = -2  # Top edge of chicken (when cars approach from above)
-    chicken_hit_inset_y_bottom: int = 0  # Bottom edge of chicken (when cars approach from below)
-
     hit_cooldown_frames: int = 8
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
-        (0, 1, 0),  # single
-        (0, 2, 35),  # two with 10px spacing
-        (0, 3, 8),  # three with 8px spacing
+        (0, 1, 0),
+        (0, 4, 0),
+        (0, 2, 35),
+        (0, 2, 55),
+        (0, 3, 10),
+        (0, 3, 25),
     )
 
 
@@ -120,46 +119,42 @@ class JaxJourneyEscape(
         JourneyEscapeObservation, JourneyEscapeState, float, bool, JourneyEscapeInfo]:
         """Take a step in the game given an action"""
 
-        # ---CHICKEN---
+        # ---RAW PLAYER INPUT---
         # Compute vertical movement
-        dy = jnp.where(
+        dy_int = jnp.where(
             (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT),
-            -1.0,
+            -self.consts.chicken_speed,
             jnp.where(
                 (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT),
-                1.0,
-                0.0
+                self.consts.chicken_speed,
+                0
             ),
         )
 
         # Compute horizontal movement
-        dx = jnp.where(
+        dx_int = jnp.where(
             (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
-            -1.0,
+            -self.consts.chicken_speed,
             jnp.where(
                 (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT),
-                1.0,
-                0.0
+                self.consts.chicken_speed,
+                0
             ),
         )
 
         # advance walking animation every frame, independent of input
         new_walking_frames = (state.walking_frames + 1) % 8
-
-        # reset new_walking frames at 8 => ?
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
 
-        new_y = jnp.clip(
-            state.chicken_y + dy.astype(jnp.int32),
-            self.consts.top_border,
-            self.consts.bottom_border + self.consts.chicken_height - 1,
-        ).astype(jnp.int32)
+        # Effective player movement boundaries
+        player_min_y = self.consts.top_border
+        player_max_y = self.consts.bottom_border + self.consts.chicken_height - 1
+        player_min_x = self.consts.left_border
+        player_max_x = self.consts.right_border + self.consts.chicken_width - 1
 
-        new_x = jnp.clip(
-            state.chicken_x + dx.astype(jnp.int32),
-            self.consts.left_border,
-            self.consts.right_border + self.consts.chicken_width - 1,
-        ).astype(jnp.int32)
+        # "Proposed" movement from input only (used for collision detection)
+        pre_y = jnp.clip(state.chicken_y + dy_int, player_min_y, player_max_y).astype(jnp.int32)
+        pre_x = jnp.clip(state.chicken_x + dx_int, player_min_x, player_max_x).astype(jnp.int32)
 
         #---OBSTACLES---
 
@@ -269,16 +264,12 @@ class JaxJourneyEscape(
             # Ignore inactive entries (h == 0)
             active = box_h > 0
 
-            # --- Chicken AABB (same convention as Freeway) ---
-            # new_x / new_y are the *current* chicken baseline position after movement.
-            cxi = jnp.asarray(self.consts.chicken_hit_inset_x, dtype=jnp.int32)
-            cyi_top = jnp.asarray(self.consts.chicken_hit_inset_y_top, dtype=jnp.int32)
-            cyi_bottom = jnp.asarray(self.consts.chicken_hit_inset_y_bottom, dtype=jnp.int32)
+            # --- Chicken AABB  --- [axis-aligned bounding box]
 
-            ch_x0 = new_x + cxi
-            ch_x1 = new_x + self.consts.chicken_width - cxi
-            ch_y0 = new_y - self.consts.chicken_height + cyi_top
-            ch_y1 = new_y - cyi_bottom
+            ch_x0 = pre_x
+            ch_x1 = pre_x + self.consts.chicken_width
+            ch_y0 = pre_y - self.consts.chicken_height
+            ch_y1 = pre_y
 
             # --- Obstacle AABB ---
             ob_x0 = box_x
@@ -312,7 +303,7 @@ class JaxJourneyEscape(
         apply_hit = jnp.logical_and(any_collision, jnp.logical_not(cooling_down))
         hit_penalty = jnp.where(apply_hit, 1, 0).astype(jnp.int32)
         new_score = (state.score - hit_penalty).astype(jnp.int32)
-        new_score = jnp.maximum(new_score, 0) # don't go below 0
+        new_score = jnp.maximum(new_score, 0)  # don't go below 0
 
         # If we scored a hit this frame, reset cooldown to N frames.
         # Otherwise, keep ticking it down.
@@ -320,6 +311,93 @@ class JaxJourneyEscape(
             apply_hit,
             jnp.asarray(self.consts.hit_cooldown_frames, dtype=jnp.int32),
             cd_after_tick,
+        )
+
+        # ---MOVEMENT WITH OBSTACLE PHYSICS---
+
+        def move_no_collision(_):
+            # Just use the raw positions from input
+            return pre_x, pre_y
+
+        def move_collision(_):
+            # When colliding:
+            # - Can't move up; instead obstacles drag you down by their speed.
+            # - At the very bottom, you get pushed to the right instead.
+            # - Horizontal movement is
+            #       - allowed but slower (half speed)
+            #       - not allowed if you would get behind an obstacle
+
+            # Already at the bottom?
+            at_bottom = (pre_y >= player_max_y)
+
+            # Vertical:
+            #  - if not at bottom: move down with the obstacle speed
+            #  - if at bottom: stay at bottom vertically
+            moved_down_y = jnp.clip(
+                state.chicken_y + self.consts.obstacle_speed_px_per_frame,
+                player_min_y,
+                player_max_y,
+            )
+            new_y0 = jax.lax.cond(
+                at_bottom,
+                lambda _: pre_y,
+                lambda _: moved_down_y,
+                operand=None,
+            )
+
+            # Horizontal:
+            # Slow sideways movement while colliding
+            slow_dx = dx_int // 2
+
+            # Stay in screen
+            cand_x_side = jnp.clip(state.chicken_x + slow_dx, player_min_x, player_max_x)
+
+            # [avoid moving behind the obstacle]
+            # Check if cand_x_side would break the collision -> only execute it in this case
+            def check_collision_at(box):
+                box_x = box[0]
+                box_y = box[1]
+                box_w = box[2]
+                box_h = box[3]
+                active_box = box_h > 0
+
+                ch_x0 = cand_x_side
+                ch_x1 = cand_x_side + self.consts.chicken_width
+                ch_y0 = new_y0 - self.consts.chicken_height
+                ch_y1 = new_y0
+
+                ob_x0 = box_x
+                ob_x1 = box_x + box_w
+                ob_y0 = box_y - box_h
+                ob_y1 = box_y
+
+                overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
+                overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
+                hit = jnp.logical_and(overlap_x, overlap_y)
+                return jnp.logical_and(active_box, hit)
+
+            collisions_side = jax.vmap(check_collision_at)(boxes)
+            still_collide_side = jnp.any(collisions_side)
+
+            allowed_x_side = jax.lax.cond(
+                still_collide_side,
+                lambda _: state.chicken_x,  # block pushing further into the obstacle
+                lambda _: cand_x_side,  # allow movement if it resolves collision
+                operand=None,
+            )
+
+            # At bottom + collision: push right to make space
+            push_dx = jnp.where(at_bottom, 2, 0)
+            # Stay in screen
+            new_x0 = jnp.clip(allowed_x_side + push_dx, player_min_x, player_max_x)
+
+            return new_x0, new_y0
+
+        new_x, new_y = jax.lax.cond(
+            any_collision,
+            move_collision,
+            move_no_collision,
+            operand=None,
         )
 
         # Update time
