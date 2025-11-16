@@ -26,84 +26,142 @@ import chex
 
 
 class DefenderConstants(NamedTuple):
-    MAX_SPEED: int = 4
-    ENEMY_STEP_SIZE: float = 0.35
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    PLAYER_ACCELERATION: int = 0.15
-    PLAYER_BREAK: int = 0.1
-    BACKGROUND_COLOR: Tuple[int, int, int] = (144, 72, 17)
-    PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
-    SCORE_COLOR: Tuple[int, int, int] = (236, 236, 236)
-    SPACE_SHIP_COLOR: Tuple[int, int, int] = (0, 0, 200)
-    PLAYER_X: int = 140
-    PLAYER_Y: int = 80
-    PLAYER_SIZE: Tuple[int, int] = (16, 16)
+    # Game Window
+    WINDOW_WIDTH: int = 160
+    WINDOW_HEIGHT: int = 210
+    GAME_WIDTH: int = 480
+    GAME_HEIGHT: int = 135
+    GAME_AREA_TOP: int = 38
+    GAME_AREA_BOTTOM: int = GAME_AREA_TOP + GAME_HEIGHT
+
+    # Camera
+    CAMERA_WINDOW_X: int = 80
     CAMERA_OFFSET_MAX: int = 40
-    CAMERA_WIDTH: int = 160
-    CAMERA_TOP_BOUND: int = 37
-    CAMERA_X: int = 80
-    CAMERA_Y: int = 80
+    CAMERA_OFFSET_GAIN: int = 2
+    INITIAL_CAMERA_GAME_X: int = 240
+    INITIAL_CAMERA_OFFSET: int = 40
+
+    # UI
+    CITY_WIDTH: int = 80
+    CITY_HEIGHT: int = 13
+
+    # Space Ship
+    SPACE_SHIP_ACCELERATION: float = 0.15
+    SPACE_SHIP_BREAK: float = 0.1
+    SPACE_SHIP_MAX_SPEED: float = 4.0
+    SPACE_SHIP_COLOR: Tuple[int, int, int] = (0, 0, 200)
+    SPACE_SHIP_WIDTH: int = 13
+    SPACE_SHIP_HEIGHT: int = 5
+
+    # Enemy
+    ACTIVE: int = 1
+    INACTIVE: int = 0  # active, x_pos, y_pos
+    ENEMY_SPEED: float = 0.24
+    ENEMY_WIDTH: int = 13
+    ENEMY_HEIGHT: int = 7
+    ENEMY_MAX: int = 20
+
+    # Types
+    INACTIVE: int = 0
+    LANDER: int = 1
+    POD: int = 2
+    BOMBER: int = 3
+    SWARMERS: int = 4
+    MUTANT: int = 5
+    BAITER: int = 6
+
+    # Bomber
     BOMBER_AMOUNT: Tuple[int, int, int, int, int] = (1, 2, 2, 2, 2)
     MAX_BOMBER_AMOUNT: int = 1
+    BOMBER_Y_SPEED: float = -0.2
+
+    # Lander
     LANDER_AMOUNT: Tuple[int, int, int, int, int] = (18, 18, 19, 20, 20)
     MAX_LANDER_AMOUNT: int = 5
+    LANDER_Y_SPEED: float = 0.08
+
+    # Pod
     POD_AMOUNT: Tuple[int, int, int, int, int] = (2, 2, 3, 3, 3)
     MAX_POD_AMOUNT: int = 3
+
+    # Baiter
     BAITER_TIME_SEC: int = 20
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
+
+    # Bullet
     BULLET_SPEED: int = 2
-    BULLET_COLOR: Tuple[Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]] = (
-        (200, 0, 0),      # Red
-        (255, 255, 0),    # Yellow
-        (0, 0, 255)       # Blue
+    BULLET_COLOR: Tuple[
+        Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]
+    ] = (
+        (200, 0, 0),  # Red
+        (255, 255, 0),  # Yellow
+        (0, 0, 255),  # Blue
     )
-    ENEMY_SPEED: float = 0.06
 
-    ACTIVE: int = 1
-    INACTIVE: int = 0                            # active, x_pos, y_pos
-    ENEMY_SPEED: float = 0.24
-    LANDER_Y_SPEED: float = 0.08
-    BOMBER_Y_SPEED: float = -0.2
-    INIT_LANDER_STATES: chex.Array = jnp.array([
-        # active, pos_x, pos_y
-        [1, random.randint(130, 480), random.randint(39, 160)]
-        for _ in range(MAX_LANDER_AMOUNT)
-    ]).reshape(MAX_LANDER_AMOUNT, 3)
-    
-    INIT_BOMBER_STATES: chex.Array = jnp.array([
-        # active, pos_x, pos_y, direction_right
-        [1, 120, 70, 0]
-        for _ in range(MAX_BOMBER_AMOUNT)
-    ]).reshape(MAX_BOMBER_AMOUNT, 4)
-
-    INIT_POD_STATES: chex.Array = jnp.array([
-        # active, pos_x, pos_y
-        [1, random.randint(130, 480), random.randint(39, 160)]
-        for _ in range(MAX_POD_AMOUNT)
-    ]).reshape(MAX_POD_AMOUNT, 3)
-
+    # Initial Wave State
+    # Positions are in game world positions
+    INITIAL_SPACE_SHIP_X: int = INITIAL_CAMERA_GAME_X - INITIAL_CAMERA_OFFSET
+    INITIAL_SPACE_SHIP_Y: int = 80
+    INITIAL_SPACE_SHIP_FACING_RIGHT: bool = True
+    INITIAL_ENEMY_STATES: chex.Array = jnp.array(
+        [
+            # MAX 20 ENEMYS ON FIELD, see ENEMY_MAX
+            # x, y, type, arg1, arg2
+            # Landers
+            # x, y, type, human_num if lander abducts, ..
+            [360, 30, LANDER, 0, 0],
+            [20, 100, LANDER, 0, 0],
+            [80, 80, LANDER, 0, 0],
+            [30, 60, LANDER, 0, 0],
+            # Pods
+            # x, y, type, .., ..
+            [340, 20, POD, 0, 0],
+            [350, 30, POD, 0, 0],
+            # Bomber
+            # x, y, type, .., ..
+            [300, 50, BOMBER, 0, 0],
+            # Inactives
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+            [0, 0, INACTIVE, 0, 0],
+        ]
+    )
 
 
 # immutable state container
 class DefenderState(NamedTuple):
+    # Game
+    step_counter: chex.Array
+    # Camera
+    camera_offset: chex.Array
+    # Space Ship
     space_ship_speed: chex.Array
     space_ship_x: chex.Array
     space_ship_y: chex.Array
     space_ship_facing_right: chex.Array
-    camera_offset: chex.Array
-    step_counter: chex.Array
-    lander_states: chex.Array
-    bomber_states: chex.Array
+    # Bullet
     bullet_state: chex.Array
     bullet_x: chex.Array
     bullet_y: chex.Array
     bullet_dir_x: chex.Array
     bullet_dir_y: chex.Array
     bullet_color_pos: chex.Array
-    pod_states: chex.Array
-    # bomber_array: chex.Array
+    # Enemies
+    enemy_states: (
+        chex.Array
+    )  # (20, 5) array with (x, y, type, arg1, arg2) for each enemy
+
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -125,22 +183,22 @@ class DefenderRenderer(JAXGameRenderer):
     def __init__(self, consts: DefenderConstants = None):
         super().__init__()
         self.consts = consts or DefenderConst
+
     def __init__(self, consts: DefenderConstants = None):
         super().__init__()
         self.consts = consts or DefenderConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
             channels=3,
             # downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        # 1. Create procedural assets for both walls
 
-        # 2. Update asset config to include both walls
+        # Update asset config
         asset_config = self._get_asset_config()
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/defender"
 
-        # 3. Make a single call to the setup function
+        # Make a single call to the setup function
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -150,7 +208,7 @@ class DefenderRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
     def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game, including both wall sprites."""
+        # Returns the declarative manifest of all assets for the game, including both wall sprites
         return [
             {"name": "background", "type": "background", "file": "ui_overlay.npy"},
             {"name": "space_ship", "type": "single", "file": "space_ship.npy"},
@@ -168,96 +226,119 @@ class DefenderRenderer(JAXGameRenderer):
     def render(self, state: DefenderState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
+        # Render City
         city_start = -(state.space_ship_x + state.camera_offset) % 80
+        city_y_pos = self.consts.GAME_AREA_BOTTOM - self.consts.CITY_HEIGHT
         city_mask = self.SHAPE_MASKS["city"]
         raster = self.jr.render_at_clipped(
             raster,
             city_start,
-            160,
+            city_y_pos,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_start-80,
-            160,
+            city_start - 80,
+            city_y_pos,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_start+80,
-            160,
+            city_start + 80,
+            city_y_pos,
             city_mask,
         )
 
-        # render all Landers
-        for i in range(state.lander_states.shape[0]):
-            lander = state.lander_states[i]
-            is_active = lander[0] == self.consts.ACTIVE
-            pos_x = lander[1]
-            pos_y = lander[2]
-            raster = jax.lax.cond(
-                is_active,
-                lambda raster: self.jr.render_at_clipped(
-                    raster,
-                    self.consts.CAMERA_X - state.camera_offset + pos_x - state.space_ship_x,
-                    pos_y,
-                    self.SHAPE_MASKS["lander"],
-                ),
-                lambda raster: raster,
-                operand=raster,
+        # TODO Render Score
+
+        # Camera offset calculation function, does return coordinates that are not on screen!
+        def onscreen_pos(game_x, game_y):
+            camera_window_x = self.consts.CAMERA_WINDOW_X
+            camera_game_x = state.space_ship_x + state.camera_offset
+
+            camera_left_border = jnp.mod(
+                camera_game_x - self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
+            )
+            camera_right_border = jnp.mod(
+                camera_game_x + self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
             )
 
-        # render all Bombers
-        for i in range(state.bomber_states.shape[0]):
-            bomber = state.bomber_states[i]
-            is_active = bomber[0] == self.consts.ACTIVE
-            pos_x = bomber[1]
-            pos_y = bomber[2]
-            direction_right = bomber[3]
-            raster = jax.lax.cond(
-                is_active,
-                lambda raster: self.jr.render_at_clipped(
-                    raster,
-                    self.consts.CAMERA_X - state.camera_offset + pos_x - state.space_ship_x,
-                    pos_y,
-                    self.SHAPE_MASKS["bomber"],
-                    flip_horizontal= jnp.logical_not(direction_right),
-                ),
-                lambda raster: raster,
-                operand=raster,
+            is_in_left_wrap = jnp.logical_and(
+                game_x >= camera_left_border, camera_left_border > camera_game_x
             )
-            
-        # render all Pods
-        for i in range(state.pod_states.shape[0]):
-            pod = state.pod_states[i]
-            is_active = pod[0] == self.consts.ACTIVE
-            pos_x = pod[1]
-            pos_y = pod[2]
-            raster = jax.lax.cond(
-                is_active,
-                lambda raster: self.jr.render_at_clipped(
-                    raster,
-                    self.consts.CAMERA_X - state.camera_offset + pos_x - state.space_ship_x,
-                    pos_y,
-                    self.SHAPE_MASKS["pod"],
-                ),
-                lambda raster: raster,
-                operand=raster,
+            is_in_right_wrap = jnp.logical_and(
+                game_x < camera_right_border, camera_right_border < camera_game_x
             )
-        
-        # render spaceship
+
+            screen_x = (game_x - camera_game_x + camera_window_x).astype(jnp.int32)
+
+            screen_x = jax.lax.cond(
+                is_in_left_wrap,
+                lambda: jnp.mod(game_x, camera_left_border).astype(jnp.int32),
+                lambda: screen_x,
+            )
+
+            screen_x = jax.lax.cond(
+                is_in_right_wrap,
+                lambda: (
+                    self.consts.GAME_WIDTH - camera_game_x + game_x + camera_window_x
+                ).astype(jnp.int32),
+                lambda: screen_x,
+            )
+
+            screen_y = game_y + self.consts.GAME_AREA_TOP
+            return screen_x, screen_y
+
+        # Use together with onscreen_pos, as it returns even ones that are slightly offscreen, for clip
+        def is_onscreen(screen_x: int, screen_y: int, width: int, height: int) -> bool:
+            x_onscreen = jnp.logical_and(
+                screen_x + width > 0, screen_x < self.consts.WINDOW_WIDTH
+            )
+            y_onscreen = jnp.logical_and(
+                screen_y + height > self.consts.GAME_AREA_TOP,
+                screen_y < self.consts.GAME_AREA_BOTTOM,
+            )
+            return jnp.logical_and(x_onscreen, y_onscreen)
+
+        # Render Enemy custom function to use in for loop, renders if it is on screen
+        def render_enemy(i: int, r):
+            enemy = state.enemy_states[i]
+            x, y = onscreen_pos(enemy[0], enemy[1])
+            enemy_type = enemy[2]
+            mask = self.SHAPE_MASKS["lander"]
+
+            screen_x, screen_y = onscreen_pos(x, y)
+            onscreen = is_onscreen(
+                screen_x, screen_y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
+            )
+
+            is_active_and_onscreen = jnp.logical_and(
+                enemy_type != self.consts.INACTIVE, onscreen
+            )
+            return jax.lax.cond(
+                is_active_and_onscreen,
+                lambda ras: self.jr.render_at_clipped(ras, screen_x, screen_y, mask),
+                lambda ras: ras,
+                r,
+            )
+
+        raster = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, render_enemy, raster)
+
+        # Render Space Ship
         space_ship_mask = self.SHAPE_MASKS["space_ship"]
-
-        space_ship_facing_left = jnp.where(state.space_ship_facing_right, False, True)
+        space_ship_facing_right = jnp.where(state.space_ship_facing_right, False, True)
+        space_ship_window_x, space_ship_window_y = onscreen_pos(
+            state.space_ship_x, state.space_ship_y
+        )
 
         raster = self.jr.render_at(
             raster,
-            self.consts.CAMERA_X - state.camera_offset,
-            state.space_ship_y,
+            space_ship_window_x,
+            space_ship_window_y,
             space_ship_mask,
-            flip_horizontal=space_ship_facing_left,
+            flip_horizontal=space_ship_facing_right,
         )
-        
+
         return self.jr.render_from_palette(raster, self.PALETTE)
 
 
@@ -290,17 +371,39 @@ class JaxDefender(
             Action.DOWNLEFTFIRE,
         ]
 
-    def _is_onscreen(self, state: DefenderState, pos_x: int) -> bool:
-        camera_left = state.space_ship_x + state.camera_offset - self.consts.CAMERA_WIDTH/2
-        camera_right = camera_left + self.consts.CAMERA_WIDTH
-        return jnp.logical_and(pos_x >= camera_left, pos_x < camera_right)
+    def is_colliding(self, e1: EntityPosition, e2: EntityPosition) -> chex.Array:
+        e1max_x = e1.x + e1.width
+        e2max_x = e2.x + e2.width
+        e1max_y = e1.y + e1.height
+        e2max_y = e2.y + e2.height
 
-    def _get_onscreen_enemies(self, state: DefenderState) -> chex.Array:
-        
-        pass
+        check_1 = e1.x <= e2max_x
+        check_2 = e1max_x >= e2.x
 
-    def _player_step(self, state: DefenderState, action: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        """Returns: (space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right)"""
+        check_3 = e1.y <= e2max_y
+        check_4 = e1max_y >= e2.y
+
+        check_x = jnp.logical_and(check_1, check_2)
+        check_y = jnp.logical_and(check_3, check_4)
+
+        return jnp.logical_and(check_x, check_y)
+
+    # Wrap function, returns wrapped position
+    def wrap_pos(self, game_x: int, game_y: int):
+        return game_x % self.consts.GAME_WIDTH, game_y % self.consts.GAME_HEIGHT
+
+    def _move_and_wrap(
+        self, x_pos: float, y_pos: float, x_speed: float, y_speed: float
+    ) -> Tuple[float, float]:
+        x = x_pos + x_speed
+        y = y_pos + y_speed
+        x, y = self.wrap_pos(int(x), int(y))
+        return x, y
+
+    def _player_step(
+        self, state: DefenderState, action: chex.Array
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        # Returns: (space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right)
         left = jnp.any(
             jnp.array(
                 [
@@ -360,189 +463,75 @@ class JaxDefender(
             operand=None,
         )
 
-        space_ship_speed = jax.lax.cond(direction_x != 0, 
-            lambda _ : state.space_ship_speed + direction_x * self.consts.PLAYER_ACCELERATION,
-            lambda _ : state.space_ship_speed * (1 - self.consts.PLAYER_BREAK),
-            operand=None
+        space_ship_speed = jax.lax.cond(
+            direction_x != 0,
+            lambda _: state.space_ship_speed
+            + direction_x * self.consts.SPACE_SHIP_ACCELERATION,
+            lambda _: state.space_ship_speed * (1 - self.consts.SPACE_SHIP_BREAK),
+            operand=None,
         )
 
         space_ship_speed = jnp.clip(
-            space_ship_speed, -self.consts.MAX_SPEED, self.consts.MAX_SPEED
+            space_ship_speed,
+            -self.consts.SPACE_SHIP_MAX_SPEED,
+            self.consts.SPACE_SHIP_MAX_SPEED,
         )
 
         space_ship_x = state.space_ship_x + space_ship_speed
         space_ship_y = state.space_ship_y + direction_y
+        space_ship_x, space_ship_y = self.wrap_pos(space_ship_x, space_ship_y)
 
         return space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right
 
-    def _bullet_step(self, state: DefenderState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]: 
-        """Returns: (bullet_state, bullet_x, bullet_y, bullet_color_pos)"""
-        bullet_x = jax.lax.cond(state.bullet_state, 
-        lambda _: state.bullet_x + state.bullet_dir_x * self.consts.BULLET_SPEED, 
-        lambda _: state.bullet_x, 
-        operand = None)
-        bullet_y = jax.lax.cond(state.bullet_state, 
-        lambda _: state.bullet_y + state.bullet_dir_y * self.consts.BULLET_SPEED, 
-        lambda _: state.bullet_y, 
-        operand = None)
+    def _bullet_step(
+        self, state: DefenderState
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        # Returns: (bullet_state, bullet_x, bullet_y, bullet_color_pos)
+        bullet_x = jax.lax.cond(
+            state.bullet_state,
+            lambda _: state.bullet_x + state.bullet_dir_x * self.consts.BULLET_SPEED,
+            lambda _: state.bullet_x,
+            operand=None,
+        )
+        bullet_y = jax.lax.cond(
+            state.bullet_state,
+            lambda _: state.bullet_y + state.bullet_dir_y * self.consts.BULLET_SPEED,
+            lambda _: state.bullet_y,
+            operand=None,
+        )
 
         bullet_state = self._is_onscreen(state, bullet_x)
         bullet_color_pos = (state.bullet_color_pos + 1) % len(self.consts.BULLET_COLOR)
 
         return bullet_state, bullet_x, bullet_y, bullet_color_pos
-    
-    def _shoot(self, state: DefenderState, pos_x: float, pos_y: float, dir_x: int, dir_y:int) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]: 
-        """Returns: (bullet_state, bullet_x, bullet_y, bullet_dir_x, bullet_dir_y)"""
+
+    def _shoot(
+        self, pos_x: float, pos_y: float, dir_x: int, dir_y: int
+    ) -> Tuple[bool, float, float, int, int]:
+        # Returns: (bullet_state, bullet_x, bullet_y, bullet_dir_x, bullet_dir_y)
         return True, pos_x, pos_y, dir_x, dir_y
-        
 
-    def _lander_step(self, state: DefenderState, lander: chex.Array) -> chex.Array:   
-        x_pos = lander[1]
-        y_pos = lander[2]
-    
-        speed = self.consts.ENEMY_SPEED 
-        # acceleration in x direction
-        speed = jax.lax.cond(
-            state.space_ship_speed > 0,
-            lambda s: -s,
-            lambda s: s,
-            operand=speed,
-        )
-        
-        x_pos = x_pos + speed
-        
-        # movement in y direction
-        y_pos += self.consts.LANDER_Y_SPEED
-        y_pos = 39 + (y_pos - 39) % (160 - 39 + 1)
-        
-        lander = lander.at[1].set(x_pos)
-        lander = lander.at[2].set(y_pos)
-        lander = lander.at[3].set(speed)
-        return lander
-
-    def _lander_step_all(self, state: DefenderState) -> chex.Array:
-        """Returns: new_lander_states"""
-        new_lander_states = []
-        for i in range(state.lander_states.shape[0]):
-            lander = state.lander_states[i]
-            lander = jax.lax.cond(
-                lander[0] == self.consts.INACTIVE,
-                lambda _: lander,
-                lambda _: self._lander_step(state, lander),
-                operand=None,
-            )
-            new_lander_states.append(lander)
-          
-        return jnp.array(new_lander_states)
-    
-    def _pod_step(self, state: DefenderState, pod: chex.Array) -> chex.Array:
-        x_pos = pod[1]
-        y_pos = pod[2]
-    
-        speed = self.consts.ENEMY_SPEED 
-        # acceleration in x direction
-        speed = jax.lax.cond(
-            state.state.space_ship_speed > 0,
-            lambda s: -s,
-            lambda s: s,
-            operand=speed,
-        )
-        
-        x_pos = x_pos + speed
-        
-        # movement in y direction
-        y_pos += self.consts.LANDER_Y_SPEED
-        y_pos = 39 + (y_pos - 39) % (160 - 39 + 1)
-        
-        pod = pod.at[1].set(x_pos)
-        pod = pod.at[2].set(y_pos)
-        pod = pod.at[3].set(speed)
-        return pod
-
-    def _pod_step_all(self, state: DefenderState) -> chex.Array:
-        """Returns: new_pod_states"""
-        pods = []
-        for i in range(state.pod_states.shape[0]):
-            pod = state.pod_states[i]
-            pod = jax.lax.cond(
-                pod[0] == self.consts.INACTIVE,
-                lambda _: pod,
-                lambda _: self._lander_step(state, pod),
-                operand=None,
-            )
-            pods.append(pod)
-        return jnp.array(pods)
-    
-    
-    def _bomber_step(self, state: DefenderState, bomber: chex.Array) -> chex.Array:
-        # The bomber has a direction and when the spaceship is crossed and has passed it by 30 the direction changes
-        x_pos = bomber[1]
-        y_pos = bomber[2]
-        direction_right = bomber[3]
-        speed = self.consts.ENEMY_SPEED
-        # acceleration in x direction
-        speed = jax.lax.cond(
-            direction_right,
-            lambda s: s,
-            lambda s: -s,
-            operand=speed,
-        )
-        x_pos = x_pos + speed
-        # movement in y direction
-        y_pos += self.consts.BOMBER_Y_SPEED
-        y_pos = 39 + (y_pos - 39) % (160 - 39 + 1)
-        # change direction if spaceship is crossed and passed by 30
-        direction_right = jax.lax.cond(
-            jnp.logical_and(
-                direction_right,
-                x_pos > state.space_ship_x + 30
-            ),
-            lambda _: 0.0,
-            lambda _: jax.lax.cond(
-                jnp.logical_and(
-                    jnp.logical_not(direction_right),
-                    x_pos < state.space_ship_x - 30
-                ),
-                lambda _: 1.0,
-                lambda _: direction_right,
-                operand=None,
-            ),
-            operand=None,
-        )
-
-        bomber = bomber.at[1].set(x_pos)
-        bomber = bomber.at[2].set(y_pos)
-        bomber = bomber.at[3].set(direction_right)
-        return bomber
-
-
-    def _bomber_step_all(self, state: DefenderState) -> chex.Array:
-        """Returns: new_bomber_states"""
-        new_bomber_states = []
-        for i in range(state.bomber_states.shape[0]):
-            bomber = state.bomber_states[i]
-            bomber = jax.lax.cond(
-                bomber[0] == self.consts.INACTIVE,
-                lambda _: bomber,
-                lambda _: self._bomber_step(state, bomber),
-                operand=None,
-            )
-            new_bomber_states.append(bomber)
-          
-        return jnp.array(new_bomber_states)
-
-    def _shooting_step(self, state: DefenderState) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    def _shooting_step(
+        self, state: DefenderState
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
         """Returns: (bullet_state, bullet_x, bullet_y, bullet_dir_x, bullet_dir_y)"""
         # This function should check if shooting is triggered and return updated bullet state
         # For now, just return the current bullet state
-        return state.bullet_state, state.bullet_x, state.bullet_y, state.bullet_dir_x, state.bullet_dir_y
+        return (
+            state.bullet_state,
+            state.bullet_x,
+            state.bullet_y,
+            state.bullet_dir_x,
+            state.bullet_dir_y,
+        )
 
-
-    def _camera_step(self, state: DefenderState) -> chex.Array:
-        """Returns: camera_offset"""
-        offset_gain = 2
+    def _camera_step(
+        self, state: DefenderState, space_ship_facing_right: bool
+    ) -> chex.Array:
+        # Returns: camera_offset
+        offset_gain = self.consts.CAMERA_OFFSET_GAIN
         camera_offset = state.camera_offset
-        camera_offset += jnp.where(state.space_ship_facing_right, 1, -1) * offset_gain
+        camera_offset += jnp.where(space_ship_facing_right, 1, -1) * offset_gain
 
         camera_offset = jnp.clip(
             camera_offset,
@@ -554,21 +543,28 @@ class JaxDefender(
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
         initial_state = DefenderState(
-            space_ship_speed=jnp.array(0).astype(jnp.float32),
-            space_ship_x=jnp.array(20).astype(jnp.int32),
-            space_ship_y=jnp.array(100).astype(jnp.int32),
-            space_ship_facing_right=jnp.array(True, dtype=jnp.bool),
+            # Game
             step_counter=jnp.array(0).astype(jnp.int32),
-            camera_offset=jnp.array(0).astype(jnp.int32),
-            lander_states=jnp.array(self.consts.INIT_LANDER_STATES).astype(jnp.float32),
-            bomber_states=jnp.array(self.consts.INIT_BOMBER_STATES).astype(jnp.float32),
-            pod_states=jnp.array(self.consts.INIT_POD_STATES).astype(jnp.float32),
-            bullet_state=jnp.array(True, dtype=jnp.bool),
+            # Camera
+            camera_offset=jnp.array(self.consts.INITIAL_CAMERA_OFFSET).astype(
+                jnp.int32
+            ),
+            # Space Ship
+            space_ship_speed=jnp.array(0).astype(jnp.float32),
+            space_ship_x=jnp.array(self.consts.INITIAL_SPACE_SHIP_X).astype(jnp.int32),
+            space_ship_y=jnp.array(self.consts.INITIAL_SPACE_SHIP_Y).astype(jnp.int32),
+            space_ship_facing_right=jnp.array(
+                self.consts.INITIAL_SPACE_SHIP_FACING_RIGHT, dtype=jnp.bool
+            ),
+            # Bullet
+            bullet_state=jnp.array(False, dtype=jnp.bool),
             bullet_x=jnp.array(0).astype(jnp.float32),
             bullet_y=jnp.array(0).astype(jnp.float32),
             bullet_dir_x=jnp.array(0).astype(jnp.int32),
             bullet_dir_y=jnp.array(0).astype(jnp.int32),
             bullet_color_pos=jnp.array(0).astype(jnp.int32),
+            # Enemies
+            enemy_states=jnp.array(self.consts.INITIAL_ENEMY_STATES).astype(jnp.int32),
         )
         observation = self._get_observation(initial_state)
         return observation, initial_state
@@ -578,14 +574,12 @@ class JaxDefender(
         self, state: DefenderState, action: chex.Array
     ) -> Tuple[DefenderObservation, DefenderState, float, bool, DefenderInfo]:
         # Get all updated values from individual step functions
-        space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right = self._player_step(state, action)
-        lander_states = self._lander_step_all(state)
-        bomber_states = self._bomber_step_all(state)
-        pod_states = self._pod_step_all(state)
-        camera_offset = self._camera_step(state)
-        bullet_state, bullet_x, bullet_y, bullet_color_pos = self._bullet_step(state)
-        shoot_bullet_state, shoot_bullet_x, shoot_bullet_y, shoot_bullet_dir_x, shoot_bullet_dir_y = self._shooting_step(state)
-        
+        space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right = (
+            self._player_step(state, action)
+        )
+
+        camera_offset = self._camera_step(state, space_ship_facing_right)
+
         # Build the new state once at the end
         new_state = DefenderState(
             space_ship_speed=space_ship_speed,
@@ -594,17 +588,15 @@ class JaxDefender(
             space_ship_facing_right=space_ship_facing_right,
             camera_offset=camera_offset,
             step_counter=state.step_counter + 1,
-            lander_states=lander_states,
-            bomber_states=bomber_states,
-            pod_states=pod_states,
-            bullet_state=bullet_state,
-            bullet_x=bullet_x,
-            bullet_y=bullet_y,
+            bullet_state=state.bullet_state,
+            bullet_x=state.bullet_x,
+            bullet_y=state.bullet_y,
             bullet_dir_x=state.bullet_dir_x,
             bullet_dir_y=state.bullet_dir_y,
-            bullet_color_pos=bullet_color_pos,
+            bullet_color_pos=state.bullet_color_pos,
+            enemy_states=state.enemy_states,
         )
-        
+
         # state = self._collision_step(new_state)
         observation = self._get_observation(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -629,10 +621,10 @@ class JaxDefender(
             player=EntityPosition(
                 x=state.space_ship_x,
                 y=state.space_ship_y,
-                width=jnp.array(self.consts.PLAYER_SIZE[0]),
-                height=jnp.array(self.consts.PLAYER_SIZE[1]),
-        ),
-        score=0
+                width=jnp.array(self.consts.SPACE_SHIP_WIDTH),
+                height=jnp.array(self.consts.SPACE_SHIP_HEIGHT),
+            ),
+            score=0,
         )
 
     def observation_spaces(self) -> spaces.Space:
