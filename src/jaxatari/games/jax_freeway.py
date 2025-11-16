@@ -11,6 +11,30 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Freeway.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {
+            'name': 'player', 'type': 'group',
+            'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
+        },
+        {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
+        {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
+        {'name': 'car_dark_green', 'type': 'single', 'file': 'car_dark_green.npy'},
+        {'name': 'car_light_red', 'type': 'single', 'file': 'car_light_red.npy'},
+        {'name': 'car_blue', 'type': 'single', 'file': 'car_blue.npy'},
+        {'name': 'car_brown', 'type': 'single', 'file': 'car_brown.npy'},
+        {'name': 'car_light_blue', 'type': 'single', 'file': 'car_light_blue.npy'},
+        {'name': 'car_red', 'type': 'single', 'file': 'car_red.npy'},
+        {'name': 'car_green', 'type': 'single', 'file': 'car_green.npy'},
+        {'name': 'car_yellow', 'type': 'single', 'file': 'car_yellow.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+    )
+ 
 """Per-lane car movement timing (frames per pixel, sign = direction).
 Negative values move left, positive values move right. Absolute value is the
 frame interval at which the car advances by one pixel.
@@ -103,6 +127,24 @@ class FreewayConstants(NamedTuple):
         + (top_border + top_path)
         + 2,  # Lane 10
     ]
+    # Car colors for each lane (10 lanes). If color is None, use original sprite color.
+    # Otherwise, recolor the car sprite to the specified RGB color.
+    # Note: Use None for original color, (0, 0, 0) for actual black.
+    CAR_COLORS: List[Optional[Tuple[int, int, int]]] = [
+        None,  # Lane 0 - use original color
+        None,  # Lane 1 - use original color
+        None,  # Lane 2 - use original color
+        None,  # Lane 3 - use original color
+        None,  # Lane 4 - use original color
+        None,  # Lane 5 - use original color
+        None,  # Lane 6 - use original color
+        None,  # Lane 7 - use original color
+        None,  # Lane 8 - use original color
+        None,  # Lane 9 - use original color
+    ]
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class FreewayState(NamedTuple):
@@ -137,15 +179,12 @@ class FreewayInfo(NamedTuple):
 
 
 class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
-    def __init__(self, consts: FreewayConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: FreewayConstants = None):
         if consts is None:
             consts = FreewayConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.state = self.reset()
-        self.renderer = FreewayRenderer()
+        self.renderer = FreewayRenderer(self.consts)
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FreewayObservation, FreewayState]:
         """Initialize a new game state"""
@@ -455,19 +494,35 @@ class FreewayRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Load and setup assets using the new pattern
-        asset_config = self._get_asset_config()
+        # Convert tuple to list so we can append the procedural black_bar
+        asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        
+        # Add car colors to palette as 1x1 procedural sprites if they're not None
+        # This ensures the colors are in the palette before we recolor
+        for lane_idx, color in enumerate(self.consts.CAR_COLORS):
+            if color is not None:
+                # Create a 1x1 procedural sprite with this color to ensure it's in the palette
+                color_rgba = jnp.array(list(color) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
+                asset_config.append({
+                    'name': f'car_color_lane_{lane_idx}',
+                    'type': 'procedural',
+                    'data': color_rgba
+                })
         
         # Create black bar sprite at initialization time
         black_bar_sprite = self._create_black_bar_sprite()
         
-        # Add black bar sprite to the asset config as procedural asset
+        # 3. Append procedural assets
         asset_config.append({
             'name': 'black_bar', 
             'type': 'procedural', 
             'data': black_bar_sprite
         })
         
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        
+        # 4. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -475,6 +530,68 @@ class FreewayRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        
+        # Recolor cars if specified in constants
+        self._recolor_cars(sprite_path)
+
+    def _recolor_3d_sprite(self, sprite_array: jnp.ndarray, new_rgb_color: jnp.ndarray) -> jnp.ndarray:
+        """
+        Recolors the non-transparent pixels of a 3D RGBA sprite array.
+        
+        Args:
+            sprite_array: The input array with shape (H, W, 4).
+            new_rgb_color: A 3-element array for the new RGB color.
+            
+        Returns:
+            A new array with the sprite recolored.
+        """
+        # Create a mask from the alpha channel (the 4th channel)
+        is_visible = sprite_array[:, :, 3] > 0
+        
+        # Use the mask to set the RGB values (:3) of visible pixels
+        recolored_array = sprite_array.at[is_visible, :3].set(new_rgb_color)
+        
+        return recolored_array
+    
+    def _recolor_cars(self, sprite_path: str):
+        """
+        Recolors car sprites based on CAR_COLORS in constants.
+        If color is [0,0,0], the original sprite is kept.
+        """
+        # Map lane index to car sprite name
+        car_sprite_names = [
+            'car_dark_red',      # Lane 0
+            'car_light_green',   # Lane 1
+            'car_dark_green',    # Lane 2
+            'car_light_red',     # Lane 3
+            'car_blue',          # Lane 4
+            'car_brown',         # Lane 5
+            'car_light_blue',    # Lane 6
+            'car_red',           # Lane 7
+            'car_green',         # Lane 8
+            'car_yellow',        # Lane 9
+        ]
+        
+        for lane_idx in range(self.consts.num_lanes):
+            color = self.consts.CAR_COLORS[lane_idx]
+            # If color is None, skip recoloring (use original)
+            if color is None:
+                continue
+                
+            sprite_name = car_sprite_names[lane_idx]
+            
+            # Load the original sprite
+            sprite_file = os.path.join(sprite_path, f'{sprite_name}.npy')
+            original_sprite = self.jr.loadFrame(sprite_file)
+            
+            # Recolor the sprite
+            new_color = jnp.array(color, dtype=jnp.uint8)
+            recolored_sprite = self._recolor_3d_sprite(original_sprite, new_color)
+            
+            # Create a new mask from the recolored sprite
+            # The color should already be in the palette from the procedural sprite we added
+            new_mask = self.jr._create_id_mask(recolored_sprite, self.COLOR_TO_ID)
+            self.SHAPE_MASKS[sprite_name] = new_mask
 
     def _create_black_bar_sprite(self) -> jnp.ndarray:
         """Create a black bar sprite for the left side of the screen."""
@@ -485,27 +602,6 @@ class FreewayRenderer(JAXGameRenderer):
         black_bar = jnp.zeros((bar_height, bar_width, 4), dtype=jnp.uint8)
         black_bar = black_bar.at[:, :, 3].set(255)  # Set alpha to 255
         return black_bar
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        return [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {
-                'name': 'player', 'type': 'group',
-                'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
-            },
-            {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
-            {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
-            {'name': 'car_dark_green', 'type': 'single', 'file': 'car_dark_green.npy'},
-            {'name': 'car_light_red', 'type': 'single', 'file': 'car_light_red.npy'},
-            {'name': 'car_blue', 'type': 'single', 'file': 'car_blue.npy'},
-            {'name': 'car_brown', 'type': 'single', 'file': 'car_brown.npy'},
-            {'name': 'car_light_blue', 'type': 'single', 'file': 'car_light_blue.npy'},
-            {'name': 'car_red', 'type': 'single', 'file': 'car_red.npy'},
-            {'name': 'car_green', 'type': 'single', 'file': 'car_green.npy'},
-            {'name': 'car_yellow', 'type': 'single', 'file': 'car_yellow.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
