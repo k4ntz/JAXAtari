@@ -1,0 +1,3 @@
+[submodule "src/pygame/BasicMath"]
+	path = src/pygame/BasicMath
+	url = https://github.com/praktikum-aus-ki/BasicMath.git
