@@ -270,8 +270,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_on_road=True,
             player_car=Car(
                 position=EntityPosition(
-                    x=50,
-                    y=50,
+                    x=30,
+                    y=105,
                     width=self.consts.PLAYER_SIZE[0],
                     height=self.consts.PLAYER_SIZE[1],
                 ),
@@ -367,9 +367,13 @@ class UpNDownRenderer(JAXGameRenderer):
             #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        background = self._createBackgroundSprite(self.config.game_dimensions)
+        top_block = self._createBackgroundSprite((25, self.config.game_dimensions[1]))
+        bottom_block = self._createBackgroundSprite((16, self.config.game_dimensions[1]))
         
         # 2. Update asset config to include both walls
-        asset_config = self._get_asset_config()
+        asset_config = self._get_asset_config(background, top_block, bottom_block)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
 
         # 3. Make a single call to the setup function
@@ -381,18 +385,37 @@ class UpNDownRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-    def _get_asset_config(self) -> list:
+    def _createBackgroundSprite(self, dimensions: Tuple[int, int]) -> jnp.ndarray:
+        """Creates a procedural background sprite for the game."""
+        height, width = dimensions
+        color = (0, 0, 0, 255)  # RGBA for wall color
+        shape = (height, width, 4)  # Height, Width, RGBA channels
+        sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
+        return sprite
+
+    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray) -> list:
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [
-            {'name': 'background', 'type': 'background', 'file': 'background/background1.npy'},
+            {'name': 'background', 'type': 'background', 'data': backgroundSprite},
+            {'name': 'road1', 'type': 'single', 'file': 'background/background1.npy'},
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
+            {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
+            {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        road1_mask = self.SHAPE_MASKS["road1"]
+        raster = self.jr.render_at(raster, 10, 25, road1_mask)
 
         player_mask = self.SHAPE_MASKS["player"]
-        raster = self.jr.render_at(raster, state.player_car.position.x, state.player_car.position.y, player_mask)
+        raster = self.jr.render_at(raster, state.player_car.position.x, 105, player_mask)
+
+        wall_top_mask = self.SHAPE_MASKS["wall_top"]
+        raster = self.jr.render_at(raster, 0, 0, wall_top_mask)
+
+        wall_bottom_mask = self.SHAPE_MASKS["wall_bottom"]
+        raster = self.jr.render_at(raster, 0, 210 - wall_bottom_mask.shape[0], wall_bottom_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
