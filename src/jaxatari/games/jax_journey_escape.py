@@ -25,21 +25,18 @@ class JourneyEscapeConstants(NamedTuple):
     row_spawn_period_frames: int = 16  # spawn every N frames (tweakable)
 
     top_border: int = 15
-    top_path: int = 8
     bottom_border: int = 180
     left_border: int = 5
     right_border: int = 210
-    # Collision response tuning
-    throw_back_frames: int = 24  # frames the chicken is pushed back after hit
-    stun_frames: int = 28  # frames the chicken cannot move after hit
-    # After scoring (reaching the top and resetting), prevent movement for N frames
-    post_score_stun_frames: int = 28
-    # Vertical offset to apply to chicken spawn after scoring (positive = lower on screen)
-    post_score_spawn_offset_y: int = 1
+
+    starting_score: int = 99
+
     # Collision box insets (shrink AABB without changing render sizes)
     chicken_hit_inset_x: int = 1
     chicken_hit_inset_y_top: int = -2  # Top edge of chicken (when cars approach from above)
     chicken_hit_inset_y_bottom: int = 0  # Bottom edge of chicken (when cars approach from below)
+
+    hit_cooldown_frames: int = 8
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
@@ -62,6 +59,8 @@ class JourneyEscapeState(NamedTuple):
     row_timer: chex.Array  # int32
     obstacles: chex.Array  # (MAX_OBS, 5) -> x, y, w, h, type_idx | [pool]
     rng_key: chex.Array  # PRNGKey
+
+    hit_cooldown: chex.Array  # int32
 
 
 class EntityPosition(NamedTuple):
@@ -104,13 +103,14 @@ class JaxJourneyEscape(
         state = JourneyEscapeState(
             chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
             chicken_x=jnp.array(chicken_x, dtype=jnp.int32),
-            score=jnp.array(0, dtype=jnp.int32),
+            score=jnp.array(self.consts.starting_score, dtype=jnp.int32),
             time=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             row_timer=jnp.array(0, dtype=jnp.int32),
             obstacles=empty_boxes,
             rng_key=rng_key,
+            hit_cooldown=jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -254,18 +254,84 @@ class JaxJourneyEscape(
             operand=(boxes, state.rng_key)
         )
 
-        # Update score if chicken reaches top
-        new_score = jnp.where(
-            new_y <= self.consts.top_border, state.score + 1, state.score
-        ).astype(jnp.int32)
+        # --- COLLISIONS: chicken vs. falling obstacles ---
 
-        # Reset chicken position if scored
-        scored = new_y <= self.consts.top_border
-        new_y = jnp.where(
-            scored,
-            self.consts.bottom_border + self.consts.chicken_height - 1 + self.consts.post_score_spawn_offset_y,
-            new_y,
-        ).astype(jnp.int32)
+        # We treat any obstacle with h > 0 as active.
+        # boxes has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
+
+        def check_collision(box):
+            # box: [x, y, w, h, type_idx]
+            box_x = box[0]
+            box_y = box[1]
+            box_w = box[2]
+            box_h = box[3]
+
+            # Ignore inactive entries (h == 0)
+            active = box_h > 0
+
+            # --- Chicken AABB (same convention as Freeway) ---
+            # new_x / new_y are the *current* chicken baseline position after movement.
+            cxi = jnp.asarray(self.consts.chicken_hit_inset_x, dtype=jnp.int32)
+            cyi_top = jnp.asarray(self.consts.chicken_hit_inset_y_top, dtype=jnp.int32)
+            cyi_bottom = jnp.asarray(self.consts.chicken_hit_inset_y_bottom, dtype=jnp.int32)
+
+            ch_x0 = new_x + cxi
+            ch_x1 = new_x + self.consts.chicken_width - cxi
+            ch_y0 = new_y - self.consts.chicken_height + cyi_top
+            ch_y1 = new_y - cyi_bottom
+
+            # --- Obstacle AABB ---
+            # Same coordinate convention: box_y is the bottom edge of the sprite.
+            ob_x0 = box_x
+            ob_x1 = box_x + box_w
+            ob_y0 = box_y - box_h
+            ob_y1 = box_y
+
+            overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
+            overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
+            hit = jnp.logical_and(overlap_x, overlap_y)
+
+            # Only count if this obstacle is active
+            return jnp.logical_and(active, hit)
+
+        # Vectorized over all entries in the obstacle pool
+        collisions = jax.vmap(check_collision)(boxes)
+        any_collision = jnp.any(collisions)
+
+        # --- SCORE + SMALL COOLDOWN ---
+
+        # We want:
+        # - collision detected every frame (any_collision)
+        # - score decremented only when NOT in cooldown
+        # - after a "scoring hit", start a short cooldown
+
+        prev_cd = state.hit_cooldown
+        cooling_down = prev_cd > 0
+
+        # Cooldown ticks down every frame
+        cd_after_tick = jnp.maximum(prev_cd - 1, 0)
+
+        # Apply hit only if we're currently NOT cooling down
+        apply_hit = jnp.logical_and(any_collision, jnp.logical_not(cooling_down))
+
+        # One point per scoring hit
+        hit_penalty = jnp.where(apply_hit, 1, 0).astype(jnp.int32)
+        new_score = (state.score - hit_penalty).astype(jnp.int32)
+
+        # Optional clamp: don't go below 0
+        new_score = jnp.maximum(new_score, 0)
+
+        # If we scored a hit this frame, reset cooldown to N frames.
+        # Otherwise, keep ticking it down.
+        new_hit_cooldown = jnp.where(
+            apply_hit,
+            jnp.asarray(self.consts.hit_cooldown_frames, dtype=jnp.int32),
+            cd_after_tick,
+        )
+
+        # Optional safety: keep score from going below 0
+        # (feel free to remove this if you want negative scores)
+        new_score = jnp.maximum(new_score, 0)
 
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
@@ -287,6 +353,7 @@ class JaxJourneyEscape(
             row_timer=new_row_timer.astype(jnp.int32),
             obstacles=boxes.astype(jnp.int32),  # updated pool
             rng_key=new_rng,
+            hit_cooldown=new_hit_cooldown.astype(jnp.int32),
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
