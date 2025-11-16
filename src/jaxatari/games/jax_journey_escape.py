@@ -36,9 +36,6 @@ class JourneyEscapeConstants(NamedTuple):
 
     hit_cooldown_frames: int = 8
 
-    # chicken position rules
-    min_chicken_position_y: int = top_border + (screen_height//4)
-
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
         (0, 1, 0),
@@ -142,10 +139,10 @@ class JaxJourneyEscape(
         # faster movement if chicken on the top_maximum_position
         dx_int = jnp.where(
             (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
-            jnp.where(state.chicken_y == self.consts.min_chicken_position_y, -(self.consts.chicken_speed+1), -self.consts.chicken_speed),
+            -self.consts.chicken_speed,
             jnp.where(
                 (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT),
-                jnp.where(state.chicken_y == self.consts.min_chicken_position_y, self.consts.chicken_speed+1,self.consts.chicken_speed),
+                self.consts.chicken_speed,
                 0
             ),
         )
@@ -168,7 +165,7 @@ class JaxJourneyEscape(
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
 
         # Effective player movement boundaries
-        player_min_y = self.consts.min_chicken_position_y
+        player_min_y = self.consts.top_border
         player_max_y = self.consts.bottom_border + self.consts.chicken_height - 1
         player_min_x = self.consts.left_border
         player_max_x = self.consts.right_border + self.consts.chicken_width - 1
