@@ -395,6 +395,7 @@ class UpNDownRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        self.road_sizes = self._get_road_sprite_sizes()
 
     def _createBackgroundSprite(self, dimensions: Tuple[int, int]) -> jnp.ndarray:
         """Creates a procedural background sprite for the game."""
@@ -403,12 +404,24 @@ class UpNDownRenderer(JAXGameRenderer):
         shape = (height, width, 4)  # Height, Width, RGBA channels
         sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
         return sprite
+    
+    def _get_road_sprite_sizes(self) -> list:
+        """Returns the sizes of the road sprites."""
+        sizes = []
+        for file in os.listdir(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background/"):
+            sprite = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background/{file}")
+            sizes.append(sprite.shape[0])
+        jax.debug.print("Road sizes: {}", sizes)
+        return sizes
 
     def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray) -> list:
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
+        roads = []
+        for x in range(13):
+            roads.append(f"background/background{x+1}.npy")
         return [
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
-            {'name': 'road1', 'type': 'single', 'file': 'background/background1.npy'},
+            {'name': 'road', 'type': 'group', 'files': roads},
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
             {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
@@ -418,8 +431,14 @@ class UpNDownRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        road1_mask = self.SHAPE_MASKS["road1"]
+
+        road1_mask = self.SHAPE_MASKS["road"][0]
         raster = self.jr.render_at_clipped(raster, 10, self.consts.INITIAL_ROAD_POS_Y + state.road_diff, road1_mask)
+        diff = 0
+        for i in range(12):
+            road1_mask = self.SHAPE_MASKS["road"][i+1]
+            diff += self.road_sizes[i+1]
+            raster = self.jr.render_at_clipped(raster, 10, self.consts.INITIAL_ROAD_POS_Y + state.road_diff - diff, road1_mask)
 
         player_mask = self.SHAPE_MASKS["player"]
         raster = self.jr.render_at(raster, state.player_car.position.x, 105, player_mask)
