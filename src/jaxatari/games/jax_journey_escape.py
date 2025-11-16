@@ -58,6 +58,7 @@ class JourneyEscapeState(NamedTuple):
     score: chex.Array
     time: chex.Array
     walking_frames: chex.Array
+    walking_direction: chex.Array # can be {0, 1, 2} for {up/down, right, left}
     game_over: chex.Array
 
     row_timer: chex.Array  # int32
@@ -110,6 +111,7 @@ class JaxJourneyEscape(
             score=jnp.array(self.consts.starting_score, dtype=jnp.int32),
             time=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
+            walking_direction=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             row_timer=jnp.array(0, dtype=jnp.int32),
             obstacles=empty_boxes,
@@ -146,6 +148,19 @@ class JaxJourneyEscape(
                 jnp.where(state.chicken_y == self.consts.min_chicken_position_y, self.consts.chicken_speed+1,self.consts.chicken_speed),
                 0
             ),
+        )
+
+        # determine walking direction of player
+        player_move_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
+        player_move_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
+        vertical = jnp.logical_not(player_move_right) & jnp.logical_not(player_move_left)
+
+        new_walking_direction = jnp.where(
+            vertical,
+            0,                              # up/down
+            jnp.where(player_move_right, 
+                      1 ,                   # right
+                      2)                    # left
         )
 
         # advance walking animation every frame, independent of input
@@ -422,6 +437,7 @@ class JaxJourneyEscape(
             score=new_score,
             time=new_time,
             walking_frames=new_walking_frames.astype(jnp.int32),
+            walking_direction=new_walking_direction.astype(jnp.int32),
             game_over=game_over,
             row_timer=new_row_timer.astype(jnp.int32),
             obstacles=boxes.astype(jnp.int32),  # updated pool
@@ -571,7 +587,9 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {
                 'name': 'player', 'type': 'group',
-                'files': ['player_walk_front_0.npy', 'player_walk_front_1.npy']
+                'files': ['player_walk_front_0.npy', 'player_walk_front_1.npy', 
+                          'player_run_right_0.npy', 'player_run_right_1.npy',
+                          'player_run_left_0.npy', 'player_run_left_1.npy']
             },
             {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
             {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
@@ -590,9 +608,10 @@ class JourneyEscapeRenderer(JAXGameRenderer):
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Select chicken sprite based on walking frames and hit state
-        use_idle = state.walking_frames < 4
-        chicken_frame_index = jax.lax.select(use_idle, 1, 0)  # 1=left lef out, 1=right leg out
+        # Select chicken sprite based on walking frames and direction
+        use_idle = state.walking_frames < 4 
+        sprite_index = state.walking_direction * 2 
+        chicken_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index+1)
 
         chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
         raster = self.jr.render_at(raster, state.chicken_x, state.chicken_y, chicken_mask)
