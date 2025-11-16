@@ -1,0 +1,4 @@
+[submodule "src/pygame/Kaboom"]
+	path = src/pygame/Kaboom
+	url = git@github.com:praktikum-aus-ki/Kaboom.git
+	branch = features/pygame
