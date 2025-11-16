@@ -571,7 +571,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {
                 'name': 'player', 'type': 'group',
-                'files': ['player_hit.npy', 'player_walk_straight0.npy', 'player_walk_straight1.npy']
+                'files': ['player_walk_front_0.npy', 'player_walk_front_1.npy']
             },
             {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
             {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
@@ -592,7 +592,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
 
         # Select chicken sprite based on walking frames and hit state
         use_idle = state.walking_frames < 4
-        chicken_frame_index = jax.lax.select(use_idle, 2, 1)  # 2=idle, 1=walk
+        chicken_frame_index = jax.lax.select(use_idle, 1, 0)  # 1=left lef out, 1=right leg out
 
         chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
         raster = self.jr.render_at(raster, state.chicken_x, state.chicken_y, chicken_mask)
