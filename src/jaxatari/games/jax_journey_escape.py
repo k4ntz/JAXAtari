@@ -18,7 +18,7 @@ class JourneyEscapeConstants(NamedTuple):
     chicken_width: int = 6
     chicken_height: int = 8
     start_chicken_x: int = 44  # Fixed x position
-    start_chicken_y: int = 170  # Fixed x position
+    start_chicken_y: int = 170  # Fixed y position
 
     obstacle_width: int = 8
     obstacle_height: int = 10
@@ -30,9 +30,9 @@ class JourneyEscapeConstants(NamedTuple):
 
     top_border: int = 15
     top_path: int = 8
-    bottom_border: int = 180
-    left_border: int = 5
-    right_border: int = 210
+    bottom_border: int = 162
+    left_border: int = 10
+    right_border: int = 138
     # Collision response tuning
     throw_back_frames: int = 24  # frames the chicken is pushed back after hit
     stun_frames: int = 28  # frames the chicken cannot move after hit
