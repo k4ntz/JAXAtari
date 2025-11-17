@@ -1,13 +1,17 @@
 import os
 from enum import IntEnum
+from functools import partial
 from typing import Callable, NamedTuple, Optional, Tuple
 
 import chex
+import jax
 import jax.numpy as jnp
 from jax import Array
+from numpy import int32
 
 from jaxatari import spaces
-from jaxatari.environment import JAXAtariAction, JaxEnvironment
+from jaxatari.environment import JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -16,11 +20,44 @@ class Direction(IntEnum):
     RIGHT = 0
     UPRIGHT = 1
     UP = 2
-    UPLET = 3
+    UPLEFT = 3
     LEFT = 4
     DOWNLEFT = 5
     DOWN = 6
     DOWNRIGHT = 7
+
+    @staticmethod
+    def from_flags(up, down, left, right):
+        return jnp.select(
+            [
+                right & ~up & ~down & ~left,
+                right & up & ~down & ~left,
+                ~right & up & ~down & ~left,
+                ~right & up & ~down & left,
+                ~right & ~up & ~down & left,
+                ~right & ~up & down & left,
+                ~right & ~up & down & ~left,
+                right & ~up & down & ~left,
+            ],
+            [
+                Direction.RIGHT,
+                Direction.UPRIGHT,
+                Direction.UP,
+                Direction.UPLEFT,
+                Direction.LEFT,
+                Direction.DOWNLEFT,
+                Direction.DOWN,
+                Direction.DOWNRIGHT,
+            ],
+        )
+
+
+class YarState(IntEnum):
+    STEADY = 0
+    MOVING = 1
+
+
+# Yars Revenge, Neutral Zone: https://www.youtube.com/watch?v=5HSjJU562e8
 
 
 class YarsRevengeConstants(NamedTuple):
@@ -39,11 +76,12 @@ class YarsRevengeConstants(NamedTuple):
     ENERGY_MISSILE_SIZE: Tuple[int, int] = (1, 2)
 
     # Entity Speeds, 1 pixel per X frame
-    QOTILE_FRAME = 2
-    YAR_FRAME = 0.5
-    SWIRL_FRAME = 0.5
-    DESTROYER_FRAME = 8
-    ENERGY_MISSILE_FRAME = 0.5
+    QOTILE_SPEED = 0.5
+    YAR_SPEED = 2.0
+    YAR_DIAGONAL_SPEED = 1.0
+    SWIRL_SPEED = 2.0
+    DESTROYER_SPEED = 0.125
+    ENERGY_MISSILE_SPEED = 2.0
 
     STEADY_YAR_MOVEMENT_FRAME = (
         4  # Movement animation change interval for Yar (no action)
@@ -92,6 +130,7 @@ class YarsRevengeState(NamedTuple):
     yar_x: jnp.ndarray
     yar_y: jnp.ndarray
     yar_direction: jnp.ndarray  # as Direction enum
+    yar_state: jnp.ndarray  # as YarState enum
     qotile_x: jnp.ndarray
     qotile_y: jnp.ndarray
     destroyer_x: jnp.ndarray
@@ -160,6 +199,7 @@ class JaxYarsRevenge(
             yar_x=jnp.array(10).astype(jnp.int32),
             yar_y=jnp.array(100).astype(jnp.int32),
             yar_direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
+            yar_state=jnp.array(YarState.STEADY).astype(jnp.int32),
             qotile_x=jnp.array(152).astype(jnp.int32),
             qotile_y=jnp.array(100).astype(jnp.int32),
             destroyer_x=jnp.array(155).astype(jnp.int32),
@@ -178,14 +218,90 @@ class JaxYarsRevenge(
 
         return initial_obs, state
 
-    def step(self, state, action: JAXAtariAction):
-        previous_state = state
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: YarsRevengeState, action: chex.Array):
+        # Extract the direction flags from the actions
+        up = (
+            (action == Action.UP)
+            | (action == Action.UPFIRE)
+            | (action == Action.UPLEFT)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPRIGHTFIRE)
+        )
+        down = (
+            (action == Action.DOWN)
+            | (action == Action.DOWNFIRE)
+            | (action == Action.DOWNLEFT)
+            | (action == Action.DOWNLEFTFIRE)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
+        left = (
+            (action == Action.LEFT)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.UPLEFT)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.DOWNLEFT)
+            | (action == Action.DOWNLEFTFIRE)
+        )
+        right = (
+            (action == Action.RIGHT)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
 
-        observation = self._get_observation(state)
-        reward = self._get_reward(previous_state, state)
-        done = self._get_done(state)
-        info = self._get_info(state)
-        return observation, state, reward, done, info
+        yar_moving = up | down | left | right
+        yar_diagonal = (up | down) & (left | right)
+
+        # Calculate the position difference compared to the previous state
+        yar_speed = jax.lax.select(
+            yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
+        )
+        delta_yar_x = jnp.where(left, -yar_speed, jnp.where(right, yar_speed, 0.0))
+        delta_yar_y = jnp.where(up, -yar_speed, jnp.where(down, yar_speed, 0.0))
+
+        # New position calculation with boundary check (y-axis wraps)
+        new_yar_x = jnp.clip(state.yar_x + delta_yar_x, 0, self.consts.WIDTH)
+        new_yar_y = (state.yar_y + delta_yar_y) % self.consts.HEIGHT
+
+        new_yar_direction = jax.lax.select(
+            yar_moving, Direction.from_flags(up, down, left, right), state.yar_direction
+        )
+        new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
+
+        new_state = YarsRevengeState(
+            step_counter=state.step_counter + 1,
+            level=state.level,
+            score=state.score,
+            lives=state.lives,
+            yar_x=new_yar_x,
+            yar_y=new_yar_y,
+            yar_direction=new_yar_direction,
+            yar_state=new_yar_state,
+            qotile_x=state.qotile_x,
+            qotile_y=state.qotile_y,
+            destroyer_x=state.destroyer_x,
+            destroyer_y=state.destroyer_y,
+            swirl_exist=state.swirl_exist,
+            swirl_fired=state.swirl_fired,
+            swirl_x=state.swirl_x,
+            swirl_y=state.swirl_y,
+            energy_missile_exist=state.energy_missile_exist,
+            energy_missile_fired=state.energy_missile_fired,
+            energy_missile_x=state.energy_missile_x,
+            energy_missile_y=state.energy_missile_y,
+            energy_shield=state.energy_shield,
+        )
+
+        observation = self._get_observation(new_state)
+        reward = self._get_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
+        return observation, new_state, reward, done, info
 
     def render(self, state):
         return self.renderer.render(state)
@@ -371,9 +487,53 @@ class YarsRevengeRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
     def _get_asset_config(self) -> list:
-        return [{"name": "background", "type": "background", "file": "background.npy"}]
+        return [
+            {"name": "background", "type": "background", "file": "background.npy"},
+            {
+                "name": "yar",
+                "type": "group",
+                "files": [
+                    "yar_right_0.npy",
+                    "yar_right_1.npy",
+                    "yar_upright_0.npy",
+                    "yar_upright_1.npy",
+                    "yar_up_0.npy",
+                    "yar_up_1.npy",
+                    "yar_upleft_0.npy",
+                    "yar_upleft_1.npy",
+                    "yar_left_0.npy",
+                    "yar_left_1.npy",
+                    "yar_downleft_0.npy",
+                    "yar_downleft_1.npy",
+                    "yar_down_0.npy",
+                    "yar_down_1.npy",
+                    "yar_downright_0.npy",
+                    "yar_downright_1.npy",
+                ],
+            },
+        ]
+
+    def get_animation_idx(
+        self,
+        step: jnp.ndarray,
+        group: jnp.ndarray,
+        duration: int,
+        group_item_count: int,
+    ):
+        return group * 2 + (jnp.floor(step / duration).astype(int32) % group_item_count)
 
     def render(self, state: YarsRevengeState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        yar_animation_duration = jax.lax.cond(
+            state.yar_state == YarState.MOVING,
+            lambda: self.consts.MOVING_YAR_MOVEMENT_FRAME,
+            lambda: self.consts.STEADY_YAR_MOVEMENT_FRAME,
+        )
+        yar_sprite_idx = self.get_animation_idx(
+            state.step_counter, state.yar_direction, yar_animation_duration, 2
+        )
+        yar_mask = self.SHAPE_MASKS["yar"][yar_sprite_idx]
+        raster = self.jr.render_at(raster, state.yar_x, state.yar_y, yar_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
