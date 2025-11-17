@@ -43,24 +43,41 @@ NAMED: Dict[str, int] = {
     # "CD": 0xCD,
     # "CE": 0xCE,
     #
-    "blue_tank_facing_direction": 0xAE,  # 46 + 0x80 ## probably actually the background scroll offset
-    "blue_tank_size_y": 0xAF,            # 47
-    "blue_tank_x": 0xB0,                 # 48
-    "blue_tank2_facing_direction": 0xB4,# 52
-    "blue_tank2_size_y": 0xB5,          # 53
-    "blue_tank2_x": 0xB6,               # 54
+    # "blue_tank_facing_direction": 0xAE,  # 46 + 0x80 
+    # "blue_tank_size_y": 0xAF,            # 47
+    # "blue_tank_x": 0xB0,                 # 48
+    # "blue_tank2_facing_direction": 0xB4,# 52
+    # "blue_tank2_size_y": 0xB5,          # 53
+    # "blue_tank2_x": 0xB6,               # 54
+    "frame": 0x80,
     "num_lives": 0xBA,                  # 58
     "missile_y": 0xE9,                  # 105
-    "compass_needles_angle": 0xD4,      # 84
-    "angle_of_tank": 0x84,              # 4
-    "left_tread_position": 0xBB,        # 59
-    "right_tread_position": 0xBC,       # 60
-    "crosshairs_color": 0xEC,  # 108 -> 0xEC; merged with previous
+    # "compass_needles_angle": 0xD4,      # 84
+    "bg_scroll_offset": 0x84,              # 4
+    # "left_tread_position": 0xBB,        # 59
+    # "right_tread_position": 0xBC,       # 60
+    "crosshairs_color": 0xEC,  # !!!
     "score": 0x9D,   
+    "enemy_a_X_hi": 0xC3,  # !!!
+    # "enemy_a_X_lo": 0xC4,  # !!!
+    "enemy_a_Z_hi": 0xC5,  # !!!
+    # "enemy_a_Z_lo": 0xC6,  # !!!
+    "enemy_b_X_hi": 0xCB,  # !!!
+    # "enemy_b_X_lo": 0xCC,  # !!!
+    "enemy_b_Z_hi": 0xCD,  # !!!
+    # "enemy_b_Z_lo": 0xCE,  # !!!
+    "enemy_a_sector": 0xE2,
+    "enemy_b_sector": 0xE3,
+    "enemy_a_distance_bucket": 0xD2,
+    "enemy_b_distance_bucket": 0xD3,
+    "fire0_X": 0xDC,
+    "fire0_Z": 0xDE,
+    "fire1_X": 0xD6,
+    "fire1_Z": 0xD8,
 }
 # Addresses to hide from the heatmap (use displayed addresses 0x80..0xFF)
 # Example: BLACKLIST = {0x80, 0xCA}
-BLACKLIST = {0xDD, 0xD7, 0xC0, 0xA6, 0xBF, 0xFC, 0xFD, 0xFE, 0xFF, 0xDE, 0xDF, 0xA4, 0xA5, 0xA7, 0xA8, 0xD9, 0xDA, 0xD8, 0xD6}
+BLACKLIST = {0xDD, 0xD7, 0xC0, 0xA6, 0xBF, 0xFC, 0xFD, 0xFE, 0xFF, 0xDE, 0xDF, 0xA7, 0xA8, 0xD9, 0xDA, 0xD8, 0xD6}
 
 # Optional: custom names for heatmap boxes keyed by displayed address (0x80..0xFF).
 # If an address is present here its value will be displayed instead of the hex address.
@@ -76,12 +93,29 @@ HEATMAP_NAMES: Dict[int, str] = {
     0xBA: "num_lives",                  # 58
     0xE9: "missile_y",                  # 105
     0xD4: "compass_needles_angle",      # 84
-    0x84: "angle_of_tank",              # 4
+    0x84: "bg_scroll\noffset",              # 4
     0xBB: "left_tread_position",        # 59
     0xBC: "right_tread_position",       # 60
     0xEC: "crosshairs_color",  # 108 -> 0xEC; merged with previous
     0x9D: "score",                      # 29
 }
+
+# Per-frame logging: fill with addresses (display addresses 0x80..0xFF) to log
+# Example: LOG_ADDRESSES = {"player_x": 0xCA, "player_y": 0xCB}
+LOG_ADDRESSES: Dict[str, int] = {
+    "frame": 0x80,
+    "enemy_a_X_hi": 0xC3,  # !!!
+    "enemy_a_X_lo": 0xC4,  # !!!
+    "enemy_a_Z_hi": 0xC5,  # !!!
+    "enemy_a_Z_lo": 0xC6,  # !!!
+    "enemy_b_X_hi": 0xCB,  # !!!
+    "enemy_b_X_lo": 0xCC,  # !!!
+    "enemy_b_Z_hi": 0xCD,  # !!!
+    "enemy_b_Z_lo": 0xCE,  # !!!
+}
+
+# Logfile path for per-frame logging. Set to None to disable file output.
+LOGFILE_PATH = "ram_log.txt"
 
 # Controls:
 #  - Arrows = movement. Space = FIRE. (We auto-map to ALE combos like "UPFIRE" if present.)
@@ -160,6 +194,8 @@ def main():
 
     clock = pygame.time.Clock()
     paused = False
+    logging_enabled = False
+    log_file = None
     pressed = set()  # {"UP","DOWN","LEFT","RIGHT","FIRE"}
 
     # Precompute grid origin so event handling can reference it before drawing
@@ -188,12 +224,14 @@ def main():
     print("  Arrows: movement (mapped to ALE action meanings)")
     print("  Space: FIRE")
     print("  P: pause/resume stepping")
+    print("  +: advance one tick when paused")
     print("  R: reset environment")
     print("  S: save a screenshot of the game frame")
     print("  N: toggle named-address panel (if any names configured)")
     print("  Q or ESC: quit")
     print("  Mouse left-click on a RAM cell: edit its value (enter hex). Enter to commit, Esc to cancel.")
     print(f"  Screenshot format: {SCREENSHOT_FORMAT} (one game px -> one saved px)")
+    print("  L: toggle per-frame logging of addresses in LOG_ADDRESSES")
     while running:
         # ---- Input ----
         for event in pygame.event.get():
@@ -240,6 +278,17 @@ def main():
                     running = False
                 elif k == pygame.K_p:
                     paused = not paused
+                # Single-step advance when paused: press '+' to advance one tick
+                elif getattr(event, "unicode", "") == "+" and paused:
+                    action = resolve_action(pressed, meaning_to_id, noop_id)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    if terminated or truncated:
+                        obs, info = env.reset()
+                        last_vals[:] = -1
+                        stable_counts[:] = 0
+                        flash_timers[:] = 0
+                        inc_counts[:] = 0
+                        dec_counts[:] = 0
                 elif k == pygame.K_s:
                     ts = int(time.time())
                     fmt = SCREENSHOT_FORMAT.lower()
@@ -267,6 +316,30 @@ def main():
                     obs, info = env.reset()
                 elif k == pygame.K_n:
                     show_named = not show_named
+                elif k == pygame.K_l:
+                    logging_enabled = not logging_enabled
+                    if logging_enabled:
+                        # open logfile for append
+                        if LOGFILE_PATH:
+                            try:
+                                log_file = open(LOGFILE_PATH, "a")
+                                log_file.write(f"--- LOG START {time.asctime()} ---\n")
+                                log_file.flush()
+                            except Exception as e:
+                                print(f"Failed to open logfile {LOGFILE_PATH}: {e}")
+                                logging_enabled = False
+                        print("Logging ENABLED")
+                        if len(LOG_ADDRESSES) == 0:
+                            print("LOG_ADDRESSES is empty — add addresses to LOG_ADDRESSES at top of file to start logging.")
+                    else:
+                        print("Logging DISABLED")
+                        if log_file is not None:
+                            try:
+                                # log_file.write(f"--- LOG STOP {time.asctime()} ---\n")
+                                log_file.close()
+                            except Exception:
+                                pass
+                            log_file = None
                 elif k == pygame.K_SPACE:
                     pressed.add("FIRE")
                 elif k == pygame.K_UP:
@@ -316,6 +389,7 @@ def main():
                 elif k == pygame.K_RIGHT:
                     pressed.discard("RIGHT")
 
+        # pressed.add("UP")  # always move forward for testing
         # ---- Step env ----
         if not paused:
             action = resolve_action(pressed, meaning_to_id, noop_id)
@@ -365,6 +439,23 @@ def main():
                 stable_counts[i] = 1
         # Decay flash timers
         flash_timers[flash_timers > 0] -= 1
+
+        # Per-frame logging of selected RAM addresses (if enabled)
+        if logging_enabled and len(LOG_ADDRESSES) > 0 and LOGFILE_PATH:
+            # write each selected address value (display address -> value) to logfile
+            try:
+                for name, addr in LOG_ADDRESSES.items():
+                    disp_addr = int(addr) & 0xFF
+                    idx = disp_addr & 0x7F
+                    v = int(ram[idx])
+                    if log_file:
+                        log_file.write(f"{name} (0x{disp_addr:02X}): {v}\n")
+                if log_file:
+                    log_file.write("---\n")
+                    log_file.flush()
+            except Exception:
+                # best-effort: don't crash on logging errors
+                pass
 
         # ---- Draw ----
         screen.fill((12, 12, 12))
@@ -436,37 +527,89 @@ def main():
                 addr_text = sfont.render(line, True, (220, 220, 220))
                 screen.blit(addr_text, (x + 5, y + 4 + li * line_h))
 
-        # Named addresses panel (under grid) - display as a simple table (omit the address)
+        # Named addresses panel (under grid) - compact table that fits contents
         if show_named and len(NAMED) > 0:
             panel_top = grid_y + grid_h
-            pygame.draw.line(screen, (70, 70, 70),
-                             (grid_x + PADDING, panel_top),
-                             (grid_x + grid_w - PADDING, panel_top), 2)
-            y = panel_top + int(PADDING * 0.75)
-            # Header row
+            rows = len(NAMED) + 1  # header + entries
+            row_h = NAMED_LINE_H
+
+            # compute column widths based on rendered text sizes
+            name_col_w = 0
+            val_col_w = 0
+            # include header widths
+            nh_w, _ = sfont.size("NAME")
+            vh_w, _ = sfont.size("VALUE")
+            name_col_w = max(name_col_w, nh_w)
+            val_col_w = max(val_col_w, vh_w)
+            # include content widths
+            for name, addr in NAMED.items():
+                nw, _ = sfont.size(str(name))
+                a = addr & 0x7F
+                v = int(ram[a])
+                vw, _ = sfont.size(f"{v:3d}")
+                if nw > name_col_w:
+                    name_col_w = nw
+                if vw > val_col_w:
+                    val_col_w = vw
+
+            # padding inside cells and gap between columns
+            cell_pad = 8
+            col_gap = 12
+            panel_w = PADDING + name_col_w + col_gap + val_col_w + PADDING
+            panel_h = rows * row_h + int(PADDING * 0.5)
+
+            panel_left = grid_x + PADDING
+            panel_rect = pygame.Rect(panel_left, panel_top, panel_w, panel_h)
+
+            # background of panel (subtle)
+            pygame.draw.rect(screen, (18, 18, 18), panel_rect, border_radius=4)
+            # outer border
+            pygame.draw.rect(screen, (70, 70, 70), panel_rect, width=1, border_radius=4)
+
+            # vertical separator x (between name and value)
+            name_col_x = panel_left + PADDING
+            sep_x = name_col_x + name_col_w + col_gap
+            # draw vertical separator
+            pygame.draw.line(screen, (70, 70, 70), (sep_x, panel_top), (sep_x, panel_top + panel_h), 1)
+
+            # draw horizontal lines (header separator + row separators)
+            for i in range(rows + 1):
+                y0 = panel_top + i * row_h
+                pygame.draw.line(screen, (70, 70, 70), (panel_left, y0), (panel_left + panel_w, y0), 1)
+
+            # render header
+            y = panel_top + 0
             h_name = sfont.render("NAME", True, (180, 180, 180))
-            screen.blit(h_name, (grid_x + PADDING, y))
+            screen.blit(h_name, (name_col_x + cell_pad // 2, y + (row_h - h_name.get_height()) // 2))
             h_val = sfont.render("VALUE", True, (180, 180, 180))
             h_val_rect = h_val.get_rect()
-            h_val_rect.topright = (grid_x + grid_w - PADDING, y)
+            h_val_rect.topright = (panel_left + panel_w - PADDING - cell_pad // 2, y + (row_h - h_val.get_height()) // 2)
             screen.blit(h_val, h_val_rect)
-            y += NAMED_LINE_H
-            # Rows
+
+            # render rows
+            y += row_h
             for name, addr in NAMED.items():
                 a = addr & 0x7F
                 v = int(ram[a])
                 name_txt = sfont.render(f"{name}", True, (240, 240, 240))
-                screen.blit(name_txt, (grid_x + PADDING, y))
+                screen.blit(name_txt, (name_col_x + cell_pad // 2, y + (row_h - name_txt.get_height()) // 2))
                 val_txt = sfont.render(f"{v:3d}", True, (240, 240, 240))
                 val_rect = val_txt.get_rect()
-                val_rect.topright = (grid_x + grid_w - PADDING, y)
+                val_rect.topright = (panel_left + panel_w - PADDING - cell_pad // 2, y + (row_h - val_txt.get_height()) // 2)
                 screen.blit(val_txt, val_rect)
-                y += NAMED_LINE_H
+                y += row_h
 
         pygame.display.flip()
         clock.tick(FPS_CAP)
 
     env.close()
+    # ensure logfile closed on exit
+    try:
+        if log_file is not None:
+            # log_file.write(f"--- LOG END {time.asctime()} ---\n")
+            log_file.close()
+    except Exception:
+        pass
     pygame.quit()
 
 if __name__ == "__main__":

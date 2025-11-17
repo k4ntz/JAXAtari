@@ -10,3 +10,4 @@ results/
 docs/build/
 
 .dev
+*_log*.txt
