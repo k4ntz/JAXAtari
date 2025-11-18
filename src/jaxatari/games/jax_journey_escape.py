@@ -40,6 +40,7 @@ class JourneyEscapeConstants(NamedTuple):
     min_chicken_position_y: int = top_border + (screen_height // 4)
 
     # predefined groups: [type, amount, spacing in px]
+    MAX_OBS = 64
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
         (0, 1, 0),
         (0, 4, 0),
@@ -77,6 +78,7 @@ class EntityPosition(NamedTuple):
 
 class JourneyEscapeObservation(NamedTuple):
     chicken: EntityPosition
+    obstacles: chex.Array  
 
 
 class JourneyEscapeInfo(NamedTuple):
@@ -101,8 +103,7 @@ class JaxJourneyEscape(
         chicken_y = self.consts.start_chicken_y
         chicken_x = self.consts.start_chicken_x
 
-        MAX_OBS = 64
-        empty_boxes = jnp.zeros((MAX_OBS, 5), dtype=jnp.int32)
+        empty_boxes = jnp.zeros((self.consts.MAX_OBS, 5), dtype=jnp.int32)
         rng_key = jax.random.PRNGKey(0)
 
         state = JourneyEscapeState(
@@ -464,7 +465,22 @@ class JaxJourneyEscape(
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
         )
 
-        return JourneyEscapeObservation(chicken=chicken)
+        # create obstacle
+        obstacles = jnp.zeros((self.consts.MAX_OBS, 4), dtype=jnp.int32)
+        for i in range (self.consts.MAX_OBS):
+            ob = state.obstacles.at[i].get()
+            obstacles = obstacles.at[i].set(
+                jnp.array(
+                    [
+                        ob.at[0].get(),
+                        ob.at[1].get(),
+                        self.consts.obstacle_width,
+                        self.consts.obstacle_height
+                    ],
+                    dtype=jnp.int32
+                )
+            )
+        return JourneyEscapeObservation(chicken=chicken, obstacles=obstacles)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: JourneyEscapeState) -> JourneyEscapeInfo:
@@ -499,8 +515,8 @@ class JaxJourneyEscape(
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "car": spaces.Box(low=0, high=210, shape=(10, 4), dtype=jnp.int32),
+            })
+            , "obstacles": spaces.Box(low=0, high=210, shape=(self.consts.MAX_OBS, 4), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -528,8 +544,10 @@ class JaxJourneyEscape(
             obs.chicken.height.reshape(-1)
         ])
 
+        obstacles_flat = obs.obstacles.reshape(-1)
+
         # Concatenate all components
-        return jnp.concatenate([chicken_flat]).astype(jnp.int32)
+        return jnp.concatenate([chicken_flat, obstacles_flat]).astype(jnp.int32)
 
 
 class JourneyEscapeRenderer(JAXGameRenderer):
