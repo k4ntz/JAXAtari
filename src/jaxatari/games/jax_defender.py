@@ -56,7 +56,7 @@ class DefenderConstants(NamedTuple):
     # Enemy
     ACTIVE: int = 1
     INACTIVE: int = 0  # active, x_pos, y_pos
-    ENEMY_SPEED: float = 0.24
+    ENEMY_SPEED: float = 2
     ENEMY_WIDTH: int = 13
     ENEMY_HEIGHT: int = 7
     ENEMY_MAX: int = 20
@@ -79,6 +79,9 @@ class DefenderConstants(NamedTuple):
     LANDER_AMOUNT: Tuple[int, int, int, int, int] = (18, 18, 19, 20, 20)
     MAX_LANDER_AMOUNT: int = 5
     LANDER_Y_SPEED: float = 0.08
+    LANDER_STATE_PATROL: int = 0
+    LANDER_STATE_DESCEND: int = 1
+    LANDER_STATE_ASCEND: int = 2
 
     # Pod
     POD_AMOUNT: Tuple[int, int, int, int, int] = (2, 2, 3, 3, 3)
@@ -109,11 +112,11 @@ class DefenderConstants(NamedTuple):
             # MAX 20 ENEMYS ON FIELD, see ENEMY_MAX
             # x, y, type, arg1, arg2
             # Landers
-            # x, y, type, human_num if lander abducts, ..
-            [360, 30, LANDER, 0, 0],
-            [20, 100, LANDER, 0, 0],
-            [80, 80, LANDER, 0, 0],
-            [30, 60, LANDER, 0, 0],
+            # x, y, type, state, human_num
+            [360, 30, LANDER, LANDER_STATE_PATROL, 0],
+            [20, 100, LANDER, LANDER_STATE_PATROL, 0],
+            [80, 80, LANDER, LANDER_STATE_PATROL, 0],
+            [30, 60, LANDER, LANDER_STATE_PATROL, 0],
             # Pods
             # x, y, type, .., ..
             [340, 20, POD, 0, 0],
@@ -207,6 +210,33 @@ class DefenderRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        # Stack the enemy sprites to use with index
+        enemy_mask_before_pad = [
+            self.SHAPE_MASKS["lander"],
+            self.SHAPE_MASKS["pod"],
+            self.SHAPE_MASKS["bomber"],
+            self.SHAPE_MASKS["swarmers"],
+            self.SHAPE_MASKS["mutant"],
+            self.SHAPE_MASKS["baiter"],
+        ]
+
+        max_h = max(m.shape[0] for m in enemy_mask_before_pad)
+        max_w = max(m.shape[1] for m in enemy_mask_before_pad)
+
+        padded_masks = []
+        padded_masks.append(jnp.zeros((max_h, max_w)))
+        for mask in enemy_mask_before_pad:
+            h, w = mask.shape
+            padded_mask = jnp.pad(
+                mask,
+                ((0, max_h - h), (0, max_w - w)),
+                mode="constant",
+                constant_values=self.jr.TRANSPARENT_ID,
+            )
+            padded_masks.append(padded_mask)
+
+        self.ENEMY_MASKS = jnp.stack(padded_masks)
+
     def _get_asset_config(self) -> list:
         # Returns the declarative manifest of all assets for the game, including both wall sprites
         return [
@@ -221,6 +251,57 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "ui_overlay", "type": "single", "file": "ui_overlay.npy"},
             {"name": "city", "type": "single", "file": "city.npy"},
         ]
+
+    # Use together with onscreen_pos, as it returns even ones that are slightly offscreen, for clip
+    def is_onscreen(
+        self, screen_x: int, screen_y: int, width: int, height: int
+    ) -> bool:
+        x_onscreen = jnp.logical_and(
+            screen_x + width > 0, screen_x < self.consts.WINDOW_WIDTH
+        )
+        y_onscreen = jnp.logical_and(
+            screen_y + height > self.consts.GAME_AREA_TOP,
+            screen_y < self.consts.GAME_AREA_BOTTOM,
+        )
+        return jnp.logical_and(x_onscreen, y_onscreen)
+
+    # Camera offset calculation function, does return coordinates that are not on screen!
+    def onscreen_pos(self, state, game_x, game_y):
+        camera_window_x = self.consts.CAMERA_WINDOW_X
+        camera_game_x = state.space_ship_x + state.camera_offset
+
+        camera_left_border = jnp.mod(
+            camera_game_x - self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
+        )
+        camera_right_border = jnp.mod(
+            camera_game_x + self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
+        )
+
+        is_in_left_wrap = jnp.logical_and(
+            game_x >= camera_left_border, camera_left_border > camera_game_x
+        )
+        is_in_right_wrap = jnp.logical_and(
+            game_x < camera_right_border, camera_right_border < camera_game_x
+        )
+
+        screen_x = (game_x - camera_game_x + camera_window_x).astype(jnp.int32)
+
+        screen_x = jax.lax.cond(
+            is_in_left_wrap,
+            lambda: jnp.mod(game_x, camera_left_border).astype(jnp.int32),
+            lambda: screen_x,
+        )
+
+        screen_x = jax.lax.cond(
+            is_in_right_wrap,
+            lambda: (
+                self.consts.GAME_WIDTH - camera_game_x + game_x + camera_window_x
+            ).astype(jnp.int32),
+            lambda: screen_x,
+        )
+
+        screen_y = game_y + self.consts.GAME_AREA_TOP
+        return screen_x, screen_y
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: DefenderState) -> jnp.ndarray:
@@ -251,64 +332,16 @@ class DefenderRenderer(JAXGameRenderer):
 
         # TODO Render Score
 
-        # Camera offset calculation function, does return coordinates that are not on screen!
-        def onscreen_pos(game_x, game_y):
-            camera_window_x = self.consts.CAMERA_WINDOW_X
-            camera_game_x = state.space_ship_x + state.camera_offset
-
-            camera_left_border = jnp.mod(
-                camera_game_x - self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
-            )
-            camera_right_border = jnp.mod(
-                camera_game_x + self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
-            )
-
-            is_in_left_wrap = jnp.logical_and(
-                game_x >= camera_left_border, camera_left_border > camera_game_x
-            )
-            is_in_right_wrap = jnp.logical_and(
-                game_x < camera_right_border, camera_right_border < camera_game_x
-            )
-
-            screen_x = (game_x - camera_game_x + camera_window_x).astype(jnp.int32)
-
-            screen_x = jax.lax.cond(
-                is_in_left_wrap,
-                lambda: jnp.mod(game_x, camera_left_border).astype(jnp.int32),
-                lambda: screen_x,
-            )
-
-            screen_x = jax.lax.cond(
-                is_in_right_wrap,
-                lambda: (
-                    self.consts.GAME_WIDTH - camera_game_x + game_x + camera_window_x
-                ).astype(jnp.int32),
-                lambda: screen_x,
-            )
-
-            screen_y = game_y + self.consts.GAME_AREA_TOP
-            return screen_x, screen_y
-
-        # Use together with onscreen_pos, as it returns even ones that are slightly offscreen, for clip
-        def is_onscreen(screen_x: int, screen_y: int, width: int, height: int) -> bool:
-            x_onscreen = jnp.logical_and(
-                screen_x + width > 0, screen_x < self.consts.WINDOW_WIDTH
-            )
-            y_onscreen = jnp.logical_and(
-                screen_y + height > self.consts.GAME_AREA_TOP,
-                screen_y < self.consts.GAME_AREA_BOTTOM,
-            )
-            return jnp.logical_and(x_onscreen, y_onscreen)
-
         # Render Enemy custom function to use in for loop, renders if it is on screen
         def render_enemy(i: int, r):
             enemy = state.enemy_states[i]
-            x, y = onscreen_pos(enemy[0], enemy[1])
-            enemy_type = enemy[2]
-            mask = self.SHAPE_MASKS["lander"]
+            screen_x, screen_y = self.onscreen_pos(state, enemy[0], enemy[1])
 
-            screen_x, screen_y = onscreen_pos(x, y)
-            onscreen = is_onscreen(
+            enemy_type = enemy[2]
+
+            mask = self.ENEMY_MASKS[enemy_type]
+
+            onscreen = self.is_onscreen(
                 screen_x, screen_y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
             )
 
@@ -327,8 +360,8 @@ class DefenderRenderer(JAXGameRenderer):
         # Render Space Ship
         space_ship_mask = self.SHAPE_MASKS["space_ship"]
         space_ship_facing_right = jnp.where(state.space_ship_facing_right, False, True)
-        space_ship_window_x, space_ship_window_y = onscreen_pos(
-            state.space_ship_x, state.space_ship_y
+        space_ship_window_x, space_ship_window_y = self.onscreen_pos(
+            state, state.space_ship_x, state.space_ship_y
         )
 
         raster = self.jr.render_at(
@@ -400,10 +433,9 @@ class JaxDefender(
         x, y = self.wrap_pos(int(x), int(y))
         return x, y
 
-    def _player_step(
+    def _space_ship_step(
         self, state: DefenderState, action: chex.Array
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        # Returns: (space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right)
+    ) -> DefenderState:
         left = jnp.any(
             jnp.array(
                 [
@@ -481,57 +513,47 @@ class JaxDefender(
         space_ship_y = state.space_ship_y + direction_y
         space_ship_x, space_ship_y = self.wrap_pos(space_ship_x, space_ship_y)
 
-        return space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right
-
-    def _bullet_step(
-        self, state: DefenderState
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        # Returns: (bullet_state, bullet_x, bullet_y, bullet_color_pos)
-        bullet_x = jax.lax.cond(
-            state.bullet_state,
-            lambda _: state.bullet_x + state.bullet_dir_x * self.consts.BULLET_SPEED,
-            lambda _: state.bullet_x,
-            operand=None,
-        )
-        bullet_y = jax.lax.cond(
-            state.bullet_state,
-            lambda _: state.bullet_y + state.bullet_dir_y * self.consts.BULLET_SPEED,
-            lambda _: state.bullet_y,
-            operand=None,
+        return state._replace(
+            space_ship_speed=space_ship_speed,
+            space_ship_x=space_ship_x,
+            space_ship_y=space_ship_y,
+            space_ship_facing_right=space_ship_facing_right,
         )
 
-        bullet_state = self._is_onscreen(state, bullet_x)
-        bullet_color_pos = (state.bullet_color_pos + 1) % len(self.consts.BULLET_COLOR)
+    def _lander_movement(self, index: int, enemy_states):
+        lander = enemy_states[index]
+        x = lander[0] + self.consts.ENEMY_SPEED
+        y = lander[1] + self.consts.LANDER_Y_SPEED
+        new_lander = [x, y, lander[2], lander[3], lander[4]]
+        enemy_states.at[index].set(new_lander)
+        return enemy_states
 
-        return bullet_state, bullet_x, bullet_y, bullet_color_pos
+    def _enemy_step(self, state: DefenderState) -> DefenderState:
+        def _enemy_move_switch(index: int, enemy_states):
+            enemy = enemy_states[index]
+            enemy_type = enemy[2]
+            enemy_states = jax.lax.switch(
+                enemy_type,
+                [
+                    lambda: enemy_states,
+                    lambda: self._lander_movement(index, enemy_states),
+                ],
+            )
 
-    def _shoot(
-        self, pos_x: float, pos_y: float, dir_x: int, dir_y: int
-    ) -> Tuple[bool, float, float, int, int]:
-        # Returns: (bullet_state, bullet_x, bullet_y, bullet_dir_x, bullet_dir_y)
-        return True, pos_x, pos_y, dir_x, dir_y
+            return enemy_states
 
-    def _shooting_step(
-        self, state: DefenderState
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
-        """Returns: (bullet_state, bullet_x, bullet_y, bullet_dir_x, bullet_dir_y)"""
-        # This function should check if shooting is triggered and return updated bullet state
-        # For now, just return the current bullet state
-        return (
-            state.bullet_state,
-            state.bullet_x,
-            state.bullet_y,
-            state.bullet_dir_x,
-            state.bullet_dir_y,
+        enemy_states = state.enemy_states
+        enemy_states = jax.lax.fori_loop(
+            0, self.consts.ENEMY_MAX, _enemy_move_switch, enemy_states
         )
 
-    def _camera_step(
-        self, state: DefenderState, space_ship_facing_right: bool
-    ) -> chex.Array:
+        return state._replace(enemy_states=enemy_states)
+
+    def _camera_step(self, state: DefenderState) -> DefenderState:
         # Returns: camera_offset
         offset_gain = self.consts.CAMERA_OFFSET_GAIN
         camera_offset = state.camera_offset
-        camera_offset += jnp.where(space_ship_facing_right, 1, -1) * offset_gain
+        camera_offset += jnp.where(state.space_ship_facing_right, 1, -1) * offset_gain
 
         camera_offset = jnp.clip(
             camera_offset,
@@ -539,7 +561,7 @@ class JaxDefender(
             self.consts.CAMERA_OFFSET_MAX,
         )
 
-        return camera_offset
+        return state._replace(camera_offset=camera_offset)
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
         initial_state = DefenderState(
@@ -574,35 +596,18 @@ class JaxDefender(
         self, state: DefenderState, action: chex.Array
     ) -> Tuple[DefenderObservation, DefenderState, float, bool, DefenderInfo]:
         # Get all updated values from individual step functions
-        space_ship_speed, space_ship_x, space_ship_y, space_ship_facing_right = (
-            self._player_step(state, action)
-        )
+        previous_state = state
 
-        camera_offset = self._camera_step(state, space_ship_facing_right)
-
-        # Build the new state once at the end
-        new_state = DefenderState(
-            space_ship_speed=space_ship_speed,
-            space_ship_x=space_ship_x,
-            space_ship_y=space_ship_y,
-            space_ship_facing_right=space_ship_facing_right,
-            camera_offset=camera_offset,
-            step_counter=state.step_counter + 1,
-            bullet_state=state.bullet_state,
-            bullet_x=state.bullet_x,
-            bullet_y=state.bullet_y,
-            bullet_dir_x=state.bullet_dir_x,
-            bullet_dir_y=state.bullet_dir_y,
-            bullet_color_pos=state.bullet_color_pos,
-            enemy_states=state.enemy_states,
-        )
+        state = self._space_ship_step(state, action)
+        state = self._camera_step(state)
+        state = self._enemy_step(state)
 
         # state = self._collision_step(new_state)
-        observation = self._get_observation(new_state)
-        env_reward = self._get_reward(state, new_state)
-        done = self._get_done(new_state)
-        info = self._get_info(new_state)
-        return observation, new_state, env_reward, done, info
+        observation = self._get_observation(state)
+        env_reward = self._get_reward(previous_state, state)
+        done = self._get_done(state)
+        info = self._get_info(state)
+        return observation, state, env_reward, done, info
 
     def render(self, state: DefenderState) -> jnp.ndarray:
         return self.renderer.render(state)
