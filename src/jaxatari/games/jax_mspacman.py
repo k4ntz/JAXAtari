@@ -84,8 +84,9 @@ class FruitType(IntEnum):
     BANANA = 6
     NONE = 7
 # FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170])
-FRUIT_SPAWN_THRESHOLDS = jnp.array([10, 30])
-FRUIT_WANDER_DURATION = 40*8 # Chosen randomly for now, should follow a hardcoded path instead
+FRUIT_SPAWN_THRESHOLDS = jnp.array([1, 40])
+FRUIT_CONSUME_DISTANCE = 8 # Vertical and horizontal distance at which the fruit is consumed
+FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
 PPX0 = 8
@@ -93,7 +94,8 @@ PPX1 = 148
 PPY0 = 20
 PPY1 = 152
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
-INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], [50, 78], [40, 78], [120, 78]])
+# INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], [50, 78], [40, 78], [120, 78]])
+INITIAL_GHOSTS_POSITIONS = jnp.array([[73, 54], [49, 78], [41, 78], [121, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 SCATTER_TARGETS = jnp.array([
     [MsPacmanMaze.WIDTH - 1, 0],                               # Upper right corner - Blinky
@@ -342,7 +344,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     ) for i in range(4)
                 ),
                 fruit = FruitState(
-                    fruit_type=state.fruit.type,
+                    type=state.fruit.type,
                     position=state.fruit.position,
                     direction=state.fruit.direction,
                     timer=state.fruit.timer,
@@ -433,12 +435,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
         # Fruit handling
         for threshold in FRUIT_SPAWN_THRESHOLDS:
-            if collected_pellets == threshold: # Spawn fruit
+            if collected_pellets == threshold and state.fruit.type == FruitType.NONE: # Spawn fruit
                 fruit_type = get_level_fruit(state.level_num, key)
                 fruit_position, fruit_direction = get_random_tunnel(state.level_num, key)
                 fruit_exit, _ = get_random_tunnel(state.level_num, key)
         if state.fruit.type != FruitType.NONE:
-            if jnp.all(new_pacman_pos == jnp.array(state.fruit.position)): # Consume fruit
+            if jnp.all(jnp.abs(new_pacman_pos - jnp.array(state.fruit.position)) <= FRUIT_CONSUME_DISTANCE): # Consume fruit
                 score = score + FRUIT_REWARDS[state.fruit.type]
                 fruit_type = FruitType.NONE
                 fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
@@ -796,7 +798,7 @@ def get_allowed_directions(position: chex.Array, direction: chex.Array, dofmaze:
     """
     allowed = []
     direction_idx = get_direction_index(direction)
-    if position[0] % 4 == 1 or position[1] % 12 == 6: # on horizontal or vertical grid - tile centre
+    if position[0] % 4 == 1 and position[1] % 12 == 6: # on horizontal and vertical grid - tile centre
         direction_indices = [DIR_UP, DIR_RIGHT, DIR_LEFT, DIR_DOWN]
         possible = available_directions(position, dofmaze) 
         for i, can_go in zip(direction_indices, possible):
@@ -987,7 +989,7 @@ def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
         directions = get_target_direction_indices(fruit.position, fruit.exit)
         new_dir = select_target_direction(directions, allowed, key)
     else:
-        new_dir = jax.random.choice(key, DIRECTIONS[2:])
+        new_dir = jax.random.choice(key, DIRECTIONS[jnp.array(allowed)])
 
     new_timer = fruit.timer
     if fruit.timer > 0:
