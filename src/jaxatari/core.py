@@ -13,7 +13,6 @@ GAME_MODULES = {
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "freeway": "jaxatari.games.jax_freeway",
     "breakout": "jaxatari.games.jax_breakout",
-    "journey_escape": "jaxatari.games.jax_journey_escape",
     # Add new games here
 }
 

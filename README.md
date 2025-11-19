@@ -160,7 +160,6 @@ python3 scripts/play.py -g Pong
 | Kangaroo       |    ✅     |
 | Pong           |    ✅     |
 | Seaquest       |    ✅     |
-| Journey Escape |    🔜     |
 
 > More games can be added via the uniform wrapper system.
 
