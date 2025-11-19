@@ -217,9 +217,19 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _enemy_step(self, state: BattlezoneState) -> BattlezoneState:
-        update_all_enemies = jax.vmap(self._single_enemy_update, in_axes=(None, 0))(state, state.enemies)
-        return state._replace(enemies=update_all_enemies)
+    def _enemy_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
+        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
+        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+        right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+        upLeft = jnp.logical_or(action == Action.UPLEFT, action == Action.UPLEFTFIRE)
+        upRight = jnp.logical_or(action == Action.UPRIGHT, action == Action.UPRIGHTFIRE)
+        downLeft = jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE)
+        downRight = jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNRIGHTFIRE)
+        # updating enemy x and z based on player movement
+        update_all_positions = jax.vmap(self._enemy_position_update, in_axes=(None, 0, None))(state, state.enemies, action)
+        update_all_distance = jax.vmap(self._enemy_distance_update, in_axes=(None, 0))(state, update_all_positions)
+        return state._replace(enemies=update_all_distance)
 
 
 
@@ -254,7 +264,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
                                                            +self.consts.RADAR_ROTATION_SPEED)%360)
         new_state = self._player_step(new_state, action)
-        new_state = self._enemy_step(new_state)
+        new_state = self._enemy_step(new_state, action)
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(previous_state, new_state)
@@ -263,7 +273,27 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         return observation, new_state, env_reward, done, info
 
-    def _single_enemy_update(self, state: BattlezoneState, enemy: Enemy) -> Enemy:
+    def _enemy_position_update(self, state: BattlezoneState, enemy: Enemy, direction) -> Enemy:
+        offset_xz = jnp.array([
+            [0, 1],  # Up
+            [1, 0],  # Right
+            [0, -1],  # Left
+            [-1, 0],  # Down
+            [1, 1],  # UpRight
+            [1, -1],  # UpLeft
+            [-1, 1],  # DownRight
+            [-1, -1]  # DownLeft
+        ])
+
+        idx = jnp.argmax(direction)
+        offset = offset_xz[idx]
+
+        new_x = enemy.x + offset[0]
+        new_z = enemy.z + offset[1]
+
+        return enemy._replace(x=new_x, z=new_z)
+
+    def _enemy_distance_update(self, state: BattlezoneState, enemy: Enemy) -> Enemy:
         new_distance = jnp.sqrt(enemy.x ** 2 + enemy.z ** 2)
         #Room for distance specific actions
         return enemy._replace(distance=new_distance)
