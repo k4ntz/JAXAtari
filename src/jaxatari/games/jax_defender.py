@@ -20,7 +20,6 @@ from jaxatari.environment import (
     EnvInfo,
 )
 from jaxatari.spaces import Space
-from abc import ABC, abstractmethod
 from typing import Tuple, Any
 import chex
 
@@ -29,7 +28,7 @@ class DefenderConstants(NamedTuple):
     # Game Window
     WINDOW_WIDTH: int = 160
     WINDOW_HEIGHT: int = 210
-    GAME_WIDTH: int = 480
+    GAME_WIDTH: int = 640
     GAME_HEIGHT: int = 135
     GAME_AREA_TOP: int = 38
     GAME_AREA_BOTTOM: int = GAME_AREA_TOP + GAME_HEIGHT
@@ -56,7 +55,8 @@ class DefenderConstants(NamedTuple):
     # Enemy
     ACTIVE: int = 1
     INACTIVE: int = 0  # active, x_pos, y_pos
-    ENEMY_SPEED: float = 2
+    ENEMY_SPEED: float = 0.24
+    SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
     ENEMY_WIDTH: int = 13
     ENEMY_HEIGHT: int = 7
     ENEMY_MAX: int = 20
@@ -86,6 +86,7 @@ class DefenderConstants(NamedTuple):
     # Pod
     POD_AMOUNT: Tuple[int, int, int, int, int] = (2, 2, 3, 3, 3)
     MAX_POD_AMOUNT: int = 3
+    POD_Y_SPEED: float = 0.08
 
     # Baiter
     BAITER_TIME_SEC: int = 20
@@ -141,6 +142,26 @@ class DefenderConstants(NamedTuple):
         ]
     )
 
+    # Humans
+    # INACTIVE = 0  
+    HUMAN_STATE_IDLE: int = 1
+    HUMAN_STATE_ABDUCTED: int = 2
+    HUMAN_STATE_FALLING: int = 3
+    HUMAN_AMOUNT: int = (5, 5, 6, 6, 6)
+    HUMAN_MAX: int = 6
+    HUMAN_WIDTH: int = 2
+    HUMAN_HEIGHT: int = 3
+
+    INITIAL_HUMAN_STATES: chex.Array = jnp.array([
+        # x, y, state
+        [0, 0, HUMAN_STATE_IDLE],
+        [40, 0, HUMAN_STATE_IDLE],
+        [80, 0, HUMAN_STATE_IDLE],
+        [120, 0, HUMAN_STATE_IDLE],
+        [160, 0, HUMAN_STATE_IDLE],
+        [0, 0, INACTIVE],
+    ])
+
 
 # immutable state container
 class DefenderState(NamedTuple):
@@ -164,7 +185,8 @@ class DefenderState(NamedTuple):
     enemy_states: (
         chex.Array
     )  # (20, 5) array with (x, y, type, arg1, arg2) for each enemy
-
+    # Human
+    human_states: (chex.Array)
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -333,13 +355,13 @@ class DefenderRenderer(JAXGameRenderer):
         # TODO Render Score
 
         # Render Enemy custom function to use in for loop, renders if it is on screen
-        def render_enemy(i: int, r):
-            enemy = state.enemy_states[i]
+        def render_enemy(index: int, r):
+            enemy = state.enemy_states[index]
             screen_x, screen_y = self.onscreen_pos(state, enemy[0], enemy[1])
 
             enemy_type = enemy[2]
 
-            mask = self.ENEMY_MASKS[enemy_type]
+            mask = self.ENEMY_MASKS[jnp.array(enemy_type, int)]
 
             onscreen = self.is_onscreen(
                 screen_x, screen_y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
@@ -357,6 +379,28 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, render_enemy, raster)
 
+        # Render Humans
+
+        def render_human(index: int, r):
+            human = state.human_states[index]
+            screen_x, screen_y = self.onscreen_pos(state, human[0], human[1])
+            human_state = human[2]
+            onscreen = self.is_onscreen(
+                screen_x, screen_y, 5, 5
+            )
+            is_active_and_onscreen = jnp.logical_and(
+                human_state != self.consts.INACTIVE, onscreen
+            )
+            return jax.lax.cond(is_active_and_onscreen,
+                lambda ras: self.jr.draw_rects(ras,
+                jnp.asarray([[screen_x, screen_y]]), 
+                jnp.asarray([[self.consts.HUMAN_WIDTH, self.consts.HUMAN_HEIGHT]]), 
+                0),
+                lambda ras: ras,
+                r)
+        
+        raster = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, render_human, raster)
+        
         # Render Space Ship
         space_ship_mask = self.SHAPE_MASKS["space_ship"]
         space_ship_facing_right = jnp.where(state.space_ship_facing_right, False, True)
@@ -371,6 +415,20 @@ class DefenderRenderer(JAXGameRenderer):
             space_ship_mask,
             flip_horizontal=space_ship_facing_right,
         )
+
+        # Render Scanner
+
+        def scanner_enemy(index: int, r):
+
+            return
+
+        def scanner_player(r):
+
+            return
+        
+        def scanner_humans(index: int, r):
+
+            return
 
         return self.jr.render_from_palette(raster, self.PALETTE)
 
@@ -425,12 +483,14 @@ class JaxDefender(
     def wrap_pos(self, game_x: int, game_y: int):
         return game_x % self.consts.GAME_WIDTH, game_y % self.consts.GAME_HEIGHT
 
+    # TODO:Move without wrap
+
     def _move_and_wrap(
         self, x_pos: float, y_pos: float, x_speed: float, y_speed: float
     ) -> Tuple[float, float]:
         x = x_pos + x_speed
         y = y_pos + y_speed
-        x, y = self.wrap_pos(int(x), int(y))
+        x, y = self.wrap_pos(x, y)
         return x, y
 
     def _space_ship_step(
@@ -520,24 +580,111 @@ class JaxDefender(
             space_ship_facing_right=space_ship_facing_right,
         )
 
-    def _lander_movement(self, index: int, enemy_states):
+    
+    def _lander_movement(self, index: int, enemy_states: chex.Array, space_ship_speed: float) -> chex.Array:
         lander = enemy_states[index]
-        x = lander[0] + self.consts.ENEMY_SPEED
-        y = lander[1] + self.consts.LANDER_Y_SPEED
+        lander_x = lander[0]
+        lander_y = lander[1]
+        lander_state = lander[3]
+
+        def lander_patrol(space_ship_speed: float) -> Tuple[float, float]:
+            speed_x, speed_y = jax.lax.cond(
+                space_ship_speed > 0,
+                lambda: (-self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
+                lambda: (self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
+            )
+            
+            return speed_x, speed_y
+
+        speed_x, speed_y = jax.lax.switch(
+            jnp.array(lander_state, int),
+            [
+                lambda: lander_patrol(space_ship_speed),  # Patrol
+                lambda: (0.0, 0.0),  # Descend
+                lambda: (0.0, 0.0),  # Ascendss
+            ]
+        )
+
+
+        x, y = self._move_and_wrap(lander_x, lander_y, speed_x + space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED, speed_y)
         new_lander = [x, y, lander[2], lander[3], lander[4]]
-        enemy_states.at[index].set(new_lander)
+        enemy_states = enemy_states.at[index].set(new_lander)
+        return enemy_states
+    
+    def _pod_movement(self, index: int, enemy_states: chex.Array, space_ship_speed: float) -> chex.Array:
+        pod = enemy_states[index]
+        pod_x = pod[0]
+        pod_y = pod[1]
+        pod_state = pod[3]
+
+        speed_x, speed_y = jax.lax.cond(
+            space_ship_speed > 0,
+            lambda: (-self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+            lambda: (self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+            )
+
+
+        x, y = self._move_and_wrap(pod_x, pod_y, speed_x + space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED, speed_y)
+        new_pod = [x, y, pod[2], pod[3], pod[4]]
+        enemy_states = enemy_states.at[index].set(new_pod)
         return enemy_states
 
+    
+    def _bomber_movement(self, index: int, enemy_states: chex.Array, space_ship_speed: float, space_ship_x: float) -> chex.Array:
+        bomber = enemy_states[index]
+        x_pos = bomber[0]
+        y_pos = bomber[1]
+        direction_right = bomber[3]
+        
+        speed_x = self.consts.ENEMY_SPEED
+        # acceleration in x direction
+        speed_x = jax.lax.cond(
+            direction_right,
+            lambda s: s,
+            lambda s: -s,
+            operand=speed_x,
+        )
+        
+        # change direction if spaceship is crossed and passed by 30
+        direction_right = jax.lax.cond(
+            jnp.logical_and(
+                direction_right,
+                x_pos > space_ship_x + 30
+            ),
+            lambda _: 0.0,
+            lambda _: jax.lax.cond(
+                jnp.logical_and(
+                    jnp.logical_not(direction_right),
+                    x_pos < space_ship_x - 30
+                ),
+                lambda _: 1.0,
+                lambda _: direction_right,
+                operand=None,
+            ),
+            operand=None,
+        )
+        x_pos, y_pos = self._move_and_wrap(x_pos, y_pos,
+            speed_x + space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED, self.consts.BOMBER_Y_SPEED)
+        new_bomber = [x_pos, y_pos, bomber[2], direction_right, bomber[4]]
+        enemy_states = enemy_states.at[index].set(new_bomber)
+        return enemy_states
+    
+    
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(index: int, enemy_states):
             enemy = enemy_states[index]
             enemy_type = enemy[2]
             enemy_states = jax.lax.switch(
-                enemy_type,
+                jnp.array(enemy_type, int),
                 [
                     lambda: enemy_states,
-                    lambda: self._lander_movement(index, enemy_states),
-                ],
+                    lambda: self._lander_movement(index, enemy_states, state.space_ship_speed),
+                    lambda: self._pod_movement(index, enemy_states, state.space_ship_speed),
+                    lambda: self._bomber_movement(index, enemy_states, state.space_ship_speed, state.space_ship_x),
+                    lambda: enemy_states,
+                    lambda: enemy_states,
+                    lambda: enemy_states,
+                ]
             )
 
             return enemy_states
@@ -573,8 +720,8 @@ class JaxDefender(
             ),
             # Space Ship
             space_ship_speed=jnp.array(0).astype(jnp.float32),
-            space_ship_x=jnp.array(self.consts.INITIAL_SPACE_SHIP_X).astype(jnp.int32),
-            space_ship_y=jnp.array(self.consts.INITIAL_SPACE_SHIP_Y).astype(jnp.int32),
+            space_ship_x=jnp.array(self.consts.INITIAL_SPACE_SHIP_X).astype(jnp.float32),
+            space_ship_y=jnp.array(self.consts.INITIAL_SPACE_SHIP_Y).astype(jnp.float32),
             space_ship_facing_right=jnp.array(
                 self.consts.INITIAL_SPACE_SHIP_FACING_RIGHT, dtype=jnp.bool
             ),
@@ -586,7 +733,9 @@ class JaxDefender(
             bullet_dir_y=jnp.array(0).astype(jnp.int32),
             bullet_color_pos=jnp.array(0).astype(jnp.int32),
             # Enemies
-            enemy_states=jnp.array(self.consts.INITIAL_ENEMY_STATES).astype(jnp.int32),
+            enemy_states=jnp.array(self.consts.INITIAL_ENEMY_STATES).astype(jnp.float32),
+            # Humans
+            human_states=jnp.array(self.consts.INITIAL_HUMAN_STATES).astype(jnp.float32),
         )
         observation = self._get_observation(initial_state)
         return observation, initial_state
