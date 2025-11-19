@@ -1,4 +1,5 @@
-# pip install "gymnasium[atari,accept-rom-license]" pygame ale-py
+import os
+import pickle
 import pygame
 import numpy as np
 import time
@@ -25,6 +26,7 @@ FPS_CAP = 60
 # Screenshot format: set to 'bmp' to save a bitmap image (default),
 # or 'npy' to save a 3D numpy array of RGB values (height, width, 3).
 SCREENSHOT_FORMAT = "bmp"  # one of: 'bmp', 'png', 'npy'
+SAVESTATE_PATH = "battlezone_state.pkl"
 
 # Change-highlight parameters
 STABLE_FRAMES_FOR_TRIGGER = 30
@@ -59,13 +61,13 @@ NAMED: Dict[str, int] = {
     "crosshairs_color": 0xEC,  # !!!
     "score": 0x9D,   
     "enemy_a_X_hi": 0xC3,  # !!!
-    # "enemy_a_X_lo": 0xC4,  # !!!
+    "enemy_a_X_lo": 0xC4,  # !!!
     "enemy_a_Z_hi": 0xC5,  # !!!
-    # "enemy_a_Z_lo": 0xC6,  # !!!
+    "enemy_a_Z_lo": 0xC6,  # !!!
     "enemy_b_X_hi": 0xCB,  # !!!
-    # "enemy_b_X_lo": 0xCC,  # !!!
+    "enemy_b_X_lo": 0xCC,  # !!!
     "enemy_b_Z_hi": 0xCD,  # !!!
-    # "enemy_b_Z_lo": 0xCE,  # !!!
+    "enemy_b_Z_lo": 0xCE,  # !!!
     "enemy_a_sector": 0xE2,
     "enemy_b_sector": 0xE3,
     "enemy_a_distance_bucket": 0xD2,
@@ -112,6 +114,10 @@ LOG_ADDRESSES: Dict[str, int] = {
     "enemy_b_X_lo": 0xCC,  # !!!
     "enemy_b_Z_hi": 0xCD,  # !!!
     "enemy_b_Z_lo": 0xCE,  # !!!
+    "fire0_X": 0xDC,
+    "fire0_Z": 0xDE,
+    "fire1_X": 0xD6,
+    "fire1_Z": 0xD8,
 }
 
 # Logfile path for per-frame logging. Set to None to disable file output.
@@ -122,7 +128,9 @@ LOGFILE_PATH = "ram_log.txt"
 #  - P = pause/resume stepping
 #  - R = reset
 #  - N = toggle named-address panel
-#  - Q / ESC = quit
+#  - Q = save savestate
+#  - W = load savestate (if one was saved)
+#  - ESC = quit
 # --------------------------------------------------------------------------- #
 
 def color_map(v: int) -> pygame.Color:
@@ -197,6 +205,7 @@ def main():
     logging_enabled = False
     log_file = None
     pressed = set()  # {"UP","DOWN","LEFT","RIGHT","FIRE"}
+    saved_state = None
 
     # Precompute grid origin so event handling can reference it before drawing
     grid_x = PADDING + game_surface_size[0] + PADDING
@@ -210,12 +219,15 @@ def main():
     inc_counts = np.zeros(128, dtype=int)
     dec_counts = np.zeros(128, dtype=int)
 
-    # --- Editing UI state (click-to-edit) ---
-    # editing_idx: index of the RAM cell currently being edited (or None)
-    editing_idx = None
-    edit_buffer = ""
-    # last time the edit cursor blinked (ms)
-    edit_cursor_ms = 0
+    # Load savestate pointer from disk if present (but don't restore automatically)
+    if os.path.exists(SAVESTATE_PATH):
+        try:
+            with open(SAVESTATE_PATH, "rb") as f:
+                saved_state = pickle.load(f)
+            print(f"Found savestate at {SAVESTATE_PATH}. Press 'W' to load it.")
+        except Exception as e:
+            saved_state = None
+            print(f"Failed to load savestate from disk: {e}")
 
     running = True
 
@@ -228,8 +240,9 @@ def main():
     print("  R: reset environment")
     print("  S: save a screenshot of the game frame")
     print("  N: toggle named-address panel (if any names configured)")
-    print("  Q or ESC: quit")
-    print("  Mouse left-click on a RAM cell: edit its value (enter hex). Enter to commit, Esc to cancel.")
+    print("  Q: save a savestate (persisted on quit)")
+    print("  W: load the saved savestate (if any)")
+    print("  ESC: quit")
     print(f"  Screenshot format: {SCREENSHOT_FORMAT} (one game px -> one saved px)")
     print("  L: toggle per-frame logging of addresses in LOG_ADDRESSES")
     while running:
@@ -239,43 +252,30 @@ def main():
                 running = False
             elif event.type == pygame.KEYDOWN:
                 k = event.key
-                # If we're editing a RAM cell, capture hex input here
-                if editing_idx is not None:
-                    # Enter commits, Esc cancels, Backspace edits
-                    if k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                        try:
-                            s = edit_buffer.strip().lower()
-                            if s.startswith("0x"):
-                                s = s[2:]
-                            if s == "":
-                                val = 0
-                            else:
-                                val = int(s, 16)
-                            val = int(np.clip(val, 0, 255))
-                            ale.setRAM(editing_idx, val)
-                            last_vals[editing_idx] = val
-                            stable_counts[editing_idx] = 1
-                            inc_counts[editing_idx] = 0
-                            dec_counts[editing_idx] = 0
-                        except Exception:
-                            pass
-                        editing_idx = None
-                        edit_buffer = ""
-                    elif k == pygame.K_ESCAPE:
-                        editing_idx = None
-                        edit_buffer = ""
-                    elif k == pygame.K_BACKSPACE:
-                        edit_buffer = edit_buffer[:-1]
-                    else:
-                        ch = event.unicode
-                        if ch and ch.lower() in "0123456789abcdefx":
-                            edit_buffer += ch
-                            edit_cursor_ms = pygame.time.get_ticks()
-                    continue
-
-                # not editing -> handle gameplay/controls
-                if k in (pygame.K_ESCAPE, pygame.K_q):
+                if k == pygame.K_ESCAPE:
                     running = False
+                elif k == pygame.K_q:
+                    try:
+                        saved_state = ale.cloneState()
+                        print("Saved savestate.")
+                    except Exception as e:
+                        print(f"Failed to save savestate: {e}")
+                elif k == pygame.K_w:
+                    if saved_state is None:
+                        print("No savestate available to load.")
+                    else:
+                        try:
+                            ale.restoreState(saved_state)
+                            obs = env.render()
+                            # Reset change tracking so the restored frame starts cleanly
+                            last_vals[:] = -1
+                            stable_counts[:] = 0
+                            flash_timers[:] = 0
+                            inc_counts[:] = 0
+                            dec_counts[:] = 0
+                            print("Loaded savestate.")
+                        except Exception as e:
+                            print(f"Failed to load savestate: {e}")
                 elif k == pygame.K_p:
                     paused = not paused
                 # Single-step advance when paused: press '+' to advance one tick
@@ -350,32 +350,6 @@ def main():
                     pressed.add("LEFT")
                 elif k == pygame.K_RIGHT:
                     pressed.add("RIGHT")
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                # left-click to start editing a cell
-                if event.button == 1:
-                    mx, my = event.pos
-                    # check if click inside RAM grid
-                    if (mx >= grid_x and mx < grid_x + grid_w and
-                            my >= grid_y and my < grid_y + grid_h):
-                        rx = mx - (grid_x + PADDING)
-                        ry = my - (grid_y + PADDING)
-                        if rx >= 0 and ry >= 0:
-                            c = rx // (CELL_W + PADDING)
-                            r = ry // (CELL_H + PADDING)
-                            if 0 <= c < GRID_COLS and 0 <= r < GRID_ROWS:
-                                idx = int(r * GRID_COLS + c)
-                                disp_addr = idx + 0x80
-                                if disp_addr in BLACKLIST:
-                                    editing_idx = None
-                                    edit_buffer = ""
-                                else:
-                                    editing_idx = idx
-                                    edit_buffer = ""
-                                    edit_cursor_ms = pygame.time.get_ticks()
-                                continue
-                    editing_idx = None
-                    edit_buffer = ""
-                    continue
             elif event.type == pygame.KEYUP:
                 k = event.key
                 if k == pygame.K_SPACE:
@@ -601,6 +575,15 @@ def main():
 
         pygame.display.flip()
         clock.tick(FPS_CAP)
+
+    # Persist savestate (if any) on quit
+    if saved_state is not None:
+        try:
+            with open(SAVESTATE_PATH, "wb") as f:
+                pickle.dump(saved_state, f)
+            print(f"Saved savestate to {SAVESTATE_PATH}")
+        except Exception as e:
+            print(f"Failed to save savestate to disk: {e}")
 
     env.close()
     # ensure logfile closed on exit

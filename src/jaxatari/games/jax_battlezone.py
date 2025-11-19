@@ -26,11 +26,46 @@ What do we need to research about each enemy (+player)?
 - projectile speed and range
 
 - how many enemies can be in game at once
-- how does acceleration work? is there acceleration or do we just go straight into max speed? are there jerk/snap/crackle/pop?
-- is there friction?
+- how does acceleration work? is there acceleration or do we just go straight into max speed? are there jerk/snap/crackle/pop? -> no accel
+- is there friction? no
 - is there a world size? 
-- is there friendly fire for enemies?
+- is there friendly fire for enemies? yes
 - what is the radar range?
+
+
+------------------------------------------------------------------------
+
+## World
+- functionally toroidal, we work with signed 8bit ints for x and z coordinates (-128 to 127)
+- coordinate system: player is always at (0,0), x increases to the right, z increases forward away from player, y is height on screen
+
+## Misc
+- first enemy in a game is always a tank which spawns at z=60.5547 x=6.8047 facing negative x
+- at max two enemies in world at once
+- there is always one enemy present. if the player kills the only enemy, a new one spawns immediately
+
+## Player
+- hitbox: a rectangle around the origin: (x: -3, z: 0) to (x: 3, z: 6)
+- move speed: 0.25 units per frame
+- turn speed: 2pi/270 rad/frame (270 frames for a full turn)
+-
+
+## Tank
+- behaviour:
+    - shoots when distance to player is 29.09 units
+- score points: 1000
+- move speed: 0.125 units per frame
+- turn speed: 2pi/2048 rad/frame (512 frames for a quarter turn)
+
+## Flying Saucer
+
+## Supertank
+
+## Fighter Jet
+
+## Projectile
+- speed: 0.5 units per frame
+
 """
 import matplotlib.pyplot as plt
 from enum import IntEnum, unique
@@ -139,7 +174,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE]
-        self.obs_size = 3*4+1+1  #?? change later from pong currently
+        self.obs_size = 3*4+1+1  #?? TODO: change later from pong currently
 
     def _player_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
         up = jnp.logical_or(action==Action.UP,action==Action.UPFIRE)
