@@ -218,9 +218,9 @@ class MsPacmanMaze:
        ], dtype=bool)
 
        MAZES = [MAZE0, MAZE1, MAZE2, MAZE3]
-       TUNNEL_HEIGHTS = TILE_SCALE * jnp.array([[14, 26], [17, 41], [26, 0], [20, 26]]) # y coordinates of every tunnel - 0 means no tunnel
+       TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]]) # y coordinates of every tunnel - 0 means no tunnel
        HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
-       TILE_HEIGHT, TILE_WIDTH = MAZE0.shape
+       TILE_HEIGHT, TILE_WIDTH = MAZE0.shape # Height and width of the maze in number of tiles
 
 
        @staticmethod
