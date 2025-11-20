@@ -44,11 +44,34 @@ class DefenderConstants(NamedTuple):
     CITY_WIDTH: int = 80
     CITY_HEIGHT: int = 13
 
+    COLOR_SPACE_SHIP_BLUE: Tuple[int, int, int] = (132, 144, 252)
+    COLOR_BOMBER_BLUE: Tuple[int, int, int] = (104, 116, 208)
+    COLOR_LANDER_YELLOW: Tuple[int, int, int] = (252, 224, 140)
+    COLOR_MUTANT_RED: Tuple[int, int, int] = (192, 104, 72)
+
+    ENEMY_COLORS: list = [
+        COLOR_SPACE_SHIP_BLUE,
+        COLOR_LANDER_YELLOW,
+        COLOR_LANDER_YELLOW,
+        COLOR_BOMBER_BLUE,
+        COLOR_LANDER_YELLOW,
+        COLOR_MUTANT_RED,
+        COLOR_BOMBER_BLUE,
+    ]
+
+    PARTICLE_COLOR_CYCLE: list = [
+        COLOR_SPACE_SHIP_BLUE,
+        COLOR_LANDER_YELLOW,
+        COLOR_SPACE_SHIP_BLUE,
+        COLOR_MUTANT_RED,
+        COLOR_BOMBER_BLUE,
+    ]
+    PARTICLE_FLICKER_EVERY_N_FRAMES: int = 2
+
     # Space Ship
     SPACE_SHIP_ACCELERATION: float = 0.15
     SPACE_SHIP_BREAK: float = 0.1
     SPACE_SHIP_MAX_SPEED: float = 4.0
-    SPACE_SHIP_COLOR: Tuple[int, int, int] = (0, 0, 200)
     SPACE_SHIP_WIDTH: int = 13
     SPACE_SHIP_HEIGHT: int = 5
 
@@ -95,13 +118,6 @@ class DefenderConstants(NamedTuple):
 
     # Bullet
     BULLET_SPEED: int = 2
-    BULLET_COLOR: Tuple[
-        Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]
-    ] = (
-        (200, 0, 0),  # Red
-        (255, 255, 0),  # Yellow
-        (0, 0, 255),  # Blue
-    )
 
     # Initial Wave State
     # Positions are in game world positions
@@ -177,6 +193,12 @@ class DefenderConstants(NamedTuple):
     SCANNER_HEIGHT: int = 23
     SCANNER_WINDOW_Y: int = 13
     SCANNER_WINDOW_X: int = 48
+    ENEMY_SCANNER_WIDTH: int = 2
+    ENEMY_SCANNER_HEIGHT: int = 2
+    SPACE_SHIP_SCANNER_WIDTH: int = 3
+    SPACE_SHIP_SCANNER_HEIGHT: int = 2
+    HUMAN_SCANNER_WIDTH: int = 1
+    HUMAN_SCANNER_HEIGHT: int = 1
 
 
 # immutable state container
@@ -274,7 +296,21 @@ class DefenderRenderer(JAXGameRenderer):
             )
             padded_masks.append(padded_mask)
 
-        self.ENEMY_MASKS = jnp.stack(padded_masks)
+        self.ENEMY_MASKS = jnp.array(padded_masks)
+
+        # Enemy colors to ids
+        color_ids = []
+        for color in self.consts.ENEMY_COLORS:
+            color_ids.append(self.COLOR_TO_ID.get(color, 0))
+
+        self.ENEMY_COLOR_IDS = jnp.array(color_ids)
+
+        # Particle colors to ids
+        particle_ids = []
+        for color in self.consts.PARTICLE_COLOR_CYCLE:
+            particle_ids.append(self.COLOR_TO_ID.get(color, 0))
+
+        self.PARTICLE_COLOR_IDS = jnp.array(particle_ids)
 
     def _get_asset_config(self) -> list:
         # Returns the declarative manifest of all assets for the game, including both wall sprites
@@ -294,7 +330,7 @@ class DefenderRenderer(JAXGameRenderer):
     # Use together with onscreen_pos, as it returns even ones that are slightly offscreen, for clip
     def is_onscreen(
         self, screen_x: int, screen_y: int, width: int, height: int
-    ) -> bool:
+    ) -> chex.Array:
         x_onscreen = jnp.logical_and(
             screen_x + width > 0, screen_x < self.consts.WINDOW_WIDTH
         )
@@ -371,31 +407,43 @@ class DefenderRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # Render City
-        city_start = -(state.space_ship_x + state.camera_offset) % 80
-        city_y_pos = self.consts.GAME_AREA_BOTTOM - self.consts.CITY_HEIGHT
+        # Get the next city starting position to the left
+        city_game_x = jnp.multiply(
+            jnp.floor_divide(
+                state.space_ship_x + state.camera_offset,
+                self.consts.CITY_WIDTH,
+            ),
+            self.consts.CITY_WIDTH,
+        )
+
+        city_game_y = self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT
+        city_window_x, city_window_y = self.onscreen_pos(
+            state, city_game_x, city_game_y
+        )
+
         city_mask = self.SHAPE_MASKS["city"]
         raster = self.jr.render_at_clipped(
             raster,
-            city_start,
-            city_y_pos,
+            city_window_x,
+            city_window_y,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_start - 80,
-            city_y_pos,
+            city_window_x + self.consts.CITY_WIDTH,
+            city_window_y,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_start + 80,
-            city_y_pos,
+            city_window_x - self.consts.CITY_WIDTH,
+            city_window_y,
             city_mask,
         )
 
         # TODO Render Score
 
-        def render_on_scanner(game_x, game_y, width, height, color, r):
+        def render_on_scanner(game_x, game_y, width, height, color_id, r):
             scanner_x, scanner_y = self.on_scanner_pos(state, game_x, game_y)
 
             # To render all entities inside the scanner
@@ -412,12 +460,11 @@ class DefenderRenderer(JAXGameRenderer):
                 r,
                 jnp.asarray([[scanner_x, scanner_y]]),
                 jnp.asarray([[width, height]]),
-                0,
+                color_id,
             )
 
             return r
 
-        # Render Enemy custom function to use in for loop, renders if it is on screen
         def render_enemy(index: int, r):
             enemy = state.enemy_states[index]
             screen_x, screen_y = self.onscreen_pos(state, enemy[0], enemy[1])
@@ -425,6 +472,7 @@ class DefenderRenderer(JAXGameRenderer):
             enemy_type = enemy[2]
 
             mask = self.ENEMY_MASKS[jnp.array(enemy_type, int)]
+            color_id = self.ENEMY_COLOR_IDS[jnp.array(enemy_type, int)]
 
             onscreen = self.is_onscreen(
                 screen_x, screen_y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
@@ -434,12 +482,20 @@ class DefenderRenderer(JAXGameRenderer):
                 enemy_type != self.consts.INACTIVE, onscreen
             )
 
+            scanner_width = self.consts.ENEMY_SCANNER_WIDTH
+            scanner_height = self.consts.ENEMY_SCANNER_HEIGHT
+
+            # Render on scanner
             r = jax.lax.cond(
                 enemy_type != self.consts.INACTIVE,
-                lambda ras: render_on_scanner(enemy[0], enemy[1], 2, 2, 0, ras),
+                lambda ras: render_on_scanner(
+                    enemy[0], enemy[1], scanner_width, scanner_height, color_id, ras
+                ),
                 lambda ras: ras,
                 r,
             )
+
+            # Render on screen and return new raster
             return jax.lax.cond(
                 is_active_and_onscreen,
                 lambda ras: self.jr.render_at_clipped(ras, screen_x, screen_y, mask),
@@ -447,9 +503,18 @@ class DefenderRenderer(JAXGameRenderer):
                 r,
             )
 
+        # For each loop renders all enemys on screen and scanner
         raster = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, render_enemy, raster)
 
-        # Render Humans
+        # Used for bullet color and human color
+        current_particle_color_id = self.PARTICLE_COLOR_IDS[
+            jnp.mod(
+                jnp.floor_divide(
+                    state.step_counter, self.consts.PARTICLE_FLICKER_EVERY_N_FRAMES
+                ),
+                len(self.PARTICLE_COLOR_IDS),
+            )
+        ]
 
         def render_human(index: int, r):
             human = state.human_states[index]
@@ -459,34 +524,62 @@ class DefenderRenderer(JAXGameRenderer):
             is_active_and_onscreen = jnp.logical_and(
                 human_state != self.consts.INACTIVE, onscreen
             )
+
+            color_id = current_particle_color_id
+            scanner_width = self.consts.HUMAN_SCANNER_WIDTH
+            scanner_height = self.consts.HUMAN_SCANNER_HEIGHT
+
+            # Render on scanner
+            r = jax.lax.cond(
+                human_state != self.consts.INACTIVE,
+                lambda ras: render_on_scanner(
+                    human[0], human[1], scanner_width, scanner_height, color_id, ras
+                ),
+                lambda ras: ras,
+                r,
+            )
+
+            # Render on screen and return the changed raster
             return jax.lax.cond(
                 is_active_and_onscreen,
                 lambda ras: self.jr.draw_rects(
                     ras,
                     jnp.asarray([[screen_x, screen_y]]),
                     jnp.asarray([[self.consts.HUMAN_WIDTH, self.consts.HUMAN_HEIGHT]]),
-                    0,
+                    color_id,
                 ),
                 lambda ras: ras,
                 r,
             )
 
+        # For each loop renders all humans on screen and scanner
         raster = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, render_human, raster)
 
-        # Render Space Ship
-        space_ship_mask = self.SHAPE_MASKS["space_ship"]
-        space_ship_facing_right = jnp.where(state.space_ship_facing_right, False, True)
-        space_ship_window_x, space_ship_window_y = self.onscreen_pos(
-            state, state.space_ship_x, state.space_ship_y
-        )
+        def render_space_ship(r):
+            mask = self.SHAPE_MASKS["space_ship"]
+            game_x = state.space_ship_x
+            game_y = state.space_ship_y
 
-        raster = self.jr.render_at(
-            raster,
-            space_ship_window_x,
-            space_ship_window_y,
-            space_ship_mask,
-            flip_horizontal=space_ship_facing_right,
-        )
+            screen_x, screen_y = self.onscreen_pos(state, game_x, game_y)
+
+            facing_right = jnp.where(state.space_ship_facing_right, False, True)
+
+            scanner_width = self.consts.SPACE_SHIP_SCANNER_WIDTH
+            scanner_height = self.consts.SPACE_SHIP_SCANNER_HEIGHT
+
+            color_id = self.ENEMY_COLOR_IDS[0]
+
+            # Render on scanner
+            r = render_on_scanner(
+                game_x, game_y, scanner_width, scanner_height, color_id, r
+            )
+
+            # Render on screen and return
+            return self.jr.render_at(
+                r, screen_x, screen_y, mask, flip_horizontal=facing_right
+            )
+
+        raster = render_space_ship(raster)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
 
@@ -840,6 +933,7 @@ class JaxDefender(
         state = self._space_ship_step(state, action)
         state = self._camera_step(state)
         state = self._enemy_step(state)
+        state = state._replace(step_counter=(state.step_counter + 1))
 
         # state = self._collision_step(new_state)
         observation = self._get_observation(state)
