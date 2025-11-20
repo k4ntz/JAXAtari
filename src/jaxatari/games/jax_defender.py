@@ -116,8 +116,17 @@ class DefenderConstants(NamedTuple):
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
 
-    # Bullet
+    # Enemy bullet
+    BULLET_WIDTH: int = 2
+    BULLET_HEIGHT: int = 2
     BULLET_SPEED: int = 2
+    BULLET_STATE_INACTIVE: int = 0
+    BULLET_STATE_ACTIVE: int = 1
+
+    # Space ship laser
+    LASER_WIDTH: int = 30
+    LASER_HEIGHT: int = 3
+    LASER_SPEED: int  = 2
 
     # Initial Wave State
     # Positions are in game world positions
@@ -142,7 +151,7 @@ class DefenderConstants(NamedTuple):
             # x, y, type, .., ..
             [300, 50, BOMBER, 0, 0],
             # Inactives
-            [0, 0, INACTIVE, 0, 0],
+            [100, 50, SWARMERS, 0, 0],
             [0, 0, INACTIVE, 0, 0],
             [0, 0, INACTIVE, 0, 0],
             [0, 0, INACTIVE, 0, 0],
@@ -218,7 +227,6 @@ class DefenderState(NamedTuple):
     bullet_y: chex.Array
     bullet_dir_x: chex.Array
     bullet_dir_y: chex.Array
-    bullet_color_pos: chex.Array
     # Enemies
     enemy_states: (
         chex.Array
@@ -637,15 +645,19 @@ class JaxDefender(
             - self.consts.CITY_HEIGHT  # move already when the top of the city == top of entity
         )
 
-    # TODO:Move without wrap
+    def _move(self, game_x: float, game_y: float, x_speed: float, y_speed: float) -> Tuple[float, float]:
+        new_game_x = game_x + x_speed
+        new_game_y = game_y + y_speed
+        # Wrap only around x, y not needed
+        new_game_x, _ = self.wrap_pos(new_game_x, 0)
+        return new_game_x, new_game_y
 
     def _move_and_wrap(
-        self, x_pos: float, y_pos: float, x_speed: float, y_speed: float
+        self, game_x: float, game_y: float, x_speed: float, y_speed: float
     ) -> Tuple[float, float]:
-        x = x_pos + x_speed
-        y = y_pos + y_speed
-        x, y = self.wrap_pos(x, y)
-        return x, y
+        new_game_x, new_game_y = self._move(game_x, game_y, x_speed, y_speed)
+        new_game_x, new_game_y = self.wrap_pos(new_game_x, new_game_y)
+        return new_game_x, new_game_y
 
     def _space_ship_step(
         self, state: DefenderState, action: chex.Array
@@ -722,10 +734,13 @@ class JaxDefender(
             -self.consts.SPACE_SHIP_MAX_SPEED,
             self.consts.SPACE_SHIP_MAX_SPEED,
         )
+    
+        space_ship_x = state.space_ship_x
+        space_ship_y = state.space_ship_y
 
-        space_ship_x = state.space_ship_x + space_ship_speed
-        space_ship_y = state.space_ship_y + direction_y
-        space_ship_x, space_ship_y = self.wrap_pos(space_ship_x, space_ship_y)
+        x_speed = space_ship_speed
+        y_speed = direction_y
+        space_ship_x, space_ship_y = self._move(space_ship_x, space_ship_y, x_speed, y_speed)
 
         return state._replace(
             space_ship_speed=space_ship_speed,
@@ -838,6 +853,63 @@ class JaxDefender(
         new_bomber = [x_pos, y_pos, bomber[2], direction_right, bomber[4]]
         enemy_states = enemy_states.at[index].set(new_bomber)
         return enemy_states
+    
+
+    def _swarmers_movement(
+        self, index: int, enemy_states: chex.Array, space_ship_speed: float
+    ) -> chex.Array:
+        swarmer = enemy_states[index]
+        x_pos = swarmer[0]
+        y_pos = swarmer[1]
+        swarmer_direction_right = swarmer[3]
+
+        # Swarmers move opposite to spaceship direction
+        speed_x = jax.lax.cond(
+            space_ship_speed > 0,
+            lambda: self.consts.ENEMY_SPEED,  # Spaceship going right, swarmer goes right
+            lambda: -self.consts.ENEMY_SPEED,  # Spaceship going left, swarmer goes left
+        )
+
+        # Check if swarmer crossed the spaceship
+        crossed = jax.lax.cond(
+            swarmer_direction_right,
+            lambda: x_pos > state.space_ship_x,
+            lambda: x_pos < state.space_ship_x,
+        )
+
+        # If crossed, set speed_x to 0
+        speed_x = jax.lax.cond(
+            crossed,
+            lambda: 0.0,
+            lambda: speed_x,
+        )
+
+        # Update direction based on current movement
+        swarmer_direction_right = jax.lax.cond(
+            speed_x != 0,
+            lambda: speed_x > 0,
+            lambda: swarmer_direction_right,
+        )
+
+        # Fixed Y speed for swarmers
+        speed_y = self.consts.ENEMY_SPEED
+
+        x_pos, y_pos = self._move_and_wrap(
+            x_pos,
+            y_pos,
+            speed_x + space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            speed_y,
+        )
+
+        new_swarmer = [x_pos, y_pos, swarmer[2], swarmer_direction_right, swarmer[4]]
+        enemy_states = enemy_states.at[index].set(new_swarmer)
+        return enemy_states
+
+    def _bullet_step(self, state: DefenderState) -> DefenderState:
+        bullet_x = state.bullet_x
+        bullet_y = state.bullet_y
+
+        return state
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(index: int, enemy_states):
@@ -905,12 +977,11 @@ class JaxDefender(
                 self.consts.INITIAL_SPACE_SHIP_FACING_RIGHT, dtype=jnp.bool
             ),
             # Bullet
-            bullet_state=jnp.array(False, dtype=jnp.bool),
+            bullet_state=jnp.array(0).astype(jnp.int32),
             bullet_x=jnp.array(0).astype(jnp.float32),
             bullet_y=jnp.array(0).astype(jnp.float32),
             bullet_dir_x=jnp.array(0).astype(jnp.int32),
             bullet_dir_y=jnp.array(0).astype(jnp.int32),
-            bullet_color_pos=jnp.array(0).astype(jnp.int32),
             # Enemies
             enemy_states=jnp.array(self.consts.INITIAL_ENEMY_STATES).astype(
                 jnp.float32
