@@ -1,9 +1,11 @@
-from dataclasses import dataclass
 from jax import numpy as jnp
-from jaxatari.core import JAXAtariGame
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax.lax
 import chex
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from functools import partial
 
 # =============================================================================
 # TASK 1: Define Constants and Game State
@@ -11,25 +13,7 @@ import chex
 
 from enum import IntEnum
 
-class Action(IntEnum):
-    NO_OP = 0
-    FIRE = 1
-    UP = 2
-    RIGHT = 3
-    LEFT = 4
-    DOWN = 5
-    UP_RIGHT = 6
-    UP_LEFT = 7
-    DOWN_RIGHT = 8
-    DOWN_LEFT = 9
-    UP_FIRE = 10
-    RIGHT_FIRE = 11
-    LEFT_FIRE = 12
-    DOWN_FIRE = 13
-    UP_RIGHT_FIRE = 14
-    UP_LEFT_FIRE = 15
-    DOWN_RIGHT_FIRE = 16
-    DOWN_LEFT_FIRE = 17
+
 
 class PlayerID(IntEnum):
     NONE = 0
@@ -64,6 +48,7 @@ class GameMode(IntEnum):
     PLAY_SELECTION = 0
     IN_PLAY = 1
 
+@chex.dataclass(frozen=True)
 class DunkConstants:
     """
     Holds all static values for the game like screen dimensions, player speeds, colors, etc.
@@ -91,8 +76,7 @@ class DunkConstants:
     AREA_3_POINT: Tuple[int,int] = (0,0) #We need a way to determine whether a player is in a 3-point area (might be easier to define the two-point area and the rest
                                 # will be considered 3-point by process of elimination)
 
-
-@dataclass
+@chex.dataclass(frozen=True)
 class PlayerState:
     x: chex.Array
     y: chex.Array
@@ -102,7 +86,7 @@ class PlayerState:
     vel_z: chex.Array
     role: chex.Array # can be 0 for defense, 1 for offense
 
-@dataclass
+@chex.dataclass(frozen=True)
 class BallState:
     x: chex.Array
     y: chex.Array
@@ -110,7 +94,7 @@ class BallState:
     vel_y: chex.Array
     holder: chex.Array # who has the ball (using PlayerID)
 
-@dataclass
+@chex.dataclass(frozen=True)
 class DunkGameState:
     player1_inside: PlayerState
     player1_outside: PlayerState
@@ -129,32 +113,115 @@ class DunkGameState:
     defensive_play: chex.Array      # The selected defensive play
     play_step: chex.Array           # Tracks progress within a play (e.g., 1st, 2nd, 3rd button press)
 
-
-class EntityPosition(NamedTuple):
+@chex.dataclass(frozen=True)
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-
-class DunkObservation(NamedTuple):
+@chex.dataclass(frozen=True)
+class DunkObservation:
     player: EntityPosition
     enemy: EntityPosition
     ball: EntityPosition
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
 
-
-class DunkInfo(NamedTuple):
+@chex.dataclass(frozen=True)
+class DunkInfo:
     time: jnp.ndarray
 
-class DoubleDunk(JAXAtariGame):
+class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkConstants]):
     
     def __init__(self):
         """
         Initialize the game environment.
         """
         self.constants = DunkConstants()
+        self.renderer = DunkRenderer(self.constants)
+
+    def reset(self, key=None) -> Tuple[DunkObservation, DunkGameState]:
+        """
+        Resets the environment to the initial state.
+        """
+        state = self._init_state()
+        obs = self._get_observation(state)
+        return obs, state
+
+    def _get_observation(self, state: DunkGameState) -> DunkObservation:
+        """
+        Converts the environment state to an observation.
+        """
+        # For now, we'll treat player1_inside as the main 'player'
+        # and player2_inside as the 'enemy' for the observation.
+        player = EntityPosition(
+            x=state.player1_inside.x,
+            y=state.player1_inside.y,
+            width=jnp.array(10),  # Placeholder width
+            height=jnp.array(20), # Placeholder height
+        )
+        enemy = EntityPosition(
+            x=state.player2_inside.x,
+            y=state.player2_inside.y,
+            width=jnp.array(10),  # Placeholder width
+            height=jnp.array(20), # Placeholder height
+        )
+        ball = EntityPosition(
+            x=state.ball.x,
+            y=state.ball.y,
+            width=jnp.array(self.constants.BALL_SIZE[0]),
+            height=jnp.array(self.constants.BALL_SIZE[1]),
+        )
+        return DunkObservation(
+            player=player,
+            enemy=enemy,
+            ball=ball,
+            score_player=state.player_score,
+            score_enemy=state.enemy_score,
+        )
+
+    def action_space(self):
+        """
+        Returns the action space of the environment.
+        """
+        return [
+            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT,
+            Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT,
+            Action.DOWNLEFT, Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE,
+            Action.DOWNFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
+        ]
+
+    def observation_space(self):
+        """
+        Returns the observation space of the environment.
+        """
+        # This is a placeholder based on Pong. It should be updated
+        # with the correct dimensions and types for DoubleDunk.
+        return {
+            "player": {
+                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+            },
+            "enemy": {
+                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+            },
+            "ball": {
+                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
+                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
+            },
+            "score_player": "Box(low=0, high=99, shape=(), dtype=jnp.int32)",
+            "score_enemy": "Box(low=0, high=99, shape=(), dtype=jnp.int32)",
+        }
+
 
     # =========================================================================
     # TASK 2: Implement Init and Reset
@@ -181,42 +248,26 @@ class DoubleDunk(JAXAtariGame):
             play_step=0,
         )
 
-    def _reset_state(self, state: DunkGameState) -> DunkGameState:
-        """
-        Resets the state after a point is scored or for a new round.
-        """
-        return DunkGameState(
-            player1_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player1_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player2_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player2_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.NONE),
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            game_mode=state.game_mode,
-            offensive_play=state.offensive_play,
-            defensive_play=state.defensive_play,
-            play_step=0,
-        )
+
 
     def _get_player_action_effects(self, action: int, player_z: chex.Array, constants: DunkConstants) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """
         Determines the velocity for 8-way movement and the impulse for Z-axis jumps.
         """
         # --- X/Y Movement on the ground plane ---
-        is_moving_left = (action == Action.LEFT) | (action == Action.UP_LEFT) | (action == Action.DOWN_LEFT) | \
-                         (action == Action.LEFT_FIRE) | (action == Action.UP_LEFT_FIRE) | (action == Action.DOWN_LEFT_FIRE)
-        is_moving_right = (action == Action.RIGHT) | (action == Action.UP_RIGHT) | (action == Action.DOWN_RIGHT) | \
-                          (action == Action.RIGHT_FIRE) | (action == Action.UP_RIGHT_FIRE) | (action == Action.DOWN_RIGHT_FIRE)
+        is_moving_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT) | \
+                         (action == Action.LEFTFIRE) | (action == Action.UPLEFTFIRE) | (action == Action.DOWNLEFTFIRE)
+        is_moving_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT) | \
+                          (action == Action.RIGHTFIRE) | (action == Action.UPRIGHTFIRE) | (action == Action.DOWNRIGHTFIRE)
 
         vel_x = jnp.array(0, dtype=jnp.int32)
         vel_x = jax.lax.select(is_moving_left, -constants.PLAYER_MAX_SPEED, vel_x)
         vel_x = jax.lax.select(is_moving_right, constants.PLAYER_MAX_SPEED, vel_x)
 
-        is_moving_up = (action == Action.UP) | (action == Action.UP_LEFT) | (action == Action.UP_RIGHT) | \
-                       (action == Action.UP_FIRE) | (action == Action.UP_LEFT_FIRE) | (action == Action.UP_RIGHT_FIRE)
-        is_moving_down = (action == Action.DOWN) | (action == Action.DOWN_LEFT) | (action == Action.DOWN_RIGHT) | \
-                         (action == Action.DOWN_FIRE) | (action == Action.DOWN_LEFT_FIRE) | (action == Action.DOWN_RIGHT_FIRE)
+        is_moving_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT) | \
+                       (action == Action.UPFIRE) | (action == Action.UPLEFTFIRE) | (action == Action.UPRIGHTFIRE)
+        is_moving_down = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT) | \
+                         (action == Action.DOWNFIRE) | (action == Action.DOWNLEFTFIRE) | (action == Action.DOWNRIGHTFIRE)
 
         vel_y = jnp.array(0, dtype=jnp.int32)
         vel_y = jax.lax.select(is_moving_up, -constants.PLAYER_MAX_SPEED, vel_y)
@@ -275,23 +326,90 @@ class DoubleDunk(JAXAtariGame):
     # =========================================================================
     # TASK 3: Implement the Step Function
     # =========================================================================
-    def step(self, state: DunkGameState, action: int) -> DunkGameState:
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """
         Takes an action in the game and returns the new game state.
         """
         # For now, we assume the user action controls player1_inside. The other players do nothing.
         
         updated_p1_inside = self._update_player(state.player1_inside, action, self.constants)
-        updated_p1_outside = self._update_player(state.player1_outside, Action.NO_OP, self.constants)
-        updated_p2_inside = self._update_player(state.player2_inside, Action.NO_OP, self.constants)
-        updated_p2_outside = self._update_player(state.player2_outside, Action.NO_OP, self.constants)
+        updated_p1_outside = self._update_player(state.player1_outside, Action.NOOP, self.constants)
+        updated_p2_inside = self._update_player(state.player2_inside, Action.NOOP, self.constants)
+        updated_p2_outside = self._update_player(state.player2_outside, Action.NOOP, self.constants)
 
         # A note on rendering: The player's final visual Y position should be calculated
         # by the renderer as: visual_y = player.y - player.z
         
-        return state.replace(
+        new_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
         )
+
+        observation = self._get_observation(new_state)
+        reward = self._get_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
+
+        return observation, new_state, reward, done, info
+
+    def _get_reward(self, previous_state: DunkGameState, state: DunkGameState) -> float:
+        """
+        Calculates the reward from the environment state.
+        """
+        # Placeholder: return 0 reward for now
+        return 0.0
+
+    def _get_done(self, state: DunkGameState) -> bool:
+        """
+        Determines if the environment state is a terminal state
+        """
+        # Placeholder: game is never done for now
+        return False
+
+    def _get_info(self, state: DunkGameState) -> DunkInfo:
+        """
+        Extracts information from the environment state.
+        """
+        # Placeholder: return step count
+        return DunkInfo(time=state.step_counter)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: DunkGameState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+import os
+
+class DunkRenderer(JAXGameRenderer):
+    def __init__(self, consts: DunkConstants = None):
+        super().__init__()
+        self.consts = consts or DunkConstants()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # For now, we'll just set up a basic background.
+        # We'll need to create a background.npy file later.
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        ]
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
+
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: DunkGameState) -> jnp.ndarray:
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        # No players or ball yet, just the background
+        return self.jr.render_from_palette(raster, self.PALETTE)
