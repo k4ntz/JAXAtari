@@ -25,16 +25,16 @@ import chex
 
 
 class DefenderConstants(NamedTuple):
-    # Game Window
-    WINDOW_WIDTH: int = 160
-    WINDOW_HEIGHT: int = 210
+    # Game screen
+    SCREEN_WIDTH: int = 160
+    SCREEN_HEIGHT: int = 210
     GAME_WIDTH: int = 640
     GAME_HEIGHT: int = 135
     GAME_AREA_TOP: int = 38
     GAME_AREA_BOTTOM: int = GAME_AREA_TOP + GAME_HEIGHT
 
     # Camera
-    CAMERA_WINDOW_X: int = 80
+    CAMERA_SCREEN_X: int = 80
     CAMERA_OFFSET_MAX: int = 40
     CAMERA_OFFSET_GAIN: int = 2
     INITIAL_CAMERA_GAME_X: int = 240
@@ -191,8 +191,8 @@ class DefenderConstants(NamedTuple):
     # Scanner
     SCANNER_WIDTH: int = 64
     SCANNER_HEIGHT: int = 23
-    SCANNER_WINDOW_Y: int = 13
-    SCANNER_WINDOW_X: int = 48
+    SCANNER_SCREEN_Y: int = 13
+    SCANNER_SCREEN_X: int = 48
     ENEMY_SCANNER_WIDTH: int = 2
     ENEMY_SCANNER_HEIGHT: int = 2
     SPACE_SHIP_SCANNER_WIDTH: int = 3
@@ -252,7 +252,7 @@ class DefenderRenderer(JAXGameRenderer):
         super().__init__()
         self.consts = consts or DefenderConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
             channels=3,
             # downscale=(84, 84)
         )
@@ -332,7 +332,7 @@ class DefenderRenderer(JAXGameRenderer):
         self, screen_x: int, screen_y: int, width: int, height: int
     ) -> chex.Array:
         x_onscreen = jnp.logical_and(
-            screen_x + width > 0, screen_x < self.consts.WINDOW_WIDTH
+            screen_x + width > 0, screen_x < self.consts.SCREEN_WIDTH
         )
         y_onscreen = jnp.logical_and(
             screen_y + height > self.consts.GAME_AREA_TOP,
@@ -342,14 +342,14 @@ class DefenderRenderer(JAXGameRenderer):
 
     # Camera offset calculation function, does return coordinates that are not on screen!
     def onscreen_pos(self, state, game_x, game_y):
-        camera_window_x = self.consts.CAMERA_WINDOW_X
+        camera_screen_x = self.consts.CAMERA_SCREEN_X
         camera_game_x = state.space_ship_x + state.camera_offset
 
         camera_left_border = jnp.mod(
-            camera_game_x - self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
+            camera_game_x - self.consts.SCREEN_WIDTH / 2, self.consts.GAME_WIDTH
         )
         camera_right_border = jnp.mod(
-            camera_game_x + self.consts.WINDOW_WIDTH / 2, self.consts.GAME_WIDTH
+            camera_game_x + self.consts.SCREEN_WIDTH / 2, self.consts.GAME_WIDTH
         )
 
         is_in_left_wrap = jnp.logical_and(
@@ -359,7 +359,7 @@ class DefenderRenderer(JAXGameRenderer):
             game_x < camera_right_border, camera_right_border < camera_game_x
         )
 
-        screen_x = (game_x - camera_game_x + camera_window_x).astype(jnp.int32)
+        screen_x = (game_x - camera_game_x + camera_screen_x).astype(jnp.int32)
 
         screen_x = jax.lax.cond(
             is_in_left_wrap,
@@ -370,7 +370,7 @@ class DefenderRenderer(JAXGameRenderer):
         screen_x = jax.lax.cond(
             is_in_right_wrap,
             lambda: (
-                self.consts.GAME_WIDTH - camera_game_x + game_x + camera_window_x
+                self.consts.GAME_WIDTH - camera_game_x + game_x + camera_screen_x
             ).astype(jnp.int32),
             lambda: screen_x,
         )
@@ -396,9 +396,9 @@ class DefenderRenderer(JAXGameRenderer):
         )
         screen_y = game_y * game_to_scanner_ratio_y
 
-        # Move to scanner position in window
-        screen_x += self.consts.SCANNER_WINDOW_X
-        screen_y += self.consts.SCANNER_WINDOW_Y
+        # Move to scanner position in screen
+        screen_x += self.consts.SCANNER_SCREEN_X
+        screen_y += self.consts.SCANNER_SCREEN_Y
 
         return screen_x, screen_y
 
@@ -417,27 +417,27 @@ class DefenderRenderer(JAXGameRenderer):
         )
 
         city_game_y = self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT
-        city_window_x, city_window_y = self.onscreen_pos(
+        city_screen_x, city_screen_y = self.onscreen_pos(
             state, city_game_x, city_game_y
         )
 
         city_mask = self.SHAPE_MASKS["city"]
         raster = self.jr.render_at_clipped(
             raster,
-            city_window_x,
-            city_window_y,
+            city_screen_x,
+            city_screen_y,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_window_x + self.consts.CITY_WIDTH,
-            city_window_y,
+            city_screen_x + self.consts.CITY_WIDTH,
+            city_screen_y,
             city_mask,
         )
         raster = self.jr.render_at_clipped(
             raster,
-            city_window_x - self.consts.CITY_WIDTH,
-            city_window_y,
+            city_screen_x - self.consts.CITY_WIDTH,
+            city_screen_y,
             city_mask,
         )
 
@@ -448,7 +448,7 @@ class DefenderRenderer(JAXGameRenderer):
 
             # To render all entities inside the scanner
             right_barrier = float(
-                self.consts.SCANNER_WINDOW_X + self.consts.SCANNER_WIDTH
+                self.consts.SCANNER_SCREEN_X + self.consts.SCANNER_WIDTH
             )
             scanner_x = jax.lax.cond(
                 scanner_x + width > right_barrier,
