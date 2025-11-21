@@ -275,14 +275,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def _enemy_position_update(self, state: BattlezoneState, enemy: Enemy, direction) -> Enemy:
         offset_xz = jnp.array([
-            [0, 1],  # Up
-            [1, 0],  # Right
-            [0, -1],  # Left
-            [-1, 0],  # Down
-            [1, 1],  # UpRight
+            [0, -1],  # Up
+            [-1, 0],  # Right
+            [1, 0],  # Left
+            [0, 1],  # Down
+            [-1, -1],  # UpRight
             [1, -1],  # UpLeft
-            [-1, 1],  # DownRight
-            [-1, -1]  # DownLeft
+            [-1, -1],  # DownRight
+            [1, 1]  # DownLeft
         ])
 
         idx = jnp.argmax(direction)
