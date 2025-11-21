@@ -200,8 +200,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                             -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))
         grass_offset = (jnp.where(jnp.any(jnp.stack([up, upLeft, upRight])), 1.0, 0.0)
                         - jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))
-        # --------------------enemies--------------------
-        # updating enemy x and z
 
 
         return BattlezoneState(
@@ -218,6 +216,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _enemy_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
+        #jax.debug.print("Action: {}",action)
+        noop = (action==Action.NOOP)
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
@@ -226,8 +226,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         upRight = jnp.logical_or(action == Action.UPRIGHT, action == Action.UPRIGHTFIRE)
         downLeft = jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE)
         downRight = jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNRIGHTFIRE)
+        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
         # updating enemy x and z based on player movement
-        update_all_positions = jax.vmap(self._enemy_position_update, in_axes=(None, 0, None))(state, state.enemies, action)
+        update_all_positions = jax.vmap(self._enemy_position_update, in_axes=(None, 0, None))(state, state.enemies, direction)
         update_all_distance = jax.vmap(self._enemy_distance_update, in_axes=(None, 0))(state, update_all_positions)
         return state._replace(enemies=update_all_distance)
 
@@ -244,13 +245,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             mountains_anim_counter=jnp.array(0),
             grass_anim_counter=jnp.array(0),
             radar_rotation_counter=jnp.array(0),
-            enemies=Enemy(
-                x=jnp.empty((0,), dtype=jnp.float32),
-                z=jnp.empty((0,), dtype=jnp.float32),
-                distance=jnp.empty((0,), dtype=jnp.float32),
-                enemy_type=jnp.empty((0,), dtype=jnp.float32),
-                orientation_angle=jnp.empty((0,), dtype=jnp.float32),
-            )
+            enemies = Enemy(
+                x=jnp.array([6.8047], dtype=jnp.float32),
+                z=jnp.array([60.5547], dtype=jnp.float32),
+                distance=jnp.array([60.93576], dtype=jnp.float32),
+                enemy_type=jnp.array([EnemyType.TANK], dtype=jnp.float32),
+                orientation_angle=jnp.array([1.57], dtype=jnp.float32)
+            ),
         )
         initial_obs = self._get_observation(state)
 
@@ -274,7 +275,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return observation, new_state, env_reward, done, info
 
     def _enemy_position_update(self, state: BattlezoneState, enemy: Enemy, direction) -> Enemy:
+        #jax.debug.print("{}",direction)
         offset_xz = jnp.array([
+            [0, 0],     # Noop
             [0, -1],  # Up
             [-1, 0],  # Right
             [1, 0],  # Left
@@ -284,7 +287,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             [-1, -1],  # DownRight
             [1, 1]  # DownLeft
         ])
-
+        #jax.debug.print("{}",jnp.argmax(direction))
         idx = jnp.argmax(direction)
         offset = offset_xz[idx]
 
@@ -463,7 +466,14 @@ class BattlezoneRenderer(JAXGameRenderer):
         img = jnp.where(mask, colorID_1, img)
 
         #------------------draw enemy dots----------------
-
+        # Get raw player coords
+        enemies_x = state.enemies.x
+        enemies_z = state.enemies.z
+        #("{}, {}",enemies_x, enemies_z)
+        # Translate to radar coords
+        ...
+        # Draw point
+        ...
 
 
         return img
