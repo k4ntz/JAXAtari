@@ -108,6 +108,7 @@ class BattlezoneConstants(NamedTuple):
     RADAR_CENTER_X:int = 80
     RADAR_CENTER_Y:int = 18
     RADAR_RADIUS:int = 10
+    RADAR_MAX_SCAN_RADIUS: int = 70
     RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
     RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
     LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
@@ -288,6 +289,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             [1, 1]  # DownLeft
         ])
         #jax.debug.print("{}",jnp.argmax(direction))
+        # TODO: Enemies moving left and right but should rotate
         idx = jnp.argmax(direction)
         offset = offset_xz[idx]
 
@@ -447,7 +449,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         return im
 
 
-    def _render_radar(self, img, state, center_x, center_y, radius, colorID_1, colorID_2):
+    def _render_radar(self, img, state, center_x, center_y, radius, colorID_1, colorID_2, max_scan_radius):
         h, w = jnp.shape(img)
         #------------------draw line------------------
         alpha = state.radar_rotation_counter
@@ -467,13 +469,20 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #------------------draw enemy dots----------------
         # Get raw player coords
-        enemies_x = state.enemies.x
-        enemies_z = state.enemies.z
-        #("{}, {}",enemies_x, enemies_z)
-        # Translate to radar coords
-        ...
+        world_enemies_x = state.enemies.x
+        world_enemies_z = state.enemies.z
+        world_enemies_dist = state.enemies.distance
+        #jax.debug.print("{}, {}",enemies_x, enemies_z)
+        # Scale to radar size
+        scale_val = radius / max_scan_radius
+        radar_enemies_x = world_enemies_x * scale_val
+        radar_enemies_z = world_enemies_z * scale_val * (-1)
+        # Offset to radar center
+        radar_enemies_x = jnp.round(radar_enemies_x + center_x).astype(jnp.int32)
+        radar_enemies_z = jnp.round(radar_enemies_z + center_y).astype(jnp.int32)
         # Draw point
-        ...
+        #ToDo: Discart enemies if out of max_scan_radius
+        img = img.at[radar_enemies_z, radar_enemies_x].set(colorID_2)
 
 
         return img
@@ -505,7 +514,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
                                     self.consts.RADAR_RADIUS, self.COLOR_TO_ID[self.consts.RADAR_COLOR_1],
-                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2])
+                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2], self.consts.RADAR_MAX_SCAN_RADIUS)
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
