@@ -4,11 +4,11 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from jaxatari.spaces import Space
 
-
 EnvObs = TypeVar("EnvObs")
 EnvState = TypeVar("EnvState")
 EnvInfo = TypeVar("EnvInfo")
 EnvConstants = TypeVar("EnvConstants")
+
 
 class JAXAtariAction:
     """
@@ -44,6 +44,7 @@ class JAXAtariAction:
             cls.UPRIGHTFIRE, cls.UPLEFTFIRE, cls.DOWNRIGHTFIRE, cls.DOWNLEFTFIRE
         ], dtype=jnp.int32)
 
+
 class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
     """
     Abstract class for a JAX environment.
@@ -57,7 +58,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
     def __init__(self, consts: EnvConstants = None):
         self.consts = consts
 
-    def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
+    def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnvObs, EnvState]:
         """
         Resets the environment to the initial state.
         Returns: The initial observation and the initial environment state.
@@ -66,7 +67,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
         raise NotImplementedError("Abstract method")
 
     def step(
-        self, state: EnvState, action
+            self, state: EnvState, action
     ) -> Tuple[EnvObs, EnvState, float, bool, EnvInfo]:
         """
         Takes a step in the environment.
@@ -103,7 +104,7 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
         Returns: The observation space of the environment.
         """
         raise NotImplementedError("Abstract method")
-    
+
     def image_space(self) -> Space:
         """
         Returns the image space of the environment.
@@ -163,3 +164,10 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
 
         """
         raise NotImplementedError("Abstract method")
+
+
+class EnemyType:
+    TANK = 0
+    SUPER_TANK = 1
+    MISSILE = 2
+    SAUCER = 3
