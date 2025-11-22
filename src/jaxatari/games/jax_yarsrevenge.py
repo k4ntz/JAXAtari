@@ -6,7 +6,6 @@ from typing import Callable, NamedTuple, Optional, Tuple
 import chex
 import jax
 import jax.numpy as jnp
-import jax.test_util
 from jax import Array
 from numpy import int32
 
@@ -18,6 +17,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 class Direction(IntEnum):
+    _CENTER = -1
     RIGHT = 0
     UPRIGHT = 1
     UP = 2
@@ -28,9 +28,11 @@ class Direction(IntEnum):
     DOWNRIGHT = 7
 
     @staticmethod
+    @jax.jit
     def from_flags(up, down, left, right):
         return jnp.select(
             [
+                ~right & ~up & ~down & ~left,
                 right & ~up & ~down & ~left,
                 right & up & ~down & ~left,
                 ~right & up & ~down & ~left,
@@ -41,6 +43,7 @@ class Direction(IntEnum):
                 right & ~up & down & ~left,
             ],
             [
+                Direction._CENTER,
                 Direction.RIGHT,
                 Direction.UPRIGHT,
                 Direction.UP,
@@ -53,6 +56,7 @@ class Direction(IntEnum):
         )
 
     @staticmethod
+    @jax.jit
     def to_flags(direction):
         up = (
             (direction == Direction.UP)
@@ -79,20 +83,44 @@ class Direction(IntEnum):
         )
 
         return up, down, left, right
-    
+
     @staticmethod
+    @jax.jit
     def reverse(direction: jnp.ndarray):
-        return jnp.array((direction + 4) % 8).astype(jnp.int32)
+        return jnp.where(
+            direction == Direction._CENTER,
+            jnp.array(Direction._CENTER).astype(jnp.int32),
+            jnp.array((direction + 4) % 8).astype(jnp.int32),
+        )
+
+    @staticmethod
+    @jax.jit
+    def to_delta(
+        flags: Tuple[
+            bool | jnp.ndarray,
+            bool | jnp.ndarray,
+            bool | jnp.ndarray,
+            bool | jnp.ndarray,
+        ],
+        speed: float | jnp.ndarray,
+    ):
+        up, down, left, right = flags
+        dx = jnp.where(left, -speed, jnp.where(right, speed, 0.0))
+        dy = jnp.where(up, -speed, jnp.where(down, speed, 0.0))
+        return dx, dy
+
 
 class YarState(IntEnum):
     STEADY = 0
     MOVING = 1
+
 
 class Entity(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
     w: jnp.ndarray
     h: jnp.ndarray
+
 
 class DirectionEntity(NamedTuple):
     x: jnp.ndarray
@@ -230,19 +258,19 @@ class JaxYarsRevenge(
             score=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
             yar=DirectionEntity(
-                x=jnp.array(10).astype(jnp.float32),
-                y=jnp.array(105).astype(jnp.float32),
+                x=jnp.array(10).astype(jnp.int32),
+                y=jnp.array(105).astype(jnp.int32),
                 w=jnp.array(self.consts.YAR_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.YAR_SIZE[1]).astype(jnp.int32),
-                direction=jnp.array(Direction.RIGHT).astype(jnp.int32)
+                direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
             ),
             yar_state=jnp.array(YarState.STEADY).astype(jnp.int32),
             qotile=DirectionEntity(
-                x=jnp.array(152).astype(jnp.float32),
-                y=jnp.array(64).astype(jnp.float32),
+                x=jnp.array(150).astype(jnp.int32),
+                y=jnp.array(64).astype(jnp.int32),
                 w=jnp.array(self.consts.QOTILE_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.QOTILE_SIZE[1]).astype(jnp.int32),
-                direction=jnp.array(Direction.DOWN).astype(jnp.int32)
+                direction=jnp.array(Direction.DOWN).astype(jnp.int32),
             ),
             destroyer=Entity(
                 x=jnp.array(155).astype(jnp.int32),
@@ -268,10 +296,16 @@ class JaxYarsRevenge(
                 direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
             ),
             energy_shield=Entity(
-                x=jnp.array(155).astype(jnp.int32),
+                x=jnp.array(128).astype(jnp.int32),
                 y=jnp.array(100).astype(jnp.int32),
-                w=jnp.array(self.consts.ENERGY_CELL_WIDTH * self.consts.INITIAL_ENERGY_SHIELD[0].shape[1]).astype(jnp.int32),
-                h=jnp.array(self.consts.ENERGY_CELL_WIDTH * self.consts.INITIAL_ENERGY_SHIELD[1].shape[0]).astype(jnp.int32),
+                w=jnp.array(
+                    self.consts.ENERGY_CELL_WIDTH
+                    * self.consts.INITIAL_ENERGY_SHIELD[0].shape[1]
+                ).astype(jnp.int32),
+                h=jnp.array(
+                    self.consts.ENERGY_CELL_WIDTH
+                    * self.consts.INITIAL_ENERGY_SHIELD[1].shape[0]
+                ).astype(jnp.int32),
             ),
             energy_shield_state=self.consts.INITIAL_ENERGY_SHIELD[0],
         )
@@ -281,6 +315,55 @@ class JaxYarsRevenge(
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: YarsRevengeState, action: chex.Array):
+
+        @jax.jit
+        def get_entity_position(entity: Entity | DirectionEntity, direction: Direction):
+            up, down, left, right = Direction.to_flags(direction)
+
+            w_half = entity.w // 2
+            h_half = entity.h // 2
+
+            x_offset = jnp.where(left, 0, jnp.where(right, entity.w, w_half))
+            y_offset = jnp.where(up, 0, jnp.where(down, entity.h, h_half))
+
+            return entity.x + x_offset, entity.y + y_offset
+
+        @jax.jit
+        def move_entity(
+            entity: Entity | DirectionEntity,
+            delta_x: jnp.ndarray,
+            delta_y: jnp.ndarray,
+            min_x: int = 0,
+            min_y: int = 0,
+            max_x: int = self.consts.WIDTH,
+            max_y: int = self.consts.HEIGHT,
+            wrap_y: bool = False,
+        ):
+            new_x = jnp.clip(entity.x + delta_x, min_x, max_x - entity.w)
+            new_y = entity.y + delta_y
+            new_y = jax.lax.cond(
+                wrap_y,
+                lambda: jnp.mod(new_y, jnp.asarray(max_y - entity.h)),
+                lambda: jnp.clip(new_y, min_y, max_y - entity.h),
+            )
+            return new_x, new_y
+
+        @jax.jit
+        def check_entity_boundary(
+            entity: Entity | DirectionEntity,
+            max_x: int = self.consts.WIDTH,
+            max_y: int = self.consts.HEIGHT,
+            min_x: int = 0,
+            min_y: int = 0,
+        ):
+            right = entity.x + entity.w >= max_x
+            bottom = entity.y + entity.h >= max_y
+            left = entity.x <= min_x
+            top = entity.y <= min_y
+            return jnp.logical_or(
+                jnp.logical_or(right, bottom), jnp.logical_or(left, top)
+            )
+
         # Extract the direction flags from the actions
         up = (
             (action == Action.UP)
@@ -318,45 +401,58 @@ class JaxYarsRevenge(
         yar_moving = up | down | left | right
         yar_diagonal = (up | down) & (left | right)
 
-        # Calculate the position difference compared to the previous state
-        yar_speed = jax.lax.select(
-            yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
-        )
-        delta_yar_x = jnp.where(left, -yar_speed, jnp.where(right, yar_speed, 0.0))
-        delta_yar_y = jnp.where(up, -yar_speed, jnp.where(down, yar_speed, 0.0))
-
-        # New position calculation with boundary check (y-axis wraps)
-        new_yar_x = jnp.clip(state.yar.x + delta_yar_x, 0, self.consts.WIDTH)
-        new_yar_y = (state.yar.y + delta_yar_y) % self.consts.HEIGHT
-
+        # Calculate the moving direction
         new_yar_direction = jax.lax.select(
             yar_moving, Direction.from_flags(up, down, left, right), state.yar.direction
         )
         new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
 
+        # Calculate the position difference compared to the previous state
+        yar_speed = jax.lax.select(
+            yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
+        )
+        delta_yar_x, delta_yar_y = Direction.to_delta(
+            (up, down, left, right), yar_speed
+        )
+
+        # New position calculation with boundary check (y-axis wraps)
+        new_yar_x, new_yar_y = move_entity(
+            state.yar,
+            delta_yar_x,
+            delta_yar_y,
+            wrap_y=True,
+        )
+
         # Qotile Movement
-        qotile_dy = jnp.where(state.qotile.direction == Direction.UP, 1, -1)
-        delta_qotile_y = qotile_dy * self.consts.QOTILE_SPEED
-        new_qotile_y = jnp.clip(
-            state.qotile.y + delta_qotile_y,
-            self.consts.QOTILE_MIN_Y,
-            self.consts.QOTILE_MAX_Y,
+        qotile_hit_boundary = check_entity_boundary(
+            state.qotile,
+            self.consts.WIDTH,
+            max_y=self.consts.QOTILE_MAX_Y,
+            min_y=self.consts.QOTILE_MIN_Y,
         )
 
-        qotile_hit_boundary = jnp.logical_or(
-            new_qotile_y == self.consts.QOTILE_MIN_Y,
-            new_qotile_y == self.consts.QOTILE_MAX_Y,
+        new_qotile_direction = jnp.where(
+            qotile_hit_boundary,
+            Direction.reverse(state.qotile.direction),
+            state.qotile.direction,
         )
 
-        new_qotile_direction = jnp.where(qotile_hit_boundary, Direction.reverse(state.qotile.direction), state.qotile.direction)
+        _, delta_qotile_y = Direction.to_delta(
+            Direction.to_flags(new_qotile_direction), self.consts.QOTILE_SPEED
+        )
+
+        _, new_qotile_y = move_entity(
+            state.qotile,
+            _,
+            delta_qotile_y,
+            min_y=self.consts.QOTILE_MIN_Y,
+            max_y=self.consts.QOTILE_MAX_Y,
+        )
 
         # Destroyer Movement
-        destroyer_dx = jnp.sign(
-            state.yar.x - state.destroyer.x + (self.consts.YAR_SIZE[0] / 2)
-        )
-        destroyer_dy = jnp.sign(
-            state.yar.y - state.destroyer.y + (self.consts.YAR_SIZE[1] / 2)
-        )
+        yar_center_x, yar_center_y = get_entity_position(state.yar, Direction._CENTER)
+        destroyer_dx = jnp.sign(yar_center_x - state.destroyer.x)
+        destroyer_dy = jnp.sign(yar_center_y - state.destroyer.y)
 
         new_destroyer_x = state.destroyer.x + self.consts.DESTROYER_SPEED * destroyer_dx
         new_destroyer_y = state.destroyer.y + self.consts.DESTROYER_SPEED * destroyer_dy
@@ -374,59 +470,46 @@ class JaxYarsRevenge(
             | (action == Action.DOWNRIGHTFIRE)
         )
 
-        energy_missile_hit_boundary = jnp.logical_or(
-            jnp.logical_or(
-                state.energy_missile.x == 0, state.energy_missile.x == self.consts.WIDTH
-            ),
-            jnp.logical_or(
-                state.energy_missile.y == 0,
-                state.energy_missile.y == self.consts.HEIGHT,
-            ),
-        )
+        em_exists = state.energy_missile_exist == 1
 
-        new_energy_missile_exists = jnp.where(
-            energy_missile_hit_boundary,
-            jnp.array(0).astype(jnp.bool),
-            jnp.where(fire, jnp.array(1).astype(jnp.bool), state.energy_missile_exist),
-        )
-        energy_missile_exists = state.energy_missile_exist == 1
-
-        em_up, em_down, em_left, em_right = Direction.to_flags(
-            state.energy_missile.direction
+        energy_missile_hit_boundary = check_entity_boundary(state.energy_missile)
+        new_em_exists = jnp.logical_or(
+            jnp.logical_and(~em_exists, fire),
+            jnp.logical_and(em_exists, ~energy_missile_hit_boundary),
         )
 
         new_energy_missile_direction = jnp.where(
-            energy_missile_exists, state.energy_missile.direction, state.yar.direction
+            em_exists, state.energy_missile.direction, state.yar.direction
         )
 
-        energy_missile_dx = jnp.where(
-            em_right,
+        energy_missile_dx, energy_missile_dy = Direction.to_delta(
+            Direction.to_flags(state.energy_missile.direction),
             self.consts.ENERGY_MISSILE_SPEED,
-            jnp.where(em_left, -self.consts.ENERGY_MISSILE_SPEED, 0),
         )
+
         new_energy_missile_x = jnp.clip(
             jnp.where(
-                energy_missile_exists,
+                em_exists,
                 state.energy_missile.x + energy_missile_dx,
-                state.yar.x + (self.consts.YAR_SIZE[0] / 2),
+                get_entity_position(state.yar, Direction._CENTER)[0],
             ),
             0,
             self.consts.WIDTH,
         )
 
-        energy_missile_dy = jnp.where(
-            em_down,
-            self.consts.ENERGY_MISSILE_SPEED,
-            jnp.where(em_up, -self.consts.ENERGY_MISSILE_SPEED, 0),
-        )
         new_energy_missile_y = jnp.clip(
             jnp.where(
-                energy_missile_exists,
+                em_exists,
                 state.energy_missile.y + energy_missile_dy,
-                state.yar.y + (self.consts.YAR_SIZE[1] / 2),
+                get_entity_position(state.yar, Direction._CENTER)[1],
             ),
             0,
             self.consts.HEIGHT,
+        )
+
+        new_energy_shield_y = (
+            get_entity_position(state.qotile, Direction._CENTER)[1]
+            - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
         )
 
         new_state = YarsRevengeState(
@@ -439,7 +522,7 @@ class JaxYarsRevenge(
                 y=new_yar_y,
                 w=state.yar.w,
                 h=state.yar.h,
-                direction=new_yar_direction
+                direction=new_yar_direction,
             ),
             yar_state=new_yar_state,
             qotile=DirectionEntity(
@@ -447,7 +530,7 @@ class JaxYarsRevenge(
                 y=new_qotile_y,
                 w=state.qotile.w,
                 h=state.qotile.h,
-                direction=new_qotile_direction
+                direction=new_qotile_direction,
             ),
             destroyer=Entity(
                 x=new_destroyer_x,
@@ -462,21 +545,21 @@ class JaxYarsRevenge(
                 y=state.swirl.y,
                 w=state.swirl.w,
                 h=state.swirl.h,
-                direction=state.swirl.direction
+                direction=state.swirl.direction,
             ),
-            energy_missile_exist=new_energy_missile_exists,
+            energy_missile_exist=new_em_exists,
             energy_missile=DirectionEntity(
                 x=new_energy_missile_x,
                 y=new_energy_missile_y,
                 w=state.energy_missile.w,
                 h=state.energy_missile.h,
-                direction=new_energy_missile_direction
+                direction=new_energy_missile_direction,
             ),
-            energy_shield=Entity( #TODO: fix the values
-                x=jnp.array(155).astype(jnp.int32),
-                y=jnp.array(100).astype(jnp.int32),
-                w=jnp.array(self.consts.ENERGY_CELL_WIDTH * self.consts.INITIAL_ENERGY_SHIELD[0].shape[1]).astype(jnp.int32),
-                h=jnp.array(self.consts.ENERGY_CELL_WIDTH * self.consts.INITIAL_ENERGY_SHIELD[1].shape[0]).astype(jnp.int32),
+            energy_shield=Entity(
+                x=state.energy_shield.x,
+                y=new_energy_shield_y,
+                w=state.energy_shield.w,
+                h=state.energy_shield.h,
             ),
             energy_shield_state=state.energy_shield_state,
         )
@@ -501,9 +584,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "qotile": spaces.Dict(
@@ -511,9 +592,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "destroyer": spaces.Dict(
@@ -521,9 +600,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "swirl_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
@@ -533,9 +610,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "energy_missile_exists": spaces.Box(
@@ -546,9 +621,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "energy_shield": spaces.Dict(
@@ -556,9 +629,7 @@ class JaxYarsRevenge(
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "energy_shield_state": spaces.Box(
@@ -571,6 +642,7 @@ class JaxYarsRevenge(
     def image_space(self):
         return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: YarsRevengeState) -> YarsRevengeObservation:
         return YarsRevengeObservation(
             yar=state.yar,
@@ -586,6 +658,7 @@ class JaxYarsRevenge(
             lives=state.lives,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs):
         return jnp.concatenate(
             [
@@ -624,12 +697,15 @@ class JaxYarsRevenge(
             ]
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state, all_rewards: Optional[Array] = None):
         return YarsRevengeInfo(time=state.step_counter, current_level=state.level)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state, state):
         return state.score - previous_state.score
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state):
         return False
 
