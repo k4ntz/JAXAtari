@@ -78,6 +78,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MAX_INTERVAL: int = 80
     LEVEL_TRANSITION_DURATION: int = 30
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
+    STARTING_LIVES: int = 5
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -182,6 +183,7 @@ class RoadRunnerState(NamedTuple):
     current_level: chex.Array
     level_transition_timer: chex.Array
     is_in_transition: chex.Array
+    lives: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -863,6 +865,7 @@ class JaxRoadRunner(
             current_level=jnp.array(0, dtype=jnp.int32),
             level_transition_timer=jnp.array(0, dtype=jnp.int32),
             is_in_transition=jnp.array(False, dtype=jnp.bool_),
+            lives=jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -892,7 +895,15 @@ class JaxRoadRunner(
             st = self._check_truck_collisions(st)
             st = self._check_level_completion(st)
 
-            def reset_round(inner_state: RoadRunnerState) -> RoadRunnerState:
+            def game_over_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
+                 # Game Over: Restart from beginning
+                 # We use the current RNG to generate a new key for the next game to ensure randomness
+                 rng, new_key = jax.random.split(inner_state.rng)
+                 _, new_state = self.reset(new_key)
+                 return new_state
+
+            def next_life_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
+                # Lost a life: Partial reset
                 reset_state = inner_state._replace(
                     player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
                     player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
@@ -916,13 +927,23 @@ class JaxRoadRunner(
                     truck_y=jnp.array(-1, dtype=jnp.int32),
                     next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
                     next_truck_spawn_step=jnp.array(0, dtype=jnp.int32),
+                    lives=inner_state.lives - 1,
                 )
                 level_idx = self._get_level_index(reset_state)
                 return self._initialize_spawn_timers(reset_state, level_idx)
 
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
+            
+            def handle_round_end(inner_st: RoadRunnerState) -> RoadRunnerState:
+                 return jax.lax.cond(
+                     inner_st.lives > 1,
+                     next_life_reset,
+                     game_over_reset,
+                     inner_st
+                 )
+
             st = jax.lax.cond(
-                st.is_round_over & player_at_end, reset_round, lambda inner: inner, st
+                st.is_round_over & player_at_end, handle_round_end, lambda inner: inner, st
             )
 
             st = st._replace(step_counter=st.step_counter + 1)
@@ -1204,8 +1225,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         road_sprite = self._create_road_sprite()
         truck_sprite = self._create_truck_sprite()
+        life_sprite = self._create_life_sprite()
         asset_config = self._get_asset_config(
-            background_sprite, road_sprite, wall_sprite_bottom, truck_sprite
+            background_sprite, road_sprite, wall_sprite_bottom, truck_sprite, life_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -1311,6 +1333,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
             jnp.array(seed_color_rgba, dtype=jnp.uint8), (*seed_shape[:2], 1)
         )
 
+    def _create_life_sprite(self) -> jnp.ndarray:
+        # Green square for lives
+        life_color_rgba = (*self.consts.PLAYER_COLOR, 255)
+        life_shape = (6, 6, 4) # 6x6 square
+        return jnp.tile(
+            jnp.array(life_color_rgba, dtype=jnp.uint8), (*life_shape[:2], 1)
+        )
+
     def _create_truck_sprite(self) -> jnp.ndarray:
         truck_color_rgba = (*self.consts.TRUCK_COLOR, 255)
         truck_shape = (self.consts.TRUCK_SIZE[0], self.consts.TRUCK_SIZE[1], 4)
@@ -1360,6 +1390,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_sprite: jnp.ndarray,
         wall_sprite_bottom: jnp.ndarray,
         truck_sprite: jnp.ndarray,
+        life_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
             {"name": "background", "type": "background", "data": background_sprite},
@@ -1374,6 +1405,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
             {"name": "truck", "type": "procedural", "data": truck_sprite},
+            {"name": "life", "type": "procedural", "data": life_sprite},
         ]
 
         return asset_config
@@ -1400,6 +1432,28 @@ class RoadRunnerRenderer(JAXGameRenderer):
             max_digits_to_render=6,
         )
         return raster
+
+    def _render_lives(self, raster: jnp.ndarray, lives: jnp.ndarray) -> jnp.ndarray:
+        # Render lives as green squares below the score
+        # lives=3 -> 2 squares
+        # lives=2 -> 1 square
+        # lives=1 -> 0 squares
+        
+        num_squares = jnp.maximum(lives - 1, 0)
+        
+        start_y = 40
+        square_size = 6
+        spacing = 2
+        
+        # We can render up to 2 squares (assuming max 3 lives for now, but let's support more generically)
+        total_width = num_squares * square_size + jnp.maximum(num_squares - 1, 0) * spacing
+        start_x = (self.consts.WIDTH - total_width) // 2
+        
+        def render_square(i, r):
+            x = start_x + i * (square_size + spacing)
+            return self.jr.render_at(r, x, start_y, self.SHAPE_MASKS["life"])
+            
+        return jax.lax.fori_loop(0, num_squares, render_square, raster)
 
     def _render_seeds(self, raster: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
         # Only render active seeds (x >= 0)
@@ -1514,6 +1568,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render score
         raster = self._render_score(raster, state.score)
+        
+        # Render Lives
+        raster = self._render_lives(raster, state.lives)
 
         # Render Player
         player_mask = self._get_animated_sprite(
