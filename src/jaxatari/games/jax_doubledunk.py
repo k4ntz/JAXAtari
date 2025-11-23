@@ -55,16 +55,10 @@ class DunkConstants:
     """
     WINDOW_WIDTH: int = 250
     WINDOW_HEIGHT: int = 150
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
-    PLAYER1_COLOR: Tuple[int, int, int] = (200, 72, 72)
-    PLAYER2_COLOR: Tuple[int, int, int] = (72, 72, 200)
-    BALL_COLOR: Tuple[int, int, int] = (204, 102, 0)
     BALL_SIZE: Tuple[int, int] = (3,3)
     BALL_START: Tuple [int, int] = (100, 70)
-    WALL_COLOR: Tuple[int, int, int] = (142, 142, 142)
-    FIELD_COLOR: Tuple[int, int, int] = (128, 128, 128)
     JUMP_STRENGTH: int = 5 #adjustable if necessary and more of a placeholder value 
-    PLAYER_MAX_SPEED: int = 4 #adjustable if necessary and more of a placeholder value
+    PLAYER_MAX_SPEED: int = 2 #adjustable if necessary and more of a placeholder value
     PLAYER_Y_MIN: int = 20
     PLAYER_Y_MAX: int = 150
     PLAYER_X_MIN: int  = 0
