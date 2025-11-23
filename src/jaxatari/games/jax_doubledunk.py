@@ -53,8 +53,8 @@ class DunkConstants:
     """
     Holds all static values for the game like screen dimensions, player speeds, colors, etc.
     """
-    WINDOW_WIDTH: int = 200
-    WINDOW_HEIGHT: int = 240
+    WINDOW_WIDTH: int = 250
+    WINDOW_HEIGHT: int = 150
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
     PLAYER1_COLOR: Tuple[int, int, int] = (200, 72, 72)
     PLAYER2_COLOR: Tuple[int, int, int] = (72, 72, 200)
@@ -64,17 +64,16 @@ class DunkConstants:
     WALL_COLOR: Tuple[int, int, int] = (142, 142, 142)
     FIELD_COLOR: Tuple[int, int, int] = (128, 128, 128)
     JUMP_STRENGTH: int = 5 #adjustable if necessary and more of a placeholder value 
-    PLAYER_MAX_SPEED: int = 6 #adjustable if necessary and more of a placeholder value
-    PLAYER_Y_MIN: int = 50
-    PLAYER_Y_MAX: int = 100
-    PLAYER_X_MIN: int  = 20
-    PLAYER_X_MAX: int = 180
+    PLAYER_MAX_SPEED: int = 4 #adjustable if necessary and more of a placeholder value
+    PLAYER_Y_MIN: int = 20
+    PLAYER_Y_MAX: int = 150
+    PLAYER_X_MIN: int  = 0
+    PLAYER_X_MAX: int = 250
     PLAYER_ROLES: Tuple[int,int] = (0,1) #0 = Offence, 1 = Defence (might be doable with booleans as well)
-    BASKET_POSITION: Tuple[int,int] = (100,130)
+    BASKET_POSITION: Tuple[int,int] = (125,10)
     BASKET_BUFFER: int = 3 #this should translate to [BASKET_POSITION[0]-buffer:BASKET_POSITION[0]+buffer] being the valid goal area width-wise
     GRAVITY: int = 1 # Downward acceleration due to gravity
-    AREA_3_POINT: Tuple[int,int] = (0,0) #We need a way to determine whether a player is in a 3-point area (might be easier to define the two-point area and the rest
-                                # will be considered 3-point by process of elimination)
+    AREA_3_POINT: Tuple[int,int,int] = (40, 210, 81) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
 
 @chex.dataclass(frozen=True)
 class PlayerState:
@@ -85,6 +84,8 @@ class PlayerState:
     z: chex.Array
     vel_z: chex.Array
     role: chex.Array # can be 0 for defense, 1 for offense
+    animation_frame: chex.Array
+    animation_direction: chex.Array
 
 @chex.dataclass(frozen=True)
 class BallState:
@@ -112,6 +113,7 @@ class DunkGameState:
     offensive_play: chex.Array      # The selected offensive play
     defensive_play: chex.Array      # The selected defensive play
     play_step: chex.Array           # Tracks progress within a play (e.g., 1st, 2nd, 3rd button press)
+    controlled_player: chex.Array
 
 @chex.dataclass(frozen=True)
 class EntityPosition:
@@ -156,20 +158,20 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # For now, we'll treat player1_inside as the main 'player'
         # and player2_inside as the 'enemy' for the observation.
         player = EntityPosition(
-            x=state.player1_inside.x,
-            y=state.player1_inside.y,
+            x=jnp.array(state.player1_inside.x),
+            y=jnp.array(state.player1_inside.y),
             width=jnp.array(10),  # Placeholder width
-            height=jnp.array(20), # Placeholder height
+            height=jnp.array(30), # Placeholder height
         )
         enemy = EntityPosition(
-            x=state.player2_inside.x,
-            y=state.player2_inside.y,
+            x=jnp.array(state.player2_inside.x),
+            y=jnp.array(state.player2_inside.y),
             width=jnp.array(10),  # Placeholder width
-            height=jnp.array(20), # Placeholder height
+            height=jnp.array(30), # Placeholder height
         )
         ball = EntityPosition(
-            x=state.ball.x,
-            y=state.ball.y,
+            x=jnp.array(state.ball.x),
+            y=jnp.array(state.ball.y),
             width=jnp.array(self.constants.BALL_SIZE[0]),
             height=jnp.array(self.constants.BALL_SIZE[1]),
         )
@@ -233,11 +235,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         Use values from self.constants.
         """
         return DunkGameState(
-            player1_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player1_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player2_inside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            player2_outside=PlayerState(x=0, y=0, vel_x=0, vel_y=0, z=0, vel_z=0, role=0),
-            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.NONE),
+            player1_inside=PlayerState(x=125, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player1_outside=PlayerState(x=80, y=120, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player2_inside=PlayerState(x=170, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player2_outside=PlayerState(x=200, y=120, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.PLAYER1_INSIDE),
             player_score=0,
             enemy_score=0,
             step_counter=0,
@@ -246,6 +248,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             offensive_play=OffensivePlay.NONE,
             defensive_play=DefensivePlay.NONE,
             play_step=0,
+            controlled_player=PlayerID.PLAYER1_INSIDE,
         )
 
 
@@ -313,15 +316,48 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         after applying physics and action effects.
         """
         # Get desired velocity for 8-way movement and any jump impulse
-        vel_x, vel_y, vel_z = self._get_player_action_effects(action, player.z, constants)
+        vel_x, vel_y, jump_impulse = self._get_player_action_effects(action, player.z, constants)
 
-        # Set the player's velocity based on the action
-        updated_player = player.replace(vel_x=vel_x, vel_y=vel_y, vel_z=vel_z)
+        # Set the player's X/Y velocity based on the action
+        updated_player = player.replace(vel_x=vel_x, vel_y=vel_y)
+
+        # If there's a jump impulse, apply it. Otherwise, keep the existing vel_z.
+        # This prevents the vertical velocity from being reset to 0 every frame.
+        new_vel_z = jax.lax.select(
+            jump_impulse > 0,
+            jump_impulse,
+            updated_player.vel_z
+        )
+        updated_player = updated_player.replace(vel_z=new_vel_z)
 
         # Apply physics (movement, gravity, collisions) to the player
         updated_player = self._update_player_physics(updated_player, constants)
 
         return updated_player
+
+    def _handle_passing(self, state: DunkGameState, action: int) -> DunkGameState:
+        """Handles the logic for passing the ball between players."""
+        is_pass_action = (action == Action.DOWNFIRE)
+
+        # Determine the new controlled player and ball holder if a pass occurs
+        new_controlled_player = jax.lax.select(
+            is_pass_action & (state.controlled_player == PlayerID.PLAYER1_INSIDE),
+            PlayerID.PLAYER1_OUTSIDE,
+            state.controlled_player
+        )
+        new_controlled_player = jax.lax.select(
+            is_pass_action & (state.controlled_player == PlayerID.PLAYER1_OUTSIDE),
+            PlayerID.PLAYER1_INSIDE,
+            new_controlled_player
+        )
+
+        # The ball holder becomes the newly controlled player
+        new_ball_holder = jax.lax.select(is_pass_action, new_controlled_player, state.ball.holder)
+
+        return state.replace(
+            controlled_player=new_controlled_player,
+            ball=state.ball.replace(holder=new_ball_holder)
+        )
 
     # =========================================================================
     # TASK 3: Implement the Step Function
@@ -331,21 +367,74 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """
         Takes an action in the game and returns the new game state.
         """
-        # For now, we assume the user action controls player1_inside. The other players do nothing.
+        # 1. Handle passing logic to update controlled player and ball holder
+        state = self._handle_passing(state, action)
+
+        # 2. Determine which player to update based on the (potentially new) controlled_player
+        is_p1_inside_controlled = (state.controlled_player == PlayerID.PLAYER1_INSIDE)
+        is_p1_outside_controlled = (state.controlled_player == PlayerID.PLAYER1_OUTSIDE)
+
+        # Use a NOOP action for the player who is not controlled
+        p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
+        p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
+
+        # 3. Update player states based on actions
+        updated_p1_inside = self._update_player(state.player1_inside, p1_inside_action, self.constants)
+        updated_p1_outside = self._update_player(state.player1_outside, p1_outside_action, self.constants)
         
-        updated_p1_inside = self._update_player(state.player1_inside, action, self.constants)
-        updated_p1_outside = self._update_player(state.player1_outside, Action.NOOP, self.constants)
+        # Other players remain static for now
         updated_p2_inside = self._update_player(state.player2_inside, Action.NOOP, self.constants)
         updated_p2_outside = self._update_player(state.player2_outside, Action.NOOP, self.constants)
 
-        # A note on rendering: The player's final visual Y position should be calculated
-        # by the renderer as: visual_y = player.y - player.z
+        # 4. Update animation for the player who has the ball
+        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+
+        # --- Animation for Player 1 Inside ---
+        p1_inside_anim_frame = updated_p1_inside.animation_frame
+        p1_inside_anim_dir = updated_p1_inside.animation_direction
+
+        # Calculate next frame if it has the ball
+        p1_inside_new_dir = jax.lax.cond(p1_inside_anim_frame >= 9, lambda: -1, lambda: p1_inside_anim_dir)
+        p1_inside_new_dir = jax.lax.cond(p1_inside_anim_frame <= 0, lambda: 1, lambda: p1_inside_new_dir)
+        p1_inside_new_frame = p1_inside_anim_frame + p1_inside_new_dir
+
+        # Update if it has the ball, otherwise reset
+        final_p1_inside_frame = jax.lax.select(p1_inside_has_ball, p1_inside_new_frame, 0)
+        final_p1_inside_dir = jax.lax.select(p1_inside_has_ball, p1_inside_new_dir, 1) # Reset direction to 1
+        
+        updated_p1_inside = updated_p1_inside.replace(
+            animation_frame=final_p1_inside_frame,
+            animation_direction=final_p1_inside_dir
+        )
+
+        # --- Animation for Player 1 Outside ---
+        p1_outside_anim_frame = updated_p1_outside.animation_frame
+        p1_outside_anim_dir = updated_p1_outside.animation_direction
+
+        # Calculate next frame if it has the ball
+        p1_outside_new_dir = jax.lax.cond(p1_outside_anim_frame >= 9, lambda: -1, lambda: p1_outside_anim_dir)
+        p1_outside_new_dir = jax.lax.cond(p1_outside_anim_frame <= 0, lambda: 1, lambda: p1_outside_new_dir)
+        p1_outside_new_frame = p1_outside_anim_frame + p1_outside_new_dir
+
+        # Update if it has the ball, otherwise reset
+        final_p1_outside_frame = jax.lax.select(p1_outside_has_ball, p1_outside_new_frame, 0)
+        final_p1_outside_dir = jax.lax.select(p1_outside_has_ball, p1_outside_new_dir, 1)
+
+        updated_p1_outside = updated_p1_outside.replace(
+            animation_frame=final_p1_outside_frame,
+            animation_direction=final_p1_outside_dir
+        )
         
         new_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
+            # The ball holder and controlled player were already updated in _handle_passing
+            # so we carry them over from the intermediate state.
+            ball=state.ball,
+            controlled_player=state.controlled_player,
         )
 
         observation = self._get_observation(new_state)
@@ -397,6 +486,9 @@ class DunkRenderer(JAXGameRenderer):
         # We'll need to create a background.npy file later.
         asset_config = [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {'name': 'player', 'type': 'group', 'files': [f'player_{i}.npy' for i in range(10)]},
+            {'name': 'player_no_ball', 'type': 'single', 'file': 'player_no_ball.npy'},
+            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
         ]
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
 
@@ -411,5 +503,40 @@ class DunkRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: DunkGameState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        # No players or ball yet, just the background
+
+        # Determine which player has the ball
+        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        
+        # --- Draw Player 1 Inside ---
+        p1_inside_state = state.player1_inside
+        p1_inside_visual_y = p1_inside_state.y - p1_inside_state.z
+        p1_inside_mask = jax.lax.select(
+            p1_inside_has_ball,
+            self.SHAPE_MASKS['player'][p1_inside_state.animation_frame],
+            self.SHAPE_MASKS['player_no_ball']
+        )
+        raster = self.jr.render_at(raster, p1_inside_state.x, p1_inside_visual_y, p1_inside_mask)
+
+        # --- Draw Player 1 Outside ---
+        p1_outside_state = state.player1_outside
+        p1_outside_visual_y = p1_outside_state.y - p1_outside_state.z
+        p1_outside_mask = jax.lax.select(
+            p1_outside_has_ball,
+            self.SHAPE_MASKS['player'][p1_outside_state.animation_frame],
+            self.SHAPE_MASKS['player_no_ball']
+        )
+        raster = self.jr.render_at(raster, p1_outside_state.x, p1_outside_visual_y, p1_outside_mask)
+
+        # Draw other players (without ball)
+        no_ball_mask = self.SHAPE_MASKS['player_no_ball']
+        
+        p2_inside_state = state.player2_inside
+        p2_inside_visual_y = p2_inside_state.y - p2_inside_state.z
+        raster = self.jr.render_at(raster, p2_inside_state.x, p2_inside_visual_y, no_ball_mask)
+
+        p2_outside_state = state.player2_outside
+        p2_outside_visual_y = p2_outside_state.y - p2_outside_state.z
+        raster = self.jr.render_at(raster, p2_outside_state.x, p2_outside_visual_y, no_ball_mask)
+
         return self.jr.render_from_palette(raster, self.PALETTE)
