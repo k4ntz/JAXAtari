@@ -257,9 +257,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at bottom center (row 26, col 14 is a path with dots)
-        player_x = jnp.array(14 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 14
-        player_y = jnp.array(26 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 26
+        # Initialize player at valid path with dots (row 25, col 13)
+        player_x = jnp.array(13 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 13
+        player_y = jnp.array(25 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 25
         player_direction = jnp.array(0, dtype=jnp.int32)  # Start facing right
         player_next_direction = jnp.array(-1, dtype=jnp.int32)  # No queued direction
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
@@ -389,7 +389,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_x=new_x.astype(jnp.int32),
             player_y=new_y.astype(jnp.int32),
             player_direction=current_dir,
-            player_next_direction=next_dir,
+            player_next_direction=jnp.array(-1, dtype=jnp.int32),
         )
 
     def _can_move_in_direction(self, x: chex.Array, y: chex.Array, direction: chex.Array) -> chex.Array:
