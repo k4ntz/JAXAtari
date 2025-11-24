@@ -101,7 +101,7 @@ class DunkGameState:
     offensive_play: chex.Array      # The selected offensive play
     defensive_play: chex.Array      # The selected defensive play
     play_step: chex.Array           # Tracks progress within a play (e.g., 1st, 2nd, 3rd button press)
-    controlled_player: chex.Array
+    controlled_player_id: chex.Array
 
 @chex.dataclass(frozen=True)
 class EntityPosition:
@@ -183,6 +183,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
         ]
 
+    # Define action sets
+    _MOVE_LEFT_ACTIONS = {Action.LEFT, Action.UPLEFT, Action.DOWNLEFT}
+    _MOVE_RIGHT_ACTIONS = {Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT}
+    _MOVE_UP_ACTIONS = {Action.UP, Action.UPLEFT, Action.UPRIGHT}
+    _MOVE_DOWN_ACTIONS = {Action.DOWN, Action.DOWNLEFT, Action.DOWNRIGHT}
+    _JUMP_ACTIONS = {Action.FIRE} 
+    _PASS_ACTIONS = {Action.DOWNFIRE} 
+
     def observation_space(self):
         """
         Returns the observation space of the environment.
@@ -222,7 +230,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player1_outside=PlayerState(x=80, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_inside=PlayerState(x=170, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_outside=PlayerState(x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            ball=BallState(x=0, y=0, vel_x=0, vel_y=0, holder=PlayerID.PLAYER1_INSIDE),
+            ball=BallState(x=0.0, y=0.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_INSIDE),
             player_score=0,
             enemy_score=0,
             step_counter=0,
@@ -231,7 +239,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             offensive_play=OffensivePlay.NONE,
             defensive_play=DefensivePlay.NONE,
             play_step=0,
-            controlled_player=PlayerID.PLAYER1_INSIDE,
+            controlled_player_id=PlayerID.PLAYER1_INSIDE,
         )
 
 
@@ -241,19 +249,17 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         Determines the velocity for 8-way movement and the impulse for Z-axis jumps.
         """
         # --- X/Y Movement on the ground plane ---
-        is_moving_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT) | \
-                         (action == Action.LEFTFIRE) | (action == Action.UPLEFTFIRE) | (action == Action.DOWNLEFTFIRE)
-        is_moving_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT) | \
-                          (action == Action.RIGHTFIRE) | (action == Action.UPRIGHTFIRE) | (action == Action.DOWNRIGHTFIRE)
+        action_jnp = jnp.asarray(action)
+
+        is_moving_left = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_LEFT_ACTIONS)))
+        is_moving_right = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_RIGHT_ACTIONS)))
 
         vel_x = jnp.array(0, dtype=jnp.int32)
         vel_x = jax.lax.select(is_moving_left, -constants.PLAYER_MAX_SPEED, vel_x)
         vel_x = jax.lax.select(is_moving_right, constants.PLAYER_MAX_SPEED, vel_x)
 
-        is_moving_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT) | \
-                       (action == Action.UPFIRE) | (action == Action.UPLEFTFIRE) | (action == Action.UPRIGHTFIRE)
-        is_moving_down = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT) | \
-                         (action == Action.DOWNFIRE) | (action == Action.DOWNLEFTFIRE) | (action == Action.DOWNRIGHTFIRE)
+        is_moving_up = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_UP_ACTIONS)))
+        is_moving_down = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_DOWN_ACTIONS)))
 
         vel_y = jnp.array(0, dtype=jnp.int32)
         vel_y = jax.lax.select(is_moving_up, -constants.PLAYER_MAX_SPEED, vel_y)
@@ -261,7 +267,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # --- Z-Axis Jump Impulse ---
         # A jump can only be initiated if the player is on the ground (z=0) and presses FIRE
-        can_jump = (player_z == 0) & (action == Action.FIRE)
+        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(self._JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
 
         return vel_x, vel_y, vel_z
@@ -318,55 +324,25 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return updated_player
 
-    def _handle_passing(self, state: DunkGameState, action: int) -> DunkGameState:
-        """Handles the logic for passing the ball between players."""
-        is_pass_action = (action == Action.DOWNFIRE)
-
-        # Determine the new controlled player and ball holder if a pass occurs
-        new_controlled_player = jax.lax.select(
-            is_pass_action & (state.controlled_player == PlayerID.PLAYER1_INSIDE),
-            PlayerID.PLAYER1_OUTSIDE,
-            state.controlled_player
-        )
-        new_controlled_player = jax.lax.select(
-            is_pass_action & (state.controlled_player == PlayerID.PLAYER1_OUTSIDE),
-            PlayerID.PLAYER1_INSIDE,
-            new_controlled_player
-        )
-
-        # The ball holder becomes the newly controlled player
-        new_ball_holder = jax.lax.select(is_pass_action, new_controlled_player, state.ball.holder)
-
-        return state.replace(
-            controlled_player=new_controlled_player,
-            ball=state.ball.replace(holder=new_ball_holder)
-        )
-
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """
         Takes an action in the game and returns the new game state.
         """
-        # 1. Handle passing logic to update controlled player and ball holder
-        state = self._handle_passing(state, action)
+        # 1. Update player states based on actions
+        is_p1_inside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_INSIDE)
+        is_p1_outside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_OUTSIDE)
 
-        # 2. Determine which player to update based on the (potentially new) controlled_player
-        is_p1_inside_controlled = (state.controlled_player == PlayerID.PLAYER1_INSIDE)
-        is_p1_outside_controlled = (state.controlled_player == PlayerID.PLAYER1_OUTSIDE)
-
-        # Use a NOOP action for the player who is not controlled
         p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
         p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
 
-        # 3. Update player states based on actions
         updated_p1_inside = self._update_player(state.player1_inside, p1_inside_action, self.constants)
         updated_p1_outside = self._update_player(state.player1_outside, p1_outside_action, self.constants)
         
-        # Other players remain static for now
         updated_p2_inside = self._update_player(state.player2_inside, Action.NOOP, self.constants)
         updated_p2_outside = self._update_player(state.player2_outside, Action.NOOP, self.constants)
 
-        # 4. Update animation for the player who has the ball
+        # 2. Update animation for the player who has the ball
         p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
         p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
         p2_inside_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE)
@@ -443,16 +419,119 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             animation_frame=final_p2_outside_frame,
             animation_direction=final_p2_outside_dir
         )
+
+        # --- Ball Logic ---
+        passer_id = state.controlled_player_id
+        receiver_id = jax.lax.select(is_p1_inside_controlled, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER1_INSIDE)
+
+        passer_x = jax.lax.select(is_p1_inside_controlled, updated_p1_inside.x, updated_p1_outside.x)
+        passer_y = jax.lax.select(is_p1_inside_controlled, updated_p1_inside.y, updated_p1_outside.y)
+        receiver_x = jax.lax.select(is_p1_inside_controlled, updated_p1_outside.x, updated_p1_inside.x)
+        receiver_y = jax.lax.select(is_p1_inside_controlled, updated_p1_outside.y, updated_p1_inside.y)
+
+        # 1. Passing
+        can_pass = (state.ball.holder == passer_id)
+        is_passing = jnp.any(jnp.asarray(action) == jnp.asarray(list(self._PASS_ACTIONS))) & can_pass
+
+        passer_pos = jnp.array([passer_x, passer_y], dtype=jnp.float32)
+        receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
+        direction = receiver_pos - passer_pos
+        norm = jnp.sqrt(jnp.sum(direction**2))
+        safe_norm = jnp.where(norm == 0, 1.0, norm)
+        ball_speed = 8.0
+        vel = (direction / safe_norm) * ball_speed
+
+        ball_state = jax.lax.cond(
+            is_passing,
+            lambda s: s.ball.replace(
+                x=passer_x.astype(jnp.float32),
+                y=passer_y.astype(jnp.float32),
+                vel_x=vel[0],
+                vel_y=vel[1],
+                holder=PlayerID.NONE
+            ),
+            lambda s: s.ball,
+            state
+        )
+
+        # 2. Ball movement if in flight
+        ball_in_flight = (ball_state.holder == PlayerID.NONE)
         
+        new_ball_x = ball_state.x + ball_state.vel_x
+        new_ball_y = ball_state.y + ball_state.vel_y
+
+        ball_state = jax.lax.cond(
+            ball_in_flight,
+            lambda b: b.replace(x=new_ball_x, y=new_ball_y),
+            lambda b: b,
+            ball_state
+        )
+
+        # --- Interception and Catching Logic ---
+        # Order matters here. We check for interceptions before checking for a successful catch.
+
+        # 3a. Interception by player2_inside
+        ball_in_flight = (ball_state.holder == PlayerID.NONE)
+        dist_to_p2_inside = jnp.sqrt((ball_state.x - updated_p2_inside.x)**2 + (ball_state.y - updated_p2_inside.y)**2)
+        interception_radius = 5.0 # A bit smaller than player sprite, tune if needed
+        is_intercepted_by_p2_inside = ball_in_flight & (dist_to_p2_inside < interception_radius)
+
+        ball_state = jax.lax.cond(
+            is_intercepted_by_p2_inside,
+            lambda b: b.replace(holder=PlayerID.PLAYER2_INSIDE, vel_x=0.0, vel_y=0.0),
+            lambda b: b,
+            ball_state
+        )
+
+        # 3b. Interception by player2_outside
+        ball_in_flight = (ball_state.holder == PlayerID.NONE) # Re-evaluate in case of previous interception
+        dist_to_p2_outside = jnp.sqrt((ball_state.x - updated_p2_outside.x)**2 + (ball_state.y - updated_p2_outside.y)**2)
+        is_intercepted_by_p2_outside = ball_in_flight & (dist_to_p2_outside < interception_radius)
+
+        ball_state = jax.lax.cond(
+            is_intercepted_by_p2_outside,
+            lambda b: b.replace(holder=PlayerID.PLAYER2_OUTSIDE, vel_x=0.0, vel_y=0.0),
+            lambda b: b,
+            ball_state
+        )
+
+        # 3c. Ball catching by teammate
+        ball_in_flight = (ball_state.holder == PlayerID.NONE) # Re-evaluate again
+        dist_to_receiver = jnp.sqrt((ball_state.x - receiver_x)**2 + (ball_state.y - receiver_y)**2)
+        catch_radius = 5.0
+        is_caught = ball_in_flight & (dist_to_receiver < catch_radius)
+
+        ball_state = jax.lax.cond(
+            is_caught,
+            lambda b: b.replace(holder=receiver_id, vel_x=0.0, vel_y=0.0),
+            lambda b: b,
+            ball_state
+        )
+
+        # 4. If ball is held, its position should follow the holder
+        def update_ball_pos_if_held(b_state, player_state, player_id):
+            return jax.lax.cond(
+                b_state.holder == player_id,
+                lambda: b_state.replace(x=player_state.x.astype(jnp.float32), y=player_state.y.astype(jnp.float32)),
+                lambda: b_state
+            )
+        
+        ball_state = update_ball_pos_if_held(ball_state, updated_p1_inside, PlayerID.PLAYER1_INSIDE)
+        ball_state = update_ball_pos_if_held(ball_state, updated_p1_outside, PlayerID.PLAYER1_OUTSIDE)
+        ball_state = update_ball_pos_if_held(ball_state, updated_p2_inside, PlayerID.PLAYER2_INSIDE)
+        ball_state = update_ball_pos_if_held(ball_state, updated_p2_outside, PlayerID.PLAYER2_OUTSIDE)
+
+        # 5. Update controlled player
+        is_p1_team_holder = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
+        new_controlled_player_id = jax.lax.select(is_p1_team_holder, ball_state.holder, state.controlled_player_id)
+
         new_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
-            # The ball holder and controlled player were already updated in _handle_passing
-            # so we carry them over from the intermediate state.
-            ball=state.ball,
-            controlled_player=state.controlled_player,
+            ball=ball_state,
+            controlled_player_id=new_controlled_player_id,
         )
 
         observation = self._get_observation(new_state)
@@ -578,5 +657,22 @@ class DunkRenderer(JAXGameRenderer):
             return self.jr.render_at(current_raster, x, visual_y, final_mask)
 
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
+        
+        # --- Render Ball if in flight ---
+        ball_in_flight = (state.ball.holder == PlayerID.NONE)
+        ball_mask = self.SHAPE_MASKS['ball']
+
+        def render_ball_body(current_raster):
+            # x and y might be floats, so we cast to int for rendering
+            ball_x = jnp.round(state.ball.x).astype(jnp.int32)
+            ball_y = jnp.round(state.ball.y).astype(jnp.int32)
+            return self.jr.render_at(current_raster, ball_x, ball_y, ball_mask)
+
+        raster = jax.lax.cond(
+            ball_in_flight,
+            render_ball_body,
+            lambda r: r,
+            raster
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
