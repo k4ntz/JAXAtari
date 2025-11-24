@@ -257,11 +257,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at valid path with dots (row 25, col 13)
-        player_x = jnp.array(13 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 13
-        player_y = jnp.array(25 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 25
+        # Initialize player at valid path with dots (row 25, col 12 - verified dot tile)
+        player_x = jnp.array(12 * self.consts.TILE_SIZE + self.consts.TILE_SIZE // 2, dtype=jnp.int32)
+        player_y = jnp.array(25 * self.consts.TILE_SIZE + self.consts.TILE_SIZE // 2, dtype=jnp.int32)
         player_direction = jnp.array(0, dtype=jnp.int32)  # Start facing right
-        player_next_direction = jnp.array(-1, dtype=jnp.int32)  # No queued direction
+        player_next_direction = jnp.array(-1, dtype=jnp.int32)
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
         
         # Initialize ghosts (4 ghosts at starting positions)
@@ -394,8 +394,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
     def _can_move_in_direction(self, x: chex.Array, y: chex.Array, direction: chex.Array) -> chex.Array:
         """Check if player can move in given direction based on maze walls."""
+        # Handle invalid direction
+        invalid = direction < 0
+        
         # Calculate next position
-        # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
         dx = jnp.where(direction == 0, self.consts.PLAYER_SPEED,
              jnp.where(direction == 1, -self.consts.PLAYER_SPEED, 0))
         dy = jnp.where(direction == 2, -self.consts.PLAYER_SPEED,
@@ -404,21 +406,25 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         next_x = x + dx
         next_y = y + dy
         
-        # Convert pixel coordinates to tile coordinates
-        tile_x = jnp.clip((next_x + self.consts.PLAYER_SIZE[0] // 2) // self.consts.TILE_SIZE, 0, self.consts.MAZE_WIDTH - 1)
-        tile_y = jnp.clip((next_y + self.consts.PLAYER_SIZE[1] // 2) // self.consts.TILE_SIZE, 0, self.consts.MAZE_HEIGHT - 1)
+        # Convert to tile coordinates (center of player sprite)
+        tile_x = next_x // self.consts.TILE_SIZE
+        tile_y = next_y // self.consts.TILE_SIZE
         
-        # Check bounds first
-        in_bounds = jnp.logical_and(
-            jnp.logical_and(next_x >= 0, next_x < self.consts.WIDTH - self.consts.PLAYER_SIZE[0]),
-            jnp.logical_and(next_y >= 0, next_y < self.consts.HEIGHT - self.consts.PLAYER_SIZE[1])
-        )
+        # Clamp to valid maze bounds
+        tile_x = jnp.clip(tile_x, 0, self.consts.MAZE_WIDTH - 1)
+        tile_y = jnp.clip(tile_y, 0, self.consts.MAZE_HEIGHT - 1)
         
-        # Check if tile is not a wall (value != 1)
+        # Check if tile is not a wall
         tile_value = self.consts.MAZE_LAYOUT[tile_y, tile_x]
         not_wall = tile_value != 1
         
-        return jnp.logical_and(in_bounds, not_wall)
+        # Also check screen bounds
+        in_bounds = jnp.logical_and(
+            jnp.logical_and(next_x >= 0, next_x < self.consts.WIDTH),
+            jnp.logical_and(next_y >= 0, next_y < self.consts.HEIGHT)
+        )
+        
+        return jnp.logical_and(jnp.logical_and(not_wall, in_bounds), jnp.logical_not(invalid))
 
     def _ghost_step(self, state: PacmanState) -> PacmanState:
         """Update ghost positions and AI."""
