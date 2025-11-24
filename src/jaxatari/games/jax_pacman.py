@@ -755,8 +755,7 @@ class PacmanRenderer(JAXGameRenderer):
         self.consts = consts or PacmanConstants()
         # Initialize maze if not already done
         if self.consts.MAZE_LAYOUT is None:
-            temp_env = JaxPacman(self.consts)
-            self.consts = temp_env.consts
+            self.consts = self.consts._replace(MAZE_LAYOUT=self._create_default_maze())
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
@@ -772,6 +771,49 @@ class PacmanRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+
+    def _create_default_maze(self) -> jnp.ndarray:
+        """Create a classic Pacman maze layout (same as in JaxPacman)."""
+        maze = np.zeros((31, 28), dtype=np.int32)
+        
+        maze_layout = [
+            "1111111111111111111111111111",
+            "1222222222222112222222222221",
+            "1211112111112112111112111121",
+            "1311112111112112111112111131",
+            "1211112111112112111112111121",
+            "1222222222222222222222222221",
+            "1211112112111111112112111121",
+            "1211112112111111112112111121",
+            "1222222112222112222112222221",
+            "1111112111110110111112111111",
+            "1111112111110110111112111111",
+            "1111112110000000001112111111",
+            "1111112110111441110112111111",
+            "1111112110144441110112111111",
+            "0000002000144441000002000000",
+            "1111112110144441110112111111",
+            "1111112110111111110112111111",
+            "1111112110000000001112111111",
+            "1111112110111111110112111111",
+            "1222222222222112222222222221",
+            "1211112111112112111112111121",
+            "1211112111112112111112111121",
+            "1322112222222222222222112231",
+            "1112112112111111112112112111",
+            "1112112112111111112112112111",
+            "1222222112222112222112222221",
+            "1211111111112112111111111121",
+            "1211111111112112111111111121",
+            "1222222222222222222222222221",
+            "1111111111111111111111111111",
+        ]
+        
+        for row_idx, row_str in enumerate(maze_layout):
+            for col_idx, char in enumerate(row_str):
+                maze[row_idx, col_idx] = int(char)
+        
+        return jnp.array(maze, dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
