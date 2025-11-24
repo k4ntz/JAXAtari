@@ -468,6 +468,9 @@ class BattlezoneRenderer(JAXGameRenderer):
         img = jnp.where(mask, colorID_1, img)
 
         #------------------draw enemy dots----------------
+        # Check if enemy in radar radius
+        in_radar = jax.vmap(self.check_in_radar, in_axes=(0, None))(state.enemies, max_scan_radius)
+        #jax.debug.print("in_radar: {}",in_radar)
         # Get raw player coords
         world_enemies_x = state.enemies.x
         world_enemies_z = state.enemies.z
@@ -480,12 +483,18 @@ class BattlezoneRenderer(JAXGameRenderer):
         # Offset to radar center
         radar_enemies_x = jnp.round(radar_enemies_x + center_x).astype(jnp.int32)
         radar_enemies_z = jnp.round(radar_enemies_z + center_y).astype(jnp.int32)
+        # Only allow in range enemies
+        radar_enemies_x = jnp.where(in_radar, radar_enemies_x, -1)
+        radar_enemies_z = jnp.where(in_radar, radar_enemies_z, -1)
         # Draw point
         #ToDo: Discart enemies if out of max_scan_radius
         img = img.at[radar_enemies_z, radar_enemies_x].set(colorID_2)
 
-
         return img
+
+    def check_in_radar(self, enemies: Enemy, max_scan_radius) -> chex.Array:
+        bool_in_radar = enemies.distance <= max_scan_radius
+        return bool_in_radar
 
 
     @partial(jax.jit, static_argnums=(0,))
