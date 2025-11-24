@@ -257,11 +257,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at a valid starting position (bottom center of maze)
-        # Start at tile (14, 23) which is row 23, column 14 (center-bottom area)
+        # Initialize player at bottom center (row 26, col 14 is a path with dots)
         player_x = jnp.array(14 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 14
-        player_y = jnp.array(23 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 23
-        player_direction = jnp.array(0, dtype=jnp.int32)  # Right
+        player_y = jnp.array(26 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 26
+        player_direction = jnp.array(0, dtype=jnp.int32)  # Start facing right
         player_next_direction = jnp.array(-1, dtype=jnp.int32)  # No queued direction
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
         
@@ -357,13 +356,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             jnp.where(action == Action.DOWN, 3, -1)))
         )
         
-        # Queue direction if valid
-        next_dir = jnp.where(new_direction >= 0, new_direction, state.player_next_direction)
+        # Try to move in the new direction immediately if valid, otherwise continue in current direction
+        can_move_new = self._can_move_in_direction(state.player_x, state.player_y, new_direction)
+        can_move_current = self._can_move_in_direction(state.player_x, state.player_y, state.player_direction)
         
-        # Try to change direction if queued
-        can_change = self._can_move_in_direction(state.player_x, state.player_y, next_dir)
-        current_dir = jnp.where(can_change, next_dir, state.player_direction)
-        next_dir = jnp.where(can_change, -1, next_dir)
+        # Use new direction if valid and action was given, otherwise stay with current
+        current_dir = jnp.where(
+            jnp.logical_and(new_direction >= 0, can_move_new),
+            new_direction,
+            jnp.where(can_move_current, state.player_direction, state.player_direction)
+        )
         
         # Move in current direction
         # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
