@@ -5,20 +5,18 @@ Edit: Jan Rafflewski
 
 """
 TODO
-1) Fruits
-    1.1) [x] Fruit spawning
-    1.2) [x] Fruit movement
-    1.3) [x] Fruit scoring
-    1.4) [ ] Fruit animation
-2) Ghosts
-    2.1) [x] Ghost pathfinding
-    2.2) [x] Ghost movement
-3) Game
-    3.1) [x] Life system
-    3.2) [x] Gameover state
-    3.3) [ ] Level progression
-    3.4) [ ] Correct speed
-    3.5) [ ] Pacman death animation
+    1)  [ ] Validate ghost behaviour
+    2)  [ ] Level progression
+    3)  [ ] Performance improvements
+    4)  [ ] JIT compatibility
+
+    Optional:
+    a)  [ ] Correct speed
+    b)  [ ] Pacman death animation
+    c)  [ ] Fruit scale and animation
+    d)  [ ] Fruit movement patterns
+    e)  [ ] Ghost behavioral quirks
+    f)  [ ] Correct maze colors
 """
 
 
@@ -65,9 +63,9 @@ class GhostMode(IntEnum):
     ENJAILED = 6
 
 # GHOST TIMINGS
-CHASE_DURATION = 200*8 # Chosen randomly for now, should be 20s  TODO: Adjust value
+CHASE_DURATION = 20*4*8 # Chosen randomly for now, should be 20s  TODO: Adjust value
 MAX_CHASE_OFFSET = CHASE_DURATION / 10 # Maximum value that can be added to the chase duration
-SCATTER_DURATION = 70*8 # Chosen randomly for now, should be 7s  TODO: Adjust value
+SCATTER_DURATION = 7*4*8 # Chosen randomly for now, should be 7s  TODO: Adjust value
 MAX_SCATTER_OFFSET = SCATTER_DURATION / 10 # Maximum value that can be added to the scatter duration
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
@@ -94,14 +92,13 @@ PPX1 = 148
 PPY0 = 20
 PPY1 = 152
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
-# INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], [50, 78], [40, 78], [120, 78]])
 INITIAL_GHOSTS_POSITIONS = jnp.array([[73, 54], [49, 78], [41, 78], [121, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 SCATTER_TARGETS = jnp.array([
-    [MsPacmanMaze.WIDTH - 1, 0],                               # Upper right corner - Blinky
-    [0, 0],                                                         # Upper left corner - Pinky
-    [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1],    # Lower right corner - Inky
-    [0, MsPacmanMaze.HEIGHT - 1]                               # Lower left corner - Sue
+    [MsPacmanMaze.WIDTH - 1, 0],                        # Upper right corner - Blinky
+    [0, 0],                                             # Upper left corner - Pinky
+    [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1],  # Lower right corner - Inky
+    [0, MsPacmanMaze.HEIGHT - 1]                        # Lower left corner - Sue
 ])
 
 # DIRECTIONS
@@ -256,7 +253,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     direction=jnp.zeros(2, dtype=jnp.int8),
                     mode=(jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
                           else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
-                    timer=jnp.array(SCATTER_DURATION).astype(jnp.uint8),
+                    timer=jnp.array(SCATTER_DURATION).astype(jnp.uint16),
                 ) for i in range(4)
             ),
             fruit = FruitState(
@@ -339,8 +336,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                         type=GhostType(i),
                         position=ghost_positions[i],
                         direction=ghosts_dirs[i],
-                        mode=jnp.array(0),
-                        timer=jnp.array(0),
+                        mode=jnp.array(GhostMode.SCATTER).astype(jnp.uint8),
+                        timer=jnp.array(SCATTER_DURATION).astype(jnp.uint16)
                     ) for i in range(4)
                 ),
                 fruit = FruitState(
@@ -440,11 +437,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 fruit_position, fruit_direction = get_random_tunnel(state.level_num, key)
                 fruit_exit, _ = get_random_tunnel(state.level_num, key)
         if state.fruit.type != FruitType.NONE:
-            if jnp.all(jnp.abs(new_pacman_pos - jnp.array(state.fruit.position)) <= FRUIT_CONSUME_DISTANCE): # Consume fruit
+            if jnp.all(jnp.abs(jnp.array(new_pacman_pos) - jnp.array(state.fruit.position)) <= FRUIT_CONSUME_DISTANCE): # Consume fruit
                 score = score + FRUIT_REWARDS[state.fruit.type]
                 fruit_type = FruitType.NONE
                 fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
-            if state.fruit.timer == 0 and jnp.all(state.fruit.position == jnp.array(state.fruit.exit)): # Remove fruit
+            if state.fruit.timer == 0 and jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit)): # Remove fruit
                 fruit_type = FruitType.NONE
                 fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
             else:
@@ -453,6 +450,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         ghost_positions, ghosts_dirs, ghosts_modes, ghosts_timers = ghosts_step(
             state.ghosts, state.player, ate_power_pill, dofmaze, key
         )
+        # print(ghosts_modes)
+
         # Collision detection
         eaten_ghosts = state.player.eaten_ghosts
         deadly_collision = False
@@ -822,17 +821,16 @@ def get_chase_target(ghost: GhostType,
             return player_pos
         case GhostType.PINKY:
             # Target 4 tiles ahead of Pac-Man
-            ahead = player_pos + 4 * player_dir
-            return ahead
+            return player_pos + 4*MsPacmanMaze.TILE_SCALE * player_dir
         case GhostType.INKY:
             # Target the tip of the vector from Blinky to two tiles ahead of Pac-Man, doubled
-            two_ahead = player_pos + 2 * player_dir
+            two_ahead = player_pos + 2*MsPacmanMaze.TILE_SCALE * player_dir
             vect = two_ahead - blinky_pos
             return blinky_pos + 2 * vect
         case GhostType.SUE:
             # Target Pac-Man if >8 tiles away, else target corner
             dist = jnp.linalg.norm(ghost_position - player_pos)
-            return jnp.where(dist > 8, player_pos, SCATTER_TARGETS[GhostType.SUE])
+            return jnp.where(dist > 8*MsPacmanMaze.TILE_SCALE, player_pos, SCATTER_TARGETS[GhostType.SUE])
 
 
 def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
@@ -953,7 +951,7 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     # 2) Update ghost direction
     if revert:
         new_dir = DIRECTIONS[INV_DIR[get_direction_index(ghost.direction)]]
-    elif new_mode == GhostMode.ENJAILED | new_mode == GhostMode.RETURNING:
+    elif new_mode == GhostMode.ENJAILED or new_mode == GhostMode.RETURNING:
         pass
     else:
         # 2.2) Choose new direction
@@ -962,17 +960,12 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
             pass
         elif len(allowed) == 1: # If only one allowed direction - take it
             new_dir = DIRECTIONS[allowed[0]]
+        elif new_mode == GhostMode.FRIGHTENED or new_mode == GhostMode.BLINKING or new_mode == GhostMode.RANDOM:
+            new_dir = DIRECTIONS[jax.random.choice(key, jnp.array(allowed))]
         else:
-            match new_mode:
-                case GhostMode.CHASE:
-                    directions = get_target_direction_indices(ghost.position, chase_target)
-                    new_dir = select_target_direction(directions, allowed, key)
-                case GhostMode.SCATTER:
-                    target = SCATTER_TARGETS[ghost.type]
-                    directions = get_target_direction_indices(ghost.position, target)
-                    new_dir = select_target_direction(directions, allowed, key)
-                case GhostMode.FRIGHTENED | GhostMode.BLINKING | GhostMode.RANDOM:
-                    new_dir = DIRECTIONS[jax.random.choice(key, jnp.array(allowed))]
+            if new_mode == GhostMode.SCATTER: # If not SCATTER, mode must be CHASE at this point
+                chase_target = SCATTER_TARGETS[ghost.type]
+            new_dir = pathfind(ghost.position, ghost.direction, chase_target, allowed, key)
 
     # 3) Update ghost position
     new_pos = ghost.position + new_dir
@@ -983,11 +976,12 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
 def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
                ) -> Tuple[chex.Array, chex.Array, chex.Array]:
     allowed = get_allowed_directions(fruit.position, fruit.direction, dofmaze)
+    if not allowed:
+        new_dir = fruit.direction
     if len(allowed) == 1:
         new_dir = DIRECTIONS[allowed[0]]
     elif fruit.timer == 0:
-        directions = get_target_direction_indices(fruit.position, fruit.exit)
-        new_dir = select_target_direction(directions, allowed, key)
+        new_dir = pathfind(fruit.position, fruit.direction, fruit.exit, allowed, key)
     else:
         new_dir = jax.random.choice(key, DIRECTIONS[jnp.array(allowed)])
 
@@ -999,48 +993,41 @@ def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
     return new_pos, new_dir, new_timer
 
 
-def get_target_direction_indices(position: chex.Array, target: chex.Array) -> list:
+def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, allowed: chex.Array, key: chex.Array):
     """
-    Returns the directions (indices) which should be taken to minimize the horizontal or vertical distance to the target.
-    Prioritizes the bigger distance and returns both possible directions if they are equal.
+    Returns the direction which should be taken to approach the target.
+    If multiple options exist the direction is chosen that minimizes the distance on the longer axis - horizontal or vertical.
+    If both distances are equal or multiple options exist on the same axis, the direction is chosen randomly.
     """
+    # Check allowed directions
+    if len(allowed) == 0: # If no direction allowed - Continue forward
+        return DIRECTIONS[get_direction_index(direction)]
+    if len(allowed) == 1: # If one direction allowed - Take it
+        return DIRECTIONS[allowed[0]]
+
+    # If multiple directions allowed - Get cost of allowed directions
+    cost = {}
+    for dir in allowed:
+        new_pos = position + DIRECTIONS[dir]
+        cost[dir] = jnp.abs(new_pos[0] - target[0]) + jnp.abs(new_pos[1] - target[1])
+    min_cost = min(cost.values())
+    min_dirs = jnp.array([k for k, v in cost.items() if v == min_cost])
+    if len(min_dirs) == 1: # If one direction advantageous - Take it
+        return DIRECTIONS[min_dirs[0]]
+    
+    # If multiple directions advantageous - Prioritize the longer axis
     horizontal_distance = jnp.abs(position[0] - target[0])
     vertical_distance = jnp.abs(position[1] - target[1])
-    directions = []
-
+    mask = jnp.full(len(min_dirs), False)
     if horizontal_distance >= vertical_distance:
-        if position[0] < target[0]:
-            directions.append(DIR_RIGHT)
-        else:
-            directions.append(DIR_LEFT)
-    elif vertical_distance >= horizontal_distance:
-        if position[1] < target[1]:
-            directions.append(DIR_DOWN)
-        else:
-            directions.append(DIR_UP)
-    return directions
+        mask |= jnp.isin(min_dirs, jnp.array([DIR_LEFT, DIR_RIGHT]))
+    if vertical_distance >= horizontal_distance:
+        mask |= jnp.isin(min_dirs, jnp.array([DIR_DOWN, DIR_UP]))
 
-
-def select_target_direction(directions: chex.Array, allowed: chex.Array, key: chex.Array):
-    """
-    Returns the direction (tuple) that should be taken by a ghost, given the preferred directions towards its target
-    and the allowed directions at its current position.
-    """
-    possible = []
-    for direction in directions:
-        if jnp.any(allowed == direction):
-            possible.append(direction)
-
-    if len(possible) == 0:
-        if len(directions) == 0:
-            raise ValueError("No path found!")
-        else:
-            filtered = [d for d in allowed if d != INV_DIR[directions[0]]]
-            return DIRECTIONS[jax.random.choice(key, jnp.array(filtered))]
-    elif len(possible) == 1:
-        return DIRECTIONS[possible[0]]
-    else:
-        return DIRECTIONS[jax.random.choice(key, jnp.array(possible))]
+    if jnp.sum(mask) == 1: # If one direction advantageous on longer axis - Take it
+        return DIRECTIONS[jnp.squeeze(min_dirs[mask])]
+    else: # If multiple directions advantageous on longer or equal axis - Choose randomly
+        return DIRECTIONS[jax.random.choice(key, min_dirs[mask])]
 
 
 def get_level_maze(level: chex.Array):
