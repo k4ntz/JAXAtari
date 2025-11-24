@@ -257,9 +257,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player
-        player_x = jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32)
-        player_y = jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32)
+        # Initialize player at a valid starting position (bottom center of maze)
+        # Start at tile (14, 23) which is row 23, column 14 (center-bottom area)
+        player_x = jnp.array(14 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 14
+        player_y = jnp.array(23 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 23
         player_direction = jnp.array(0, dtype=jnp.int32)  # Right
         player_next_direction = jnp.array(-1, dtype=jnp.int32)  # No queued direction
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
@@ -365,11 +366,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         next_dir = jnp.where(can_change, -1, next_dir)
         
         # Move in current direction
-        dx = jnp.where(current_dir == 0, 1, jnp.where(current_dir == 1, -1, 0))  # right/left
-        dy = jnp.where(current_dir == 2, -1, jnp.where(current_dir == 3, 1, 0))  # up/down
+        # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
+        dx = jnp.where(current_dir == 0, self.consts.PLAYER_SPEED, 
+             jnp.where(current_dir == 1, -self.consts.PLAYER_SPEED, 0))  # right/left
+        dy = jnp.where(current_dir == 2, -self.consts.PLAYER_SPEED, 
+             jnp.where(current_dir == 3, self.consts.PLAYER_SPEED, 0))  # up/down
         
-        new_x = state.player_x + dx * self.consts.PLAYER_SPEED
-        new_y = state.player_y + dy * self.consts.PLAYER_SPEED
+        new_x = state.player_x + dx
+        new_y = state.player_y + dy
         
         # Wrap around screen edges (tunnel effect)
         new_x = jnp.where(new_x < 0, self.consts.WIDTH - 1, new_x)
@@ -389,11 +393,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def _can_move_in_direction(self, x: chex.Array, y: chex.Array, direction: chex.Array) -> chex.Array:
         """Check if player can move in given direction based on maze walls."""
         # Calculate next position
-        dx = jnp.where(direction == 0, 1, jnp.where(direction == 1, -1, 0))
-        dy = jnp.where(direction == 2, -1, jnp.where(direction == 3, 1, 0))
+        # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
+        dx = jnp.where(direction == 0, self.consts.PLAYER_SPEED,
+             jnp.where(direction == 1, -self.consts.PLAYER_SPEED, 0))
+        dy = jnp.where(direction == 2, -self.consts.PLAYER_SPEED,
+             jnp.where(direction == 3, self.consts.PLAYER_SPEED, 0))
         
-        next_x = x + dx * self.consts.PLAYER_SPEED
-        next_y = y + dy * self.consts.PLAYER_SPEED
+        next_x = x + dx
+        next_y = y + dy
         
         # Convert pixel coordinates to tile coordinates
         tile_x = jnp.clip((next_x + self.consts.PLAYER_SIZE[0] // 2) // self.consts.TILE_SIZE, 0, self.consts.MAZE_WIDTH - 1)
