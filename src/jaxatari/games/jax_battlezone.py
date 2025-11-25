@@ -294,7 +294,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             [-speed, -speed],  # DownRight
             [speed, speed]  # DownLeft
         ])
-        jax.debug.print("{}",jnp.argmax(direction))
+        #jax.debug.print("{}",jnp.argmax(direction))
         # TODO: Enemies moving left and right but should rotate
         idx = jnp.argmax(direction)
         offset = offset_xz[idx]
