@@ -148,8 +148,8 @@ class YarsRevengeConstants(NamedTuple):
     DESTROYER_SIZE: Tuple[int, int] = (4, 2)
     ENERGY_MISSILE_SIZE: Tuple[int, int] = (1, 2)
 
-    QOTILE_MIN_Y: int = 64
-    QOTILE_MAX_Y: int = 146
+    QOTILE_MIN_Y: int = 55
+    QOTILE_MAX_Y: int = 155
     # Entity Speeds, X pixel per 1 frame
     QOTILE_SPEED = 0.5
     YAR_SPEED = 2.0
@@ -267,7 +267,7 @@ class JaxYarsRevenge(
             yar_state=jnp.array(YarState.STEADY).astype(jnp.int32),
             qotile=DirectionEntity(
                 x=jnp.array(150).astype(jnp.int32),
-                y=jnp.array(64).astype(jnp.int32),
+                y=jnp.array(self.consts.QOTILE_MIN_Y).astype(jnp.int32),
                 w=jnp.array(self.consts.QOTILE_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.QOTILE_SIZE[1]).astype(jnp.int32),
                 direction=jnp.array(Direction.DOWN).astype(jnp.int32),
@@ -758,6 +758,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 ],
             },
             {"name": "qotile", "type": "single", "file": "qotile.npy"},
+            {"name": "energy_shield", "type": "procedural", "data": jnp.array(self.consts.ENERGY_SHIELD_COLOR + (255,), dtype=jnp.uint8).reshape(1, 1, 4)}
         ]
 
     def get_animation_idx(
@@ -785,6 +786,14 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         qotile_mask = self.SHAPE_MASKS["qotile"]
         raster = self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask)
+
+        raster = self.jr.render_grid_inverse(
+            raster=raster,
+            grid_state=state.energy_shield_state.astype(jnp.int32),
+            grid_origin=(state.energy_shield.x, state.energy_shield.y),
+            cell_size=(self.consts.ENERGY_CELL_WIDTH, self.consts.ENERGY_CELL_HEIGHT),
+            color_map=jnp.array([self.jr.TRANSPARENT_ID, self.COLOR_TO_ID[self.consts.ENERGY_SHIELD_COLOR]])
+        )
 
         destroyer_mask = jnp.ones(
             (self.consts.DESTROYER_SIZE[1], self.consts.DESTROYER_SIZE[0])
