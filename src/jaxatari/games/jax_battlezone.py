@@ -528,23 +528,24 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         x, y = mask.shape
 
-        # calculate shrink amount
+        # compute new shape
         shrink = int(2 * (zoom_factor - 1))
         new_x = max(1, x - shrink)
         new_y = max(1, y - shrink)
 
-        # crop the mask from the center
-        start_x = (x - new_x) // 2
-        start_y = (y - new_y) // 2
+        # create new grid indices for downsampling
+        x_idx = jnp.floor(jnp.linspace(0, x - 1, new_x)).astype(int)
+        y_idx = jnp.floor(jnp.linspace(0, y - 1, new_y)).astype(int)
 
-        zoomed_mask = mask[start_x:start_x + new_x, start_y:start_y + new_y]
+        # index the original mask to create the zoomed mask
+        zoomed_mask = mask[x_idx[:, None], y_idx[None, :]]
 
         return zoomed_mask
 
 
     def render_single_enemy(self, raster, enemy:Enemy): #todo change
         enemy_mask = self.get_enemy_mask(enemy)
-        zoom_factor = 8     #change to distance * some_constant
+        zoom_factor = 4     #change to distance * some_constant
         zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
