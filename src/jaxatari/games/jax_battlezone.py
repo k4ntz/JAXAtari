@@ -117,7 +117,8 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
-    PLAYER_ROTATION_ANGLE:float = 0.015
+    PLAYER_ROTATION_SPEED:float = 0.015
+    PLAYER_SPEED:float = 1.0
 
 # immutable state container
 class BattlezoneState(NamedTuple):
@@ -279,18 +280,19 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
     def _enemy_position_update(self, state: BattlezoneState, enemy: Enemy, direction) -> Enemy:
         #jax.debug.print("{}",direction)
         ###
-        alpha = self.consts.PLAYER_ROTATION_ANGLE
+        alpha = self.consts.PLAYER_ROTATION_SPEED
+        speed = self.consts.PLAYER_SPEED
         ###
         offset_xz = jnp.array([
             [0, 0],     # Noop
-            [0, -1],  # Up
+            [0, -speed],  # Up
             [(enemy.x*jnp.cos(alpha)-enemy.z*jnp.sin(alpha))-enemy.x, (enemy.x*jnp.sin(alpha)+enemy.z*jnp.cos(alpha))-enemy.z],  # Right
             [(enemy.x*jnp.cos(-alpha)-enemy.z*jnp.sin(-alpha))-enemy.x, (enemy.x*jnp.sin(-alpha)+enemy.z*jnp.cos(-alpha))-enemy.z],  # Left
-            [0, 1],  # Down
-            [-1, -1],  # UpRight
-            [1, -1],  # UpLeft
-            [-1, -1],  # DownRight
-            [1, 1]  # DownLeft
+            [0, speed],  # Down
+            [-speed, -speed],  # UpRight
+            [speed, -speed],  # UpLeft
+            [-speed, -speed],  # DownRight
+            [speed, speed]  # DownLeft
         ])
         jax.debug.print("{}",jnp.argmax(direction))
         # TODO: Enemies moving left and right but should rotate
