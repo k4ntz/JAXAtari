@@ -1,6 +1,7 @@
 import gymnasium as gym
 import ale_py
 from gymnasium.utils import play
+from pygame.examples.scroll import zoom_factor
 
 """
 Collecting necessary information about BattleZone.
@@ -516,10 +517,38 @@ class BattlezoneRenderer(JAXGameRenderer):
         return 100, 80
 
 
+    def zoom_mask(self, mask, zoom_factor:int):
+        """
+        scales the mask proportional to the zoom_factor
+        at zoom_factor = 1 keeps everything the same
+        every zoom factor above 1 makes the mask smaller by 2x2
+        """
+        if zoom_factor == 1:
+            return mask
+
+        x, y = mask.shape
+
+        # calculate shrink amount
+        shrink = int(2 * (zoom_factor - 1))
+        new_x = max(1, x - shrink)
+        new_y = max(1, y - shrink)
+
+        # crop the mask from the center
+        start_x = (x - new_x) // 2
+        start_y = (y - new_y) // 2
+
+        zoomed_mask = mask[start_x:start_x + new_x, start_y:start_y + new_y]
+
+        return zoomed_mask
+
+
     def render_single_enemy(self, raster, enemy:Enemy): #todo change
         enemy_mask = self.get_enemy_mask(enemy)
+        zoom_factor = 8     #change to distance * some_constant
+        zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
-        return self.jr.render_at(raster, x, y, enemy_mask)
+
+        return self.jr.render_at(raster, x+zoom_factor, y+zoom_factor, zoomed_mask)
 
 
 
