@@ -453,7 +453,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         return im
 
 
-    def _render_radar(self, img, state, center_x, center_y, radius, colorID_1, colorID_2, max_scan_radius):
+    def _render_radar(self, img, state, center_x, center_y, radius, colorID_1, colorID_2):
         h, w = jnp.shape(img)
         #------------------draw line------------------
         alpha = state.radar_rotation_counter
@@ -473,7 +473,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #------------------draw enemy dots----------------
         # Check if enemy in radar radius
-        in_radar = jax.vmap(self.check_in_radar, in_axes=(0, None))(state.enemies, max_scan_radius)
+        in_radar = jax.vmap(self.check_in_radar, in_axes=(0))(state.enemies)
         #jax.debug.print("in_radar: {}",in_radar)
         # Get raw player coords
         world_enemies_x = state.enemies.x
@@ -481,7 +481,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         world_enemies_dist = state.enemies.distance
         #jax.debug.print("{}, {}",enemies_x, enemies_z)
         # Scale to radar size
-        scale_val = radius / max_scan_radius
+        scale_val = radius / self.consts.RADAR_MAX_SCAN_RADIUS
         radar_enemies_x = world_enemies_x * scale_val
         radar_enemies_z = world_enemies_z * scale_val * (-1)
         # Offset to radar center
@@ -496,8 +496,8 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         return img
 
-    def check_in_radar(self, enemies: Enemy, max_scan_radius) -> chex.Array:
-        bool_in_radar = enemies.distance <= max_scan_radius
+    def check_in_radar(self, enemies: Enemy) -> chex.Array:
+        bool_in_radar = enemies.distance <= self.consts.RADAR_MAX_SCAN_RADIUS
         return bool_in_radar
 
 
@@ -527,7 +527,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
                                     self.consts.RADAR_RADIUS, self.COLOR_TO_ID[self.consts.RADAR_COLOR_1],
-                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2], self.consts.RADAR_MAX_SCAN_RADIUS)
+                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2])
 
         #--------------chains---------
         chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
