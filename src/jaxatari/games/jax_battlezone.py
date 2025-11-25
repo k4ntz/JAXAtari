@@ -411,7 +411,10 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'grass_front_2', 'type': 'single', 'file': 'grass_front_2.npy'},
             {'name': 'grass_back', 'type': 'single', 'file': 'grass_back_1.npy'},
             {'name': 'life', 'type': 'single', 'file': 'life.npy'},
-            {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},#todo change
+            {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
+            #enemies
+            {'name': 'tank_enemy_front', 'type': 'single', 'file': 'tank_enemy_front.npy'}, #not sure if we can/should
+            {'name': 'tank_enemy_left', 'type': 'single', 'file': 'tank_enemy_left.npy'},   #summarize them like digits
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
@@ -503,6 +506,23 @@ class BattlezoneRenderer(JAXGameRenderer):
         return bool_in_radar
 
 
+
+    def get_enemy_mask(self, enemy:Enemy): #todo change
+        #selects the correct mask fo the given enemy
+        return self.SHAPE_MASKS["tank_enemy_front"]
+
+
+    def world_cords_to_viewport_cords(self, x, z): #todo change
+        return 100, 80
+
+
+    def render_single_enemy(self, raster, enemy:Enemy): #todo change
+        enemy_mask = self.get_enemy_mask(enemy)
+        x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+        return self.jr.render_at(raster, x, y, enemy_mask)
+
+
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         #-----------------background
@@ -563,6 +583,14 @@ class BattlezoneRenderer(JAXGameRenderer):
                                                 spacing=6, max_digits_to_render=8)
                                                 #best highscore i can find is 6 digits
         #--------------------------------------------------------------------
+
+        #-------------------------------enemies-----------------
+        def render_single_enemy_wrapped(raster, enemy): #so that i donw have to pass self
+            return self.render_single_enemy(raster, enemy), None
+
+
+        raster, _ = jax.lax.scan(render_single_enemy_wrapped, raster, state.enemies)
+
 
 
         return self.jr.render_from_palette(raster, self.PALETTE)
