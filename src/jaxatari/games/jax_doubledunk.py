@@ -10,6 +10,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from functools import partial
 import os
 from enum import IntEnum
+from jaxatari import spaces
 
 class PlayerID(IntEnum):
     NONE = 0
@@ -159,13 +160,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """
         Returns the action space of the environment.
         """
-        return [
-            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT,
-            Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT,
-            Action.DOWNLEFT, Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE,
-            Action.DOWNFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
-        ]
+        return spaces.Discrete(18)
 
     # Define action sets
     _MOVE_LEFT_ACTIONS = {Action.LEFT, Action.UPLEFT, Action.DOWNLEFT}
@@ -180,30 +175,28 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """
         Returns the observation space of the environment.
         """
-        # This is a placeholder based on Pong. It should be updated
-        # with the correct dimensions and types for DoubleDunk.
-        return {
-            "player": {
-                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-            },
-            "enemy": {
-                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-            },
-            "ball": {
-                "x": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "y": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-                "width": "Box(low=0, high=200, shape=(), dtype=jnp.int32)",
-                "height": "Box(low=0, high=240, shape=(), dtype=jnp.int32)",
-            },
-            "score_player": "Box(low=0, high=99, shape=(), dtype=jnp.int32)",
-            "score_enemy": "Box(low=0, high=99, shape=(), dtype=jnp.int32)",
-        }
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+            }),
+            "enemy": spaces.Dict({
+                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+            }),
+            "ball": spaces.Dict({
+                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+            }),
+            "score_player": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+        })
     
     def _init_state(self, key) -> DunkGameState:
         """
@@ -311,7 +304,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _handle_miss(self, state: DunkGameState) -> DunkGameState:
         """
         Handles a missed shot by resetting the scene, preserving the score,
-        and giving the ball to the enemy.
+        and giving the ball to the non-shooting team.
         """
         key, reset_key = random.split(state.key)
         
@@ -321,9 +314,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             enemy_score=state.enemy_score
         )
         
-        # Give the ball to the enemy (PlayerID.PLAYER2_INSIDE)
+        # Give the ball to the non-shooting team
+        is_p1_shooter = (state.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (state.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)
+        new_ball_holder = jax.lax.select(is_p1_shooter, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+
         reset_state = reset_state.replace(
-            ball=reset_state.ball.replace(holder=PlayerID.PLAYER2_INSIDE)
+            ball=reset_state.ball.replace(holder=new_ball_holder)
         )
         
         return reset_state
@@ -340,11 +336,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
         p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
 
+        # Enemy AI: 33% shoot, 66% pass
+        key, p2_action_key = random.split(state.key)
+        p2_inside_key, p2_outside_key = random.split(p2_action_key)
+
+        p2_inside_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE)
+        rand_inside = random.uniform(p2_inside_key)
+        p2_inside_action = jax.lax.select(p2_inside_has_ball,
+                                          jax.lax.select(rand_inside < 0.33, Action.UPFIRE, Action.DOWNFIRE),
+                                          Action.NOOP)
+
+        p2_outside_has_ball = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
+        rand_outside = random.uniform(p2_outside_key)
+        p2_outside_action = jax.lax.select(p2_outside_has_ball,
+                                           jax.lax.select(rand_outside < 0.33, Action.UPFIRE, Action.DOWNFIRE),
+                                           Action.NOOP)
+
         updated_p1_inside = self._update_player(state.player1_inside, p1_inside_action, self.constants)
         updated_p1_outside = self._update_player(state.player1_outside, p1_outside_action, self.constants)
         
-        updated_p2_inside = self._update_player(state.player2_inside, Action.NOOP, self.constants)
-        updated_p2_outside = self._update_player(state.player2_outside, Action.NOOP, self.constants)
+        updated_p2_inside = self._update_player(state.player2_inside, p2_inside_action, self.constants)
+        updated_p2_outside = self._update_player(state.player2_outside, p2_outside_action, self.constants)
 
         # 2. Update animation for the player who has the ball
         p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
@@ -424,18 +436,36 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             animation_direction=final_p2_outside_dir
         )
 
-        # --- Ball Logic ---
-        passer_id = state.controlled_player_id
-        
-        passer_x = jax.lax.select(is_p1_inside_controlled, updated_p1_inside.x, updated_p1_outside.x)
-        passer_y = jax.lax.select(is_p1_inside_controlled, updated_p1_inside.y, updated_p1_outside.y)
-        
-        # 1. Passing
-        can_pass = (state.ball.holder == passer_id)
-        is_passing = jnp.any(jnp.asarray(action) == jnp.asarray(list(self._PASS_ACTIONS))) & can_pass
+        # --- Ball Logic (Refactored for Generalized Shooting) ---
 
-        receiver_x = jax.lax.select(is_p1_inside_controlled, updated_p1_outside.x, updated_p1_inside.x)
-        receiver_y = jax.lax.select(is_p1_inside_controlled, updated_p1_outside.y, updated_p1_inside.y)
+        # 1. Passing (Generalized for all players)
+        is_p1_inside_passing = (state.ball.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
+        is_p1_outside_passing = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
+        is_p2_inside_passing = (state.ball.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
+        is_p2_outside_passing = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
+
+        is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
+
+        passer_x = jax.lax.select(is_p1_inside_passing, updated_p1_inside.x,
+                   jax.lax.select(is_p1_outside_passing, updated_p1_outside.x,
+                   jax.lax.select(is_p2_inside_passing, updated_p2_inside.x,
+                   jax.lax.select(is_p2_outside_passing, updated_p2_outside.x, 0))))
+        
+        passer_y = jax.lax.select(is_p1_inside_passing, updated_p1_inside.y,
+                   jax.lax.select(is_p1_outside_passing, updated_p1_outside.y,
+                   jax.lax.select(is_p2_inside_passing, updated_p2_inside.y,
+                   jax.lax.select(is_p2_outside_passing, updated_p2_outside.y, 0))))
+
+        receiver_x = jax.lax.select(is_p1_inside_passing, updated_p1_outside.x,
+                     jax.lax.select(is_p1_outside_passing, updated_p1_inside.x,
+                     jax.lax.select(is_p2_inside_passing, updated_p2_outside.x,
+                     jax.lax.select(is_p2_outside_passing, updated_p2_inside.x, 0))))
+
+        receiver_y = jax.lax.select(is_p1_inside_passing, updated_p1_outside.y,
+                     jax.lax.select(is_p1_outside_passing, updated_p1_inside.y,
+                     jax.lax.select(is_p2_inside_passing, updated_p2_outside.y,
+                     jax.lax.select(is_p2_outside_passing, updated_p2_inside.y, 0))))
+
         passer_pos = jnp.array([passer_x, passer_y], dtype=jnp.float32)
         receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
         direction = receiver_pos - passer_pos
@@ -446,29 +476,48 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         ball_state = jax.lax.cond(
             is_passing,
-            lambda s: s.ball.replace(
+            lambda b: b.replace(
                 x=passer_x.astype(jnp.float32),
                 y=passer_y.astype(jnp.float32),
                 vel_x=vel[0],
                 vel_y=vel[1],
                 holder=PlayerID.NONE
             ),
-            lambda s: s.ball,
-            state
+            lambda b: b,
+            state.ball
         )
 
-        # 2. Shooting
-        key, offset_key_x = random.split(state.key)
-        can_shoot = (state.ball.holder == passer_id)
-        is_shooting = jnp.any(jnp.asarray(action) == jnp.asarray(list(self._SHOOT_ACTIONS))) & can_shoot
+        # 2. Shooting (Generalized for all players)
+        is_p1_inside_shooting = (state.ball.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
+        is_p1_outside_shooting = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
+        is_p2_inside_shooting = (state.ball.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
+        is_p2_outside_shooting = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
 
+        is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
+
+        shooter_id = jax.lax.select(is_p1_inside_shooting, PlayerID.PLAYER1_INSIDE,
+                     jax.lax.select(is_p1_outside_shooting, PlayerID.PLAYER1_OUTSIDE,
+                     jax.lax.select(is_p2_inside_shooting, PlayerID.PLAYER2_INSIDE,
+                     jax.lax.select(is_p2_outside_shooting, PlayerID.PLAYER2_OUTSIDE, PlayerID.NONE))))
+
+        shooter_x = jax.lax.select(is_p1_inside_shooting, updated_p1_inside.x,
+                    jax.lax.select(is_p1_outside_shooting, updated_p1_outside.x,
+                    jax.lax.select(is_p2_inside_shooting, updated_p2_inside.x,
+                    jax.lax.select(is_p2_outside_shooting, updated_p2_outside.x, 0))))
+
+        shooter_y = jax.lax.select(is_p1_inside_shooting, updated_p1_inside.y,
+                    jax.lax.select(is_p1_outside_shooting, updated_p1_outside.y,
+                    jax.lax.select(is_p2_inside_shooting, updated_p2_inside.y,
+                    jax.lax.select(is_p2_outside_shooting, updated_p2_outside.y, 0))))
+
+        key, offset_key_x = random.split(key)
         offset_x = random.uniform(offset_key_x, shape=(), minval=-10, maxval=10)
         is_goal = (offset_x >= -5) & (offset_x <= 5)
 
         basket_pos = jnp.array([self.constants.BASKET_POSITION[0], self.constants.BASKET_POSITION[1]], dtype=jnp.float32)
         target_pos = basket_pos + jnp.array([offset_x, 0.0])
 
-        shooter_pos = jnp.array([passer_x, passer_y], dtype=jnp.float32)
+        shooter_pos = jnp.array([shooter_x, shooter_y], dtype=jnp.float32)
         shoot_direction = target_pos - shooter_pos
         shoot_norm = jnp.sqrt(jnp.sum(shoot_direction**2))
         shoot_safe_norm = jnp.where(shoot_norm == 0, 1.0, shoot_norm)
@@ -478,15 +527,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ball_state = jax.lax.cond(
             is_shooting,
             lambda b: b.replace(
-                x=passer_x.astype(jnp.float32),
-                y=passer_y.astype(jnp.float32),
+                x=shooter_x.astype(jnp.float32),
+                y=shooter_y.astype(jnp.float32),
                 vel_x=shoot_vel[0],
                 vel_y=shoot_vel[1],
                 holder=PlayerID.NONE,
                 target_x=target_pos[0],
                 target_y=target_pos[1],
                 is_goal=is_goal,
-                shooter_id=passer_id
+                shooter_id=shooter_id
             ),
             lambda b: b,
             ball_state
@@ -494,8 +543,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # 3. Stealing
         steal_radius = 5.0
+        
+        # The "stealer" is the currently controlled player
+        stealer_id = state.controlled_player_id
+        stealer_x = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, updated_p1_inside.x, updated_p1_outside.x)
+        stealer_y = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, updated_p1_inside.y, updated_p1_outside.y)
+
         is_trying_to_steal = jnp.any(jnp.asarray(action) == jnp.asarray(list(self._JUMP_ACTIONS)))
-        is_close_to_ball = jnp.sqrt((passer_x - ball_state.x)**2 + (passer_y - ball_state.y)**2) < steal_radius
+        is_close_to_ball = jnp.sqrt((stealer_x - ball_state.x)**2 + (stealer_y - ball_state.y)**2) < steal_radius
         
         is_p1_team_holder = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
         can_steal_from_holder = ~is_p1_team_holder
@@ -504,7 +559,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         ball_state = jax.lax.cond(
             is_stealing,
-            lambda b: b.replace(holder=passer_id, vel_x=0.0, vel_y=0.0),
+            lambda b: b.replace(holder=stealer_id, vel_x=0.0, vel_y=0.0),
             lambda b: b,
             ball_state
         )
@@ -534,9 +589,16 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             
             jax.debug.print("Player Score: {x}, Enemy Score: {y}", x=new_player_score, y=new_enemy_score)
             
-            return self._init_state(reset_key).replace(
+            new_state = self._init_state(reset_key).replace(
                 player_score=new_player_score,
                 enemy_score=new_enemy_score
+            )
+
+            # After a goal, the non-scoring team gets the ball (standard basketball rules).
+            new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+
+            return new_state.replace(
+                ball=new_state.ball.replace(holder=new_ball_holder)
             )
 
         def continue_play(s):
@@ -646,8 +708,6 @@ class DunkRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # For now, we'll just set up a basic background.
-        # We'll need to create a background.npy file later.
         asset_config = [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {'name': 'player', 'type': 'group', 'files': [f'player_{i}.npy' for i in range(10)]},
@@ -655,6 +715,8 @@ class DunkRenderer(JAXGameRenderer):
             {'name': 'enemy', 'type': 'group', 'files': [f'enemy_{i}.npy' for i in range(10)]},
             {'name': 'enemy_no_ball', 'type': 'single', 'file': 'enemy_no_ball.npy'},
             {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+            {'name': 'player_arrow', 'type': 'single', 'file': 'player_arrow.npy'},
+            {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
         ]
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
 
@@ -698,11 +760,10 @@ class DunkRenderer(JAXGameRenderer):
             ball_holder == PlayerID.PLAYER2_OUTSIDE,
         ])
 
-        # --- Sort players by visual Y position ---
+        # --- Render players by visual Y position ---
         visual_ys = all_players_y - all_players_z
         sort_indices = jnp.argsort(visual_ys)
 
-        # --- Render players in sorted order ---
         def render_player_body(i, current_raster):
             player_idx = sort_indices[i]
 
@@ -726,6 +787,37 @@ class DunkRenderer(JAXGameRenderer):
             return self.jr.render_at(current_raster, x, visual_y, final_mask)
 
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
+
+        # --- Render Controlled Player Arrow ---
+        controlled_id = state.controlled_player_id
+        
+        # Get the index of the controlled player in the all_players arrays
+        controlled_player_idx = controlled_id - 1
+
+        # Only render if a player is controlled (ID is not NONE)
+        def render_arrow_body(current_raster):
+            controlled_x = all_players_x[controlled_player_idx]
+            controlled_visual_y = visual_ys[controlled_player_idx]
+            
+            arrow_mask = self.SHAPE_MASKS['player_arrow']
+            arrow_height = arrow_mask.shape[0]
+            
+            # Position the arrow above the player
+            arrow_y = controlled_visual_y - arrow_height
+            
+            # Center the arrow horizontally over the player
+            player_width = 10 # from placeholder
+            arrow_width = arrow_mask.shape[1]
+            arrow_x = controlled_x + (player_width // 2) - (arrow_width // 2) + 2
+
+            return self.jr.render_at(current_raster, arrow_x, arrow_y, arrow_mask)
+
+        raster = jax.lax.cond(
+            controlled_id != PlayerID.NONE,
+            render_arrow_body,
+            lambda r: r,
+            raster
+        )
         
         # --- Render Ball if in flight ---
         ball_in_flight = (state.ball.holder == PlayerID.NONE)
@@ -743,5 +835,15 @@ class DunkRenderer(JAXGameRenderer):
             lambda r: r,
             raster
         )
+
+        # --- Render Scores ---
+        player_score_digits = self.jr.int_to_digits(state.player_score, 2)
+        enemy_score_digits = self.jr.int_to_digits(state.enemy_score, 2)
+        player_score_x = 110
+        enemy_score_x = 135 # Start of player score + width of player score + gap
+        score_y = 10
+
+        raster = self.jr.render_label_selective(raster, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
+        raster = self.jr.render_label_selective(raster, enemy_score_x, score_y, enemy_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
