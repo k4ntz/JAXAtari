@@ -118,7 +118,7 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1  # todo change
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15  # todo change
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.25
 
@@ -515,7 +515,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
 
     def world_cords_to_viewport_cords(self, x, z): #todo change
-        return 100, 80
+        return 100, 85
 
 
     def zoom_mask(self, mask, zoom_factor):
@@ -566,7 +566,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     def render_single_enemy(self, raster, enemy:Enemy): #todo change
         enemy_mask = self.get_enemy_mask(enemy)
-        zoom_factor = (jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) *
+        zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z))-20.0) *
                         self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
         zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
