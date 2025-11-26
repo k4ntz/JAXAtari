@@ -521,7 +521,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             return -100,-100
 
         def uvMap(_):
-            u = (f * (x / z + 1.1)).astype(int)     #there is some mistake here no clue why 1.1 just tried some stuff
+            u = ((f * (x / z))+self.consts.WIDTH/2).astype(int)
             v = 85
             return u, v
 
