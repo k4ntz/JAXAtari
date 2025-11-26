@@ -514,8 +514,18 @@ class BattlezoneRenderer(JAXGameRenderer):
         return self.SHAPE_MASKS["tank_enemy_front"]
 
 
-    def world_cords_to_viewport_cords(self, x, z): #todo change
-        return 100, 85
+    def world_cords_to_viewport_cords(self, x, z, f=60.0): #todo change
+        #f = (screen_height / 2) / tan(FOVv / 2)
+        def anchor(_):
+            # Behind the camera or invalid
+            return -100,-100
+
+        def uvMap(_):
+            u = (f * (x / z + 1.1)).astype(int)     #there is some mistake here no clue why 1.1 just tried some stuff
+            v = 85
+            return u, v
+
+        return jax.lax.cond(z<=0, anchor, uvMap, operand=None)
 
 
     def zoom_mask(self, mask, zoom_factor):
@@ -571,7 +581,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-        return self.jr.render_at(raster, x, y, zoomed_mask)
+        return self.jr.render_at_clipped(raster, x, y, zoomed_mask)
 
 
 
@@ -637,7 +647,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         #--------------------------------------------------------------------
 
         #-------------------------------enemies-----------------
-        def render_single_enemy_wrapped(raster, enemy): #so that i donw have to pass self
+        def render_single_enemy_wrapped(raster, enemy): #so that i dont have to pass self
             return self.render_single_enemy(raster, enemy), None
 
 
