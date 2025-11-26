@@ -118,8 +118,8 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
-    PLAYER_ROTATION_SPEED:float = 0.015
-    PLAYER_SPEED:float = 1.0
+    PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
+    PLAYER_SPEED:float = 0.25
 
 # immutable state container
 class BattlezoneState(NamedTuple):
@@ -497,7 +497,6 @@ class BattlezoneRenderer(JAXGameRenderer):
         radar_enemies_x = jnp.where(in_radar, radar_enemies_x, -1)
         radar_enemies_z = jnp.where(in_radar, radar_enemies_z, -1)
         # Draw point
-        #ToDo: Discart enemies if out of max_scan_radius
         img = img.at[radar_enemies_z, radar_enemies_x].set(colorID_2)
 
         return img
