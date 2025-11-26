@@ -66,6 +66,7 @@ class BallState:
     landing_y: chex.Array
     is_goal: chex.Array # boolean
     shooter_id: chex.Array
+    receiver_id: chex.Array
 
 @chex.dataclass(frozen=True)
 class DunkGameState:
@@ -205,7 +206,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player1_outside=PlayerState(x=80, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_inside=PlayerState(x=170, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_outside=PlayerState(x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            ball=BallState(x=0.0, y=0.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_INSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter_id=PlayerID.NONE),
+            ball=BallState(x=0.0, y=0.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_INSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter_id=PlayerID.NONE, receiver_id=PlayerID.NONE),
             player_score=0,
             enemy_score=0,
             step_counter=0,
@@ -329,15 +330,36 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
         p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
 
-        # --- Enemy AI Logic ---
-        key, p2_action_key = random.split(key)
-        # We need 4 keys: 2 for probability checks and 2 for random move selection
+        # --- AI Logic ---
+        key, p2_action_key, teammate_action_key = random.split(key, 3)
+        # We need 4 keys for enemies: 2 for probability checks and 2 for random move selection
         p2_inside_prob_key, p2_outside_prob_key, p2_inside_move_key, p2_outside_move_key = random.split(p2_action_key, 4)
 
         movement_actions = jnp.array([
             Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT
         ])
+
+        # --- Teammate AI ---
+        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+
+        is_p1_inside_teammate_no_ball = ~is_p1_inside_controlled & ~p1_inside_has_ball
+        is_p1_outside_teammate_no_ball = ~is_p1_outside_controlled & ~p1_outside_has_ball
+
+        random_teammate_move_idx = random.randint(teammate_action_key, shape=(), minval=0, maxval=8)
+        random_teammate_move_action = movement_actions[random_teammate_move_idx]
+
+        p1_inside_action = jax.lax.select(
+            is_p1_inside_teammate_no_ball,
+            random_teammate_move_action,
+            p1_inside_action
+        )
+        p1_outside_action = jax.lax.select(
+            is_p1_outside_teammate_no_ball,
+            random_teammate_move_action,
+            p1_outside_action
+        )
 
         # --- P2 Inside Logic ---
         p2_inside_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE)
@@ -349,15 +371,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_inside = jax.lax.select(
-            rand_inside < 0.001,  # 0.1% chance to shoot
+            rand_inside < 0.01, 
             Action.UPFIRE,
             jax.lax.select(
-                rand_inside < 0.009,  # 1% chance to pass (0.005 + 0.045)
+                rand_inside < 0.04,  
                 Action.DOWNFIRE,
-                random_inside_move_action  # 99% chance to move
+                random_inside_move_action 
             )
         )
-        p2_inside_action = jax.lax.select(p2_inside_has_ball, action_if_ball_inside, Action.NOOP)
+        p2_inside_action = jax.lax.select(p2_inside_has_ball, action_if_ball_inside, random_inside_move_action)
 
         # --- P2 Outside Logic ---
         p2_outside_has_ball = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
@@ -369,15 +391,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_outside = jax.lax.select(
-            rand_outside < 0.001,  # 0.1% chance to shoot
+            rand_outside < 0.01, 
             Action.UPFIRE,
             jax.lax.select(
-                rand_outside < 0.009,  # 1% chance to pass (0.005 + 0.045)
+                rand_outside < 0.04,  
                 Action.DOWNFIRE,
-                random_outside_move_action  # 99% chance to move
+                random_outside_move_action  
             )
         )
-        p2_outside_action = jax.lax.select(p2_outside_has_ball, action_if_ball_outside, Action.NOOP)
+        p2_outside_action = jax.lax.select(p2_outside_has_ball, action_if_ball_outside, random_outside_move_action)
         
         actions = (p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action)
         return actions, key
@@ -440,6 +462,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_p2_outside_passing = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
         is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
 
+        receiver_id = jax.lax.select(is_p1_inside_passing, PlayerID.PLAYER1_OUTSIDE,
+                      jax.lax.select(is_p1_outside_passing, PlayerID.PLAYER1_INSIDE,
+                      jax.lax.select(is_p2_inside_passing, PlayerID.PLAYER2_OUTSIDE,
+                      jax.lax.select(is_p2_outside_passing, PlayerID.PLAYER2_INSIDE, PlayerID.NONE))))
+
         passer_x = jax.lax.select(is_p1_inside_passing, state.player1_inside.x,
                    jax.lax.select(is_p1_outside_passing, state.player1_outside.x,
                    jax.lax.select(is_p2_inside_passing, state.player2_inside.x,
@@ -467,7 +494,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         ball_state = jax.lax.cond(
             is_passing,
-            lambda b: b.replace(x=passer_x.astype(jnp.float32), y=passer_y.astype(jnp.float32), vel_x=vel[0], vel_y=vel[1], holder=PlayerID.NONE),
+            lambda b: b.replace(x=passer_x.astype(jnp.float32), y=passer_y.astype(jnp.float32), vel_x=vel[0], vel_y=vel[1], holder=PlayerID.NONE, receiver_id=receiver_id),
             lambda b: b,
             ball_state
         )
@@ -511,7 +538,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 x=shooter_x.astype(jnp.float32), y=shooter_y.astype(jnp.float32),
                 vel_x=shoot_vel[0], vel_y=shoot_vel[1], holder=PlayerID.NONE,
                 target_x=target_pos[0], target_y=target_pos[1],
-                is_goal=is_goal, shooter_id=shooter_id
+                is_goal=is_goal, shooter_id=shooter_id, receiver_id=PlayerID.NONE
             ),
             lambda b: b,
             ball_state
@@ -552,9 +579,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             
             new_player_score = s.player_score + is_p1_scorer
             new_enemy_score = s.enemy_score + (1 - is_p1_scorer)
-            
-            jax.debug.print("Player Score: {x}, Enemy Score: {y}", x=new_player_score, y=new_enemy_score)
-            
+                        
             new_state = self._init_state(reset_key).replace(player_score=new_player_score, enemy_score=new_enemy_score)
             new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
             return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
@@ -564,6 +589,40 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             is_miss = reached_target & ~s.ball.is_goal
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
+
+            # --- New logic for passing ---
+            is_passing = b_state.receiver_id != PlayerID.NONE
+
+            def update_pass_trajectory(b):
+                receiver_x = jax.lax.switch(
+                    b.receiver_id - 1,
+                    [
+                        lambda: s.player1_inside.x,
+                        lambda: s.player1_outside.x,
+                        lambda: s.player2_inside.x,
+                        lambda: s.player2_outside.x,
+                    ],
+                )
+                receiver_y = jax.lax.switch(
+                    b.receiver_id - 1,
+                    [
+                        lambda: s.player1_inside.y,
+                        lambda: s.player1_outside.y,
+                        lambda: s.player2_inside.y,
+                        lambda: s.player2_outside.y,
+                    ],
+                )
+
+                passer_pos = jnp.array([b.x, b.y], dtype=jnp.float32)
+                receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
+                direction = receiver_pos - passer_pos
+                norm = jnp.sqrt(jnp.sum(direction**2))
+                safe_norm = jnp.where(norm == 0, 1.0, norm)
+                ball_speed = 8.0
+                vel = (direction / safe_norm) * ball_speed
+                return b.replace(vel_x=vel[0], vel_y=vel[1])
+
+            b_state = jax.lax.cond(is_passing, update_pass_trajectory, lambda b: b, b_state)
 
             # Update ball flight physics
             is_falling = (b_state.vel_x == 0) & jnp.isclose(b_state.vel_y, 2.0)
@@ -589,7 +648,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             def check_catch(p, pid, current_ball_state):
                 dist_sq = (current_ball_state.x - p.x)**2 + (current_ball_state.y - p.y)**2
                 is_caught = ball_in_flight_after_physics & (dist_sq < catch_radius_sq)
-                return jax.lax.cond(is_caught, lambda b: b.replace(holder=pid, vel_x=0.0, vel_y=0.0), lambda b: b, current_ball_state)
+                return jax.lax.cond(is_caught, lambda b: b.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver_id=PlayerID.NONE), lambda b: b, current_ball_state)
 
             # This loop is symbolic; JAX will unroll it.
             for p, pid in zip(players, player_ids):
