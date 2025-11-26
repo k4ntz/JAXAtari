@@ -118,8 +118,10 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1  # todo change
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.25
+
 
 # immutable state container
 class BattlezoneState(NamedTuple):
@@ -516,39 +518,60 @@ class BattlezoneRenderer(JAXGameRenderer):
         return 100, 80
 
 
-    def zoom_mask(self, mask, zoom_factor:int):
+    def zoom_mask(self, mask, zoom_factor):
         """
         scales the mask proportional to the zoom_factor
         at zoom_factor = 1 keeps everything the same
         every zoom factor above 1 makes the mask smaller by 2x2
         """
-        if zoom_factor == 1:
+        def anchor(_):
             return mask
+        def zoom(_):
+            x, y = mask.shape
 
-        x, y = mask.shape
+            # create grid of coordinates in the output canvas
+            xi = jnp.arange(x)
+            yi = jnp.arange(y)
+            xv, yv = jnp.meshgrid(xi, yi, indexing='ij')
 
-        # compute new shape
-        shrink = int(2 * (zoom_factor - 1))
-        new_x = max(1, x - shrink)
-        new_y = max(1, y - shrink)
+            # compute coordinates in the original mask to sample
+            # zoom center is at the middle of the mask
+            cx, cy = (x - 1) / 2, (y - 1) / 2
+            x_orig = (xv - cx) * zoom_factor + cx
+            y_orig = (yv - cy) * zoom_factor + cy
+            #x_orig = xv + zoom_factor * jnp.sign(cx-xv)
+            #y_orig = yv + zoom_factor * jnp.sign(cy-yv)
 
-        # create new grid indices for downsampling
-        x_idx = jnp.floor(jnp.linspace(0, x - 1, new_x)).astype(int)
-        y_idx = jnp.floor(jnp.linspace(0, y - 1, new_y)).astype(int)
+            # clip coordinates to valid range
+            x_orig = jnp.clip(x_orig, 0, x - 1)
+            y_orig = jnp.clip(y_orig, 0, y - 1)
 
-        # index the original mask to create the zoomed mask
-        zoomed_mask = mask[x_idx[:, None], y_idx[None, :]]
+            # nearest neighbor sampling
+            x0 = jnp.floor(x_orig).astype(int)
+            y0 = jnp.floor(y_orig).astype(int)
+            zoomed_mask = mask[x0, y0]
 
-        return zoomed_mask
+            # zero edges using fixed-size boolean mask
+            rows = jnp.arange(x)[:, None]
+            cols = jnp.arange(y)[None, :]
+
+            edge = (rows < zoom_factor) | (rows >= x - zoom_factor) | \
+                   (cols < zoom_factor) | (cols >= y - zoom_factor)
+
+            zoomed_mask = jnp.where(edge, -1, zoomed_mask)
+            return  zoomed_mask
+
+        return jax.lax.cond(zoom_factor<=1, anchor, zoom, operand=None)
 
 
     def render_single_enemy(self, raster, enemy:Enemy): #todo change
         enemy_mask = self.get_enemy_mask(enemy)
-        zoom_factor = 4     #change to distance * some_constant
+        zoom_factor = (jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) *
+                        self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
         zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-        return self.jr.render_at(raster, x+zoom_factor, y+zoom_factor, zoomed_mask)
+        return self.jr.render_at(raster, x, y, zoomed_mask)
 
 
 
