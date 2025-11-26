@@ -5,7 +5,7 @@ Edit: Jan Rafflewski
 
 """
 TODO
-    1)  [ ] Validate ghost behaviour
+    1)  [x] Validate ghost behaviour
     2)  [ ] Level progression
     3)  [ ] Performance improvements
     4)  [ ] JIT compatibility
@@ -16,11 +16,14 @@ TODO
     c)  [ ] Fruit scale and animation
     d)  [ ] Fruit movement patterns
     e)  [ ] Ghost behavioral quirks
-    f)  [ ] Correct maze colors
+    f)  [ ] Ghost starting positions
+    g)  [ ] Ghost enjailment
+    h)  [ ] Ghost timings
+    i)  [ ] Correct maze colors
 """
 
 
-# --- IMPORTS --- #
+# -------- Imports --------
 from enum import IntEnum
 import os
 from functools import partial
@@ -36,24 +39,32 @@ from jaxatari.renderers import AtraJaxisRenderer
 from jaxatari.rendering import atraJaxis as aj
 from jaxatari.games.mspacman_mazes import MsPacmanMaze
 
-# --- CONSTANTS --- #
-# GENERAL
-RESET_MAZE = 0 # the starting level, loaded when reset is called
-RESET_TIMER = 40  # Timer for resetting the game after death
-MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-PELLETS_TO_COLLECT = 155  # Total pellets to collect in the maze (including power pellets)
-INITIAL_LIVES = 2 # Number of starting bonus lives
-BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
-COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 
-# GHOST TYPES
+# -------- Enums --------
+class Direction(IntEnum):
+    NOOP = 0
+    FIRE = 1
+    UP = 2
+    RIGHT = 3
+    LEFT = 4
+    DOWN = 5
+    
+class FruitType(IntEnum):
+    CHERRY = 0
+    STRAWBERRY = 1
+    ORANGE = 2
+    PRETZEL = 3
+    APPLE = 4
+    PEAR = 5
+    BANANA = 6
+    NONE = 7
+
 class GhostType(IntEnum):
     BLINKY = 0
     PINKY = 1
     INKY = 2
     SUE = 3
 
-# GHOST MODES
 class GhostMode(IntEnum):
     RANDOM = 0
     CHASE = 1
@@ -62,6 +73,17 @@ class GhostMode(IntEnum):
     BLINKING = 4
     RETURNING = 5
     ENJAILED = 6
+
+
+# -------- Constants --------
+# GENERAL
+RESET_MAZE = 0 # the starting level, loaded when reset is called
+RESET_TIMER = 40  # Timer for resetting the game after death
+MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
+PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+INITIAL_LIVES = 2 # Number of starting bonus lives
+BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
+COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 
 # GHOST TIMINGS
 CHASE_DURATION = 20*4*8 # Estimated for now, should be 20s  TODO: Adjust value
@@ -74,18 +96,7 @@ ENJAILED_DURATION = 120 # in steps
 RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
 
 # FRUITS
-class FruitType(IntEnum):
-    CHERRY = 0
-    STRAWBERRY = 1
-    ORANGE = 2
-    PRETZEL = 3
-    APPLE = 4
-    PEAR = 5
-    BANANA = 6
-    NONE = 7
-# FRUIT_SPAWN_THRESHOLDS = jnp.array([70, 170])
-FRUIT_SPAWN_THRESHOLDS = jnp.array([1, 40])
-FRUIT_CONSUME_DISTANCE = 8 # Vertical and horizontal distance at which the fruit is consumed
+FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~50, ~100 but this version has a reduced number of pellets
 FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
@@ -93,10 +104,10 @@ PPX0 = 8
 PPX1 = 148
 PPY0 = 20
 PPY1 = 152
-JAIL_POSITION = jnp.array([77, 70])
 POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
 INITIAL_GHOSTS_POSITIONS = jnp.array([[73, 54], [49, 78], [41, 78], [121, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
+JAIL_POSITION = jnp.array([77, 70])
 SCATTER_TARGETS = jnp.array([
     [MsPacmanMaze.WIDTH - 1, 0],                        # Upper right corner - Blinky
     [0, 0],                                             # Upper left corner - Pinky
@@ -105,13 +116,6 @@ SCATTER_TARGETS = jnp.array([
 ])
 
 # DIRECTIONS
-class Direction(IntEnum):
-    NOOP = 0
-    FIRE = 1
-    UP = 2
-    RIGHT = 3
-    LEFT = 4
-    DOWN = 5
 DIRECTIONS = jnp.array([
     (0, 0),   # NOOP
     (0, 0),   # FIRE
@@ -139,7 +143,7 @@ PACMAN_COLOR = jnp.array([210, 164, 74, 255], dtype=jnp.uint8)
 TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
 
-# --- CLASSES --- #
+# -------- Entity classes --------
 class LevelState(NamedTuple):
     maze_layout: chex.Array # Whether the level is completed
     dofmaze: chex.Array # Precomputed degree of freedom maze layout
@@ -193,6 +197,7 @@ class PacmanInfo(NamedTuple):
     done: chex.Array
 
 
+# -------- Game class --------
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def __init__(self):
         super().__init__()
@@ -448,7 +453,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         ghost_positions, ghosts_dirs, ghosts_modes, ghosts_timers = ghosts_step(
             state.ghosts, state.player, ate_power_pill, dofmaze, key
         )
-        # print(ghosts_modes)
 
         # Ghost collision detection
         eaten_ghosts = state.player.eaten_ghosts
@@ -544,6 +548,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return obs, new_state, reward, done, info
 
 
+# -------- Render class --------
 class MsPacmanRenderer(AtraJaxisRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
@@ -705,7 +710,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         return sprites
 
 
-# --- HELPER FUNCTIONS --- #
+# -------- Helper functions --------
 def last_pressed_action(action, prev_action):
     """
     Returns the last pressed action in cases where both actions are pressed
@@ -861,17 +866,17 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     """
     GHOST BEHAVIOUR
     -   All Ghosts always aim for a specific target
-    -   They try to minimize their horizontal and vertical distance to this target
+    -   They try to minimize their horizontal and vertical distance to their target
     -   They prioritizes the longer one of those two distances - If equal, they choose randomly
     -   They can only change direction when they are on a vertical or horizontal grid
     -   They cannot reverse direction without a mode change
 
     MODES
     -   CHASE: Aim for their specific target
-    -   SCATTER: Aim for their specific corner target (BLINKY and PINKY move randomly for the first scatter of each game)   (EXAMINE FURTHER)
+    -   SCATTER: Aim for their specific corner target
     -   FRIGHTENED: Move randomly
-    -   Every mode change from CHASE to SCATTER, SCATTER to CHASE and any mode to FRIGHTENED causes a reversal of direction
-    -   Mode changes happen on a timer with some additional randomness
+    -   Every mode change between CHASE and SCATTER and any mode change to FRIGHTENED causes a reversal of direction
+    -   Mode changes happen on a timer with some additional randomnes for CHASE and SCATTER
 
     BLINKY (Red)
     -   Aims for Ms Pacman directly
@@ -892,19 +897,8 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
 
     SOURCES:
     https://www.classicarcadegaming.com/forums/index.php?topic=6701.0
-    https://en.wikipedia.org/wiki/Ms._Pac-Man?utm_source=chatgpt.com
-    https://www.youtube.com/watch?v=ICwzQ0_RCcQ&t
+    https://en.wikipedia.org/wiki/Ms._Pac-Man
     https://www.youtube.com/watch?v=sQK7PmR8kpQ
-    https://www.youtube.com/watch?v=VV4_kVIV9WE
-
-    ADDITIONAL RESOURCES:
-    https://www.gamedeveloper.com/design/the-pac-man-dossier
-    https://www.researchgate.net/publication/224180057_Ghost_Direction_Detection_and_other_Innovations_for_Ms_Pac-Man
-    https://nn.cs.utexas.edu/downloads/papers/schrum.tciaig16.pdf?utm_source=chatgpt.com
-    http://donhodges.com/pacman_pinky_explanation.htm
-    http://donhodges.com/ms_pacman_bugs.htm
-    http://donhodges.com/how_high_can_you_get3.htm
-    http://cubeman.org/arcade-source/mspac.asm
     """
 
     # 0) Initialize
@@ -957,7 +951,7 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
             pass
         elif len(allowed) == 1: # If only one allowed direction - take it
             new_dir = DIRECTIONS[allowed[0]]
-        elif new_mode == GhostMode.FRIGHTENED or new_mode == GhostMode.BLINKING or new_mode == GhostMode.RANDOM or GhostMode.RETURNING:
+        elif new_mode == GhostMode.FRIGHTENED or new_mode == GhostMode.BLINKING or new_mode == GhostMode.RANDOM or new_mode == GhostMode.RETURNING:
             new_dir = DIRECTIONS[jax.random.choice(key, jnp.array(allowed))]
         else:
             if new_mode == GhostMode.SCATTER: # If not SCATTER, mode must be CHASE at this point

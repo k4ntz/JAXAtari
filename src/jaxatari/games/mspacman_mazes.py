@@ -222,7 +222,6 @@ class MsPacmanMaze:
        HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
        TILE_HEIGHT, TILE_WIDTH = MAZE0.shape # Height and width of the maze in number of tiles
 
-
        @staticmethod
        def precompute_dof(maze: np.ndarray):
               """
