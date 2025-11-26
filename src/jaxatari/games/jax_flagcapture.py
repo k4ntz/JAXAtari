@@ -52,10 +52,10 @@ class FlagCaptureConstants:
     FIELD_PADDING_LEFT = 12
     FIELD_PADDING_TOP = 26
     FIELD_GAP_X = 8
-    FIELD_GAP_Y = 4
-    FIELD_WIDTH = FIELD_HEIGHT = 8
-    NUMBER_WIDTH = 12
-    NUMBER_HEIGHT = 5
+    FIELD_GAP_Y = 8
+    FIELD_WIDTH = 8
+    FIELD_HEIGHT = 16
+    SCORE_AND_TIMER_PADDING_TOP = 7
 
     NUM_BOMBS = 3
     NUM_NUMBER_CLUES = 30
@@ -681,7 +681,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["score_digits"],
             single_digit_x=32,
             double_digit_x=16,
-            y=3,
+            y=self.consts.SCORE_AND_TIMER_PADDING_TOP,
             max_digits=3
         )
 
@@ -691,7 +691,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["timer_digits"],
             single_digit_x=112,
             double_digit_x=96,
-            y=3,
+            y=self.consts.SCORE_AND_TIMER_PADDING_TOP,
             max_digits=3
         )
 
