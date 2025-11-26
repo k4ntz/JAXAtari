@@ -51,6 +51,7 @@ def _get_default_asset_config() -> tuple:
         ]},
         {'name': 'pellet_dot', 'type': 'single', 'file': 'pellet_dot.npy'},
         {'name': 'pellet_power', 'type': 'single', 'file': 'pellet_power.npy'},
+        {'name': 'wall', 'type': 'single', 'file': 'wall/0.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
@@ -146,6 +147,7 @@ class PacmanState(NamedTuple):
     score: chex.Array
     lives: chex.Array
     level: chex.Array
+    pellets_collected: chex.Array  # 31x28 mask: 0=not collected, 1=collected
     
     # Timers
     frightened_timer: chex.Array
@@ -212,8 +214,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         """
         # Create maze as numpy array for easier initialization, then convert to jax
         maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
-        
-        # Classic Pacman-inspired maze layout (simplified 28x31)
+
         maze_layout = [
             "1111111111111111111111111111",
             "1222222222222112222222222221",
@@ -229,7 +230,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             "1111112110000000001112111111",
             "1111112110111441110112111111",
             "1111112110144441110112111111",
-            "0000002000144441000002000000",  # Tunnel on sides
+            "0000002000144441000002000000",
             "1111112110144441110112111111",
             "1111112110111111110112111111",
             "1111112110000000001112111111",
@@ -246,8 +247,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             "1222222222222222222222222221",
             "1111111111111111111111111111",
         ]
-        
-        # Fill the maze from the layout string
+
         for row_idx, row_str in enumerate(maze_layout):
             for col_idx, char in enumerate(row_str):
                 maze[row_idx, col_idx] = int(char)
@@ -257,9 +257,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at valid path with dots (row 25, col 12 - verified dot tile)
-        player_x = jnp.array(12 * self.consts.TILE_SIZE + self.consts.TILE_SIZE // 2, dtype=jnp.int32)
-        player_y = jnp.array(25 * self.consts.TILE_SIZE + self.consts.TILE_SIZE // 2, dtype=jnp.int32)
+        # Initialize player at valid path with dots (row 25, col 12)
+        # Don't add offset - keep within bounds
+        player_x = jnp.array(12 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 12 = 96
+        player_y = jnp.array(25 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 25 = 200
         player_direction = jnp.array(0, dtype=jnp.int32)  # Start facing right
         player_next_direction = jnp.array(-1, dtype=jnp.int32)
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
@@ -274,21 +275,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts = ghosts.at[i, 4].set(self.consts.GHOST_START_X)  # target_x
             ghosts = ghosts.at[i, 5].set(self.consts.GHOST_START_Y)  # target_y
         
-        # Initialize pellets (simplified - track remaining count)
-        # In a full implementation, this would track individual pellet positions
-        dots_remaining = jnp.array(240, dtype=jnp.int32)  # Approximate number of dots
-        power_pellets_active = jnp.array(15, dtype=jnp.int32)  # Bitmask: 4 power pellets = 0b1111
-        
-        # Initialize game state
+        # Initial game state
         score = jnp.array(0, dtype=jnp.int32)
         lives = jnp.array(3, dtype=jnp.int32)
         level = jnp.array(1, dtype=jnp.int32)
-        
-        # Initialize timers
+        dots_remaining = jnp.array(240, dtype=jnp.int32)  # Approximate
         frightened_timer = jnp.array(0, dtype=jnp.int32)
         scatter_chase_timer = jnp.array(0, dtype=jnp.int32)
-        is_scatter_mode = jnp.array(True, dtype=jnp.bool_)
+        is_scatter_mode = jnp.array(True)  # Start in scatter mode
         
+        # Initialize pellet collection mask (0 = not collected)
+        pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+        
+        # Create state
         state = PacmanState(
             player_x=player_x,
             player_y=player_y,
@@ -297,10 +296,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_animation_frame=player_animation_frame,
             ghosts=ghosts,
             dots_remaining=dots_remaining,
-            power_pellets_active=power_pellets_active,
+            power_pellets_active=jnp.array(15, dtype=jnp.int32), # Re-added as it's part of PacmanState
             score=score,
             lives=lives,
             level=level,
+            pellets_collected=pellets_collected,
             frightened_timer=frightened_timer,
             scatter_chase_timer=scatter_chase_timer,
             is_scatter_mode=is_scatter_mode,
@@ -322,8 +322,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Update player movement
         state = self._player_step(state, action)
         
-        # Update ghost AI
-        state = self._ghost_step(state)
+        # Split key for ghost updates
+        key, ghost_key = jax.random.split(state.key)
+        state = state._replace(key=key)
+        
+        # 2. Ghost Step
+        state = self._ghost_step(state, ghost_key)
         
         # Check collisions
         state = self._check_collisions(state)
@@ -347,35 +351,37 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
     def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
         """Handle player movement based on action."""
+        # Check if this is a NOOP action
+        is_noop = action == Action.NOOP
+        
         # Map Action enum to our direction: 0=right, 1=left, 2=up, 3=down
         # Action.NOOP=0, Action.UP=2, Action.DOWN=5, Action.LEFT=4, Action.RIGHT=3
         new_direction = jnp.where(
             action == Action.RIGHT, 0,
             jnp.where(action == Action.LEFT, 1,
             jnp.where(action == Action.UP, 2,
-            jnp.where(action == Action.DOWN, 3, -1)))
+            jnp.where(action == Action.DOWN, 3, state.player_direction)))
         )
         
-        # Try to move in the new direction immediately if valid, otherwise continue in current direction
-        can_move_new = self._can_move_in_direction(state.player_x, state.player_y, new_direction)
-        can_move_current = self._can_move_in_direction(state.player_x, state.player_y, state.player_direction)
+        # Check if we can move in the new direction
+        can_move_direction = self._can_move_in_direction(state.player_x, state.player_y, new_direction)
         
-        # Use new direction if valid and action was given, otherwise stay with current
-        current_dir = jnp.where(
-            jnp.logical_and(new_direction >= 0, can_move_new),
-            new_direction,
-            jnp.where(can_move_current, state.player_direction, state.player_direction)
-        )
+        # Only move if NOT noop AND can move in direction
+        should_move = jnp.logical_and(jnp.logical_not(is_noop), can_move_direction)
         
-        # Move in current direction
+        # Use the new direction
+        current_dir = new_direction
+        
+        # Calculate movement deltas
         # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
         dx = jnp.where(current_dir == 0, self.consts.PLAYER_SPEED, 
-             jnp.where(current_dir == 1, -self.consts.PLAYER_SPEED, 0))  # right/left
+             jnp.where(current_dir == 1, -self.consts.PLAYER_SPEED, 0))
         dy = jnp.where(current_dir == 2, -self.consts.PLAYER_SPEED, 
-             jnp.where(current_dir == 3, self.consts.PLAYER_SPEED, 0))  # up/down
+             jnp.where(current_dir == 3, self.consts.PLAYER_SPEED, 0))
         
-        new_x = state.player_x + dx
-        new_y = state.player_y + dy
+        # Apply movement only if should_move is True
+        new_x = jnp.where(should_move, state.player_x + dx, state.player_x)
+        new_y = jnp.where(should_move, state.player_y + dy, state.player_y)
         
         # Wrap around screen edges (tunnel effect)
         new_x = jnp.where(new_x < 0, self.consts.WIDTH - 1, new_x)
@@ -426,68 +432,159 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         return jnp.logical_and(jnp.logical_and(not_wall, in_bounds), jnp.logical_not(invalid))
 
-    def _ghost_step(self, state: PacmanState) -> PacmanState:
-        """Update ghost positions and AI."""
-        # Split key for random operations
-        keys = jax.random.split(state.key, 5)  # 4 ghosts + 1 for next state
+    def _ghost_step(self, state: PacmanState, keys: chex.PRNGKey) -> PacmanState:
+        """Update ghost positions and states."""
         
-        # Simplified ghost AI - move toward player or scatter
         def update_ghost(ghost_data, ghost_key):
             gx, gy, gdir, gstate, gtx, gty = ghost_data
+            ghost_idx = jnp.where(
+                (state.ghosts[:, 0] == gx) & (state.ghosts[:, 1] == gy),
+                jnp.arange(4),
+                -1
+            )[0] # This is a bit hacky to get index, but we can pass index via vmap if needed
+            # Better approach: vmap over indices
             
-            # Determine target based on state
+            return ghost_data # Placeholder, we'll implement the logic inside the vmap wrapper below
+            
+        # We need to process ghosts with their indices to assign scatter targets
+        ghost_indices = jnp.arange(4)
+        
+        def process_single_ghost(idx, ghost_data, key):
+            gx, gy, gdir, gstate, _, _ = ghost_data
+            
+            # 1. Select target
+            # Scatter targets (corners)
+            scatter_targets_x = jnp.array([
+                self.consts.WIDTH - self.consts.GHOST_SIZE[0], # Blinky -> Top Right
+                0,                                             # Pinky -> Top Left
+                self.consts.WIDTH - self.consts.GHOST_SIZE[0], # Inky -> Bottom Right
+                0                                              # Clyde -> Bottom Left
+            ])
+            scatter_targets_y = jnp.array([
+                0,                                             # Blinky -> Top Right
+                0,                                             # Pinky -> Top Left
+                self.consts.HEIGHT - self.consts.GHOST_SIZE[1],# Inky -> Bottom Right
+                self.consts.HEIGHT - self.consts.GHOST_SIZE[1] # Clyde -> Bottom Left
+            ])
+            
             target_x = jnp.where(
-                gstate == 2,  # eaten
-                self.consts.GHOST_START_X,
+                gstate == 2, self.consts.GHOST_START_X, # Eaten -> Home
                 jnp.where(
-                    gstate == 1,  # frightened
-                    gx + jax.random.randint(ghost_key, (), -2, 3),  # Random -1, 0, or 1
+                    gstate == 1, gx, # Frightened -> Random (handled by random dir choice)
                     jnp.where(
-                        state.is_scatter_mode,  # scatter
-                        jnp.array(0),  # Corner
-                        state.player_x  # chase
+                        state.is_scatter_mode,
+                        scatter_targets_x[idx],
+                        state.player_x # Chase -> Player
                     )
                 )
             )
             
             target_y = jnp.where(
-                gstate == 2,  # eaten
-                self.consts.GHOST_START_Y,
+                gstate == 2, self.consts.GHOST_START_Y, # Eaten -> Home
                 jnp.where(
-                    gstate == 1,  # frightened
-                    gy + jax.random.randint(ghost_key, (), -2, 3),  # Random -1, 0, or 1
+                    gstate == 1, gy, # Frightened -> Random
                     jnp.where(
-                        state.is_scatter_mode,  # scatter
-                        jnp.array(0),  # Corner
-                        state.player_y  # chase
+                        state.is_scatter_mode,
+                        scatter_targets_y[idx],
+                        state.player_y # Chase -> Player
                     )
                 )
             )
             
-            # Simple movement toward target
-            dx = jnp.sign(target_x - gx)
-            dy = jnp.sign(target_y - gy)
+            # 2. Check valid moves
             
-            # Choose direction (prefer horizontal)
-            new_dir = jnp.where(
-                jnp.abs(dx) > jnp.abs(dy),
-                jnp.where(dx > 0, 0, 1),  # right or left
-                jnp.where(dy > 0, 3, 2)  # down or up
-            )
-            
-            # Move
-            move_dx = jnp.where(new_dir == 0, 1, jnp.where(new_dir == 1, -1, 0))
-            move_dy = jnp.where(new_dir == 2, -1, jnp.where(new_dir == 3, 1, 0))
-            
-            speed = jnp.where(
-                gstate == 2,
-                self.consts.GHOST_SPEED_EATEN,
-                jnp.where(
-                    gstate == 1,
-                    self.consts.GHOST_SPEED_FRIGHTENED,
-                    self.consts.GHOST_SPEED_NORMAL
+            # Check if move is valid
+            def is_valid_move(d):
+                dx = jnp.where(d == 0, 1, jnp.where(d == 1, -1, 0)) * self.consts.GHOST_SPEED_NORMAL
+                dy = jnp.where(d == 2, -1, jnp.where(d == 3, 1, 0)) * self.consts.GHOST_SPEED_NORMAL
+                
+                # Collision check
+                check_x = gx + dx + self.consts.GHOST_SIZE[0] // 2
+                check_y = gy + dy + self.consts.GHOST_SIZE[1] // 2
+                
+                # Convert to tile coordinates
+                tx = check_x // self.consts.TILE_SIZE
+                ty = check_y // self.consts.TILE_SIZE
+                
+                # Boundary check
+                in_bounds = (tx >= 0) & (tx < self.consts.MAZE_WIDTH) & \
+                            (ty >= 0) & (ty < self.consts.MAZE_HEIGHT)
+                
+                # Wall check (1=wall)
+                is_wall = jnp.where(
+                    in_bounds,
+                    self.consts.MAZE_LAYOUT[ty, tx] == 1,
+                    True # Out of bounds is wall
                 )
+                
+                # Prevent immediate reverse
+                # 0(R) <-> 1(L)
+                # 2(U) <-> 3(D)
+                is_reverse = jnp.where(
+                    gdir == 0, d == 1,
+                    jnp.where(gdir == 1, d == 0,
+                    jnp.where(gdir == 2, d == 3,
+                    jnp.where(gdir == 3, d == 2, False)))
+                )
+                
+                # Allow reverse if frightened or eaten, otherwise forbid
+                allow_reverse = (gstate != 0) 
+                
+                return jnp.logical_and(jnp.logical_not(is_wall), jnp.logical_or(jnp.logical_not(is_reverse), allow_reverse))
+
+            # Check all 4 directions
+            valid_dirs = jax.vmap(is_valid_move)(jnp.arange(4))
+            
+            # 3. Pick best direction
+            # Calc distances
+            def get_dist(d):
+                dx = jnp.where(d == 0, 1, jnp.where(d == 1, -1, 0)) * self.consts.GHOST_SPEED_NORMAL
+                dy = jnp.where(d == 2, -1, jnp.where(d == 3, 1, 0)) * self.consts.GHOST_SPEED_NORMAL
+                nx, ny = gx + dx, gy + dy
+                return (nx - target_x)**2 + (ny - target_y)**2
+            
+            dists = jax.vmap(get_dist)(jnp.arange(4))
+            
+            # Mask invalid directions with infinity
+            masked_dists = jnp.where(valid_dirs, dists, jnp.inf)
+            
+            # Pick direction with min distance
+            # Tie-break: Up > Left > Down > Right
+            # We can achieve this by adding small offsets to distances based on priority
+            # Lower distance is better.
+            # Priority: 2 > 1 > 3 > 0
+            # Add: 0.0 for 2, 0.1 for 1, 0.2 for 3, 0.3 for 0
+            priority_offsets = jnp.array([0.3, 0.1, 0.0, 0.2])
+            masked_dists = masked_dists + priority_offsets
+            
+            best_dir = jnp.argmin(masked_dists)
+            
+            # Random move if frightened
+            random_dir_idx = jax.random.randint(key, (), 0, 4)
+            # We want a random VALID direction.
+            # Simple way: add large random noise to dists if frightened
+            is_frightened = (gstate == 1)
+            noise = jax.random.uniform(key, (4,)) * 10000.0
+            frightened_dists = jnp.where(valid_dirs, noise, jnp.inf)
+            
+            final_dir = jnp.where(
+                is_frightened,
+                jnp.argmin(frightened_dists),
+                best_dir
             )
+            
+            # Fallback if stuck
+            any_valid = jnp.any(valid_dirs)
+            final_dir = jnp.where(any_valid, final_dir, (gdir + 1) % 4) # fallback
+            
+            # 4. Update position
+            speed = jnp.where(
+                gstate == 2, self.consts.GHOST_SPEED_EATEN,
+                jnp.where(gstate == 1, self.consts.GHOST_SPEED_FRIGHTENED, self.consts.GHOST_SPEED_NORMAL)
+            )
+            
+            move_dx = jnp.where(final_dir == 0, 1, jnp.where(final_dir == 1, -1, 0))
+            move_dy = jnp.where(final_dir == 2, -1, jnp.where(final_dir == 3, 1, 0))
             
             new_x = gx + move_dx * speed
             new_y = gy + move_dy * speed
@@ -495,18 +592,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             # Wrap around
             new_x = jnp.where(new_x < 0, self.consts.WIDTH - 1, new_x)
             new_x = jnp.where(new_x >= self.consts.WIDTH, 0, new_x)
-            new_y = jnp.clip(new_y, 0, self.consts.HEIGHT - self.consts.GHOST_SIZE[1])
             
-            return jnp.array([new_x, new_y, new_dir, gstate, target_x, target_y], dtype=jnp.int32)
+            return jnp.array([new_x, new_y, final_dir, gstate, target_x, target_y], dtype=jnp.int32)
+
+        # Process all ghosts
+        keys = jax.random.split(keys, 4)
+        new_ghosts = jax.vmap(process_single_ghost)(ghost_indices, state.ghosts, keys)
         
-        # Update all ghosts with separate keys
-        ghost_keys = keys[:4]
-        new_ghosts = jax.vmap(update_ghost)(state.ghosts, ghost_keys)
+        # Update state key (consume one more)
+        new_key, _ = jax.random.split(keys[0]) # Just mixing keys to get a new one
         
-        # Update state key
-        new_state = state._replace(ghosts=new_ghosts, key=keys[4])
-        
-        return new_state
+        return state._replace(ghosts=new_ghosts, key=new_key)
 
     def _check_collisions(self, state: PacmanState) -> PacmanState:
         """Check player-ghost and player-pellet collisions."""
@@ -577,10 +673,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         new_player_x = jnp.where(any_life_lost, self.consts.PLAYER_START_X, state.player_x)
         new_player_y = jnp.where(any_life_lost, self.consts.PLAYER_START_Y, state.player_y)
         
-        # NEW: Check pellet collisions based on player's tile position
-        # Convert player position to tile coordinates
-        player_tile_x = (state.player_x + self.consts.PLAYER_SIZE[0] // 2) // self.consts.TILE_SIZE
-        player_tile_y = (state.player_y + self.consts.PLAYER_SIZE[1] // 2) // self.consts.TILE_SIZE
+        # Check pellet collisions based on player's tile position
+        # Convert player position to tile coordinates (simple division)
+        player_tile_x = state.player_x // self.consts.TILE_SIZE
+        player_tile_y = state.player_y // self.consts.TILE_SIZE
         
         # Clamp to maze bounds
         player_tile_x = jnp.clip(player_tile_x, 0, self.consts.MAZE_WIDTH - 1)
@@ -589,9 +685,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Get tile value at player position
         tile_val = self.consts.MAZE_LAYOUT[player_tile_y, player_tile_x]
         
-        # Check if dot pellet (2) or power pellet (3) is at this position
-        dot_collected = tile_val == 2
-        power_pellet_collected = tile_val == 3
+        # Check if pellet was already collected
+        already_collected = state.pellets_collected[player_tile_y, player_tile_x] == 1
+        
+        # Check if dot pellet (2) or power pellet (3) is at this position AND not yet collected
+        dot_collected = jnp.logical_and(tile_val == 2, jnp.logical_not(already_collected))
+        power_pellet_collected = jnp.logical_and(tile_val == 3, jnp.logical_not(already_collected))
         
         # Add scores for collected pellets
         pellet_score = jnp.where(dot_collected, self.consts.PELLET_DOT_SCORE, 0)
@@ -600,6 +699,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Update dots remaining
         new_dots_remaining = jnp.where(dot_collected, state.dots_remaining - 1, state.dots_remaining)
+        
+        # Mark pellet as collected
+        pellet_collected = jnp.logical_or(dot_collected, power_pellet_collected)
+        new_pellets_collected = jnp.where(
+            pellet_collected,
+            state.pellets_collected.at[player_tile_y, player_tile_x].set(1),
+            state.pellets_collected
+        )
         
         # Activate frightened mode if power pellet eaten
         power_pellet_eaten = power_pellet_collected
@@ -621,10 +728,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts=new_ghosts_final,
             score=new_score,
             lives=final_lives,
-            player_x=new_player_x,
-            player_y=new_player_y,
             frightened_timer=new_frightened_timer,
             dots_remaining=new_dots_remaining,
+            pellets_collected=new_pellets_collected,
         )
 
     def _update_timers(self, state: PacmanState) -> PacmanState:
@@ -739,7 +845,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             shape=(210, 160, 3),
             dtype=jnp.uint8
         )
-
+    
     def render(self, state: PacmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
@@ -787,6 +893,9 @@ class PacmanRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
 
+        # Pre-render static maze background (walls and ghost house)
+        self.maze_background = self._create_maze_background()
+
     def _create_default_maze(self) -> jnp.ndarray:
         """Create a classic Pacman maze layout (same as in JaxPacman)."""
         maze = np.zeros((31, 28), dtype=np.int32)
@@ -829,12 +938,76 @@ class PacmanRenderer(JAXGameRenderer):
                 maze[row_idx, col_idx] = int(char)
         
         return jnp.array(maze, dtype=jnp.int32)
+    
+    def _create_maze_background(self) -> jnp.ndarray:
+        """Create static background with maze walls."""
+        import numpy as np
+        bg = np.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=np.uint8)
+        
+        for row in range(self.consts.MAZE_HEIGHT):
+            for col in range(self.consts.MAZE_WIDTH):
+                tile_val = int(self.consts.MAZE_LAYOUT[row, col])
+                if tile_val == 1:  # Wall
+                    x, y = col * self.consts.TILE_SIZE, row * self.consts.TILE_SIZE
+                    for dy in range(self.consts.TILE_SIZE):
+                        for dx in range(self.consts.TILE_SIZE):
+                            px, py = x + dx, y + dy
+                            if px < self.consts.WIDTH and py < self.consts.HEIGHT:
+                                bg[py, px] = [33, 33, 222]  # Blue walls
+        
+        return jnp.array(bg, dtype=jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        # Init raster
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
-        # Render player
+        # Render maze elements
+        wall_mask = self.SHAPE_MASKS["wall"]
+        pellet_dot_mask = self.SHAPE_MASKS["pellet_dot"]
+        pellet_power_mask = self.SHAPE_MASKS["pellet_power"]
+        
+        # Draw tiles
+        def render_tile(i, raster_state):
+            row = i // self.consts.MAZE_WIDTH
+            col = i % self.consts.MAZE_WIDTH
+            tile_val = self.consts.MAZE_LAYOUT[row, col]
+            x = col * self.consts.TILE_SIZE
+            y = row * self.consts.TILE_SIZE
+            
+            # Draw wall
+            raster_state = jax.lax.cond(
+                tile_val == 1,
+                lambda r: self.jr.render_at(r, x, y, wall_mask),
+                lambda r: r,
+                raster_state
+            )
+            
+            # Draw dot
+            is_dot = jnp.logical_and(tile_val == 2, state.pellets_collected[row, col] == 0)
+            raster_state = jax.lax.cond(
+                is_dot,
+                lambda r: self.jr.render_at(r, x, y, pellet_dot_mask),
+                lambda r: r,
+                raster_state
+            )
+            
+            # Draw power pellet  
+            is_power = jnp.logical_and(tile_val == 3, state.pellets_collected[row, col] == 0)
+            raster_state = jax.lax.cond(
+                is_power,
+                lambda r: self.jr.render_at(r, x, y, pellet_power_mask),
+                lambda r: r,
+                raster_state
+            )
+            
+            return raster_state
+        
+        # Draw all tiles
+        num_tiles = self.consts.MAZE_HEIGHT * self.consts.MAZE_WIDTH
+        raster = jax.lax.fori_loop(0, num_tiles, render_tile, raster)
+        
+        # Draw player
         player_dir_idx = state.player_direction
         player_frame = state.player_animation_frame
         # Player sprite indices: 0-1=right, 2-3=left, 4-5=up, 6-7=down
@@ -842,7 +1015,8 @@ class PacmanRenderer(JAXGameRenderer):
         player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
         
-        # Render ghosts - render each one individually
+        
+        # Draw ghosts
         frightened_frame = (state.step_counter // 10) % 2
         
         # Ghost 0 - Blinky
@@ -893,10 +1067,7 @@ class PacmanRenderer(JAXGameRenderer):
         )
         raster = self.jr.render_at(raster, g3[0], g3[1], g3_mask)
         
-        # Render pellets based on maze layout
-        # Only render if maze layout exists
-        # Note: Pellet rendering is skipped for now due to JAX control flow limitations
-        # In a proper implementation, pellets would be tracked in state and rendered selectively
+
         
         # Render score
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
