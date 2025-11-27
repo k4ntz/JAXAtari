@@ -28,6 +28,12 @@ ITEM_POISON = 2
 ITEM_WIDTH = 6
 ITEM_HEIGHT = 6
 
+# Bullet configuration
+MAX_BULLETS = 5
+BULLET_WIDTH = 4
+BULLET_HEIGHT = 4
+BULLET_SPEED = 4
+
 
 class DarkChambersConstants(NamedTuple):
     """Game constants and configuration."""
@@ -45,6 +51,7 @@ class DarkChambersConstants(NamedTuple):
     HEART_COLOR: Tuple[int, int, int] = (220, 30, 30)
     POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
     
     # Sizes
     PLAYER_WIDTH: int = 12
@@ -59,18 +66,26 @@ class DarkChambersConstants(NamedTuple):
     PLAYER_START_Y: int = 24
     
     # Health mechanics
-    MAX_HEALTH: int = 10
-    STARTING_HEALTH: int = 5
-    HEALTH_GAIN: int = 1
-    POISON_DAMAGE: int = 1
+    MAX_HEALTH: int = 1000
+    STARTING_HEALTH: int = 1000
+    HEALTH_GAIN: int = 200
+    POISON_DAMAGE: int = 200
+    ENEMY_MAX_HEALTH: int = 3
+    # Damage when standing in an enemy per step
+    ENEMY_CONTACT_DAMAGE: int = 1
 
 
 class DarkChambersState(NamedTuple):
     """Game state."""
     player_x: chex.Array
     player_y: chex.Array
+    player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
     
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
+    enemy_health: chex.Array     # shape: (NUM_ENEMIES,) - hits remaining
+    
+    bullet_positions: chex.Array  # (MAX_BULLETS, 4) - x, y, dx, dy
+    bullet_active: chex.Array     # (MAX_BULLETS,) - 1=active, 0=inactive
     
     health: chex.Array
     score: chex.Array
@@ -125,6 +140,72 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.consts.HEART_COLOR,        # 4
             self.consts.POISON_COLOR,       # 5
             self.consts.UI_COLOR,           # 6
+            self.consts.BULLET_COLOR,       # 7
+        ], dtype=jnp.uint8)
+
+        # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
+        # 1 = pixel on, 0 = off
+        self.DIGIT_PATTERNS = jnp.array([
+            # 0
+            [[1,1,1],
+             [1,0,1],
+             [1,0,1],
+             [1,0,1],
+             [1,1,1]],
+            # 1
+            [[0,1,0],
+             [1,1,0],
+             [0,1,0],
+             [0,1,0],
+             [1,1,1]],
+            # 2
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [1,0,0],
+             [1,1,1]],
+            # 3
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 4
+            [[1,0,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [0,0,1]],
+            # 5
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 6
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 7
+            [[1,1,1],
+             [0,0,1],
+             [0,1,0],
+             [0,1,0],
+             [0,1,0]],
+            # 8
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 9
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
         ], dtype=jnp.uint8)
         
         # Walls in world coordinates - format: [x, y, width, height]
@@ -189,13 +270,20 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=1
         )
         
-        # Enemies
+        # Enemies (mask out dead ones)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
         enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         num_enemies = enemy_screen_pos.shape[0]
         enemy_sizes = jnp.tile(
             jnp.array([self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT], dtype=jnp.int32)[None, :],
             (num_enemies, 1)
+        )
+        _off = jnp.array([-100, -100], dtype=jnp.int32)
+        enemy_active_mask = (state.enemy_health > 0)
+        enemy_screen_pos = jnp.where(
+            enemy_active_mask[:, None],
+            enemy_screen_pos,
+            _off
         )
         object_raster = self.jr.draw_rects(
             object_raster, 
@@ -252,34 +340,76 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=5
         )
         
-        # Health bar at top-right
-        heart_spacing = ITEM_WIDTH + 2
-        health_count = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
-        max_hearts = self.consts.MAX_HEALTH
-        start_x = self.config.game_dimensions[1] - (max_hearts * heart_spacing) - 4
-        health_indices = jnp.arange(max_hearts)
-        health_x = health_indices * heart_spacing + start_x
-        health_y = jnp.full(max_hearts, 4, dtype=jnp.int32)
-        health_visible = health_indices < health_count
-        health_pos_x = jnp.where(health_visible, health_x, -100)
-        health_positions = jnp.stack([health_pos_x, health_y], axis=1).astype(jnp.int32)
-        health_sizes = jnp.tile(
+        # Health bar (5 boxes of 200 health) top-left
+        health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
+        segment_value = 200
+        segments = health_val // segment_value  # 0..5
+        bar_indices = jnp.arange(5)
+        bar_spacing = ITEM_WIDTH + 2
+        bar_x = 4 + bar_indices * bar_spacing
+        bar_y = jnp.full(5, 4, dtype=jnp.int32)
+        bar_active = bar_indices < segments
+        bar_pos_x = jnp.where(bar_active, bar_x, -100)
+        bar_positions = jnp.stack([bar_pos_x, bar_y], axis=1).astype(jnp.int32)
+        bar_sizes = jnp.tile(
             jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
-            (max_hearts, 1)
+            (5, 1)
         )
         object_raster = self.jr.draw_rects(
             object_raster,
-            positions=health_positions,
-            sizes=health_sizes,
+            positions=bar_positions,
+            sizes=bar_sizes,
+            color_id=4
+        )
+        # Health digits below bar (supports up to 1000)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        thousands = health_val // 1000
+        hundreds = (health_val // 100) % 10
+        tens = (health_val // 10) % 10
+        ones = health_val % 10
+        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([
+            thousands > 0,
+            (thousands > 0) | (hundreds > 0),
+            (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True
+        ])
+        active_count = jnp.sum(active_mask.astype(jnp.int32))
+        start_x_digits = 4  # left aligned
+        start_y_digits = 4 + ITEM_HEIGHT + 2  # below bar
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        base_x = jnp.where(active_mask, start_x_digits + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = start_y_digits + grid_y
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        pixel_sizes = jnp.ones((digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=digit_positions,
+            sizes=pixel_sizes,
             color_id=4
         )
         
-        # Score display at top-left (static value for now)
-        max_score_units = 20
+        # Score display moved to top-right (bar) and numeric score below
+        max_score_units = 10  # Reduced to fit on right side
         score_units = jnp.clip(state.score // 10, 0, max_score_units).astype(jnp.int32)
         score_spacing = ITEM_WIDTH + 2
         score_indices = jnp.arange(max_score_units)
-        score_x = score_indices * score_spacing + 4
+        total_score_width = max_score_units * score_spacing
+        score_start_x = self.config.game_dimensions[1] - total_score_width - 4
+        score_x = score_start_x + score_indices * score_spacing
         score_y = jnp.full(max_score_units, 4, dtype=jnp.int32)
         score_visible = score_indices < score_units
         score_pos_x = jnp.where(score_visible, score_x, -100)
@@ -293,6 +423,64 @@ class DarkChambersRenderer(JAXGameRenderer):
             positions=score_positions,
             sizes=score_sizes,
             color_id=6
+        )
+        # Numeric score digits (0-9999) below score bar
+        score_val = jnp.clip(state.score, 0, 9999).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        thousands = score_val // 1000
+        hundreds = (score_val // 100) % 10
+        tens = (score_val // 10) % 10
+        ones = score_val % 10
+        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([
+            thousands > 0,
+            (thousands > 0) | (hundreds > 0),
+            (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True
+        ])
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        base_x = jnp.where(active_mask, score_start_x + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = (4 + ITEM_HEIGHT + 2) + grid_y  # below score bar
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        score_digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        score_digit_sizes = jnp.ones((score_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=score_digit_positions,
+            sizes=score_digit_sizes,
+            color_id=6
+        )
+        
+        # Bullets
+        bullet_world_pos = state.bullet_positions[:, :2].astype(jnp.int32)
+        bullet_screen_pos = (bullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        bullet_mask = state.bullet_active == 1
+        masked_bullet_pos = jnp.where(
+            bullet_mask[:, None],
+            bullet_screen_pos,
+            off_screen
+        )
+        bullet_sizes = jnp.tile(
+            jnp.array([BULLET_WIDTH, BULLET_HEIGHT], dtype=jnp.int32)[None, :],
+            (MAX_BULLETS, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=masked_bullet_pos,
+            sizes=bullet_sizes,
+            color_id=7
         )
         
         # Convert to RGB
@@ -344,7 +532,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         state = DarkChambersState(
             player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+            player_direction=jnp.array(0, dtype=jnp.int32),
             enemy_positions=enemy_positions,
+            enemy_health=jnp.full(NUM_ENEMIES, self.consts.ENEMY_MAX_HEALTH, dtype=jnp.int32),
+            bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
+            bullet_active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
             health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32),
             item_positions=item_positions,
@@ -360,6 +552,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def step(self, state: DarkChambersState, action: int) -> Tuple[DarkChambersObservation, DarkChambersState, float, bool, DarkChambersInfo]:
         """Step forward."""
         a = jnp.asarray(action)
+        
+        # Track player direction from action
+        new_direction = jnp.where(a == Action.RIGHT, 0,
+                        jnp.where(a == Action.LEFT, 1,
+                        jnp.where(a == Action.UP, 2,
+                        jnp.where(a == Action.DOWN, 3, state.player_direction))))
+        
         dx = jnp.where(a == Action.LEFT, -self.consts.PLAYER_SPEED, 
                jnp.where(a == Action.RIGHT, self.consts.PLAYER_SPEED, 0))
         dy = jnp.where(a == Action.UP, -self.consts.PLAYER_SPEED, 
@@ -392,11 +591,77 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         collide_y = collides(new_x, try_y)
         new_y = jnp.where(~collide_y, try_y, state.player_y)
         
-        # Enemy random walk
+        # Shooting - spawn bullet on FIRE action
+        fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE)
+        
+        # Find first inactive bullet slot
+        first_inactive = jnp.argmax(state.bullet_active == 0)
+        can_spawn = jnp.any(state.bullet_active == 0)
+        
+        # Direction vectors based on player direction
+        dir_x = jnp.where(new_direction == 0, BULLET_SPEED,
+                jnp.where(new_direction == 1, -BULLET_SPEED, 0))
+        dir_y = jnp.where(new_direction == 2, -BULLET_SPEED,
+                jnp.where(new_direction == 3, BULLET_SPEED, 0))
+        
+        # Spawn position offset from player center
+        spawn_x = new_x + self.consts.PLAYER_WIDTH // 2
+        spawn_y = new_y + self.consts.PLAYER_HEIGHT // 2
+        
+        # Create new bullet
+        new_bullet = jnp.array([spawn_x, spawn_y, dir_x, dir_y], dtype=jnp.int32)
+        
+        # Update bullets array
+        should_spawn = fire_pressed & can_spawn
+        new_bullet_positions = jnp.where(
+            jnp.arange(MAX_BULLETS)[:, None] == first_inactive,
+            jnp.where(should_spawn, new_bullet, state.bullet_positions),
+            state.bullet_positions
+        )
+        new_bullet_active = jnp.where(
+            (jnp.arange(MAX_BULLETS) == first_inactive) & should_spawn,
+            1,
+            state.bullet_active
+        )
+        
+        # Move existing bullets
+        moved_bullets = state.bullet_positions + jnp.concatenate([state.bullet_positions[:, 2:], jnp.zeros((MAX_BULLETS, 2), dtype=jnp.int32)], axis=1)
+        
+        # Check bounds and deactivate out-of-bounds bullets
+        in_bounds = (moved_bullets[:, 0] >= 0) & (moved_bullets[:, 0] < self.consts.WORLD_WIDTH) & \
+                    (moved_bullets[:, 1] >= 0) & (moved_bullets[:, 1] < self.consts.WORLD_HEIGHT)
+        
+        updated_bullet_positions = jnp.where(
+            state.bullet_active[:, None] == 1,
+            moved_bullets,
+            state.bullet_positions
+        )
+        updated_bullet_active = state.bullet_active & in_bounds.astype(jnp.int32)
+        
+        # Merge spawned and moved bullets
+        final_bullet_positions = jnp.where(
+            should_spawn & (jnp.arange(MAX_BULLETS)[:, None] == first_inactive),
+            new_bullet,
+            updated_bullet_positions
+        )
+        final_bullet_active = jnp.where(
+            should_spawn & (jnp.arange(MAX_BULLETS) == first_inactive),
+            1,
+            updated_bullet_active
+        )
+        
+        # Enemy random walk (dead enemies stay put and never move again)
         rng, subkey = jax.random.split(state.key)
         enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
+        enemy_alive = state.enemy_health > 0
         
         prop_enemy_positions = state.enemy_positions + enemy_deltas
+        # Keep dead enemies exactly where they are (typically [0,0])
+        prop_enemy_positions = jnp.where(
+            enemy_alive[:, None],
+            prop_enemy_positions,
+            state.enemy_positions
+        )
         prop_enemy_positions = jnp.clip(
             prop_enemy_positions,
             jnp.array([0, 0]),
@@ -410,6 +675,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             return jnp.any(e_overlap_x & e_overlap_y)
         
         enemy_collisions = jax.vmap(check_enemy_collision)(prop_enemy_positions)
+        # Dead enemies cannot collide with walls or move
+        enemy_collisions = enemy_collisions & enemy_alive
         new_enemy_positions = jnp.where(
             enemy_collisions[:, None],
             state.enemy_positions,
@@ -436,12 +703,66 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Remove collected items
         new_item_active = jnp.where(item_collisions, 0, state.item_active)
         
+        # Bullet-enemy collision detection
+        def check_bullet_enemy_collision(bullet_pos, enemy_pos):
+            """Check if bullet hits enemy."""
+            b_overlap_x = (bullet_pos[0] <= (enemy_pos[0] + self.consts.ENEMY_WIDTH - 1)) & \
+                         ((bullet_pos[0] + BULLET_WIDTH - 1) >= enemy_pos[0])
+            b_overlap_y = (bullet_pos[1] <= (enemy_pos[1] + self.consts.ENEMY_HEIGHT - 1)) & \
+                         ((bullet_pos[1] + BULLET_HEIGHT - 1) >= enemy_pos[1])
+            return b_overlap_x & b_overlap_y
+        
+        # Vectorized collision for all bullet-enemy pairs
+        def check_all_enemies_for_bullet(bullet_idx):
+            bullet_pos = final_bullet_positions[bullet_idx]
+            is_active = final_bullet_active[bullet_idx] == 1
+            collisions = jax.vmap(lambda e_pos: check_bullet_enemy_collision(bullet_pos, e_pos))(new_enemy_positions)
+            return collisions & is_active & (state.enemy_health > 0)
+        
+        # Check all bullets against all enemies
+        all_collisions = jax.vmap(check_all_enemies_for_bullet)(jnp.arange(MAX_BULLETS))
+        
+        # Any bullet hit per enemy
+        enemy_hit = jnp.any(all_collisions, axis=0)
+        
+        # Reduce enemy health
+        new_enemy_health = jnp.where(enemy_hit, state.enemy_health - 1, state.enemy_health)
+        
+        # Deactivate dead enemies (health <= 0)
+        enemies_alive = new_enemy_health > 0
+        final_enemy_positions = jnp.where(
+            enemies_alive[:, None],
+            new_enemy_positions,
+            jnp.array([0, 0])  # Move dead enemies off-screen
+        )
+        
+        # Deactivate bullets that hit
+        bullet_hit_any = jnp.any(all_collisions, axis=1)
+        final_bullet_active = final_bullet_active & (~bullet_hit_any).astype(jnp.int32)
+        
+        # Killing/shooting does not affect score
+        final_score = new_score
+
+        # Enemy contact damage (after all movements & deaths resolved)
+        alive_enemies_mask = new_enemy_health > 0
+        enemy_x = final_enemy_positions[:, 0]
+        enemy_y = final_enemy_positions[:, 1]
+        overlap_x = (new_x <= (enemy_x + self.consts.ENEMY_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= enemy_x)
+        overlap_y = (new_y <= (enemy_y + self.consts.ENEMY_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= enemy_y)
+        enemy_contact = jnp.any(overlap_x & overlap_y & alive_enemies_mask)
+        contact_damage = enemy_contact.astype(jnp.int32) * self.consts.ENEMY_CONTACT_DAMAGE
+        final_health = jnp.clip(new_health - contact_damage, 0, self.consts.MAX_HEALTH)
+        
         new_state = DarkChambersState(
             player_x=new_x,
             player_y=new_y,
-            enemy_positions=new_enemy_positions,
-            health=new_health,
-            score=new_score,
+            player_direction=new_direction,
+            enemy_positions=final_enemy_positions,
+            enemy_health=new_enemy_health,
+            bullet_positions=final_bullet_positions,
+            bullet_active=final_bullet_active,
+            health=final_health,
+            score=final_score,
             item_positions=state.item_positions,
             item_types=state.item_types,
             item_active=new_item_active,
@@ -472,7 +793,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 shape=(NUM_ENEMIES, 5),
                 dtype=jnp.float32
             ),
-            "health": spaces.Box(low=0, high=self.consts.MAX_HEALTH, shape=(), dtype=jnp.int32),
+            "health": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=10**9, shape=(), dtype=jnp.int32),
             "step": spaces.Box(low=0, high=10**9, shape=(), dtype=jnp.int32),
         })
@@ -496,7 +817,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Pack enemy data
         enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float32)
         enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
-        enemy_active = jnp.ones(NUM_ENEMIES, dtype=jnp.float32)
+        enemy_active = (state.enemy_health > 0).astype(jnp.float32)
         
         enemies_array = jnp.stack([
             state.enemy_positions[:, 0].astype(jnp.float32),
