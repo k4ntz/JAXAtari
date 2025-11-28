@@ -15,10 +15,10 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
-    chicken_width: int = 6
-    chicken_height: int = 8
+    chicken_width: int = 8
+    chicken_height: int = 10
     start_chicken_x: int = 44  # Fixed x position
-    start_chicken_y: int = 170  # Fixed y position
+    start_chicken_y: int = 166  # Fixed y position
     chicken_speed: int = 2  # constant downward speed
 
     obstacle_width: int = 8
@@ -28,9 +28,9 @@ class JourneyEscapeConstants(NamedTuple):
 
     # border of the valid game space
     top_border: int = 33
-    bottom_border: int = screen_width + 3
+    bottom_border: int = screen_height - 53
     left_border: int = 8
-    right_border: int = screen_width - 22
+    right_border: int = screen_width - 25
 
     starting_score: int = 99
 
@@ -42,12 +42,12 @@ class JourneyEscapeConstants(NamedTuple):
     # predefined groups: [type, amount, spacing in px]
     MAX_OBS = 64
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
-        (0, 1, 0),
-        (0, 4, 0),
-        (0, 2, 35),
-        (0, 2, 55),
-        (0, 3, 10),
-        (0, 3, 25),
+        (0, 4, 0), # fence
+        (1, 1, 0), # lightbulb
+        (2, 2, 55), # face
+        (3, 3, 10), # heart
+        (3, 3, 25), # heart
+        (4, 2, 20), # blue item
     )
 
 
@@ -64,6 +64,7 @@ class JourneyEscapeState(NamedTuple):
 
     row_timer: chex.Array  # int32
     obstacles: chex.Array  # (MAX_OBS, 5) -> x, y, w, h, type_idx | [pool]
+    obstacle_frames: chex.Array
     rng_key: chex.Array  # PRNGKey
 
     hit_cooldown: chex.Array  # int32
@@ -116,6 +117,7 @@ class JaxJourneyEscape(
             game_over=jnp.array(False, dtype=jnp.bool_),
             row_timer=jnp.array(0, dtype=jnp.int32),
             obstacles=empty_boxes,
+            obstacle_frames=jnp.array(0, dtype=jnp.int32),
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
         )
@@ -273,6 +275,8 @@ class JaxJourneyEscape(
             no_spawn,
             operand=(boxes, state.rng_key)
         )
+
+        new_obstacle_frames = (state.obstacle_frames + 1) % 8
 
         # --- COLLISIONS---
 
@@ -445,6 +449,7 @@ class JaxJourneyEscape(
             game_over=game_over,
             row_timer=new_row_timer.astype(jnp.int32),
             obstacles=boxes.astype(jnp.int32),  # updated pool
+            obstacle_frames=new_obstacle_frames.astype(jnp.int32),
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
         )
@@ -612,16 +617,20 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                           'player_run_right_0.npy', 'player_run_right_1.npy',
                           'player_run_left_0.npy', 'player_run_left_1.npy']
             },
-            {'name': 'car_dark_red', 'type': 'single', 'file': 'car_dark_red.npy'},
-            {'name': 'car_light_green', 'type': 'single', 'file': 'car_light_green.npy'},
-            {'name': 'car_dark_green', 'type': 'single', 'file': 'car_dark_green.npy'},
-            {'name': 'car_light_red', 'type': 'single', 'file': 'car_light_red.npy'},
-            {'name': 'car_blue', 'type': 'single', 'file': 'car_blue.npy'},
-            {'name': 'car_brown', 'type': 'single', 'file': 'car_brown.npy'},
-            {'name': 'car_light_blue', 'type': 'single', 'file': 'car_light_blue.npy'},
-            {'name': 'car_red', 'type': 'single', 'file': 'car_red.npy'},
-            {'name': 'car_green', 'type': 'single', 'file': 'car_green.npy'},
-            {'name': 'car_yellow', 'type': 'single', 'file': 'car_yellow.npy'},
+            {
+                'name': 'obstacle_face', 'type': 'group', 
+                'files': ['obs_face_0.npy', 'obs_face_1.npy']
+            },
+            {
+                'name': 'obstacle_heart', 'type': 'group', 
+                'files': ['obs_heart_0.npy', 'obs_heart_1.npy']
+            },
+            {
+                'name': 'obstacle_item', 'type': 'group', 
+                'files': ['obs_item_0.npy', 'obs_item_1.npy']
+            },
+            {'name': 'obstacle_fence', 'type': 'single', 'file': 'obs_fence.npy'},
+            {'name': 'obstacle_light', 'type': 'single', 'file':'obs_light.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         ]
 
@@ -641,18 +650,31 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
         # We consider entries with h > 0 as "active".
         obs_boxes = state.obstacles  # (MAX_OBS, 5)
-        car_mask = self.SHAPE_MASKS["car_light_green"]  # placeholder sprite for all obstacles
+
+        MASK_TABLE = [
+            lambda frame: self.SHAPE_MASKS["obstacle_fence"],
+            lambda frame: self.SHAPE_MASKS["obstacle_light"],
+            lambda frame: self.SHAPE_MASKS["obstacle_face"][frame],
+            lambda frame: self.SHAPE_MASKS["obstacle_heart"][frame],
+            lambda frame: self.SHAPE_MASKS["obstacle_item"][frame],
+        ]
 
         # Guards for the case MAX_OBS == 0 (unlikely, but keeps it robust)
-        def draw_one(r, box):
+        def draw_one(r, box, obs_type, obs_frame_idx):
             # box[0]=x, box[1]=y; we ignore w/h/type for rendering here
-            return self.jr.render_at_clipped(r, box[0], box[1], car_mask)
-
+            mask = jax.lax.switch(obs_type, MASK_TABLE, obs_frame_idx) 
+            return self.jr.render_at_clipped(r, box[0], box[1], mask)
+        
         def body(i, r):
             # If h > 0, draw; else keep raster unchanged
             box = obs_boxes[i]
             is_active = box[3] > 0
-            return jax.lax.cond(is_active, lambda rr: draw_one(rr, box), lambda rr: rr, r)
+
+            # get obstacle type and obstacle frame index for correct animation
+            obs_type = obs_boxes[i, 4]
+            obs_frame_idx = jnp.where(state.obstacle_frames >= 4, 0, 1)
+
+            return jax.lax.cond(is_active, lambda rr: draw_one(rr, box, obs_type, obs_frame_idx), lambda rr: rr, r)
 
         # Iterate all possible slots in a JAX-friendly loop
         raster = jax.lax.fori_loop(0, obs_boxes.shape[0], body, raster)
@@ -669,8 +691,9 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index,
                                                 num_to_render, spacing=8)
 
-        # Render black bar on the left side
+        # Render black bar on the left and right side
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
         raster = self.jr.render_at(raster, 0, 0, black_bar_mask)
+        raster = self.jr.render_at(raster, self.consts.screen_width, 0, black_bar_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
