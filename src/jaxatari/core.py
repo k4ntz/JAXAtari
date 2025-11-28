@@ -32,6 +32,7 @@ GAME_MODULES = {
     "lasergates": "jaxatari.games.jax_lasergates",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "pacman": "jaxatari.games.jax_pacman",
+    "pacman_simple": "jaxatari.games.jax_pacman_simple",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
     "riverraid": "jaxatari.games.jax_riverraid",
