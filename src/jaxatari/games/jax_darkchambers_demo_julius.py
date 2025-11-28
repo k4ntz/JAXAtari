@@ -21,10 +21,25 @@ WORLD_H = GAME_H * 2
 
 NUM_ENEMIES = 5
 
+# Enemy types (5 = strongest, 1 = weakest)
+ENEMY_GRIM_REAPER = 5  # Strongest
+ENEMY_WIZARD = 4
+ENEMY_SKELETON = 3
+ENEMY_WRAITH = 2
+ENEMY_ZOMBIE = 1  # Weakest
+
 # Item configuration
-NUM_ITEMS = 8
-ITEM_HEART = 1
-ITEM_POISON = 2
+NUM_ITEMS = 20  # Increased variety
+# Item type codes
+ITEM_HEART = 1          # +health, no points
+ITEM_POISON = 2         # -4 health, no points
+ITEM_TRAP = 3           # -6 health, no points
+ITEM_STRONGBOX = 4      # +100 points
+ITEM_SILVER_CHALICE = 5 # +500 points
+ITEM_AMULET = 6         # +1000 points
+ITEM_GOLD_CHALICE = 7   # +3000 points
+
+# Default base size (unused now, kept for reference)
 ITEM_WIDTH = 6
 ITEM_HEIGHT = 6
 
@@ -46,10 +61,17 @@ class DarkChambersConstants(NamedTuple):
     # Color scheme
     BACKGROUND_COLOR: Tuple[int, int, int] = (8, 10, 20)
     PLAYER_COLOR: Tuple[int, int, int] = (200, 80, 60)
-    ENEMY_COLOR: Tuple[int, int, int] = (80, 200, 120)
+    # Enemy colors by type (from weakest to strongest)
+    ZOMBIE_COLOR: Tuple[int, int, int] = (100, 100, 100)  # Gray
+    WRAITH_COLOR: Tuple[int, int, int] = (180, 180, 220)  # Light purple
+    SKELETON_COLOR: Tuple[int, int, int] = (220, 220, 200)  # Bone white
+    WIZARD_COLOR: Tuple[int, int, int] = (150, 80, 200)  # Purple
+    GRIM_REAPER_COLOR: Tuple[int, int, int] = (50, 50, 50)  # Dark gray/black
     WALL_COLOR: Tuple[int, int, int] = (150, 120, 70)
     HEART_COLOR: Tuple[int, int, int] = (220, 30, 30)
-    POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)
+    POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)  # Green poison
+    TRAP_COLOR: Tuple[int, int, int] = (120, 70, 20)     # Brown trap
+    TREASURE_COLOR: Tuple[int, int, int] = (255, 220, 0) # Yellow for all treasures
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
     BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
     
@@ -65,14 +87,26 @@ class DarkChambersConstants(NamedTuple):
     PLAYER_START_X: int = 24
     PLAYER_START_Y: int = 24
     
-    # Health mechanics
-    MAX_HEALTH: int = 1000
-    STARTING_HEALTH: int = 1000
-    HEALTH_GAIN: int = 200
-    POISON_DAMAGE: int = 200
-    ENEMY_MAX_HEALTH: int = 3
-    # Damage when standing in an enemy per step
-    ENEMY_CONTACT_DAMAGE: int = 1
+    # Health mechanics (scaled to classic 31 strength units)
+    MAX_HEALTH: int = 31
+    STARTING_HEALTH: int = 31
+    HEALTH_GAIN: int = 10  # Heart potion gain
+    POISON_DAMAGE: int = 4   # Light damage
+    TRAP_DAMAGE: int = 6     # Heavier damage
+    
+    # Enemy damage by type (contact damage per step)
+    ZOMBIE_DAMAGE: int = 1  # Weakest
+    WRAITH_DAMAGE: int = 1
+    SKELETON_DAMAGE: int = 3
+    WIZARD_DAMAGE: int = 4
+    GRIM_REAPER_DAMAGE: int = 5  # Strongest
+    
+    # Enemy scoring (points awarded when killed)
+    ZOMBIE_POINTS: int = 10  # Weakest - explodes when killed
+    WRAITH_POINTS: int = 20
+    SKELETON_POINTS: int = 30
+    WIZARD_POINTS: int = 50
+    GRIM_REAPER_POINTS: int = 100  # Strongest
 
 
 class DarkChambersState(NamedTuple):
@@ -82,7 +116,8 @@ class DarkChambersState(NamedTuple):
     player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
     
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
-    enemy_health: chex.Array     # shape: (NUM_ENEMIES,) - hits remaining
+    enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
+    enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
     
     bullet_positions: chex.Array  # (MAX_BULLETS, 4) - x, y, dx, dy
     bullet_active: chex.Array     # (MAX_BULLETS,) - 1=active, 0=inactive
@@ -135,12 +170,18 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.PALETTE = jnp.array([
             self.consts.BACKGROUND_COLOR,  # 0
             self.consts.PLAYER_COLOR,       # 1
-            self.consts.ENEMY_COLOR,        # 2
-            self.consts.WALL_COLOR,         # 3
-            self.consts.HEART_COLOR,        # 4
-            self.consts.POISON_COLOR,       # 5
-            self.consts.UI_COLOR,           # 6
-            self.consts.BULLET_COLOR,       # 7
+            self.consts.ZOMBIE_COLOR,       # 2
+            self.consts.WRAITH_COLOR,       # 3
+            self.consts.SKELETON_COLOR,     # 4
+            self.consts.WIZARD_COLOR,       # 5
+            self.consts.GRIM_REAPER_COLOR,  # 6
+            self.consts.WALL_COLOR,         # 7
+            self.consts.HEART_COLOR,        # 8
+            self.consts.POISON_COLOR,       # 9
+            self.consts.UI_COLOR,           # 10
+            self.consts.BULLET_COLOR,       # 11
+            self.consts.TREASURE_COLOR,     # 12 (treasures)
+            self.consts.TRAP_COLOR,         # 13 (trap)
         ], dtype=jnp.uint8)
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
@@ -227,6 +268,33 @@ class DarkChambersRenderer(JAXGameRenderer):
             [280, 120, 8, 160],
             [160, 300, 8, 80],
         ], dtype=jnp.int32)
+        
+        # Per-item sizes (width, height) indexed by item type code
+        # Index 0 unused placeholder for alignment
+        self.ITEM_TYPE_SIZES = jnp.array([
+            [0, 0],                 # 0 (unused)
+            [6, 6],                 # 1 HEART
+            [6, 6],                 # 2 POISON
+            [6, 6],                 # 3 TRAP
+            [7, 7],                 # 4 STRONGBOX (small)
+            [9, 9],                 # 5 SILVER CHALICE (medium)
+            [11, 11],               # 6 AMULET (large)
+            [13, 13],               # 7 GOLD CHALICE (largest)
+        ], dtype=jnp.int32)
+
+        # Color id mapping per item type (aligning with palette above)
+        self.ITEM_TYPE_COLOR_IDS = jnp.array([
+            0,   # unused
+            8,   # HEART (red)
+            9,   # POISON (green)
+            13,  # TRAP (brown)
+            12,  # STRONGBOX (yellow)
+            12,  # SILVER CHALICE (yellow)
+            12,  # AMULET (yellow)
+            12,  # GOLD CHALICE (yellow)
+        ], dtype=jnp.int32)
+        # Python constants (avoid tracing int() on JAX 0-D arrays inside jit)
+        self.ITEM_TYPE_COLOR_IDS_PY = [8, 9, 13, 12, 12, 12, 12]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
         """Render current game state."""
@@ -255,7 +323,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster, 
             positions=wall_positions, 
             sizes=wall_sizes, 
-            color_id=3
+            color_id=7
         )
         
         # Player
@@ -270,7 +338,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=1
         )
         
-        # Enemies (mask out dead ones)
+        # Enemies (render by type with different colors, mask out dead ones)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
         enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         num_enemies = enemy_screen_pos.shape[0]
@@ -279,18 +347,27 @@ class DarkChambersRenderer(JAXGameRenderer):
             (num_enemies, 1)
         )
         _off = jnp.array([-100, -100], dtype=jnp.int32)
-        enemy_active_mask = (state.enemy_health > 0)
-        enemy_screen_pos = jnp.where(
+        enemy_active_mask = (state.enemy_active == 1)
+        masked_enemy_pos = jnp.where(
             enemy_active_mask[:, None],
             enemy_screen_pos,
             _off
         )
-        object_raster = self.jr.draw_rects(
-            object_raster, 
-            positions=enemy_screen_pos, 
-            sizes=enemy_sizes, 
-            color_id=2
-        )
+        
+        # Draw each enemy type separately with its color
+        for enemy_type in range(1, 6):  # 1=zombie to 5=grim_reaper
+            type_mask = (state.enemy_types == enemy_type) & enemy_active_mask
+            type_positions = jnp.where(
+                type_mask[:, None],
+                masked_enemy_pos,
+                _off
+            )
+            object_raster = self.jr.draw_rects(
+                object_raster,
+                positions=type_positions,
+                sizes=enemy_sizes,
+                color_id=enemy_type + 1  # +1 because palette starts at 0, zombie=2, wraith=3, etc.
+            )
         
         # Items - mask inactive ones by moving off-screen
         items_world_pos = state.item_positions.astype(jnp.int32)
@@ -304,46 +381,26 @@ class DarkChambersRenderer(JAXGameRenderer):
             off_screen
         )
         
-        # Hearts
-        heart_mask = (state.item_types == ITEM_HEART) & (state.item_active == 1)
-        heart_pos = jnp.where(
-            heart_mask[:, None],
-            masked_item_pos,
-            off_screen
-        )
-        heart_sizes = jnp.tile(
-            jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
-            (NUM_ITEMS, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=heart_pos,
-            sizes=heart_sizes,
-            color_id=4
-        )
+        # Draw items by type using size and color mappings
+        def draw_item_type(raster, t, positions_world):
+            mask = (state.item_types == t) & (state.item_active == 1)
+            pos = jnp.where(mask[:, None], positions_world, off_screen)
+            size_wh = self.ITEM_TYPE_SIZES[t]
+            sizes = jnp.tile(size_wh[None, :], (NUM_ITEMS, 1))
+            color_id_py = self.ITEM_TYPE_COLOR_IDS_PY[t-1]  # t in 1..7
+            return self.jr.draw_rects(
+                raster,
+                positions=pos,
+                sizes=sizes,
+                color_id=color_id_py
+            )
+        for t in range(1, 8):  # 1..7 item types
+            object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
-        # Poison
-        poison_mask = (state.item_types == ITEM_POISON) & (state.item_active == 1)
-        poison_pos = jnp.where(
-            poison_mask[:, None],
-            masked_item_pos,
-            off_screen
-        )
-        poison_sizes = jnp.tile(
-            jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
-            (NUM_ITEMS, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=poison_pos,
-            sizes=poison_sizes,
-            color_id=5
-        )
-        
-        # Health bar (5 boxes of 200 health) top-left
+        # Health bar (5 boxes proportional to max health=31) top-left
         health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
-        segment_value = 200
-        segments = health_val // segment_value  # 0..5
+        # Number of filled segments = floor(health * 5 / MAX_HEALTH)
+        segments = (health_val * 5) // self.consts.MAX_HEALTH  # 0..5
         bar_indices = jnp.arange(5)
         bar_spacing = ITEM_WIDTH + 2
         bar_x = 4 + bar_indices * bar_spacing
@@ -359,7 +416,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=bar_positions,
             sizes=bar_sizes,
-            color_id=4
+            color_id=8
         )
         # Health digits below bar (supports up to 1000)
         digit_width = 3
@@ -399,7 +456,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=digit_positions,
             sizes=pixel_sizes,
-            color_id=4
+            color_id=8
         )
         
         # Score display moved to top-right (bar) and numeric score below
@@ -422,7 +479,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=score_positions,
             sizes=score_sizes,
-            color_id=6
+            color_id=10
         )
         # Numeric score digits (0-9999) below score bar
         score_val = jnp.clip(state.score, 0, 9999).astype(jnp.int32)
@@ -460,7 +517,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=score_digit_positions,
             sizes=score_digit_sizes,
-            color_id=6
+            color_id=10
         )
         
         # Bullets
@@ -480,7 +537,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=masked_bullet_pos,
             sizes=bullet_sizes,
-            color_id=7
+            color_id=11
         )
         
         # Convert to RGB
@@ -511,6 +568,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )
         enemy_positions = jnp.stack([enemy_x_positions, enemy_y_positions], axis=1)
         
+        # Spawn enemies with random types (favor stronger types)
+        key, subkey = jax.random.split(key)
+        enemy_types = jax.random.randint(
+            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32
+        )  # Random types from 2 (Wraith) to 5 (Grim Reaper)
+        enemy_active = jnp.ones(NUM_ENEMIES, dtype=jnp.int32)
+        
         # Spawn items
         key, subkey = jax.random.split(key)
         item_x_positions = jax.random.randint(
@@ -522,11 +586,28 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )
         item_positions = jnp.stack([item_x_positions, item_y_positions], axis=1)
         
-        # 50/50 split between hearts and poison
+        # Weighted distribution of item types (more traps)
         key, subkey = jax.random.split(key)
-        item_types = jax.random.choice(
-            subkey, jnp.array([ITEM_HEART, ITEM_POISON]), shape=(NUM_ITEMS,)
-        )
+        all_item_types = jnp.array([
+            ITEM_HEART,          # health +10
+            ITEM_POISON,         # -4 health
+            ITEM_TRAP,           # -6 health (increase frequency)
+            ITEM_STRONGBOX,      # 100 pts
+            ITEM_SILVER_CHALICE, # 500 pts
+            ITEM_AMULET,         # 1000 pts
+            ITEM_GOLD_CHALICE,   # 3000 pts
+        ], dtype=jnp.int32)
+        # Probabilities sum to 1.0; traps boosted
+        spawn_probs = jnp.array([
+            0.22,  # heart
+            0.12,  # poison
+            0.20,  # trap (increased)
+            0.14,  # strongbox
+            0.12,  # silver chalice
+            0.10,  # amulet
+            0.10,  # gold chalice
+        ], dtype=jnp.float32)
+        item_types = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS,), p=spawn_probs)
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
         
         state = DarkChambersState(
@@ -534,7 +615,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
             player_direction=jnp.array(0, dtype=jnp.int32),
             enemy_positions=enemy_positions,
-            enemy_health=jnp.full(NUM_ENEMIES, self.consts.ENEMY_MAX_HEALTH, dtype=jnp.int32),
+            enemy_types=enemy_types,
+            enemy_active=enemy_active,
             bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
             bullet_active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
             health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
@@ -592,17 +674,35 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         new_y = jnp.where(~collide_y, try_y, state.player_y)
         
         # Shooting - spawn bullet on FIRE action
-        fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE)
+        fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE) | \
+                       (a == Action.UPRIGHTFIRE) | (a == Action.UPLEFTFIRE) | (a == Action.DOWNRIGHTFIRE) | (a == Action.DOWNLEFTFIRE)
         
         # Find first inactive bullet slot
         first_inactive = jnp.argmax(state.bullet_active == 0)
         can_spawn = jnp.any(state.bullet_active == 0)
         
-        # Direction vectors based on player direction
-        dir_x = jnp.where(new_direction == 0, BULLET_SPEED,
-                jnp.where(new_direction == 1, -BULLET_SPEED, 0))
-        dir_y = jnp.where(new_direction == 2, -BULLET_SPEED,
-                jnp.where(new_direction == 3, BULLET_SPEED, 0))
+        # Direction vectors based on fire action (not player direction)
+        # Cardinal directions
+        dir_x = jnp.where(a == Action.RIGHTFIRE, BULLET_SPEED,
+                jnp.where(a == Action.LEFTFIRE, -BULLET_SPEED,
+                jnp.where(a == Action.FIRE, jnp.where(new_direction == 0, BULLET_SPEED,
+                                            jnp.where(new_direction == 1, -BULLET_SPEED, 0)),
+                0)))
+        dir_y = jnp.where(a == Action.UPFIRE, -BULLET_SPEED,
+                jnp.where(a == Action.DOWNFIRE, BULLET_SPEED,
+                jnp.where(a == Action.FIRE, jnp.where(new_direction == 2, -BULLET_SPEED,
+                                            jnp.where(new_direction == 3, BULLET_SPEED, 0)),
+                0)))
+        
+        # Diagonal directions
+        dir_x = jnp.where(a == Action.UPRIGHTFIRE, BULLET_SPEED,
+                jnp.where(a == Action.DOWNRIGHTFIRE, BULLET_SPEED,
+                jnp.where(a == Action.UPLEFTFIRE, -BULLET_SPEED,
+                jnp.where(a == Action.DOWNLEFTFIRE, -BULLET_SPEED, dir_x))))
+        dir_y = jnp.where(a == Action.UPRIGHTFIRE, -BULLET_SPEED,
+                jnp.where(a == Action.UPLEFTFIRE, -BULLET_SPEED,
+                jnp.where(a == Action.DOWNRIGHTFIRE, BULLET_SPEED,
+                jnp.where(a == Action.DOWNLEFTFIRE, BULLET_SPEED, dir_y))))
         
         # Spawn position offset from player center
         spawn_x = new_x + self.consts.PLAYER_WIDTH // 2
@@ -653,7 +753,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Enemy random walk (dead enemies stay put and never move again)
         rng, subkey = jax.random.split(state.key)
         enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
-        enemy_alive = state.enemy_health > 0
+        enemy_alive = state.enemy_active == 1
         
         prop_enemy_positions = state.enemy_positions + enemy_deltas
         # Keep dead enemies exactly where they are (typically [0,0])
@@ -695,10 +795,29 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Apply item effects
         collected_hearts = jnp.sum(item_collisions & (state.item_types == ITEM_HEART))
         collected_poison = jnp.sum(item_collisions & (state.item_types == ITEM_POISON))
-        health_change = (collected_hearts * self.consts.HEALTH_GAIN) - (collected_poison * self.consts.POISON_DAMAGE)
+        collected_traps = jnp.sum(item_collisions & (state.item_types == ITEM_TRAP))
+        # Health change mapping: heart +HEALTH_GAIN, poison -POISON_DAMAGE, trap -TRAP_DAMAGE
+        health_change = (
+            collected_hearts * self.consts.HEALTH_GAIN
+            - collected_poison * self.consts.POISON_DAMAGE
+            - collected_traps * self.consts.TRAP_DAMAGE
+        )
         new_health = jnp.clip(state.health + health_change, 0, self.consts.MAX_HEALTH)
         
-        new_score = state.score + jnp.sum(item_collisions) * 10
+        # Score mapping only for treasure items
+        points_by_type = jnp.array([
+            0,                    # 0 unused
+            0,                    # 1 HEART
+            0,                    # 2 POISON
+            0,                    # 3 TRAP
+            100,                  # 4 STRONGBOX
+            500,                  # 5 SILVER CHALICE
+            1000,                 # 6 AMULET
+            3000,                 # 7 GOLD CHALICE
+        ], dtype=jnp.int32)
+        item_points = points_by_type[state.item_types]
+        gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
+        new_score = state.score + gained_points
         
         # Remove collected items
         new_item_active = jnp.where(item_collisions, 0, state.item_active)
@@ -717,7 +836,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             bullet_pos = final_bullet_positions[bullet_idx]
             is_active = final_bullet_active[bullet_idx] == 1
             collisions = jax.vmap(lambda e_pos: check_bullet_enemy_collision(bullet_pos, e_pos))(new_enemy_positions)
-            return collisions & is_active & (state.enemy_health > 0)
+            return collisions & is_active & (state.enemy_active == 1)
         
         # Check all bullets against all enemies
         all_collisions = jax.vmap(check_all_enemies_for_bullet)(jnp.arange(MAX_BULLETS))
@@ -725,32 +844,64 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Any bullet hit per enemy
         enemy_hit = jnp.any(all_collisions, axis=0)
         
-        # Reduce enemy health
-        new_enemy_health = jnp.where(enemy_hit, state.enemy_health - 1, state.enemy_health)
+        # Enemy mutation system: when hit, enemy mutates to weaker form
+        # Grim Reaper (5) -> Wizard (4) -> Skeleton (3) -> Wraith (2) -> Zombie (1) -> Dead (0)
+        new_enemy_types = jnp.where(enemy_hit, state.enemy_types - 1, state.enemy_types)
         
-        # Deactivate dead enemies (health <= 0)
-        enemies_alive = new_enemy_health > 0
+        # Award points when enemy is killed (mutates from zombie to dead)
+        zombies_killed = enemy_hit & (state.enemy_types == ENEMY_ZOMBIE)
+        wraiths_hit = enemy_hit & (state.enemy_types == ENEMY_WRAITH)
+        skeletons_hit = enemy_hit & (state.enemy_types == ENEMY_SKELETON)
+        wizards_hit = enemy_hit & (state.enemy_types == ENEMY_WIZARD)
+        grim_reapers_hit = enemy_hit & (state.enemy_types == ENEMY_GRIM_REAPER)
+        
+        enemy_kill_score = (
+            jnp.sum(zombies_killed) * self.consts.ZOMBIE_POINTS +
+            jnp.sum(wraiths_hit) * self.consts.WRAITH_POINTS +
+            jnp.sum(skeletons_hit) * self.consts.SKELETON_POINTS +
+            jnp.sum(wizards_hit) * self.consts.WIZARD_POINTS +
+            jnp.sum(grim_reapers_hit) * self.consts.GRIM_REAPER_POINTS
+        )
+        
+        # Deactivate enemies that have been killed (type becomes 0)
+        new_enemy_active = jnp.where(new_enemy_types <= 0, 0, state.enemy_active)
+        
+        # Move dead enemies off-screen
         final_enemy_positions = jnp.where(
-            enemies_alive[:, None],
+            new_enemy_active[:, None] == 1,
             new_enemy_positions,
-            jnp.array([0, 0])  # Move dead enemies off-screen
+            jnp.array([0, 0])
         )
         
         # Deactivate bullets that hit
         bullet_hit_any = jnp.any(all_collisions, axis=1)
         final_bullet_active = final_bullet_active & (~bullet_hit_any).astype(jnp.int32)
         
-        # Killing/shooting does not affect score
-        final_score = new_score
+        # Add enemy kill score to total
+        final_score = new_score + enemy_kill_score
 
-        # Enemy contact damage (after all movements & deaths resolved)
-        alive_enemies_mask = new_enemy_health > 0
+        # Enemy contact damage (varies by enemy type)
+        alive_enemies_mask = new_enemy_active == 1
         enemy_x = final_enemy_positions[:, 0]
         enemy_y = final_enemy_positions[:, 1]
         overlap_x = (new_x <= (enemy_x + self.consts.ENEMY_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= enemy_x)
         overlap_y = (new_y <= (enemy_y + self.consts.ENEMY_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= enemy_y)
-        enemy_contact = jnp.any(overlap_x & overlap_y & alive_enemies_mask)
-        contact_damage = enemy_contact.astype(jnp.int32) * self.consts.ENEMY_CONTACT_DAMAGE
+        enemy_contacts = overlap_x & overlap_y & alive_enemies_mask
+        
+        # Calculate damage based on enemy type
+        damage_by_type = jnp.array([
+            0,  # Dead enemy (type 0)
+            self.consts.ZOMBIE_DAMAGE,
+            self.consts.WRAITH_DAMAGE,
+            self.consts.SKELETON_DAMAGE,
+            self.consts.WIZARD_DAMAGE,
+            self.consts.GRIM_REAPER_DAMAGE
+        ], dtype=jnp.int32)
+        
+        # Sum damage from all contacted enemies
+        contact_damage = jnp.sum(
+            jnp.where(enemy_contacts, damage_by_type[new_enemy_types], 0)
+        )
         final_health = jnp.clip(new_health - contact_damage, 0, self.consts.MAX_HEALTH)
         
         new_state = DarkChambersState(
@@ -758,7 +909,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             player_y=new_y,
             player_direction=new_direction,
             enemy_positions=final_enemy_positions,
-            enemy_health=new_enemy_health,
+            enemy_types=new_enemy_types,
+            enemy_active=new_enemy_active,
             bullet_positions=final_bullet_positions,
             bullet_active=final_bullet_active,
             health=final_health,
@@ -817,7 +969,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Pack enemy data
         enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float32)
         enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
-        enemy_active = (state.enemy_health > 0).astype(jnp.float32)
+        enemy_active = state.enemy_active.astype(jnp.float32)
         
         enemies_array = jnp.stack([
             state.enemy_positions[:, 0].astype(jnp.float32),
