@@ -19,7 +19,8 @@ GAME_W = 160
 WORLD_W = GAME_W * 2  # World is 2x viewport size
 WORLD_H = GAME_H * 2
 
-NUM_ENEMIES = 5
+NUM_ENEMIES = 20  # Increased to allow more spawned enemies
+NUM_SPAWNERS = 3  # Spawner entities
 
 # Enemy types (5 = strongest, 1 = weakest)
 ENEMY_GRIM_REAPER = 5  # Strongest
@@ -49,6 +50,12 @@ BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
 BULLET_SPEED = 4
 
+# Spawner configuration
+SPAWNER_WIDTH = 14
+SPAWNER_HEIGHT = 14
+SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
+SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
+
 
 class DarkChambersConstants(NamedTuple):
     """Game constants and configuration."""
@@ -72,6 +79,7 @@ class DarkChambersConstants(NamedTuple):
     POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)  # Green poison
     TRAP_COLOR: Tuple[int, int, int] = (120, 70, 20)     # Brown trap
     TREASURE_COLOR: Tuple[int, int, int] = (255, 220, 0) # Yellow for all treasures
+    SPAWNER_COLOR: Tuple[int, int, int] = (180, 50, 180) # Magenta/purple spawner
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
     BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
     
@@ -118,6 +126,11 @@ class DarkChambersState(NamedTuple):
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
     enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
     enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
+    
+    spawner_positions: chex.Array  # shape: (NUM_SPAWNERS, 2)
+    spawner_health: chex.Array     # shape: (NUM_SPAWNERS,) - health remaining
+    spawner_active: chex.Array     # shape: (NUM_SPAWNERS,) - 1=active, 0=destroyed
+    spawner_timers: chex.Array     # shape: (NUM_SPAWNERS,) - countdown to next spawn
     
     bullet_positions: chex.Array  # (MAX_BULLETS, 4) - x, y, dx, dy
     bullet_active: chex.Array     # (MAX_BULLETS,) - 1=active, 0=inactive
@@ -182,6 +195,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.consts.BULLET_COLOR,       # 11
             self.consts.TREASURE_COLOR,     # 12 (treasures)
             self.consts.TRAP_COLOR,         # 13 (trap)
+            self.consts.SPAWNER_COLOR,      # 14 (spawner)
         ], dtype=jnp.uint8)
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
@@ -397,6 +411,26 @@ class DarkChambersRenderer(JAXGameRenderer):
         for t in range(1, 8):  # 1..7 item types
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
+        # Spawners
+        spawner_world_pos = state.spawner_positions.astype(jnp.int32)
+        spawner_screen_pos = (spawner_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        spawner_active_mask = state.spawner_active == 1
+        masked_spawner_pos = jnp.where(
+            spawner_active_mask[:, None],
+            spawner_screen_pos,
+            off_screen
+        )
+        spawner_sizes = jnp.tile(
+            jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
+            (NUM_SPAWNERS, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=masked_spawner_pos,
+            sizes=spawner_sizes,
+            color_id=14
+        )
+        
         # Health bar (5 boxes proportional to max health=31) top-left
         health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
         # Number of filled segments = floor(health * 5 / MAX_HEALTH)
@@ -520,6 +554,48 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=10
         )
         
+        # Step counter display (center top)
+        step_val = jnp.clip(state.step_counter, 0, 9999).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        thousands = step_val // 1000
+        hundreds = (step_val // 100) % 10
+        tens = (step_val // 10) % 10
+        ones = step_val % 10
+        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([
+            thousands > 0,
+            (thousands > 0) | (hundreds > 0),
+            (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True
+        ])
+        active_count = jnp.sum(active_mask.astype(jnp.int32))
+        total_width = active_count * (digit_width + spacing) - spacing
+        step_start_x = (self.config.game_dimensions[1] - total_width) // 2
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        base_x = jnp.where(active_mask, step_start_x + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = 4 + grid_y  # top center
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        step_digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        step_digit_sizes = jnp.ones((step_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=step_digit_positions,
+            sizes=step_digit_sizes,
+            color_id=10
+        )
+        
         # Bullets
         bullet_world_pos = state.bullet_positions[:, :2].astype(jnp.int32)
         bullet_screen_pos = (bullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
@@ -557,16 +633,46 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         if key is None:
             key = jax.random.PRNGKey(0)
         
-        # Spawn enemies
+        WALLS = self.renderer.WALLS
+        
+        def check_wall_overlap(pos_x, pos_y, width, height):
+            """Check if a rectangle overlaps with any wall."""
+            wx = WALLS[:, 0]
+            wy = WALLS[:, 1]
+            ww = WALLS[:, 2]
+            wh = WALLS[:, 3]
+            overlap_x = (pos_x <= (wx + ww - 1)) & ((pos_x + width - 1) >= wx)
+            overlap_y = (pos_y <= (wy + wh - 1)) & ((pos_y + height - 1) >= wy)
+            return jnp.any(overlap_x & overlap_y)
+        
+        # Spawn enemies (retry until not on wall)
+        def spawn_enemy(carry, i):
+            positions, key = carry
+            
+            def try_spawn(retry_idx, retry_carry):
+                pos, key_in, found_valid = retry_carry
+                key_out, subkey = jax.random.split(key_in)
+                x = jax.random.randint(subkey, (), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32)
+                key_out, subkey = jax.random.split(key_out)
+                y = jax.random.randint(subkey, (), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32)
+                
+                on_wall = check_wall_overlap(x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT)
+                # Update position if this is better (not on wall and haven't found valid yet)
+                new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([x, y]), pos)
+                new_found = found_valid | (~on_wall)
+                
+                return (new_pos, key_out, new_found)
+            
+            # Try up to 20 times
+            init_pos = jnp.array([30, 30])
+            final_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn, (init_pos, key, False))
+            
+            new_positions = positions.at[i].set(final_pos)
+            return (new_positions, key), None
+        
         key, subkey = jax.random.split(key)
-        enemy_x_positions = jax.random.randint(
-            subkey, (NUM_ENEMIES,), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32
-        )
-        key, subkey = jax.random.split(key)
-        enemy_y_positions = jax.random.randint(
-            subkey, (NUM_ENEMIES,), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32
-        )
-        enemy_positions = jnp.stack([enemy_x_positions, enemy_y_positions], axis=1)
+        enemy_positions_init = jnp.zeros((NUM_ENEMIES, 2), dtype=jnp.int32)
+        (enemy_positions, key), _ = jax.lax.scan(spawn_enemy, (enemy_positions_init, subkey), jnp.arange(NUM_ENEMIES))
         
         # Spawn enemies with random types (favor stronger types)
         key, subkey = jax.random.split(key)
@@ -575,16 +681,51 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )  # Random types from 2 (Wraith) to 5 (Grim Reaper)
         enemy_active = jnp.ones(NUM_ENEMIES, dtype=jnp.int32)
         
-        # Spawn items
+        # Spawn spawners
         key, subkey = jax.random.split(key)
-        item_x_positions = jax.random.randint(
-            subkey, (NUM_ITEMS,), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32
+        spawner_x_positions = jax.random.randint(
+            subkey, (NUM_SPAWNERS,), 50, self.consts.WORLD_WIDTH - 50, dtype=jnp.int32
         )
         key, subkey = jax.random.split(key)
-        item_y_positions = jax.random.randint(
-            subkey, (NUM_ITEMS,), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32
+        spawner_y_positions = jax.random.randint(
+            subkey, (NUM_SPAWNERS,), 50, self.consts.WORLD_HEIGHT - 50, dtype=jnp.int32
         )
-        item_positions = jnp.stack([item_x_positions, item_y_positions], axis=1)
+        spawner_positions = jnp.stack([spawner_x_positions, spawner_y_positions], axis=1)
+        spawner_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
+        spawner_active = jnp.ones(NUM_SPAWNERS, dtype=jnp.int32)
+        key, subkey = jax.random.split(key)
+        spawner_timers = jax.random.randint(
+            subkey, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32
+        )
+        
+        # Spawn items (retry until not on wall)
+        def spawn_item(carry, i):
+            positions, key = carry
+            
+            def try_spawn_item(retry_idx, retry_carry):
+                pos, key_in, found_valid = retry_carry
+                key_out, subkey = jax.random.split(key_in)
+                x = jax.random.randint(subkey, (), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32)
+                key_out, subkey = jax.random.split(key_out)
+                y = jax.random.randint(subkey, (), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32)
+                
+                on_wall = check_wall_overlap(x, y, ITEM_WIDTH, ITEM_HEIGHT)
+                # Update position if this is better (not on wall and haven't found valid yet)
+                new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([x, y]), pos)
+                new_found = found_valid | (~on_wall)
+                
+                return (new_pos, key_out, new_found)
+            
+            # Try up to 20 times
+            init_pos = jnp.array([30, 30])
+            final_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_item, (init_pos, key, False))
+            
+            new_positions = positions.at[i].set(final_pos)
+            return (new_positions, key), None
+        
+        key, subkey = jax.random.split(key)
+        item_positions_init = jnp.zeros((NUM_ITEMS, 2), dtype=jnp.int32)
+        (item_positions, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(NUM_ITEMS))
         
         # Weighted distribution of item types (more traps)
         key, subkey = jax.random.split(key)
@@ -617,6 +758,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_positions=enemy_positions,
             enemy_types=enemy_types,
             enemy_active=enemy_active,
+            spawner_positions=spawner_positions,
+            spawner_health=spawner_health,
+            spawner_active=spawner_active,
+            spawner_timers=spawner_timers,
             bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
             bullet_active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
             health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
@@ -873,9 +1018,80 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             jnp.array([0, 0])
         )
         
-        # Deactivate bullets that hit
-        bullet_hit_any = jnp.any(all_collisions, axis=1)
-        final_bullet_active = final_bullet_active & (~bullet_hit_any).astype(jnp.int32)
+        # Deactivate bullets that hit enemies
+        bullet_hit_enemy = jnp.any(all_collisions, axis=1)
+        
+        # Bullet-spawner collision detection
+        def check_bullet_spawner_collision(bullet_pos, spawner_pos):
+            """Check if bullet hits spawner."""
+            b_overlap_x = (bullet_pos[0] <= (spawner_pos[0] + SPAWNER_WIDTH - 1)) & \
+                         ((bullet_pos[0] + BULLET_WIDTH - 1) >= spawner_pos[0])
+            b_overlap_y = (bullet_pos[1] <= (spawner_pos[1] + SPAWNER_HEIGHT - 1)) & \
+                         ((bullet_pos[1] + BULLET_HEIGHT - 1) >= spawner_pos[1])
+            return b_overlap_x & b_overlap_y
+        
+        def check_all_spawners_for_bullet(bullet_idx):
+            bullet_pos = final_bullet_positions[bullet_idx]
+            is_active = final_bullet_active[bullet_idx] == 1
+            collisions = jax.vmap(lambda s_pos: check_bullet_spawner_collision(bullet_pos, s_pos))(state.spawner_positions)
+            return collisions & is_active & (state.spawner_active == 1)
+        
+        spawner_collisions = jax.vmap(check_all_spawners_for_bullet)(jnp.arange(MAX_BULLETS))
+        spawner_hit = jnp.any(spawner_collisions, axis=0)
+        
+        # Reduce spawner health on hit
+        new_spawner_health = jnp.where(spawner_hit, state.spawner_health - 1, state.spawner_health)
+        new_spawner_active = jnp.where(new_spawner_health <= 0, 0, state.spawner_active)
+        
+        # Spawn item where spawner was destroyed
+        spawner_destroyed = (state.spawner_active == 1) & (new_spawner_active == 0)
+        
+        # Find first inactive item slot for spawner drops
+        def add_spawner_drop(carry, spawner_idx):
+            item_pos, item_types_arr, item_active_arr, key = carry
+            destroyed = spawner_destroyed[spawner_idx]
+            
+            # Find first inactive slot
+            first_inactive = jnp.argmax(item_active_arr == 0)
+            can_add = jnp.any(item_active_arr == 0) & destroyed
+            
+            # Random item type (heart or treasures)
+            key, subkey = jax.random.split(key)
+            drop_types = jnp.array([ITEM_HEART, ITEM_STRONGBOX, ITEM_SILVER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
+            drop_type = jax.random.choice(subkey, drop_types)
+            
+            # Use spawner position (already placed off walls during reset)
+            spawner_pos = state.spawner_positions[spawner_idx]
+            
+            # Update arrays
+            new_pos = jnp.where(
+                (jnp.arange(NUM_ITEMS)[:, None] == first_inactive) & can_add,
+                spawner_pos,
+                item_pos
+            )
+            new_types = jnp.where(
+                (jnp.arange(NUM_ITEMS) == first_inactive) & can_add,
+                drop_type,
+                item_types_arr
+            )
+            new_active = jnp.where(
+                (jnp.arange(NUM_ITEMS) == first_inactive) & can_add,
+                1,
+                item_active_arr
+            )
+            
+            return (new_pos, new_types, new_active, key), None
+        
+        rng, subkey = jax.random.split(state.key)
+        (final_item_positions, final_item_types, final_item_active, rng), _ = jax.lax.scan(
+            add_spawner_drop,
+            (state.item_positions, state.item_types, new_item_active, subkey),
+            jnp.arange(NUM_SPAWNERS)
+        )
+        
+        # Deactivate bullets that hit anything
+        bullet_hit_spawner = jnp.any(spawner_collisions, axis=1)
+        final_bullet_active = final_bullet_active & (~(bullet_hit_enemy | bullet_hit_spawner)).astype(jnp.int32)
         
         # Add enemy kill score to total
         final_score = new_score + enemy_kill_score
@@ -904,20 +1120,76 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )
         final_health = jnp.clip(new_health - contact_damage, 0, self.consts.MAX_HEALTH)
         
+        # Spawner logic: spawn enemies near active spawners
+        new_spawner_timers = state.spawner_timers - 1
+        should_spawn_enemy = (new_spawner_timers <= 0) & (new_spawner_active == 1)
+        
+        # For each spawner that should spawn, try to place enemy next to it
+        def try_spawn_from_spawner(carry, spawner_idx):
+            enemy_pos, enemy_types_arr, enemy_active_arr, key = carry
+            should_spawn = should_spawn_enemy[spawner_idx]
+            
+            # Find first inactive enemy slot
+            first_inactive = jnp.argmax(enemy_active_arr == 0)
+            can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn
+            
+            # Random enemy type
+            key, subkey = jax.random.split(key)
+            spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32)
+            
+            spawner_pos = state.spawner_positions[spawner_idx]
+            
+            # Spawn enemy directly inside the spawner (centered)
+            spawn_offset_x = (SPAWNER_WIDTH - self.consts.ENEMY_WIDTH) // 2
+            spawn_offset_y = (SPAWNER_HEIGHT - self.consts.ENEMY_HEIGHT) // 2
+            spawn_pos = spawner_pos + jnp.array([spawn_offset_x, spawn_offset_y])
+            
+            # Update arrays
+            new_pos = jnp.where(
+                (jnp.arange(NUM_ENEMIES)[:, None] == first_inactive) & can_spawn,
+                spawn_pos,
+                enemy_pos
+            )
+            new_types = jnp.where(
+                (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                spawn_type,
+                enemy_types_arr
+            )
+            new_active = jnp.where(
+                (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                1,
+                enemy_active_arr
+            )
+            
+            return (new_pos, new_types, new_active, key), None
+        
+        (spawned_enemy_positions, spawned_enemy_types, spawned_enemy_active, rng), _ = jax.lax.scan(
+            try_spawn_from_spawner,
+            (final_enemy_positions, new_enemy_types, new_enemy_active, rng),
+            jnp.arange(NUM_SPAWNERS)
+        )
+        
+        # Reset spawner timers when they spawn
+        final_spawner_timers = jnp.where(should_spawn_enemy, SPAWNER_SPAWN_INTERVAL, new_spawner_timers)
+        
         new_state = DarkChambersState(
             player_x=new_x,
             player_y=new_y,
             player_direction=new_direction,
-            enemy_positions=final_enemy_positions,
-            enemy_types=new_enemy_types,
-            enemy_active=new_enemy_active,
+            enemy_positions=spawned_enemy_positions,
+            enemy_types=spawned_enemy_types,
+            enemy_active=spawned_enemy_active,
+            spawner_positions=state.spawner_positions,
+            spawner_health=new_spawner_health,
+            spawner_active=new_spawner_active,
+            spawner_timers=final_spawner_timers,
             bullet_positions=final_bullet_positions,
             bullet_active=final_bullet_active,
             health=final_health,
             score=final_score,
-            item_positions=state.item_positions,
-            item_types=state.item_types,
-            item_active=new_item_active,
+            item_positions=final_item_positions,
+            item_types=final_item_types,
+            item_active=final_item_active,
             step_counter=state.step_counter + 1,
             key=rng,
         )
