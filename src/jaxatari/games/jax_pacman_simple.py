@@ -11,7 +11,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.games.pacmanTry.nodes import NodeGroup, Node
+from jaxatari.games.pacmanMaps.nodes import NodeGroup, Node
 
 
 def _get_default_asset_config() -> tuple:
@@ -45,7 +45,7 @@ class PacmanConstants(NamedTuple):
     
     # Player constants
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
-    PLAYER_SPEED: int = 1  # pixels per step
+    PLAYER_SPEED: int = 1  # pixels per step (smooth movement speed) - can be reduced for slower movement
     PLAYER_START_X: int = 76  # Center of maze
     PLAYER_START_Y: int = 188  # Bottom area
     
@@ -64,6 +64,8 @@ class PacmanState(NamedTuple):
     player_direction: chex.Array  # Action enum value (Action.UP, Action.DOWN, etc.)
     player_next_direction: chex.Array  # Queued direction for cornering
     player_animation_frame: chex.Array  # 0 or 1 for mouth open/close
+    current_node_index: chex.Array  # Index in nodeList for current node
+    target_node_index: chex.Array  # Index in nodeList for target node (node being moved towards)
     
     # Step counter and RNG
     step_counter: chex.Array
@@ -94,7 +96,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Load NodeList from maze file (or use default if file doesn't exist)
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanTry", "maze1.txt"
+            "pacmanMaps", "maze1.txt"
         )
         # Check if file exists, otherwise use None for default map
         if not os.path.exists(maze_file_path):
@@ -131,6 +133,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             self.maze_width = 0
             self.wall_positions = jnp.zeros((0, 2), dtype=jnp.int32)
         
+        # Pre-compute node positions for JIT-compatible movement
+        num_nodes = len(self.node_group.nodeList)
+        self.node_positions_x = jnp.array([node.position.x for node in self.node_group.nodeList], dtype=jnp.int32)
+        self.node_positions_y = jnp.array([node.position.y for node in self.node_group.nodeList], dtype=jnp.int32)
+        
+        # Each node.neighbor_indices is a JAX array: neighbor_indices[action] = node_index (-1 if no neighbor)
+        # Stack all node neighbor_indices into a 2D array for easy indexing: [node_idx][action] -> neighbor_idx
+        neighbor_arrays = [node.neighbor_indices for node in self.node_group.nodeList]
+        self.neighbor_lookup = jnp.stack(neighbor_arrays)  # Shape: (num_nodes, 18)
+        
         self.consts = consts
         
         self.renderer = PacmanRenderer(self.consts, wall_positions=self.wall_positions)
@@ -145,13 +157,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at first node (static position, no movement)
+        # Initialize player at first node
         start_node = self.node_group.nodeList[0]
         player_x = jnp.array(start_node.position.x, dtype=jnp.int32)
         player_y = jnp.array(start_node.position.y, dtype=jnp.int32)
         player_direction = jnp.array(Action.NOOP, dtype=jnp.int32)
         player_next_direction = jnp.array(Action.NOOP, dtype=jnp.int32)
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
+        current_node_index = jnp.array(0, dtype=jnp.int32)  # Start at first node
+        target_node_index = jnp.array(0, dtype=jnp.int32)  # Initially target is same as current
         
         # Create state
         state = PacmanState(
@@ -160,6 +174,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_direction=player_direction,
             player_next_direction=player_next_direction,
             player_animation_frame=player_animation_frame,
+            current_node_index=current_node_index,
+            target_node_index=target_node_index,
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=state_key,
         )
@@ -167,7 +183,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array) -> Tuple[PacmanObservation, PacmanState, float, bool, PacmanInfo]:
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
@@ -175,7 +190,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Update state key
         state = state._replace(key=step_key)
         
-        # No movement - player stays in place
+        # Update player movement (node-to-node jumping)
+        state = self._player_step(state, action)
         
         # Update animation frames
         state = state._replace(
@@ -191,6 +207,103 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         return observation, state, reward, done, info
 
+    def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
+        """
+        Handle player movement - smooth movement between nodes.
+        Translated from pacman.py: update() logic with smooth movement.
+        Uses neighbors already computed in nodes.py (via NodeGroup.from_maze_file).
+        Key behavior: When reaching a node, stop (set direction to NOOP) and wait for new action.
+        """
+        # Check if this is a NOOP action
+        is_noop = action == Action.NOOP
+        
+        # Get current and target node positions
+        current_node_idx = state.current_node_index
+        target_node_idx = state.target_node_index
+        
+        current_node_x = self.node_positions_x[current_node_idx]
+        current_node_y = self.node_positions_y[current_node_idx]
+        target_node_x = self.node_positions_x[target_node_idx]
+        target_node_y = self.node_positions_y[target_node_idx]
+        
+        # Check if we're currently at a node (position matches current node position)
+        at_current_node = jnp.logical_and(
+            state.player_x == current_node_x,
+            state.player_y == current_node_y
+        )
+        
+        # Check if we've reached/passed the target node (overshot check)
+        # Calculate direction vector from current node to target node
+        dx_to_target = target_node_x - current_node_x
+        dy_to_target = target_node_y - current_node_y
+        vec_to_target_sq = dx_to_target * dx_to_target + dy_to_target * dy_to_target
+        
+        # Calculate distance from current node to current position
+        vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + (state.player_y - current_node_y) * (state.player_y - current_node_y)
+        reached_target = vec_to_self_sq >= vec_to_target_sq
+        
+        # If we've reached the target node and we're moving, stop at it
+        is_moving = state.player_direction != Action.NOOP
+        should_stop_at_target = jnp.logical_and(is_moving, reached_target)
+        
+        # Update current node if we reached target
+        new_current_idx = jnp.where(should_stop_at_target, target_node_idx, current_node_idx)
+        
+        # If we stopped at target, snap position to target node
+        snapped_x = jnp.where(should_stop_at_target, target_node_x, state.player_x)
+        snapped_y = jnp.where(should_stop_at_target, target_node_y, state.player_y)
+        
+        # After stopping, we're at the new current node
+        at_node_after_stop = jnp.logical_or(at_current_node, should_stop_at_target)
+        
+        # Get new target based on action (equivalent to getNewTarget() in pacman.py)
+        # Only check action if we're at a node (either was already at node, or just reached target)
+        new_target_from_action = self.neighbor_lookup[new_current_idx, action]
+        has_new_target = new_target_from_action >= 0
+        valid_action = jnp.logical_and(jnp.logical_not(is_noop), has_new_target)
+        
+        # Only start moving if we're at a node AND have a valid action
+        # This ensures we stop at each node and wait for a new action
+        should_start_moving = jnp.logical_and(at_node_after_stop, valid_action)
+        
+        # Update target: if we should start moving, use action target; 
+        # if we stopped, target becomes same as current (we're at the node);
+        # otherwise keep current target (still moving towards it)
+        new_target_idx = jnp.where(should_start_moving, new_target_from_action,
+                          jnp.where(should_stop_at_target, new_current_idx, target_node_idx))
+        
+        # Update direction: 
+        # - if we should start moving (at node + valid action), use action
+        # - if we stopped at target, use NOOP (stop moving)
+        # - otherwise keep current direction (continue moving)
+        new_direction = jnp.where(should_start_moving, action,
+                         jnp.where(should_stop_at_target, jnp.array(Action.NOOP, dtype=jnp.int32),
+                                  state.player_direction))
+        
+        # Update target node position for movement calculation
+        final_target_x = self.node_positions_x[new_target_idx]
+        final_target_y = self.node_positions_y[new_target_idx]
+        
+        # Calculate movement direction based on new direction
+        # Action values: Action.UP=2, Action.DOWN=5, Action.LEFT=4, Action.RIGHT=3
+        # Movement deltas: RIGHT=+x, LEFT=-x, DOWN=+y, UP=-y
+        move_dx = jnp.where(new_direction == Action.RIGHT, self.consts.PLAYER_SPEED,
+                   jnp.where(new_direction == Action.LEFT, -self.consts.PLAYER_SPEED, 0))
+        move_dy = jnp.where(new_direction == Action.DOWN, self.consts.PLAYER_SPEED,
+                   jnp.where(new_direction == Action.UP, -self.consts.PLAYER_SPEED, 0))
+        
+        # Move incrementally towards target (only if moving, otherwise stay at snapped position)
+        new_x = jnp.where(new_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
+        new_y = jnp.where(new_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
+        
+        return state._replace(
+            player_x=new_x.astype(jnp.int32),
+            player_y=new_y.astype(jnp.int32),
+            player_direction=new_direction,
+            player_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
+            current_node_index=new_current_idx,
+            target_node_index=new_target_idx,
+        )
 
 
     def _get_observation(self, state: PacmanState) -> PacmanObservation:

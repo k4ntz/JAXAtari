@@ -16,22 +16,20 @@ class Node(NamedTuple):
     Translated from original Node class.
     """
     position: Vector2
-    neighbors: Dict[int, Optional['Node']]  # Action enum -> neighbor Node (or None)
+    neighbor_indices: chex.Array  # JAX array: neighbor_indices[action] = node_index (-1 if no neighbor)
     
     @classmethod
     def create(cls, x, y):
         """Create a Node from coordinates (translated from __init__)."""
+        # Initialize neighbor_indices with -1 (no neighbor) for all actions
+        # Array size 18 to accommodate max Action value
+        neighbor_indices = jnp.full(18, -1, dtype=jnp.int32)
         return cls(
             position=Vector2(
                 x=jnp.array(x, dtype=jnp.float32),
                 y=jnp.array(y, dtype=jnp.float32)
             ),
-            neighbors={
-                Action.UP: None,
-                Action.DOWN: None,
-                Action.LEFT: None,
-                Action.RIGHT: None,
-            }
+            neighbor_indices=neighbor_indices
         )
 
 
@@ -69,11 +67,18 @@ class NodeGroup(NamedTuple):
         nodes_lut = {}
         cls.create_node_table(data, nodes_lut, tile_size)
         
-        # Connect nodes
-        cls.connect_horizontally(data, nodes_lut, tile_size)
-        cls.connect_vertically(data, nodes_lut, tile_size)
+        # Convert to list and create position->index mapping
+        node_list = list(nodes_lut.values())
+        position_to_index = {}
+        for idx, node in enumerate(node_list):
+            pos_key = (float(node.position.x), float(node.position.y))
+            position_to_index[pos_key] = idx
         
-        # Convert to list (maintain order for consistency)
+        # Connect nodes (now using indices instead of Node objects)
+        cls.connect_horizontally(data, nodes_lut, position_to_index, tile_size)
+        cls.connect_vertically(data, nodes_lut, position_to_index, tile_size)
+        
+        # Update node_list with connected nodes
         node_list = list(nodes_lut.values())
         node_group = cls(nodeList=node_list)
         
@@ -103,7 +108,7 @@ class NodeGroup(NamedTuple):
                     nodes_lut[(x, y)] = Node.create(x, y)
     
     @staticmethod
-    def connect_horizontally(data, nodes_lut, tile_size, xoffset=0, yoffset=0):
+    def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
         """Connect nodes horizontally (translated from connectHorizontally)."""
         node_symbols = ['+']
         path_symbols = ['.']
@@ -117,32 +122,38 @@ class NodeGroup(NamedTuple):
                         key = (x, y)
                     else:
                         other_key = (x, y)
-                        # Connect nodes
-                        node1 = nodes_lut[key]
-                        node2 = nodes_lut[other_key]
-                        node1 = Node(
-                            position=node1.position,
-                            neighbors={
-                                **node1.neighbors,
-                                Action.RIGHT: node2
-                            }
-                        )
-                        node2 = Node(
-                            position=node2.position,
-                            neighbors={
-                                **node2.neighbors,
-                                Action.LEFT: node1
-                            }
-                        )
-                        nodes_lut[key] = node1
-                        nodes_lut[other_key] = node2
+                        # Get node indices from position
+                        key_pos = (float(key[0]), float(key[1]))
+                        other_key_pos = (float(other_key[0]), float(other_key[1]))
+                        node1_idx = position_to_index.get(key_pos)
+                        node2_idx = position_to_index.get(other_key_pos)
+                        
+                        if node1_idx is not None and node2_idx is not None:
+                            # Connect nodes using indices
+                            node1 = nodes_lut[key]
+                            node2 = nodes_lut[other_key]
+                            
+                            # Update neighbor_indices array
+                            node1_neighbors = node1.neighbor_indices.at[Action.RIGHT].set(node2_idx)
+                            node2_neighbors = node2.neighbor_indices.at[Action.LEFT].set(node1_idx)
+                            
+                            node1 = Node(
+                                position=node1.position,
+                                neighbor_indices=node1_neighbors
+                            )
+                            node2 = Node(
+                                position=node2.position,
+                                neighbor_indices=node2_neighbors
+                            )
+                            nodes_lut[key] = node1
+                            nodes_lut[other_key] = node2
                         key = other_key
                 elif data[row][col] not in path_symbols:
                     # Hit a wall, reset chain
                     key = None
     
     @staticmethod
-    def connect_vertically(data, nodes_lut, tile_size, xoffset=0, yoffset=0):
+    def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
         """Connect nodes vertically (translated from connectVertically)."""
         node_symbols = ['+']
         path_symbols = ['.']
@@ -157,25 +168,31 @@ class NodeGroup(NamedTuple):
                         key = (x, y)
                     else:
                         other_key = (x, y)
-                        # Connect nodes
-                        node1 = nodes_lut[key]
-                        node2 = nodes_lut[other_key]
-                        node1 = Node(
-                            position=node1.position,
-                            neighbors={
-                                **node1.neighbors,
-                                Action.DOWN: node2
-                            }
-                        )
-                        node2 = Node(
-                            position=node2.position,
-                            neighbors={
-                                **node2.neighbors,
-                                Action.UP: node1
-                            }
-                        )
-                        nodes_lut[key] = node1
-                        nodes_lut[other_key] = node2
+                        # Get node indices from position
+                        key_pos = (float(key[0]), float(key[1]))
+                        other_key_pos = (float(other_key[0]), float(other_key[1]))
+                        node1_idx = position_to_index.get(key_pos)
+                        node2_idx = position_to_index.get(other_key_pos)
+                        
+                        if node1_idx is not None and node2_idx is not None:
+                            # Connect nodes using indices
+                            node1 = nodes_lut[key]
+                            node2 = nodes_lut[other_key]
+                            
+                            # Update neighbor_indices array
+                            node1_neighbors = node1.neighbor_indices.at[Action.DOWN].set(node2_idx)
+                            node2_neighbors = node2.neighbor_indices.at[Action.UP].set(node1_idx)
+                            
+                            node1 = Node(
+                                position=node1.position,
+                                neighbor_indices=node1_neighbors
+                            )
+                            node2 = Node(
+                                position=node2.position,
+                                neighbor_indices=node2_neighbors
+                            )
+                            nodes_lut[key] = node1
+                            nodes_lut[other_key] = node2
                         key = other_key
                 elif dataT[col][row] not in path_symbols:
                     # Hit a wall, reset chain
@@ -190,16 +207,12 @@ class NodeGroup(NamedTuple):
             x = float(node.position.x)
             y = float(node.position.y)
             connections = []
-            for direction, neighbor in node.neighbors.items():
-                if neighbor is not None:
-                    # Find neighbor index
-                    for n_idx, n in enumerate(self.nodeList):
-                        n_x = float(n.position.x)
-                        n_y = float(n.position.y)
-                        if abs(n_x - float(neighbor.position.x)) < 0.001 and abs(n_y - float(neighbor.position.y)) < 0.001:
-                            dir_name = {Action.UP: "UP", Action.DOWN: "DOWN", Action.LEFT: "LEFT", Action.RIGHT: "RIGHT"}.get(direction, f"DIR{direction}")
-                            connections.append(f"{dir_name}->node{n_idx}")
-                            break
+            # Check all action directions
+            for direction in [Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT]:
+                neighbor_idx = int(node.neighbor_indices[direction])
+                if neighbor_idx >= 0:
+                    dir_name = {Action.UP: "UP", Action.DOWN: "DOWN", Action.LEFT: "LEFT", Action.RIGHT: "RIGHT"}.get(direction, f"DIR{direction}")
+                    connections.append(f"{dir_name}->node{neighbor_idx}")
             
             if connections:
                 print(f"Node {idx}: pos=({int(x)}, {int(y)}) -> {', '.join(connections)}")
@@ -207,4 +220,78 @@ class NodeGroup(NamedTuple):
                 print(f"Node {idx}: pos=({int(x)}, {int(y)}) -> (no connections)")
         
         print("=" * 50 + "\n")
+    
+    @classmethod
+    def create_default_map(cls, tile_size=8):
+        """
+        Create a default simple test map when no maze file is provided.
+        Creates a simple grid of connected nodes.
+        """
+        nodes_lut = {}
+        grid_size = 3
+        spacing = 32  # 4 tiles apart
+        
+        for row in range(grid_size):
+            for col in range(grid_size):
+                x = col * spacing + 16
+                y = row * spacing + 16
+                nodes_lut[(x, y)] = Node.create(x, y)
+        
+        # Convert to list and create position->index mapping
+        node_list = list(nodes_lut.values())
+        position_to_index = {}
+        for idx, node in enumerate(node_list):
+            pos_key = (float(node.position.x), float(node.position.y))
+            position_to_index[pos_key] = idx
+        
+        # Connect horizontally
+        for row in range(grid_size):
+            for col in range(grid_size - 1):
+                x1 = col * spacing + 16
+                y1 = row * spacing + 16
+                x2 = (col + 1) * spacing + 16
+                y2 = row * spacing + 16
+                
+                key1 = (x1, y1)
+                key2 = (x2, y2)
+                node1_idx = position_to_index[(float(x1), float(y1))]
+                node2_idx = position_to_index[(float(x2), float(y2))]
+                
+                node1 = nodes_lut[key1]
+                node2 = nodes_lut[key2]
+                
+                node1_neighbors = node1.neighbor_indices.at[Action.RIGHT].set(node2_idx)
+                node2_neighbors = node2.neighbor_indices.at[Action.LEFT].set(node1_idx)
+                
+                node1 = Node(position=node1.position, neighbor_indices=node1_neighbors)
+                node2 = Node(position=node2.position, neighbor_indices=node2_neighbors)
+                nodes_lut[key1] = node1
+                nodes_lut[key2] = node2
+        
+        # Connect vertically
+        for col in range(grid_size):
+            for row in range(grid_size - 1):
+                x1 = col * spacing + 16
+                y1 = row * spacing + 16
+                x2 = col * spacing + 16
+                y2 = (row + 1) * spacing + 16
+                
+                key1 = (x1, y1)
+                key2 = (x2, y2)
+                node1_idx = position_to_index[(float(x1), float(y1))]
+                node2_idx = position_to_index[(float(x2), float(y2))]
+                
+                node1 = nodes_lut[key1]
+                node2 = nodes_lut[key2]
+                
+                node1_neighbors = node1.neighbor_indices.at[Action.DOWN].set(node2_idx)
+                node2_neighbors = node2.neighbor_indices.at[Action.UP].set(node1_idx)
+                
+                node1 = Node(position=node1.position, neighbor_indices=node1_neighbors)
+                node2 = Node(position=node2.position, neighbor_indices=node2_neighbors)
+                nodes_lut[key1] = node1
+                nodes_lut[key2] = node2
+        
+        node_list = list(nodes_lut.values())
+        return cls(nodeList=node_list)
     
