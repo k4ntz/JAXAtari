@@ -9,3 +9,8 @@ results/
 .DS_Store
 docs/build/
 
+.dev
+*_log*.txt
+
+screenshot*
+battlezone_state.pkl
