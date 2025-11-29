@@ -52,7 +52,8 @@ GAME_MODULES = {
     "wordzapper": "jaxatari.games.jax_wordzapper",
     # Add new games here
 
-    "darkchambers": "jaxatari.games.jax_darkchambers_demo_julius"
+    "darkchambers": "jaxatari.games.jax_darkchambers_demo_julius",
+    "darkchambers2": "jaxatari.games.jax_darkchambers_paolo"
 
 }
 
