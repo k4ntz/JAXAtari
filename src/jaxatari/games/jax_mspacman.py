@@ -77,10 +77,11 @@ class GhostMode(IntEnum):
 
 # -------- Constants --------
 # GENERAL
-RESET_MAZE = 0 # the starting level, loaded when reset is called
+RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+# PELLETS_TO_COLLECT = 3
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -145,12 +146,12 @@ TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
 # -------- Entity classes --------
 class LevelState(NamedTuple):
-    maze_layout: chex.Array # Whether the level is completed
+    index: chex.Array
     dofmaze: chex.Array # Precomputed degree of freedom maze layout
     pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
     collected_pellets: chex.Array  # the number of pellets collected
     power_pellets: chex.Array
-    completed_level: chex.Array  # Whether the level is completed
+    loaded: chex.Array  # Whether the level is loaded
 
 class GhostState(NamedTuple):
     type: GhostType
@@ -162,6 +163,7 @@ class GhostState(NamedTuple):
 class PlayerState(NamedTuple):
     position: chex.Array  # (x, y)
     direction: chex.Array  # (dx, dy)
+    current_action: chex.Array # 0: NOOP, 1: NOOP, 2: UP ...
     last_dir_int : chex.Array  # Last direction as an integer (0: UP, 1: RIGHT, 2: LEFT, 3: DOWN)
     has_pellet: chex.Array  # Boolean indicating if pacman just collected a pellet
     eaten_ghosts: chex.Array  # timers indicating which ghosts have been eaten, when set to one, does not go down, indicate respawned ghost
@@ -180,14 +182,10 @@ class PacmanState(NamedTuple):
     player: PlayerState
     ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # 4 ghosts
     fruit: FruitState
-    current_action: chex.Array # 0: NOOP, 1: NOOP, 2: UP ...
-    step_count: chex.Array
-    level_num: chex.Array
-    lives: chex.Array  # Number of lives left
+    lives: chex.Array # Number of lives left
     score: chex.Array
-    score_changed: chex.Array
-    game_over: chex.Array
-    reset: chex.Array  # Reset state for the next episode
+    score_changed: chex.Array # indicates which score digit changed since the last step
+    step_count: chex.Array
 
 class PacmanObservation(NamedTuple):
     grid: chex.Array  # 2D array showing layout of walls, pellets, pacman, ghosts
@@ -233,142 +231,39 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return spaces.Discrete(10)
 
     def reset(self, key=None) -> Tuple[PacmanObservation, PacmanState]:
-        state = PacmanState(
-            level = LevelState(
-                maze_layout=jnp.array(RESET_MAZE).astype(jnp.uint8),
-                dofmaze=MsPacmanMaze.precompute_dof(MsPacmanMaze.MAZES[RESET_MAZE]), # Precompute degree of freedom maze layout
-                pellets=jnp.copy(MsPacmanMaze.BASE_PELLETS),
-                collected_pellets=jnp.array(0).astype(jnp.uint8),
-                power_pellets=jnp.ones(4, dtype=jnp.bool_),
-                completed_level=jnp.array(False, dtype=jnp.bool_)
-            ),
-            player = PlayerState(
-                position=INITIAL_PACMAN_POSITION,
-                direction=INITIAL_PACMAN_DIRECTION,
-                last_dir_int=INITIAL_LAST_DIR_INT,
-                has_pellet=jnp.array(False),
-                eaten_ghosts=jnp.array(0).astype(jnp.uint8), # number of eaten ghost since power pellet consumed
-                power_mode_timer=jnp.array(0).astype(jnp.uint8),  # Timer for power mode,
-                death_timer=jnp.array(0),
-            ),
-            ghosts = tuple(
-                GhostState(
-                    type=jnp.array(GhostType(i)).astype(jnp.uint8),
-                    position=INITIAL_GHOSTS_POSITIONS[i],
-                    direction=jnp.zeros(2, dtype=jnp.int8),
-                    mode=(jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
-                          else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
-                    timer=jnp.array(SCATTER_DURATION).astype(jnp.uint16),
-                ) for i in range(4)
-            ),
-            fruit = FruitState(
-                type=jnp.array(FruitType.NONE).astype(jnp.uint8),
-                position=jnp.zeros(2, dtype=jnp.int8),
-                direction=jnp.zeros(2, dtype=jnp.int8),
-                timer=jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8),
-                exit=jnp.zeros(2, dtype=jnp.int8)
-            ),
-            current_action = INITIAL_ACTION,
-            score=jnp.array(0),
-            score_changed=jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_), # indicates which score digit changed since the last step
-            step_count=jnp.array(0),
-            game_over=jnp.array(False),
-            level_num=jnp.array([1], dtype=jnp.uint8),
-            lives=jnp.array(INITIAL_LIVES, dtype=jnp.int8),  # Number of lives left
-            reset=jnp.array(True, dtype=jnp.bool_) # to reload the background
-        )
-        obs = None
-        return obs, state
+        return None, reset_game(RESET_LEVEL, INITIAL_LIVES, 0)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
         PacmanObservation, PacmanState, jax.Array, jax.Array, PacmanInfo]:
-        # Skip current step if in reset state, so the renderer has time to react
-        if state.reset and self.skipped == False:
+        obs = None
+        reward = 0.0
+        done = jnp.array(False, dtype=jnp.bool_)
+        info = PacmanInfo(score=state.score, done=done)
+
+        # Skip current step if in reset state or level not loaded, so the renderer has time to react
+        if not state.level.loaded and self.skipped == False:
             self.skipped = True
-            obs = None
-            reward = 0.0
-            done = jnp.array(False, dtype=jnp.bool_)
-            info = PacmanInfo(score=state.score, done=done)
             return obs, state, reward, done, info
         self.skipped = False
-        
-        pacman_pos = state.player.position
-        pacman_dir = state.player.direction
-        pacman_last_dir_int = state.player.last_dir_int
-        power_mode_timer = state.player.power_mode_timer
-
-        ghost_positions = jnp.array([ghost.position for ghost in state.ghosts])
-        ghosts_dirs = jnp.array([ghost.direction for ghost in state.ghosts])
-        dofmaze = state.level.dofmaze
-        completed_level = jnp.array(False, dtype=jnp.bool_)
-        game_over = jnp.array(False, dtype=jnp.bool_)
 
         # If in death animation, decrement timer and freeze everything
+        done = jnp.array(False, dtype=jnp.bool_)
         if state.player.death_timer > 0:
             new_death_timer = state.player.death_timer - 1
-            # When timer reaches 0, reset positions if lives remain or set state to game over
-            if new_death_timer == 0:
+            new_state = freeze_game(state, new_death_timer)
+            if new_death_timer == 0: # When timer reaches 0, reset entities if lives remain or set state to game over
                 if state.lives >= 0:
-                    power_mode_timer = jnp.array(0).astype(jnp.uint8)  # Reset power mode timer
-                    pacman_pos = INITIAL_PACMAN_POSITION
-                    pacman_dir = INITIAL_PACMAN_DIRECTION
-                    ghost_positions = INITIAL_GHOSTS_POSITIONS
-                    ghosts_dirs = jnp.zeros_like(ghost_positions)
+                    new_state = reset_entities(state)
                 else:
-                    game_over = jnp.array(True, dtype=jnp.bool_)
-
-            new_state = PacmanState(
-                level = LevelState(
-                    maze_layout=state.level.maze_layout,
-                    dofmaze=dofmaze,
-                    pellets=state.level.pellets,
-                    collected_pellets=state.level.collected_pellets,
-                    power_pellets=state.level.power_pellets,
-                    completed_level=completed_level
-                ),
-                player = PlayerState(
-                    position=pacman_pos,
-                    direction=pacman_dir,
-                    last_dir_int=jnp.array(2),
-                    has_pellet=state.player.has_pellet,
-                    eaten_ghosts=state.player.eaten_ghosts,
-                    power_mode_timer=power_mode_timer,
-                    death_timer=new_death_timer,
-                ),
-                ghosts = tuple(
-                    GhostState(
-                        type=GhostType(i),
-                        position=ghost_positions[i],
-                        direction=ghosts_dirs[i],
-                        mode=jnp.array(GhostMode.SCATTER).astype(jnp.uint8),
-                        timer=jnp.array(SCATTER_DURATION).astype(jnp.uint16)
-                    ) for i in range(4)
-                ),
-                fruit = FruitState(
-                    type=state.fruit.type,
-                    position=state.fruit.position,
-                    direction=state.fruit.direction,
-                    timer=state.fruit.timer,
-                    exit=state.fruit.exit
-                ),
-                current_action=state.current_action,
-                score=state.score,
-                score_changed=jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_),
-                step_count=state.step_count + 1,
-                game_over=game_over,
-                level_num=state.level_num,
-                lives=state.lives,
-                reset=jnp.array(False, dtype=jnp.bool_)
-            )
-            obs = None
-            reward = state.score
-            done = game_over
-            info = PacmanInfo(score=state.score, done=done)
+                    reward = state.score
+                    done = jnp.array(True, dtype=jnp.bool_)
             return obs, new_state, reward, done, info
 
         # Pacman movement
-        action = last_pressed_action(action, state.current_action)
+        dofmaze = state.level.dofmaze
+        pacman_last_dir_int = state.player.last_dir_int
+        action = last_pressed_action(action, state.player.current_action)
         possible_directions = available_directions(state.player.position, state.level.dofmaze)
         if action < 0 or action > len(DIRECTIONS) - 1: # Ignore illegal actions
             action = Action.NOOP
@@ -378,19 +273,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             pacman_last_dir_int = action - 2  # Convert action to direction index (0: UP, 1: RIGHT, 2: LEFT, 3: DOWN)
         else:
             # check for wall deadly_collision
-            if state.current_action > 1 and stop_wall(state.player.position, dofmaze)[state.current_action - 2]:
+            if state.player.current_action > 1 and stop_wall(state.player.position, dofmaze)[state.player.current_action - 2]:
                 executed_action = 0
                 new_pacman_dir = jnp.array([0, 0])
             else:
-                executed_action = state.current_action
+                executed_action = state.player.current_action
                 new_pacman_dir = state.player.direction
         new_pacman_pos = state.player.position + new_pacman_dir
         new_pacman_pos = new_pacman_pos.at[0].set(new_pacman_pos[0] % 160)
 
-
         # Pellet handling
         collected_pellets = state.level.collected_pellets
         power_pellets = state.level.power_pellets
+        power_mode_timer = state.player.power_mode_timer
         px, py = new_pacman_pos // 4
         ate_power_pill = False
         if px == 1:
@@ -435,9 +330,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         fruit_exit = state.fruit.exit
         for threshold in FRUIT_SPAWN_THRESHOLDS:
             if collected_pellets == threshold and state.fruit.type == FruitType.NONE: # Spawn fruit
-                fruit_type = get_level_fruit(state.level_num, key)
-                fruit_position, fruit_direction = get_random_tunnel(state.level_num, key)
-                fruit_exit, _ = get_random_tunnel(state.level_num, key)
+                fruit_type = get_level_fruit(state.level.index, key)
+                fruit_position, fruit_direction = get_random_tunnel(state.level.index, key)
+                fruit_exit, _ = get_random_tunnel(state.level.index, key)
         if state.fruit.type != FruitType.NONE:
             if detect_collision(new_pacman_pos, state.fruit.position): # Consume fruit
                 score = score + FRUIT_REWARDS[state.fruit.type]
@@ -475,19 +370,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
 
         # Progress to next level if all pellets collected
-        maze_layout = state.level.maze_layout
-        if collected_pellets >= PELLETS_TO_COLLECT: # TODO: Fix! Is never true.
-            collected_pellets = jnp.array(0, dtype=jnp.uint8)
-            ghost_positions = INITIAL_GHOSTS_POSITIONS
-            ghosts_dirs = jnp.zeros_like(ghost_positions)
-            power_mode_timer = jnp.array(0, dtype=jnp.uint8)
-            power_pellets = jnp.ones(4, dtype=jnp.bool_)
-            completed_level = jnp.array(True)
+        level_idx = state.level.index
+        if collected_pellets >= PELLETS_TO_COLLECT:
+            level_idx += 1
             score += 500
-            pellets = jnp.copy(MsPacmanMaze.BASE_PELLETS)  # Reset pellets
-            maze_layout = (maze_layout + 1) % 4  # len(MAZES)
-            print(f"Level completed! New level: {maze_layout}")
-            dofmaze= MsPacmanMaze.precompute_dof(MsPacmanMaze.MAZES[maze_layout])
+            new_state = reset_game(level_idx, state.lives, score)
+            print(f"Level completed! Starting level {level_idx}...")
+            return obs, new_state, reward, done, info
 
         # Flag score change digit-wise
         if score != state.score:
@@ -500,21 +389,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # Update state
         new_state = PacmanState(
             level = LevelState(
-                maze_layout=maze_layout,
+                index = level_idx,
                 dofmaze=dofmaze,
                 pellets=pellets,
                 collected_pellets=collected_pellets,
                 power_pellets=power_pellets,
-                completed_level=completed_level
+                loaded=jnp.array(True, dtype=jnp.bool_)
             ),
             player = PlayerState(
                 position=new_pacman_pos,
                 direction=new_pacman_dir,
+                current_action=executed_action,
                 last_dir_int=pacman_last_dir_int,
                 has_pellet=has_pellet,
                 eaten_ghosts=eaten_ghosts,
                 power_mode_timer=power_mode_timer,
-                death_timer=new_death_timer,
+                death_timer=new_death_timer
             ),
             ghosts = tuple(
                 GhostState(
@@ -532,19 +422,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 timer=fruit_timer,
                 exit=fruit_exit
             ),
-            current_action=executed_action,
+            lives=new_lives,
             score=score,
             score_changed=score_changed,
             step_count=state.step_count + 1,
-            game_over=game_over,
-            level_num=state.level_num, # TODO: Increment level_num
-            lives=new_lives,
-            reset=jnp.array(False, dtype=jnp.bool_)
         )
-        obs = None
-        reward = 0.0
-        done = game_over
-        info = PacmanInfo(score=score, done=done)
         return obs, new_state, reward, done, info
 
 
@@ -556,22 +438,22 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         super().__init__()
         self.sprites = MsPacmanRenderer.load_sprites()
 
-    def reset_bg(self):
+    def render_background(self, level: chex.Array, lives: chex.Array, score: chex.Array):
         """Reset the background for a new level."""
-        self.SPRITE_BG = MsPacmanMaze.load_background(RESET_MAZE)
-        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, 0, jnp.arange(MAX_SCORE_DIGITS) == (MAX_SCORE_DIGITS - 1), self.sprites["score"])
-        self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, INITIAL_LIVES, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
+        print('Lives: ' + str(lives) + ', Score: ' + str(score))
+        maze = get_level_maze(level) 
+        self.SPRITE_BG = MsPacmanMaze.load_background(maze)
+        self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
+        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) == (MAX_SCORE_DIGITS - 1), self.sprites["score"])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
-        if state.reset:
-            # Render game over screen
-            self.reset_bg()
-        if state.level.completed_level:
-            self.SPRITE_BG = MsPacmanMaze.load_background(state.level.maze_layout)
+        # Render background for new game or level
+        if not state.level.loaded:
+            self.render_background(state.level.index, state.lives, state.score) # Render game over screen
         raster = self.SPRITE_BG
-        # de-render pellets
-        # if state.has_pellet:
+
+        # De-render pellets when consumed
         if state.player.has_pellet:
             pellet_x = state.player.position[0] + 3
             pellet_y = state.player.position[1] + 4
@@ -1080,3 +962,100 @@ def detect_collision(position_1: chex.Array, position_2: chex.Array):
     if jnp.all(abs(jnp.array(position_1) - jnp.array(position_2)) < COLLISION_THRESHOLD):
         return True
     return False
+
+
+def reset_level(level: chex.Array):
+    maze = MsPacmanMaze.MAZES[get_level_maze(level)]
+    return LevelState(
+        index               = jnp.array(level, dtype=jnp.uint8),
+        dofmaze             = MsPacmanMaze.precompute_dof(maze), # Precompute degree of freedom maze layout
+        pellets             = jnp.copy(MsPacmanMaze.BASE_PELLETS),
+        collected_pellets   = jnp.array(0).astype(jnp.uint8),
+        power_pellets       = jnp.ones(4, dtype=jnp.bool_),
+        loaded              = jnp.array(False, dtype=jnp.bool_)
+    )
+
+def reset_player():
+    return PlayerState(
+        position            = INITIAL_PACMAN_POSITION,
+        direction           = INITIAL_PACMAN_DIRECTION,
+        current_action      = INITIAL_ACTION,
+        last_dir_int        = INITIAL_LAST_DIR_INT,
+        has_pellet          = jnp.array(False),
+        eaten_ghosts        = jnp.array(0).astype(jnp.uint8), # number of eaten ghost since power pellet consumed
+        power_mode_timer    = jnp.array(0).astype(jnp.uint8), # Timer for power mode
+        death_timer         = jnp.array(0).astype(jnp.uint8)
+    )
+
+def reset_ghosts():
+    return tuple(
+        GhostState(
+            type        = jnp.array(GhostType(i)).astype(jnp.uint8),
+            position    = INITIAL_GHOSTS_POSITIONS[i],
+            direction   = jnp.zeros(2, dtype=jnp.int8),
+            mode        = (jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
+                            else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
+            timer       = jnp.array(SCATTER_DURATION).astype(jnp.uint16),
+        ) for i in range(4)
+    )
+
+def reset_fruit():
+    return FruitState(
+        type        = jnp.array(FruitType.NONE).astype(jnp.uint8),
+        position    = jnp.zeros(2, dtype=jnp.int8),
+        direction   = jnp.zeros(2, dtype=jnp.int8),
+        timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8),
+        exit        = jnp.zeros(2, dtype=jnp.int8)
+    )
+
+def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
+    return PacmanState(
+        level           = reset_level(level),
+        player          = reset_player(),
+        ghosts          = reset_ghosts(),
+        fruit           = reset_fruit(),
+        lives           = jnp.array(lives, dtype=jnp.int8),
+        score           = jnp.array(score, dtype=jnp.uint32),
+        score_changed   = jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_),
+        step_count      = jnp.array(0, dtype=jnp.uint32),
+    )
+
+def reset_entities(state: PacmanState):
+    return PacmanState(
+        level = LevelState(
+            index = state.level.index,
+            dofmaze=state.level.dofmaze,
+            pellets=state.level.pellets,
+            collected_pellets=state.level.collected_pellets,
+            power_pellets=state.level.power_pellets,
+            loaded=state.level.loaded
+        ),
+        player          = reset_player(),
+        ghosts          = reset_ghosts(),
+        fruit           = reset_fruit(),
+        lives           = state.lives,
+        score           = state.score,
+        score_changed   = state.score_changed,
+        step_count      = state.step_count,
+    )
+
+def freeze_game(state: PacmanState, death_timer: chex.Array):
+    return PacmanState(
+        level           = state.level,
+        player          = PlayerState(
+            position            = state.player.position,
+            direction           = state.player.direction,
+            current_action      = state.player.current_action,
+            last_dir_int        = state.player.last_dir_int,
+            has_pellet          = state.player.has_pellet,
+            eaten_ghosts        = state.player.eaten_ghosts,
+            power_mode_timer    = state.player.power_mode_timer,
+            death_timer         = death_timer
+        ),
+        ghosts          = state.ghosts,
+        fruit           = state.fruit,
+        lives           = state.lives,
+        score           = state.score,
+        score_changed   = state.score_changed,
+        step_count      = state.step_count,
+    )
