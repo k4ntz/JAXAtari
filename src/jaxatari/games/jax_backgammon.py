@@ -106,8 +106,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         consts = consts or BackgammonConstants()
         super().__init__(consts)
 
-        # Pre-compute all possible moves
+        # Pre-compute all possible moves (from_point, to_point) for points 0..25
+        # Shape: (676, 2) = 26×26 combinations
+        # This will be used for vectorized move validation in Phase 3 (sequence generation)
+        NUM_ACTION_PAIRS = 26 * 26
         self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
+        assert self._action_pairs.shape == (NUM_ACTION_PAIRS, 2), \
+            f"Action pairs shape mismatch: expected ({NUM_ACTION_PAIRS}, 2), got {self._action_pairs.shape}"
 
         # Special action indices for interactive play
         self._roll_action_index = self._action_pairs.shape[0]
@@ -117,7 +122,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
 
-        # Define action set for jaxatari compatibility
+        # Define action set for jaxatari compatibility (interactive mode)
+        # NOTE: For AI agent training (PPO/PQN), you can either:
+        #   1. Use these interactive actions (LEFT/RIGHT/FIRE/NOOP) to simulate cursor movement
+        #   2. Or add a direct move API: step_move(state, move_index) where move_index ∈ [0, 675]
+        # Current implementation: Interactive mode (ALE-compatible)
         self.action_set = [
             JAXAtariAction.LEFT,  # Move cursor left
             JAXAtariAction.RIGHT,  # Move cursor right
@@ -262,19 +271,32 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
             def bearing_off_case(_):
                 can_bear_off = self.check_bearing_off(state, player)
+                
+                # ALE-konforme Bearing-Off-Distanz:
+                # White: Point 18=6-pip, 19=5-pip, ..., 23=1-pip → distance = 24 - from_point
+                # Black: Point 5=6-pip, 4=5-pip, ..., 0=1-pip   → distance = from_point + 1
                 bearing_off_distance = jax.lax.cond(
                     player == self.consts.WHITE,
-                    lambda _: self.consts.HOME_INDEX - from_point - 1,
+                    lambda _: 24 - from_point,  # FIX: war HOME_INDEX - from - 1
                     lambda _: from_point + 1,
                     operand=None
                 )
                 dice_match = jnp.any(state.dice == bearing_off_distance)
 
+                # Prüfe ob höhere Steine existieren (für Oversize-Regel)
+                # "Höher" bedeutet: WEITER vom Home entfernt (größere Distanz)
                 def white_check():
+                    # White: Point 23=1-pip (näheste), 22=2-pip, ..., 18=6-pip (weiteste)
+                    # Höher = größere Distanz = kleinere Point-Number
+                    # Prüfe ob Steine auf Points < from_point existieren (weiter entfernt)
                     full_home = jax.lax.dynamic_slice(board[player_idx], (18,), (6,))
                     mask = (jnp.arange(18, 24) < from_point)
                     return jnp.any(full_home * mask > 0)
+                
                 def black_check():
+                    # Black: Point 0=1-pip (näheste), 1=2-pip, ..., 5=6-pip (weiteste)
+                    # Höher = größere Distanz = größere Point-Number
+                    # Prüfe ob Steine auf Points > from_point existieren (weiter entfernt)
                     full_home = jax.lax.dynamic_slice(board[player_idx], (0,), (6,))
                     mask = (jnp.arange(0, 6) > from_point)
                     return jnp.any(full_home * mask > 0)
@@ -332,11 +354,17 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 operand=None
             )
 
+            # Höherer-Würfel-Regel: Wenn nur EINER der Würfel geht, muss der HÖHERE verwendet werden
+            # need_rule = True wenn: 2 verschiedene Würfel UND höherer geht UND niedrigerer NICHT geht
             need_rule = has_two & can_hi & (~can_lo)
 
             def must_use_hi(_):
+                # Prüfe ob aktueller Move den höheren Würfel benutzt
                 state_hi = state._replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
-                return self._is_valid_move_basic(state_hi, move)
+                uses_hi = self._is_valid_move_basic(state_hi, move)
+                
+                # Wenn Regel aktiv: Move ist nur legal wenn er höheren Würfel benutzt
+                return uses_hi
 
             ok2 = jax.lax.cond(need_rule, must_use_hi, lambda __: jnp.bool_(True), operand=None)
             return basic_ok & ok2
@@ -807,11 +835,19 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
                 def invalid_drop(s2):
                     # Checker jumps back: move cursor to origin, return to SELECTING phase
+                    # FIX: Bei Bar-Drops zurück zur ursprünglichen Bar-Seite (picked_bar_side), nicht nur BAR_INDEX
+                    was_from_bar = (s2.picked_checker_from == jnp.int32(self.consts.BAR_INDEX))
+                    fallback_cursor = jax.lax.cond(
+                        was_from_bar & (s2.picked_bar_side >= 0),
+                        lambda _: s2.picked_bar_side,  # Zurück zur korrekten Bar-Hälfte
+                        lambda _: s2.picked_checker_from,  # Normaler Fall: zurück zum Punkt
+                        operand=None
+                    )
                     ns = s2._replace(
                         picked_checker_from=-1,
                         picked_bar_side=-1,                   
                         game_phase=1,
-                        cursor_position=s2.picked_checker_from
+                        cursor_position=fallback_cursor
                     )
                     return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
