@@ -1228,7 +1228,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             updated_bullet_active
         )
         
-        # Enemy random walk (dead enemies stay put and never move again)
+        # Enemy random walk
         rng, subkey = jax.random.split(state.key)
         enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
         enemy_alive = state.enemy_active == 1
