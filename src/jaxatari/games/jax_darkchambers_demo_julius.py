@@ -1124,7 +1124,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         new_spawner_timers = state.spawner_timers - 1
         should_spawn_enemy = (new_spawner_timers <= 0) & (new_spawner_active == 1)
         
-        # For each spawner that should spawn, try to place enemy next to it
+        # spawn each enemy exactly in the middle of the spawner
         def try_spawn_from_spawner(carry, spawner_idx):
             enemy_pos, enemy_types_arr, enemy_active_arr, key = carry
             should_spawn = should_spawn_enemy[spawner_idx]
