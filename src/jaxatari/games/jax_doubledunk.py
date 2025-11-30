@@ -2,7 +2,6 @@ from jax import numpy as jnp
 from typing import Tuple
 import jax.lax
 import jax.random as random
-import jax.debug
 import chex
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -25,21 +24,19 @@ class GameMode(IntEnum):
 
 @chex.dataclass(frozen=True)
 class DunkConstants:
-    """
-    Holds all static values for the game like screen dimensions, player speeds, colors, etc.
-    """
+    """Holds all static values for the game like screen dimensions, player speeds, colors, etc."""
     WINDOW_WIDTH: int = 250
     WINDOW_HEIGHT: int = 150
     BALL_SIZE: Tuple[int, int] = (3,3)
     BALL_START: Tuple [int, int] = (100, 70)
-    JUMP_STRENGTH: int = 5 #adjustable if necessary and more of a placeholder value 
-    PLAYER_MAX_SPEED: int = 2 #adjustable if necessary and more of a placeholder value
+    JUMP_STRENGTH: int = 5
+    PLAYER_MAX_SPEED: int = 2
     PLAYER_Y_MIN: int = 20
     PLAYER_Y_MAX: int = 120
     PLAYER_X_MIN: int  = 0
     PLAYER_X_MAX: int = 250
     BASKET_POSITION: Tuple[int,int] = (125,10)
-    GRAVITY: int = 1 # Downward acceleration due to gravity
+    GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (40, 210, 81) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
 
 @chex.dataclass(frozen=True)
@@ -116,37 +113,29 @@ _SHOOT_ACTIONS = {Action.UPFIRE}
 class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkConstants]):
     
     def __init__(self):
-        """
-        Initialize the game environment.
-        """
+        """Initialize the game environment."""
         self.constants = DunkConstants()
         self.renderer = DunkRenderer(self.constants)
 
     def reset(self, key) -> Tuple[DunkObservation, DunkGameState]:
-        """
-        Resets the environment to the initial state.
-        """
+        """Resets the environment to the initial state."""
         state = self._init_state(key)
         obs = self._get_observation(state)
         return obs, state
 
     def _get_observation(self, state: DunkGameState) -> DunkObservation:
-        """
-        Converts the environment state to an observation.
-        """
-        # For now, we'll treat player1_inside as the main 'player'
-        # and player2_inside as the 'enemy' for the observation.
+        """Converts the environment state to an observation."""
         player = EntityPosition(
             x=jnp.array(state.player1_inside.x),
             y=jnp.array(state.player1_inside.y),
-            width=jnp.array(10),  # Placeholder width
-            height=jnp.array(30), # Placeholder height
+            width=jnp.array(10),  
+            height=jnp.array(30), 
         )
         enemy = EntityPosition(
             x=jnp.array(state.player2_inside.x),
             y=jnp.array(state.player2_inside.y),
-            width=jnp.array(10),  # Placeholder width
-            height=jnp.array(30), # Placeholder height
+            width=jnp.array(10),  
+            height=jnp.array(30), 
         )
         ball = EntityPosition(
             x=jnp.array(state.ball.x),
@@ -163,15 +152,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
     def action_space(self):
-        """
-        Returns the action space of the environment.
-        """
+        """Returns the action space of the environment."""
         return spaces.Discrete(18)
     
     def observation_space(self):
-        """
-        Returns the observation space of the environment.
-        """
+        """Returns the observation space of the environment."""
         field=spaces.Dict({
                 "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
@@ -188,10 +173,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         })
     
     def _init_state(self, key) -> DunkGameState:
-        """
-        Creates the very first state of the game.
-        Use values from self.constants.
-        """
+        """Creates the very first state of the game."""
         return DunkGameState(
             player1_inside=PlayerState(x=125, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player1_outside=PlayerState(x=80, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
@@ -209,9 +191,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
     def _get_player_action_effects(self, action: int, player_z: chex.Array, constants: DunkConstants) -> Tuple[chex.Array, chex.Array, chex.Array]:
-        """
-        Determines the velocity for 8-way movement and the impulse for Z-axis jumps.
-        """
+        """Determines the velocity for 8-way movement and the impulse for Z-axis jumps."""
         # --- X/Y Movement on the ground plane ---
         action_jnp = jnp.asarray(action)
 
@@ -230,92 +210,52 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         vel_y = jax.lax.select(is_moving_down, constants.PLAYER_MAX_SPEED, vel_y)
 
         # --- Z-Axis Jump Impulse ---
-        # A jump can only be initiated if the player is on the ground (z=0) and presses FIRE
-        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(_JUMP_ACTIONS)))
+        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(_JUMP_ACTIONS))) # A jump can only be initiated if the player is on the ground (z=0) and presses FIRE
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
 
         return vel_x, vel_y, vel_z
 
     def _update_player_physics(self, player: PlayerState, constants: DunkConstants) -> PlayerState:
-        """
-        Applies physics for both 2D plane movement and Z-axis jumping.
-        """
+        """Applies physics for both 2D plane movement and Z-axis jumping."""
         # --- Z-Axis Physics (Jumping) ---
-        # Update Z position based on current Z velocity
         new_z = player.z + player.vel_z
-
-        # Apply gravity for the *next* frame's velocity
         new_vel_z = player.vel_z - constants.GRAVITY
-
-        # Ground collision and state reset
         has_landed = new_z <= 0
         new_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_z)
         new_vel_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_vel_z)
 
         # --- X/Y Plane Physics (8-way movement) ---
-        # Update position
-        new_x = player.x + player.vel_x
-        new_y = player.y + player.vel_y
-
-        # Screen boundary collision
-        new_x = jax.lax.clamp(constants.PLAYER_X_MIN, new_x, constants.PLAYER_X_MAX)
-        new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, new_y, constants.PLAYER_Y_MAX)
+        new_x = jax.lax.clamp(constants.PLAYER_X_MIN, player.x + player.vel_x, constants.PLAYER_X_MAX)
+        new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, player.y + player.vel_y, constants.PLAYER_Y_MAX)
 
         return player.replace(x=new_x, y=new_y, z=new_z, vel_z=new_vel_z)
 
     def _update_player(self, player: PlayerState, action: int, constants: DunkConstants) -> PlayerState:
-        """
-        Takes a player state and an action, and returns the updated player state
-        after applying physics and action effects.
-        """
-        # Get desired velocity for 8-way movement and any jump impulse
+        """Takes a player state and an action, and returns the updated player state"""
         vel_x, vel_y, jump_impulse = self._get_player_action_effects(action, player.z, constants)
-
-        # Set the player's X/Y velocity based on the action
-        updated_player = player.replace(vel_x=vel_x, vel_y=vel_y)
-
-        # If there's a jump impulse, apply it. Otherwise, keep the existing vel_z.
-        # This prevents the vertical velocity from being reset to 0 every frame.
         new_vel_z = jax.lax.select(
             jump_impulse > 0,
             jump_impulse,
-            updated_player.vel_z
+            player.vel_z
         )
-        updated_player = updated_player.replace(vel_z=new_vel_z)
-
-        # Apply physics (movement, gravity, collisions) to the player
-        updated_player = self._update_player_physics(updated_player, constants)
-
+        updated_player = self._update_player_physics(player.replace(vel_x=vel_x, vel_y=vel_y,vel_z=new_vel_z), constants)
         return updated_player
 
     def _handle_miss(self, state: DunkGameState) -> DunkGameState:
-        """
-        Handles a missed shot by resetting the scene, preserving the score,
-        and giving the ball to the non-shooting team.
-        """
+        """Handles a missed shot by resetting the scene"""
         key, reset_key = random.split(state.key)
-        
-        # Create a new initial state
-        reset_state = self._init_state(reset_key).replace(
-            player_score=state.player_score,
-            enemy_score=state.enemy_score
-        )
-        
-        # Give the ball to the non-shooting team
         is_p1_shooter = (state.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (state.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)
         new_ball_holder = jax.lax.select(is_p1_shooter, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
-
-        reset_state = reset_state.replace(
-            ball=reset_state.ball.replace(holder=new_ball_holder)
+        return self._init_state(reset_key).replace(
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            ball=state.ball.replace(holder=new_ball_holder)
         )
-        
-        return reset_state
 
     def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
         """Determines the action for each player based on control state and AI."""
         is_p1_inside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_INSIDE)
         is_p1_outside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_OUTSIDE)
-
         p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
         p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
 
@@ -323,7 +263,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         key, p2_action_key, teammate_action_key = random.split(key, 3)
         # We need 4 keys for enemies: 2 for probability checks and 2 for random move selection
         p2_inside_prob_key, p2_outside_prob_key, p2_inside_move_key, p2_outside_move_key = random.split(p2_action_key, 4)
-
         movement_actions = jnp.array([
             Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT
@@ -332,7 +271,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # --- Teammate AI ---
         p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
         p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
-
         is_p1_inside_teammate_no_ball = ~is_p1_inside_controlled & ~p1_inside_has_ball
         is_p1_outside_teammate_no_ball = ~is_p1_outside_controlled & ~p1_outside_has_ball
 
@@ -557,11 +495,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         def on_goal(s):
             key, reset_key = random.split(s.key)
-            is_p1_scorer = (s.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (s.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)
-            
+            is_p1_scorer = (s.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (s.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)  
             new_player_score = s.player_score + is_p1_scorer
-            new_enemy_score = s.enemy_score + (1 - is_p1_scorer)
-                        
+            new_enemy_score = s.enemy_score + (1 - is_p1_scorer)         
             new_state = self._init_state(reset_key).replace(player_score=new_player_score, enemy_score=new_enemy_score)
             new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
             return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
@@ -656,9 +592,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
-        """
-        Takes an action in the game and returns the new game state.
-        """
+        """Takes an action in the game and returns the new game state."""
         # 1. Determine actions for all players (human-controlled and AI)
         actions, key = self._handle_player_actions(state, action, state.key)
 
@@ -680,23 +614,17 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return observation, final_state, reward, done, info
 
     def _get_reward(self, previous_state: DunkGameState, state: DunkGameState) -> float:
-        """
-        Calculates the reward from the environment state.
-        """
+        """Calculates the reward from the environment state."""
         # Placeholder: return 0 reward for now
         return 0.0
 
     def _get_done(self, state: DunkGameState) -> bool:
-        """
-        Determines if the environment state is a terminal state
-        """
+        """Determines if the environment state is a terminal state"""
         # Placeholder: game is never done for now
         return False
 
     def _get_info(self, state: DunkGameState) -> DunkInfo:
-        """
-        Extracts information from the environment state.
-        """
+        """Extracts information from the environment state."""
         # Placeholder: return step count
         return DunkInfo(time=state.step_counter)
 
@@ -795,17 +723,11 @@ class DunkRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
 
-        # --- Render Controlled Player Arrow ---
-        controlled_id = state.controlled_player_id
-        
-        # Get the index of the controlled player in the all_players arrays
-        controlled_player_idx = controlled_id - 1
-
+        # --- Render Controlled Player Arrow ---        
         # Only render if a player is controlled (ID is not NONE)
         def render_arrow_body(current_raster):
-            controlled_x = all_players_x[controlled_player_idx]
-            controlled_visual_y = visual_ys[controlled_player_idx]
-            
+            controlled_x = all_players_x[state.controlled_player_id - 1]
+            controlled_visual_y = visual_ys[state.controlled_player_id - 1]
             arrow_mask = self.SHAPE_MASKS['player_arrow']
             arrow_height = arrow_mask.shape[0]
             
@@ -820,7 +742,7 @@ class DunkRenderer(JAXGameRenderer):
             return self.jr.render_at(current_raster, arrow_x, arrow_y, arrow_mask)
 
         raster = jax.lax.cond(
-            controlled_id != PlayerID.NONE,
+            state.controlled_player_id != PlayerID.NONE,
             render_arrow_body,
             lambda r: r,
             raster
@@ -831,7 +753,6 @@ class DunkRenderer(JAXGameRenderer):
         ball_mask = self.SHAPE_MASKS['ball']
 
         def render_ball_body(current_raster):
-            # x and y might be floats, so we cast to int for rendering
             ball_x = jnp.round(state.ball.x).astype(jnp.int32)
             ball_y = jnp.round(state.ball.y).astype(jnp.int32)
             return self.jr.render_at(current_raster, ball_x, ball_y, ball_mask)
