@@ -80,8 +80,9 @@ class GhostMode(IntEnum):
 RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-# PELLETS_TO_COLLECT = 3
+MAX_LIVE_COUNT = 8
+# PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+PELLETS_TO_COLLECT = 4
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -516,12 +517,12 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         """
         Render the lives on the raster at a fixed position.
         """
-        if current_lives == initial_lives:
-            for i in range(current_lives):
+        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
+        for i in range(0, MAX_LIVE_COUNT):
+            if i < current_lives:
                 raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
-        elif current_lives >= 0:
-            bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-            raster = aj.render_at(raster, life_x + current_lives * (life_sprite.shape[1] + spacing), life_y, bg_sprite)
+            else:
+                raster = aj.render_at(raster, life_x + current_lives * (life_sprite.shape[1] + spacing), life_y, bg_sprite)            
         return raster
     
     @staticmethod
