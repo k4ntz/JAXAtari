@@ -75,12 +75,10 @@ class DunkGameState:
     player2_inside: PlayerState
     player2_outside: PlayerState
     ball: BallState
-
     player_score: chex.Array
     enemy_score: chex.Array
     step_counter: chex.Array
     acceleration_counter: chex.Array
-
     game_mode: chex.Array           # Current mode (PLAY_SELECTION or IN_PLAY)
     play_step: chex.Array           # Tracks progress within a play (e.g., 1st, 2nd, 3rd button press)
     controlled_player_id: chex.Array
@@ -104,6 +102,16 @@ class DunkObservation:
 @chex.dataclass(frozen=True)
 class DunkInfo:
     time: jnp.ndarray
+
+# Define action sets
+_MOVE_LEFT_ACTIONS = {Action.LEFT, Action.UPLEFT, Action.DOWNLEFT}
+_MOVE_RIGHT_ACTIONS = {Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT}
+_MOVE_UP_ACTIONS = {Action.UP, Action.UPLEFT, Action.UPRIGHT}
+_MOVE_DOWN_ACTIONS = {Action.DOWN, Action.DOWNLEFT, Action.DOWNRIGHT}
+_JUMP_ACTIONS = {Action.FIRE} 
+_PASS_ACTIONS = {Action.DOWNFIRE} 
+_SHOOT_ACTIONS = {Action.UPFIRE}
+
 
 class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkConstants]):
     
@@ -159,39 +167,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         Returns the action space of the environment.
         """
         return spaces.Discrete(18)
-
-    # Define action sets
-    _MOVE_LEFT_ACTIONS = {Action.LEFT, Action.UPLEFT, Action.DOWNLEFT}
-    _MOVE_RIGHT_ACTIONS = {Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT}
-    _MOVE_UP_ACTIONS = {Action.UP, Action.UPLEFT, Action.UPRIGHT}
-    _MOVE_DOWN_ACTIONS = {Action.DOWN, Action.DOWNLEFT, Action.DOWNRIGHT}
-    _JUMP_ACTIONS = {Action.FIRE} 
-    _PASS_ACTIONS = {Action.DOWNFIRE} 
-    _SHOOT_ACTIONS = {Action.UPFIRE}
-
+    
     def observation_space(self):
         """
         Returns the observation space of the environment.
         """
+        field=spaces.Dict({
+                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
+            })
+            
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-            }),
-            "enemy": spaces.Dict({
-                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-            }),
+            "player": field,
+            "enemy": field,
+            "ball": field,
             "score_player": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "score_enemy": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
@@ -217,8 +208,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             key=key,
         )
 
-
-
     def _get_player_action_effects(self, action: int, player_z: chex.Array, constants: DunkConstants) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """
         Determines the velocity for 8-way movement and the impulse for Z-axis jumps.
@@ -226,15 +215,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # --- X/Y Movement on the ground plane ---
         action_jnp = jnp.asarray(action)
 
-        is_moving_left = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_LEFT_ACTIONS)))
-        is_moving_right = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_RIGHT_ACTIONS)))
+        is_moving_left = jnp.any(action_jnp == jnp.asarray(list(_MOVE_LEFT_ACTIONS)))
+        is_moving_right = jnp.any(action_jnp == jnp.asarray(list(_MOVE_RIGHT_ACTIONS)))
 
         vel_x = jnp.array(0, dtype=jnp.int32)
         vel_x = jax.lax.select(is_moving_left, -constants.PLAYER_MAX_SPEED, vel_x)
         vel_x = jax.lax.select(is_moving_right, constants.PLAYER_MAX_SPEED, vel_x)
 
-        is_moving_up = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_UP_ACTIONS)))
-        is_moving_down = jnp.any(action_jnp == jnp.asarray(list(self._MOVE_DOWN_ACTIONS)))
+        is_moving_up = jnp.any(action_jnp == jnp.asarray(list(_MOVE_UP_ACTIONS)))
+        is_moving_down = jnp.any(action_jnp == jnp.asarray(list(_MOVE_DOWN_ACTIONS)))
 
         vel_y = jnp.array(0, dtype=jnp.int32)
         vel_y = jax.lax.select(is_moving_up, -constants.PLAYER_MAX_SPEED, vel_y)
@@ -242,7 +231,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # --- Z-Axis Jump Impulse ---
         # A jump can only be initiated if the player is on the ground (z=0) and presses FIRE
-        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(self._JUMP_ACTIONS)))
+        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(_JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
 
         return vel_x, vel_y, vel_z
@@ -322,7 +311,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         return reset_state
 
-    def _determine_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
+    def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
         """Determines the action for each player based on control state and AI."""
         is_p1_inside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_INSIDE)
         is_p1_outside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_OUTSIDE)
@@ -420,7 +409,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return player.replace(animation_frame=final_frame, animation_direction=final_dir)
 
-    def _update_players_and_animations(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
+    def _update_players(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
         """Updates physics and animations for all players."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
 
@@ -456,10 +445,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         human_action = actions[0] # The primary action from the user
 
         # --- Passing ---
-        is_p1_inside_passing = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
-        is_p1_outside_passing = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
-        is_p2_inside_passing = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
-        is_p2_outside_passing = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(self._PASS_ACTIONS)))
+        is_p1_inside_passing = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p1_outside_passing = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_inside_passing = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_outside_passing = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
 
         receiver_id = jax.lax.select(is_p1_inside_passing, PlayerID.PLAYER1_OUTSIDE,
@@ -500,10 +489,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # --- Shooting ---
-        is_p1_inside_shooting = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
-        is_p1_outside_shooting = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
-        is_p2_inside_shooting = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
-        is_p2_outside_shooting = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(self._SHOOT_ACTIONS)))
+        is_p1_inside_shooting = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p1_outside_shooting = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_inside_shooting = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_outside_shooting = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
 
         shooter_id = jax.lax.select(is_p1_inside_shooting, PlayerID.PLAYER1_INSIDE,
@@ -550,7 +539,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         stealer_x = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, state.player1_inside.x, state.player1_outside.x)
         stealer_y = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, state.player1_inside.y, state.player1_outside.y)
 
-        is_trying_to_steal = jnp.any(jnp.asarray(human_action) == jnp.asarray(list(self._JUMP_ACTIONS)))
+        is_trying_to_steal = jnp.any(jnp.asarray(human_action) == jnp.asarray(list(_JUMP_ACTIONS)))
         is_close_to_ball = jnp.sqrt((stealer_x - ball_state.x)**2 + (stealer_y - ball_state.y)**2) < steal_radius
         is_p1_team_holder = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
         can_steal_from_holder = ~is_p1_team_holder
@@ -565,7 +554,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return ball_state, key
 
-    def _update_ball_flight_and_possession(self, state: DunkGameState) -> DunkGameState:
+    def _update_ball(self, state: DunkGameState) -> DunkGameState:
         """Handles ball movement, goals, misses, catches, and possession changes."""
         ball_in_flight = (state.ball.holder == PlayerID.NONE)
         dist_to_target = jnp.sqrt((state.ball.x - state.ball.target_x)**2 + (state.ball.y - state.ball.target_y)**2)
@@ -678,10 +667,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         Takes an action in the game and returns the new game state.
         """
         # 1. Determine actions for all players (human-controlled and AI)
-        actions, key = self._determine_player_actions(state, action, state.key)
+        actions, key = self._handle_player_actions(state, action, state.key)
 
         # 2. Update player physics and animations
-        state_with_updated_players = self._update_players_and_animations(state, actions)
+        state_with_updated_players = self._update_players(state, actions)
 
         # 3. Handle ball actions (passing, shooting, stealing)
         ball_state, key = self._handle_ball_actions(state_with_updated_players, actions, key)
@@ -690,7 +679,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         temp_state = state_with_updated_players.replace(ball=ball_state, key=key)
 
         # 4. Process ball flight, goals, misses, and possession changes
-        final_state = self._update_ball_flight_and_possession(temp_state)
+        final_state = self._update_ball(temp_state)
 
         # 5. Generate outputs
         observation = self._get_observation(final_state)
