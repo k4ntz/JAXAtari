@@ -419,17 +419,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         updated_p2_inside = self._update_player(state.player2_inside, p2_inside_action, self.constants)
         updated_p2_outside = self._update_player(state.player2_outside, p2_outside_action, self.constants)
 
-        # Check ball possession
-        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
-        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
-        p2_inside_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE)
-        p2_outside_has_ball = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
-
         # Update animations
-        updated_p1_inside = self._update_player_animation(updated_p1_inside, p1_inside_has_ball)
-        updated_p1_outside = self._update_player_animation(updated_p1_outside, p1_outside_has_ball)
-        updated_p2_inside = self._update_player_animation(updated_p2_inside, p2_inside_has_ball)
-        updated_p2_outside = self._update_player_animation(updated_p2_outside, p2_outside_has_ball)
+        updated_p1_inside = self._update_player_animation(updated_p1_inside, (state.ball.holder == PlayerID.PLAYER1_INSIDE))
+        updated_p1_outside = self._update_player_animation(updated_p1_outside, (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
+        updated_p2_inside = self._update_player_animation(updated_p2_inside, (state.ball.holder == PlayerID.PLAYER2_INSIDE))
+        updated_p2_outside = self._update_player_animation(updated_p2_outside, (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
 
         return state.replace(
             player1_inside=updated_p1_inside,
@@ -438,7 +432,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-    def _handle_ball_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[BallState, chex.PRNGKey]:
+    def _handle_ball_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> DunkGameState:
         """Handles ball actions like passing, shooting, and stealing."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
@@ -551,8 +545,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             lambda b: b,
             ball_state
         )
-
-        return ball_state, key
+        return state.replace(ball=ball_state, key=key)
 
     def _update_ball(self, state: DunkGameState) -> DunkGameState:
         """Handles ball movement, goals, misses, catches, and possession changes."""
@@ -670,16 +663,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions, key = self._handle_player_actions(state, action, state.key)
 
         # 2. Update player physics and animations
-        state_with_updated_players = self._update_players(state, actions)
+        new_state_1 = self._update_players(state, actions)
 
         # 3. Handle ball actions (passing, shooting, stealing)
-        ball_state, key = self._handle_ball_actions(state_with_updated_players, actions, key)
+        new_state_2 = self._handle_ball_actions(new_state_1, actions, key)
         
-        # Create a temporary state with all updates so far
-        temp_state = state_with_updated_players.replace(ball=ball_state, key=key)
-
         # 4. Process ball flight, goals, misses, and possession changes
-        final_state = self._update_ball(temp_state)
+        final_state = self._update_ball(new_state_2)
 
         # 5. Generate outputs
         observation = self._get_observation(final_state)
