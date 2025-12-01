@@ -441,11 +441,9 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
     def render_background(self, level: chex.Array, lives: chex.Array, score: chex.Array):
         """Reset the background for a new level."""
-        print('Lives: ' + str(lives) + ', Score: ' + str(score))
-        maze = get_level_maze(level) 
-        self.SPRITE_BG = MsPacmanMaze.load_background(maze)
+        self.SPRITE_BG = MsPacmanMaze.load_background(get_level_maze(level))
         self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
-        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) == (MAX_SCORE_DIGITS - 1), self.sprites["score"])
+        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)), self.sprites["score"])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
@@ -504,8 +502,8 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         Only updates digits that have changed.
         """
         digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-        for idx in range(MAX_SCORE_DIGITS):
-            if score_changed[idx]:
+        for idx in range(len(digits)):
+            if score_changed[idx]: 
                 d_sprite    = digit_sprites[digits[idx]]
                 bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
                 raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
@@ -518,7 +516,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         Render the lives on the raster at a fixed position.
         """
         bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-        for i in range(0, MAX_LIVE_COUNT):
+        for i in range(MAX_LIVE_COUNT):
             if i < current_lives:
                 raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
             else:
@@ -670,6 +668,13 @@ def get_direction_index(direction: chex.Array) -> int:
         if jnp.all(d == direction):
             return idx
     return 0  # Default to NOOP if not found
+
+
+def get_digit_count(number: chex.Array) -> int:
+    """
+    Returns the number of digits in a given decimal number.
+    """
+    return len(str(abs(number)))
 
 
 def get_allowed_directions(position: chex.Array, direction: chex.Array, dofmaze: chex.Array):
@@ -1017,7 +1022,7 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
         fruit           = reset_fruit(),
         lives           = jnp.array(lives, dtype=jnp.int8),
         score           = jnp.array(score, dtype=jnp.uint32),
-        score_changed   = jnp.zeros(MAX_SCORE_DIGITS, dtype=jnp.bool_),
+        score_changed   = jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)),
         step_count      = jnp.array(0, dtype=jnp.uint32),
     )
 
