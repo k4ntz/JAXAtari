@@ -3,7 +3,9 @@ import numpy as np
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Discrete, Box
 from jaxatari.renderers import JAXGameRenderer
+import jax.numpy as jnp
 import chex
+import jax.lax
 
 
 # ---------------------------------------------------------------------
@@ -15,8 +17,12 @@ class TutankhamConstants(NamedTuple):
     SPEED: int = 4
     PIXEL_COLOR: Tuple[int, int, int] = (255, 255, 255)  # white
 
-    #PLAYER_SIZE: Tuple[int, int] = (5, 10)
-    #MISSILE_SIZE: Tuple[int, int] = (1, 2)
+    PLAYER_SIZE: Tuple[int, int] = (5, 10)
+
+    # Missile constants
+    BULLET_SIZE: Tuple[int, int] = (1, 2)
+    BULLET_SPEED: int = 8
+    MAX_BULLETS: int = 2
 
 # ---------------------------------------------------------------------
 # Game State
@@ -25,8 +31,8 @@ class TutankhamState(NamedTuple):
     player_x: int
     player_y: int
 
-    #missile_states: chex.Array # (2, 6) array with (x, y, speed_x, speed_y, rotation, lifespan) for each missile
-    #missile_rdy: chex.Array # tracks whether the player can fire a missile
+    bullet_states: chex.Array #(2, 6) array with (x, y, bullet_rotation, bullet_active) for each bullet
+    bullet_rdy: int # tracks whether the player can fire a bullet
 
 
 # ---------------------------------------------------------------------
@@ -42,10 +48,23 @@ class TutankhamRenderer(JAXGameRenderer):
             (self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=np.uint8
         )
 
+        # -------------------------
+        # Draw player
+        # -------------------------
         x = min(max(state.player_x, 0), self.consts.WIDTH - 1)
         y = min(max(state.player_y, 0), self.consts.HEIGHT - 1)
+        frame[y, x] = self.consts.PIXEL_COLOR
 
-        frame[y, x] = np.array(self.consts.PIXEL_COLOR, dtype=np.uint8)
+        # -------------------------
+        # Draw bullets (1×1 pixels)
+        # -------------------------
+        for bullet in state.bullet_states:
+            bx, by, rot, active = bullet
+            if active:
+                # Clip
+                #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
+                frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
+
         return frame
 
 
@@ -77,31 +96,109 @@ class JaxTutankham(JaxEnvironment):
     def reset(self, key=None):
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
+        bullet_states = np.array([[0, 0, 0, False], [0, 0, 0, False]])
+        bullet_rdy = 0
 
-        state = TutankhamState(player_x=start_x, player_y=start_y)
+        state = TutankhamState(player_x=start_x, player_y=start_y, bullet_states=bullet_states, bullet_rdy=bullet_rdy)
         return state, state
+
+    # Player Step
+    def player_step(
+            self,
+            player_x,
+            player_y,
+            action
+    ):
+
+        if action == Action.LEFT:
+            player_x -= self.consts.SPEED
+        elif action == Action.RIGHT:
+            player_x += self.consts.SPEED
+        elif action == Action.UP:
+            player_y -= self.consts.SPEED
+        elif action == Action.DOWN:
+            player_y += self.consts.SPEED
+
+        # Clip bounds
+        player_x = max(0, min(player_x, self.consts.WIDTH - 1))
+        player_y = max(0, min(player_y, self.consts.HEIGHT - 1))
+
+        return player_x, player_y
+    
+    
+    #Bullet Step
+    def bullet_step(self, tutankham_state, player_x, player_y, bullet_speed, action):
+
+        def get_rotation(action):
+            if action == Action.RIGHTFIRE: return 1
+            if action == Action.LEFTFIRE: return -1
+            return 0  # default if firing up/down/etc
+
+        space = (
+                (action == Action.LEFTFIRE)
+                or (action == Action.RIGHTFIRE)
+            )
+
+        bullet_1 = tutankham_state.bullet_states[0] #array with (x, y, bullet_rotation, bullet_active)
+        bullet_2 = tutankham_state.bullet_states[1] #array with (x, y, bullet_rotation, bullet_active)
+        bullet_rdy = tutankham_state.bullet_rdy
+
+        new_bullet_1 = bullet_1.copy()
+        new_bullet_2 = bullet_2.copy()
+
+        # --- update existing bullets ---
+        if bullet_1[3]:
+            bullet_1_x = bullet_1[0] + bullet_speed * bullet_1[2]
+            new_bullet_1[0] = bullet_1_x
+
+            # Deactivate if out of bounds
+            if not (0 <= bullet_1_x < self.consts.WIDTH):
+                new_bullet_1 = [0, 0, 0, False]
+
+
+        if bullet_2[3]:
+            bullet_2_x = bullet_2[0] + bullet_speed * bullet_2[2]
+            new_bullet_2[0] = bullet_2_x
+
+            # Deactivate if out of bounds
+            if not (0 <= bullet_2_x < self.consts.WIDTH):
+                new_bullet_2 = [0, 0, 0, False]
+
+        # --- cooldown logic ---
+        if bullet_rdy > 0:
+            bullet_rdy -= 1
+
+
+        # --- firing logic ---
+        slot1_free = not bullet_1[3]
+        slot2_free = not bullet_2[3]
+
+        if space and slot1_free and bullet_rdy == 0:
+            new_bullet_1 = [player_x, player_y, get_rotation(action), True]
+            bullet_rdy = 4  # cooldown period after firing
+
+        if space and slot2_free and bullet_rdy == 0:
+            new_bullet_2 = [player_x, player_y, get_rotation(action), True]
+            bullet_rdy = 4  # cooldown period after firing
+        
+        
+
+        return np.array([new_bullet_1, new_bullet_2]), bullet_rdy
+
+
 
     # -----------------------------
     # Step logic (pure Python)
     # -----------------------------
     def step(self, state: TutankhamState, action: int):
 
-        x, y = state.player_x, state.player_y
+        player_x, player_y = state.player_x, state.player_y
 
-        if action == Action.LEFT:
-            x -= self.consts.SPEED
-        elif action == Action.RIGHT:
-            x += self.consts.SPEED
-        elif action == Action.UP:
-            y -= self.consts.SPEED
-        elif action == Action.DOWN:
-            y += self.consts.SPEED
+        player_x, player_y = self.player_step(player_x, player_y, action)
 
-        # Clip bounds
-        x = max(0, min(x, self.consts.WIDTH - 1))
-        y = max(0, min(y, self.consts.HEIGHT - 1))
+        bullet_states, bullet_rdy =self.bullet_step(state, player_x, player_y, self.consts.BULLET_SPEED, action)
 
-        state = TutankhamState(player_x=x, player_y=y)
+        state = TutankhamState(player_x=player_x, player_y=player_y, bullet_states=bullet_states, bullet_rdy=bullet_rdy)
 
         reward = 0.0
         done = False
