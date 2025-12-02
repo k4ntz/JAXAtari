@@ -1,0 +1,15 @@
+diff a/src/jaxatari/environment.py b/src/jaxatari/environment.py	(rejected hunks)
+@@ -163,4 +163,11 @@
+         Returns: True if the state is terminal, False otherwise.
+ 
+         """
+-        raise NotImplementedError("Abstract method")
+\ No newline at end of file
++        raise NotImplementedError("Abstract method")
++
++
++class EnemyType:
++    TANK = 0
++    SUPER_TANK = 1
++    MISSILE = 2
++    SAUCER = 3

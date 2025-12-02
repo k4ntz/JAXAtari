@@ -81,7 +81,7 @@ import chex
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnemyType
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 
@@ -151,6 +151,14 @@ class Enemy(NamedTuple):
     distance: chex.Array
     enemy_type: chex.Array
     orientation_angle: chex.Array
+
+
+class EnemyType(IntEnum):
+    TANK = 0
+    SUPER_TANK = 1
+    MISSILE = 2
+    SAUCER = 3
+
 
 
 #----------------------------Battlezone Environment------------------------
@@ -256,7 +264,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 x=jnp.array([6.8047], dtype=jnp.float32),
                 z=jnp.array([60.5547], dtype=jnp.float32),
                 distance=jnp.array([60.93576], dtype=jnp.float32),
-                enemy_type=jnp.array([EnemyType.TANK], dtype=jnp.float32),
+                enemy_type=jnp.array([EnemyType.TANK], dtype=jnp.int32),
                 orientation_angle=jnp.array([1.57], dtype=jnp.float32)
             ),
         )
@@ -512,6 +520,9 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     def get_enemy_mask(self, enemy:Enemy): #todo change
         #selects the correct mask fo the given enemy
+        #all_enemy_types = [self.SHAPE_MASKS["tank_enemy_front"], self.SHAPE_MASKS["tank_enemy_left"]]
+
+        #selected_enemy_type = all_enemy_types[enemy.enemy_type]
         return self.SHAPE_MASKS["tank_enemy_front"]
 
 
