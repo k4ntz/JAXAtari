@@ -21,10 +21,10 @@ class UpNDownConstants(NamedTuple):
     LANDING_ZONE: int = 15
     FIRST_ROAD_LENGTH: int = 4
     SECOND_ROAD_LENGTH: int = 4
-    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 80, 140, 80]) #get actual values
-    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([105, 80, 25, 0]) #get actual values
-    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
-    SECOND_TRACK_CORNERS_Y: chex.Array = jnp.array([20, 50, 80, 100]) #get actual values
+    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 67, 38, 38, 20, 64, 30]) #get actual values
+    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([105, 65, 7, -50, -98, -163, -222, -242, -277, -362, -420, -460, -492, -520, -565, -600, -633, -683, -733, -793, -820, -845, -867, -895, -928]) #get actual values
+    SECOND_TRACK_CORNERS_X: chex.Array = FIRST_TRACK_CORNERS_X#jnp.array([20, 50]) #get actual values
+    SECOND_TRACK_CORNERS_Y: chex.Array = FIRST_TRACK_CORNERS_Y#jnp.array([20, 50, ]) #get actual values
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
     INITIAL_ROAD_POS_Y: int = 25 
 
@@ -54,6 +54,7 @@ class UpNDownState(NamedTuple):
     is_on_road: chex.Array
     player_car: Car
     step_counter: chex.Array
+    road_reset: chex.Array
 
 
 
@@ -99,7 +100,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         slope = jax.lax.cond(
             trackx[roadIndex+1] - trackx[roadIndex] != 0,
             lambda s: (tracky[roadIndex+1] - tracky[roadIndex]) / (trackx[roadIndex+1] - trackx[roadIndex]),
-            lambda s: jnp.inf,
+            lambda s: 300.0,
             operand=None,
         )
         b = tracky[roadIndex] - slope * trackx[roadIndex]
@@ -109,7 +110,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _isOnLine(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array, player_speed: chex.Array) -> chex.Array:
         slope, b = self._getSlopeAndB(state)
         jax.debug.print("slope: {}, b: {}", slope, b)
-        isOnLine = jnp.less_equal(jnp.abs(jnp.round(jnp.subtract(new_position_y, slope * new_position_x + b))), player_speed)
+        isOnLine = jnp.logical_or(jnp.logical_and(jnp.equal(slope, 300.0), jnp.equal(new_position_x, state.player_car.position.x)), jnp.less_equal(jnp.abs(jnp.round(jnp.subtract(new_position_y, slope * new_position_x + b))), player_speed))
 
         jax.debug.print("isOnLine: {}", jnp.subtract(new_position_y, slope * new_position_x + b))
         return isOnLine
@@ -301,6 +302,22 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
+        player_y = jax.lax.cond(
+            state.road_reset,
+            lambda s: 105.0,
+            lambda s: s,
+            operand=player_y,
+        )
+
+        road_reset = jax.lax.cond(
+            jnp.equal(player_y, -928),
+            lambda s: True,
+            lambda s: False,
+            operand=None,
+        )
+
+        
+
         #jax.debug.print("Player X: {}, Player Y: {}, on road: {}, jumping: {}, speed: {}, road index A: {}, road index B: {}, current road: {}", player_x, player_y, is_on_road, is_jumping, player_speed, road_index_A, road_index_B, current_road)
         return UpNDownState(
             score=state.score,
@@ -308,6 +325,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_cooldown=jump_cooldown,
             is_jumping=is_jumping,
             is_on_road=is_on_road,
+            road_reset=road_reset,
             player_car=Car(
                 position=EntityPosition(
                     x=player_x,
@@ -333,10 +351,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_cooldown=0,
             is_jumping=False,
             is_on_road=True,
+            road_reset=False,
             player_car=Car(
                 position=EntityPosition(
                     x=30,
-                    y=105,
+                    y= 105,
                     width=self.consts.PLAYER_SIZE[0],
                     height=self.consts.PLAYER_SIZE[1],
                 ),
@@ -439,7 +458,7 @@ class UpNDownRenderer(JAXGameRenderer):
         temp_pointer = self._createBackgroundSprite((1, 1))
         
         # 2. Update asset config to include both walls
-        asset_config = self._get_asset_config(background, top_block, bottom_block, temp_pointer)
+        asset_config, road_files = self._get_asset_config(background, top_block, bottom_block, temp_pointer)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
 
         # 3. Make a single call to the setup function
@@ -450,7 +469,7 @@ class UpNDownRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-        self.road_sizes, self.complete_road_size = self._get_road_sprite_sizes()
+        self.road_sizes, self.complete_road_size = self._get_road_sprite_sizes(road_files)
         self.view_height = self.config.game_dimensions[0]
         # Precompute offsets so repeated road tiles can wrap seamlessly without gaps.
         road_cycle = max(1, self.complete_road_size)
@@ -466,22 +485,26 @@ class UpNDownRenderer(JAXGameRenderer):
         sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
         return sprite
     
-    def _get_road_sprite_sizes(self) -> list:
-        """Returns the sizes of the road sprites."""
+    def _get_road_sprite_sizes(self, road_files: list[str]) -> list:
+        """Returns the sizes of the road sprites limited to the configured files."""
+        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
         sizes = []
-        complete_size = 0
-        for file in os.listdir(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background/"):
-            sprite = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background/{file}")
+        for file in road_files:
+            sprite_name = os.path.basename(file)
+            sprite = jnp.load(f"{road_dir}/{sprite_name}")
             sizes.append(sprite.shape[0])
-            if file != "background1.npy":
-                complete_size += sprite.shape[0]
+        complete_size = int(sum(sizes))
+        jax.debug.print("Complete road size: {}", complete_size)
         return sizes, complete_size
 
-    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray) -> list:
-        """Returns the declarative manifest of all assets for the game, including both wall sprites."""
-        roads = []
-        for x in range(13):
-            roads.append(f"background/background{x+1}.npy")
+    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray) -> tuple[list, list[str]]:
+        """Returns the asset manifest and ordered road files."""
+        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
+        road_files = sorted(
+            file for file in os.listdir(road_dir)
+            if file.endswith(".npy")
+        )
+        roads = [f"roads/{file}" for file in road_files]
         return [
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
             {'name': 'road', 'type': 'group', 'files': roads},
@@ -489,7 +512,7 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
             {'name': 'tempPointer', 'type': 'procedural', 'data': tempPointer},
-        ]
+        ], roads
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -512,7 +535,7 @@ class UpNDownRenderer(JAXGameRenderer):
 
         tile_offsets = self._road_tile_offsets
         tile_count = self._num_road_tiles
-        tiled_y = (y_positions[None, :] + tile_offsets[:, None]).reshape(tile_count * num_segments)
+        tiled_y = (y_positions[None, :] + tile_offsets[:, None]).reshape(-1)
         tiled_masks = jnp.tile(road_masks, (tile_count, 1, 1))
         tiled_sizes = jnp.tile(sizes, tile_count)
 
