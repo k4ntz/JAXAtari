@@ -22,7 +22,7 @@ class UpNDownConstants(NamedTuple):
     FIRST_ROAD_LENGTH: int = 4
     SECOND_ROAD_LENGTH: int = 4
     FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 67, 38, 38, 20, 64, 30]) #get actual values
-    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([105, 65, 7, -50, -98, -163, -222, -242, -277, -362, -420, -460, -492, -520, -565, -600, -633, -683, -733, -793, -820, -845, -867, -895, -928]) #get actual values
+    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -898, -925, -950, -972, -1000, -1033]) #get actual values
     SECOND_TRACK_CORNERS_X: chex.Array = FIRST_TRACK_CORNERS_X#jnp.array([20, 50]) #get actual values
     SECOND_TRACK_CORNERS_Y: chex.Array = FIRST_TRACK_CORNERS_Y#jnp.array([20, 50, ]) #get actual values
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
@@ -54,7 +54,6 @@ class UpNDownState(NamedTuple):
     is_on_road: chex.Array
     player_car: Car
     step_counter: chex.Array
-    road_reset: chex.Array
 
 
 
@@ -302,19 +301,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
-        player_y = jax.lax.cond(
-            state.road_reset,
-            lambda s: 105.0,
-            lambda s: s,
-            operand=player_y,
-        )
-
-        road_reset = jax.lax.cond(
-            jnp.equal(player_y, -928),
-            lambda s: True,
-            lambda s: False,
-            operand=None,
-        )
 
         
 
@@ -325,11 +311,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_cooldown=jump_cooldown,
             is_jumping=is_jumping,
             is_on_road=is_on_road,
-            road_reset=road_reset,
             player_car=Car(
                 position=EntityPosition(
                     x=player_x,
-                    y=player_y,
+                    y=-((player_y * -1) % 1036),
                     width=state.player_car.position.width,
                     height=state.player_car.position.height,
                 ),
@@ -351,11 +336,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_cooldown=0,
             is_jumping=False,
             is_on_road=True,
-            road_reset=False,
             player_car=Car(
                 position=EntityPosition(
                     x=30,
-                    y= 105,
+                    y= 0,
                     width=self.consts.PLAYER_SIZE[0],
                     height=self.consts.PLAYER_SIZE[1],
                 ),
@@ -517,7 +501,7 @@ class UpNDownRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        road_diff = (-state.player_car.position.y + 105) % self.complete_road_size
+        road_diff = (-state.player_car.position.y) % self.complete_road_size
 
         # Vectorized road rendering: compute all Y offsets, stamp via vmap, fold overlays.
         road_masks = self.SHAPE_MASKS["road"]  # shape: (N, H, W)
