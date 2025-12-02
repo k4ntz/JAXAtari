@@ -15,8 +15,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _get_default_asset_config() -> tuple:
     """
-    Returns the default declarative asset manifest for Pacman.
-    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Default asset configuration for Pacman.
+    Uses a tuple of dictionaries for immutability and JAX compatibility.
     """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
@@ -59,14 +59,14 @@ def _get_default_asset_config() -> tuple:
 class PacmanConstants(NamedTuple):
     # Screen dimensions (Atari 2600 Pacman uses 224x288, but we'll use standard 210x160)
     WIDTH: int = 160
-    HEIGHT: int = 210
+    HEIGHT: int = 200  # 25 tiles * 8 pixels
     
     # Tile size for maze (8x8 pixels per tile)
     TILE_SIZE: int = 8
     
-    # Maze dimensions in tiles
-    MAZE_WIDTH: int = 28  # 28 tiles wide
-    MAZE_HEIGHT: int = 31  # 31 tiles tall
+    # Maze dimensions in tiles (matching maze1.txt)
+    MAZE_WIDTH: int = 20  # 20 tiles wide
+    MAZE_HEIGHT: int = 25  # 25 tiles tall
     
     # Player constants
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
@@ -109,10 +109,13 @@ class PacmanConstants(NamedTuple):
     PELLET_COLOR: Tuple[int, int, int] = (255, 255, 0)  # Yellow
     SCORE_COLOR: Tuple[int, int, int] = (255, 255, 255)  # White
     
-    # Maze layout - simplified representation
-    # 0 = empty, 1 = wall, 2 = dot, 3 = power pellet, 4 = ghost house
-    # This will be a 2D array representing the maze
-    MAZE_LAYOUT: chex.Array = None  # Will be initialized
+    # Maze layout grid where each cell represents a tile type.
+    # 0: Empty path
+    # 1: Wall
+    # 2: Dot
+    # 3: Power Pellet
+    # 4: Ghost House
+    MAZE_LAYOUT: chex.Array = None
     
     # Asset config
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -135,9 +138,11 @@ class PacmanState(NamedTuple):
     player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
     player_next_direction: chex.Array  # Queued direction for cornering
     player_animation_frame: chex.Array  # 0 or 1 for mouth open/close
+    player_current_node_index: chex.Array  # Current node index for node-based movement
+    player_target_node_index: chex.Array  # Target node index for node-based movement
     
     # Ghost states (4 ghosts)
-    ghosts: chex.Array  # Shape: (4, 6) - [x, y, direction, state, target_x, target_y] for each ghost
+    ghosts: chex.Array  # Shape: (4, 8) - [x, y, direction, state, target_x, target_y, current_node, target_node]
     
     # Pellet states - simplified: track number of dots remaining
     dots_remaining: chex.Array
@@ -147,10 +152,11 @@ class PacmanState(NamedTuple):
     score: chex.Array
     lives: chex.Array
     level: chex.Array
-    pellets_collected: chex.Array  # 31x28 mask: 0=not collected, 1=collected
+    pellets_collected: chex.Array  # 25x20 mask: 0=not collected, 1=collected
     
     # Timers
     frightened_timer: chex.Array
+    ghosts_eaten_count: chex.Array  # Tracks ghosts eaten during current power pellet
     scatter_chase_timer: chex.Array
     is_scatter_mode: chex.Array  # True for scatter, False for chase
     
@@ -201,79 +207,119 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             self.consts = consts._replace(MAZE_LAYOUT=self._create_default_maze())
         else:
             self.consts = consts
+        
+        # Load NodeGroup for node-based movement
+        from jaxatari.games.pacmanMaps.nodes import NodeGroup
+        maze_file_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "pacmanMaps", "maze1.txt"
+        )
+        if not os.path.exists(maze_file_path):
+            maze_file_path = None
+        self.node_group = NodeGroup.from_maze_file(maze_file_path, tile_size=self.consts.TILE_SIZE)
+        
+        # Pre-compute node positions for JIT-compatible movement
+        self.node_positions_x = jnp.array([node.position.x for node in self.node_group.nodeList], dtype=jnp.int32)
+        self.node_positions_y = jnp.array([node.position.y for node in self.node_group.nodeList], dtype=jnp.int32)
+        
+        # Pre-compute neighbor lookup: neighbor_lookup[node_idx][action] -> next_node_idx
+        neighbor_arrays = [node.neighbor_indices for node in self.node_group.nodeList]
+        self.neighbor_lookup = jnp.stack(neighbor_arrays)  # Shape: (num_nodes, 18)
+        
+        # Find ghost house node (look for tile value 4)
+        # Default to center if not found
+        center_x = (self.consts.MAZE_WIDTH * self.consts.TILE_SIZE) // 2
+        center_y = (self.consts.MAZE_HEIGHT * self.consts.TILE_SIZE) // 2
+        self.ghost_house_node_idx = self._find_nearest_node_idx(center_x, center_y)
+        
+        # Try to find a node that is actually inside the ghost house (tile 4)
+        for i, node in enumerate(self.node_group.nodeList):
+            tx = int(node.position.x) // self.consts.TILE_SIZE
+            ty = int(node.position.y) // self.consts.TILE_SIZE
+            if tx < self.consts.MAZE_WIDTH and ty < self.consts.MAZE_HEIGHT:
+                if self.consts.MAZE_LAYOUT[ty, tx] == 4:
+                    self.ghost_house_node_idx = jnp.array(i, dtype=jnp.int32)
+                    break
 
     def _create_default_maze(self) -> jnp.ndarray:
-        """Create a classic Pacman maze layout.
-        
-        Maze values:
-        0 = empty path
-        1 = wall
-        2 = dot pellet
-        3 = power pellet
-        4 = ghost house area
         """
-        # Create maze as numpy array for easier initialization, then convert to jax
-        maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
-
-        maze_layout = [
-            "1111111111111111111111111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1311112111112112111112111131",
-            "1211112111112112111112111121",
-            "1222222222222222222222222221",
-            "1211112112111111112112111121",
-            "1211112112111111112112111121",
-            "1222222112222112222112222221",
-            "1111112111110110111112111111",
-            "1111112111110110111112111111",
-            "1111112110000000001112111111",
-            "1111112110111441110112111111",
-            "1111112110144441110112111111",
-            "0000002000144441000002000000",
-            "1111112110144441110112111111",
-            "1111112110111111110112111111",
-            "1111112110000000001112111111",
-            "1111112110111111110112111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1211112111112112111112111121",
-            "1322112222222222222222112231",
-            "1112112112111111112112112111",
-            "1112112112111111112112112111",
-            "1222222112222112222112222221",
-            "1211111111112112111111111121",
-            "1211111111112112111111111121",
-            "1222222222222222222222222221",
-            "1111111111111111111111111111",
-        ]
-
-        for row_idx, row_str in enumerate(maze_layout):
-            for col_idx, char in enumerate(row_str):
-                maze[row_idx, col_idx] = int(char)
+        Loads maze layout from 'maze1.txt'.
         
-        return jnp.array(maze, dtype=jnp.int32)
+        Parses text file into numerical grid:
+        0: Empty path
+        1: Wall (X)
+        2: Dot (.) or Regular Node (o)
+        3: Power Pellet (+)
+        4: Ghost House (H)
+        """
+        # Try to load from file
+        maze_file_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "pacmanMaps", "maze1.txt"
+        )
+        
+        if os.path.exists(maze_file_path):
+            # Load from file
+            maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
+            with open(maze_file_path, 'r') as f:
+                lines = f.readlines()
+                for row, line in enumerate(lines):
+                    if row >= self.consts.MAZE_HEIGHT:
+                        break
+                    # Remove spaces and newline
+                    line = line.strip().replace(' ', '')
+                    for col, char in enumerate(line):
+                        if col >= self.consts.MAZE_WIDTH:
+                            break
+                        if char == 'X':
+                            maze[row, col] = 1
+                        elif char == '.':
+                            maze[row, col] = 2
+                        elif char == 'o':
+                            maze[row, col] = 2
+                        elif char == '+':
+                            maze[row, col] = 3
+                        elif char == 'H':
+                            maze[row, col] = 4
+                        else:
+                            maze[row, col] = 0
+            return jnp.array(maze, dtype=jnp.int32)
+        else:
+            # Fallback to empty maze if file not found
+            return jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
         
-        # Initialize player at valid path with dots (row 25, col 12)
-        # Don't add offset - keep within bounds
-        player_x = jnp.array(12 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Column 12 = 96
-        player_y = jnp.array(25 * self.consts.TILE_SIZE, dtype=jnp.int32)  # Row 25 = 200
+        # Initialize player at nearest node
+        player_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X,
+            self.consts.PLAYER_START_Y
+        )
+        player_x = jnp.array(self.node_positions_x[player_start_node_idx], dtype=jnp.int32)
+        player_y = jnp.array(self.node_positions_y[player_start_node_idx], dtype=jnp.int32)
         player_direction = jnp.array(0, dtype=jnp.int32)  # Start facing right
         player_next_direction = jnp.array(-1, dtype=jnp.int32)
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
+        player_current_node_index = jnp.array(player_start_node_idx, dtype=jnp.int32)
+        player_target_node_index = jnp.array(player_start_node_idx, dtype=jnp.int32)
         
         # Initialize ghosts (4 ghosts at starting positions)
-        ghosts = jnp.zeros((4, 6), dtype=jnp.int32)
+        ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
         for i in range(4):
-            ghosts = ghosts.at[i, 0].set(self.consts.GHOST_START_X + i * 8)  # x
-            ghosts = ghosts.at[i, 1].set(self.consts.GHOST_START_Y)  # y
+            ghost_x = self.consts.GHOST_START_X + i * 8
+            ghost_y = self.consts.GHOST_START_Y
+            # Find nearest node for this ghost
+            ghost_node_idx = self._find_nearest_node_idx(ghost_x, ghost_y)
+            
+            ghosts = ghosts.at[i, 0].set(self.node_positions_x[ghost_node_idx])  # x at node
+            ghosts = ghosts.at[i, 1].set(self.node_positions_y[ghost_node_idx])  # y at node
             ghosts = ghosts.at[i, 2].set(0)  # direction (right)
             ghosts = ghosts.at[i, 3].set(0)  # state (normal)
-            ghosts = ghosts.at[i, 4].set(self.consts.GHOST_START_X)  # target_x
-            ghosts = ghosts.at[i, 5].set(self.consts.GHOST_START_Y)  # target_y
+            ghosts = ghosts.at[i, 4].set(self.node_positions_x[ghost_node_idx])  # target_x
+            ghosts = ghosts.at[i, 5].set(self.node_positions_y[ghost_node_idx])  # target_y
+            ghosts = ghosts.at[i, 6].set(ghost_node_idx)  # current_node
+            ghosts = ghosts.at[i, 7].set(ghost_node_idx)  # target_node
         
         # Initial game state
         score = jnp.array(0, dtype=jnp.int32)
@@ -294,14 +340,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_direction=player_direction,
             player_next_direction=player_next_direction,
             player_animation_frame=player_animation_frame,
+            player_current_node_index=player_current_node_index,
+            player_target_node_index=player_target_node_index,
             ghosts=ghosts,
             dots_remaining=dots_remaining,
-            power_pellets_active=jnp.array(15, dtype=jnp.int32), # Re-added as it's part of PacmanState
+            power_pellets_active=jnp.array(15, dtype=jnp.int32),
             score=score,
             lives=lives,
             level=level,
             pellets_collected=pellets_collected,
             frightened_timer=frightened_timer,
+            ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
             scatter_chase_timer=scatter_chase_timer,
             is_scatter_mode=is_scatter_mode,
             step_counter=jnp.array(0, dtype=jnp.int32),
@@ -350,53 +399,105 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return observation, state, reward, done, info
 
     def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
-        """Handle player movement based on action."""
+        """
+        Handles Pac-Man movement logic.
+        
+        Uses node-based system for smooth movement between intersections/corners
+        instead of pixel-perfect collision.
+        """
         # Check if this is a NOOP action
         is_noop = action == Action.NOOP
         
-        # Map Action enum to our direction: 0=right, 1=left, 2=up, 3=down
-        # Action.NOOP=0, Action.UP=2, Action.DOWN=5, Action.LEFT=4, Action.RIGHT=3
-        new_direction = jnp.where(
-            action == Action.RIGHT, 0,
-            jnp.where(action == Action.LEFT, 1,
-            jnp.where(action == Action.UP, 2,
-            jnp.where(action == Action.DOWN, 3, state.player_direction)))
+        # Get current and target node positions
+        current_node_idx = state.player_current_node_index
+        target_node_idx = state.player_target_node_index
+        
+        current_node_x = self.node_positions_x[current_node_idx]
+        current_node_y = self.node_positions_y[current_node_idx]
+        target_node_x = self.node_positions_x[target_node_idx]
+        target_node_y = self.node_positions_y[target_node_idx]
+        
+        # Check if we're currently at a node
+        at_current_node = jnp.logical_and(
+            state.player_x == current_node_x,
+            state.player_y == current_node_y
         )
         
-        # Check if we can move in the new direction
-        can_move_direction = self._can_move_in_direction(state.player_x, state.player_y, new_direction)
+        # Check if we've reached the target node
+        dx_to_target = target_node_x - current_node_x
+        dy_to_target = target_node_y - current_node_y
+        vec_to_target_sq = dx_to_target * dx_to_target + dy_to_target * dy_to_target
         
-        # Only move if NOT noop AND can move in direction
-        should_move = jnp.logical_and(jnp.logical_not(is_noop), can_move_direction)
+        vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + \
+                         (state.player_y - current_node_y) * (state.player_y - current_node_y)
+        reached_target = vec_to_self_sq >= vec_to_target_sq
         
-        # Use the new direction
-        current_dir = new_direction
+        # Stop at target node if reached while moving
+        is_moving = state.player_direction != Action.NOOP
+        should_stop_at_target = jnp.logical_and(is_moving, reached_target)
+        
+        # Update current node if we reached target
+        new_current_idx = jnp.where(should_stop_at_target, target_node_idx, current_node_idx)
+        
+        # Snap position to target node if stopped
+        snapped_x = jnp.where(should_stop_at_target, target_node_x, state.player_x)
+        snapped_y = jnp.where(should_stop_at_target, target_node_y, state.player_y)
+        
+        # Check if we're at a node now
+        at_node_after_stop = jnp.logical_or(at_current_node, should_stop_at_target)
+        
+        # Get new target based on action using neighbor lookup
+        new_target_from_action = self.neighbor_lookup[new_current_idx, action]
+        has_new_target = new_target_from_action >= 0
+        valid_action = jnp.logical_and(jnp.logical_not(is_noop), has_new_target)
+        
+        # Start moving if at node AND have valid action
+        should_start_moving = jnp.logical_and(at_node_after_stop, valid_action)
+        
+        # Update target index
+        new_target_idx = jnp.where(should_start_moving, new_target_from_action,
+                          jnp.where(should_stop_at_target, new_current_idx, target_node_idx))
+        
+        # Update direction
+        new_direction = jnp.where(should_start_moving, action,
+                         jnp.where(should_stop_at_target, jnp.array(Action.NOOP, dtype=jnp.int32),
+                                  state.player_direction))
+        
+        # Get final target position
+        final_target_x = self.node_positions_x[new_target_idx]
+        final_target_y = self.node_positions_y[new_target_idx]
         
         # Calculate movement deltas
-        # 0=right(+x), 1=left(-x), 2=up(-y), 3=down(+y)
-        dx = jnp.where(current_dir == 0, self.consts.PLAYER_SPEED, 
-             jnp.where(current_dir == 1, -self.consts.PLAYER_SPEED, 0))
-        dy = jnp.where(current_dir == 2, -self.consts.PLAYER_SPEED, 
-             jnp.where(current_dir == 3, self.consts.PLAYER_SPEED, 0))
+        move_dx = jnp.where(new_direction == Action.RIGHT, self.consts.PLAYER_SPEED,
+                   jnp.where(new_direction == Action.LEFT, -self.consts.PLAYER_SPEED, 0))
+        move_dy = jnp.where(new_direction == Action.DOWN, self.consts.PLAYER_SPEED,
+                   jnp.where(new_direction == Action.UP, -self.consts.PLAYER_SPEED, 0))
         
-        # Apply movement only if should_move is True
-        new_x = jnp.where(should_move, state.player_x + dx, state.player_x)
-        new_y = jnp.where(should_move, state.player_y + dy, state.player_y)
-        
-        # Wrap around screen edges (tunnel effect)
-        new_x = jnp.where(new_x < 0, self.consts.WIDTH - 1, new_x)
-        new_x = jnp.where(new_x >= self.consts.WIDTH, 0, new_x)
-        
-        # Clamp to screen bounds
-        new_x = jnp.clip(new_x, 0, self.consts.WIDTH - self.consts.PLAYER_SIZE[0])
-        new_y = jnp.clip(new_y, 0, self.consts.HEIGHT - self.consts.PLAYER_SIZE[1])
+        # Move towards target (only if moving)
+        new_x = jnp.where(new_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
+        new_y = jnp.where(new_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
         
         return state._replace(
             player_x=new_x.astype(jnp.int32),
             player_y=new_y.astype(jnp.int32),
-            player_direction=current_dir,
-            player_next_direction=jnp.array(-1, dtype=jnp.int32),
+            player_direction=new_direction,
+            player_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
+            player_current_node_index=new_current_idx,
+            player_target_node_index=new_target_idx,
         )
+    
+    def _find_nearest_node_idx(self, x: int, y: int) -> int:
+        """Find nearest node index to given position (non-JIT for init)."""
+        min_dist = float('inf')
+        nearest_idx = 0
+        for idx in range(len(self.node_group.nodeList)):
+            node_x = int(self.node_group.nodeList[idx].position.x)
+            node_y = int(self.node_group.nodeList[idx].position.y)
+            dist = (x - node_x)**2 + (y - node_y)**2
+            if dist < min_dist:
+                min_dist = dist
+                nearest_idx = idx
+        return nearest_idx
 
     def _can_move_in_direction(self, x: chex.Array, y: chex.Array, direction: chex.Array) -> chex.Array:
         """Check if player can move in given direction based on maze walls."""
@@ -433,174 +534,242 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return jnp.logical_and(jnp.logical_and(not_wall, in_bounds), jnp.logical_not(invalid))
 
     def _ghost_step(self, state: PacmanState, keys: chex.PRNGKey) -> PacmanState:
-        """Update ghost positions and states."""
+        """
+        Updates ghost positions and states.
         
-        def update_ghost(ghost_data, ghost_key):
-            gx, gy, gdir, gstate, gtx, gty = ghost_data
-            ghost_idx = jnp.where(
-                (state.ghosts[:, 0] == gx) & (state.ghosts[:, 1] == gy),
-                jnp.arange(4),
-                -1
-            )[0] # This is a bit hacky to get index, but we can pass index via vmap if needed
-            # Better approach: vmap over indices
-            
-            return ghost_data # Placeholder, we'll implement the logic inside the vmap wrapper below
-            
-        # We need to process ghosts with their indices to assign scatter targets
-        ghost_indices = jnp.arange(4)
+        Ghosts use node-based movement and select targets based on personality
+        (Blinky, Pinky, Inky, Clyde) or state (Frightened, Eaten).
+        """
         
         def process_single_ghost(idx, ghost_data, key):
-            gx, gy, gdir, gstate, _, _ = ghost_data
+            gx, gy, gdir, gstate, gtx, gty, gcurrent, gtarget = ghost_data
             
-            # 1. Select target
-            # Scatter targets (corners)
-            scatter_targets_x = jnp.array([
-                self.consts.WIDTH - self.consts.GHOST_SIZE[0], # Blinky -> Top Right
-                0,                                             # Pinky -> Top Left
-                self.consts.WIDTH - self.consts.GHOST_SIZE[0], # Inky -> Bottom Right
-                0                                              # Clyde -> Bottom Left
-            ])
-            scatter_targets_y = jnp.array([
-                0,                                             # Blinky -> Top Right
-                0,                                             # Pinky -> Top Left
-                self.consts.HEIGHT - self.consts.GHOST_SIZE[1],# Inky -> Bottom Right
-                self.consts.HEIGHT - self.consts.GHOST_SIZE[1] # Clyde -> Bottom Left
-            ])
+            # Get current and target node positions
+            current_node_x = self.node_positions_x[gcurrent]
+            current_node_y = self.node_positions_y[gcurrent]
+            target_node_x = self.node_positions_x[gtarget]
+            target_node_y = self.node_positions_y[gtarget]
             
-            target_x = jnp.where(
-                gstate == 2, self.consts.GHOST_START_X, # Eaten -> Home
-                jnp.where(
-                    gstate == 1, gx, # Frightened -> Random (handled by random dir choice)
-                    jnp.where(
-                        state.is_scatter_mode,
-                        scatter_targets_x[idx],
-                        state.player_x # Chase -> Player
+            # Check if reached target node
+            at_current = jnp.logical_and(gx == current_node_x, gy == current_node_y)
+            
+            # Calculate speed early to check for overshoot
+            speed = jnp.where(gstate == 2, self.consts.GHOST_SPEED_EATEN, self.consts.GHOST_SPEED_NORMAL)
+            
+            dx_to_target = target_node_x - current_node_x
+            dy_to_target = target_node_y - current_node_y
+            vec_to_target_sq = dx_to_target * dx_to_target + dy_to_target * dy_to_target
+            vec_to_self_sq = (gx - current_node_x) * (gx - current_node_x) + (gy - current_node_y) * (gy - current_node_y)
+            
+            # Check if already passed target
+            already_passed = vec_to_self_sq >= vec_to_target_sq
+            
+            # Check if will reach target in this step (prevent overshoot)
+            dist_remaining_sq = (gx - target_node_x) * (gx - target_node_x) + (gy - target_node_y) * (gy - target_node_y)
+            will_reach = dist_remaining_sq <= speed * speed
+            
+            is_moving = gdir != Action.NOOP
+            should_stop = jnp.logical_and(is_moving, jnp.logical_or(already_passed, will_reach))
+            
+            # Update current node if stopped
+            new_current = jnp.where(should_stop, gtarget, gcurrent)
+            snapped_x = jnp.where(should_stop, target_node_x, gx)
+            snapped_y = jnp.where(should_stop, target_node_y, gy)
+            
+            at_node = jnp.logical_or(at_current, should_stop)
+            
+            # Choose next target when at node
+            # Simple AI: pick random valid neighbor
+            valid_neighbors = self.neighbor_lookup[new_current, :]
+            
+            # Filter valid directions (not -1)
+            valid_mask = valid_neighbors >= 0
+            
+            # Count valid neighbors
+            num_valid = jnp.sum(valid_mask)
+            
+            # Pick random valid direction
+            rand_idx = jax.random.randint(key, (), 0, 18)
+            # Find the rand_idx-th valid neighbor (with wraparound)
+            rand_idx = rand_idx % jnp.maximum(num_valid, 1)
+            
+            # Get that neighbor
+            cumsum = jnp.cumsum(valid_mask.astype(jnp.int32))
+            # FIX: Ensure we only select indices that are VALID neighbors
+            selected_neighbor_mask = jnp.logical_and(valid_mask, cumsum == (rand_idx + 1))
+            
+            new_target_from_random = jnp.where(
+                jnp.any(selected_neighbor_mask),
+                jnp.sum(jnp.where(selected_neighbor_mask, valid_neighbors, 0)),
+                new_current
+            )
+            
+            # Update target when at node
+            new_target = jnp.where(at_node, new_target_from_random, gtarget)
+            
+            # Eaten ghosts (state 2) ignore other logic and return to ghost house.
+            is_eaten = gstate == 2
+            
+            # Ghost house is around center of maze
+            # Use pre-computed ghost house node index
+            ghost_house_node = self.ghost_house_node_idx
+            
+            # Check if eaten ghost reached the house
+            at_house = jnp.logical_and(
+                is_eaten,
+                jnp.logical_and(
+                    jnp.abs(gx - self.node_positions_x[ghost_house_node]) < 8,
+                    jnp.abs(gy - self.node_positions_y[ghost_house_node]) < 8
+                )
+            )
+            
+            # Respawn: change state back to normal
+            respawned_state = jnp.where(at_house, 0, gstate)
+            
+            # For eaten ghosts, override target to be ghost house
+            # Pick neighbor that gets closer to ghost house
+            def get_distance_to_house(node_idx):
+                nx = self.node_positions_x[node_idx]
+                ny = self.node_positions_y[node_idx]
+                hx = self.node_positions_x[ghost_house_node]
+                hy = self.node_positions_y[ghost_house_node]
+                return (nx - hx) * (nx - hx) + (ny - hy) * (ny - hy)
+            
+            # When eaten and at node, pick neighbor closest to house
+            def pick_best_neighbor_to_house():
+                valid_neighbors = self.neighbor_lookup[new_current, :]
+                valid_mask = valid_neighbors >= 0
+                
+                # Calculate distance for each valid neighbor
+                def calc_dist(i):
+                    neighbor = valid_neighbors[i]
+                    is_valid = valid_mask[i]
+                    dist = jnp.where(
+                        is_valid,
+                        get_distance_to_house(neighbor),
+                        jnp.inf
                     )
-                )
-            )
+                    return dist
+                
+                distances = jax.vmap(calc_dist)(jnp.arange(18))
+                best_idx = jnp.argmin(distances)
+                return valid_neighbors[best_idx]
             
-            target_y = jnp.where(
-                gstate == 2, self.consts.GHOST_START_Y, # Eaten -> Home
+            # Unique personalities for each ghost (when not eaten).
+            # Blinky (Red): Direct chaser.
+            # Pinky (Pink): Ambusher (targets ahead of player).
+            # Inky (Cyan): Patroller (mix of Blinky and player position).
+            # Clyde (Orange): Shy (chases when far, retreats when close).
+            
+            # Calculate target node for each ghost personality
+            def get_target_for_personality():
+                # Use player's current node from state
+                player_node = state.player_current_node_index
+                
+                # Blinky: Direct chase - target player's node
+                blinky_target = player_node
+                
+                # Pinky: Target ahead of player
+                player_dir = state.player_direction
+                pinky_neighbors = self.neighbor_lookup[player_node, :]
+                pinky_target = jnp.where(
+                    pinky_neighbors[player_dir] >= 0,
+                    pinky_neighbors[player_dir],
+                    player_node
+                )
+                
+                # Inky: Patrol - cycle through corners
+                inky_corners = jnp.array([0, 4, 45, 48], dtype=jnp.int32)
+                inky_idx = (state.step_counter // 200) % 4
+                inky_target = inky_corners[inky_idx]
+                
+                # Clyde: Shy - chase when far, retreat when close
+                dx = gx - state.player_x
+                dy = gy - state.player_y
+                dist_sq = dx * dx + dy * dy
+                clyde_target = jnp.where(dist_sq > 2500, player_node, 0)
+                
+                # Select based on ghost index
+                targets = jnp.array([blinky_target, pinky_target, inky_target, clyde_target], dtype=jnp.int32)
+                return targets[idx]
+            
+            # Get personality-based target (only for normal ghosts)
+            personality_target_node = get_target_for_personality()
+            
+            # Pick neighbor that gets closest to personality target
+            def pick_best_neighbor_to_target(target_node):
+                valid_neighbors = self.neighbor_lookup[new_current, :]
+                valid_mask = valid_neighbors >= 0
+                
+                def calc_dist_to_target(i):
+                    neighbor = valid_neighbors[i]
+                    is_valid = valid_mask[i]
+                    # Distance to target node
+                    nx = self.node_positions_x[neighbor]
+                    ny = self.node_positions_y[neighbor]
+                    tx = self.node_positions_x[target_node]
+                    ty = self.node_positions_y[target_node]
+                    dist = (nx - tx) * (nx - tx) + (ny - ty) * (ny - ty)
+                    return jnp.where(is_valid, dist, jnp.inf)
+                
+                distances = jax.vmap(calc_dist_to_target)(jnp.arange(18))
+                best_idx = jnp.argmin(distances)
+                return valid_neighbors[best_idx]
+            
+            # Choose target based on state
+            target_for_eaten = pick_best_neighbor_to_house()
+            target_for_normal = pick_best_neighbor_to_target(personality_target_node)
+            target_for_frightened = new_target_from_random  # Random when frightened
+            
+            # Update target based on ghost state
+            new_target = jnp.where(
+                at_node,
                 jnp.where(
-                    gstate == 1, gy, # Frightened -> Random
+                    is_eaten,
+                    target_for_eaten,  # Eaten: go to house
                     jnp.where(
-                        state.is_scatter_mode,
-                        scatter_targets_y[idx],
-                        state.player_y # Chase -> Player
+                        gstate == 1,
+                        target_for_frightened,  # Frightened: random
+                        target_for_normal  # Normal: personality-based
                     )
-                )
+                ),
+                gtarget  # Not at node: keep current target
             )
             
-            # 2. Check valid moves
+            # Update direction based on movement
+            target_x_pos = self.node_positions_x[new_target]
+            target_y_pos = self.node_positions_y[new_target]
             
-            # Check if move is valid
-            def is_valid_move(d):
-                dx = jnp.where(d == 0, 1, jnp.where(d == 1, -1, 0)) * self.consts.GHOST_SPEED_NORMAL
-                dy = jnp.where(d == 2, -1, jnp.where(d == 3, 1, 0)) * self.consts.GHOST_SPEED_NORMAL
-                
-                # Collision check
-                check_x = gx + dx + self.consts.GHOST_SIZE[0] // 2
-                check_y = gy + dy + self.consts.GHOST_SIZE[1] // 2
-                
-                # Convert to tile coordinates
-                tx = check_x // self.consts.TILE_SIZE
-                ty = check_y // self.consts.TILE_SIZE
-                
-                # Boundary check
-                in_bounds = (tx >= 0) & (tx < self.consts.MAZE_WIDTH) & \
-                            (ty >= 0) & (ty < self.consts.MAZE_HEIGHT)
-                
-                # Wall check (1=wall)
-                is_wall = jnp.where(
-                    in_bounds,
-                    self.consts.MAZE_LAYOUT[ty, tx] == 1,
-                    True # Out of bounds is wall
-                )
-                
-                # Prevent immediate reverse
-                # 0(R) <-> 1(L)
-                # 2(U) <-> 3(D)
-                is_reverse = jnp.where(
-                    gdir == 0, d == 1,
-                    jnp.where(gdir == 1, d == 0,
-                    jnp.where(gdir == 2, d == 3,
-                    jnp.where(gdir == 3, d == 2, False)))
-                )
-                
-                # Allow reverse if frightened or eaten, otherwise forbid
-                allow_reverse = (gstate != 0) 
-                
-                return jnp.logical_and(jnp.logical_not(is_wall), jnp.logical_or(jnp.logical_not(is_reverse), allow_reverse))
-
-            # Check all 4 directions
-            valid_dirs = jax.vmap(is_valid_move)(jnp.arange(4))
+            # Determine direction
+            dx = target_x_pos - snapped_x
+            dy = target_y_pos - snapped_y
             
-            # 3. Pick best direction
-            # Calc distances
-            def get_dist(d):
-                dx = jnp.where(d == 0, 1, jnp.where(d == 1, -1, 0)) * self.consts.GHOST_SPEED_NORMAL
-                dy = jnp.where(d == 2, -1, jnp.where(d == 3, 1, 0)) * self.consts.GHOST_SPEED_NORMAL
-                nx, ny = gx + dx, gy + dy
-                return (nx - target_x)**2 + (ny - target_y)**2
-            
-            dists = jax.vmap(get_dist)(jnp.arange(4))
-            
-            # Mask invalid directions with infinity
-            masked_dists = jnp.where(valid_dirs, dists, jnp.inf)
-            
-            # Pick direction with min distance
-            # Tie-break: Up > Left > Down > Right
-            # We can achieve this by adding small offsets to distances based on priority
-            # Lower distance is better.
-            # Priority: 2 > 1 > 3 > 0
-            # Add: 0.0 for 2, 0.1 for 1, 0.2 for 3, 0.3 for 0
-            priority_offsets = jnp.array([0.3, 0.1, 0.0, 0.2])
-            masked_dists = masked_dists + priority_offsets
-            
-            best_dir = jnp.argmin(masked_dists)
-            
-            # Random move if frightened
-            random_dir_idx = jax.random.randint(key, (), 0, 4)
-            # We want a random VALID direction.
-            # Simple way: add large random noise to dists if frightened
-            is_frightened = (gstate == 1)
-            noise = jax.random.uniform(key, (4,)) * 10000.0
-            frightened_dists = jnp.where(valid_dirs, noise, jnp.inf)
-            
-            final_dir = jnp.where(
-                is_frightened,
-                jnp.argmin(frightened_dists),
-                best_dir
+            new_direction = jnp.where(
+                dx > 0, Action.RIGHT,
+                jnp.where(dx < 0, Action.LEFT,
+                jnp.where(dy > 0, Action.DOWN,
+                jnp.where(dy < 0, Action.UP, Action.NOOP)))
             )
             
-            # Fallback if stuck
-            any_valid = jnp.any(valid_dirs)
-            final_dir = jnp.where(any_valid, final_dir, (gdir + 1) % 4) # fallback
+            # Move toward target with appropriate speed
+            speed = jnp.where(is_eaten, self.consts.GHOST_SPEED_EATEN, self.consts.GHOST_SPEED_NORMAL)
+            move_dx = jnp.where(new_direction == Action.RIGHT, speed,
+                       jnp.where(new_direction == Action.LEFT, -speed, 0))
+            move_dy = jnp.where(new_direction == Action.DOWN, speed,
+                       jnp.where(new_direction == Action.UP, -speed, 0))
             
-            # 4. Update position
-            speed = jnp.where(
-                gstate == 2, self.consts.GHOST_SPEED_EATEN,
-                jnp.where(gstate == 1, self.consts.GHOST_SPEED_FRIGHTENED, self.consts.GHOST_SPEED_NORMAL)
-            )
+            new_x = jnp.where(new_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
+            new_y = jnp.where(new_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
             
-            move_dx = jnp.where(final_dir == 0, 1, jnp.where(final_dir == 1, -1, 0))
-            move_dy = jnp.where(final_dir == 2, -1, jnp.where(final_dir == 3, 1, 0))
-            
-            new_x = gx + move_dx * speed
-            new_y = gy + move_dy * speed
-            
-            # Wrap around
-            new_x = jnp.where(new_x < 0, self.consts.WIDTH - 1, new_x)
-            new_x = jnp.where(new_x >= self.consts.WIDTH, 0, new_x)
-            
-            return jnp.array([new_x, new_y, final_dir, gstate, target_x, target_y], dtype=jnp.int32)
-
+            return jnp.array([new_x, new_y, new_direction, respawned_state, target_x_pos, target_y_pos, new_current, new_target], dtype=jnp.int32)
+        
         # Process all ghosts
+        ghost_indices = jnp.arange(4)
         keys = jax.random.split(keys, 4)
         new_ghosts = jax.vmap(process_single_ghost)(ghost_indices, state.ghosts, keys)
         
-        # Update state key (consume one more)
-        new_key, _ = jax.random.split(keys[0]) # Just mixing keys to get a new one
+        # Update state key
+        new_key, _ = jax.random.split(keys[0])
         
         return state._replace(ghosts=new_ghosts, key=new_key)
 
@@ -613,7 +782,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         player_bottom = state.player_y + self.consts.PLAYER_SIZE[1]
         
         def check_ghost_collision(ghost_data):
-            gx, gy, _, gstate, _, _ = ghost_data
+            gx, gy, _, gstate, _, _, gcurrent, gtarget = ghost_data
             ghost_left = gx
             ghost_right = gx + self.consts.GHOST_SIZE[0]
             ghost_top = gy
@@ -631,7 +800,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Process collisions for all ghosts
         def process_collision(ghost_idx, ghost_data, collided):
-            gx, gy, gdir, gstate, gtx, gty = ghost_data
+            gx, gy, gdir, gstate, gtx, gty, gcurrent, gtarget = ghost_data
             
             # If frightened and collided, ghost is eaten
             new_state = jnp.where(
@@ -643,19 +812,29 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             # If normal and collided, player loses life
             life_lost = jnp.logical_and(collided, gstate == 0)
             
-            # Calculate score for eating ghost
+            # Calculate score for eating ghost using progressive scoring
+            # First ghost: 200, second: 400, third: 800, fourth: 1600
+            ghost_eaten = jnp.logical_and(collided, gstate == 1)
             ghost_score = jnp.where(
-                jnp.logical_and(collided, gstate == 1),
-                self.consts.GHOST_SCORE_BASE * (2 ** ghost_idx),  # Doubles for each ghost
+                ghost_eaten,
+                self.consts.GHOST_SCORE_BASE * (2 ** state.ghosts_eaten_count),
                 0
             )
             
-            return new_state, life_lost, ghost_score
+            return new_state, life_lost, ghost_score, ghost_eaten
         
         results = jax.vmap(process_collision)(jnp.arange(4), state.ghosts, collisions)
         new_ghost_states = results[0]
         any_life_lost = jnp.any(results[1])
         ghost_scores = jnp.sum(results[2])
+        any_ghost_eaten = jnp.any(results[3])
+        
+        # Update ghosts eaten counter
+        new_ghosts_eaten_count = jnp.where(
+            any_ghost_eaten,
+            state.ghosts_eaten_count + 1,
+            state.ghosts_eaten_count
+        )
         
         # Update ghost states
         new_ghosts = state.ghosts.at[:, 3].set(new_ghost_states)
@@ -724,11 +903,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         )
         new_ghosts_final = new_ghosts.at[:, 3].set(new_ghost_states_final)
         
+        # Reset ghosts_eaten_count when new power pellet is eaten
+        final_ghosts_eaten_count = jnp.where(
+            power_pellet_eaten,
+            0,  # Reset counter on new power pellet
+            new_ghosts_eaten_count
+        )
+        
         return state._replace(
             ghosts=new_ghosts_final,
             score=new_score,
             lives=final_lives,
             frightened_timer=new_frightened_timer,
+            ghosts_eaten_count=final_ghosts_eaten_count,
             dots_remaining=new_dots_remaining,
             pellets_collected=new_pellets_collected,
         )
@@ -740,14 +927,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # If frightened timer expired, return frightened ghosts to normal (but not eaten ghosts)
         def update_ghost_state(ghost_data):
-            gx, gy, gdir, gstate, gtx, gty = ghost_data
+            gx, gy, gdir, gstate, gtx, gty, gcurrent, gtarget = ghost_data
             # If frightened and timer expired, return to normal
             new_state = jnp.where(
                 jnp.logical_and(gstate == 1, new_frightened == 0),
                 0,  # normal
                 gstate
             )
-            return jnp.array([gx, gy, gdir, new_state, gtx, gty], dtype=jnp.int32)
+            return jnp.array([gx, gy, gdir, new_state, gtx, gty, gcurrent, gtarget], dtype=jnp.int32)
         
         new_ghosts = jax.vmap(update_ghost_state)(state.ghosts)
         
@@ -762,9 +949,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             False
         )
         
+        # Reset ghosts_eaten_count when frightened mode ends
+        final_ghosts_eaten_count = jnp.where(
+            jnp.logical_and(state.frightened_timer > 0, new_frightened == 0),
+            0,  # Reset counter when mode ends
+            state.ghosts_eaten_count
+        )
+        
         return state._replace(
             ghosts=new_ghosts,
             frightened_timer=new_frightened,
+            ghosts_eaten_count=final_ghosts_eaten_count,
             scatter_chase_timer=new_scatter_chase,
             is_scatter_mode=new_is_scatter,
         )
@@ -966,6 +1161,7 @@ class PacmanRenderer(JAXGameRenderer):
         wall_mask = self.SHAPE_MASKS["wall"]
         pellet_dot_mask = self.SHAPE_MASKS["pellet_dot"]
         pellet_power_mask = self.SHAPE_MASKS["pellet_power"]
+        digit_masks = self.SHAPE_MASKS["digits"]
         
         # Draw tiles
         def render_tile(i, raster_state):
@@ -983,20 +1179,23 @@ class PacmanRenderer(JAXGameRenderer):
                 raster_state
             )
             
-            # Draw dot
+            # Draw dot (centered)
+            # Dot is 2x2, TILE_SIZE is 8 -> offset 3
             is_dot = jnp.logical_and(tile_val == 2, state.pellets_collected[row, col] == 0)
             raster_state = jax.lax.cond(
                 is_dot,
-                lambda r: self.jr.render_at(r, x, y, pellet_dot_mask),
+                lambda r: self.jr.render_at(r, x + 3, y + 3, pellet_dot_mask),
                 lambda r: r,
                 raster_state
             )
             
-            # Draw power pellet  
+            # Draw power pellet (centered)
+            # Power pellet is 4x4 or 6x6, TILE_SIZE is 8 -> offset 1 or 2
+            # Assuming 4x4 -> offset 2
             is_power = jnp.logical_and(tile_val == 3, state.pellets_collected[row, col] == 0)
             raster_state = jax.lax.cond(
                 is_power,
-                lambda r: self.jr.render_at(r, x, y, pellet_power_mask),
+                lambda r: self.jr.render_at(r, x + 1, y + 1, pellet_power_mask),
                 lambda r: r,
                 raster_state
             )
@@ -1019,62 +1218,57 @@ class PacmanRenderer(JAXGameRenderer):
         # Draw ghosts
         frightened_frame = (state.step_counter // 10) % 2
         
-        # Ghost 0 - Blinky
-        g0 = state.ghosts[0]
-        g0_mask = jax.lax.switch(
-            g0[3].astype(jnp.int32),
-            [
-                lambda: self.SHAPE_MASKS["ghost_blinky"][g0[2].astype(jnp.int32)],
-                lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
-                lambda: self.SHAPE_MASKS["ghost_eyes"][g0[2].astype(jnp.int32)]
-            ]
-        )
-        raster = self.jr.render_at(raster, g0[0], g0[1], g0_mask)
-        
-        # Ghost 1 - Pinky
-        g1 = state.ghosts[1]
-        g1_mask = jax.lax.switch(
-            g1[3].astype(jnp.int32),
-            [
-                lambda: self.SHAPE_MASKS["ghost_pinky"][g1[2].astype(jnp.int32)],
-                lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
-                lambda: self.SHAPE_MASKS["ghost_eyes"][g1[2].astype(jnp.int32)]
-            ]
-        )
-        raster = self.jr.render_at(raster, g1[0], g1[1], g1_mask)
-        
-        # Ghost 2 - Inky
-        g2 = state.ghosts[2]
-        g2_mask = jax.lax.switch(
-            g2[3].astype(jnp.int32),
-            [
-                lambda: self.SHAPE_MASKS["ghost_inky"][g2[2].astype(jnp.int32)],
-                lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
-                lambda: self.SHAPE_MASKS["ghost_eyes"][g2[2].astype(jnp.int32)]
-            ]
-        )
-        raster = self.jr.render_at(raster, g2[0], g2[1], g2_mask)
-        
-        # Ghost 3 - Clyde
-        g3 = state.ghosts[3]
-        g3_mask = jax.lax.switch(
-            g3[3].astype(jnp.int32),
-            [
-                lambda: self.SHAPE_MASKS["ghost_clyde"][g3[2].astype(jnp.int32)],
-                lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
-                lambda: self.SHAPE_MASKS["ghost_eyes"][g3[2].astype(jnp.int32)]
-            ]
-        )
-        raster = self.jr.render_at(raster, g3[0], g3[1], g3_mask)
-        
+        # Helper to draw ghost
+        def draw_ghost(g_idx, r):
+            g = state.ghosts[g_idx]
+            # Select mask based on state: 0=normal, 1=frightened, 2=eaten
+            
+            # Animation frame for normal ghosts
+            anim_frame = (state.step_counter // 10) % 2
+            
+            g_mask = jax.lax.switch(
+                g[3].astype(jnp.int32),
+                [
+                    # 0: Normal
+                    lambda: [
+                        lambda: self.SHAPE_MASKS["ghost_blinky"][anim_frame],
+                        lambda: self.SHAPE_MASKS["ghost_pinky"][anim_frame],
+                        lambda: self.SHAPE_MASKS["ghost_inky"][anim_frame],
+                        lambda: self.SHAPE_MASKS["ghost_clyde"][anim_frame],
+                    ][g_idx](),
+                    # 1: Frightened
+                    lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
+                    # 2: Eaten (Eyes)
+                    lambda: self.SHAPE_MASKS["ghost_eyes"][g[2].astype(jnp.int32)] # Direction
+                ]
+            )
+            return self.jr.render_at(r, g[0], g[1], g_mask)
 
+        # Draw all 4 ghosts
+        for i in range(4):
+            raster = draw_ghost(i, raster)
+
+        # Draw Score
+        # Draw up to 6 digits, right aligned at top left padding
+        score = state.score
+        score_x = 10
+        score_y = 2
         
-        # Render score
-        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
-        score_digit_masks = self.SHAPE_MASKS["digits"]
-        raster = self.jr.render_label_selective(
-            raster, 10, 5, score_digits, score_digit_masks, 0, 6, spacing=8
-        )
+        def draw_digit(i, r_val):
+            # Extract digit: (score // 10^i) % 10
+            divisor = jnp.power(10, i)
+            digit = (score // divisor) % 10
+            
+            # Only draw if score >= divisor (except for 0)
+            should_draw = jnp.logical_or(score >= divisor, i == 0)
+            
+            return jax.lax.cond(
+                should_draw,
+                lambda r: self.jr.render_at(r, score_x + (5 - i) * 8, score_y, digit_masks[digit]),
+                lambda r: r,
+                r_val
+            )
+
+        raster = jax.lax.fori_loop(0, 6, draw_digit, raster)
         
         return self.jr.render_from_palette(raster, self.PALETTE)
-

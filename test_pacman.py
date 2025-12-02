@@ -1,89 +1,160 @@
-#!/usr/bin/env python3
 """
-Quick test script to verify Pacman implementation.
-Tests basic functionality without requiring full environment setup.
+Pac-Man Test Suite
+
+Runs verification tests for Pac-Man implementation.
+Checks map layout, game logic, and physics.
 """
 
 import jax
 import jax.numpy as jnp
+import pytest
+import numpy as np
+from jaxatari.games.jax_pacman import JaxPacman, PacmanConstants
 
-# Test 1: Import the game module
-print("Test 1: Importing Pacman module...")
-try:
-    from jaxatari.games.jax_pacman import JaxPacman, PacmanConstants
-    print("✅ Module imported successfully")
-except Exception as e:
-    print(f"❌ Failed to import: {e}")
-    exit(1)
+@pytest.fixture
+def env():
+    return JaxPacman()
 
-# Test 2: Create environment instance
-print("\nTest 2: Creating Pacman environment...")
-try:
-    env = JaxPacman()
-    print("✅ Environment created successfully")
-except Exception as e:
-    print(f"❌ Failed to create environment: {e}")
-    exit(1)
+@pytest.fixture
+def key():
+    return jax.random.PRNGKey(42)
 
-# Test 3: Initialize game state
-print("\nTest 3: Resetting environment...")
-try:
-    rng = jax.random.PRNGKey(42)
-    obs, state = env.reset(rng)
-    print(f"✅ Environment reset successfully")
-    print(f"   Initial lives: {state.lives}")
-    print(f"   Initial score: {state.score}")
-    print(f"   Dots remaining: {state.dots_remaining}")
-    print(f"   Player position: ({state.player_x}, {state.player_y})")
-except Exception as e:
-    print(f"❌ Failed to reset: {e}")
-    exit(1)
+def test_initialization(env, key):
+    """
+    Verifies initial game state.
+    Checks lives, score, and starting position.
+    """
+    obs, state = env.reset(key)
+    assert state.lives == 3
+    assert state.score == 0
+    # Check initial position (should be at start position)
+    assert state.player_x > 0
+    assert state.player_y > 0
 
-# Test 4: Check maze layout
-print("\nTest 4: Checking maze layout...")
-try:
+def test_maze_layout(env):
+    """
+    Verifies maze layout properties.
+    Checks for presence of walls, dots, power pellets, and ghost house.
+    """
     maze = env.consts.MAZE_LAYOUT
-    print(f"✅ Maze layout exists")
-    print(f"   Maze shape: {maze.shape}")
+    assert maze.shape == (25, 20)
+    
     wall_count = jnp.sum(maze == 1)
     dot_count = jnp.sum(maze == 2)
     power_count = jnp.sum(maze == 3)
-    print(f"   Walls: {wall_count}")
-    print(f"   Dots: {dot_count}")
-    print(f"   Power pellets: {power_count}")
-except Exception as e:
-    print(f"❌ Failed to check maze: {e}")
-    exit(1)
+    
+    assert wall_count > 0, "Maze should have walls"
+    assert dot_count > 0, "Maze should have dots"
+    assert power_count > 0, "Maze should have power pellets"
+    
+    # Check for ghost house tiles (4)
+    house_count = jnp.sum(maze == 4)
+    assert house_count > 0, "Maze should have ghost house tiles"
+    
+    # Check ghost house node index
+    gh_idx = env.ghost_house_node_idx
+    gh_x = env.node_positions_x[gh_idx]
+    gh_y = env.node_positions_y[gh_idx]
+    gh_tile_x = int(gh_x) // env.consts.TILE_SIZE
+    gh_tile_y = int(gh_y) // env.consts.TILE_SIZE
+    assert maze[gh_tile_y, gh_tile_x] == 4, f"Ghost house node should be on tile 4, got {maze[gh_tile_y, gh_tile_x]}"
 
-# Test 5: Take some steps
-print("\nTest 5: Taking game steps...")
-try:
-    for i in range(5):
-        # Try moving right
-        action = 3  # RIGHT action
+def test_step_execution(env, key):
+    """
+    Verifies basic gameplay mechanics.
+    Simulates steps to ensure state updates correctly.
+    """
+    obs, state = env.reset(key)
+    initial_score = state.score
+    
+    # Take 5 steps moving right
+    for _ in range(5):
+        action = 3  # RIGHT
         obs, state, reward, done, info = env.step(state, action)
-        print(f"   Step {i+1}: pos=({state.player_x},{state.player_y}), score={state.score}, reward={reward}")
-    print("✅ Steps executed successfully")
-except Exception as e:
-    print(f"❌ Failed to step: {e}")
-    exit(1)
+        
+    # Score might change if we eat a dot
+    assert state.score >= initial_score
 
-# Test 6: Test rendering
-print("\nTest 6: Testing rendering...")
-try:
+def test_rendering(env, key):
+    """
+    Verifies renderer output.
+    Ensures render function returns valid RGB array.
+    """
+    obs, state = env.reset(key)
     img = env.render(state)
-    print(f"✅ Rendering successful")
-    print(f"   Image shape: {img.shape}")
-    print(f"   Image dtype: {img.dtype}")
-except Exception as e:
-    print(f"❌ Failed to render: {e}")
-    exit(1)
+    assert img.shape == (210, 160, 3)
+    assert img.dtype == jnp.uint8
 
-print("\n" + "="*50)
-print("✅ ALL TESTS PASSED!")
-print("="*50)
-print("\nThe Pacman implementation is working correctly!")
-print("Next steps:")
-print("  1. Install dependencies: pip install -e .")
-print("  2. Test with JAXAtari: python3 -c 'import jaxatari; env = jaxatari.make(\"pacman\"); print(\"Success!\")'")
-print("  3. Play the game: python3 scripts/play.py -g pacman")
+def test_ghost_wall_collision_strict(env, key):
+    """
+    Strict collision check.
+    Verifies ghosts never overlap with wall tiles at any frame.
+    """
+    obs, state = env.reset(key)
+    maze = env.consts.MAZE_LAYOUT
+    
+    # Run for a longer duration to ensure ghosts move around
+    for step in range(200):
+        # Use NOOP action
+        obs, state, reward, done, info = env.step(state, 0)
+        ghosts = state.ghosts
+        
+        for i in range(4):
+            gx, gy = ghosts[i, 0], ghosts[i, 1]
+            
+            # Check bounding box (assuming 8x8 ghost size)
+            # We check the 4 corners of the ghost
+            corners = [
+                (gx, gy),           # Top-left
+                (gx + 7, gy),       # Top-right
+                (gx, gy + 7),       # Bottom-left
+                (gx + 7, gy + 7)    # Bottom-right
+            ]
+            
+            for cx, cy in corners:
+                tx, ty = int(cx // 8), int(cy // 8)
+                
+                # Boundary check
+                if tx < 0 or tx >= 20 or ty < 0 or ty >= 25:
+                    continue # Out of bounds is handled separately or allowed in tunnel
+                    
+                # Check if inside wall (1)
+                is_wall = maze[ty, tx] == 1
+                if is_wall:
+                    print(f"FAILURE at step {step}: Ghost {i} at ({gx}, {gy}) overlaps wall at tile ({tx}, {ty})")
+                    print(f"Ghost State: {ghosts[i]}")
+                
+                assert not is_wall, f"Ghost {i} at ({gx}, {gy}) overlaps wall at tile ({tx}, {ty}) during step {step}"
+
+def test_ghost_revival(env, key):
+    """
+    Verifies ghost revival logic.
+    Ensures eaten ghosts return to ghost house and reset state.
+    """
+    obs, state = env.reset(key)
+    
+    # Manually set a ghost to eaten state (2)
+    eaten_ghost_idx = 0
+    ghosts = state.ghosts
+    ghosts = ghosts.at[eaten_ghost_idx, 3].set(2)
+    state = state._replace(ghosts=ghosts)
+    
+    # Verify ghost is eaten
+    assert state.ghosts[eaten_ghost_idx, 3] == 2
+    
+    # Step until revived (or timeout)
+    revived = False
+    for _ in range(500): # Allow enough steps to return to house
+        # Use NOOP action
+        obs, state, reward, done, info = env.step(state, 0)
+        
+        # Check state
+        current_state = state.ghosts[eaten_ghost_idx, 3]
+        if current_state == 0:
+            revived = True
+            break
+    
+    assert revived, f"Ghost {eaten_ghost_idx} failed to revive after 500 steps"
+
+if __name__ == "__main__":
+    pytest.main([__file__])
