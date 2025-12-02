@@ -404,6 +404,14 @@ class BattlezoneRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        #----------------------create padded enemy masks for uniform shape-----------------------
+        self.padded_enemy_masks = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_front"],
+                                                       100, 100),
+                                     self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_left"],
+                                                       100, 100)])
+
+
+
     def _create_wall_sprite(self, height: int) -> jnp.ndarray:
         """Procedurally creates an RGBA sprite for a wall of given height."""
         wall_color_rgba = (0, 0, 0, 255)  # black
@@ -517,13 +525,19 @@ class BattlezoneRenderer(JAXGameRenderer):
         return bool_in_radar
 
 
+    def pad_to_shape(self, arr: jnp.ndarray, shape_target_x: int, shape_target_y: int) -> jnp.ndarray:
+        x, y = arr.shape
+        pad_x = shape_target_x - x
+        pad_y = shape_target_y - y
+        print("---------------------------------")
+        print(pad_x)
+        print(pad_y)
+        return jnp.pad(arr, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=-1)
 
     def get_enemy_mask(self, enemy:Enemy): #todo change
         #selects the correct mask fo the given enemy
-        #all_enemy_types = [self.SHAPE_MASKS["tank_enemy_front"], self.SHAPE_MASKS["tank_enemy_left"]]
-
-        #selected_enemy_type = all_enemy_types[enemy.enemy_type]
-        return self.SHAPE_MASKS["tank_enemy_front"]
+        selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type]
+        return selected_enemy_type
 
 
     def world_cords_to_viewport_cords(self, x, z, f=60.0): #todo change
@@ -543,48 +557,56 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     def zoom_mask(self, mask, zoom_factor):
         """
-        scales the mask proportional to the zoom_factor
-        at zoom_factor = 1 keeps everything the same
-        every zoom factor above 1 makes the mask smaller by 2x2
+        Scales the mask proportional to zoom_factor.
+        - zoom_factor = 1 keeps everything the same
+        - zoom_factor > 1 zooms in (mask elements appear smaller)
+        Works with masks padded with -1.
         """
+
         def anchor(_):
             return mask
+
         def zoom(_):
             x, y = mask.shape
 
-            # create grid of coordinates in the output canvas
+            # Create grid of coordinates in the output canvas
             xi = jnp.arange(x)
             yi = jnp.arange(y)
             xv, yv = jnp.meshgrid(xi, yi, indexing='ij')
 
-            # compute coordinates in the original mask to sample
-            # zoom center is at the middle of the mask
-            cx, cy = (x - 1) / 2, (y - 1) / 2
+            # Compute coordinates in the original mask to sample
+            # Zoom center is at the middle of the **non-padded region**
+            valid_rows = jnp.any(mask != -1, axis=1)
+            valid_cols = jnp.any(mask != -1, axis=0)
+            x_min, x_max = jnp.argmax(valid_rows), x - jnp.argmax(valid_rows[::-1]) - 1
+            y_min, y_max = jnp.argmax(valid_cols), y - jnp.argmax(valid_cols[::-1]) - 1
+            cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+
+            # Zoom coordinates
             x_orig = (xv - cx) * zoom_factor + cx
             y_orig = (yv - cy) * zoom_factor + cy
-            #x_orig = xv + zoom_factor * jnp.sign(cx-xv)
-            #y_orig = yv + zoom_factor * jnp.sign(cy-yv)
 
-            # clip coordinates to valid range
-            x_orig = jnp.clip(x_orig, 0, x - 1)
-            y_orig = jnp.clip(y_orig, 0, y - 1)
+            # Clip to the **non-padded region**
+            x_orig = jnp.clip(x_orig, x_min, x_max)
+            y_orig = jnp.clip(y_orig, y_min, y_max)
 
-            # nearest neighbor sampling
+            # Nearest neighbor sampling
             x0 = jnp.floor(x_orig).astype(int)
             y0 = jnp.floor(y_orig).astype(int)
             zoomed_mask = mask[x0, y0]
 
-            # zero edges using fixed-size boolean mask
+            # Zero edges: set padding outside zoomed area to -1
             rows = jnp.arange(x)[:, None]
             cols = jnp.arange(y)[None, :]
-
-            edge = (rows < zoom_factor) | (rows >= x - zoom_factor) | \
-                   (cols < zoom_factor) | (cols >= y - zoom_factor)
-
+            #edge = (rows < x_min) | (rows > x_max) | (cols < y_min) | (cols > y_max)
+            z = zoom_factor+1
+            edge = (rows < x_min+z) | (rows >= x_max - z) | \
+                   (cols < y_min+z) | (cols >= y_max - z)
             zoomed_mask = jnp.where(edge, -1, zoomed_mask)
-            return  zoomed_mask
 
-        return jax.lax.cond(zoom_factor<=1, anchor, zoom, operand=None)
+            return zoomed_mask
+
+        return jax.lax.cond(zoom_factor <= 1, anchor, zoom, operand=None)
 
 
     def render_single_enemy(self, raster, enemy:Enemy): #todo change
