@@ -121,6 +121,7 @@ class BattlezoneConstants(NamedTuple):
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15  # todo change
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.25
+    ENEMY_POS_Y:int = 85
 
 
 # immutable state container
@@ -522,7 +523,8 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         def uvMap(_):
             u = ((f * (x / z))+self.consts.WIDTH/2).astype(int)
-            v = 85
+            vOffset = self.consts.ENEMY_POS_Y   #change to tune for missiles
+            v = ((f/z) + vOffset).astype(int)
             return u, v
 
         return jax.lax.cond(z<=0, anchor, uvMap, operand=None)
@@ -581,7 +583,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
         x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-        return self.jr.render_at_clipped(raster, x, y, zoomed_mask)
+        return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
 
 
 
