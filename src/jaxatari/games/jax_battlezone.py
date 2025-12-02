@@ -544,7 +544,12 @@ class BattlezoneRenderer(JAXGameRenderer):
         selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type] #this is still an array containing all rotations
 
         #----------------select sprite based on rotation------------
-        rotated_sprite = selected_enemy_type[0]  #todo
+        n, _, _ = jnp.shape(selected_enemy_type)
+        circle = 360  #change to 2pi if radians
+        angle = enemy.orientation_angle % circle
+        #flip = enemy.orientation_angle > halfcircle
+        index = jnp.round((angle/circle) * (n-1)).astype(int)
+        rotated_sprite = selected_enemy_type[index]
 
         return rotated_sprite
 
