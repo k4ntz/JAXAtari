@@ -118,7 +118,7 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15  # todo change
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.25
     ENEMY_POS_Y:int = 85
@@ -405,10 +405,16 @@ class BattlezoneRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
         #----------------------create padded enemy masks for uniform shape-----------------------
-        self.padded_enemy_masks = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_front"],
-                                                       100, 100),
-                                     self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_left"],
-                                                       100, 100)])
+        pad = 140
+        self.padded_enemy_masks = jnp.array([
+            [self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_front"],pad, pad),
+            self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_left"],pad, pad)
+             ],
+            [self.pad_to_shape(self.SHAPE_MASKS["saucer_left"],pad, pad),
+            self.pad_to_shape(self.SHAPE_MASKS["saucer_right"],pad, pad)
+             ],
+
+             ])
 
 
 
@@ -435,6 +441,8 @@ class BattlezoneRenderer(JAXGameRenderer):
             #enemies
             {'name': 'tank_enemy_front', 'type': 'single', 'file': 'tank_enemy_front.npy'}, #not sure if we can/should
             {'name': 'tank_enemy_left', 'type': 'single', 'file': 'tank_enemy_left.npy'},   #summarize them like digits
+            {'name': 'saucer_left', 'type': 'single', 'file': 'saucer_left.npy'},
+            {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
@@ -529,18 +537,19 @@ class BattlezoneRenderer(JAXGameRenderer):
         x, y = arr.shape
         pad_x = shape_target_x - x
         pad_y = shape_target_y - y
-        print("---------------------------------")
-        print(pad_x)
-        print(pad_y)
         return jnp.pad(arr, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=-1)
 
-    def get_enemy_mask(self, enemy:Enemy): #todo change
+    def get_enemy_mask(self, enemy:Enemy):
         #selects the correct mask fo the given enemy
-        selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type]
-        return selected_enemy_type
+        selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type] #this is still an array containing all rotations
+
+        #----------------select sprite based on rotation------------
+        rotated_sprite = selected_enemy_type[0]  #todo
+
+        return rotated_sprite
 
 
-    def world_cords_to_viewport_cords(self, x, z, f=60.0): #todo change
+    def world_cords_to_viewport_cords(self, x, z, f=60.0):
         #f = (screen_height / 2) / tan(FOVv / 2)
         def anchor(_):
             # Behind the camera or invalid
@@ -548,7 +557,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         def uvMap(_):
             u = ((f * (x / z))+self.consts.WIDTH/2).astype(int)
-            vOffset = self.consts.ENEMY_POS_Y   #change to tune for missiles
+            vOffset = self.consts.ENEMY_POS_Y   #todo change to tune for missiles
             v = ((f/z) + vOffset).astype(int)
             return u, v
 
@@ -609,7 +618,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jax.lax.cond(zoom_factor <= 1, anchor, zoom, operand=None)
 
 
-    def render_single_enemy(self, raster, enemy:Enemy): #todo change
+    def render_single_enemy(self, raster, enemy:Enemy):
         enemy_mask = self.get_enemy_mask(enemy)
         zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z))-20.0) *
                         self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
