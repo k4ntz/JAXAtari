@@ -239,25 +239,22 @@ class MsPacmanMaze:
               return jnp.array(dof_grid)
 
        @staticmethod
-       def load_background(level: int, mazes = MAZES, pellets = BASE_PELLETS,
+       def load_background(maze: int, mazes = MAZES, pellets = BASE_PELLETS,
                            scale = TILE_SCALE, height = TILE_HEIGHT, width = TILE_WIDTH,
                            wall_color = WALL_COLOR, path_color = PATH_COLOR):
               """
               Constructs the background based on the level.
               """
-              maze_grid = mazes[level]
+              maze_grid = mazes[maze]
 			  
               # Initialize RGB image
-              background = jnp.zeros((210, width * scale, 3), dtype=jnp.uint8)
+              background = np.zeros((210, width * scale, 3), dtype=jnp.uint8)
 
               # Fill background
               for y in range(height):
                      for x in range(width):
-                            color = jax.lax.cond(maze_grid[y, x] == 1,
-                                   lambda _: wall_color,
-                                   lambda _: path_color,
-                                   operand=None)
-                            background = background.at[1+y*scale: (y+2)*scale, x*scale: (x+1)*scale, :].set(color)
+                            color = wall_color if maze_grid[y, x] == 1 else path_color
+                            background[1+y*scale: (y+2)*scale, x*scale: (x+1)*scale, :] = color
               # Render pellets
               for px in range(18):
                      x_offset = 8 if px < 9 else 12
@@ -267,5 +264,5 @@ class MsPacmanMaze:
                                    pellet_y = py * 12 + 10
                                    for i in range(4):
               	                     for j in range(2):
-                                                 background = background.at[pellet_y+j, pellet_x+i].set(wall_color)
-              return jnp.swapaxes(background, 0, 1)
+                                                 background[pellet_y+j, pellet_x+i] = wall_color
+              return jnp.swapaxes(jnp.array(background), 0, 1)
