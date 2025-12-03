@@ -6,20 +6,21 @@ Edit: Jan Rafflewski
 """
 TODO
     1)  [x] Validate ghost behaviour
-    2)  [ ] Level progression
+    2)  [x] Level progression
     3)  [ ] Performance improvements
     4)  [ ] JIT compatibility
 
     Optional:
     a)  [ ] Correct speed
     b)  [ ] Pacman death animation
-    c)  [ ] Fruit scale and animation
-    d)  [ ] Fruit movement patterns
-    e)  [ ] Ghost behavioral quirks
+    c)  [ ] Bonus Life at 10000 score
+    d)  [ ] Fruit scale and animation
+    e)  [ ] Fruit movement patterns
     f)  [ ] Ghost starting positions
-    g)  [ ] Ghost enjailment
-    h)  [ ] Ghost timings
-    i)  [ ] Correct maze colors
+    g)  [ ] Ghost behavioral quirks
+    h)  [ ] Ghost enjailment
+    i)  [ ] Ghost timings
+    j)  [ ] Correct maze colors
 """
 
 
