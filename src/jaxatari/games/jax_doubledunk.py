@@ -38,6 +38,9 @@ class DunkConstants:
     BASKET_POSITION: Tuple[int,int] = (125,10)
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (40, 210, 81) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
+    MATCH_STEPS: int = 600  # number of steps per match (tunable)
+    DUNK_RADIUS: int = 18
+    BLOCK_RADIUS: int = 14
 
 @chex.dataclass(frozen=True)
 class PlayerState:
@@ -179,12 +182,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player1_outside=PlayerState(x=80, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_inside=PlayerState(x=170, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             player2_outside=PlayerState(x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            ball=BallState(x=0.0, y=0.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_INSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter_id=PlayerID.NONE, receiver_id=PlayerID.NONE),
+            # Start with a jump ball in the center: no holder and ball sits at the start position
+            ball=BallState(x=float(self.constants.BALL_START[0]), y=float(self.constants.BALL_START[1]), vel_x=0.0, vel_y=0.0, holder=PlayerID.NONE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter_id=PlayerID.NONE, receiver_id=PlayerID.NONE),
             player_score=0,
             enemy_score=0,
             step_counter=0,
             acceleration_counter=0,
-            game_mode=GameMode.PLAY_SELECTION,
+            game_mode=GameMode.IN_PLAY,
             play_step=0,
             controlled_player_id=PlayerID.PLAYER1_INSIDE,
             key=key,
@@ -246,11 +250,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         key, reset_key = random.split(state.key)
         is_p1_shooter = (state.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (state.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)
         new_ball_holder = jax.lax.select(is_p1_shooter, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
-        return self._init_state(reset_key).replace(
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            ball=state.ball.replace(holder=new_ball_holder)
-        )
+        # Reinitialize positions but preserve match timer and scores
+        new_state = self._init_state(reset_key).replace(player_score=state.player_score, enemy_score=state.enemy_score)
+        new_state = new_state.replace(step_counter=state.step_counter, acceleration_counter=state.acceleration_counter, key=key)
+        return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
 
     def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
         """Determines the action for each player based on control state and AI."""
@@ -447,20 +450,59 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         basket_pos = jnp.array([self.constants.BASKET_POSITION[0], self.constants.BASKET_POSITION[1]], dtype=jnp.float32)
         target_pos = basket_pos + jnp.array([offset_x, 0.0])
         shooter_pos = jnp.array([shooter_x, shooter_y], dtype=jnp.float32)
+        # shooter z (height) for dunk/block checks
+        shooter_z = jax.lax.select(is_p1_inside_shooting, state.player1_inside.z,
+                  jax.lax.select(is_p1_outside_shooting, state.player1_outside.z,
+                  jax.lax.select(is_p2_inside_shooting, state.player2_inside.z,
+                  jax.lax.select(is_p2_outside_shooting, state.player2_outside.z, 0))))
         shoot_direction = target_pos - shooter_pos
         shoot_norm = jnp.sqrt(jnp.sum(shoot_direction**2))
         shoot_safe_norm = jnp.where(shoot_norm == 0, 1.0, shoot_norm)
         shoot_speed = 8.0
         shoot_vel = (shoot_direction / shoot_safe_norm) * shoot_speed
 
+        # Basic blocking: if an opponent jumps near the shooter during the shot, they can block it
+        # Check opponents (for P1 shots, opponents are P2 players; vice-versa)
+        def check_blocking():
+            # opponent positions and heights
+            opp1_x = state.player2_inside.x
+            opp1_y = state.player2_inside.y
+            opp1_z = state.player2_inside.z
+            opp2_x = state.player2_outside.x
+            opp2_y = state.player2_outside.y
+            opp2_z = state.player2_outside.z
+
+            d1 = jnp.sqrt((opp1_x - shooter_x)**2 + (opp1_y - shooter_y)**2)
+            d2 = jnp.sqrt((opp2_x - shooter_x)**2 + (opp2_y - shooter_y)**2)
+
+            can_block1 = (opp1_z > 0) & (d1 < self.constants.BLOCK_RADIUS)
+            can_block2 = (opp2_z > 0) & (d2 < self.constants.BLOCK_RADIUS)
+
+            blocked_by = jax.lax.select(can_block1, PlayerID.PLAYER2_INSIDE, PlayerID.NONE)
+            blocked_by = jax.lax.select(can_block2, PlayerID.PLAYER2_OUTSIDE, blocked_by)
+            return blocked_by
+
+        blocked_by = jax.lax.cond(
+            is_shooting & ((shooter_id == PlayerID.PLAYER1_INSIDE) | (shooter_id == PlayerID.PLAYER1_OUTSIDE)),
+            lambda: check_blocking(),
+            lambda: PlayerID.NONE
+        )
+
+        # Determine whether this shot should be a dunk (inside player jumping near basket)
+        dist_to_basket = jnp.sqrt(jnp.sum((shooter_pos - basket_pos)**2))
+        is_dunk = (dist_to_basket < self.constants.DUNK_RADIUS) & (shooter_z > 0)
+
+        def make_shot(b):
+            # If blocked by opponent, possession goes to blocker
+            b = b.replace(x=shooter_x.astype(jnp.float32), y=shooter_y.astype(jnp.float32), vel_x=shoot_vel[0], vel_y=shoot_vel[1], holder=PlayerID.NONE, target_x=target_pos[0], target_y=target_pos[1], is_goal=is_goal, shooter_id=shooter_id, receiver_id=PlayerID.NONE)
+            b = jax.lax.cond(blocked_by != PlayerID.NONE, lambda bb: bb.replace(holder=blocked_by, vel_x=0.0, vel_y=0.0, is_goal=False, shooter_id=PlayerID.NONE), lambda bb: bb, b)
+            # If dunk, bump is_goal to True and make target the rim
+            b = jax.lax.cond(is_dunk, lambda bb: bb.replace(is_goal=True, target_x=basket_pos[0], target_y=basket_pos[1]), lambda bb: bb)
+            return b
+
         ball_state = jax.lax.cond(
             is_shooting,
-            lambda b: b.replace(
-                x=shooter_x.astype(jnp.float32), y=shooter_y.astype(jnp.float32),
-                vel_x=shoot_vel[0], vel_y=shoot_vel[1], holder=PlayerID.NONE,
-                target_x=target_pos[0], target_y=target_pos[1],
-                is_goal=is_goal, shooter_id=shooter_id, receiver_id=PlayerID.NONE
-            ),
+            make_shot,
             lambda b: b,
             ball_state
         )
