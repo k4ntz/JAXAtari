@@ -169,7 +169,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
                 #enemies
                 enemy_type=jnp.array([0, 0, 0]),
                 enemy_pos=jnp.array([[85,85,85],[43,43,43]]),
-                enemy_vel=jnp.array([[0,0,0],[1,0,0]]),
+                enemy_vel=jnp.array([[1,-1,-1],[0,0,0]]),
                 enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
                 enemy_shot_vel=jnp.array([0, 0, 0]),
 
@@ -370,36 +370,37 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         white_ufo_3_position= jnp.array(state.level.enemy_pos[0:2][2])
         ufo_1_vel_y = state.level.enemy_vel[1][0]
 
-        ufo_1_vel_y = jax.lax.cond(
-            white_ufo_1_position[1] >= self.consts.BOTTOM_CLIP,
-            lambda v_: -1,
-            lambda v_: v_,
-            ufo_1_vel_y,
-        )
+        #ufo_1_vel_y = jax.lax.cond(
+           # white_ufo_1_position[1] >= self.consts.BOTTOM_CLIP,
+          #  lambda v_: -1,
+         #   lambda v_: v_,
+        #    ufo_1_vel_y,
+        #)
 
-        ufo_1_vel_y = jax.lax.cond(
-            white_ufo_1_position[1]<= self.consts.TOP_CLIP,
-            lambda v_: 1,
-            lambda v_: v_,
-            ufo_1_vel_y,
-        )
+        #ufo_1_vel_y = jax.lax.cond(
+        #    white_ufo_1_position[1]<= self.consts.TOP_CLIP,
+        #    lambda v_: 1,
+        #    lambda v_: v_,
+        #    ufo_1_vel_y,
+        #)
 
-        white_ufo_1_position = white_ufo_1_position.at[1].add(ufo_1_vel_y)
+        white_ufo_1_position = white_ufo_1_position.at[0].add(self._enemy_top_lane(state))
 
         return white_ufo_1_position,ufo_1_vel_y
     
     ####################benes code
     def _enemy_top_lane(self, state: BeamriderState):
+        ufo_1_vel_x = state.level.enemy_vel[0][0]
         white_ufo_1_position= jnp.array([state.level.enemy_pos[0][0],state.level.enemy_pos[1][0]])
         ufo_1_vel_x = jax.lax.cond(
-            white_ufo_1_position[1] >= self.consts.RIGHT_CLIPPLAYER,
+            white_ufo_1_position[1] >= self.consts.RIGHT_CLIP_PLAYER,
             lambda v: -1,
             lambda v: v,
             ufo_1_vel_x,
         )
 
         ufo_1_vel_x = jax.lax.cond(
-            white_ufo_1_position[1]<= self.consts.LEFT_CLIPPLAYER,
+            white_ufo_1_position[1]<= self.consts.LEFT_CLIP_PLAYER,
             lambda v: 1,
             lambda v: v,
             ufo_1_vel_x,
