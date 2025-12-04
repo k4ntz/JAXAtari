@@ -60,6 +60,15 @@ class BeamriderConstants(NamedTuple):
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3
 ])
+    INIT_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
+
+    INIT_LINE_VEL = jnp.array([0.31581876, 0.22127658, 0.4507547, 0.07610765, 0.10862522, 0.15503621])
+    NEW_LINE_VEL = 0.06528
+    LINE_ACCELERATION = 1.007
+    MAX_LINE_VEL = 0.6665
+    BLUE_LINE_OFFSCREEN_Y = 500
+    NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
+
 
 
 class LevelState(NamedTuple):
@@ -81,8 +90,8 @@ class LevelState(NamedTuple):
     enemy_shot_pos : chex.Array          
     enemy_shot_vel : chex.Array
 
-    line_timers: chex.Array
-    line_offsett: chex.Array 
+    line_positions: chex.Array
+    line_velocities: chex.Array 
 
 class BeamriderState(NamedTuple):
     level : LevelState
@@ -173,8 +182,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
                 enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
                 enemy_shot_vel=jnp.array([0, 0, 0]),
 
-                line_timers=jnp.array([0, 0, 0, 0, 0, 0]),
-                line_offsett= jnp.array([0, 0, 0, 0, 0, 0])
+                line_positions= self.consts.INIT_LINE_POS,
+                line_velocities= self.consts.INIT_LINE_VEL
             ),
                 score=jnp.array(0),
                 sector=jnp.array(next_level),                #current level
@@ -224,6 +233,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         (
             enemy_pos, player_shot_position
          ) = self._collision_handler(state, enemy_pos, player_shot_position, bullet_type)
+        
+        (line_positions, line_velocities) = self._line_step(state)
+
         next_step = state.steps + 1
         new_level_state = LevelState(
             player_pos=player_x,
@@ -244,8 +256,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
             enemy_shot_vel=jnp.array([0, 0, 0]),
 
-            line_timers=jnp.array([0, 0, 0, 0, 0, 0]),
-            line_offsett=jnp.array([0, 0, 0, 0, 0, 0])
+            line_positions= line_positions,
+            line_velocities= line_velocities
         )
 
         new_state = BeamriderState(
@@ -408,9 +420,19 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
     
     def _line_step(self, state: BeamriderState):
 
-        line_exists = jnp.array((state.level.line_offsett <= self.consts.MAX_BLUE_LINE_POS) & (state.level.line_offsett >= self.consts.MIN_BLUE_LINE_POS))
-        #TODO line_movements implementieren (Maybe ROM analysieren für genaue implementation)
-        return None
+    
+        velocities = state.level.line_velocities * self.consts.LINE_ACCELERATION
+        velocities = jnp.clip(velocities, a_max= self.consts.MAX_LINE_VEL) 
+        positions = state.level.line_positions + 2 * velocities #LINE accelerates twice as fast as constant
+        positions = jnp.where(positions > self.consts.MAX_BLUE_LINE_POS, self.consts.BLUE_LINE_OFFSCREEN_Y, positions)
+        trigger_reset = jnp.all(positions >= self.consts.NEW_LINE_THRESHHOLD_BOTTOM_LINE) & jnp.any(positions > self.consts.MAX_BLUE_LINE_POS)
+        idx_to_reset = jnp.argmax(positions >= self.consts.BLUE_LINE_OFFSCREEN_Y)
+        positions_with_reset = positions.at[idx_to_reset].set(46)
+        velocities_with_reset = velocities.at[idx_to_reset].set(self.consts.NEW_LINE_VEL)
+        positions = jnp.where(trigger_reset, positions_with_reset, positions)
+        velocities = jnp.where(trigger_reset, velocities_with_reset, velocities)
+
+        return (positions, velocities)
 
     def _bullet_infos(self, state: BeamriderState):
         shot_y = state.level.player_shot_pos[1]
@@ -501,9 +523,16 @@ class BeamriderRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:BeamriderState) -> chex.Array:
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        # blue_line_mask = self.SHAPE_MASKS["blue_line"]
-        # raster = self.jr.render_at_clipped(raster,8 ,163,blue_line_mask)
+        blue_line_mask = self.SHAPE_MASKS["blue_line"]
+        # Blue_Line Render:
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[0],blue_line_mask)
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[1],blue_line_mask)
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[2],blue_line_mask)
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[3],blue_line_mask)
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[4],blue_line_mask)
+        raster = self.jr.render_at_clipped(raster,8 ,state.level.line_positions[5],blue_line_mask)
 
+        # ------------------
         torpedos_left = self.SHAPE_MASKS["torpedos_left"]
         torpedos_left_y_pos_3 = jnp.where(state.level.torpedoes_left >= 3, 128, 500)
         torpedos_left_y_pos_2 = jnp.where(state.level.torpedoes_left >= 2, 136, 500)
