@@ -76,8 +76,8 @@ class LevelState(NamedTuple):
 
     #enemies
     enemy_type : chex.Array              #int
-    enemy_pos : chex.Array               #( (1,3) , (2,4) , ... )
-    enemy_vel : chex.Array
+    white_ufo_pos : chex.Array               #( (1,3) , (2,4) , ... )
+    white_ufo_vel : chex.Array
     enemy_shot_pos : chex.Array          
     enemy_shot_vel : chex.Array
 
@@ -108,8 +108,8 @@ class BeamriderObservation(NamedTuple):
 
     #enemies
     enemy_type: chex.Array
-    enemy_pos:chex.Array
-    enemy_vel :chex.Array
+    white_ufo_pos:chex.Array
+    white_ufo_vel :chex.Array
     enemy_shot_pos : chex.Array          
     enemy_shot_vel : chex.Array
 
@@ -168,8 +168,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
 
                 #enemies
                 enemy_type=jnp.array([0, 0, 0]),
-                enemy_pos=jnp.array([[85,85,85],[43,43,43]]),
-                enemy_vel=jnp.array([[1,-1,-1],[0,0,0]]),
+                white_ufo_pos=jnp.array([[77.0,77.0,77.0],[43.0,43.0,43.0]]),
+                white_ufo_vel=jnp.array([[-0.5,0.5,0.3],[0.0,0.0,0.0]]),
                 enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
                 enemy_shot_vel=jnp.array([0, 0, 0]),
 
@@ -198,8 +198,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
 
             #enemies
             enemy_type= state.level.enemy_type,
-            enemy_pos=state.level.enemy_pos,
-            enemy_vel =state.level.enemy_vel,
+            white_ufo_pos=state.level.white_ufo_pos,
+            white_ufo_vel =state.level.white_ufo_vel,
             enemy_shot_pos =state.level.enemy_shot_pos,        
             enemy_shot_vel =state.level.enemy_shot_vel,
         )
@@ -218,12 +218,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         ) = self._player_step(state, action)
 
         #ufo test
-        (white_ufo_1_position,ufo_1_vel_y) = self._enemy_step(state)
+        (white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y) = self._white_ufo_1_step(state)
+        (white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y) = self._white_ufo_2_step(state)
+        (white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y) = self._white_ufo_3_step(state)
 
-        enemy_pos = jnp.array([[81,80,80],[white_ufo_1_position[1],0,0]])
+        white_ufo_pos = jnp.array([[white_ufo_1_position[0],white_ufo_2_position[0],white_ufo_3_position[0]],
+                               [white_ufo_1_position[1],white_ufo_2_position[1],white_ufo_3_position[1]]])
         (
-            enemy_pos, player_shot_position
-         ) = self._collision_handler(state, enemy_pos, player_shot_position, bullet_type)
+            white_ufo_pos, player_shot_position
+         ) = self._collision_handler(state, white_ufo_pos, player_shot_position, bullet_type)
         next_step = state.steps + 1
         new_level_state = LevelState(
             player_pos=player_x,
@@ -239,8 +242,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
 
             #enemies
             enemy_type=jnp.array([0, 0, 0]),
-            enemy_pos=enemy_pos,
-            enemy_vel=jnp.array([[0,0,0],[ufo_1_vel_y,0,0]]),
+            white_ufo_pos=white_ufo_pos,
+            white_ufo_vel=jnp.array([[white_ufo_1_vel_x,white_ufo_2_vel_x,white_ufo_3_vel_x],[0.0,0.0,0.0]]),
             enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
             enemy_shot_vel=jnp.array([0, 0, 0]),
 
@@ -349,8 +352,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         #####
         return(x,v,shot_position, shot_velocity, torpedos_left, bullet_type)
 
-    def _collision_handler(self, state: BeamriderState, new_enemy_pos, new_shot_pos, new_bullet_type):
-        enemies = new_enemy_pos.T
+    def _collision_handler(self, state: BeamriderState, new_white_ufo_pos, new_shot_pos, new_bullet_type):
+        enemies = new_white_ufo_pos.T
         distance_to_bullet = jnp.abs(enemies - new_shot_pos)
         bullet_type_is_laser = new_bullet_type == self.consts.LASER_ID
         bullet_radius = jnp.where(bullet_type_is_laser, jnp.array(self.consts.LASER_HIT_RADIUS),jnp.array(self.consts.TORPEDO_HIT_RADIUS))
@@ -358,54 +361,66 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         mask = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
         hit_index = jnp.argmax(mask)
         hit_exists = jnp.any(mask) 
-        enemy_pos_after_hit = enemies.at[hit_index].set(jnp.array(self.consts.ENEMY_OFFSCREEN_POS)).T
+        white_ufo_pos_after_hit = enemies.at[hit_index].set(jnp.array(self.consts.ENEMY_OFFSCREEN_POS)).T
         player_shot_pos = jnp.where(hit_exists, jnp.array(self.consts.BULLET_OFFSCREEN_POS), new_shot_pos)
-        enemie_pos = jnp.where(hit_exists, enemy_pos_after_hit ,new_enemy_pos)
+        enemie_pos = jnp.where(hit_exists, white_ufo_pos_after_hit ,new_white_ufo_pos)
         return (enemie_pos, player_shot_pos)
 
+
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
-    def _enemy_step(self, state: BeamriderState):
-        white_ufo_1_position= jnp.array([state.level.enemy_pos[0][0],state.level.enemy_pos[1][0]])
-        white_ufo_2_position= jnp.array(state.level.enemy_pos[0:2][1])
-        white_ufo_3_position= jnp.array(state.level.enemy_pos[0:2][2])
-        ufo_1_vel_y = state.level.enemy_vel[1][0]
+    def _white_ufo_1_step(self, state: BeamriderState):
+        white_ufo_1_position= jnp.array([state.level.white_ufo_pos[0][0],state.level.white_ufo_pos[1][0]])
+        
+        white_ufo_1_vel_x = state.level.white_ufo_vel[0][0]
+        white_ufo_1_vel_y = state.level.white_ufo_vel[1][0]
 
-        #ufo_1_vel_y = jax.lax.cond(
-           # white_ufo_1_position[1] >= self.consts.BOTTOM_CLIP,
-          #  lambda v_: -1,
-         #   lambda v_: v_,
-        #    ufo_1_vel_y,
-        #)
+        #this is for if top lane:
+        white_ufo_1_vel_x = self._enemy_top_lane(white_ufo_1_position,white_ufo_1_vel_x)
 
-        #ufo_1_vel_y = jax.lax.cond(
-        #    white_ufo_1_position[1]<= self.consts.TOP_CLIP,
-        #    lambda v_: 1,
-        #    lambda v_: v_,
-        #    ufo_1_vel_y,
-        #)
+        white_ufo_1_position = white_ufo_1_position.at[0].add(white_ufo_1_vel_x)
+        return white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y
+    
+    def _white_ufo_2_step(self, state: BeamriderState):
+        white_ufo_2_position= jnp.array([state.level.white_ufo_pos[0][1],state.level.white_ufo_pos[1][1]])
 
-        white_ufo_1_position = white_ufo_1_position.at[0].add(self._enemy_top_lane(state))
+        white_ufo_2_vel_x = state.level.white_ufo_vel[0][1]
+        white_ufo_2_vel_y = state.level.white_ufo_vel[1][1]
 
-        return white_ufo_1_position,ufo_1_vel_y
+        #this is for if top lane:
+        white_ufo_2_vel_x = self._enemy_top_lane(white_ufo_2_position,white_ufo_2_vel_x)
+
+        white_ufo_2_position = white_ufo_2_position.at[0].add(white_ufo_2_vel_x)
+        return white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y
+    
+    def _white_ufo_3_step(self, state: BeamriderState):
+        white_ufo_3_position= jnp.array([state.level.white_ufo_pos[0][2],state.level.white_ufo_pos[1][2]])
+
+        white_ufo_3_vel_x = state.level.white_ufo_vel[0][2]
+        white_ufo_3_vel_y = state.level.white_ufo_vel[1][2]
+
+        #this is for if top lane:
+        white_ufo_3_vel_x = self._enemy_top_lane(white_ufo_3_position,white_ufo_3_vel_x)
+
+        white_ufo_3_position = white_ufo_3_position.at[0].add(white_ufo_3_vel_x)
+        return white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y
     
     ####################benes code
-    def _enemy_top_lane(self, state: BeamriderState):
-        ufo_1_vel_x = state.level.enemy_vel[0][0]
-        white_ufo_1_position= jnp.array([state.level.enemy_pos[0][0],state.level.enemy_pos[1][0]])
-        ufo_1_vel_x = jax.lax.cond(
-            white_ufo_1_position[1] >= self.consts.RIGHT_CLIP_PLAYER,
-            lambda v: -1,
+    def _enemy_top_lane(self, white_ufo_pos, white_ufo_vel_x):
+        
+        white_ufo_vel_x = jax.lax.cond(
+            white_ufo_pos[0] >= self.consts.RIGHT_CLIP_PLAYER,
+            lambda v: -0.5,
             lambda v: v,
-            ufo_1_vel_x,
+            white_ufo_vel_x,
         )
 
-        ufo_1_vel_x = jax.lax.cond(
-            white_ufo_1_position[1]<= self.consts.LEFT_CLIP_PLAYER,
-            lambda v: 1,
+        white_ufo_vel_x = jax.lax.cond(
+            white_ufo_pos[0]<= self.consts.LEFT_CLIP_PLAYER,
+            lambda v: 0.5,
             lambda v: v,
-            ufo_1_vel_x,
+            white_ufo_vel_x,
         )
-        return ufo_1_vel_x
+        return white_ufo_vel_x
     
     def _line_step(self, state: BeamriderState):
 
@@ -523,9 +538,18 @@ class BeamriderRenderer(JAXGameRenderer):
         # raster = self.jr.render_at_clipped(raster, state.level.player_shot_pos[0], state.level.player_shot_pos[1], laser_mask)
         raster = self.jr.render_at_clipped(raster, state.level.player_shot_pos[0]+self._get_bullet_alignment(state.level.player_shot_pos[1],state.level.bullet_type), state.level.player_shot_pos[1], bullet_mask)
 
-        ufo_1_mask = self.SHAPE_MASKS["white_ufo"][self._get_index_ufo(state.level.enemy_pos[1][0])-1]
-        raster = self.jr.render_at_clipped(raster,state.level.enemy_pos[0][0]+self._get_ufo_alignment(state.level.enemy_pos[1][0]),state.level.enemy_pos[1][0], ufo_1_mask)
+        #white ufo masks
+        white_ufo_1_mask = self.SHAPE_MASKS["white_ufo"][self._get_index_ufo(state.level.white_ufo_pos[1][0])-1]
+        raster = self.jr.render_at_clipped(raster,state.level.white_ufo_pos[0][0]+self._get_ufo_alignment(state.level.white_ufo_pos[1][0]),
+                                           state.level.white_ufo_pos[1][0], white_ufo_1_mask)
 
+        white_ufo_2_mask = self.SHAPE_MASKS["white_ufo"][self._get_index_ufo(state.level.white_ufo_pos[1][1])-1]
+        raster = self.jr.render_at_clipped(raster,state.level.white_ufo_pos[0][1]+self._get_ufo_alignment(state.level.white_ufo_pos[1][1]),
+                                           state.level.white_ufo_pos[1][1], white_ufo_2_mask)
+        
+        white_ufo_3_mask = self.SHAPE_MASKS["white_ufo"][self._get_index_ufo(state.level.white_ufo_pos[1][2])-1]
+        raster = self.jr.render_at_clipped(raster,state.level.white_ufo_pos[0][2]+self._get_ufo_alignment(state.level.white_ufo_pos[1][2]),
+                                           state.level.white_ufo_pos[1][2], white_ufo_3_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
 
