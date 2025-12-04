@@ -1,6 +1,7 @@
 """
 Authors: Lasse Reith, Benedikt Schwarz, Shir Nussbaum
 """
+#active_development branch
 from jax._src.pjit import JitWrapped
 import os
 from functools import partial
