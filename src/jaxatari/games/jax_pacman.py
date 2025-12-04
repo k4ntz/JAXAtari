@@ -400,10 +400,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
     def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
         """
-        Handles Pac-Man movement logic.
-        
-        Uses node-based system for smooth movement between intersections/corners
-        instead of pixel-perfect collision.
+        Handle player movement - full Pacman movement implementation.
+        Key behaviors:
+        - Only stops at node if can't continue in current direction
+        - Can reverse direction at any time (when not overshooting)
+        - Input direction takes precedence when overshooting a node
         """
         # Check if this is a NOOP action
         is_noop = action == Action.NOOP
@@ -417,73 +418,102 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         target_node_x = self.node_positions_x[target_node_idx]
         target_node_y = self.node_positions_y[target_node_idx]
         
-        # Check if we're currently at a node
-        at_current_node = jnp.logical_and(
-            state.player_x == current_node_x,
-            state.player_y == current_node_y
-        )
-        
-        # Check if we've reached the target node
+        # Check if we've overshot the target node (equivalent to overshotTarget() in pacman.py)
+        # Calculate direction vector from current node to target node
         dx_to_target = target_node_x - current_node_x
         dy_to_target = target_node_y - current_node_y
         vec_to_target_sq = dx_to_target * dx_to_target + dy_to_target * dy_to_target
         
-        vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + \
-                         (state.player_y - current_node_y) * (state.player_y - current_node_y)
-        reached_target = vec_to_self_sq >= vec_to_target_sq
+        # Calculate distance from current node to current position
+        vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + (state.player_y - current_node_y) * (state.player_y - current_node_y)
+        overshot = vec_to_self_sq >= vec_to_target_sq
         
-        # Stop at target node if reached while moving
-        is_moving = state.player_direction != Action.NOOP
-        should_stop_at_target = jnp.logical_and(is_moving, reached_target)
+        # If overshot target (reached/passed the target node)
+        # Update current node to target, then get new target
+        new_current_idx = jnp.where(overshot, target_node_idx, current_node_idx)
         
-        # Update current node if we reached target
-        new_current_idx = jnp.where(should_stop_at_target, target_node_idx, current_node_idx)
-        
-        # Snap position to target node if stopped
-        snapped_x = jnp.where(should_stop_at_target, target_node_x, state.player_x)
-        snapped_y = jnp.where(should_stop_at_target, target_node_y, state.player_y)
-        
-        # Check if we're at a node now
-        at_node_after_stop = jnp.logical_or(at_current_node, should_stop_at_target)
-        
-        # Get new target based on action using neighbor lookup
+        # Get new target from input direction (equivalent to getNewTarget(direction) in pacman.py)
         new_target_from_action = self.neighbor_lookup[new_current_idx, action]
-        has_new_target = new_target_from_action >= 0
-        valid_action = jnp.logical_and(jnp.logical_not(is_noop), has_new_target)
+        has_target_from_action = new_target_from_action >= 0
+        valid_action = jnp.logical_and(jnp.logical_not(is_noop), has_target_from_action)
         
-        # Start moving if at node AND have valid action
-        should_start_moving = jnp.logical_and(at_node_after_stop, valid_action)
+        # Get new target from current direction (equivalent to getNewTarget(self.direction))
+        new_target_from_current_dir = self.neighbor_lookup[new_current_idx, state.player_direction]
+        has_target_from_current_dir = new_target_from_current_dir >= 0
+        valid_current_dir = jnp.logical_and(state.player_direction != Action.NOOP, has_target_from_current_dir)
         
-        # Update target index
-        new_target_idx = jnp.where(should_start_moving, new_target_from_action,
-                          jnp.where(should_stop_at_target, new_current_idx, target_node_idx))
+        # When overshot: input direction takes precedence, then current direction, else stop
+        # When not overshot: keep current target
+        new_target_idx = jnp.where(
+            overshot,
+            jnp.where(valid_action, new_target_from_action,
+                     jnp.where(valid_current_dir, new_target_from_current_dir, new_current_idx)),
+            target_node_idx
+        )
         
-        # Update direction
-        new_direction = jnp.where(should_start_moving, action,
-                         jnp.where(should_stop_at_target, jnp.array(Action.NOOP, dtype=jnp.int32),
-                                  state.player_direction))
+        # Update direction when overshot:
+        # - If input direction gives valid target, use input direction
+        # - Else if current direction gives valid target, use current direction
+        # - Else stop (NOOP)
+        new_direction = jnp.where(
+            overshot,
+            jnp.where(valid_action, action,
+                     jnp.where(valid_current_dir, state.player_direction, jnp.array(Action.NOOP, dtype=jnp.int32))),
+            state.player_direction
+        )
         
-        # Get final target position
-        final_target_x = self.node_positions_x[new_target_idx]
-        final_target_y = self.node_positions_y[new_target_idx]
+        # If overshot, snap position to target node (equivalent to setPosition() in pacman.py)
+        snapped_x = jnp.where(overshot, target_node_x, state.player_x)
+        snapped_y = jnp.where(overshot, target_node_y, state.player_y)
         
-        # Calculate movement deltas
-        move_dx = jnp.where(new_direction == Action.RIGHT, self.consts.PLAYER_SPEED,
-                   jnp.where(new_direction == Action.LEFT, -self.consts.PLAYER_SPEED, 0))
-        move_dy = jnp.where(new_direction == Action.DOWN, self.consts.PLAYER_SPEED,
-                   jnp.where(new_direction == Action.UP, -self.consts.PLAYER_SPEED, 0))
+        # If NOT overshot, check if we can reverse direction (oppositeDirection check)
+        # Action values: UP=2, DOWN=5, LEFT=4, RIGHT=3
+        # Opposite pairs: UP(2) <-> DOWN(5), LEFT(4) <-> RIGHT(3)
+        is_opposite = jnp.where(
+            action == Action.UP, state.player_direction == Action.DOWN,
+            jnp.where(
+                action == Action.DOWN, state.player_direction == Action.UP,
+                jnp.where(
+                    action == Action.LEFT, state.player_direction == Action.RIGHT,
+                    jnp.where(
+                        action == Action.RIGHT, state.player_direction == Action.LEFT,
+                        False
+                    )
+                )
+            )
+        )
+        can_reverse = jnp.logical_and(jnp.logical_not(overshot), 
+                                     jnp.logical_and(jnp.logical_not(is_noop), is_opposite))
         
-        # Move towards target (only if moving)
-        new_x = jnp.where(new_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
-        new_y = jnp.where(new_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
+        # If reversing direction, swap node and target, and change direction
+        # reverseDirection() in pseudo code: direction *= -1, swap(node, target)
+        final_current_idx = jnp.where(can_reverse, target_node_idx, new_current_idx)
+        final_target_idx = jnp.where(can_reverse, current_node_idx, new_target_idx)
+        final_direction = jnp.where(can_reverse, action, new_direction)
+        
+        # Update target node position for movement calculation
+        final_target_x = self.node_positions_x[final_target_idx]
+        final_target_y = self.node_positions_y[final_target_idx]
+        
+        # Calculate movement direction based on final direction
+        # Action values: Action.UP=2, Action.DOWN=5, Action.LEFT=4, Action.RIGHT=3
+        # Movement deltas: RIGHT=+x, LEFT=-x, DOWN=+y, UP=-y
+        move_dx = jnp.where(final_direction == Action.RIGHT, self.consts.PLAYER_SPEED,
+                   jnp.where(final_direction == Action.LEFT, -self.consts.PLAYER_SPEED, 0))
+        move_dy = jnp.where(final_direction == Action.DOWN, self.consts.PLAYER_SPEED,
+                   jnp.where(final_direction == Action.UP, -self.consts.PLAYER_SPEED, 0))
+        
+        # Move incrementally towards target (equivalent to position += directions[direction]*speed*dt)
+        new_x = jnp.where(final_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
+        new_y = jnp.where(final_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
         
         return state._replace(
             player_x=new_x.astype(jnp.int32),
             player_y=new_y.astype(jnp.int32),
-            player_direction=new_direction,
+            player_direction=final_direction,
             player_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
-            player_current_node_index=new_current_idx,
-            player_target_node_index=new_target_idx,
+            player_current_node_index=final_current_idx,
+            player_target_node_index=final_target_idx,
         )
     
     def _find_nearest_node_idx(self, x: int, y: int) -> int:
