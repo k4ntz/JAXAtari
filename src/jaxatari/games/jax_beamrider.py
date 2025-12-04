@@ -27,6 +27,10 @@ class BeamriderConstants(NamedTuple):
     LEFT_CLIP_PLAYER: int = 27
     RIGHT_CLIP_PLAYER: int = 137
     LANES: Tuple[int, int, int, int, int] = (27,52,77,102,127)
+    TOP_OF_LANES: Tuple[int, int, int, int, int] = (38,61,71,81,91,102,123)
+    ENEMY_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1.5,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(1.5,4))
+
+
     MAX_LASER_Y: int = 67
     MIN_BULLET_Y:int =156
     MAX_TORPEDO_Y: int = 60
@@ -41,10 +45,12 @@ class BeamriderConstants(NamedTuple):
     TORPEDO_HIT_RADIUS: Tuple[int, int] = (3, 2)
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
-    BULLET_OFFSCREEN_POS: Tuple[int, int] = (800, 800)
+    BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
     ENEMY_OFFSCREEN_POS: Tuple[int,int] = (2000,2000)
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
+
+
     INTERVAL_PER_MOVE = jnp.array([
     # Moves  0–5  -> ~8–9
     10, 9, 9, 9, 9, 9, 9,
@@ -59,6 +65,7 @@ class BeamriderConstants(NamedTuple):
     # Moves 32+   -> ~3
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3
+
 ])
     INIT_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
 
@@ -89,6 +96,8 @@ class LevelState(NamedTuple):
     white_ufo_vel : chex.Array
     enemy_shot_pos : chex.Array          
     enemy_shot_vel : chex.Array
+    white_ufo_time_on_lane: chex.Array
+    white_ufo_time_allowed:chex.Array
 
     line_positions: chex.Array
     line_velocities: chex.Array 
@@ -101,6 +110,7 @@ class BeamriderState(NamedTuple):
     reset_coords:chex.Array
     lives:chex.Array
     steps: chex.Array
+    rng: chex.Array
 
 
 class BeamriderInfo(NamedTuple):
@@ -158,13 +168,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         obs = self._get_observation(state)
         return obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
     def reset_level(self, next_level=1) -> BeamriderState:
         #next_level = jnp.clip(next_level, 1, 3)
         
         new_state = BeamriderState(
             level = LevelState(
-                player_pos=self.consts.LANES[2],
+                player_pos=jnp.array(77.0),
                 player_vel=jnp.array(0.0),
                 white_ufo_left=jnp.array(15),
                 comet_positions=jnp.array(0),
@@ -181,6 +190,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
                 white_ufo_vel=jnp.array([[-0.5,0.5,0.3],[0.0,0.0,0.0]]),
                 enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
                 enemy_shot_vel=jnp.array([0, 0, 0]),
+                white_ufo_time_on_lane=jnp.array([0,0,0]),
+                white_ufo_time_allowed=jnp.array([400,600,800]),
 
                 line_positions= self.consts.INIT_LINE_POS,
                 line_velocities= self.consts.INIT_LINE_VEL
@@ -190,12 +201,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
                 level_finished=jnp.array(0),
                 reset_coords=jnp.array(False),
                 lives=jnp.array(3), 
-                steps= jnp.array(0)
+                steps= jnp.array(0),
+                rng= jnp.array(jax.random.key(42))
         )
         return new_state
     
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BeamriderState) -> BeamriderObservation:
         return BeamriderObservation(
             pos=state.level.player_pos,
@@ -227,9 +238,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         ) = self._player_step(state, action)
 
         #ufo test
-        (white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y) = self._white_ufo_1_step(state)
-        (white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y) = self._white_ufo_2_step(state)
-        (white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y) = self._white_ufo_3_step(state)
+        (white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y,white_ufo_1_time_on_lane,key) = self._white_ufo_1_step(state)
+        (white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y,white_ufo_2_time_on_lane) = self._white_ufo_2_step(state)
+        (white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y,white_ufo_3_time_on_lane) = self._white_ufo_3_step(state)
 
         white_ufo_pos = jnp.array([[white_ufo_1_position[0],white_ufo_2_position[0],white_ufo_3_position[0]],
                                [white_ufo_1_position[1],white_ufo_2_position[1],white_ufo_3_position[1]]])
@@ -258,6 +269,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             white_ufo_vel=jnp.array([[white_ufo_1_vel_x,white_ufo_2_vel_x,white_ufo_3_vel_x],[0.0,0.0,0.0]]),
             enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
             enemy_shot_vel=jnp.array([0, 0, 0]),
+            white_ufo_time_on_lane=jnp.array([white_ufo_1_time_on_lane,white_ufo_2_time_on_lane,white_ufo_3_time_on_lane]),
+            white_ufo_time_allowed=state.level.white_ufo_time_allowed,
 
             line_positions= line_positions,
             line_velocities= line_velocities
@@ -270,7 +283,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             level_finished=jnp.array(0),
             reset_coords=jnp.array(False),
             lives=jnp.array(3),
-            steps=next_step
+            steps=next_step,
+            rng= key
         )
 
         done = self._get_done(new_state)
@@ -281,7 +295,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         
         return observation, new_state, env_reward, done, info
 
-    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _player_step(self, state: BeamriderState, action: chex.Array):
         #level_constants = self._get_level_constants(state.sector)
         x = state.level.player_pos
@@ -378,46 +391,88 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         enemie_pos = jnp.where(hit_exists, white_ufo_pos_after_hit ,new_white_ufo_pos)
         return (enemie_pos, player_shot_pos)
 
+    def entropy_heat_prob(self, steps_static, alpha=0.002, p_min=0.0002, p_max=0.8):
+        steps =steps_static/10
+        # steps_static: scalar integer or array
+        heat = 1.0 - jnp.exp(-alpha * steps)
+        p_swap = p_min + (p_max - p_min) * heat
+        return p_swap
+    
 
-    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+
+
     def _white_ufo_1_step(self, state: BeamriderState):
         white_ufo_1_position= jnp.array([state.level.white_ufo_pos[0][0],state.level.white_ufo_pos[1][0]])
         
         white_ufo_1_vel_x = state.level.white_ufo_vel[0][0]
         white_ufo_1_vel_y = state.level.white_ufo_vel[1][0]
+        time_on_lane_1 = state.level.white_ufo_time_on_lane[0]
 
-        #this is for if top lane:
-        white_ufo_1_vel_x = self._enemy_top_lane(white_ufo_1_position,white_ufo_1_vel_x)
+        p_swap = self.entropy_heat_prob(time_on_lane_1)
+        key, subkey = jax.random.split(state.rng)
+
+        new_y = white_ufo_1_position[1]
+        jax.debug.print("x: {}", state.level.white_ufo_pos[0][0])
+
+
+        white_ufo_1_vel_x,white_ufo_1_vel_y = jax.lax.cond(
+            new_y == 43.0,
+            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_1_position,white_ufo_1_vel_x,state.level.white_ufo_time_on_lane[0]),
+            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y),
+            white_ufo_1_vel_x,white_ufo_1_vel_y
+        )
+        
+        new_y = jax.lax.cond(
+            time_on_lane_1 == state.level.white_ufo_time_allowed[0],
+            lambda pos_y : pos_y + 1,
+            lambda pos_y: pos_y,
+            new_y
+        )
+        time_on_lane_1 += 1
 
         white_ufo_1_position = white_ufo_1_position.at[0].add(white_ufo_1_vel_x)
-        return white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y
+        white_ufo_1_position = white_ufo_1_position.at[1].add(white_ufo_1_vel_y)
+        return white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y,time_on_lane_1,key
     
     def _white_ufo_2_step(self, state: BeamriderState):
         white_ufo_2_position= jnp.array([state.level.white_ufo_pos[0][1],state.level.white_ufo_pos[1][1]])
-
+        
         white_ufo_2_vel_x = state.level.white_ufo_vel[0][1]
         white_ufo_2_vel_y = state.level.white_ufo_vel[1][1]
+        time_on_lane_2 = state.level.white_ufo_time_on_lane[1]
 
-        #this is for if top lane:
-        white_ufo_2_vel_x = self._enemy_top_lane(white_ufo_2_position,white_ufo_2_vel_x)
+        white_ufo_2_vel_x,white_ufo_2_vel_y = jax.lax.cond(
+            white_ufo_2_position[1] == 43.0,
+            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_2_position,white_ufo_2_vel_x,state.level.white_ufo_time_on_lane[1]),
+            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y),
+            white_ufo_2_vel_x,white_ufo_2_vel_y
+        )
 
+        time_on_lane_2 += 1
         white_ufo_2_position = white_ufo_2_position.at[0].add(white_ufo_2_vel_x)
-        return white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y
+        return white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y,time_on_lane_2
     
     def _white_ufo_3_step(self, state: BeamriderState):
         white_ufo_3_position= jnp.array([state.level.white_ufo_pos[0][2],state.level.white_ufo_pos[1][2]])
 
         white_ufo_3_vel_x = state.level.white_ufo_vel[0][2]
         white_ufo_3_vel_y = state.level.white_ufo_vel[1][2]
+        time_on_lane_3 = state.level.white_ufo_time_on_lane[2]
 
-        #this is for if top lane:
-        white_ufo_3_vel_x = self._enemy_top_lane(white_ufo_3_position,white_ufo_3_vel_x)
-
+        white_ufo_3_vel_x,white_ufo_3_vel_y = jax.lax.cond(
+            white_ufo_3_position[1] == 43.0,
+            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_3_position,white_ufo_3_vel_x,state.level.white_ufo_time_on_lane[2]),
+            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y),
+            white_ufo_3_vel_x,white_ufo_3_vel_y
+        )
+        time_on_lane_3 += 1
         white_ufo_3_position = white_ufo_3_position.at[0].add(white_ufo_3_vel_x)
-        return white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y
+        
+
+        return white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y, time_on_lane_3
     
     ####################benes code
-    def _enemy_top_lane(self, white_ufo_pos, white_ufo_vel_x):
+    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x,time_on_lane):
         
         white_ufo_vel_x = jax.lax.cond(
             white_ufo_pos[0] >= self.consts.RIGHT_CLIP_PLAYER,
@@ -432,8 +487,35 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             lambda v: v,
             white_ufo_vel_x,
         )
-        return white_ufo_vel_x
+        return white_ufo_vel_x,0.0
     
+    ########
+    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y):
+        x=white_ufo_pos[0]
+        lanes = jnp.array(self.consts.TOP_OF_LANES)
+        distances = jnp.abs(lanes-x)
+        lane_id = jnp.argmin(distances)
+        lane_vector = jnp.array(self.consts.ENEMY_LANE_VECTORS)[lane_id]
+
+        def seek_lane():
+            direction = jnp.sign(lanes[lane_id]-x)
+            new_vx = direction * 0.5
+            return new_vx,0.25
+        
+        def follow_lane():
+            return lane_vector[0],lane_vector[1]
+        
+        new_vx,new_vy = jax.lax.cond(
+            distances[lane_id]<= 0.25,
+            lambda vx,vy:follow_lane(),
+            lambda vx,vy:seek_lane(),
+            white_ufo_vel_x,white_ufo_vel_y
+        )
+
+        return new_vx,new_vy
+
+
+
     def _line_step(self, state: BeamriderState):
 
     
@@ -472,20 +554,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
     
-    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BeamriderState) -> BeamriderInfo:
         return BeamriderInfo(
             score=state.score,
             sector=state.sector,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(
         self, previous_state: BeamriderState, state: BeamriderState
     ) -> float:
         return state.score - previous_state.score
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BeamriderState) -> bool:
         return state.lives <= 0
 
