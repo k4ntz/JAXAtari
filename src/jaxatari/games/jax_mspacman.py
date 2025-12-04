@@ -91,7 +91,7 @@ ENJAILED_DURATION = 120 # in steps
 RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
 
 # FRUITS
-FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~50, ~100 but this version has a reduced number of pellets
+FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
 FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
@@ -241,146 +241,46 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         self.skipped = False
 
         # If in death animation, decrement timer and freeze everything
-        done = jnp.array(False, dtype=jnp.bool_)
         if state.player.death_timer > 0:
-            new_death_timer = state.player.death_timer - 1
-            new_state = freeze_game(state, new_death_timer)
-            if new_death_timer == 0: # When timer reaches 0, reset entities if lives remain or set state to game over
-                if state.lives >= 0:
-                    new_state = reset_entities(state)
-                else:
-                    reward = state.score
-                    done = jnp.array(True, dtype=jnp.bool_)
+            new_state, reward, done = death_step(state)
             return obs, new_state, reward, done, info
 
         # Pacman movement
-        dofmaze = state.level.dofmaze 
-        last_action = state.player.last_action
-        action = last_pressed_action(action, state.player.current_action)
-        possible_directions = available_directions(state.player.position, state.level.dofmaze)
-        if action < 0 or action > len(ACTIONS) - 1: # Ignore illegal actions
-            action = Action.NOOP
-        if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
-            executed_action = action
-            last_action = action
-        else:
-            # check for wall deadly_collision
-            if state.player.current_action > 1 and stop_wall(state.player.position, dofmaze)[state.player.current_action - 2]:
-                executed_action = Action.NOOP
-            else:
-                executed_action = state.player.current_action
-        new_pacman_pos = state.player.position + ACTIONS[executed_action]
-        new_pacman_pos = new_pacman_pos.at[0].set(new_pacman_pos[0] % 160)
+        new_pacman_pos, executed_action, last_action = pacman_step(state.player, state.level.dofmaze, action)
 
         # Pellet handling
-        collected_pellets = state.level.collected_pellets
-        power_pellets = state.level.power_pellets
-        power_mode_timer = state.player.power_mode_timer
-        px, py = new_pacman_pos // 4
-        ate_power_pill = False
-        if px == 1:
-            if (py == 3 or py == 4) and power_pellets[0]:
-                power_pellets = state.level.power_pellets.at[0].set(False)
-                ate_power_pill = True
-            elif (py == 36 or py == 37) and power_pellets[2]:
-                power_pellets = state.level.power_pellets.at[2].set(False)
-                ate_power_pill = True
-        elif px == 36:
-            if (py == 3 or py == 4) and power_pellets[1]:
-                power_pellets = state.level.power_pellets.at[1].set(False)
-                ate_power_pill = True
-            elif (py == 36 or py == 37) and power_pellets[3]:
-                power_pellets = state.level.power_pellets.at[3].set(False)
-                ate_power_pill = True
-        if ate_power_pill:
-            collected_pellets += 1
-        elif state.player.power_mode_timer > 0 and state.step_count % 8 == 0:
-            # Decrement power mode timer
-            power_mode_timer = state.player.power_mode_timer - 1
-        pellets = state.level.pellets
-        # Check for pellet consumption
-        has_pellet = jnp.array(False)
-        x_offset = 5 if new_pacman_pos[0] < 75 else 1
-        if new_pacman_pos[0] % 8 == x_offset and new_pacman_pos[1] % 12 == 6:
-            x_pellets = (new_pacman_pos[0] - 2) // 8
-            y_pellets = (new_pacman_pos[1] + 4) // 12
-            if state.level.pellets[x_pellets, y_pellets]:
-                has_pellet = jnp.array(True)
-                pellets = state.level.pellets.at[x_pellets, y_pellets].set(False)
-        score = state.score + jax.lax.select(has_pellet, PELLET_POINTS, 0)
-        if has_pellet:
-            print(f"Pacman collected a pellet at {new_pacman_pos}, score: {score}")
-            collected_pellets += 1
+        pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, power_mode_timer, new_score = pellet_step(state, new_pacman_pos)
 
         # Fruit handling
-        fruit_type = state.fruit.type
-        fruit_position = state.fruit.position
-        fruit_action = state.fruit.action
-        fruit_timer = state.fruit.timer
-        fruit_exit = state.fruit.exit
-        for threshold in FRUIT_SPAWN_THRESHOLDS:
-            if collected_pellets == threshold and state.fruit.type == FruitType.NONE: # Spawn fruit
-                fruit_type = get_level_fruit(state.level.index, key)
-                fruit_position, fruit_action = get_random_tunnel(state.level.index, key)
-                fruit_exit, _ = get_random_tunnel(state.level.index, key)
-        if state.fruit.type != FruitType.NONE:
-            if detect_collision(new_pacman_pos, state.fruit.position): # Consume fruit
-                score = score + FRUIT_REWARDS[state.fruit.type]
-                fruit_type = FruitType.NONE
-                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
-            if state.fruit.timer == 0 and jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit)): # Remove fruit
-                fruit_type = FruitType.NONE
-                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
-            else:
-                fruit_position, fruit_action, fruit_timer = fruit_step(state.fruit, dofmaze, key) # Move fruit
+        new_fruit_state, new_score = fruit_step(state, new_pacman_pos, collected_pellets, new_score, key)
 
-        # Execute ghost steps
-        ghost_positions, ghosts_actions, ghosts_modes, ghosts_timers = ghosts_step(
-            state.ghosts, state.player, ate_power_pill, dofmaze, key
+        # Ghost handling
+        ghost_positions, ghost_actions, ghost_modes, ghost_timers = ghosts_step(
+            state.ghosts, state.player, ate_power_pill, state.level.dofmaze, key
         )
 
         # Ghost collision detection
-        eaten_ghosts = state.player.eaten_ghosts
-        deadly_collision = False
-        for i in range(4): 
-            if detect_collision(new_pacman_pos, ghost_positions[i]):
-                if ghosts_modes[i] == GhostMode.FRIGHTENED or ghosts_modes[i] == GhostMode.BLINKING:  # If are frighted
-                    # Ghost eaten
-                    score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)   # TODO: Reset eaten_ghosts after power mode ends
-                    ghost_positions = ghost_positions.at[i].set(JAIL_POSITION)  # Reset eaten ghost position
-                    ghosts_actions = ghosts_actions.at[i].set(Action.NOOP)  # Reset eaten ghost action
-                    ghosts_modes = ghosts_modes.at[i].set(GhostMode.ENJAILED.value)
-                    ghosts_timers = ghosts_timers.at[i].set(ENJAILED_DURATION)
-                    eaten_ghosts = eaten_ghosts + 1
-                else:
-                    deadly_collision = True  # Collision with an already eaten and respawned ghost           
-        else:
-            deadly_collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
-        new_lives = state.lives - jnp.where(deadly_collision, 1, 0)
-        new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
+        ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, new_score, new_lives, new_death_timer = ghosts_collision(
+            ghost_positions, ghost_actions, ghost_modes, ghost_timers, new_pacman_pos, state.player.eaten_ghosts, new_score, state.lives
+        )
+
+        # Flag score change digit-wise
+        score_changed = flag_score_change(state.score, new_score)
 
         # Progress to next level if all pellets collected
         level_idx = state.level.index
         if collected_pellets >= PELLETS_TO_COLLECT:
             level_idx += 1
-            score += 500
-            new_state = reset_game(level_idx, state.lives, score)
+            new_score += 500
+            new_state = reset_game(level_idx, state.lives, new_score)
             print(f"Level completed! Starting level {level_idx}...")
             return obs, new_state, reward, done, info
-
-        # Flag score change digit-wise
-        if score != state.score:
-            score_digits        = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-            state_score_digits  = aj.int_to_digits(state.score, max_digits=MAX_SCORE_DIGITS)
-            score_changed       = score_digits != state_score_digits
-        else:
-            score_changed       = jnp.array(False, dtype=jnp.bool_)
 
         # Update state
         new_state = PacmanState(
             level = LevelState(
                 index=level_idx,
-                dofmaze=dofmaze,
+                dofmaze=state.level.dofmaze,
                 pellets=pellets,
                 collected_pellets=collected_pellets,
                 power_pellets=power_pellets,
@@ -399,20 +299,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 GhostState(
                     type=GhostType(i),
                     position=ghost_positions[i],
-                    action=ghosts_actions[i],
-                    mode=ghosts_modes[i],
-                    timer=ghosts_timers[i],
+                    action=ghost_actions[i],
+                    mode=ghost_modes[i],
+                    timer=ghost_timers[i],
                 ) for i in range(4)
             ),
-            fruit = FruitState(
-                type=fruit_type,
-                position=fruit_position,
-                action=fruit_action,
-                timer=fruit_timer,
-                exit=fruit_exit
-            ),
+            fruit = new_fruit_state,
             lives=new_lives,
-            score=score,
+            score=new_score,
             score_changed=score_changed,
             step_count=state.step_count + 1,
         )
@@ -648,6 +542,15 @@ def stop_wall(pos: chex.Array, dofmaze: chex.Array):
     return not(up) and on_horizontal_grid, not(right) and on_vertical_grid, not(left) and on_vertical_grid, not(down) and on_horizontal_grid
 
 
+def to_hashable(value):
+    """
+    Converts a value to a hashable type (e.g. from chex.Array to int or float).
+    """
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def get_digit_count(number: chex.Array) -> int:
     """
     Returns the number of digits in a given decimal number.
@@ -664,7 +567,7 @@ def get_allowed_directions(position: chex.Array, direction: chex.Array, dofmaze:
     if position[0] % 4 == 1 and position[1] % 12 == 6: # on horizontal and vertical grid - tile centre
         possible = available_directions(position, dofmaze) 
         for i, can_go in zip(DIRECTIONS, possible):
-            if can_go and (direction == 0 or i != reverse_direction(direction.item())):
+            if can_go and (direction == 0 or i != reverse_direction(direction)):
                 allowed.append(i)
     else:
         allowed.append(direction)
@@ -694,6 +597,83 @@ def get_chase_target(ghost: GhostType,
             # Target Pac-Man if >8 tiles away, else target corner
             dist = jnp.linalg.norm(ghost_position - player_pos)
             return jnp.where(dist > 8*MsPacmanMaze.TILE_SCALE, player_pos, SCATTER_TARGETS[GhostType.SUE])
+        
+
+def death_step(state: PacmanState):
+    new_state = state
+    reward = 0
+    done = jnp.array(False, dtype=jnp.bool_)
+    new_death_timer = state.player.death_timer - 1
+    if new_death_timer == 0: # When timer reaches 0, reset entities if lives remain or set state to game over
+        if state.lives >= 0:
+            new_state = reset_entities(state)
+        else:
+            reward = state.score
+            done = jnp.array(True, dtype=jnp.bool_)
+    else:
+        new_state = freeze_game(state, new_death_timer)
+    return new_state, reward, done
+        
+
+def pacman_step(player: PlayerState, dofmaze: chex.Array, action: chex.Array):
+    last_action = player.last_action
+    action = last_pressed_action(action, player.current_action)
+    possible_directions = available_directions(player.position, dofmaze)
+    if action < 0 or action > len(ACTIONS) - 1: # Ignore illegal actions
+        action = Action.NOOP
+    if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
+        new_action = action
+        last_action = action
+    else:
+        if player.current_action > 1 and stop_wall(player.position, dofmaze)[player.current_action - 2]: # check for wall collision
+            new_action = Action.NOOP
+        else:
+            new_action = player.current_action
+    new_pos = player.position + ACTIONS[new_action]
+    new_pos = new_pos.at[0].set(new_pos[0] % 160)
+    return new_pos, new_action, last_action
+
+
+def pellet_step(state: PacmanState, new_pacman_pos: chex.Array):
+    collected_pellets = state.level.collected_pellets
+    power_pellets = state.level.power_pellets
+    power_mode_timer = state.player.power_mode_timer
+    score = state.score
+    px, py = new_pacman_pos // 4
+    ate_power_pill = False
+    if px == 1:
+        if (py == 3 or py == 4) and power_pellets[0]:
+            power_pellets = state.level.power_pellets.at[0].set(False)
+            ate_power_pill = True
+        elif (py == 36 or py == 37) and power_pellets[2]:
+            power_pellets = state.level.power_pellets.at[2].set(False)
+            ate_power_pill = True
+    elif px == 36:
+        if (py == 3 or py == 4) and power_pellets[1]:
+            power_pellets = state.level.power_pellets.at[1].set(False)
+            ate_power_pill = True
+        elif (py == 36 or py == 37) and power_pellets[3]:
+            power_pellets = state.level.power_pellets.at[3].set(False)
+            ate_power_pill = True
+    elif state.player.power_mode_timer > 0 and state.step_count % 8 == 0:
+        power_mode_timer = state.player.power_mode_timer - 1 # Decrement power mode timer
+    pellets = state.level.pellets
+    has_pellet = jnp.array(False)
+    x_offset = 5 if new_pacman_pos[0] < 75 else 1
+    if new_pacman_pos[0] % 8 == x_offset and new_pacman_pos[1] % 12 == 6: # Check for pellet consumption
+        x_pellets = (new_pacman_pos[0] - 2) // 8
+        y_pellets = (new_pacman_pos[1] + 4) // 12
+        if state.level.pellets[x_pellets, y_pellets]:
+            has_pellet = jnp.array(True)
+            pellets = state.level.pellets.at[x_pellets, y_pellets].set(False)
+    if has_pellet or ate_power_pill:
+        if has_pellet:
+            score += PELLET_POINTS
+        if ate_power_pill:
+            score += POWER_PELLET_POINTS
+        print(f"Pacman collected a pellet at {new_pacman_pos}, score: {score}")
+        collected_pellets += 1
+    return pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, power_mode_timer, score
 
 
 def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
@@ -828,7 +808,29 @@ def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Arra
     return new_pos, new_action, new_mode, new_timer
 
 
-def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
+def ghosts_collision(ghost_positions: chex.Array, ghost_actions: chex.Array, ghost_modes: chex.Array, ghost_timers: chex.Array,
+                            new_pacman_pos: chex.Array, eaten_ghosts: chex.Array, score: chex.Array, lives: chex.Array):
+    deadly_collision = False
+    for i in range(4): 
+        if detect_collision(new_pacman_pos, ghost_positions[i]):
+            if ghost_modes[i] == GhostMode.FRIGHTENED or ghost_modes[i] == GhostMode.BLINKING:  # If are frighted
+                # Ghost eaten
+                score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)   # TODO: Reset eaten_ghosts after power mode ends
+                ghost_positions = ghost_positions.at[i].set(JAIL_POSITION)  # Reset eaten ghost position
+                ghost_actions = ghost_actions.at[i].set(Action.NOOP)  # Reset eaten ghost action
+                ghost_modes = ghost_modes.at[i].set(GhostMode.ENJAILED.value)
+                ghost_timers = ghost_timers.at[i].set(ENJAILED_DURATION)
+                eaten_ghosts = eaten_ghosts + 1
+            else:
+                deadly_collision = True  # Collision with an already eaten and respawned ghost           
+    else:
+        deadly_collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
+    new_lives = lives - jnp.where(deadly_collision, 1, 0)
+    new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
+    return ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, score, new_lives, new_death_timer
+
+
+def fruit_move(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
                ) -> Tuple[chex.Array, chex.Array, chex.Array]:
     allowed = get_allowed_directions(fruit.position, fruit.action, dofmaze)
     if not allowed:
@@ -848,6 +850,41 @@ def fruit_step(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
     return new_pos, new_dir, new_timer
 
 
+def fruit_step(state: PacmanState, new_pacman_pos: chex.Array, collected_pellets: chex.Array, score: chex.Array, key: chex.Array):
+    fruit_type = state.fruit.type
+    fruit_position = state.fruit.position
+    fruit_action = state.fruit.action
+    fruit_timer = state.fruit.timer
+    fruit_exit = state.fruit.exit
+    new_score = score
+    for threshold in FRUIT_SPAWN_THRESHOLDS:
+        if collected_pellets == threshold and state.fruit.type == FruitType.NONE: # Spawn fruit
+            fruit_type = get_level_fruit(state.level.index, key)
+            fruit_position, fruit_action = get_random_tunnel(state.level.index, key)
+            fruit_exit, _ = get_random_tunnel(state.level.index, key)
+    if state.fruit.type != FruitType.NONE:
+        if detect_collision(new_pacman_pos, state.fruit.position): # Consume fruit
+            new_score = score + FRUIT_REWARDS[state.fruit.type]
+            fruit_type = FruitType.NONE
+            fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
+        if state.fruit.timer == 0 and jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit)): # Remove fruit
+            fruit_type = FruitType.NONE
+            fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
+        else:
+            fruit_position, fruit_action, fruit_timer = fruit_move(state.fruit, state.level.dofmaze, key) # Move fruit
+    return FruitState(fruit_type, fruit_position, fruit_action, fruit_timer, fruit_exit), new_score
+
+
+def flag_score_change(current_score: chex.Array, new_score: chex.Array):
+    if new_score != current_score:
+        score_digits        = aj.int_to_digits(new_score, max_digits=MAX_SCORE_DIGITS)
+        state_score_digits  = aj.int_to_digits(current_score, max_digits=MAX_SCORE_DIGITS)
+        score_changed       = score_digits != state_score_digits
+    else:
+        score_changed       = jnp.array(False, dtype=jnp.bool_)
+    return score_changed
+
+
 def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, allowed: chex.Array, key: chex.Array):
     """
     Returns the direction which should be taken to approach the target.
@@ -864,7 +901,7 @@ def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, al
     cost = {}
     for dir in allowed:
         new_pos = position + ACTIONS[dir]
-        cost[dir.item()] = jnp.abs(new_pos[0] - target[0]) + jnp.abs(new_pos[1] - target[1])
+        cost[to_hashable(dir)] = jnp.abs(new_pos[0] - target[0]) + jnp.abs(new_pos[1] - target[1])
     min_cost = min(cost.values())
     min_dirs = jnp.array([k for k, v in cost.items() if v == min_cost])
     if len(min_dirs) == 1: # If one direction advantageous - Take it
@@ -935,6 +972,7 @@ def get_random_tunnel(level: chex.Array, key: chex.Array):
 
 def reverse_direction(dir_idx: chex.Array):
     INV_DIR = {2:5, 3:4, 4:3, 5:2}
+    dir_idx = to_hashable(dir_idx)
     if dir_idx not in INV_DIR:
         return dir_idx
     return INV_DIR[dir_idx]
@@ -973,7 +1011,7 @@ def reset_ghosts():
         GhostState(
             type        = jnp.array(GhostType(i)).astype(jnp.uint8),
             position    = INITIAL_GHOSTS_POSITIONS[i],
-            action      = Action.NOOP,
+            action      = jnp.array(Action.NOOP).astype(jnp.uint8),
             mode        = (jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
                             else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
             timer       = jnp.array(SCATTER_DURATION).astype(jnp.uint16),
@@ -984,7 +1022,7 @@ def reset_fruit():
     return FruitState(
         type        = jnp.array(FruitType.NONE).astype(jnp.uint8),
         position    = jnp.zeros(2, dtype=jnp.int8),
-        action      = Action.NOOP,
+        action      = jnp.array(Action.NOOP).astype(jnp.uint8),
         timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8),
         exit        = jnp.zeros(2, dtype=jnp.int8)
     )
