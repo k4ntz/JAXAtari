@@ -295,19 +295,19 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         alpha = self.consts.PLAYER_ROTATION_SPEED
         speed = self.consts.PLAYER_SPEED
         ###
+        # Changing position bsed on player movement
         offset_xz = jnp.array([
             [0, 0],     # Noop
             [0, -speed],  # Up
             [(enemy.x*jnp.cos(alpha)-enemy.z*jnp.sin(alpha))-enemy.x, (enemy.x*jnp.sin(alpha)+enemy.z*jnp.cos(alpha))-enemy.z],  # Right
             [(enemy.x*jnp.cos(-alpha)-enemy.z*jnp.sin(-alpha))-enemy.x, (enemy.x*jnp.sin(-alpha)+enemy.z*jnp.cos(-alpha))-enemy.z],  # Left
             [0, speed],  # Down
-            [-speed, -speed],  # UpRight
-            [speed, -speed],  # UpLeft
-            [-speed, -speed],  # DownRight
-            [speed, speed]  # DownLeft
+            [(enemy.x * jnp.cos(alpha) - (enemy.z - speed) * jnp.sin(alpha)) - enemy.x, (enemy.x * jnp.sin(alpha) + (enemy.z - speed) * jnp.cos(alpha)) - enemy.z], # UpRight
+            [(enemy.x * jnp.cos(alpha) + (enemy.z - speed) * jnp.sin(alpha)) - enemy.x, (-enemy.x * jnp.sin(alpha) + (enemy.z - speed) * jnp.cos(alpha)) - enemy.z],  # UpLeft
+            [(enemy.x * jnp.cos(alpha) + (enemy.z + speed) * jnp.sin(alpha)) - enemy.x, (-enemy.x * jnp.sin(alpha) + (enemy.z + speed) * jnp.cos(alpha)) - enemy.z],  # DownRight
+            [(enemy.x * jnp.cos(alpha) - (enemy.z + speed) * jnp.sin(alpha)) - enemy.x, (enemy.x * jnp.sin(alpha) + (enemy.z + speed) * jnp.cos(alpha)) - enemy.z]  # DownLeft
         ])
-        #jax.debug.print("{}",jnp.argmax(direction))
-        # TODO: Enemies moving left and right but should rotate
+        #jax.debug.print("{}",jnp.argmax(direction)
         idx = jnp.argmax(direction)
         offset = offset_xz[idx]
 
