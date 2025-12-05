@@ -47,7 +47,7 @@ What do we need to research about each enemy (+player)?
 
 ## Player
 - hitbox: a rectangle around the origin: (x: -3, z: 0) to (x: 3, z: 6)
-- move speed: 0.25 units per frame
+- move speed: 0.24804691667 units per frame
 - turn speed: 2pi/270 rad/frame (270 frames for a full turn)
 -
 
@@ -120,7 +120,7 @@ class BattlezoneConstants(NamedTuple):
     SCORE_POS_Y:int = 179
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
-    PLAYER_SPEED:float = 0.25
+    PLAYER_SPEED:float = 0.24804691667
     ENEMY_POS_Y:int = 85
 
 
