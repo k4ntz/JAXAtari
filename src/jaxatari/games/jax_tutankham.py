@@ -22,7 +22,6 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: Tuple[int, int] = (1, 2)
     BULLET_SPEED: int = 8
-    MAX_BULLETS: int = 2
 
 # ---------------------------------------------------------------------
 # Game State
@@ -31,8 +30,8 @@ class TutankhamState(NamedTuple):
     player_x: int
     player_y: int
 
-    bullet_states: chex.Array #(2, 6) array with (x, y, bullet_rotation, bullet_active) for each bullet
-    bullet_rdy: int # tracks whether the player can fire a bullet
+    bullet_state: chex.Array #(, 4) array with (x, y, bullet_rotation, bullet_active)
+    amonition_timer: int # if timer runs out, player can not fire again
 
 
 # ---------------------------------------------------------------------
@@ -58,12 +57,11 @@ class TutankhamRenderer(JAXGameRenderer):
         # -------------------------
         # Draw bullets (1×1 pixels)
         # -------------------------
-        for bullet in state.bullet_states:
-            bx, by, rot, active = bullet
-            if active:
-                # Clip
-                #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
-                frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
+        bx, by, rot, active = state.bullet_state
+        if active:
+            # Clip
+            #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
+            frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
 
         return frame
 
@@ -96,10 +94,10 @@ class JaxTutankham(JaxEnvironment):
     def reset(self, key=None):
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
-        bullet_states = np.array([[0, 0, 0, False], [0, 0, 0, False]])
-        bullet_rdy = 0
+        bullet_state = np.array([0, 0, 0, False])
+        amonition_timer = 300
 
-        state = TutankhamState(player_x=start_x, player_y=start_y, bullet_states=bullet_states, bullet_rdy=bullet_rdy)
+        state = TutankhamState(player_x=start_x, player_y=start_y, bullet_state=bullet_state, amonition_timer=amonition_timer)
         return state, state
 
     # Player Step
@@ -139,51 +137,32 @@ class JaxTutankham(JaxEnvironment):
                 or (action == Action.RIGHTFIRE)
             )
 
-        bullet_1 = tutankham_state.bullet_states[0] #array with (x, y, bullet_rotation, bullet_active)
-        bullet_2 = tutankham_state.bullet_states[1] #array with (x, y, bullet_rotation, bullet_active)
-        bullet_rdy = tutankham_state.bullet_rdy
+        bullet = tutankham_state.bullet_state #array with (x, y, bullet_rotation, bullet_active)
+        new_bullet = bullet.copy()
 
-        new_bullet_1 = bullet_1.copy()
-        new_bullet_2 = bullet_2.copy()
+        amonition_timer = tutankham_state.amonition_timer
 
+        
         # --- update existing bullets ---
-        if bullet_1[3]:
-            bullet_1_x = bullet_1[0] + bullet_speed * bullet_1[2]
-            new_bullet_1[0] = bullet_1_x
+        if bullet[3]:
+            bullet_x = bullet[0] + bullet_speed * bullet[2]
+            new_bullet[0] = bullet_x
 
             # Deactivate if out of bounds
-            if not (0 <= bullet_1_x < self.consts.WIDTH):
-                new_bullet_1 = [0, 0, 0, False]
-
-
-        if bullet_2[3]:
-            bullet_2_x = bullet_2[0] + bullet_speed * bullet_2[2]
-            new_bullet_2[0] = bullet_2_x
-
-            # Deactivate if out of bounds
-            if not (0 <= bullet_2_x < self.consts.WIDTH):
-                new_bullet_2 = [0, 0, 0, False]
-
-        # --- cooldown logic ---
-        if bullet_rdy > 0:
-            bullet_rdy -= 1
+            if not (0 <= bullet_x < self.consts.WIDTH):
+                new_bullet = [0, 0, 0, False]
 
 
         # --- firing logic ---
-        slot1_free = not bullet_1[3]
-        slot2_free = not bullet_2[3]
+        bullet_rdy = not bullet[3]
 
-        if space and slot1_free and bullet_rdy == 0:
-            new_bullet_1 = [player_x, player_y, get_rotation(action), True]
-            bullet_rdy = 4  # cooldown period after firing
 
-        if space and slot2_free and bullet_rdy == 0:
-            new_bullet_2 = [player_x, player_y, get_rotation(action), True]
-            bullet_rdy = 4  # cooldown period after firing
+        if space and bullet_rdy and amonition_timer > 0:
+            new_bullet = np.array([player_x, player_y, get_rotation(action), True])
+
+
         
-        
-
-        return np.array([new_bullet_1, new_bullet_2]), bullet_rdy
+        return new_bullet, amonition_timer
 
 
 
@@ -198,7 +177,7 @@ class JaxTutankham(JaxEnvironment):
 
         bullet_states, bullet_rdy =self.bullet_step(state, player_x, player_y, self.consts.BULLET_SPEED, action)
 
-        state = TutankhamState(player_x=player_x, player_y=player_y, bullet_states=bullet_states, bullet_rdy=bullet_rdy)
+        state = TutankhamState(player_x=player_x, player_y=player_y, bullet_state=bullet_states, amonition_timer=bullet_rdy)
 
         reward = 0.0
         done = False
