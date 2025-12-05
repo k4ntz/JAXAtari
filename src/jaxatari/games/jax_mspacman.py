@@ -7,7 +7,7 @@ Edit: Jan Rafflewski
 TODO
     1)  [x] Validate ghost behaviour
     2)  [x] Level progression
-    3)  [ ] Performance improvements
+    3)  [x] Performance improvements
     4)  [ ] JIT compatibility
 
     Optional:
@@ -28,6 +28,7 @@ TODO
 from enum import IntEnum
 import os
 from functools import partial
+import time
 from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import chex
@@ -258,6 +259,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
         # Pellet handling
         pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, power_mode_timer, new_score = JaxPacman.pellet_step(state, new_pacman_pos)
+        eaten_ghosts = state.player.eaten_ghosts
+        if ate_power_pill:
+            eaten_ghosts = 0
 
         # Fruit handling
         new_fruit_state, new_score = JaxPacman.fruit_step(state, new_pacman_pos, collected_pellets, new_score, key)
@@ -269,7 +273,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
         # Ghost collision detection
         ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, new_score, new_lives, new_death_timer = JaxPacman.ghosts_collision(
-            ghost_positions, ghost_actions, ghost_modes, ghost_timers, new_pacman_pos, state.player.eaten_ghosts, new_score, state.lives
+            ghost_positions, ghost_actions, ghost_modes, ghost_timers, new_pacman_pos, eaten_ghosts, new_score, state.lives
         )
 
         # Flag score change digit-wise
@@ -512,7 +516,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             if detect_collision(new_pacman_pos, ghost_positions[i]):
                 if ghost_modes[i] == GhostMode.FRIGHTENED or ghost_modes[i] == GhostMode.BLINKING:  # If are frighted
                     # Ghost eaten
-                    score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)   # TODO: Reset eaten_ghosts after power mode ends
+                    score += EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)
                     ghost_positions = ghost_positions.at[i].set(JAIL_POSITION)  # Reset eaten ghost position
                     ghost_actions = ghost_actions.at[i].set(Action.NOOP)  # Reset eaten ghost action
                     ghost_modes = ghost_modes.at[i].set(GhostMode.ENJAILED.value)
@@ -1008,7 +1012,8 @@ def reset_player():
     )
 
 def reset_ghosts():
-    base_key = jax.random.PRNGKey(42)
+    seed = int(time.time() * 1000) % (2**32 - 1)
+    base_key = jax.random.PRNGKey(seed)
     unique_keys = jax.random.split(base_key, 4)
     return tuple(
         GhostState(
