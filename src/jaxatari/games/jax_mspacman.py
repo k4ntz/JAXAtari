@@ -74,8 +74,8 @@ RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 MAX_LIVE_COUNT = 8
-# PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-PELLETS_TO_COLLECT = 4
+PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+# PELLETS_TO_COLLECT = 4
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -92,6 +92,7 @@ RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the gho
 
 # FRUITS
 FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
+# FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100])
 FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
@@ -153,6 +154,7 @@ class GhostState(NamedTuple):
     action: chex.Array  # 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
     mode: chex.Array
     timer: chex.Array
+    key: chex.Array # Unique random key - saved in state to prevent repeated generation
 
 class PlayerState(NamedTuple):
     position: chex.Array  # (x, y)
@@ -308,6 +310,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     action=ghost_actions[i],
                     mode=ghost_modes[i],
                     timer=ghost_timers[i],
+                    key=state.ghosts[i].key
                 ) for i in range(4)
             ),
             fruit = new_fruit_state,
@@ -411,19 +414,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         Updates all ghosts.
         'key' can be a PRNGKey or None for deterministic behaviour.
         """
-        n_ghosts = len(ghosts)
-        keys = jax.random.split(key, n_ghosts)
         new_positions = []
         new_dirs = []
         modes = []
         timers = []
-        chase_offset = jax.random.randint(keys[0], (), 0, MAX_CHASE_OFFSET)
-        scatter_offset = jax.random.randint(keys[0], (), 0, MAX_SCATTER_OFFSET)
+        n_ghosts = len(ghosts)
         for i in range(n_ghosts):
-            chase_target = get_chase_target(ghosts[i].type, ghosts[i].position, ghosts[GhostType.BLINKY].position,
-                                            player.position, player.current_action)
-            pos, dir, mode, timer = JaxPacman.ghost_step(ghosts[i], ate_power_pill, dofmaze, keys[i],
-                                               chase_target, chase_offset, scatter_offset)
+            pos, dir, mode, timer = JaxPacman.ghost_step(ghosts[i], ghosts[GhostType.BLINKY].position,
+                                                         player.position, player.current_action,
+                                                         ate_power_pill, dofmaze, key)
             new_positions.append(pos)
             new_dirs.append(dir)
             modes.append(mode)
@@ -431,8 +430,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return jnp.stack(new_positions), jnp.stack(new_dirs), jnp.array(modes), jnp.array(timers)
 
     @staticmethod
-    def ghost_step(ghost: GhostState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array,
-                   chase_target: chex.Array, chase_offset: chex.Array, scatter_offset: chex.Array
+    def ghost_step(ghost: GhostState, blinky_pos: chex.Array, player_pos: chex.Array, player_dir: chex.Array,
+                   ate_power_pill: chex.Array, dofmaze: chex.Array, common_key: chex.Array
                    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         """
         Updates a single ghosts position, action, mode and timer.
@@ -458,12 +457,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             match ghost.mode:
                 case GhostMode.CHASE:
                     new_mode = GhostMode.SCATTER
-                    new_timer = SCATTER_DURATION + chase_offset
+                    new_timer = SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET)
                     new_action = reverse_direction(ghost.action)
                     skip = True
                 case GhostMode.SCATTER:
                     new_mode = GhostMode.CHASE
-                    new_timer = CHASE_DURATION + scatter_offset
+                    new_timer = CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET)
                     new_action = reverse_direction(ghost.action)
                     skip = True
                 case GhostMode.ENJAILED:
@@ -489,11 +488,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             elif len(allowed) == 1: # If only one allowed direction - take it
                 new_action = allowed[0]
             elif new_mode == GhostMode.FRIGHTENED or new_mode == GhostMode.BLINKING or new_mode == GhostMode.RANDOM or new_mode == GhostMode.RETURNING:
-                new_action = jax.random.choice(key, jnp.array(allowed))
+                new_action = jax.random.choice(ghost.key, jnp.array(allowed))
             else:
-                if new_mode == GhostMode.SCATTER: # If not SCATTER, mode must be CHASE at this point
+                if new_mode == GhostMode.CHASE:
+                    chase_target = get_chase_target(ghost.type, ghost.position, blinky_pos, player_pos, player_dir)
+                else: # If not CHASE, mode must be SCATTER at this point
                     chase_target = SCATTER_TARGETS[ghost.type]
-                new_action = pathfind(ghost.position, ghost.action, chase_target, allowed, key)
+                new_action = pathfind(ghost.position, ghost.action, chase_target, allowed, ghost.key)
 
         # 3) Update ghost position
         new_pos = ghost.position + ACTIONS[new_action]
@@ -1007,6 +1008,8 @@ def reset_player():
     )
 
 def reset_ghosts():
+    base_key = jax.random.PRNGKey(42)
+    unique_keys = jax.random.split(base_key, 4)
     return tuple(
         GhostState(
             type        = jnp.array(GhostType(i)).astype(jnp.uint8),
@@ -1015,6 +1018,7 @@ def reset_ghosts():
             mode        = (jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
                             else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
             timer       = jnp.array(SCATTER_DURATION).astype(jnp.uint16),
+            key         = jnp.array(unique_keys[i], dtype=jnp.uint32)
         ) for i in range(4)
     )
 
