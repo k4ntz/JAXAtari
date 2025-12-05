@@ -21,12 +21,11 @@ class UpNDownConstants(NamedTuple):
     LANDING_ZONE: int = 15
     FIRST_ROAD_LENGTH: int = 4
     SECOND_ROAD_LENGTH: int = 4
-    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 67, 38, 38, 20, 64, 30]) #get actual values
-    FIRST_TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -898, -925, -950, -972, -1000, -1033]) #get actual values
-    SECOND_TRACK_CORNERS_X: chex.Array = FIRST_TRACK_CORNERS_X#jnp.array([20, 50]) #get actual values
-    SECOND_TRACK_CORNERS_Y: chex.Array = FIRST_TRACK_CORNERS_Y#jnp.array([20, 50, ]) #get actual values
+    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]) 
+    TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1036])
+    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115]) 
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
-    INITIAL_ROAD_POS_Y: int = 25 
+    INITIAL_ROAD_POS_Y: int = 25
 
 
 
@@ -93,8 +92,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _getSlopeAndB(self, state: UpNDownState) -> chex.Array:
         trackx, tracky, roadIndex = jax.lax.cond(
             state.player_car.current_road == 0,
-            lambda s: (self.consts.FIRST_TRACK_CORNERS_X, self.consts.FIRST_TRACK_CORNERS_Y, state.player_car.road_index_A),
-            lambda s: (self.consts.SECOND_TRACK_CORNERS_X, self.consts.SECOND_TRACK_CORNERS_Y, state.player_car.road_index_B),
+            lambda s: (self.consts.FIRST_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, state.player_car.road_index_A),
+            lambda s: (self.consts.SECOND_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, state.player_car.road_index_B),
             operand=None,)
         slope = jax.lax.cond(
             trackx[roadIndex+1] - trackx[roadIndex] != 0,
@@ -106,18 +105,20 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return slope, b
     
     @partial(jax.jit, static_argnums=(0,))
-    def _isOnLine(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array, player_speed: chex.Array) -> chex.Array:
+    def _isOnLine(self, state: UpNDownState,  player_speed: chex.Array, turn: chex.Array) -> chex.Array:
         slope, b = self._getSlopeAndB(state)
-        jax.debug.print("slope: {}, b: {}", slope, b)
-        isOnLine = jnp.logical_or(jnp.logical_and(jnp.equal(slope, 300.0), jnp.equal(new_position_x, state.player_car.position.x)), jnp.less_equal(jnp.abs(jnp.round(jnp.subtract(new_position_y, slope * new_position_x + b))), player_speed))
-
-        jax.debug.print("isOnLine: {}", jnp.subtract(new_position_y, slope * new_position_x + b))
-        return isOnLine
+        x_step = abs(jnp.subtract(state.player_car.position.y, slope * (state.player_car.position.x) + b))
+        y_step = abs(jnp.subtract(state.player_car.position.y - player_speed, slope * state.player_car.position.x + b))
+        prefer_y = jnp.less_equal(y_step, x_step)
+        return jnp.logical_or(
+            jnp.logical_and(turn == 1, prefer_y),
+            jnp.logical_and(turn == 2, jnp.logical_not(prefer_y)),
+        )
     
     @partial(jax.jit, static_argnums=(0,))
     def _landing_in_water(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
-        road_A_x = ((new_position_y - self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A]) / (self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_Y[state.player_car.road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]
-        road_B_x = ((new_position_y - self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B]) / (self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_Y[state.player_car.road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]
+        road_A_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A]) / (self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A+1] - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]
+        road_B_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B]) / (self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B+1] - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]
         distance_to_road_A = jnp.abs(new_position_x - road_A_x)
         distance_to_road_B = jnp.abs(new_position_x - road_B_x)
         landing_in_Water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_ZONE, distance_to_road_B > self.consts.LANDING_ZONE)
@@ -187,17 +188,15 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=car_direction_x,
         )
 
-        
         is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
-
         ##calculate new position with speed (TODO: calculate better speed)
         player_y = jax.lax.cond(
-            state.step_counter % (16/ speed_divider) == 8 / speed_divider,
+            jnp.logical_and((state.step_counter % (16/ speed_divider) == 8 / speed_divider), player_speed != 0,),
             lambda s: jax.lax.cond(
                 is_jumping,
                 lambda s: state.player_car.position.y + jax.lax.abs(player_speed) / player_speed * -1,
                 lambda s: jax.lax.cond(
-                    self._isOnLine(state, state.player_car.position.x, s + jax.lax.abs(player_speed) / player_speed * -1, 1),
+                    self._isOnLine(state, jax.lax.abs(player_speed) / player_speed, 1),
                     lambda s: s + jax.lax.abs(player_speed) / player_speed * -1,
                     lambda s: jnp.array(s, float),
                     operand=state.player_car.position.y,
@@ -207,12 +206,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=state.player_car.position.y,
         )
         player_x = jax.lax.cond(
-            state.step_counter % (16/ speed_divider) == 0,
+            jnp.logical_and((state.step_counter % (16/ speed_divider) == 0), player_speed != 0,),
             lambda s: jax.lax.cond(
                 is_jumping,
                 lambda s: s + jax.lax.abs(player_speed) / player_speed * car_direction_x,
                 lambda s: jax.lax.cond(
-                    self._isOnLine(state, s + jax.lax.abs(player_speed) / player_speed * car_direction_x, player_y, 1),
+                    self._isOnLine(state, jax.lax.abs(player_speed) / player_speed, 2),
                     lambda s: s + jax.lax.abs(player_speed) / player_speed * car_direction_x,
                     lambda s: jnp.array(s, float),
                     operand=state.player_car.position.x,
@@ -224,7 +223,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
         ##if y not on mx +b then no move
 
-        jax.debug.print("Player X: {}, Player Y: {}, car_direction_x: {}", player_x, player_y, car_direction_x)
+        
 
         landing_in_Water, between_roads, road_A_x, road_B_x = self._landing_in_water(state, player_x, player_y)
         landing_in_Water = jnp.logical_and(is_landing, landing_in_Water)
@@ -251,18 +250,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             current_road == 2,
             lambda s: road_index_A,
             lambda s: jax.lax.cond(
-                self.consts.FIRST_TRACK_CORNERS_Y[road_index_A] < player_y,
+                self.consts.TRACK_CORNERS_Y[road_index_A] < player_y,
                 lambda s: road_index_A - 1,
                 lambda s: jax.lax.cond(
-                    len(self.consts.FIRST_TRACK_CORNERS_Y) == road_index_A + 1,
+                    len(self.consts.TRACK_CORNERS_Y) == road_index_A + 1,
                     lambda s: jax.lax.cond(
-                        self.consts.FIRST_TRACK_CORNERS_Y[0] > player_y,
+                        self.consts.TRACK_CORNERS_Y[0] > player_y,
                         lambda s: 0,
                         lambda s: road_index_A,
                         operand=None,
                     ),
                     lambda s: jax.lax.cond(
-                        self.consts.FIRST_TRACK_CORNERS_Y[road_index_A+1] > player_y,
+                        self.consts.TRACK_CORNERS_Y[road_index_A+1] > player_y,
                         lambda s: road_index_A + 1,
                         lambda s: road_index_A,
                         operand=None,
@@ -278,18 +277,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             current_road == 2,
             lambda s: road_index_B,
             lambda s: jax.lax.cond(
-                self.consts.SECOND_TRACK_CORNERS_Y[road_index_B] < player_y,
+                self.consts.TRACK_CORNERS_Y[road_index_B] < player_y,
                 lambda s: road_index_B - 1,
                 lambda s: jax.lax.cond(
-                    len(self.consts.SECOND_TRACK_CORNERS_Y) == road_index_B + 1,
+                    len(self.consts.TRACK_CORNERS_Y) == road_index_B + 1,
                     lambda s: jax.lax.cond(
-                        self.consts.SECOND_TRACK_CORNERS_Y[0] > player_y,
+                        self.consts.TRACK_CORNERS_Y[0] > player_y,
                         lambda s: 0,
                         lambda s: road_index_B,
                         operand=None,
                     ),
                     lambda s: jax.lax.cond(
-                        self.consts.SECOND_TRACK_CORNERS_Y[road_index_B+1] > player_y,
+                        self.consts.TRACK_CORNERS_Y[road_index_B+1] > player_y,
                         lambda s: road_index_B + 1,
                         lambda s: road_index_B,
                         operand=None,
@@ -301,7 +300,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
-
+        jax.debug.print("Player X: {}, Player Y: {}, car_direction_x: {}", player_x, player_y, car_direction_x)
         
 
         #jax.debug.print("Player X: {}, Player Y: {}, on road: {}, jumping: {}, speed: {}, road index A: {}, road index B: {}, current road: {}", player_x, player_y, is_on_road, is_jumping, player_speed, road_index_A, road_index_B, current_road)
