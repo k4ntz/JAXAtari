@@ -5,6 +5,7 @@ from jax._src.pjit import JitWrapped
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
+from jax._src.source_info_util import current
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -83,6 +84,7 @@ class DefenderConstants(NamedTuple):
     ENEMY_WIDTH: int = 13
     ENEMY_HEIGHT: int = 7
     ENEMY_MAX: int = 20
+    ENEMY_MAX_ON_SCREEN: int = 5
 
     # Types
     INACTIVE: int = 0
@@ -120,7 +122,8 @@ class DefenderConstants(NamedTuple):
     # Enemy bullet
     BULLET_WIDTH: int = 2
     BULLET_HEIGHT: int = 2
-    BULLET_SPEED: int = 2
+    BULLET_SPEED: float = 3.0
+    BULLET_MOVE_WITH_SPACE_SHIP: float = 0.9
     BULLET_STATE_INACTIVE: int = 0
     BULLET_STATE_ACTIVE: int = 1
 
@@ -229,11 +232,11 @@ class DefenderState(NamedTuple):
     bullet_dir_x: chex.Array
     bullet_dir_y: chex.Array
     # Enemies
-    enemy_states: (
-        chex.Array
-    )  # (20, 5) array with (x, y, type, arg1, arg2) for each enemy
+    enemy_states: chex.Array
     # Human
     human_states: chex.Array
+    # Randomness
+    key: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -612,6 +615,26 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = render_space_ship(raster)
 
+        # Render bullet
+        def render_bullet(r):
+            game_x = state.bullet_x
+            game_y = state.bullet_y
+            screen_x, screen_y = self.dh._onscreen_pos(state, game_x, game_y)
+
+            color_id = current_particle_color_id
+
+            width = self.consts.BULLET_WIDTH
+            height = self.consts.BULLET_HEIGHT
+
+            return self.jr.draw_rects(
+                r,
+                jnp.asarray([[screen_x, screen_y]]),
+                jnp.asarray([[width, height]]),
+                color_id,
+            )
+
+        raster = render_bullet(raster)
+
         return self.jr.render_from_palette(raster, self.PALETTE)
 
 
@@ -624,7 +647,6 @@ class JaxDefender(
         super().__init__(consts)
         self.renderer = DefenderRenderer(self.consts)
         self.dh = DefenderHelper(self.consts)
-        self.key = jax.random.PRNGKey(0)
 
         self.action_set = [
             Action.NOOP,
@@ -665,7 +687,7 @@ class JaxDefender(
         return jnp.logical_and(check_x, check_y)
 
     # Wrap function, returns wrapped position
-    def wrap_pos(self, game_x: int, game_y: int):
+    def wrap_pos(self, game_x: float, game_y: float):
         return game_x % self.consts.GAME_WIDTH, game_y % (
             self.consts.GAME_HEIGHT
             - self.consts.CITY_HEIGHT  # move already when the top of the city == top of entity
@@ -744,23 +766,30 @@ class JaxDefender(
 
         space_ship_facing_right = jax.lax.cond(
             direction_x != 0,
-            lambda _: direction_x > 0,
-            lambda _: state.space_ship_facing_right,
-            operand=None,
+            lambda: direction_x > 0,
+            lambda: state.space_ship_facing_right,
         )
 
         space_ship_speed = jax.lax.cond(
             direction_x != 0,
-            lambda _: state.space_ship_speed
+            lambda: state.space_ship_speed
             + direction_x * self.consts.SPACE_SHIP_ACCELERATION,
-            lambda _: state.space_ship_speed * (1 - self.consts.SPACE_SHIP_BREAK),
-            operand=None,
+            lambda: state.space_ship_speed
+            - state.space_ship_speed * self.consts.SPACE_SHIP_BREAK,
         )
 
         space_ship_speed = jnp.clip(
             space_ship_speed,
             -self.consts.SPACE_SHIP_MAX_SPEED,
             self.consts.SPACE_SHIP_MAX_SPEED,
+        )
+
+        space_ship_stopping_deadzone = 0.0001
+
+        space_ship_speed = jnp.where(
+            jnp.abs(space_ship_speed) <= space_ship_stopping_deadzone,
+            0,
+            space_ship_speed,
         )
 
         space_ship_x = state.space_ship_x
@@ -934,43 +963,237 @@ class JaxDefender(
         enemy_states = enemy_states.at[index].set(new_swarmer)
         return enemy_states
 
-    def _move_with_space_ship(self, state: DefenderState, game_x, game_y, dir_x, dir_y):
-        space_ship_speed_x = state.space_ship_speed
-        new_game_x, new_game_y = self._move(
-            game_x, game_y, dir_x * space_ship_speed_x, dir_y
-        )
-        return new_game_x, new_game_y
-
-    def _enemy_shoot(
-        self, state: DefenderState, game_x, game_y, dir_x, dir_y, enemy_type
+    def _move_with_space_ship(
+        self,
+        state: DefenderState,
+        game_x,
+        game_y,
+        speed_x,
+        speed_y,
+        space_ship_coefficient,
     ):
 
-        return
+        speed_x += state.space_ship_speed * space_ship_coefficient
 
-    def _space_ship_shoot(self):
-        return
+        new_game_x, new_game_y = self._move(game_x, game_y, speed_x, speed_y)
+        return new_game_x, new_game_y
+
+    def _update_enemy(
+        self,
+        state: DefenderState,
+        index,
+        game_x: float,
+        game_y: float,
+        enemy_type: float,
+        arg1: float,
+        arg2: float,
+    ) -> DefenderState:
+        enemy_state = state.enemy_states
+        enemy_state = enemy_state.at[index].set(
+            [game_x, game_y, enemy_type, arg1, arg2]
+        )
+        return state._replace(enemy_states=enemy_state)
+
+    def _shoot_bullet(self, state: DefenderState, enemy_index) -> DefenderState:
+        # get on screen pos to have wrap around functionality
+        space_ship_onscreen_x, space_ship_onscreen_y = self.dh._onscreen_pos(
+            state, state.space_ship_x, state.space_ship_y
+        )
+
+        enemy_states = state.enemy_states
+        enemy = enemy_states[enemy_index]
+        enemy_x = enemy[0]
+        enemy_y = enemy[1]
+        enemy_type = enemy[2]
+
+        bullet_onscreen_x, bullet_onscreen_y = self.dh._onscreen_pos(
+            state, enemy_x, enemy_y
+        )
+
+        # differentiate between bomber and others
+        def bomber_shoot():
+            bullet_dir_x = 0.0
+            bullet_dir_y = 0.0
+            return bullet_dir_x, bullet_dir_y
+
+        def lander_shoot():
+            # aim at player
+            dir_x = jnp.where(
+                (space_ship_onscreen_x - bullet_onscreen_x) < 0, -1.0, 1.0
+            )
+            dir_y = jnp.where(
+                (space_ship_onscreen_y - bullet_onscreen_y) < 0, -1.0, 1.0
+            )
+            dir_y *= jrandom.uniform(state.key, (), float, 0.1, 0.3)
+
+            dir_vector = jnp.array([dir_x, dir_y])
+            magnitude = jnp.linalg.norm(dir_vector)
+
+            normalized_dir = dir_vector / magnitude
+            return normalized_dir[0], normalized_dir[1]
+
+        dir_x, dir_y = jax.lax.cond(
+            enemy_type == self.consts.BOMBER,
+            lambda: bomber_shoot(),
+            lambda: lander_shoot(),
+        )
+
+        # update if bomber has shot
+        state = jax.lax.cond(
+            enemy_type == self.consts.BOMBER,
+            lambda: self._update_enemy(
+                state,
+                enemy_index,
+                enemy_x,
+                enemy_y,
+                enemy_type,
+                self.consts.BOMB_TTL_IN_SEC,
+                0.0,
+            ),
+            lambda: state,
+        )
+
+        # spawn bullet from inside enemy, not topleft
+        bullet_x = enemy_x + self.consts.ENEMY_WIDTH / 2
+        bullet_y = enemy_y + self.consts.ENEMY_HEIGHT / 2
+
+        # different types need to be added
+        return state._replace(
+            bullet_x=bullet_x,
+            bullet_y=bullet_y,
+            bullet_dir_x=dir_x,
+            bullet_dir_y=dir_y,
+            bullet_state=self.consts.BULLET_STATE_ACTIVE,
+        )
+
+    def _enemies_on_screen(self, state) -> Tuple:
+        # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
+
+        indices = jnp.full((self.consts.ENEMY_MAX_ON_SCREEN,), -1)
+
+        # Returns data = (enemy_states, indices)
+        def add_indices(i, data):
+            enemy_states = data[0]
+            indices = data[1]
+            enemy_count_in_indices = data[2]
+
+            enemy = enemy_states[i]
+            x = enemy[0]
+            y = enemy[1]
+            is_active = enemy[2] != self.consts.INACTIVE
+            is_onscreen = jax.lax.cond(
+                is_active,
+                lambda: self.dh._is_onscreen_from_game(
+                    state, x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
+                ),
+                lambda: False,
+            )
+
+            # Pass -1 for non on screen enemies, array has to be static size
+            indices = indices.at[enemy_count_in_indices].set(
+                jax.lax.cond(is_onscreen, lambda: i, lambda: -1)
+            )
+            enemy_count_in_indices += is_onscreen
+
+            return (enemy_states, indices, enemy_count_in_indices)
+
+        result = jax.lax.fori_loop(
+            0,
+            self.consts.ENEMY_MAX,
+            add_indices,
+            (state.enemy_states, indices, 0),
+        )
+
+        indices = result[1]
+        max_indice = result[2]
+
+        return (indices, max_indice)
 
     def _bullet_step(self, state: DefenderState) -> DefenderState:
-        enemy_states = state.enemy_states
-
         bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
 
+        x = state.bullet_x
+        y = state.bullet_y
+        dir_x = state.bullet_dir_x
+        dir_y = state.bullet_dir_y
+
         # Starts a shot
-        def _start_shooting():
-            # Get all enemies on screen
+        def _start_shooting(enemy_indices_and_max):
+            enemy_indices = enemy_indices_and_max[0]
+            max_indice = enemy_indices_and_max[1]
+
             # Choose a random one
-            # call enemy_shoot with it
-            # return bullet_x, y, dirx, diry
-            return
+            p = jrandom.randint(state.key, (), 0, max_indice, dtype=jnp.int32)
+            chosen = enemy_indices[p]
+
+            return jax.lax.cond(
+                max_indice > 0,
+                lambda: self._shoot_bullet(state, chosen),
+                lambda: state,
+            )
+
+        def _bomber_update():
+            # find bomber
+            enemy_states = state.enemy_states
+            mask = (enemy_states[:, 2] == self.consts.BOMBER) & (enemy_states[:, 3] > 0)
+            first = jnp.where(jnp.any(mask), jnp.argmax(mask), -1)
+            exists = first != -1
+            enemy = jax.lax.cond(
+                exists,
+                lambda: jnp.array(
+                    [
+                        enemy_states[first][0],
+                        enemy_states[first][1],
+                        enemy_states[first][2],
+                        enemy_states[first][3] - 1,
+                        enemy_states[first][4],
+                    ]
+                ),
+                lambda: enemy_states[0],
+            )
+
+            return jax.lax.cond(
+                exists,
+                lambda: (
+                    enemy[3] > 0,
+                    self._update_enemy(
+                        state, first, enemy[0], enemy[1], enemy[2], enemy[3], enemy[4]
+                    ),
+                ),
+                lambda: (True, state),
+            )
 
         # Updates a bullet
         def _bullet_update():
+            speed_x = dir_x * self.consts.BULLET_SPEED
+            speed_y = dir_y * self.consts.BULLET_SPEED
+            new_x, new_y = self._move_with_space_ship(
+                state, x, y, speed_x, speed_y, self.consts.BULLET_MOVE_WITH_SPACE_SHIP
+            )
+            is_onscreen = self.dh._is_onscreen_from_game(
+                state, new_x, new_y, self.consts.BULLET_WIDTH, self.consts.BULLET_HEIGHT
+            )
 
-            return
+            return new_x, new_y, is_onscreen
 
-        jax.lax.cond(bullet_is_active, _bullet_update, _start_shooting)
+        # Update if active
+        x, y, bullet_is_active = jax.lax.cond(
+            bullet_is_active, _bullet_update, lambda: (x, y, False)
+        )
 
-        return state
+        # Update bomber ttl if it is the one shooting
+        bullet_is_active, state = jax.lax.cond(
+            bullet_is_active,
+            lambda: _bomber_update(),
+            lambda: (bullet_is_active, state),
+        )
+
+        # If it is now inactive, it was inactive before or went out of screen, so spawn bullet
+        return jax.lax.cond(
+            bullet_is_active,
+            lambda: state._replace(bullet_x=x, bullet_y=y),
+            lambda: _start_shooting(self._enemies_on_screen(state)),
+        )
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(index: int, enemy_states):
@@ -1041,8 +1264,8 @@ class JaxDefender(
             bullet_state=jnp.array(0).astype(jnp.int32),
             bullet_x=jnp.array(0).astype(jnp.float32),
             bullet_y=jnp.array(0).astype(jnp.float32),
-            bullet_dir_x=jnp.array(0).astype(jnp.int32),
-            bullet_dir_y=jnp.array(0).astype(jnp.int32),
+            bullet_dir_x=jnp.array(0).astype(jnp.float32),
+            bullet_dir_y=jnp.array(0).astype(jnp.float32),
             # Enemies
             enemy_states=jnp.array(self.consts.INITIAL_ENEMY_STATES).astype(
                 jnp.float32
@@ -1051,6 +1274,8 @@ class JaxDefender(
             human_states=jnp.array(self.consts.INITIAL_HUMAN_STATES).astype(
                 jnp.float32
             ),
+            # Randomness
+            key=jnp.array(jax.random.PRNGKey(0)),
         )
         observation = self._get_observation(initial_state)
         return observation, initial_state
@@ -1061,6 +1286,10 @@ class JaxDefender(
     ) -> Tuple[DefenderObservation, DefenderState, float, bool, DefenderInfo]:
         # Get all updated values from individual step functions
         previous_state = state
+
+        # Randomness
+        key, subkey = jax.random.split(state.key)
+        state = state._replace(key=subkey)
 
         state = self._space_ship_step(state, action)
         state = self._camera_step(state)
@@ -1073,6 +1302,9 @@ class JaxDefender(
         env_reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
         info = self._get_info(state)
+
+        # Swap key to parent key
+        state = state._replace(key=key)
         return observation, state, env_reward, done, info
 
     def render(self, state: DefenderState) -> jnp.ndarray:
