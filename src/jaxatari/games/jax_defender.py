@@ -99,7 +99,7 @@ class DefenderConstants(NamedTuple):
     BOMBER_AMOUNT: Tuple[int, int, int, int, int] = (1, 2, 2, 2, 2)
     MAX_BOMBER_AMOUNT: int = 1
     BOMBER_Y_SPEED: float = -0.2
-    BOMB_TTL_IN_SEC: float = 2  # Time to live
+    BOMB_TTL_IN_SEC: float = 20.0  # Time to live
 
     # Lander
     LANDER_AMOUNT: Tuple[int, int, int, int, int] = (18, 18, 19, 20, 20)
@@ -126,6 +126,8 @@ class DefenderConstants(NamedTuple):
     BULLET_MOVE_WITH_SPACE_SHIP: float = 0.9
     BULLET_STATE_INACTIVE: int = 0
     BULLET_STATE_ACTIVE: int = 1
+    BULLET_MIN_SPREAD: float = 0
+    BULLET_MAX_SPREAD: float = 0
 
     # Space ship laser
     LASER_WIDTH: int = 30
@@ -982,89 +984,29 @@ class JaxDefender(
         self,
         state: DefenderState,
         index,
-        game_x: float,
-        game_y: float,
-        enemy_type: float,
-        arg1: float,
-        arg2: float,
+        game_x=-1.0,
+        game_y=-1.0,
+        enemy_type=-1.0,
+        arg1=-1.0,
+        arg2=-1.0,
     ) -> DefenderState:
         enemy_state = state.enemy_states
+        enemy = state.enemy_states[index]
+        # Handle defaults
+        game_x = jnp.where(game_x == -1.0, enemy[0], game_x)
+        game_y = jnp.where(game_y == -1.0, enemy[1], game_y)
+        enemy_type = jnp.where(enemy_type == -1.0, enemy[2], enemy_type)
+        arg1 = jnp.where(arg1 == -1.0, enemy[3], arg1)
+        arg2 = jnp.where(arg2 == -1.0, enemy[4], arg2)
+
         enemy_state = enemy_state.at[index].set(
             [game_x, game_y, enemy_type, arg1, arg2]
         )
         return state._replace(enemy_states=enemy_state)
 
-    def _shoot_bullet(self, state: DefenderState, enemy_index) -> DefenderState:
-        # get on screen pos to have wrap around functionality
-        space_ship_onscreen_x, space_ship_onscreen_y = self.dh._onscreen_pos(
-            state, state.space_ship_x, state.space_ship_y
-        )
-
-        enemy_states = state.enemy_states
-        enemy = enemy_states[enemy_index]
-        enemy_x = enemy[0]
-        enemy_y = enemy[1]
-        enemy_type = enemy[2]
-
-        bullet_onscreen_x, bullet_onscreen_y = self.dh._onscreen_pos(
-            state, enemy_x, enemy_y
-        )
-
-        # differentiate between bomber and others
-        def bomber_shoot():
-            bullet_dir_x = 0.0
-            bullet_dir_y = 0.0
-            return bullet_dir_x, bullet_dir_y
-
-        def lander_shoot():
-            # aim at player
-            dir_x = jnp.where(
-                (space_ship_onscreen_x - bullet_onscreen_x) < 0, -1.0, 1.0
-            )
-            dir_y = jnp.where(
-                (space_ship_onscreen_y - bullet_onscreen_y) < 0, -1.0, 1.0
-            )
-            dir_y *= jrandom.uniform(state.key, (), float, 0.1, 0.3)
-
-            dir_vector = jnp.array([dir_x, dir_y])
-            magnitude = jnp.linalg.norm(dir_vector)
-
-            normalized_dir = dir_vector / magnitude
-            return normalized_dir[0], normalized_dir[1]
-
-        dir_x, dir_y = jax.lax.cond(
-            enemy_type == self.consts.BOMBER,
-            lambda: bomber_shoot(),
-            lambda: lander_shoot(),
-        )
-
-        # update if bomber has shot
-        state = jax.lax.cond(
-            enemy_type == self.consts.BOMBER,
-            lambda: self._update_enemy(
-                state,
-                enemy_index,
-                enemy_x,
-                enemy_y,
-                enemy_type,
-                self.consts.BOMB_TTL_IN_SEC,
-                0.0,
-            ),
-            lambda: state,
-        )
-
-        # spawn bullet from inside enemy, not topleft
-        bullet_x = enemy_x + self.consts.ENEMY_WIDTH / 2
-        bullet_y = enemy_y + self.consts.ENEMY_HEIGHT / 2
-
-        # different types need to be added
-        return state._replace(
-            bullet_x=bullet_x,
-            bullet_y=bullet_y,
-            bullet_dir_x=dir_x,
-            bullet_dir_y=dir_y,
-            bullet_state=self.consts.BULLET_STATE_ACTIVE,
-        )
+    def _get_enemy(self, state: DefenderState, index):
+        # Returns the enemy list at index
+        return state.enemy_states[index]
 
     def _enemies_on_screen(self, state) -> Tuple:
         # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
@@ -1109,91 +1051,160 @@ class JaxDefender(
 
         return (indices, max_indice)
 
+    def _bullet_spawn(self, state: DefenderState) -> DefenderState:
+        # Spawns a bullet, call only if bullet is inactive
+        enemy_indices, max_indice = self._enemies_on_screen(state)
+
+        # Choose a random enemy
+        chosen_one = enemy_indices[
+            jrandom.randint(state.key, (), 0, max_indice, dtype=jnp.int32)
+        ]
+
+        def _shoot(s_state: DefenderState):
+            ss_onscreen_x, ss_onscreen_y = self.dh._onscreen_pos(
+                s_state, s_state.space_ship_x, s_state.space_ship_y
+            )
+
+            e_x, e_y, e_type, _, _ = self._get_enemy(s_state, chosen_one)
+            e_onscreen_x, e_onscreen_y = self.dh._onscreen_pos(s_state, e_x, e_y)
+
+            def _bomber():
+                b = self._update_enemy(
+                    s_state, chosen_one, arg1=self.consts.BOMB_TTL_IN_SEC
+                )
+                return b._replace(bullet_dir_x=0.0, bullet_dir_y=0.0)
+
+            def _normal():
+                # aim at player
+                dir_x = jnp.where((ss_onscreen_x - e_onscreen_x) < 0, -1.0, 1.0)
+                dir_y = jnp.where((ss_onscreen_y - e_onscreen_y) < 0, -1.0, 1.0)
+                dir_y *= jrandom.uniform(
+                    state.key,
+                    (),
+                    float,
+                    self.consts.BULLET_MIN_SPREAD,
+                    self.consts.BULLET_MAX_SPREAD,
+                )
+
+                dir_vector = jnp.array([dir_x, dir_y])
+                magnitude = jnp.linalg.norm(dir_vector)
+                normalized_dir = dir_vector / magnitude
+                return s_state._replace(
+                    bullet_dir_x=normalized_dir[0], bullet_dir_y=normalized_dir[1]
+                )
+
+            s_state = jax.lax.cond(
+                e_type == self.consts.BOMBER, lambda: _bomber(), lambda: _normal()
+            )
+            bullet_x = e_x + self.consts.ENEMY_WIDTH / 2
+            bullet_y = e_y + self.consts.ENEMY_WIDTH / 2
+            return s_state._replace(
+                bullet_x=bullet_x,
+                bullet_y=bullet_y,
+                bullet_state=self.consts.BULLET_STATE_ACTIVE,
+            )
+
+        # Shoot the bullet if an enemy is onscreen
+        return jax.lax.cond(max_indice > 0, lambda: _shoot(state), lambda: state)
+
+    def _bullet_update(self, state: DefenderState) -> DefenderState:
+        # Updates a bullet, call only if bullet state active
+        b_x = state.bullet_x
+        b_y = state.bullet_y
+        b_dir_x = state.bullet_dir_x
+        b_dir_y = state.bullet_dir_y
+
+        # Update position
+        speed_x = b_dir_x * self.consts.BULLET_SPEED
+        speed_y = b_dir_y + self.consts.BULLET_SPEED
+        b_x, b_y = self._move_with_space_ship(
+            state, b_x, b_y, speed_x, speed_y, self.consts.BULLET_MOVE_WITH_SPACE_SHIP
+        )
+
+        # If it is a bomber, update its ttl
+        is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
+
+        def _bomber():
+            # Find bomber, there has to be one
+            mask = (state.enemy_states[:, 2] == self.consts.BOMBER) & (
+                state.enemy_states[:, 3] > 0.0
+            )
+            match = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0][0]
+            enemy = state.enemy_states[match]
+            new_ttl = enemy[3] - 0.016
+
+            return self._update_enemy(state, match, arg1=new_ttl)
+
+        state = jax.lax.cond(is_bomber, lambda: _bomber(), lambda: state)
+
+        return state._replace(bullet_x=b_x, bullet_y=b_y)
+
+    def _bullet_check(self, state: DefenderState) -> DefenderState:
+        # Check if its a bomber and if there is no bomber with ttl > 0
+        b_x = state.bullet_x
+        b_y = state.bullet_y
+        b_dir_x = state.bullet_dir_x
+        b_dir_y = state.bullet_dir_y
+
+        is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
+
+        def _ttl_death():
+            mask = (state.enemy_states[:, 2] == self.consts.BOMBER) & (
+                state.enemy_states[:, 3] > 0.0
+            )
+            matches = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0]
+            return matches[0] != -1
+
+        is_ttl_death = jax.lax.cond(is_bomber, lambda: _ttl_death(), lambda: False)
+
+        # Check if it is on_screen
+        is_onscreen = self.dh._is_onscreen_from_game(
+            state, b_x, b_y, self.consts.BULLET_WIDTH, self.consts.BULLET_HEIGHT
+        )
+
+        def _reset_ttl() -> DefenderState:
+            mask = state.enemy_states[:, 2] == self.consts.BOMBER
+
+            def _update_bombers(state, idx):
+                return jax.lax.cond(idx != -1, lambda: (self._update_enemy(state, idx, arg1=0.0), None), lambda: (state, None))
+
+            matches = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0]
+            return jax.lax.scan(_update_bombers, state, matches)[0]
+
+        state = jax.lax.cond(
+            is_ttl_death,
+            lambda: state._replace(bullet_state=self.consts.BULLET_STATE_INACTIVE),
+            lambda: state,
+        )
+
+        state = jax.lax.cond(
+            is_onscreen,
+            lambda: state,
+            lambda: _reset_ttl()._replace(
+                bullet_state=self.consts.BULLET_STATE_INACTIVE
+            ),
+        )
+
+        return state
+
     def _bullet_step(self, state: DefenderState) -> DefenderState:
         bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
-
-        x = state.bullet_x
-        y = state.bullet_y
-        dir_x = state.bullet_dir_x
-        dir_y = state.bullet_dir_y
-
-        # Starts a shot
-        def _start_shooting(enemy_indices_and_max):
-            enemy_indices = enemy_indices_and_max[0]
-            max_indice = enemy_indices_and_max[1]
-
-            # Choose a random one
-            p = jrandom.randint(state.key, (), 0, max_indice, dtype=jnp.int32)
-            chosen = enemy_indices[p]
-
-            return jax.lax.cond(
-                max_indice > 0,
-                lambda: self._shoot_bullet(state, chosen),
-                lambda: state,
-            )
-
-        def _bomber_update():
-            # find bomber
-            enemy_states = state.enemy_states
-            mask = (enemy_states[:, 2] == self.consts.BOMBER) & (enemy_states[:, 3] > 0)
-            first = jnp.where(jnp.any(mask), jnp.argmax(mask), -1)
-            exists = first != -1
-            enemy = jax.lax.cond(
-                exists,
-                lambda: jnp.array(
-                    [
-                        enemy_states[first][0],
-                        enemy_states[first][1],
-                        enemy_states[first][2],
-                        enemy_states[first][3] - 1,
-                        enemy_states[first][4],
-                    ]
-                ),
-                lambda: enemy_states[0],
-            )
-
-            return jax.lax.cond(
-                exists,
-                lambda: (
-                    enemy[3] > 0,
-                    self._update_enemy(
-                        state, first, enemy[0], enemy[1], enemy[2], enemy[3], enemy[4]
-                    ),
-                ),
-                lambda: (True, state),
-            )
-
-        # Updates a bullet
-        def _bullet_update():
-            speed_x = dir_x * self.consts.BULLET_SPEED
-            speed_y = dir_y * self.consts.BULLET_SPEED
-            new_x, new_y = self._move_with_space_ship(
-                state, x, y, speed_x, speed_y, self.consts.BULLET_MOVE_WITH_SPACE_SHIP
-            )
-            is_onscreen = self.dh._is_onscreen_from_game(
-                state, new_x, new_y, self.consts.BULLET_WIDTH, self.consts.BULLET_HEIGHT
-            )
-
-            return new_x, new_y, is_onscreen
-
-        # Update if active
-        x, y, bullet_is_active = jax.lax.cond(
-            bullet_is_active, _bullet_update, lambda: (x, y, False)
+        state = jax.lax.cond(
+            bullet_is_active, lambda: state, lambda: self._bullet_spawn(state)
         )
 
-        # Update bomber ttl if it is the one shooting
-        bullet_is_active, state = jax.lax.cond(
-            bullet_is_active,
-            lambda: _bomber_update(),
-            lambda: (bullet_is_active, state),
+        # Update bullet is active
+        bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
+        state = jax.lax.cond(
+            bullet_is_active, lambda: self._bullet_update(state), lambda: state
         )
 
-        # If it is now inactive, it was inactive before or went out of screen, so spawn bullet
-        return jax.lax.cond(
-            bullet_is_active,
-            lambda: state._replace(bullet_x=x, bullet_y=y),
-            lambda: _start_shooting(self._enemies_on_screen(state)),
+        # Check for destruction
+        state = jax.lax.cond(
+            bullet_is_active, lambda: self._bullet_check(state), lambda: state
         )
+
+        return state
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(index: int, enemy_states):
