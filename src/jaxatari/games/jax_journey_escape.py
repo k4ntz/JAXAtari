@@ -56,7 +56,7 @@ class JourneyEscapeConstants(NamedTuple):
     # chicken position rules
     min_chicken_position_y: int = top_border + (screen_height // 4)
 
-    # predefined groups: [type, amount, spacing in px]
+    
     MAX_OBS = 64
 
     """
@@ -65,37 +65,51 @@ class JourneyEscapeConstants(NamedTuple):
         2: Heart
         3: Manager
         4: Lightbulb
+        -: Big Blue Robot (not yet implemented)
         5: Big Heart
         6: Big Manager
         7: Big Lightbulb
+        -: Big Fire Face (not yet implemented)
     """
-
+    # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
         (0, 4, 0),  # Fence
         (1, 2, 20),  # Blue Robots
 
+        (2, 1, 0),  # Heart (1)
         (2, 2, 55),  # Hearts (2, Wide spacing)
         (2, 3, 10),  # Hearts (3, Tight spacing)
         (2, 3, 45),  # Hearts (3, Wide spacing)
-        (5, 1, 0),  # Big Heart (Single)
+        (5, 1, 0),  # Big Heart (1)
 
-        (3, 3, 15),  # Faces (3, Tight spacing)
-        (3, 2, 55),  # Faces (2, Wide spacing)
-        (6, 1, 0),  # Big Face (Single)
+        (3, 1, 0),  # Manager (1)
+        (3, 3, 15),  # Manager (3, Tight spacing)
+        (3, 2, 55),  # Manager (2, Wide spacing)
+        (6, 1, 0),  # Big Manager (1)
 
         (4, 3, 20),  # Lightbulbs (3, Tight spacing)
         (4, 2, 70),  # Lightbulbs (2, Very wide spacing)
-        (7, 1, 0),  # Big Lightbulb (Single)
+        (7, 1, 0),  # Big Lightbulb (1)
     )
-    # PROBABILITIES
-    # Index 1 (Robots) is 0.0 because it is scripted.
-    # Others are 1.0 (Uniform) or higher/lower for rarity.
+    # SPAWN PROBABILITIES
     spawn_weights: chex.Array = jnp.array([
-        1.0,  # 0: Fence
-        0.0,  # 1: ROBOTS (Scripted only)
-        1.0, 1.0, 1.0, 0.5,  # Hearts (Big heart rare)
-        1.0, 1.0, 0.5,  # Faces (Big face rare)
-        1.0, 1.0, 0.5  # Lights (Big light rare)
+        0.07017544,     # 0: (0, 1, 0)   Fence
+        0.0175,         # 1: (1, 2, 20) ROBOTS
+
+        0.08771930,     # 2: (2, 1, 0)   Heart (1)
+        0.22807018,     # 3: (2, 2, 55)  Hearts (2)
+        0.10526316,     # 4: (2, 3, 10)  Hearts (3,T)
+        0.10526316,     # 5: (2, 3, 45)  Hearts (3,W)
+        0.03508772,     # 6: (5, 1, 0)   Big Heart (1)
+
+        0.05263158,     # 7: (3, 1, 0)   Manager (1)
+        0.08771930,     # 8: (3, 3, 15)  Manager (3,T)
+        0.08771930,     # 9: (3, 2, 55)  Manager (2,W)
+        0.05263158,     # 10: (6, 1, 0)  Big Manager
+
+        0.05263158,     # 11: (4, 3, 20)  Lightbulbs (3)
+        0.05263158,     # 12: (4, 2, 70)  Lightbulbs (2)
+        0.05263158,     # 13: (7, 1, 0)   Big Lightbulb
     ])
 
 
