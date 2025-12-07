@@ -201,23 +201,27 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.RIGHT,
         ]
         
-        # Initialize maze layout if not provided (load before creating renderer)
+        # Determine maze file path once (single source of truth)
+        from jaxatari.games.pacmanMaps.nodes import NodeGroup
+        maze_file_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "pacmanMaps", "maze2.txt"
+        )
+        
+        # Check if maze file exists, raise error if not found
+        if not os.path.exists(maze_file_path):
+            raise FileNotFoundError(f"Maze file not found: {maze_file_path}")
+        
+        # Initialize maze layout if not provided (load from file)
         if consts.MAZE_LAYOUT is None:
-            self.consts = consts._replace(MAZE_LAYOUT=self._create_default_maze())
+            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_path))
         else:
             self.consts = consts
         
         # Create renderer after maze layout is loaded (so it can create maze_background correctly)
         self.renderer = PacmanRenderer(self.consts)
         
-        # Load NodeGroup for node-based movement
-        from jaxatari.games.pacmanMaps.nodes import NodeGroup
-        maze_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze2.txt"
-        )
-        if not os.path.exists(maze_file_path):
-            maze_file_path = None
+        # Load NodeGroup using the same maze file path
         self.node_group = NodeGroup.from_maze_file(maze_file_path, tile_size=self.consts.TILE_SIZE)
         
         # Pre-compute node positions for JIT-compatible movement
@@ -243,9 +247,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                     self.ghost_house_node_idx = jnp.array(i, dtype=jnp.int32)
                     break
 
-    def _create_default_maze(self) -> jnp.ndarray:
+    def _load_maze_from_file(self, maze_file_path: str) -> jnp.ndarray:
         """
-        Loads maze layout from 'maze2.txt'.
+        Loads maze layout from the provided maze file path.
         
         Parses text file into numerical grid:
         0: Empty path
@@ -253,42 +257,34 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         2: Dot (.) or Regular Node (o)
         3: Power Pellet (+)
         4: Ghost House (H)
-        """
-        # Try to load from file
-        maze_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze2.txt"
-        )
         
-        if os.path.exists(maze_file_path):
-            # Load from file
-            maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
-            with open(maze_file_path, 'r') as f:
-                lines = f.readlines()
-                for row, line in enumerate(lines):
-                    if row >= self.consts.MAZE_HEIGHT:
+        Args:
+            maze_file_path: Path to maze file (must exist)
+        """
+        maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
+        with open(maze_file_path, 'r') as f:
+            lines = f.readlines()
+            for row, line in enumerate(lines):
+                if row >= self.consts.MAZE_HEIGHT:
+                    break
+                # Remove spaces and newline
+                line = line.strip().replace(' ', '')
+                for col, char in enumerate(line):
+                    if col >= self.consts.MAZE_WIDTH:
                         break
-                    # Remove spaces and newline
-                    line = line.strip().replace(' ', '')
-                    for col, char in enumerate(line):
-                        if col >= self.consts.MAZE_WIDTH:
-                            break
-                        if char == 'X':
-                            maze[row, col] = 1
-                        elif char == '.':
-                            maze[row, col] = 2
-                        elif char == 'o':
-                            maze[row, col] = 2
-                        elif char == '+':
-                            maze[row, col] = 3
-                        elif char == 'H':
-                            maze[row, col] = 4
-                        else:
-                            maze[row, col] = 0
-            return jnp.array(maze, dtype=jnp.int32)
-        else:
-            # Fallback to empty maze if file not found
-            return jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+                    if char == 'X':
+                        maze[row, col] = 1
+                    elif char == '.':
+                        maze[row, col] = 2
+                    elif char == 'o':
+                        maze[row, col] = 2
+                    elif char == '+':
+                        maze[row, col] = 3
+                    elif char == 'H':
+                        maze[row, col] = 4
+                    else:
+                        maze[row, col] = 0
+        return jnp.array(maze, dtype=jnp.int32)
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
