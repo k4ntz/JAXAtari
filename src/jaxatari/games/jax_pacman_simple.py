@@ -32,22 +32,22 @@ def _get_default_asset_config() -> tuple:
 
 
 class PacmanConstants(NamedTuple):
-    # Screen dimensions (Atari 2600 Pacman uses 224x288, but we'll use standard 210x160)
-    WIDTH: int = 160
-    HEIGHT: int = 210
+    # Screen dimensions (Atari 2600 Pacman uses 224x288)
+    WIDTH: int = 224
+    HEIGHT: int = 288  # 36 tiles * 8 pixels
     
     # Tile size for maze (8x8 pixels per tile)
     TILE_SIZE: int = 8
     
-    # Maze dimensions in tiles
+    # Maze dimensions in tiles (224/8 = 28, 288/8 = 36)
     MAZE_WIDTH: int = 28  # 28 tiles wide
-    MAZE_HEIGHT: int = 31  # 31 tiles tall
+    MAZE_HEIGHT: int = 36  # 36 tiles tall
     
     # Player constants
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     PLAYER_SPEED: int = 1  # pixels per step (smooth movement speed) - can be reduced for slower movement
-    PLAYER_START_X: int = 76  # Center of maze
-    PLAYER_START_Y: int = 188  # Bottom area
+    PLAYER_START_X: int = 112  # Center of maze (224/2 = 112)
+    PLAYER_START_Y: int = 280  # Bottom area (near bottom of 288 height)
     
     # Colors
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)  # Black
@@ -96,7 +96,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Load NodeList from maze file (or use default if file doesn't exist)
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
+            "pacmanMaps", "maze2.txt"
         )
         # Check if file exists, otherwise use None for default map
         if not os.path.exists(maze_file_path):
@@ -356,10 +356,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
         })
@@ -368,7 +368,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(288, 224, 3),  # (height, width, channels)
             dtype=jnp.uint8
         )
     
@@ -399,7 +399,7 @@ class PacmanRenderer(JAXGameRenderer):
         # Wall positions for JIT-compatible rendering
         self.wall_positions = wall_positions if wall_positions is not None else jnp.zeros((0, 2), dtype=jnp.int32)
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(288, 224),  # (height, width) format
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
@@ -423,6 +423,16 @@ class PacmanRenderer(JAXGameRenderer):
         import numpy as np
         # Start with the base background raster (palette-indexed, 2D)
         bg_raster = np.array(self.BACKGROUND, dtype=np.uint8).copy()
+        
+        # Resize background to match game dimensions if needed
+        bg_h, bg_w = bg_raster.shape[:2]
+        target_h, target_w = self.config.game_dimensions
+        if bg_h != target_h or bg_w != target_w:
+            # Resize background to match game dimensions using nearest neighbor
+            from scipy.ndimage import zoom
+            zoom_h = target_h / bg_h
+            zoom_w = target_w / bg_w
+            bg_raster = zoom(bg_raster, (zoom_h, zoom_w), order=0).astype(np.uint8)
         
         # Render walls at each wall position using the wall mask
         wall_positions_np = np.array(self.wall_positions)

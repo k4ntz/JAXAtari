@@ -57,22 +57,22 @@ def _get_default_asset_config() -> tuple:
 
 
 class PacmanConstants(NamedTuple):
-    # Screen dimensions (Atari 2600 Pacman uses 224x288, but we'll use standard 210x160)
-    WIDTH: int = 160
-    HEIGHT: int = 200  # 25 tiles * 8 pixels
+    # Screen dimensions (Atari 2600 Pacman uses 224x288)
+    WIDTH: int = 224
+    HEIGHT: int = 288  # 36 tiles * 8 pixels
     
     # Tile size for maze (8x8 pixels per tile)
     TILE_SIZE: int = 8
     
-    # Maze dimensions in tiles (matching maze1.txt)
-    MAZE_WIDTH: int = 20  # 20 tiles wide
-    MAZE_HEIGHT: int = 25  # 25 tiles tall
+    # Maze dimensions in tiles (224/8 = 28, 288/8 = 36)
+    MAZE_WIDTH: int = 28  # 28 tiles wide
+    MAZE_HEIGHT: int = 36  # 36 tiles tall
     
     # Player constants
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     PLAYER_SPEED: int = 1  # pixels per step
-    PLAYER_START_X: int = 76  # Center of maze
-    PLAYER_START_Y: int = 188  # Bottom area
+    PLAYER_START_X: int = 112  # Center of maze (224/2 = 112)
+    PLAYER_START_Y: int = 280  # Bottom area (near bottom of 288 height)
     
     # Ghost constants
     GHOST_SIZE: Tuple[int, int] = (8, 8)
@@ -81,8 +81,8 @@ class PacmanConstants(NamedTuple):
     GHOST_SPEED_EATEN: int = 2
     
     # Ghost starting positions (in ghost house area)
-    GHOST_START_X: int = 76
-    GHOST_START_Y: int = 100
+    GHOST_START_X: int = 112  # Center of maze (224/2 = 112)
+    GHOST_START_Y: int = 144  # Adjusted for new map size (approximately center vertically)
     
     # Ghost colors (RGB)
     GHOST_BLINKY_COLOR: Tuple[int, int, int] = (255, 0, 0)  # Red
@@ -193,7 +193,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def __init__(self, consts: PacmanConstants = None):
         consts = consts or PacmanConstants()
         super().__init__(consts)
-        self.renderer = PacmanRenderer(self.consts)
         self.action_set = [
             Action.NOOP,
             Action.UP,
@@ -202,17 +201,20 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.RIGHT,
         ]
         
-        # Initialize maze layout if not provided
+        # Initialize maze layout if not provided (load before creating renderer)
         if consts.MAZE_LAYOUT is None:
             self.consts = consts._replace(MAZE_LAYOUT=self._create_default_maze())
         else:
             self.consts = consts
         
+        # Create renderer after maze layout is loaded (so it can create maze_background correctly)
+        self.renderer = PacmanRenderer(self.consts)
+        
         # Load NodeGroup for node-based movement
         from jaxatari.games.pacmanMaps.nodes import NodeGroup
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
+            "pacmanMaps", "maze2.txt"
         )
         if not os.path.exists(maze_file_path):
             maze_file_path = None
@@ -243,7 +245,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
     def _create_default_maze(self) -> jnp.ndarray:
         """
-        Loads maze layout from 'maze1.txt'.
+        Loads maze layout from 'maze2.txt'.
         
         Parses text file into numerical grid:
         0: Empty path
@@ -255,7 +257,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Try to load from file
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
+            "pacmanMaps", "maze2.txt"
         )
         
         if os.path.exists(maze_file_path):
@@ -1048,13 +1050,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "ghosts": spaces.Box(low=0, high=210, shape=(4, 5), dtype=jnp.int32),
+            "ghosts": spaces.Box(low=0, high=288, shape=(4, 5), dtype=jnp.int32),
             "dots_remaining": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
             "power_pellets_active": spaces.Box(low=0, high=15, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
@@ -1067,7 +1069,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(288, 224, 3),  # (height, width, channels)
             dtype=jnp.uint8
         )
     
@@ -1099,11 +1101,9 @@ class PacmanRenderer(JAXGameRenderer):
     def __init__(self, consts: PacmanConstants = None):
         super().__init__(consts)
         self.consts = consts or PacmanConstants()
-        # Initialize maze if not already done
-        if self.consts.MAZE_LAYOUT is None:
-            self.consts = self.consts._replace(MAZE_LAYOUT=self._create_default_maze())
+        # Maze layout will be set by JaxPacman after initialization
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(288, 224),  # (height, width) format
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
@@ -1117,52 +1117,18 @@ class PacmanRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+        
+        # Resize BACKGROUND to match new game dimensions if needed
+        bg_h, bg_w = self.BACKGROUND.shape[:2]
+        target_h, target_w = self.config.game_dimensions
+        if bg_h != target_h or bg_w != target_w:
+            from scipy.ndimage import zoom
+            zoom_h = target_h / bg_h
+            zoom_w = target_w / bg_w
+            self.BACKGROUND = jnp.array(zoom(self.BACKGROUND, (zoom_h, zoom_w), order=0).astype(np.uint8))
 
         # Pre-render static maze background (walls and ghost house)
         self.maze_background = self._create_maze_background()
-
-    def _create_default_maze(self) -> jnp.ndarray:
-        """Create a classic Pacman maze layout (same as in JaxPacman)."""
-        maze = np.zeros((31, 28), dtype=np.int32)
-        
-        maze_layout = [
-            "1111111111111111111111111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1311112111112112111112111131",
-            "1211112111112112111112111121",
-            "1222222222222222222222222221",
-            "1211112112111111112112111121",
-            "1211112112111111112112111121",
-            "1222222112222112222112222221",
-            "1111112111110110111112111111",
-            "1111112111110110111112111111",
-            "1111112110000000001112111111",
-            "1111112110111441110112111111",
-            "1111112110144441110112111111",
-            "0000002000144441000002000000",
-            "1111112110144441110112111111",
-            "1111112110111111110112111111",
-            "1111112110000000001112111111",
-            "1111112110111111110112111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1211112111112112111112111121",
-            "1322112222222222222222112231",
-            "1112112112111111112112112111",
-            "1112112112111111112112112111",
-            "1222222112222112222112222221",
-            "1211111111112112111111111121",
-            "1211111111112112111111111121",
-            "1222222222222222222222222221",
-            "1111111111111111111111111111",
-        ]
-        
-        for row_idx, row_str in enumerate(maze_layout):
-            for col_idx, char in enumerate(row_str):
-                maze[row_idx, col_idx] = int(char)
-        
-        return jnp.array(maze, dtype=jnp.int32)
     
     def _create_maze_background(self) -> jnp.ndarray:
         """Create static background with maze walls."""
