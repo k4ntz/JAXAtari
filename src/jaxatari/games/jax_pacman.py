@@ -26,53 +26,103 @@ def _get_default_asset_config() -> tuple:
             'player/player_up_1.npy', 'player/player_up_2.npy',
             'player/player_down_1.npy', 'player/player_down_2.npy',
         ]},
+        {'name': 'player_death', 'type': 'group', 'files': [
+            'player/death_0.npy', 'player/death_1.npy', 'player/death_2.npy', 'player/death_3.npy',
+            'player/death_4.npy', 'player/death_5.npy', 'player/death_6.npy', 'player/death_7.npy',
+            'player/death_8.npy', 'player/death_9.npy', 'player/death_10.npy', 'player/death_11.npy',
+        ]},
         {'name': 'ghost_blinky', 'type': 'group', 'files': [
-            'ghost_blinky/ghost_right.npy', 'ghost_blinky/ghost_left.npy',
-            'ghost_blinky/ghost_up.npy', 'ghost_blinky/ghost_down.npy',
+            'ghost_blinky/ghost_right_1.npy', 'ghost_blinky/ghost_right_2.npy',
+            'ghost_blinky/ghost_left_1.npy', 'ghost_blinky/ghost_left_2.npy',
+            'ghost_blinky/ghost_up_1.npy', 'ghost_blinky/ghost_up_2.npy',
+            'ghost_blinky/ghost_down_1.npy', 'ghost_blinky/ghost_down_2.npy',
         ]},
         {'name': 'ghost_pinky', 'type': 'group', 'files': [
-            'ghost_pinky/ghost_right.npy', 'ghost_pinky/ghost_left.npy',
-            'ghost_pinky/ghost_up.npy', 'ghost_pinky/ghost_down.npy',
+            'ghost_pinky/ghost_right_1.npy', 'ghost_pinky/ghost_right_2.npy',
+            'ghost_pinky/ghost_left_1.npy', 'ghost_pinky/ghost_left_2.npy',
+            'ghost_pinky/ghost_up_1.npy', 'ghost_pinky/ghost_up_2.npy',
+            'ghost_pinky/ghost_down_1.npy', 'ghost_pinky/ghost_down_2.npy',
         ]},
         {'name': 'ghost_inky', 'type': 'group', 'files': [
-            'ghost_inky/ghost_right.npy', 'ghost_inky/ghost_left.npy',
-            'ghost_inky/ghost_up.npy', 'ghost_inky/ghost_down.npy',
+            'ghost_inky/ghost_right_1.npy', 'ghost_inky/ghost_right_2.npy',
+            'ghost_inky/ghost_left_1.npy', 'ghost_inky/ghost_left_2.npy',
+            'ghost_inky/ghost_up_1.npy', 'ghost_inky/ghost_up_2.npy',
+            'ghost_inky/ghost_down_1.npy', 'ghost_inky/ghost_down_2.npy',
         ]},
         {'name': 'ghost_clyde', 'type': 'group', 'files': [
-            'ghost_clyde/ghost_right.npy', 'ghost_clyde/ghost_left.npy',
-            'ghost_clyde/ghost_up.npy', 'ghost_clyde/ghost_down.npy',
+            'ghost_clyde/ghost_right_1.npy', 'ghost_clyde/ghost_right_2.npy',
+            'ghost_clyde/ghost_left_1.npy', 'ghost_clyde/ghost_left_2.npy',
+            'ghost_clyde/ghost_up_1.npy', 'ghost_clyde/ghost_up_2.npy',
+            'ghost_clyde/ghost_down_1.npy', 'ghost_clyde/ghost_down_2.npy',
         ]},
         {'name': 'ghost_frightened', 'type': 'group', 'files': [
             'ghost_frightened/ghost_frightened_1.npy', 'ghost_frightened/ghost_frightened_2.npy',
+            'ghost_frightened/ghost_frightened_white_1.npy', 'ghost_frightened/ghost_frightened_white_2.npy',
         ]},
         {'name': 'ghost_eyes', 'type': 'group', 'files': [
             'ghost_eyes/eyes_right.npy', 'ghost_eyes/eyes_left.npy',
             'ghost_eyes/eyes_up.npy', 'ghost_eyes/eyes_down.npy',
         ]},
         {'name': 'pellet_dot', 'type': 'single', 'file': 'pellet_dot.npy'},
-        {'name': 'pellet_power', 'type': 'single', 'file': 'pellet_power.npy'},
+        {'name': 'pellet_power', 'type': 'group', 'files': [
+            'pellet_power/pellet_power_on.npy',
+            'pellet_power/pellet_power_off.npy'
+        ]},
         {'name': 'wall', 'type': 'single', 'file': 'wall/0.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
 
+def _get_sprite_lookup() -> chex.Array:
+    """
+    Creates lookup table for mapping Actions to Sprites.
+    """
+    # Define sprite offsets
+    SPRITE_RIGHT = 0
+    SPRITE_LEFT = 2
+    SPRITE_UP = 4
+    SPRITE_DOWN = 6
+
+    # Create lookup table for mapping Actions to Sprites
+    lookup = np.zeros(18, dtype=np.int32)
+    
+    # Default to Right facing
+    lookup[:] = SPRITE_RIGHT
+    
+    # Map Actions to Sprites
+    lookup[Action.UP] = SPRITE_UP
+    lookup[Action.DOWN] = SPRITE_DOWN
+    lookup[Action.LEFT] = SPRITE_LEFT
+    lookup[Action.RIGHT] = SPRITE_RIGHT
+    
+    # Ghost direction mapping (Action -> Sprite Offset)
+    ghost_lookup = np.zeros(18, dtype=np.int32)
+    ghost_lookup[:] = 0 # Default to Right
+    ghost_lookup[Action.RIGHT] = 0
+    ghost_lookup[Action.LEFT] = 2
+    ghost_lookup[Action.UP] = 4
+    ghost_lookup[Action.DOWN] = 6
+    
+    return jnp.array(lookup, dtype=jnp.int32), jnp.array(ghost_lookup, dtype=jnp.int32)
+
+
 class PacmanConstants(NamedTuple):
-    # Screen dimensions (Atari 2600 Pacman uses 224x288, but we'll use standard 210x160)
-    WIDTH: int = 160
-    HEIGHT: int = 200  # 25 tiles * 8 pixels
+    # Screen dimensions (Atari 2600 Pacman uses 224x288)
+    WIDTH: int = 224
+    HEIGHT: int = 288  # 36 tiles * 8 pixels
     
     # Tile size for maze (8x8 pixels per tile)
     TILE_SIZE: int = 8
     
-    # Maze dimensions in tiles (matching maze1.txt)
-    MAZE_WIDTH: int = 20  # 20 tiles wide
-    MAZE_HEIGHT: int = 25  # 25 tiles tall
+    # Maze dimensions in tiles (224/8 = 28, 288/8 = 36)
+    MAZE_WIDTH: int = 28  # 28 tiles wide
+    MAZE_HEIGHT: int = 36  # 36 tiles tall
     
     # Player constants
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     PLAYER_SPEED: int = 1  # pixels per step
-    PLAYER_START_X: int = 76  # Center of maze
-    PLAYER_START_Y: int = 188  # Bottom area
+    PLAYER_START_X: int = 112  # Center of maze (224/2 = 112)
+    PLAYER_START_Y: int = 280  # Bottom area (near bottom of 288 height)
     
     # Ghost constants
     GHOST_SIZE: Tuple[int, int] = (8, 8)
@@ -81,8 +131,8 @@ class PacmanConstants(NamedTuple):
     GHOST_SPEED_EATEN: int = 2
     
     # Ghost starting positions (in ghost house area)
-    GHOST_START_X: int = 76
-    GHOST_START_Y: int = 100
+    GHOST_START_X: int = 112  # Center of maze (224/2 = 112)
+    GHOST_START_Y: int = 144  # Adjusted for new map size (approximately center vertically)
     
     # Ghost colors (RGB)
     GHOST_BLINKY_COLOR: Tuple[int, int, int] = (255, 0, 0)  # Red
@@ -102,6 +152,9 @@ class PacmanConstants(NamedTuple):
     FRIGHTENED_DURATION: int = 200  # frames
     SCATTER_DURATION: int = 7000  # frames
     CHASE_DURATION: int = 20000  # frames
+    LEVEL_TRANSITION_DURATION: int = 60 # frames (1 second at 60fps)
+    FREEZE_DURATION: int = 15 # frames (0.25 second)
+    DEATH_DURATION: int = 60 # frames (1 second)
     
     # Colors
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)  # Black
@@ -119,6 +172,7 @@ class PacmanConstants(NamedTuple):
     
     # Asset config
     ASSET_CONFIG: tuple = _get_default_asset_config()
+    SPRITE_LOOKUP: Tuple[chex.Array, chex.Array] = _get_sprite_lookup()
 
 
 # Ghost states: 0=normal, 1=frightened, 2=eaten
@@ -160,6 +214,14 @@ class PacmanState(NamedTuple):
     scatter_chase_timer: chex.Array
     is_scatter_mode: chex.Array  # True for scatter, False for chase
     
+    # Level transition
+    level_transition_timer: chex.Array
+    
+    # Freeze and Death
+    freeze_timer: chex.Array
+    death_timer: chex.Array
+    player_state: chex.Array # 0=Alive, 1=Dying
+    
     # Step counter and RNG
     step_counter: chex.Array
     key: chex.PRNGKey
@@ -182,6 +244,8 @@ class PacmanObservation(NamedTuple):
     lives: jnp.ndarray
     level: jnp.ndarray
     frightened_timer: jnp.ndarray
+    level_transition_timer: jnp.ndarray
+    player_state: jnp.ndarray
 
 
 class PacmanInfo(NamedTuple):
@@ -193,7 +257,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def __init__(self, consts: PacmanConstants = None):
         consts = consts or PacmanConstants()
         super().__init__(consts)
-        self.renderer = PacmanRenderer(self.consts)
         self.action_set = [
             Action.NOOP,
             Action.UP,
@@ -202,20 +265,27 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.RIGHT,
         ]
         
-        # Initialize maze layout if not provided
-        if consts.MAZE_LAYOUT is None:
-            self.consts = consts._replace(MAZE_LAYOUT=self._create_default_maze())
-        else:
-            self.consts = consts
-        
-        # Load NodeGroup for node-based movement
+        # Determine maze file path once (single source of truth)
         from jaxatari.games.pacmanMaps.nodes import NodeGroup
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
+            "pacmanMaps", "maze2.txt"
         )
+        
+        # Check if maze file exists, raise error if not found
         if not os.path.exists(maze_file_path):
-            maze_file_path = None
+            raise FileNotFoundError(f"Maze file not found: {maze_file_path}")
+        
+        # Initialize maze layout if not provided (load from file)
+        if consts.MAZE_LAYOUT is None:
+            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_path))
+        else:
+            self.consts = consts
+        
+        # Create renderer after maze layout is loaded (so it can create maze_background correctly)
+        self.renderer = PacmanRenderer(self.consts)
+        
+        # Load NodeGroup using the same maze file path
         self.node_group = NodeGroup.from_maze_file(maze_file_path, tile_size=self.consts.TILE_SIZE)
         
         # Pre-compute node positions for JIT-compatible movement
@@ -241,9 +311,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                     self.ghost_house_node_idx = jnp.array(i, dtype=jnp.int32)
                     break
 
-    def _create_default_maze(self) -> jnp.ndarray:
+    def _load_maze_from_file(self, maze_file_path: str) -> jnp.ndarray:
         """
-        Loads maze layout from 'maze1.txt'.
+        Loads maze layout from the provided maze file path.
         
         Parses text file into numerical grid:
         0: Empty path
@@ -251,42 +321,34 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         2: Dot (.) or Regular Node (o)
         3: Power Pellet (+)
         4: Ghost House (H)
-        """
-        # Try to load from file
-        maze_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
-        )
         
-        if os.path.exists(maze_file_path):
-            # Load from file
-            maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
-            with open(maze_file_path, 'r') as f:
-                lines = f.readlines()
-                for row, line in enumerate(lines):
-                    if row >= self.consts.MAZE_HEIGHT:
+        Args:
+            maze_file_path: Path to maze file (must exist)
+        """
+        maze = np.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=np.int32)
+        with open(maze_file_path, 'r') as f:
+            lines = f.readlines()
+            for row, line in enumerate(lines):
+                if row >= self.consts.MAZE_HEIGHT:
+                    break
+                # Remove spaces and newline
+                line = line.strip().replace(' ', '')
+                for col, char in enumerate(line):
+                    if col >= self.consts.MAZE_WIDTH:
                         break
-                    # Remove spaces and newline
-                    line = line.strip().replace(' ', '')
-                    for col, char in enumerate(line):
-                        if col >= self.consts.MAZE_WIDTH:
-                            break
-                        if char == 'X':
-                            maze[row, col] = 1
-                        elif char == '.':
-                            maze[row, col] = 2
-                        elif char == 'o':
-                            maze[row, col] = 2
-                        elif char == '+':
-                            maze[row, col] = 3
-                        elif char == 'H':
-                            maze[row, col] = 4
-                        else:
-                            maze[row, col] = 0
-            return jnp.array(maze, dtype=jnp.int32)
-        else:
-            # Fallback to empty maze if file not found
-            return jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+                    if char == 'X':
+                        maze[row, col] = 1
+                    elif char == '.':
+                        maze[row, col] = 2
+                    elif char == 'o':
+                        maze[row, col] = 2
+                    elif char == '+':
+                        maze[row, col] = 3
+                    elif char == 'H':
+                        maze[row, col] = 4
+                    else:
+                        maze[row, col] = 0
+        return jnp.array(maze, dtype=jnp.int32)
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
         state_key, _ = jax.random.split(key)
@@ -323,15 +385,18 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Initial game state
         score = jnp.array(0, dtype=jnp.int32)
-        lives = jnp.array(3, dtype=jnp.int32)
+        lives = jnp.array(1, dtype=jnp.int32)
         level = jnp.array(1, dtype=jnp.int32)
+        pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+        
         dots_remaining = jnp.array(240, dtype=jnp.int32)  # Approximate
         frightened_timer = jnp.array(0, dtype=jnp.int32)
         scatter_chase_timer = jnp.array(0, dtype=jnp.int32)
         is_scatter_mode = jnp.array(True)  # Start in scatter mode
         
-        # Initialize pellet collection mask (0 = not collected)
-        pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+        freeze_timer = jnp.array(0, dtype=jnp.int32)
+        death_timer = jnp.array(0, dtype=jnp.int32)
+        player_state = jnp.array(0, dtype=jnp.int32) # Alive
         
         # Create state
         state = PacmanState(
@@ -353,6 +418,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
             scatter_chase_timer=scatter_chase_timer,
             is_scatter_mode=is_scatter_mode,
+            level_transition_timer=jnp.array(0, dtype=jnp.int32),
+            freeze_timer=freeze_timer,
+            death_timer=death_timer,
+            player_state=player_state,
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=state_key,
         )
@@ -365,38 +434,204 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
         
-        # Update state key
-        state = state._replace(key=step_key)
+        # Check if we are in level transition
+        is_transitioning = state.level_transition_timer > 0
         
-        # Update player movement
-        state = self._player_step(state, action)
+        # Check if we are frozen (ghost eaten)
+        is_frozen = state.freeze_timer > 0
         
-        # Split key for ghost updates
-        key, ghost_key = jax.random.split(state.key)
-        state = state._replace(key=key)
+        # Check if player is dying
+        is_dying = state.player_state == 1
         
-        # 2. Ghost Step
-        state = self._ghost_step(state, ghost_key)
+        def transition_step(state):
+            # Only update transition timer
+            new_timer = state.level_transition_timer - 1
+            state = state._replace(level_transition_timer=new_timer)
+            
+            # If timer hits 0, reset for new level
+            state = jax.lax.cond(
+                new_timer == 0,
+                self._reset_for_new_level,
+                lambda x: x,
+                state
+            )
+            
+            # Update key
+            state = state._replace(key=new_state_key)
+            
+            # Return current state (paused)
+            return self._get_observation(state), state, jnp.array(0.0, dtype=jnp.float32), self._get_done(state), self._get_info(state)
+
+        def freeze_step(state):
+            # Only update freeze timer
+            new_timer = state.freeze_timer - 1
+            state = state._replace(freeze_timer=new_timer)
+            state = state._replace(key=new_state_key)
+            return self._get_observation(state), state, jnp.array(0.0, dtype=jnp.float32), self._get_done(state), self._get_info(state)
+
+        def death_step(state):
+            # Update death timer
+            new_timer = state.death_timer - 1
+            state = state._replace(death_timer=new_timer)
+            
+            # If timer hits 0, reset after death (lives - 1, reset positions)
+            state = jax.lax.cond(
+                new_timer == 0,
+                self._reset_after_death,
+                lambda x: x,
+                state
+            )
+            
+            state = state._replace(key=new_state_key)
+            return self._get_observation(state), state, jnp.array(0.0, dtype=jnp.float32), self._get_done(state), self._get_info(state)
+
+        def normal_step(state):
+            # Update state key
+            state = state._replace(key=step_key)
+            
+            # Update player movement
+            state = self._player_step(state, action)
+            
+            # Split key for ghost updates
+            key, ghost_key = jax.random.split(state.key)
+            state = state._replace(key=key)
+            
+            # 2. Ghost Step
+            state = self._ghost_step(state, ghost_key)
+            
+            # Check collisions
+            state = self._check_collisions(state)
+            
+            # Update timers
+            state = self._update_timers(state)
+            
+            # Update animation frames
+            state = state._replace(
+                player_animation_frame=(state.player_animation_frame + 1) % 2,
+                step_counter=state.step_counter + 1,
+                key=new_state_key,
+            )
+            
+            done = self._get_done(state)
+            reward = self._get_reward(previous_state, state)
+            info = self._get_info(state)
+            observation = self._get_observation(state)
+            
+            return observation, state, reward, done, info
+            
+        # Dispatch based on state priority: Transition > Death > Freeze > Normal
         
-        # Check collisions
-        state = self._check_collisions(state)
-        
-        # Update timers
-        state = self._update_timers(state)
-        
-        # Update animation frames
-        state = state._replace(
-            player_animation_frame=(state.player_animation_frame + 1) % 2,
-            step_counter=state.step_counter + 1,
-            key=new_state_key,
+        return jax.lax.cond(
+            is_transitioning,
+            transition_step,
+            lambda s: jax.lax.cond(
+                is_dying,
+                death_step,
+                lambda s2: jax.lax.cond(
+                    is_frozen,
+                    freeze_step,
+                    normal_step,
+                    s2
+                ),
+                s
+            ),
+            state
         )
+
+    def _reset_after_death(self, state: PacmanState) -> PacmanState:
+        """Resets positions and decrements lives after death animation."""
+        new_lives = state.lives - 1
+        new_lives = jnp.maximum(new_lives, 0)
         
-        done = self._get_done(state)
-        reward = self._get_reward(previous_state, state)
-        info = self._get_info(state)
-        observation = self._get_observation(state)
+        # Reset positions (same logic as reset_for_new_level but keep pellets)
+        player_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X,
+            self.consts.PLAYER_START_Y
+        )
+        player_x = jnp.array(self.node_positions_x[player_start_node_idx], dtype=jnp.int32)
+        player_y = jnp.array(self.node_positions_y[player_start_node_idx], dtype=jnp.int32)
         
-        return observation, state, reward, done, info
+        ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
+        for i in range(4):
+            ghost_x = self.consts.GHOST_START_X + i * 8
+            ghost_y = self.consts.GHOST_START_Y
+            ghost_node_idx = self._find_nearest_node_idx(ghost_x, ghost_y)
+            ghosts = ghosts.at[i, 0].set(self.node_positions_x[ghost_node_idx])
+            ghosts = ghosts.at[i, 1].set(self.node_positions_y[ghost_node_idx])
+            ghosts = ghosts.at[i, 2].set(0)
+            ghosts = ghosts.at[i, 3].set(0)
+            ghosts = ghosts.at[i, 4].set(self.node_positions_x[ghost_node_idx])
+            ghosts = ghosts.at[i, 5].set(self.node_positions_y[ghost_node_idx])
+            ghosts = ghosts.at[i, 6].set(ghost_node_idx)
+            ghosts = ghosts.at[i, 7].set(ghost_node_idx)
+            
+        return state._replace(
+            lives=new_lives,
+            player_x=player_x,
+            player_y=player_y,
+            player_direction=jnp.array(0, dtype=jnp.int32),
+            player_next_direction=jnp.array(-1, dtype=jnp.int32),
+            player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            ghosts=ghosts,
+            frightened_timer=jnp.array(0, dtype=jnp.int32),
+            scatter_chase_timer=jnp.array(0, dtype=jnp.int32),
+            is_scatter_mode=jnp.array(True),
+            player_state=jnp.array(0, dtype=jnp.int32), # Alive again
+            death_timer=jnp.array(0, dtype=jnp.int32)
+        )
+
+    def _reset_for_new_level(self, state: PacmanState) -> PacmanState:
+        """Resets entities and pellets for a new level."""
+        # Increment level
+        new_level = state.level + 1
+        
+        # Reset player
+        player_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X,
+            self.consts.PLAYER_START_Y
+        )
+        player_x = jnp.array(self.node_positions_x[player_start_node_idx], dtype=jnp.int32)
+        player_y = jnp.array(self.node_positions_y[player_start_node_idx], dtype=jnp.int32)
+        
+        # Reset ghosts
+        ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
+        for i in range(4):
+            ghost_x = self.consts.GHOST_START_X + i * 8
+            ghost_y = self.consts.GHOST_START_Y
+            ghost_node_idx = self._find_nearest_node_idx(ghost_x, ghost_y)
+            ghosts = ghosts.at[i, 0].set(self.node_positions_x[ghost_node_idx])
+            ghosts = ghosts.at[i, 1].set(self.node_positions_y[ghost_node_idx])
+            ghosts = ghosts.at[i, 2].set(0)
+            ghosts = ghosts.at[i, 3].set(0)
+            ghosts = ghosts.at[i, 4].set(self.node_positions_x[ghost_node_idx])
+            ghosts = ghosts.at[i, 5].set(self.node_positions_y[ghost_node_idx])
+            ghosts = ghosts.at[i, 6].set(ghost_node_idx)
+            ghosts = ghosts.at[i, 7].set(ghost_node_idx)
+
+        # Reset pellets
+        pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+        dots_remaining = jnp.array(240, dtype=jnp.int32) # Reset count
+
+        return state._replace(
+            level=new_level,
+            player_x=player_x,
+            player_y=player_y,
+            player_direction=jnp.array(0, dtype=jnp.int32),
+            player_next_direction=jnp.array(-1, dtype=jnp.int32),
+            player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            ghosts=ghosts,
+            pellets_collected=pellets_collected,
+            dots_remaining=dots_remaining,
+            frightened_timer=jnp.array(0, dtype=jnp.int32),
+            level_transition_timer=jnp.array(0, dtype=jnp.int32),
+            scatter_chase_timer=jnp.array(0, dtype=jnp.int32),
+            is_scatter_mode=jnp.array(True),
+            freeze_timer=jnp.array(0, dtype=jnp.int32),
+            death_timer=jnp.array(0, dtype=jnp.int32),
+            player_state=jnp.array(0, dtype=jnp.int32)
+        )
 
     def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
         """
@@ -874,13 +1109,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Update score
         new_score = state.score + ghost_scores
         
-        # Update lives
-        final_lives = jnp.where(any_life_lost, state.lives - 1, state.lives)
-        final_lives = jnp.maximum(final_lives, 0)
+        # Handle Death: If life lost, set player state to dying and start death timer
+        new_player_state = jnp.where(any_life_lost, 1, state.player_state)
+        new_death_timer = jnp.where(any_life_lost, self.consts.DEATH_DURATION, state.death_timer)
         
-        # Reset player position if life lost
-        new_player_x = jnp.where(any_life_lost, self.consts.PLAYER_START_X, state.player_x)
-        new_player_y = jnp.where(any_life_lost, self.consts.PLAYER_START_Y, state.player_y)
+        # Handle Freeze: If ghost eaten, start freeze timer
+        new_freeze_timer = jnp.where(any_ghost_eaten, self.consts.FREEZE_DURATION, state.freeze_timer)
         
         # Check pellet collisions based on player's tile position
         # Convert player position to tile coordinates (simple division)
@@ -940,14 +1174,27 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             new_ghosts_eaten_count
         )
         
+        # Check level completion
+        level_complete = jnp.logical_and(new_dots_remaining <= 0, state.level_transition_timer == 0)
+        
+        new_transition_timer = jnp.where(
+            level_complete,
+            self.consts.LEVEL_TRANSITION_DURATION,
+            state.level_transition_timer
+        )
+
         return state._replace(
             ghosts=new_ghosts_final,
             score=new_score,
-            lives=final_lives,
+            lives=state.lives, # Lives updated after death animation
             frightened_timer=new_frightened_timer,
             ghosts_eaten_count=final_ghosts_eaten_count,
             dots_remaining=new_dots_remaining,
             pellets_collected=new_pellets_collected,
+            level_transition_timer=new_transition_timer,
+            player_state=new_player_state,
+            death_timer=new_death_timer,
+            freeze_timer=new_freeze_timer
         )
 
     def _update_timers(self, state: PacmanState) -> PacmanState:
@@ -986,12 +1233,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             state.ghosts_eaten_count
         )
         
+        # Update level transition timer
+        new_transition = jnp.maximum(state.level_transition_timer - 1, 0)
+
         return state._replace(
             ghosts=new_ghosts,
             frightened_timer=new_frightened,
             ghosts_eaten_count=final_ghosts_eaten_count,
             scatter_chase_timer=new_scatter_chase,
             is_scatter_mode=new_is_scatter,
+            level_transition_timer=new_transition
         )
 
     def _get_observation(self, state: PacmanState) -> PacmanObservation:
@@ -1022,6 +1273,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             lives=state.lives,
             level=state.level,
             frightened_timer=state.frightened_timer,
+            level_transition_timer=state.level_transition_timer,
+            player_state=state.player_state,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1040,6 +1293,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             obs.lives.flatten(),
             obs.level.flatten(),
             obs.frightened_timer.flatten(),
+            obs.level_transition_timer.flatten(),
+            obs.player_state.flatten(),
         ])
 
     def action_space(self) -> spaces.Discrete:
@@ -1048,26 +1303,28 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=224, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=288, shape=(), dtype=jnp.int32),
                 "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             }),
-            "ghosts": spaces.Box(low=0, high=210, shape=(4, 5), dtype=jnp.int32),
+            "ghosts": spaces.Box(low=0, high=288, shape=(4, 5), dtype=jnp.int32),
             "dots_remaining": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
             "power_pellets_active": spaces.Box(low=0, high=15, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
             "level": spaces.Box(low=1, high=255, shape=(), dtype=jnp.int32),
             "frightened_timer": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+            "level_transition_timer": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
+            "player_state": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(288, 224, 3),  # (height, width, channels)
             dtype=jnp.uint8
         )
     
@@ -1088,22 +1345,18 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PacmanState) -> bool:
-        """Game over when no lives remaining or all dots collected."""
-        return jnp.logical_or(
-            state.lives <= 0,
-            state.dots_remaining <= 0
-        )
+        """Game over when no lives remaining."""
+        # Note: Completing a level is NOT done, it just transitions.
+        return state.lives <= 0
 
 
 class PacmanRenderer(JAXGameRenderer):
     def __init__(self, consts: PacmanConstants = None):
         super().__init__(consts)
         self.consts = consts or PacmanConstants()
-        # Initialize maze if not already done
-        if self.consts.MAZE_LAYOUT is None:
-            self.consts = self.consts._replace(MAZE_LAYOUT=self._create_default_maze())
+        # Maze layout will be set by JaxPacman after initialization
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(288, 224),  # (height, width) format
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
@@ -1117,52 +1370,26 @@ class PacmanRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+        
+        # Resize BACKGROUND to match new game dimensions if needed
+        bg_h, bg_w = self.BACKGROUND.shape[:2]
+        target_h, target_w = self.config.game_dimensions
+        if bg_h != target_h or bg_w != target_w:
+            from scipy.ndimage import zoom
+            zoom_h = target_h / bg_h
+            zoom_w = target_w / bg_w
+            self.BACKGROUND = jnp.array(zoom(self.BACKGROUND, (zoom_h, zoom_w), order=0).astype(np.uint8))
+        
+
+        
+        # Find Wall and Background IDs dynamically from the loaded palette
+        # Use COLOR_TO_ID to get correct indices
+
+        self.bg_id = jnp.array(self.COLOR_TO_ID[tuple(self.consts.BACKGROUND_COLOR)], dtype=jnp.uint8)
+        self.white_id = jnp.array(self.COLOR_TO_ID[(255, 255, 255)], dtype=jnp.uint8)
 
         # Pre-render static maze background (walls and ghost house)
         self.maze_background = self._create_maze_background()
-
-    def _create_default_maze(self) -> jnp.ndarray:
-        """Create a classic Pacman maze layout (same as in JaxPacman)."""
-        maze = np.zeros((31, 28), dtype=np.int32)
-        
-        maze_layout = [
-            "1111111111111111111111111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1311112111112112111112111131",
-            "1211112111112112111112111121",
-            "1222222222222222222222222221",
-            "1211112112111111112112111121",
-            "1211112112111111112112111121",
-            "1222222112222112222112222221",
-            "1111112111110110111112111111",
-            "1111112111110110111112111111",
-            "1111112110000000001112111111",
-            "1111112110111441110112111111",
-            "1111112110144441110112111111",
-            "0000002000144441000002000000",
-            "1111112110144441110112111111",
-            "1111112110111111110112111111",
-            "1111112110000000001112111111",
-            "1111112110111111110112111111",
-            "1222222222222112222222222221",
-            "1211112111112112111112111121",
-            "1211112111112112111112111121",
-            "1322112222222222222222112231",
-            "1112112112111111112112112111",
-            "1112112112111111112112112111",
-            "1222222112222112222112222221",
-            "1211111111112112111111111121",
-            "1211111111112112111111111121",
-            "1222222222222222222222222221",
-            "1111111111111111111111111111",
-        ]
-        
-        for row_idx, row_str in enumerate(maze_layout):
-            for col_idx, char in enumerate(row_str):
-                maze[row_idx, col_idx] = int(char)
-        
-        return jnp.array(maze, dtype=jnp.int32)
     
     def _create_maze_background(self) -> jnp.ndarray:
         """Create static background with maze walls."""
@@ -1190,7 +1417,7 @@ class PacmanRenderer(JAXGameRenderer):
         # Render maze elements
         wall_mask = self.SHAPE_MASKS["wall"]
         pellet_dot_mask = self.SHAPE_MASKS["pellet_dot"]
-        pellet_power_mask = self.SHAPE_MASKS["pellet_power"]
+        # pellet_power_mask is now accessed dynamically via self.SHAPE_MASKS["pellet_power"][frame]
         digit_masks = self.SHAPE_MASKS["digits"]
         
         # Draw tiles
@@ -1210,22 +1437,25 @@ class PacmanRenderer(JAXGameRenderer):
             )
             
             # Draw dot (centered)
-            # Dot is 2x2, TILE_SIZE is 8 -> offset 3
+            # Dot is pre-centered in 8x8 sprite
             is_dot = jnp.logical_and(tile_val == 2, state.pellets_collected[row, col] == 0)
             raster_state = jax.lax.cond(
                 is_dot,
-                lambda r: self.jr.render_at(r, x + 3, y + 3, pellet_dot_mask),
+                lambda r: self.jr.render_at(r, x, y, pellet_dot_mask),
                 lambda r: r,
                 raster_state
             )
             
-            # Draw power pellet (centered)
-            # Power pellet is 4x4 or 6x6, TILE_SIZE is 8 -> offset 1 or 2
-            # Assuming 4x4 -> offset 2
+            # Draw power pellet
             is_power = jnp.logical_and(tile_val == 3, state.pellets_collected[row, col] == 0)
+            
+            # Blink logic
+            power_frame = (state.step_counter // 10) % 2
+            power_mask = self.SHAPE_MASKS["pellet_power"][power_frame]
+            
             raster_state = jax.lax.cond(
                 is_power,
-                lambda r: self.jr.render_at(r, x + 1, y + 1, pellet_power_mask),
+                lambda r: self.jr.render_at(r, x, y, power_mask),
                 lambda r: r,
                 raster_state
             )
@@ -1235,18 +1465,29 @@ class PacmanRenderer(JAXGameRenderer):
         # Draw all tiles
         num_tiles = self.consts.MAZE_HEIGHT * self.consts.MAZE_WIDTH
         raster = jax.lax.fori_loop(0, num_tiles, render_tile, raster)
+
+        # Check if dying
+        is_dying = state.player_state == 1
         
-        # Draw player
-        player_dir_idx = state.player_direction
-        player_frame = state.player_animation_frame
-        # Player sprite indices: 0-1=right, 2-3=left, 4-5=up, 6-7=down
-        player_sprite_idx = player_dir_idx * 2 + player_frame
-        player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
-        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
-        
-        
-        # Draw ghosts
-        frightened_frame = (state.step_counter // 10) % 2
+        def render_alive(r):
+            player_dir_idx = state.player_direction
+            player_frame = state.player_animation_frame
+            # Use pre-computed lookup table
+            base_sprite_idx = self.consts.SPRITE_LOOKUP[0][player_dir_idx]
+            player_sprite_idx = base_sprite_idx + player_frame
+            player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
+            return self.jr.render_at(r, state.player_x, state.player_y, player_mask)
+            
+        def render_dying(r):
+            # Calculate death frame (0 to 11)
+            progress = (self.consts.DEATH_DURATION - state.death_timer) / self.consts.DEATH_DURATION
+            frame = (progress * 12).astype(jnp.int32)
+            frame = jnp.clip(frame, 0, 11)
+            
+            death_mask = self.SHAPE_MASKS["player_death"][frame]
+            return self.jr.render_at(r, state.player_x, state.player_y, death_mask)
+            
+        raster = jax.lax.cond(is_dying, render_dying, render_alive, raster)
         
         # Helper to draw ghost
         def draw_ghost(g_idx, r):
@@ -1256,20 +1497,41 @@ class PacmanRenderer(JAXGameRenderer):
             # Animation frame for normal ghosts
             anim_frame = (state.step_counter // 10) % 2
             
+            # Get ghost direction index
+            g_dir = g[2].astype(jnp.int32)
+            
+            # Lookup sprite offset for direction
+            g_base_idx = self.consts.SPRITE_LOOKUP[1][g_dir]
+            g_sprite_idx = g_base_idx + anim_frame
+            
+            # Frightened flashing (Blue/White) near end
+            is_flashing = jnp.logical_and(state.frightened_timer < 60, (state.step_counter // 8) % 2 == 0)
+            frightened_idx = jnp.where(is_flashing, 2 + anim_frame, anim_frame)
+
             g_mask = jax.lax.switch(
                 g[3].astype(jnp.int32),
                 [
                     # 0: Normal
                     lambda: [
-                        lambda: self.SHAPE_MASKS["ghost_blinky"][anim_frame],
-                        lambda: self.SHAPE_MASKS["ghost_pinky"][anim_frame],
-                        lambda: self.SHAPE_MASKS["ghost_inky"][anim_frame],
-                        lambda: self.SHAPE_MASKS["ghost_clyde"][anim_frame],
+                        lambda: self.SHAPE_MASKS["ghost_blinky"][g_sprite_idx],
+                        lambda: self.SHAPE_MASKS["ghost_pinky"][g_sprite_idx],
+                        lambda: self.SHAPE_MASKS["ghost_inky"][g_sprite_idx],
+                        lambda: self.SHAPE_MASKS["ghost_clyde"][g_sprite_idx],
                     ][g_idx](),
                     # 1: Frightened
-                    lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_frame],
+                    lambda: self.SHAPE_MASKS["ghost_frightened"][frightened_idx],
                     # 2: Eaten (Eyes)
-                    lambda: self.SHAPE_MASKS["ghost_eyes"][g[2].astype(jnp.int32)] # Direction
+                    lambda: jax.lax.switch(
+                        g_dir,
+                        [
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][0], # NOOP -> Right
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][0], # FIRE -> Right
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][2], # UP
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][0], # RIGHT
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][1], # LEFT
+                            lambda: self.SHAPE_MASKS["ghost_eyes"][3], # DOWN
+                        ]
+                    )
                 ]
             )
             return self.jr.render_at(r, g[0], g[1], g_mask)
@@ -1301,4 +1563,39 @@ class PacmanRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, 6, draw_digit, raster)
         
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        # Draw Level Indicator (Top Right)
+        level = state.level
+        level_x = 130
+        level_y = 2
+        
+        def draw_level_digit(i, r_val):
+            divisor = jnp.power(10, i)
+            digit = (level // divisor) % 10
+            should_draw = jnp.logical_or(level >= divisor, i == 0)
+            return jax.lax.cond(
+                should_draw,
+                lambda r: self.jr.render_at(r, level_x + (2 - i) * 8, level_y, digit_masks[digit]),
+                lambda r: r,
+                r_val
+            )
+        raster = jax.lax.fori_loop(0, 3, draw_level_digit, raster)
+
+        # Level Transition Flash
+        is_transitioning = state.level_transition_timer > 0
+        flash_on = (state.level_transition_timer // 4) % 2 == 0
+        
+        # Black screen
+        is_black_screen = jnp.logical_and(is_transitioning, state.level_transition_timer < 10)
+        
+        # Determine final raster
+        final_raster = jax.lax.cond(
+            is_black_screen,
+            lambda: jnp.full_like(raster, self.bg_id),
+            lambda: jax.lax.cond(
+                jnp.logical_and(is_transitioning, flash_on),
+                lambda: jnp.full_like(raster, self.white_id),
+                lambda: raster
+            )
+        )
+        
+        return self.jr.render_from_palette(final_raster, self.PALETTE)
