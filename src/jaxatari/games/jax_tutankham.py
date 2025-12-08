@@ -19,9 +19,40 @@ class TutankhamConstants(NamedTuple):
 
     PLAYER_SIZE: Tuple[int, int] = (5, 10)
 
+    PLAYER_LIVES: int = 3
+
     # Missile constants
     BULLET_SIZE: Tuple[int, int] = (1, 2)
     BULLET_SPEED: int = 8
+    AMMO_SUPPLY: int = 300 # frames until ammo runs out
+
+    MAX_LASER_FLASHES: int = 3
+    LASER_FLASH_COOLDOWN: int = 60  # frames
+
+    # Creature constants
+
+    INACTIVE: int = 0
+    ACTIVE: int = 1
+
+    # Creature Types
+    SNAKE: int = 0
+    SCORPION: int = 1
+    BAT: int = 2
+    TURTLE: int = 3
+    JACKEL: int = 4
+    CONDOR: int = 5
+    LION: int = 6
+    MOTH: int = 7
+    VIRUS: int = 8
+    MONKEY: int = 9
+    MYSTERY: int = 10
+    WEAPON: int = 11
+    
+    CREATURE_SPEED: chex.Array = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])  # speed for each creature type
+    CREATE_POINTS: chex.Array = np.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3])  # points for each creature type
+
+    MAX_CREATURES: int = 3 # max number of creatures on screen at once
+
 
 # ---------------------------------------------------------------------
 # Game State
@@ -29,9 +60,16 @@ class TutankhamConstants(NamedTuple):
 class TutankhamState(NamedTuple):
     player_x: int
     player_y: int
+    player_lives: int
 
     bullet_state: chex.Array #(, 4) array with (x, y, bullet_rotation, bullet_active)
+    laser_flash_count: int # number of laser flashes that can be fired
+    laser_flash_cooldown: int # cooldown timer for next laser flash
     amonition_timer: int # if timer runs out, player can not fire again
+
+    creature_states: chex.Array # (3, 5) array with (x, y, creature_type, active) for each creature
+    last_creature_spawn: int = 0  # time since last creature spawn
+
 
 
 # ---------------------------------------------------------------------
@@ -62,6 +100,15 @@ class TutankhamRenderer(JAXGameRenderer):
             # Clip
             #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
             frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
+
+        # -------------------------
+        # Draw creatures (1×1 pixels)
+        for i in range(self.consts.MAX_CREATURES):
+            cx, cy, creature_type, active = state.creature_states[i]
+            if active == self.consts.ACTIVE:
+                # Clip
+                if 0 <= cx < self.consts.WIDTH and 0 <= cy < self.consts.HEIGHT:
+                    frame[int(cy), int(cx)] = self.consts.PIXEL_COLOR
 
         return frame
 
@@ -94,11 +141,26 @@ class JaxTutankham(JaxEnvironment):
     def reset(self, key=None):
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
+        player_lives = self.consts.PLAYER_LIVES
+        amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = np.array([0, 0, 0, False])
-        amonition_timer = 300
+        creature_states = np.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        last_creature_spawn = 0
+        laser_flash_count = self.consts.MAX_LASER_FLASHES
+        laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
+        
 
-        state = TutankhamState(player_x=start_x, player_y=start_y, bullet_state=bullet_state, amonition_timer=amonition_timer)
-        return state, state
+        state = TutankhamState(player_x=start_x, 
+                                player_y=start_y,
+                                player_lives=player_lives,
+                                bullet_state=bullet_state, 
+                                amonition_timer=amonition_timer,
+                                creature_states=creature_states,
+                                last_creature_spawn=last_creature_spawn,
+                                laser_flash_count=laser_flash_count,
+                                laser_flash_cooldown=laser_flash_cooldown
+                               )
+        return state, state #TODO: (EnvObs, EnvState)
 
     # Player Step
     def player_step(
@@ -125,7 +187,7 @@ class JaxTutankham(JaxEnvironment):
     
     
     #Bullet Step
-    def bullet_step(self, tutankham_state, player_x, player_y, bullet_speed, action):
+    def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
 
         def get_rotation(action):
             if action == Action.RIGHTFIRE: return 1
@@ -137,15 +199,13 @@ class JaxTutankham(JaxEnvironment):
                 or (action == Action.RIGHTFIRE)
             )
 
-        bullet = tutankham_state.bullet_state #array with (x, y, bullet_rotation, bullet_active)
-        new_bullet = bullet.copy()
 
-        amonition_timer = tutankham_state.amonition_timer
+        new_bullet = bullet_state.copy() #array with (x, y, bullet_rotation, bullet_active)
 
         
         # --- update existing bullets ---
-        if bullet[3]:
-            bullet_x = bullet[0] + bullet_speed * bullet[2]
+        if bullet_state[3]:
+            bullet_x = bullet_state[0] + self.consts.BULLET_SPEED * bullet_state[2]
             new_bullet[0] = bullet_x
 
             # Deactivate if out of bounds
@@ -154,15 +214,114 @@ class JaxTutankham(JaxEnvironment):
 
 
         # --- firing logic ---
-        bullet_rdy = not bullet[3]
+        bullet_rdy = not bullet_state[3]
 
 
         if space and bullet_rdy and amonition_timer > 0:
             new_bullet = np.array([player_x, player_y, get_rotation(action), True])
 
 
+        amonition_timer -= 1 # TODO: adjust amonition timer
         
         return new_bullet, amonition_timer
+    
+
+    def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, action):
+        
+        laser_flash_cooldown = max(laser_flash_cooldown -1 , 0)
+        if action == Action.UPFIRE and laser_flash_count > 0 and laser_flash_cooldown == 0:
+            new_laser_flash_count = laser_flash_count - 1
+            new_laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
+
+            new_creature_states = creature_states.copy()
+            new_creature_states[:, -1] = 0  # set all creatures to inactive
+            
+            return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count
+
+        return creature_states, laser_flash_cooldown, laser_flash_count
+    
+    # creature step
+    def creature_step(self, creature_states, last_creature_spawn):
+        
+        def spawn_creature(creature_states, last_creature_spawn):
+            # last_creature_spawn = vergangene Zeit (in Sekunden) seit letztem Frame
+
+            # Parameter # TODO: REMOVE HARDCODED VALUES
+            MAX_ACTIVE = 3
+            GROWTH = 0.0003           # Chance steigt pro Sekunde um 5%
+            MAX_PROB = 0.8          # Deckelung (optional)
+
+            # 1) aktive Creatures zählen
+            active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
+            if active_count >= MAX_ACTIVE:
+                return creature_states, last_creature_spawn  # nichts tun, Limit erreicht
+
+            # 2) Spawn-Timer erhöhen
+            last_creature_spawn += 1
+
+            # 3) Spawn-Chance berechnen
+            spawn_chance = last_creature_spawn * GROWTH
+            spawn_chance = min(spawn_chance, MAX_PROB)
+
+            # 4) treffen wir den Zufall?
+            if np.random.random() > spawn_chance:
+                return creature_states, last_creature_spawn  # nein → nichts machen
+
+            # 5) Ja → wir spawnen einen!
+            new_creature_states = creature_states.copy()
+
+            for i in range(self.consts.MAX_CREATURES):
+                x, y, creature_type, active = creature_states[i]
+                if active == self.consts.INACTIVE: # TODO: find correct spawner x,y
+                    new_x = 0
+                    new_y = np.random.randint(0, self.consts.HEIGHT)
+                    new_creature_type = np.random.randint(0, len(self.consts.CREATE_POINTS))
+                    new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
+
+                    # Timer zurücksetzen: Start von vorne
+                    last_creature_spawn = 0
+                    break
+
+            return new_creature_states, last_creature_spawn
+        
+        def move_creature(creature_state):
+            x, y, creature_type, active = creature_state
+
+            if active:
+                speed = self.consts.CREATURE_SPEED[int(creature_type)]
+                x += speed  # Move right for simplicity
+
+                # Deactivate if out of bounds
+                if x >= self.consts.WIDTH:
+                   active = self.consts.INACTIVE
+
+            return np.array([x, y, creature_type, active])
+        
+
+        
+        
+        creature_states, last_creature_spawn = spawn_creature(creature_states, last_creature_spawn)
+        new_creature_states = creature_states.copy()
+
+        for i in range(self.consts.MAX_CREATURES):
+            new_creature_states[i] = move_creature(creature_states[i])
+
+        return new_creature_states, last_creature_spawn
+    
+    # TODO:
+    def detect_creature_deaths(old_states, new_states):
+        """Erkennt Todes-Events: active: 1 → 0."""
+        old_active = old_states[:, 3] == 1.0
+        new_active = new_states[:, 3] == 1.0
+        died = jnp.logical_and(old_active, jnp.logical_not(new_active))
+        return died  # shape: (MAX_CREATURES,)
+
+    def update_score(score, deaths, new_states, creature_points):
+        creature_types = new_states[:, 2].astype(int)
+        gained_points = jnp.sum(creature_points[creature_types] * deaths)
+        return score + gained_points
+
+
 
 
 
@@ -172,14 +331,37 @@ class JaxTutankham(JaxEnvironment):
     def step(self, state: TutankhamState, action: int):
 
         player_x, player_y = state.player_x, state.player_y
+        bullet_state = state.bullet_state
+        creature_states = state.creature_states
+        laser_flash_count = state.laser_flash_count
+        last_creature_spawn = state.last_creature_spawn
+        laser_flash_cooldown = state.laser_flash_cooldown
+        amonition_timer = state.amonition_timer
 
         player_x, player_y = self.player_step(player_x, player_y, action)
 
-        bullet_states, bullet_rdy =self.bullet_step(state, player_x, player_y, self.consts.BULLET_SPEED, action)
+        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
-        state = TutankhamState(player_x=player_x, player_y=player_y, bullet_state=bullet_states, amonition_timer=bullet_rdy)
+        creature_states, laser_flash_cooldown, laser_flash_count = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, action)
+
+        creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)
+        
+        player_lives = state.player_lives # TODO: implement player lives logic
+
+        state = TutankhamState(player_x=player_x, 
+                               player_y=player_y,
+                               player_lives=player_lives,
+                               bullet_state=bullet_state, 
+                               amonition_timer=amonition_timer, 
+                               creature_states=creature_states,
+                               last_creature_spawn=last_creature_spawn,
+                               laser_flash_count=laser_flash_count,
+                               laser_flash_cooldown=laser_flash_cooldown
+                               )
 
         reward = 0.0
+        
+        #done = self._get_done(state) #TODO: uncomment later
         done = False
         info = None
 
@@ -204,3 +386,10 @@ class JaxTutankham(JaxEnvironment):
             shape=(2,),
             dtype=np.int32,
         )
+    
+    def _get_done(self, state: TutankhamState) -> bool:
+        if state.player_lives <= 0: # Game Over
+            return False
+        # TODO: beat final level condition
+
+        return True
