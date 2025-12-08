@@ -269,7 +269,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         from jaxatari.games.pacmanMaps.nodes import NodeGroup
         maze_file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze2.txt"
+            "pacmanMaps", "maze1.txt"
         )
         
         # Check if maze file exists, raise error if not found
