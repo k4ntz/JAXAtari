@@ -33,6 +33,7 @@ class DefenderConstants(NamedTuple):
     GAME_HEIGHT: int = 135
     GAME_AREA_TOP: int = 38
     GAME_AREA_BOTTOM: int = GAME_AREA_TOP + GAME_HEIGHT
+    GAME_TICK_PER_FRAME: float = 0.030
 
     # Camera
     CAMERA_SCREEN_X: int = 80
@@ -99,7 +100,7 @@ class DefenderConstants(NamedTuple):
     BOMBER_AMOUNT: Tuple[int, int, int, int, int] = (1, 2, 2, 2, 2)
     MAX_BOMBER_AMOUNT: int = 1
     BOMBER_Y_SPEED: float = -0.2
-    BOMB_TTL_IN_SEC: float = 20.0  # Time to live
+    BOMB_TTL_IN_SEC: float = 1.0  # Time to live
 
     # Lander
     LANDER_AMOUNT: Tuple[int, int, int, int, int] = (18, 18, 19, 20, 20)
@@ -156,7 +157,7 @@ class DefenderConstants(NamedTuple):
             [340, 20, POD, 0, 0],
             [350, 30, POD, 0, 0],
             # Bomber
-            # x, y, type, bomb remaining time to live, ..
+            # x, y, type, bomb remaining time to live, is_facing_right
             [300, 50, BOMBER, 0, 0],
             # Inactives
             [100, 50, SWARMERS, 0, 0],
@@ -916,7 +917,7 @@ class JaxDefender(
         bomber = enemy_states[index]
         x_pos = bomber[0]
         y_pos = bomber[1]
-        direction_right = bomber[3]
+        direction_right = bomber[4]
 
         speed_x = self.consts.ENEMY_SPEED
         # acceleration in x direction
@@ -947,7 +948,7 @@ class JaxDefender(
             speed_x + space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
             self.consts.BOMBER_Y_SPEED,
         )
-        new_bomber = [x_pos, y_pos, bomber[2], direction_right, bomber[4]]
+        new_bomber = [x_pos, y_pos, bomber[2], bomber[3], direction_right]
         enemy_states = enemy_states.at[index].set(new_bomber)
         return enemy_states
     
@@ -1132,8 +1133,10 @@ class JaxDefender(
             s_state = jax.lax.cond(
                 e_type == self.consts.BOMBER, lambda: _bomber(), lambda: _normal()
             )
+
             bullet_x = e_x + self.consts.ENEMY_WIDTH / 2
             bullet_y = e_y + self.consts.ENEMY_WIDTH / 2
+
             return s_state._replace(
                 bullet_x=bullet_x,
                 bullet_y=bullet_y,
@@ -1152,7 +1155,7 @@ class JaxDefender(
 
         # Update position
         speed_x = b_dir_x * self.consts.BULLET_SPEED
-        speed_y = b_dir_y + self.consts.BULLET_SPEED
+        speed_y = b_dir_y * self.consts.BULLET_SPEED
         b_x, b_y = self._move_with_space_ship(
             state, b_x, b_y, speed_x, speed_y, self.consts.BULLET_MOVE_WITH_SPACE_SHIP
         )
@@ -1165,11 +1168,11 @@ class JaxDefender(
             mask = (state.enemy_states[:, 2] == self.consts.BOMBER) & (
                 state.enemy_states[:, 3] > 0.0
             )
-            match = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0][0]
-            enemy = state.enemy_states[match]
-            new_ttl = enemy[3] - 0.016
+            match = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0]
+            enemy = state.enemy_states[match[0]]
+            new_ttl = enemy[3] - self.consts.GAME_TICK_PER_FRAME
 
-            return self._update_enemy(state, match, arg1=new_ttl)
+            return self._update_enemy(state, match[0], arg1=new_ttl)
 
         state = jax.lax.cond(is_bomber, lambda: _bomber(), lambda: state)
 
@@ -1185,21 +1188,19 @@ class JaxDefender(
         is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
 
         def _ttl_death():
-            mask = (state.enemy_states[:, 2] == self.consts.BOMBER) & (
-                state.enemy_states[:, 3] > 0.0
-            )
+            mask = (state.enemy_states[:, 2] == self.consts.BOMBER) & (state.enemy_states[:, 3] > 0.0)
             matches = jnp.nonzero(mask, size=self.consts.MAX_BOMBER_AMOUNT, fill_value=-1)[0]
-            return matches[0] != -1
+            return matches[0] == -1
 
         is_ttl_death = jax.lax.cond(is_bomber, lambda: _ttl_death(), lambda: False)
 
         # Check if it is on_screen
-        is_onscreen = self.dh._is_onscreen_from_game(
+        is_offscreen = jnp.logical_not(self.dh._is_onscreen_from_game(
             state, b_x, b_y, self.consts.BULLET_WIDTH, self.consts.BULLET_HEIGHT
-        )
+        ))
 
         def _reset_ttl() -> DefenderState:
-            mask = state.enemy_states[:, 2] == self.consts.BOMBER
+            mask = (state.enemy_states[2] == self.consts.BOMBER) & (state.enemy_states[3] > 0.0)
 
             def _update_bombers(state, idx):
                 return jax.lax.cond(idx != -1, lambda: (self._update_enemy(state, idx, arg1=0.0), None), lambda: (state, None))
@@ -1208,20 +1209,13 @@ class JaxDefender(
             return jax.lax.scan(_update_bombers, state, matches)[0]
 
         state = jax.lax.cond(
-            is_ttl_death,
-            lambda: state._replace(bullet_state=self.consts.BULLET_STATE_INACTIVE),
+            jnp.logical_or(is_ttl_death, is_offscreen),
+            lambda: _reset_ttl()._replace(bullet_state=self.consts.BULLET_STATE_INACTIVE),
             lambda: state,
-        )
-
-        state = jax.lax.cond(
-            is_onscreen,
-            lambda: state,
-            lambda: _reset_ttl()._replace(
-                bullet_state=self.consts.BULLET_STATE_INACTIVE
-            ),
         )
 
         return state
+
 
     def _bullet_step(self, state: DefenderState) -> DefenderState:
         bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
