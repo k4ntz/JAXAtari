@@ -28,7 +28,7 @@ class DunkConstants:
     WINDOW_WIDTH: int = 250
     WINDOW_HEIGHT: int = 150
     BALL_SIZE: Tuple[int, int] = (3,3)
-    BALL_START: Tuple [int, int] = (100, 70)
+    BALL_START: Tuple [int, int] = (122, 100)
     JUMP_STRENGTH: int = 5
     PLAYER_MAX_SPEED: int = 2
     PLAYER_Y_MIN: int = 20
@@ -39,6 +39,7 @@ class DunkConstants:
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (40, 210, 81) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
     MATCH_STEPS: int = 600  # number of steps per match (tunable)
+    MAX_SCORE: int = 10
     DUNK_RADIUS: int = 18
     BLOCK_RADIUS: int = 14
 
@@ -497,7 +498,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             b = b.replace(x=shooter_x.astype(jnp.float32), y=shooter_y.astype(jnp.float32), vel_x=shoot_vel[0], vel_y=shoot_vel[1], holder=PlayerID.NONE, target_x=target_pos[0], target_y=target_pos[1], is_goal=is_goal, shooter_id=shooter_id, receiver_id=PlayerID.NONE)
             b = jax.lax.cond(blocked_by != PlayerID.NONE, lambda bb: bb.replace(holder=blocked_by, vel_x=0.0, vel_y=0.0, is_goal=False, shooter_id=PlayerID.NONE), lambda bb: bb, b)
             # If dunk, bump is_goal to True and make target the rim
-            b = jax.lax.cond(is_dunk, lambda bb: bb.replace(is_goal=True, target_x=basket_pos[0], target_y=basket_pos[1]), lambda bb: bb)
+            b = jax.lax.cond(is_dunk, lambda bb: bb.replace(is_goal=True, target_x=basket_pos[0], target_y=basket_pos[1]), lambda bb: bb, b)
             return b
 
         ball_state = jax.lax.cond(
@@ -540,7 +541,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             is_p1_scorer = (s.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (s.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)  
             new_player_score = s.player_score + is_p1_scorer
             new_enemy_score = s.enemy_score + (1 - is_p1_scorer)         
-            new_state = self._init_state(reset_key).replace(player_score=new_player_score, enemy_score=new_enemy_score)
+            new_state = self._init_state(reset_key).replace(player_score=new_player_score, enemy_score=new_enemy_score, step_counter=s.step_counter)
             new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
             return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
 
@@ -647,6 +648,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # 4. Process ball flight, goals, misses, and possession changes
         final_state = self._update_ball(new_state_2)
 
+        final_state = final_state.replace(step_counter=final_state.step_counter + 1)
+
         # 5. Generate outputs
         observation = self._get_observation(final_state)
         reward = self._get_reward(state, final_state)
@@ -662,8 +665,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_done(self, state: DunkGameState) -> bool:
         """Determines if the environment state is a terminal state"""
-        # Placeholder: game is never done for now
-        return False
+        is_max_steps_reached = state.step_counter >= self.constants.MATCH_STEPS
+        is_max_score_reached = (state.player_score >= self.constants.MAX_SCORE) | (state.enemy_score >= self.constants.MAX_SCORE)
+        return is_max_steps_reached | is_max_score_reached
 
     def _get_info(self, state: DunkGameState) -> DunkInfo:
         """Extracts information from the environment state."""
