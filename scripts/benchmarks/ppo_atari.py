@@ -15,6 +15,11 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import gymnasium as gym
 
+# before import jaxatari, set jax to use cpu only to avoid potential GPU memory conflicts
+# We don't make use of GPU acceleration of the env anyway
+import jax
+jax.config.update('jax_platform_name', 'cpu')
+
 from cleanrl_atari_wrapper import (  # isort:skip
     ClipRewardEnv,
     EpisodicLifeEnv,
@@ -202,6 +207,7 @@ if __name__ == "__main__":
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
+    done_num = 0
 
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
@@ -210,7 +216,6 @@ if __name__ == "__main__":
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
-        done_num = 0
         for step in range(0, args.num_steps):
             global_step += args.num_envs
             obs[step] = next_obs
@@ -238,12 +243,11 @@ if __name__ == "__main__":
             # Had to rewrite this, since final_info was never returned
             if next_done.any():
                 done_num += next_done.sum().item()
-                if done_num == args.num_envs:
+                if done_num >= args.num_envs:
                     done_num = 0
-                    print("all_done")
                     if "episode" in infos:
-                        avg_ep_ret = infos["episode"]["r"].sum() / next_done.sum().item()
-                        avg_ep_len = infos["episode"]["l"].sum() / next_done.sum().item()
+                        avg_ep_ret = infos["episode"]["r"].mean().item()
+                        avg_ep_len = infos["episode"]["l"].mean().item()
                         print(f"global_step={global_step}, episodic_return={avg_ep_ret}")
                         writer.add_scalar("charts/episodic_return", avg_ep_ret, global_step)
                         writer.add_scalar("charts/episodic_length", avg_ep_len, global_step)
