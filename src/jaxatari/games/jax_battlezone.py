@@ -59,13 +59,17 @@ What do we need to research about each enemy (+player)?
 - turn speed: 2pi/2048 rad/frame (512 frames for a quarter turn)
 
 ## Flying Saucer
+- score points: 5000
 
 ## Supertank
+- score points: 3000
 
 ## Fighter Jet
+- score points: 2000
 
 ## Projectile
 - speed: 0.5 units per frame
+
 
 """
 import matplotlib.pyplot as plt

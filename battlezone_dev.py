@@ -148,19 +148,45 @@ def build_action_mapper(env) -> Tuple[dict, int]:
     return meaning_to_id, noop_id
 
 def resolve_action(keys: set, meaning_to_id: dict, noop_id: int) -> int:
-    # Choose one direction deterministically if multiple are held
-    base = None
+    # Support diagonal combinations (UP+RIGHT -> UPRIGHT, UP+LEFT -> UPLEFT, etc.)
+    # and prefer the FIRE variants if FIRE is also held.
+    dirs = {d for d in ("UP", "DOWN", "LEFT", "RIGHT") if d in keys}
+    fire = "FIRE" in keys
+
+    candidates = []
+
+    # Diagonals (check common combos first)
+    if "UP" in dirs and "RIGHT" in dirs:
+        if fire:
+            candidates.append("UPRIGHTFIRE")
+        candidates.append("UPRIGHT")
+    if "UP" in dirs and "LEFT" in dirs:
+        if fire:
+            candidates.append("UPLEFTFIRE")
+        candidates.append("UPLEFT")
+    if "DOWN" in dirs and "RIGHT" in dirs:
+        if fire:
+            candidates.append("DOWNRIGHTFIRE")
+        candidates.append("DOWNRIGHT")
+    if "DOWN" in dirs and "LEFT" in dirs:
+        if fire:
+            candidates.append("DOWNLEFTFIRE")
+        candidates.append("DOWNLEFT")
+
+    # Single directions — choose by priority if multiple orthogonal directions present
     priority = ["UP", "DOWN", "LEFT", "RIGHT"]
     for p in priority:
-        if p in keys:
-            base = p
+        if p in dirs:
+            if fire:
+                candidates.append(p + "FIRE")
+            candidates.append(p)
             break
-    fire = "FIRE" in keys
-    candidates = []
-    if base and fire: candidates.append(base + "FIRE")
-    if base: candidates.append(base)
-    if fire: candidates.append("FIRE")
+
+    # Fire-alone, then NOOP fallback
+    if fire:
+        candidates.append("FIRE")
     candidates.append("NOOP")
+
     for name in candidates:
         if name in meaning_to_id:
             return meaning_to_id[name]
@@ -233,7 +259,7 @@ def main():
 
     # Print the available key commands once on startup
     print("Controls:")
-    print("  Arrows: movement (mapped to ALE action meanings)")
+    print("  Arrows: movement (mapped to ALE action meanings)") # TODO: fix mapping: UPLEFT etc    TODO: actually test whether the mappings are correct
     print("  Space: FIRE")
     print("  P: pause/resume stepping")
     print("  +: advance one tick when paused")
@@ -322,7 +348,7 @@ def main():
                         # open logfile for append
                         if LOGFILE_PATH:
                             try:
-                                log_file = open(LOGFILE_PATH, "a")
+                                log_file = open(LOGFILE_PATH, "w")
                                 log_file.write(f"--- LOG START {time.asctime()} ---\n")
                                 log_file.flush()
                             except Exception as e:
@@ -424,6 +450,21 @@ def main():
                     v = int(ram[idx])
                     if log_file:
                         log_file.write(f"{name} (0x{disp_addr:02X}): {v}\n")
+
+                # Also log current input state as booleans for UP/DOWN/LEFT/RIGHT/FIRE
+                inputs_state = {
+                    "UP": "UP" in pressed,
+                    "DOWN": "DOWN" in pressed,
+                    "LEFT": "LEFT" in pressed,
+                    "RIGHT": "RIGHT" in pressed,
+                    "FIRE": "FIRE" in pressed,
+                }
+                if log_file:
+                    log_file.write(
+                        f"INPUTS: UP={inputs_state['UP']} DOWN={inputs_state['DOWN']} "
+                        f"LEFT={inputs_state['LEFT']} RIGHT={inputs_state['RIGHT']} FIRE={inputs_state['FIRE']}\n"
+                    )
+
                 if log_file:
                     log_file.write("---\n")
                     log_file.flush()
