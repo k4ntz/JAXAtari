@@ -68,7 +68,25 @@ def _get_default_asset_config() -> tuple:
             'pellet_power/pellet_power_on.npy',
             'pellet_power/pellet_power_off.npy'
         ]},
-        {'name': 'wall', 'type': 'single', 'file': 'wall/0.npy'},
+        {'name': 'wall', 'type': 'group', 'files': [
+            'wall/wall_0.npy',   
+            'wall/wall_1.npy',   
+            'wall/wall_2.npy',   
+            'wall/wall_3.npy',   
+            'wall/wall_4.npy',   
+            'wall/wall_5.npy',   
+            'wall/wall_6.npy',   
+            'wall/wall_7.npy',   
+            'wall/wall_8.npy',   
+            'wall/wall_9.npy',   
+            'wall/wall_10.npy',  
+            'wall/wall_11.npy',  
+            'wall/wall_12.npy',  
+            'wall/wall_13.npy',  
+            'wall/wall_14.npy',  
+            'wall/wall_15.npy',  
+        ]},
+        {'name': 'ghost_door', 'type': 'single', 'file': 'ghost_door.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
@@ -102,7 +120,6 @@ def _get_sprite_lookup() -> chex.Array:
     ghost_lookup[Action.LEFT] = 2
     ghost_lookup[Action.UP] = 4
     ghost_lookup[Action.DOWN] = 6
-    
     return jnp.array(lookup, dtype=jnp.int32), jnp.array(ghost_lookup, dtype=jnp.int32)
 
 
@@ -113,6 +130,7 @@ class PacmanConstants(NamedTuple):
     
     # Tile size for maze (8x8 pixels per tile)
     TILE_SIZE: int = 8
+    ANIMATION_SPEED: int = 5 # Frames per animation step
     
     # Maze dimensions in tiles (224/8 = 28, 288/8 = 36)
     MAZE_WIDTH: int = 28  # 28 tiles wide
@@ -311,6 +329,46 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                     self.ghost_house_node_idx = jnp.array(i, dtype=jnp.int32)
                     break
 
+        # Pre-compute which edges correspond to crossing the ghost door (or entering ghost house)
+        num_nodes, num_actions = self.neighbor_lookup.shape
+        door_edge_mask = np.zeros((num_nodes, num_actions), dtype=np.bool_)
+        ghost_entry_mask = np.zeros((num_nodes, num_actions), dtype=np.bool_)
+
+        # Helper to get tile type at a node
+        def tile_type_for_node(node):
+            tx = int(node.position.x) // self.consts.TILE_SIZE
+            ty = int(node.position.y) // self.consts.TILE_SIZE
+            if 0 <= tx < self.consts.MAZE_WIDTH and 0 <= ty < self.consts.MAZE_HEIGHT:
+                return int(self.consts.MAZE_LAYOUT[ty, tx])
+            return 1  # treat out-of-bounds as wall
+
+        node_tile_types = [tile_type_for_node(node) for node in self.node_group.nodeList]
+
+        for n in range(num_nodes):
+            tile_n = node_tile_types[n]
+            for a in range(num_actions):
+                nb = int(self.neighbor_lookup[n, a])
+                if nb < 0:
+                    continue
+                tile_nb = node_tile_types[nb]
+
+                # Option 1: treat any edge that touches a door node as a "door edge"
+                if tile_n == 5 or tile_nb == 5:
+                    door_edge_mask[n, a] = True
+                
+                # Option 2: Ghost entry mask (Block entry to Door/House from Outside)
+                is_house_complex_n = (tile_n == 4 or tile_n == 5)
+                is_house_complex_nb = (tile_nb == 4 or tile_nb == 5)
+                
+                if is_house_complex_nb and not is_house_complex_n:
+                     # Attempting to enter House/Door from Outside -> BLOCK for non-eaten ghosts
+                     ghost_entry_mask[n, a] = True
+
+        # Store mask as JAX array; used only for Pacman
+        self.player_door_edge_mask = jnp.array(door_edge_mask, dtype=jnp.bool_)
+        # Store ghost one-way mask
+        self.ghost_entry_mask = jnp.array(ghost_entry_mask, dtype=jnp.bool_)
+
     def _load_maze_from_file(self, maze_file_path: str) -> jnp.ndarray:
         """
         Loads maze layout from the provided maze file path.
@@ -346,6 +404,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                         maze[row, col] = 3
                     elif char == 'H':
                         maze[row, col] = 4
+                    elif char == 'D':
+                        maze[row, col] = 5
                     else:
                         maze[row, col] = 0
         return jnp.array(maze, dtype=jnp.int32)
@@ -507,7 +567,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             
             # Update animation frames
             state = state._replace(
-                player_animation_frame=(state.player_animation_frame + 1) % 2,
+                player_animation_frame=(state.step_counter // self.consts.ANIMATION_SPEED) % 2,
                 step_counter=state.step_counter + 1,
                 key=new_state_key,
             )
@@ -668,12 +728,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         new_current_idx = jnp.where(overshot, target_node_idx, current_node_idx)
         
         # Get new target from input direction (equivalent to getNewTarget(direction) in pacman.py)
+        # Raw graph neighbors
         new_target_from_action = self.neighbor_lookup[new_current_idx, action]
+        new_target_from_current_dir = self.neighbor_lookup[new_current_idx, state.player_direction]
+
+        # Block edges that go through the door for Pacman only
+        # door_edge_mask[new_current_idx, action] == True -> treat as no neighbor (-1)
+        blocked_action = self.player_door_edge_mask[new_current_idx, action]
+        blocked_curr  = self.player_door_edge_mask[new_current_idx, state.player_direction]
+
+        new_target_from_action = jnp.where(blocked_action, -1, new_target_from_action)
+        new_target_from_current_dir = jnp.where(blocked_curr, -1, new_target_from_current_dir)
+
         has_target_from_action = new_target_from_action >= 0
         valid_action = jnp.logical_and(jnp.logical_not(is_noop), has_target_from_action)
         
         # Get new target from current direction (equivalent to getNewTarget(self.direction))
-        new_target_from_current_dir = self.neighbor_lookup[new_current_idx, state.player_direction]
         has_target_from_current_dir = new_target_from_current_dir >= 0
         valid_current_dir = jnp.logical_and(state.player_direction != Action.NOOP, has_target_from_current_dir)
         
@@ -846,6 +916,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             # Choose next target when at node
             # Simple AI: pick random valid neighbor
             valid_neighbors = self.neighbor_lookup[new_current, :]
+
+            # Apply One-Way Door restriction for Ghosts
+            # If ghost is NOT eaten (state != 2), it cannot traverse "entry" edges into the house
+            is_restricted = gstate != 2
+            entry_mask = self.ghost_entry_mask[new_current, :]
+            
+            # If restricted and edge is an entry edge, treat as invalid (-1)
+            # mask: True if edge should be blocked
+            should_block = jnp.logical_and(is_restricted, entry_mask)
+            
+            valid_neighbors = jnp.where(should_block, -1, valid_neighbors)
             
             # Filter valid directions (not -1)
             valid_mask = valid_neighbors >= 0
@@ -1390,6 +1471,50 @@ class PacmanRenderer(JAXGameRenderer):
 
         # Pre-render static maze background (walls and ghost house)
         self.maze_background = self._create_maze_background()
+
+        # NEW: precompute per-tile wall connectivity mask indices (0–15)
+        self.wall_mask_indices = self._compute_wall_masks()
+    
+    def _compute_wall_masks(self) -> jnp.ndarray:
+        """Precompute 4-way connectivity mask for wall-like tiles.
+
+        Bit layout (0–15):
+          bit 0: neighbor wall above (up)
+          bit 1: neighbor wall to the right
+          bit 2: neighbor wall below (down)
+          bit 3: neighbor wall to the left
+        """
+        import numpy as np
+
+        layout_np = np.array(self.consts.MAZE_LAYOUT)  # (H, W)
+        H, W = layout_np.shape
+
+        def is_wall_like(val: int) -> bool:
+            # Treat these tile types as solid walls for connectivity purposes.
+            # 1 = normal wall
+            return val == 1
+
+        mask_indices = np.zeros_like(layout_np, dtype=np.int32)
+
+        for row in range(H):
+            for col in range(W):
+                if not is_wall_like(int(layout_np[row, col])):
+                    continue  # leave 0 for non-wall tiles
+
+                up    = is_wall_like(int(layout_np[row - 1, col])) if row > 0 else False
+                right = is_wall_like(int(layout_np[row, col + 1])) if col < W - 1 else False
+                down  = is_wall_like(int(layout_np[row + 1, col])) if row < H - 1 else False
+                left  = is_wall_like(int(layout_np[row, col - 1])) if col > 0 else False
+
+                mask = (
+                    (1 if up else 0)   |  # bit 0
+                    (2 if right else 0)|  # bit 1
+                    (4 if down else 0) |  # bit 2
+                    (8 if left else 0)    # bit 3
+                )
+                mask_indices[row, col] = mask
+
+        return jnp.array(mask_indices, dtype=jnp.int32)
     
     def _create_maze_background(self) -> jnp.ndarray:
         """Create static background with maze walls."""
@@ -1415,7 +1540,8 @@ class PacmanRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
         # Render maze elements
-        wall_mask = self.SHAPE_MASKS["wall"]
+        wall_masks = self.SHAPE_MASKS["wall"]
+        door_mask = self.SHAPE_MASKS["ghost_door"]
         pellet_dot_mask = self.SHAPE_MASKS["pellet_dot"]
         # pellet_power_mask is now accessed dynamically via self.SHAPE_MASKS["pellet_power"][frame]
         digit_masks = self.SHAPE_MASKS["digits"]
@@ -1428,14 +1554,30 @@ class PacmanRenderer(JAXGameRenderer):
             x = col * self.consts.TILE_SIZE
             y = row * self.consts.TILE_SIZE
             
-            # Draw wall
+            # Draw wall / ghost-house walls with connectivity-based sprite
+            def draw_wall(r):
+                mask_idx = self.wall_mask_indices[row, col]  # 0–15
+                wall_mask = wall_masks[mask_idx]
+                return self.jr.render_at(r, x, y, wall_mask)
+
+            # Tiles that should be rendered using wall connectivity
+            is_wall_tile = (tile_val == 1)  # Only normal walls
+
             raster_state = jax.lax.cond(
-                tile_val == 1,
-                lambda r: self.jr.render_at(r, x, y, wall_mask),
+                is_wall_tile,
+                draw_wall,
                 lambda r: r,
                 raster_state
             )
-            
+
+            # Draw door (pink)
+            raster_state = jax.lax.cond(
+                tile_val == 5,   # door tile
+                lambda r: self.jr.render_at(r, x, y, door_mask),
+                lambda r: r,
+                raster_state
+            )
+
             # Draw dot (centered)
             # Dot is pre-centered in 8x8 sprite
             is_dot = jnp.logical_and(tile_val == 2, state.pellets_collected[row, col] == 0)
@@ -1485,6 +1627,22 @@ class PacmanRenderer(JAXGameRenderer):
             frame = jnp.clip(frame, 0, 11)
             
             death_mask = self.SHAPE_MASKS["player_death"][frame]
+            
+            # Rotate mask based on direction (assuming default sprites are RIGHT facing)
+            dir_idx = state.player_direction
+            
+            death_mask = jax.lax.switch(
+                dir_idx,
+                [
+                    lambda: death_mask, # 0: NOOP (Default Right)
+                    lambda: death_mask, # 1: FIRE (Default Right)
+                    lambda: jnp.rot90(death_mask, k=1), # 2: UP (90 CCW)
+                    lambda: death_mask, # 3: RIGHT (No change)
+                    lambda: jnp.fliplr(death_mask), # 4: LEFT (Flip H)
+                    lambda: jnp.rot90(death_mask, k=3), # 5: DOWN (90 CW)
+                ]
+            )
+            
             return self.jr.render_at(r, state.player_x, state.player_y, death_mask)
             
         raster = jax.lax.cond(is_dying, render_dying, render_alive, raster)

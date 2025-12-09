@@ -102,7 +102,7 @@ class NodeGroup(NamedTuple):
     @staticmethod
     def create_node_table(data, nodes_lut, tile_size, xoffset=0, yoffset=0):
         """Create node table from maze data (translated from createNodeTable)."""
-        node_symbols = ['+', 'H', 'o']
+        node_symbols = ['+', 'H', 'o', 'D']
         for row in range(data.shape[0]):
             for col in range(data.shape[1]):
                 if data[row][col] in node_symbols:
@@ -112,8 +112,8 @@ class NodeGroup(NamedTuple):
     @staticmethod
     def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
         """Connect nodes horizontally (translated from connectHorizontally)."""
-        node_symbols = ['+', 'H', 'o']
-        path_symbols = ['.', 'H', 'o']
+        node_symbols = ['+', 'H', 'o', 'D']
+        path_symbols = ['.', 'H', 'o', 'D']
         
         for row in range(data.shape[0]):
             key = None
@@ -157,8 +157,8 @@ class NodeGroup(NamedTuple):
     @staticmethod
     def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
         """Connect nodes vertically (translated from connectVertically)."""
-        node_symbols = ['+', 'H', 'o']
-        path_symbols = ['.', 'H', 'o']
+        node_symbols = ['+', 'H', 'o', 'D']
+        path_symbols = ['.', 'H', 'o', 'D']
         dataT = data.transpose()
         
         for col in range(dataT.shape[0]):
