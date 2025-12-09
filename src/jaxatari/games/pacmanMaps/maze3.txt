@@ -14,7 +14,7 @@ X + . . + . + X X + + . . + . . + . . + . + X X X . X X
 X X X X . X X X X X X X X X X X X X X X X X X X X . X X
 X X X X . X X X X X X X X X X X X X X X X X X X X . X X
 X X X X + . + . . + . . + . . + . . + . . + . . . + X X
-X X X X X X . X X . X X H H H H X X . X X . X X X X X X
+X X X X X X . X X . X X D D D D X X . X X . X X X X X X
 X X X X X X . X X . X X H H H H X X . X X . X X X X X X
 + . . . . . + . . + . . + X X + . . + . . + . . . . . +
 X X X X X X . X X . X X X X X X X X . X X . X X X X X X
