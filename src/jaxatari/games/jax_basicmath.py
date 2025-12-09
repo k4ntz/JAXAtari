@@ -1,18 +1,15 @@
+import os
 from functools import partial
 from typing import NamedTuple, Tuple
-import os
-
 import jax
+import jax.lax
 import jax.numpy as jnp
 import chex
-from jax import lax
-from jax import random as jrandom
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.rendering import jax_rendering_utils as render_utils
-import numpy as np
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _get_default_asset_config() -> tuple:
     num_files = [f'num{i}.npy' for i in range(16)]
@@ -45,11 +42,14 @@ class BasicMathConstants(NamedTuple):
         "/"
     ]
 
+    INITIAL_NUMARR = chex.Array = jnp.array([
+        None, None, None, None, None, None
+    ])
+
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class BasicMathState(NamedTuple):
     numArr: chex.Array
-    remainderArr: chex.Array
     arrPos: chex.Array
     score: chex.Array
     numberProb: chex.Array
@@ -59,14 +59,13 @@ class BasicMathState(NamedTuple):
 
 class BasicMathObservation(NamedTuple):
     numArr: chex.Array
-    remainderArr: chex.Array
     arrPos: chex.Array
-    score: chex.Array
     problemNum1: chex.Array
     problemNum2: chex.Array
 
 class BasicMathInfo(NamedTuple):
     score: chex.Array
+    round: chex.Array
 
 class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMathInfo, BasicMathConstants]):
     def __init__(self, consts: BasicMathConstants = None):
@@ -84,9 +83,17 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(5)
 
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BasicMathState, ) -> BasicMathState:
-        return BasicMathInfo(time=state.step_counter)
+        return BasicMathInfo(score=state.score, round=state.numberProb)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BasicMathState, state: BasicMathState):
@@ -100,16 +107,28 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             jnp.greater_equal(state.problemNum, 10),
         )
     
-    def _generate_problem(state: BasicMathState) -> BasicMathState:
+    def _generate_problem(state: BasicMathState, action: chex.Array) -> BasicMathState:
+        fire = action == Action.FIRE
+
         key, k1 = jax.random.split(state.key)
         key, k2 = jax.random.split(state.key)
 
-        x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
-        y = jax.random.randint(k2, shape=(), minval=1, maxval=10)
+        x = jax.lax.cond(
+            fire,
+            lambda _: jax.random.randint(k1, shape=(), minval=1, maxval=10),
+            lambda s: s,
+            operand=state.problemNum1,
+        )
+
+        y = jax.lax.cond(
+            fire,
+            lambda _: jax.random.randint(k2, shape=(), minval=1, maxval=10),
+            lambda s: s,
+            operand=state.problemNum2,
+        )
 
         return BasicMathState(
             state.numArr,
-            state.remainderArr,
             state.arrPos,
             state.score,
             state.numberProb,
@@ -118,7 +137,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             key
         )
     
-    def _evaluate_issue(state: BasicMathState, gameMode) -> BasicMathState:
+    def _evaluate_issue(self, state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
+        fire = action == Action.FIRE
+
         ops = [
             lambda a, b: a + b,
             lambda a, b: a - b,
@@ -139,7 +160,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return BasicMathState(
             state.numArr,
-            state.remainderArr,
             state.arrPos,
             score,
             state.numberProb,
@@ -148,12 +168,66 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.key
         )
     
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: BasicMathState, action: chex.Array) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
-        left = action == Action.LEFT
-        right = action == Action.RIGHT
+    def _change_value(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
         up = action == Action.UP
         down = action == Action.DOWN
+
+        arr = state.numArr
+
+        non_val_up = jnp.logical_and(up, value == None)
+        up_edge = jnp.logical_and(up, value == 9)
+        up_add = jnp.logical_and(up, jnp.logical_and(jnp.logical_not(up_edge), jnp.logical_not(non_val_up)))
+
+        value = jax.lax.cond(
+            non_val_up,
+            lambda: 0,
+            lambda: arr[state.arrPos],
+        )
+
+        value = jax.lax.cond(
+            up_edge,
+            lambda: None,
+            lambda: arr[state.arrPos],
+        )
+
+        value = jax.lax.cond(
+            up_add,
+            lambda: arr[state.arrPos] + 1,
+            lambda: arr[state.arrPos],
+        )
+
+        non_val_down = jnp.logical_and(down, value == None)
+        down_edge = jnp.logical_and(down, value == 1)
+        down_add = jnp.logical_and(down, jnp.logical_and(jnp.logical_not(down_edge), jnp.logical_not(non_val_down)))
+
+        value = jax.lax.cond(
+            non_val_down,
+            lambda: 9,
+            lambda: arr[state.arrPos],
+        )
+
+        value = jax.lax.cond(
+            down_edge,
+            lambda: None,
+            lambda: arr[state.arrPos],
+            value
+        )
+
+        value = jax.lax.cond(
+            down_add,
+            lambda: arr[state.arrPos] - 1,
+            lambda: arr[state.arrPos],
+        )
+
+        new_arr = arr.at[state.arrPos].set(value)
+
+        return BasicMathState(
+
+        )
+    
+    def _change_pos(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
+        left = action == Action.LEFT
+        right = action == Action.RIGHT
 
         player_pos = state.arrPos
 
@@ -189,14 +263,58 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             operand= player_pos
         )
 
-        arr = state.numArr
-        value = arr[player_pos]
+        return BasicMathState(
+            state.numArr,
+            player_pos,
+            state.score,
+            state.numberProb,
+            state.problemNum1,
+            state.problemNum2,
+            state.key
+        )
+    
+    def render(self, state: BasicMathState):
+        return self.renderer.render(state)
+    
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BasicMathObservation, BasicMathState]:
+        state_key, _step_key = jax.random.split(key)
 
-        new_arr = arr.at[player_pos].set(value)
+        state = BasicMathState(
+            numArr=jnp.array(self.consts.INITIAL_NUMARR).astype(jnp.int32),
+            arrPos= jnp.array(2).astype(jnp.int32),
+            score= jnp.array(0).astype(jnp.int32),
+            numberProb= jnp.array(0).astype(jnp.int32),
+            problemNum1= jnp.array(1).astype(jnp.int32),
+            problemNum2= jnp.array(1).astype(jnp.int32),
+            key= state_key           
+        )
 
+        return None, state
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: BasicMathState, action: chex.Array, gameMode: int = 5) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
+        state = BasicMathState(
+            state.numArr,
+            state.arrPos,
+            state.score,
+            state.numberProb,
+            state.problemNum1,
+            state.problemNum2,
+            state.key
+        )
+
+        state = self._change_pos(state, action)
+        state = self._change_value(state, action)
+        state = self._evaluate_issue(state, action, gameMode)
+        state = self._generate_problem(state, action)
 
         done = self._get_done
-        return done
+        reward = self._get_reward
+        info = self._get_info
+
+        state = self._evaluate_issue(state, gameMode)
+
+        return None, state,reward, done, info
 
 class BasicMathRenderer(JAXGameRenderer):
     def __init__(self, consts: BasicMathConstants = None):
