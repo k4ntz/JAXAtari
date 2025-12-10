@@ -75,8 +75,8 @@ RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 MAX_LIVE_COUNT = 8
-PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-# PELLETS_TO_COLLECT = 4
+# PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+PELLETS_TO_COLLECT = 4
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -179,9 +179,9 @@ class PacmanState(NamedTuple):
     ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # 4 ghosts
     fruit: FruitState
     lives: chex.Array # Number of lives left
-    score: chex.Array
-    score_changed: chex.Array # indicates which score digit changed since the last step
-    step_count: chex.Array
+    score: chex.Array # Score reached since the start of the game
+    score_changed: chex.Array # Indicates which score digit changed since the last step
+    step_count: chex.Array # Number of steps made in the current level
 
 class PacmanObservation(NamedTuple):
     grid: chex.Array  # 2D array showing layout of walls, pellets, pacman, ghosts
@@ -195,7 +195,6 @@ class PacmanInfo(NamedTuple):
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def __init__(self):
         super().__init__()
-        self.skipped = False
         self.frame_stack_size = 1
         self.action_set = [
             Action.NOOP,
@@ -242,12 +241,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         reward = 0.0
         done = jnp.array(False, dtype=jnp.bool_)
         info = PacmanInfo(score=state.score, done=done)
-
-        # Skip current step if in reset state or level not loaded, so the renderer has time to react
-        if not state.level.loaded and self.skipped == False:
-            self.skipped = True
-            return obs, state, reward, done, info
-        self.skipped = False
 
         # If in death animation, decrement timer and freeze everything
         if state.player.death_timer > 0:
