@@ -67,6 +67,8 @@ class MiniatureGolfState(NamedTuple):
     player_y: chex.Array
     ball_x: chex.Array
     ball_y: chex.Array
+    ball_x_subpixel: chex.Array  # see original ROM, memory address $9e
+    ball_y_subpixel: chex.Array  # see original ROM, memory address $98
     ball_vel_x: chex.Array
     ball_vel_y: chex.Array
     hole_x: chex.Array
@@ -135,6 +137,16 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             )
         )
 
+    def _any_corners_overlap_wall(self, wall_layout: chex.Array, x: chex.Array, y: chex.Array):
+        overlap_top_left_corner = self._overlaps_wall(wall_layout, x, y)
+        overlap_top_right_corner = self._overlaps_wall(wall_layout, x + self.consts.BALL_SIZE[0] - 1, y)
+        overlap_bottom_left_corner = self._overlaps_wall(wall_layout, x, y + self.consts.BALL_SIZE[1] - 1)
+        overlap_bottom_right_corner = self._overlaps_wall(wall_layout, x + self.consts.BALL_SIZE[0] - 1, y + self.consts.BALL_SIZE[1] - 1)
+        return jnp.any(jnp.logical_or(
+            jnp.logical_or(overlap_top_left_corner, overlap_top_right_corner),
+            jnp.logical_or(overlap_bottom_left_corner, overlap_bottom_right_corner),
+        ))
+
     def _is_overlapping(self, x1, y1, w1, h1, x2, y2, w2, h2):
         rows, cols = jnp.mgrid[:self.consts.HEIGHT, :self.consts.WIDTH]
 
@@ -164,8 +176,12 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
 
     def _ball_step(self, state: MiniatureGolfState) -> MiniatureGolfState:
-        ball_x_new = state.ball_x + state.ball_vel_x
-        ball_y_new = state.ball_y + state.ball_vel_y
+        ball_x_subpixel_new = state.ball_x_subpixel + state.ball_vel_x
+        ball_y_subpixel_new = state.ball_y_subpixel + state.ball_vel_y
+        ball_delta_x, ball_x_subpixel_new = jnp.divmod(ball_x_subpixel_new, 16)
+        ball_delta_y, ball_y_subpixel_new = jnp.divmod(ball_y_subpixel_new, 16)
+        ball_x_new = state.ball_x + ball_delta_x
+        ball_y_new = state.ball_y + ball_delta_y
 
         overlap_top_left_corner = self._overlaps_wall(state.wall_layout, ball_x_new, ball_y_new)
         overlap_top_right_corner = self._overlaps_wall(state.wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new)
@@ -180,6 +196,51 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             jnp.logical_and(overlap_top_left_corner, overlap_top_right_corner),
             jnp.logical_and(overlap_bottom_left_corner, overlap_bottom_right_corner)
         )
+
+        # handle special case: all corners overlap
+        all_corners = jnp.logical_and(
+            jnp.logical_and(overlap_top_left_corner, overlap_bottom_left_corner),
+            jnp.logical_and(overlap_top_right_corner, overlap_bottom_right_corner)
+        )
+
+        # handle special case: only one corner overlaps
+        single_corner = jnp.logical_and(
+            jnp.logical_and(
+                jnp.logical_not(collision_x),
+                jnp.logical_not(collision_y),
+            ),
+            jnp.logical_or(
+                jnp.logical_or(
+                    overlap_top_left_corner,
+                    overlap_top_right_corner,
+                ),
+                jnp.logical_or(
+                    overlap_bottom_left_corner,
+                    overlap_bottom_right_corner,
+                )
+            )
+        )
+
+        overlap_only_x_change = self._any_corners_overlap_wall(state.wall_layout, ball_x_new, state.ball_y)
+        overlap_only_y_change = self._any_corners_overlap_wall(state.wall_layout, state.ball_x, ball_y_new)
+
+        collision_x = jnp.logical_or(
+            collision_x,
+            jnp.logical_and(
+                single_corner,
+                overlap_only_x_change,
+            )
+        )
+        collision_y = jnp.logical_or(
+            collision_y,
+            jnp.logical_and(
+                single_corner,
+                overlap_only_y_change,
+            )
+        )
+
+        collision_x = jnp.where(all_corners, overlap_only_x_change, collision_x)
+        collision_y = jnp.where(all_corners, overlap_only_y_change, collision_y)
 
         # negate velocity in case of overlap
         ball_vel_x_new = jnp.where(
@@ -198,6 +259,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             player_y=state.player_y,
             ball_x=ball_x_new,
             ball_y=ball_y_new,
+            ball_x_subpixel=ball_x_subpixel_new,
+            ball_y_subpixel=ball_y_subpixel_new,
             ball_vel_x=ball_vel_x_new,
             ball_vel_y=ball_vel_y_new,
             hole_x=state.hole_x,
@@ -217,25 +280,27 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
     def _update_velocity(self, state: MiniatureGolfState) -> MiniatureGolfState:
         acceleration_counter = jnp.where(state.acceleration_counter >= 0,
-                                         state.acceleration_counter + 1,
-                                         state.acceleration_counter - 1)
+                                         state.acceleration_counter - 1,
+                                         state.acceleration_counter + 1)
         decelerate = jnp.equal(acceleration_counter, 0)
-        acceleration_counter = jnp.where(decelerate, state.acceleration_threshold, acceleration_counter)
         ball_vel_x_new = jnp.where(state.ball_vel_x > 0, state.ball_vel_x - 1, jnp.where(
             state.ball_vel_x < 0, state.ball_vel_x + 1, state.ball_vel_x
         ))
         ball_vel_y_new = jnp.where(state.ball_vel_y > 0, state.ball_vel_y - 1, jnp.where(
-            state.ball_vel_y < 0, state.ball_vel_y - 1, state.ball_vel_y
+            state.ball_vel_y < 0, state.ball_vel_y + 1, state.ball_vel_y
         ))
         ball_vel_x_new = jnp.where(decelerate, ball_vel_x_new, state.ball_vel_x)
         ball_vel_y_new = jnp.where(decelerate, ball_vel_y_new, state.ball_vel_y)
         acceleration_threshold_new = jnp.where(decelerate, 1, state.acceleration_threshold)
+        acceleration_counter_new = jnp.where(decelerate, acceleration_threshold_new, acceleration_counter)
 
         return MiniatureGolfState(
             player_x=state.player_x,
             player_y=state.player_y,
             ball_x=state.ball_x,
             ball_y=state.ball_y,
+            ball_x_subpixel=state.ball_x_subpixel,
+            ball_y_subpixel=state.ball_y_subpixel,
             ball_vel_x=ball_vel_x_new,
             ball_vel_y=ball_vel_y_new,
             hole_x=state.hole_x,
@@ -247,7 +312,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             level=state.level,
             wall_layout=state.wall_layout,
             acceleration_threshold=acceleration_threshold_new,
-            acceleration_counter=acceleration_counter,
+            acceleration_counter=acceleration_counter_new,
             mod_4_counter=state.mod_4_counter,
             fire_prev=state.fire_prev,
         )
@@ -278,16 +343,17 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         fire = jnp.logical_and(fire, jnp.logical_not(state.fire_prev))
         shot_count_new = jnp.where(fire, state.shot_count + 1, state.shot_count)
 
-        ball_vel_x_new = jnp.where(fire, (state.ball_x - state.player_x) / 4, ball_vel_x_new)
-        ball_vel_y_new = jnp.where(fire, (state.ball_y - state.player_y) / 4, ball_vel_y_new)
+        ball_vel_x_new = jnp.where(fire, (state.ball_x - state.player_x) // 4, ball_vel_x_new)
+        ball_vel_y_new = jnp.where(fire, (state.ball_y - state.player_y) // 4, ball_vel_y_new)
         ball_stationary_now = jnp.logical_and(jnp.equal(ball_vel_x_new, 0), jnp.equal(ball_vel_y_new, 0))
         fire_had_effect = jnp.logical_and(ball_stationary, jnp.logical_not(ball_stationary_now))
 
         v_abs_x = jnp.abs(ball_vel_x_new)
         v_abs_y = jnp.abs(ball_vel_y_new) * 2
-        tempo = (jnp.where(v_abs_x > v_abs_y, v_abs_x, v_abs_y) + 0x74) / 2
+        tempo = (jnp.where(v_abs_x > v_abs_y, v_abs_x, v_abs_y) + 0x74) // 2
 
-        acceleration_counter = jnp.where(fire_had_effect, 0, state.acceleration_counter)
+        acceleration_threshold_new = jnp.where(fire_had_effect, tempo, temporary_state.acceleration_threshold)
+        acceleration_counter_new = jnp.where(fire_had_effect, tempo, temporary_state.acceleration_counter)
 
         player_y_dec = jnp.where(up, 1, 0)
         player_y_inc = jnp.where(down, 1, 0)
@@ -303,6 +369,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             player_y=player_y_new,
             ball_x=state.ball_x,
             ball_y=state.ball_y,
+            ball_x_subpixel=state.ball_x_subpixel,
+            ball_y_subpixel=state.ball_y_subpixel,
             ball_vel_x=ball_vel_x_new,
             ball_vel_y=ball_vel_y_new,
             hole_x=state.hole_x,
@@ -313,8 +381,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             shot_count=shot_count_new,
             level=state.level,
             wall_layout=state.wall_layout,
-            acceleration_threshold=temporary_state.acceleration_threshold,
-            acceleration_counter=temporary_state.acceleration_counter,
+            acceleration_threshold=acceleration_threshold_new,
+            acceleration_counter=acceleration_counter_new,
             mod_4_counter=state.mod_4_counter,
             fire_prev=jnp.equal(action, Action.FIRE),
         )
@@ -466,6 +534,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             player_y=player_y_new,
             ball_x=ball_x_new,
             ball_y=ball_y_new,
+            ball_x_subpixel=state.ball_x_subpixel,  # as in the original, subpixel values are not reset
+            ball_y_subpixel=state.ball_y_subpixel,
             ball_vel_x=ball_vel_x_new,
             ball_vel_y=ball_vel_y_new,
             hole_x=hole_x_new,
@@ -565,6 +635,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             player_y=state.player_y,
             ball_x=state.ball_x,
             ball_y=state.ball_y,
+            ball_x_subpixel=state.ball_x_subpixel,
+            ball_y_subpixel=state.ball_y_subpixel,
             ball_vel_x=state.ball_vel_x,
             ball_vel_y=state.ball_vel_y,
             hole_x=state.hole_x,
@@ -587,6 +659,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             player_y=self.consts.PLAYER_START_Y[0],
             ball_x=self.consts.BALL_START_X[0],
             ball_y=self.consts.BALL_START_Y[0],
+            ball_x_subpixel=jnp.array(0),
+            ball_y_subpixel=jnp.array(0),
             ball_vel_x=jnp.array(0),
             ball_vel_y=jnp.array(0),
             hole_x=self.consts.HOLE_X[0],
@@ -832,7 +906,7 @@ class MiniatureGolfRenderer(JAXGameRenderer):
         left_render_x = jax.lax.select(left_single_digit,
                                          self.consts.SCORE_POS_ONES_DIGIT[0],
                                          self.consts.SCORE_POS_TENS_DIGIT[0])
-        spacing = 4
+        spacing = self.consts.SCORE_POS_ONES_DIGIT[0] - self.consts.SCORE_POS_TENS_DIGIT[0]
 
         raster = self.jr.render_label_selective(raster, left_render_x, self.consts.SCORE_POS_ONES_DIGIT[1], left_digits,
                                                 left_digit_masks, left_start_index, left_num_to_render, spacing=spacing)
