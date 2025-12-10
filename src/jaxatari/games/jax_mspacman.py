@@ -142,46 +142,46 @@ TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
 # -------- Entity classes --------
 class LevelState(NamedTuple):
-    id: chex.Array
-    dofmaze: chex.Array # Precomputed degree of freedom maze layout
-    pellets: chex.Array  # 2D grid of 0 (empty) or 1 (pellet)
-    collected_pellets: chex.Array  # the number of pellets collected
-    power_pellets: chex.Array
-    loaded: chex.Array  # Whether the level is loaded
+    id: chex.Array                  # Int - Number of the current level, starts at 1
+    collected_pellets: chex.Array   # Int - Number of collected pellets
+    dofmaze: chex.Array             # Bool[x][y][4] - Precomputed degree of freedom maze layout
+    pellets: chex.Array             # Bool[x][y] - 2D grid of 0 (empty) or 1 (pellet)
+    power_pellets: chex.Array       # Bool[4] - Indicates wheter the power pill is available
+    loaded: chex.Array              # Bool - Indicates whether the level is loaded
 
 class GhostState(NamedTuple):
-    type: GhostType
-    position: chex.Array  # (x, y)
-    action: chex.Array  # 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
-    mode: chex.Array
-    timer: chex.Array
-    key: chex.Array # Unique random key - saved in state to prevent repeated generation
+    position: chex.Array            # Tuple - (x, y)
+    type: GhostType                 # Enum - 0: BLINKY, 1: PINKY, 2: INKY, 3: SUE
+    action: chex.Array              # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    mode: chex.Array                # Enum - 0: RANDOM, 1: CHASE, 2: SCTATTER, 3: FRIGHTENED, 4: BLINKING, 5: RETURNING, 6: ENJAILED
+    timer: chex.Array               # Int - Triggers mode change when reaching 0, decrements every step
+    key: chex.Array                 # chex.PRNGKey - Unique random key, saved in state to prevent repeated generation
 
 class PlayerState(NamedTuple):
-    position: chex.Array  # (x, y)
-    current_action: chex.Array # 0: NOOP, 1: FURE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
-    last_action : chex.Array  # 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
-    has_pellet: chex.Array  # Boolean indicating if pacman just collected a pellet
-    eaten_ghosts: chex.Array  # timers indicating which ghosts have been eaten, when set to one, does not go down, indicate respawned ghost
-    power_mode_timer: chex.Array # Timer for power mode, decrements every 8 steps
-    death_timer: chex.Array  # Frames left in death animation
+    position: chex.Array            # Tuple - (x, y)
+    current_action: chex.Array      # Enum - 0: NOOP, 1: FURE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    last_action : chex.Array        # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    has_pellet: chex.Array          # Bool - Indicates if pacman just collected a pellet
+    eaten_ghosts: chex.Array        # Int - Indicates the number of ghosts eaten since the last power pellet
+    power_mode_timer: chex.Array    # Int - Timer for power mode, decrements every 8 steps
+    death_timer: chex.Array         # Int - Timer for death animation, decrements every step
 
 class FruitState(NamedTuple):
-    type: chex.Array # Type of the fruit
-    position: chex.Array # (x, y)
-    action: chex.Array # 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
-    timer: chex.Array # Time until leaving through the closest tunnel
-    exit: chex.Array # Tunnel number through which it will exit
+    position: chex.Array            # Tuple - (x, y)
+    exit: chex.Array                # Tuple - (x, y) Position of the tunnel through which it will exit
+    type: chex.Array                # Enum - 0: CHERRY, 1: STRAWBERRY, 2: ORANGE, 3: PRETZEL, 4: APPLE, 5: PEAR, 6: BANANA, 7: NONE
+    action: chex.Array              # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    timer: chex.Array               # Int - Time until leaving through the exit tunnel, decrements every step
 
 class PacmanState(NamedTuple):
-    level: LevelState
-    player: PlayerState
-    ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # 4 ghosts
-    fruit: FruitState
-    lives: chex.Array # Number of lives left
-    score: chex.Array # Score reached since the start of the game
-    score_changed: chex.Array # Indicates which score digit changed since the last step
-    step_count: chex.Array # Number of steps made in the current level
+    level: LevelState               # LevelState
+    player: PlayerState             # PlayerState
+    ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # GhostState[4]
+    fruit: FruitState               # FruitState
+    lives: chex.Array               # Int - Number of lives left
+    score: chex.Array               # Int - Total score reached
+    score_changed: chex.Array       # Bool[] - Indicates which score digit changed since the last step
+    step_count: chex.Array          # Int - Number of steps made in the current level
 
 class PacmanObservation(NamedTuple):
     grid: chex.Array  # 2D array showing layout of walls, pellets, pacman, ghosts
@@ -292,9 +292,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             new_state = PacmanState(
                 level = LevelState(
                     id=level_id,
+                    collected_pellets=collected_pellets,
                     dofmaze=state.level.dofmaze,
                     pellets=pellets,
-                    collected_pellets=collected_pellets,
                     power_pellets=power_pellets,
                     loaded=jnp.array(True, dtype=jnp.bool_)
                 ),
@@ -576,7 +576,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
             else:
                 fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state.fruit, state.level.dofmaze, key) # Move fruit
-        return FruitState(fruit_type, fruit_position, fruit_action, fruit_timer, fruit_exit), reward
+        return FruitState(fruit_position, fruit_exit, fruit_type, fruit_action, fruit_timer), reward
 
     @staticmethod
     def flag_score_change(current_score: chex.Array, new_score: chex.Array):
@@ -989,10 +989,10 @@ def detect_collision(position_1: chex.Array, position_2: chex.Array):
 def reset_level(level: chex.Array):
     maze = MsPacmanMaze.MAZES[get_level_maze(level)]
     return LevelState(
-        id               = jnp.array(level, dtype=jnp.uint8),
+        id                  = jnp.array(level, dtype=jnp.uint8),
+        collected_pellets   = jnp.array(0).astype(jnp.uint8),
         dofmaze             = MsPacmanMaze.precompute_dof(maze), # Precompute degree of freedom maze layout
         pellets             = jnp.copy(MsPacmanMaze.BASE_PELLETS),
-        collected_pellets   = jnp.array(0).astype(jnp.uint8),
         power_pellets       = jnp.ones(4, dtype=jnp.bool_),
         loaded              = jnp.array(False, dtype=jnp.bool_)
     )
@@ -1026,11 +1026,11 @@ def reset_ghosts():
 
 def reset_fruit():
     return FruitState(
-        type        = jnp.array(FruitType.NONE).astype(jnp.uint8),
         position    = jnp.zeros(2, dtype=jnp.int8),
+        exit        = jnp.zeros(2, dtype=jnp.int8),
+        type        = jnp.array(FruitType.NONE).astype(jnp.uint8),
         action      = jnp.array(Action.NOOP).astype(jnp.uint8),
-        timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8),
-        exit        = jnp.zeros(2, dtype=jnp.int8)
+        timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
     )
 
 def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
@@ -1049,9 +1049,9 @@ def reset_entities(state: PacmanState):
     return PacmanState(
         level = LevelState(
             id = state.level.id,
+            collected_pellets=state.level.collected_pellets,
             dofmaze=state.level.dofmaze,
             pellets=state.level.pellets,
-            collected_pellets=state.level.collected_pellets,
             power_pellets=state.level.power_pellets,
             loaded=state.level.loaded
         ),
