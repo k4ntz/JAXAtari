@@ -197,9 +197,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             key=key,
         )
 
-    def _get_player_action_effects(self, action: int, player_z: chex.Array, constants: DunkConstants) -> Tuple[chex.Array, chex.Array, chex.Array]:
-        """Determines the velocity for 8-way movement and the impulse for Z-axis jumps."""
-        # --- X/Y Movement on the ground plane ---
+    def _handle_jump(self, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
+        """Calculates the vertical impulse for a jump."""
+        can_jump = (player.z == 0) & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
+        vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
+        new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
+        return player.replace(vel_z=new_vel_z)
+
+    def _get_player_xy_action_effects(self, action: int, constants: DunkConstants) -> Tuple[chex.Array, chex.Array]:
+        """Determines the velocity for 8-way movement."""
         action_jnp = jnp.asarray(action)
 
         is_moving_left = jnp.any(action_jnp == jnp.asarray(list(_MOVE_LEFT_ACTIONS)))
@@ -216,37 +222,66 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         vel_y = jax.lax.select(is_moving_up, -constants.PLAYER_MAX_SPEED, vel_y)
         vel_y = jax.lax.select(is_moving_down, constants.PLAYER_MAX_SPEED, vel_y)
 
-        # --- Z-Axis Jump Impulse ---
-        can_jump = (player_z == 0) & jnp.any(action_jnp == jnp.asarray(list(_JUMP_ACTIONS))) # A jump can only be initiated if the player is on the ground (z=0) and presses FIRE
-        vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
+        return vel_x, vel_y
 
-        return vel_x, vel_y, vel_z
+    def _update_player_xy(self, player: PlayerState, action: int, constants: DunkConstants) -> PlayerState:
+        """Updates the player's XY position based on an action."""
+        vel_x, vel_y = self._get_player_xy_action_effects(action, constants)
+        new_x = jax.lax.clamp(constants.PLAYER_X_MIN, player.x + vel_x, constants.PLAYER_X_MAX)
+        new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, player.y + vel_y, constants.PLAYER_Y_MAX)
+        return player.replace(x=new_x, y=new_y, vel_x=vel_x, vel_y=vel_y)
 
-    def _update_player_physics(self, player: PlayerState, constants: DunkConstants) -> PlayerState:
-        """Applies physics for both 2D plane movement and Z-axis jumping."""
-        # --- Z-Axis Physics (Jumping) ---
+    def _update_players_xy(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
+        """Updates the XY positions for all players."""
+        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
+
+        updated_p1_inside = self._update_player_xy(state.player1_inside, p1_inside_action, self.constants)
+        updated_p1_outside = self._update_player_xy(state.player1_outside, p1_outside_action, self.constants)
+        updated_p2_inside = self._update_player_xy(state.player2_inside, p2_inside_action, self.constants)
+        updated_p2_outside = self._update_player_xy(state.player2_outside, p2_outside_action, self.constants)
+
+        return state.replace(
+            player1_inside=updated_p1_inside,
+            player1_outside=updated_p1_outside,
+            player2_inside=updated_p2_inside,
+            player2_outside=updated_p2_outside,
+        )
+
+    def _update_player_z(self, player: PlayerState, constants: DunkConstants) -> PlayerState:
+        """Applies Z-axis physics (jumping and gravity) to a player."""
         new_z = player.z + player.vel_z
         new_vel_z = player.vel_z - constants.GRAVITY
         has_landed = new_z <= 0
         new_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_z)
         new_vel_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_vel_z)
+        return player.replace(z=new_z, vel_z=new_vel_z)
 
-        # --- X/Y Plane Physics (8-way movement) ---
-        new_x = jax.lax.clamp(constants.PLAYER_X_MIN, player.x + player.vel_x, constants.PLAYER_X_MAX)
-        new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, player.y + player.vel_y, constants.PLAYER_Y_MAX)
-
-        return player.replace(x=new_x, y=new_y, z=new_z, vel_z=new_vel_z)
-
-    def _update_player(self, player: PlayerState, action: int, constants: DunkConstants) -> PlayerState:
-        """Takes a player state and an action, and returns the updated player state"""
-        vel_x, vel_y, jump_impulse = self._get_player_action_effects(action, player.z, constants)
-        new_vel_z = jax.lax.select(
-            jump_impulse > 0,
-            jump_impulse,
-            player.vel_z
+    def _update_players_z(self, state: DunkGameState) -> DunkGameState:
+        """Applies Z-axis physics for all players."""
+        updated_p1_inside = self._update_player_z(state.player1_inside, self.constants)
+        updated_p1_outside = self._update_player_z(state.player1_outside, self.constants)
+        updated_p2_inside = self._update_player_z(state.player2_inside, self.constants)
+        updated_p2_outside = self._update_player_z(state.player2_outside, self.constants)
+        return state.replace(
+            player1_inside=updated_p1_inside,
+            player1_outside=updated_p1_outside,
+            player2_inside=updated_p2_inside,
+            player2_outside=updated_p2_outside,
         )
-        updated_player = self._update_player_physics(player.replace(vel_x=vel_x, vel_y=vel_y,vel_z=new_vel_z), constants)
-        return updated_player
+
+    def _update_players_animations(self, state: DunkGameState) -> DunkGameState:
+        """Updates animations for all players."""
+        updated_p1_inside = self._update_player_animation(state.player1_inside, (state.ball.holder == PlayerID.PLAYER1_INSIDE))
+        updated_p1_outside = self._update_player_animation(state.player1_outside, (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
+        updated_p2_inside = self._update_player_animation(state.player2_inside, (state.ball.holder == PlayerID.PLAYER2_INSIDE))
+        updated_p2_outside = self._update_player_animation(state.player2_outside, (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
+
+        return state.replace(
+            player1_inside=updated_p1_inside,
+            player1_outside=updated_p1_outside,
+            player2_inside=updated_p2_inside,
+            player2_outside=updated_p2_outside,
+        )
 
     def _handle_miss(self, state: DunkGameState) -> DunkGameState:
         """Handles a missed shot by making the ball fall to the ground."""
@@ -356,36 +391,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return player.replace(animation_frame=final_frame, animation_direction=final_dir)
 
-    def _update_players(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
-        """Updates physics and animations for all players."""
-        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
-
-        # Update player physics
-        updated_p1_inside = self._update_player(state.player1_inside, p1_inside_action, self.constants)
-        updated_p1_outside = self._update_player(state.player1_outside, p1_outside_action, self.constants)
-        updated_p2_inside = self._update_player(state.player2_inside, p2_inside_action, self.constants)
-        updated_p2_outside = self._update_player(state.player2_outside, p2_outside_action, self.constants)
-
-        # Update animations
-        updated_p1_inside = self._update_player_animation(updated_p1_inside, (state.ball.holder == PlayerID.PLAYER1_INSIDE))
-        updated_p1_outside = self._update_player_animation(updated_p1_outside, (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
-        updated_p2_inside = self._update_player_animation(updated_p2_inside, (state.ball.holder == PlayerID.PLAYER2_INSIDE))
-        updated_p2_outside = self._update_player_animation(updated_p2_outside, (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
-
-        return state.replace(
-            player1_inside=updated_p1_inside,
-            player1_outside=updated_p1_outside,
-            player2_inside=updated_p2_inside,
-            player2_outside=updated_p2_outside,
-        )
-
-    def _handle_ball_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> DunkGameState:
-        """Handles ball actions like passing, shooting, and stealing."""
+    def _handle_passing(self, state: DunkGameState, actions: Tuple[int, ...]) -> BallState:
+        """Handles the logic for passing the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        human_action = actions[0] # The primary action from the user
 
-        # --- Passing ---
         is_p1_inside_passing = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_p1_outside_passing = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_p2_inside_passing = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
@@ -422,14 +432,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ball_speed = 8.0
         vel = (direction / safe_norm) * ball_speed
 
-        ball_state = jax.lax.cond(
+        new_ball_state = jax.lax.cond(
             is_passing,
             lambda b: b.replace(x=passer_x.astype(jnp.float32), y=passer_y.astype(jnp.float32), vel_x=vel[0], vel_y=vel[1], holder=PlayerID.NONE, receiver_id=receiver_id),
             lambda b: b,
             ball_state
         )
+        return new_ball_state
 
-        # --- Shooting ---
+    def _handle_shooting(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[BallState, chex.PRNGKey]:
+        """Handles the logic for shooting the ball."""
+        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
+        ball_state = state.ball
+
         is_p1_inside_shooting = (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p1_outside_shooting = (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p2_inside_shooting = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
@@ -506,14 +521,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             b = jax.lax.cond(is_dunk, lambda bb: bb.replace(is_goal=True, target_x=basket_pos[0], target_y=basket_pos[1]), lambda bb: bb, b)
             return b
 
-        ball_state = jax.lax.cond(
+        new_ball_state = jax.lax.cond(
             is_shooting,
             make_shot,
             lambda b: b,
             ball_state
         )
+        return new_ball_state, key
 
-        # --- Stealing ---
+    def _handle_stealing(self, state: DunkGameState, actions: Tuple[int, ...]) -> BallState:
+        """Handles the logic for stealing the ball."""
+        human_action = actions[0] # The primary action from the user
+        ball_state = state.ball
+
         steal_radius = 5.0
         stealer_id = state.controlled_player_id
         stealer_x = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, state.player1_inside.x, state.player1_outside.x)
@@ -525,13 +545,53 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         can_steal_from_holder = ~is_p1_team_holder
         is_stealing = is_trying_to_steal & is_close_to_ball & can_steal_from_holder
 
-        ball_state = jax.lax.cond(
+        new_ball_state = jax.lax.cond(
             is_stealing,
             lambda b: b.replace(holder=stealer_id, vel_x=0.0, vel_y=0.0),
             lambda b: b,
             ball_state
         )
-        return state.replace(ball=ball_state, key=key)
+        return new_ball_state
+
+    def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey]:
+        """Handles offensive actions: passing and shooting."""
+        # Passing
+        ball_state_after_pass = self._handle_passing(state, actions)
+        state = state.replace(ball=ball_state_after_pass)
+
+        # Shooting
+        ball_state_after_shot, key = self._handle_shooting(state, actions, key)
+        state = state.replace(ball=ball_state_after_shot)
+        
+        return state, key
+
+    def _handle_defense_actions(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
+        """Handles defensive actions: stealing."""
+        ball_state_after_steal = self._handle_stealing(state, actions)
+        state = state.replace(ball=ball_state_after_steal)
+        return state
+
+    def _handle_interactions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey]:
+        """Handles all player interactions: jump, pass, shoot, steal."""
+        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
+
+        updated_p1_inside = self._handle_jump(state.player1_inside, p1_inside_action, self.constants)
+        updated_p1_outside = self._handle_jump(state.player1_outside, p1_outside_action, self.constants)
+        updated_p2_inside = self._handle_jump(state.player2_inside, p2_inside_action, self.constants)
+        updated_p2_outside = self._handle_jump(state.player2_outside, p2_outside_action, self.constants)
+        
+        state = state.replace(
+            player1_inside=updated_p1_inside,
+            player1_outside=updated_p1_outside,
+            player2_inside=updated_p2_inside,
+            player2_outside=updated_p2_outside,
+        )
+
+        # 2. Handle ball actions
+        state, key = self._handle_offense_actions(state, actions, key)
+        state = self._handle_defense_actions(state, actions)
+
+        return state, key
 
     def _update_ball(self, state: DunkGameState) -> DunkGameState:
         """Handles ball movement, goals, misses, catches, and possession changes."""
@@ -651,21 +711,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """Takes an action in the game and returns the new game state."""
-        # 1. Determine actions for all players (human-controlled and AI)
+        # 1. Determine actions for all players
         actions, key = self._handle_player_actions(state, action, state.key)
 
-        # 2. Update player physics and animations
-        new_state_1 = self._update_players(state, actions)
+        # 2. Update player XY movement
+        state = self._update_players_xy(state, actions)
 
-        # 3. Handle ball actions (passing, shooting, stealing)
-        new_state_2 = self._handle_ball_actions(new_state_1, actions, key)
+        # 3. Handle interactions (jump, pass, shoot, steal)
+        state, key = self._handle_interactions(state, actions, key)
         
-        # 4. Process ball flight, goals, misses, and possession changes
-        final_state = self._update_ball(new_state_2)
+        # 4. Update player Z physics (gravity, etc.)
+        state = self._update_players_z(state)
 
-        final_state = final_state.replace(step_counter=final_state.step_counter + 1)
+        # 5. Update player animations
+        state = self._update_players_animations(state)
 
-        # 5. Generate outputs
+        # 6. Process ball flight, goals, misses, and possession changes
+        final_state = self._update_ball(state)
+
+        final_state = final_state.replace(step_counter=final_state.step_counter + 1, key=key)
+
+        # 7. Generate outputs
         observation = self._get_observation(final_state)
         reward = self._get_reward(state, final_state)
         done = self._get_done(final_state)
