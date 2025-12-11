@@ -1262,43 +1262,45 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             prop_enemy_positions
         )"""
 
+        # Enemy movement: chase player with some randomness, stronger enemies are more aggressive
         rng, move_key, noise_key = jax.random.split(state.key, 3)
         enemy_alive = state.enemy_active == 1
 
+        # Vector from enemy to player (use enemy center vs player center)
         player_center = jnp.array([
             new_x + self.consts.PLAYER_WIDTH // 2,
             new_y + self.consts.PLAYER_HEIGHT // 2,
         ], dtype=jnp.int32)
 
-        vec_to_player = player_center[None, :] - state.enemy_positions 
+        vec_to_player = player_center[None, :] - state.enemy_positions  # (N, 2)
+        # Step of size 1 towards player in each axis (-1, 0, 1)
         step_towards = jnp.sign(vec_to_player).astype(jnp.int32)
 
+        # Random jitter step (-1, 0, 1) in each axis
         rand_steps = jax.random.randint(
             noise_key, (NUM_ENEMIES, 2), minval=-1, maxval=2, dtype=jnp.int32
         )
 
+        # Per-type chase probability: zombies dumb, reapers relentless
+        # index: 0=dead, 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim reaper
         type_chase_probs = jnp.array(
             [0.0, 0.3, 0.5, 0.7, 0.85, 1.0], dtype=jnp.float32
         )
-        chase_probs = type_chase_probs[state.enemy_types]
+        chase_probs = type_chase_probs[state.enemy_types]          # (N,)
         rand_uniform = jax.random.uniform(move_key, (NUM_ENEMIES,))
-        use_chase = rand_uniform < chase_probs
+        use_chase = rand_uniform < chase_probs                    # (N,)
 
+        # Choose per-enemy step: towards player or random
         chosen_step = jnp.where(
             use_chase[:, None],
             step_towards,
             rand_steps
         ).astype(jnp.int32)
 
+        # Dead enemies don’t move
         chosen_step = chosen_step * enemy_alive[:, None].astype(jnp.int32)
 
-        prop_enemy_positions = state.enemy_positions + chosen_step
-        prop_enemy_positions = jnp.clip(
-            prop_enemy_positions,
-            jnp.array([0, 0]),
-            jnp.array([self.consts.WORLD_WIDTH - 1, self.consts.WORLD_HEIGHT - 1])
-        )
-
+        # Helper: check collision for a single enemy position
         def check_enemy_collision(enemy_pos):
             ex, ey = enemy_pos[0], enemy_pos[1]
             e_overlap_x = (ex <= (WALLS[:, 0] + WALLS[:, 2] - 1)) & \
@@ -1307,13 +1309,47 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                           ((ey + self.consts.ENEMY_HEIGHT - 1) >= WALLS[:, 1])
             return jnp.any(e_overlap_x & e_overlap_y)
 
-        enemy_collisions = jax.vmap(check_enemy_collision)(prop_enemy_positions)
-        enemy_collisions = enemy_collisions & enemy_alive
-        new_enemy_positions = jnp.where(
-            enemy_collisions[:, None],
-            state.enemy_positions,
-            prop_enemy_positions
-        )
+        # For each enemy: try full step; if blocked, try X-only, then Y-only, else stay
+        def move_enemy(enemy_pos, step_vec):
+            # current position if no movement
+            cur = enemy_pos
+
+            # three candidate steps
+            step_full = step_vec
+            step_x = jnp.array([step_vec[0], 0], dtype=jnp.int32)
+            step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
+
+            # proposed positions (clipped to world)
+            def clip_pos(pos):
+                return jnp.clip(
+                    pos,
+                    jnp.array([0, 0], dtype=jnp.int32),
+                    jnp.array([self.consts.WORLD_WIDTH - 1, self.consts.WORLD_HEIGHT - 1], dtype=jnp.int32),
+                )
+
+            pos_full = clip_pos(cur + step_full)
+            pos_x    = clip_pos(cur + step_x)
+            pos_y    = clip_pos(cur + step_y)
+
+            col_full = check_enemy_collision(pos_full)
+            col_x    = check_enemy_collision(pos_x)
+            col_y    = check_enemy_collision(pos_y)
+
+            # preference: full → x-only → y-only → stay
+            use_full = ~col_full
+            use_x    = col_full & ~col_x
+            use_y    = col_full & col_x & ~col_y
+
+            pos_after = jnp.where(
+                use_full, pos_full,
+                jnp.where(
+                    use_x, pos_x,
+                    jnp.where(use_y, pos_y, cur),
+                ),
+            )
+            return pos_after
+
+        new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, chosen_step)
 
         
         # Item pickup detection
