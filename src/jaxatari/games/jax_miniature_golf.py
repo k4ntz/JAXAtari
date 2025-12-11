@@ -20,8 +20,8 @@ class MiniatureGolfConstants(NamedTuple):
     BACKGROUND_COLOR: Tuple[int, int, int] = (92, 186, 92)
     PLAYER_COLOR: Tuple[int, int, int] = (66, 72, 200)
     OBSTACLE_COLOR: Tuple[int, int, int] = (214, 92, 92)
-    OBSTACLE_MIN_X: chex.Array = jnp.array([1, 1, 1, 55, 69, 67, 78, 254, 1])               # special case level 8:
-    OBSTACLE_MAX_X: chex.Array = jnp.array([35, 107, 35, 103, 69, 67, 78, 254, 109])        # barrier y counts down
+    OBSTACLE_MIN_X: chex.Array = jnp.array([1, 1, 1, 55, 69, 67, 78, 26, 1])               # special case level 8:
+    OBSTACLE_MAX_X: chex.Array = jnp.array([35, 107, 35, 103, 69, 67, 78, 26, 109])        # barrier y counts down
     OBSTACLE_MIN_Y: chex.Array = jnp.array([155, 155, 133, 81, 197, 219, 211, 0, 155])      # from 255 to 0
     OBSTACLE_MAX_Y: chex.Array = jnp.array([155, 155, 133, 81, 121, 61, 91, 255, 155])      # wrapping back to 255
     HOLE_COLOR: Tuple[int, int, int] = (66, 72, 200)
@@ -149,6 +149,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         ))
 
     def _is_overlapping(self, x1, y1, w1, h1, x2, y2, w2, h2):
+        """Check if rectangles with width wi, height hi and upper-left corner at (xi, yi) overlap."""
         rows, cols = jnp.mgrid[:self.consts.HEIGHT, :self.consts.WIDTH]
 
         mask_first = jnp.logical_and(
@@ -997,7 +998,7 @@ class MiniatureGolfRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         obstacle_mask = self.SHAPE_MASKS["obstacle"]
-        raster = self.jr.render_at(raster, state.obstacle_x, state.obstacle_y, obstacle_mask)
+        raster = self.jr.render_at_clipped(raster, state.obstacle_x, state.obstacle_y, obstacle_mask)
 
         # TODO: implement it such that changing the colors in self.consts actually has an effect
         # (i.e. with the ID mapping)
