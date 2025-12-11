@@ -50,15 +50,15 @@ class MiniatureGolfConstants(NamedTuple):
     LEVEL_8: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_8.npy")
     LEVEL_9: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_9.npy")
 
-    WALL_LAYOUT_LEVEL_1: chex.Array = (LEVEL_1[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_2: chex.Array = (LEVEL_2[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_3: chex.Array = (LEVEL_3[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_4: chex.Array = (LEVEL_4[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_5: chex.Array = (LEVEL_5[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_6: chex.Array = (LEVEL_6[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
-    WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int4)
+    WALL_LAYOUT_LEVEL_1: chex.Array = (LEVEL_1[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_2: chex.Array = (LEVEL_2[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_3: chex.Array = (LEVEL_3[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_4: chex.Array = (LEVEL_4[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_5: chex.Array = (LEVEL_5[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_6: chex.Array = (LEVEL_6[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+    WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
 
 
 # immutable state container
@@ -262,10 +262,10 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         no_overlap = jnp.logical_not(vmap(state.wall_layout, x_positions_to_check, y_positions_to_check))
         x_no_overlap, y_no_overlap = jnp.nonzero(no_overlap, size=self.consts.BALL_SIZE[0] * self.consts.BALL_SIZE[1],
                                                  fill_value=jnp.nan)
-        x_min = jnp.nanmin(x_no_overlap)
-        x_max = jnp.nanmax(x_no_overlap) + 1
-        y_min = jnp.nanmin(y_no_overlap)
-        y_max = jnp.nanmax(y_no_overlap) + 1
+        x_min = jnp.nanmin(x_no_overlap).astype(jnp.int32)
+        x_max = jnp.nanmax(x_no_overlap).astype(jnp.int32) + 1
+        y_min = jnp.nanmin(y_no_overlap).astype(jnp.int32)
+        y_max = jnp.nanmax(y_no_overlap).astype(jnp.int32) + 1
 
         def get_x_when_stuck_in_wall():
             # since the ball's width is only 2, it gets stuck in the wall within a single frame occasionally
@@ -274,8 +274,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             x_no_overlap_, _ = jnp.nonzero(
                 no_overlap_, size=(4 + self.consts.BALL_SIZE[0]) * self.consts.BALL_SIZE[1], fill_value=jnp.nan
             )
-            x_min_ = jnp.nanmin(x_no_overlap_) - 2
-            x_max_ = jnp.nanmax(x_no_overlap_) + 1
+            x_min_ = jnp.nanmin(x_no_overlap_).astype(jnp.int32) - 2
+            x_max_ = jnp.nanmax(x_no_overlap_).astype(jnp.int32) + 1
             return ball_x_new + (x_min_ + 2) - (self.consts.BALL_SIZE[0] + 2 - x_max_)
 
         ball_x_new = jnp.where(
@@ -784,7 +784,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             acceleration_threshold=jnp.array(0),
             acceleration_counter=jnp.array(0),
             mod_4_counter=jnp.array(0),
-            fire_prev=jnp.array(0),
+            fire_prev=jnp.array(False),
             right_number=self.consts.PAR_VALUES[0],
         )
         initial_obs = self._get_observation(state)
