@@ -36,7 +36,7 @@ class VideoChessConstants:
     CURSOR = 13  # for rendering cursor as a "piece"
 
     COLOUR_WHITE = 0
-    COLOUR_BLACK = 1  # we play as black
+    COLOUR_BLACK = 1
 
     WIDTH = 160
     HEIGHT = 210
@@ -53,8 +53,9 @@ class VideoChessConstants:
 
     ANIMATION_FRAME_RATE = 30
 
-    MOVE_DELAY_FRAMES = 5  # process movement actions every 4 frames
+    MOVE_DELAY_FRAMES = 5  # legacy, not used at the moment
     LAST_MOVE_BLINK_FRAMES = 90  # ~3 seconds at 30 FPS
+    BLINK_PERIOD = 6  # frames for cursor/piece blinking
 
     # reuse a very simple asset config: one board + a group of pieces
     ASSET_CONFIG = (
@@ -97,10 +98,13 @@ class BoardHandler:
 
     @staticmethod
     def reset_board() -> jnp.ndarray:
-        """Standard chess start position, encoded with VideoChessConstants."""
+        """Standard chess start position, encoded with VideoChessConstants.
+        White (you) at the bottom, black (opponent, orange) at the top.
+        """
         c = VideoChessConstants
         board = jnp.zeros((c.NUM_RANKS, c.NUM_FILES), dtype=jnp.int32)
 
+        # White pieces (your side, rendered as white sprites 1–6)
         white_back = jnp.array(
             [c.W_ROOK, c.W_KNIGHT, c.W_BISHOP, c.W_QUEEN,
              c.W_KING, c.W_BISHOP, c.W_KNIGHT, c.W_ROOK],
@@ -108,6 +112,7 @@ class BoardHandler:
         )
         white_pawns = jnp.full((c.NUM_FILES,), c.W_PAWN, dtype=jnp.int32)
 
+        # Black pieces (opponent, rendered as orange sprites 7–12)
         black_back = jnp.array(
             [c.B_ROOK, c.B_KNIGHT, c.B_BISHOP, c.B_QUEEN,
              c.B_KING, c.B_BISHOP, c.B_KNIGHT, c.B_ROOK],
@@ -115,10 +120,13 @@ class BoardHandler:
         )
         black_pawns = jnp.full((c.NUM_FILES,), c.B_PAWN, dtype=jnp.int32)
 
-        board = board.at[0, :].set(white_back)
-        board = board.at[1, :].set(white_pawns)
-        board = board.at[6, :].set(black_pawns)
-        board = board.at[7, :].set(black_back)
+        # Place black (opponent, orange) at the TOP (ranks 0 and 1)
+        board = board.at[0, :].set(black_back)
+        board = board.at[1, :].set(black_pawns)
+
+        # Place white (YOU) at the BOTTOM (ranks 7 and 6)
+        board = board.at[6, :].set(white_pawns)
+        board = board.at[7, :].set(white_back)
 
         return board
 
@@ -160,64 +168,111 @@ class BoardHandler:
         )
 
     @staticmethod
-    def legal_moves_for_black_piece(board: jnp.ndarray, from_sq: chex.Array) -> jnp.ndarray:
-        """Legal moves for a black piece (chess-like, only black side for now).
+    def legal_moves_for_colour(board: jnp.ndarray, from_sq: chex.Array, colour: chex.Array) -> jnp.ndarray:
+        """Moves for a piece of the given colour.
 
-        Implemented:
-        - Black pawn: forward 1/2 from start, diagonal captures.
-        - Knight: L-shaped jumps, max 8.
-        - Bishop: sliding diagonals.
-        - Rook: sliding orthogonals.
-        - Queen: bishop + rook rays.
-        - King: one step in any direction.
-
-        Returns:
-            jnp.ndarray of shape (28, 2) with target squares, padded with [-1, -1].
+        Pawns follow normal pawn rules (no en passant). Knights move in L-shapes.
+        Bishops, rooks and queens slide with blocking. Kings move one step in any
+        direction. The result is a (56, 2) array padded with [-1, -1].
         """
         c = VideoChessConstants
 
-        # Keep row/col as JAX scalars (no int())
         row = from_sq[0]
         col = from_sq[1]
 
         piece = board[row, col]
+        colour_scalar = jnp.int32(colour)
 
-        # Helper: a canonical "no-move" array
-        def no_moves_28() -> jnp.ndarray:
-            return jnp.full((28, 2), -1, dtype=jnp.int32)
+        def no_moves() -> jnp.ndarray:
+            return jnp.full((56, 2), -1, dtype=jnp.int32)
 
-        # ----------------------
-        # Pawn moves (black pawns)
-        # ----------------------
+        # --------------------------------------------------------------
+        # Helper for sliding pieces: one ray in a given direction
+        # --------------------------------------------------------------
+        def ray_moves(dir_row: chex.Array, dir_col: chex.Array) -> jnp.ndarray:
+            steps = jnp.arange(1, 8, dtype=jnp.int32)  # 1..7
+
+            r2 = row + dir_row * steps
+            c2 = col + dir_col * steps
+
+            inb = BoardHandler.in_bounds(r2, c2)
+
+            # Safe indexing: clip to board, then mask out of bounds
+            safe_r2 = jnp.clip(r2, 0, c.NUM_RANKS - 1)
+            safe_c2 = jnp.clip(c2, 0, c.NUM_FILES - 1)
+            target_all = board[safe_r2, safe_c2]
+            target = jnp.where(inb, target_all, jnp.int32(c.EMPTY))
+
+            same_colour = BoardHandler.is_same_colour(target, colour_scalar)
+            any_piece = target != jnp.int32(c.EMPTY)
+
+            # Block after the first occupied square (friend or foe)
+            # We want "exclusive" prefix: for index i, look at any_piece[:i].
+            cum = jnp.cumsum(any_piece.astype(jnp.int32))  # inclusive
+            exclusive_cum = jnp.concatenate(
+                [jnp.array([0], dtype=jnp.int32), cum[:-1]],
+                axis=0,
+            )
+            blocked_before = (exclusive_cum > 0)
+
+            legal = inb & (~blocked_before) & (~same_colour)
+
+            coords = jnp.stack([r2, c2], axis=1)
+            # For illegal squares, fill with [-1, -1]
+            coords_masked = jnp.where(
+                legal[:, None],
+                coords.astype(jnp.int32),
+                jnp.array([-1, -1], dtype=jnp.int32),
+            )
+            return coords_masked  # (7, 2)
+
+        # --------------------------------------------------------------
+        # Individual piece move generators
+        # --------------------------------------------------------------
         def pawn_moves() -> jnp.ndarray:
-            # Candidates: forward 1, forward 2 (from start), capture left, capture right
-            # We'll build 4 candidates and then pad to (28, 2).
+            # White pawns move "up" (towards smaller row), black "down".
+            is_white_turn = (colour_scalar == jnp.int32(c.COLOUR_WHITE))
 
-            # 1) One step forward (row - 1, same col), only if empty
-            f_row1 = row - jnp.int32(1)
+            fwd = jax.lax.cond(
+                is_white_turn,
+                lambda: jnp.int32(-1),
+                lambda: jnp.int32(1),
+            )
+
+            start_rank_row = jax.lax.cond(
+                is_white_turn,
+                lambda: jnp.int32(6),  # white pawns on row 6
+                lambda: jnp.int32(1),  # black pawns on row 1
+            )
+            start_rank = (row == start_rank_row)
+
+            moves = []
+
+            # 1) One step forward (only if empty)
+            f_row1 = row + fwd
             f_col = col
             inb1 = BoardHandler.in_bounds(f_row1, f_col)
-            empty1 = jax.lax.cond(
+            target_f1 = jax.lax.cond(
                 inb1,
-                lambda: BoardHandler.is_empty(board, f_row1, f_col),
-                lambda: False,
+                lambda: board[f_row1, f_col],
+                lambda: jnp.int32(c.EMPTY),
             )
+            empty1 = (target_f1 == jnp.int32(c.EMPTY))
+
             move_f1 = jax.lax.cond(
                 inb1 & empty1,
                 lambda: jnp.stack([f_row1, f_col]).astype(jnp.int32),
                 lambda: jnp.array([-1, -1], dtype=jnp.int32),
             )
+            moves.append(move_f1)
 
-            # 2) Two steps forward from start rank (row == 6)
-            f_row2 = row - jnp.int32(2)
-            start_rank = (row == jnp.int32(6))
+            # 2) Two steps forward from starting rank (both intermediate and target must be empty)
+            f_row2 = row + fwd * jnp.int32(2)
             inb2 = BoardHandler.in_bounds(f_row2, f_col)
 
             def can_two_step():
-                return (
-                    BoardHandler.is_empty(board, f_row1, f_col)
-                    & BoardHandler.is_empty(board, f_row2, f_col)
-                )
+                target_f2 = board[f_row2, f_col]
+                return empty1 & (target_f2 == jnp.int32(c.EMPTY))
 
             empty2 = jax.lax.cond(inb2 & start_rank, can_two_step, lambda: False)
 
@@ -226,9 +281,10 @@ class BoardHandler:
                 lambda: jnp.stack([f_row2, f_col]).astype(jnp.int32),
                 lambda: jnp.array([-1, -1], dtype=jnp.int32),
             )
+            moves.append(move_f2)
 
-            # 3) Capture diagonally up-left (row-1, col-1)
-            cap_l_row = row - jnp.int32(1)
+            # 3) Capture diagonally forward-left
+            cap_l_row = row + fwd
             cap_l_col = col - jnp.int32(1)
             inb_cap_l = BoardHandler.in_bounds(cap_l_row, cap_l_col)
             target_l = jax.lax.cond(
@@ -236,15 +292,17 @@ class BoardHandler:
                 lambda: board[cap_l_row, cap_l_col],
                 lambda: jnp.int32(c.EMPTY),
             )
-            can_cap_l = inb_cap_l & BoardHandler.is_opponent(target_l, c.COLOUR_BLACK)
+            can_cap_l = inb_cap_l & BoardHandler.is_opponent(target_l, colour_scalar)
+
             move_cap_l = jax.lax.cond(
                 can_cap_l,
                 lambda: jnp.stack([cap_l_row, cap_l_col]).astype(jnp.int32),
                 lambda: jnp.array([-1, -1], dtype=jnp.int32),
             )
+            moves.append(move_cap_l)
 
-            # 4) Capture diagonally up-right (row-1, col+1)
-            cap_r_row = row - jnp.int32(1)
+            # 4) Capture diagonally forward-right
+            cap_r_row = row + fwd
             cap_r_col = col + jnp.int32(1)
             inb_cap_r = BoardHandler.in_bounds(cap_r_row, cap_r_col)
             target_r = jax.lax.cond(
@@ -252,43 +310,41 @@ class BoardHandler:
                 lambda: board[cap_r_row, cap_r_col],
                 lambda: jnp.int32(c.EMPTY),
             )
-            can_cap_r = inb_cap_r & BoardHandler.is_opponent(target_r, c.COLOUR_BLACK)
+            can_cap_r = inb_cap_r & BoardHandler.is_opponent(target_r, colour_scalar)
+
             move_cap_r = jax.lax.cond(
                 can_cap_r,
                 lambda: jnp.stack([cap_r_row, cap_r_col]).astype(jnp.int32),
                 lambda: jnp.array([-1, -1], dtype=jnp.int32),
             )
+            moves.append(move_cap_r)
 
-            # Stack the 4 pawn candidates
-            pawn_moves_4 = jnp.stack([move_f1, move_f2, move_cap_l, move_cap_r], axis=0)  # (4,2)
+            moves4 = jnp.stack(moves, axis=0)  # (4, 2)
+            pad = jnp.full((56 - 4, 2), -1, dtype=jnp.int32)
+            return jnp.concatenate([moves4, pad], axis=0)  # (56, 2)
 
-            # Pad up to (28,2) with [-1,-1]
-            pad = jnp.full((28 - 4, 2), -1, dtype=jnp.int32)
-            return jnp.concatenate([pawn_moves_4, pad], axis=0)
-
-        # ----------------------
-        # Knight moves (L-shaped jumps)
-        # ----------------------
         def knight_moves() -> jnp.ndarray:
-            deltas = jnp.array([
-                [-2, -1], [-2, 1],
-                [-1, -2], [-1, 2],
-                [1, -2],  [1, 2],
-                [2, -1],  [2, 1],
-            ], dtype=jnp.int32)
+            deltas = jnp.array(
+                [
+                    [-2, -1], [-2, 1],
+                    [-1, -2], [-1, 2],
+                    [1, -2],  [1, 2],
+                    [2, -1],  [2, 1],
+                ],
+                dtype=jnp.int32,
+            )
 
             def one(delta):
                 r2 = row + delta[0]
                 c2 = col + delta[1]
-                inb = BoardHandler.in_bounds(r2, c2)
 
+                inb = BoardHandler.in_bounds(r2, c2)
                 target = jax.lax.cond(
                     inb,
                     lambda: board[r2, c2],
                     lambda: jnp.int32(c.EMPTY),
                 )
-
-                legal = inb & (~BoardHandler.is_same_colour(target, c.COLOUR_BLACK))
+                legal = inb & (~BoardHandler.is_same_colour(target, colour_scalar))
 
                 return jax.lax.cond(
                     legal,
@@ -296,155 +352,48 @@ class BoardHandler:
                     lambda: jnp.array([-1, -1], dtype=jnp.int32),
                 )
 
-            moves8 = jax.vmap(one)(deltas)  # (8,2)
-            pad = jnp.full((28 - 8, 2), -1, dtype=jnp.int32)
+            moves8 = jax.vmap(one)(deltas)  # (8, 2)
+            pad = jnp.full((56 - 8, 2), -1, dtype=jnp.int32)
             return jnp.concatenate([moves8, pad], axis=0)
 
-        # ----------------------
-        # Sliding moves helper (for bishop/rook/queen)
-        # ----------------------
-        def ray_moves(dir_row, dir_col, max_steps: int = 7) -> jnp.ndarray:
-            """Generate up to max_steps squares along a single ray.
-
-            Stops when leaving board or hitting any piece; if it hits an
-            opponent, that square is included; if it hits own piece, it is blocked.
-            Returns shape (max_steps, 2), padded with [-1, -1].
-            """
-            def body(i, carry):
-                moves_arr, blocked = carry
-                # step index i -> distance (i+1)
-                r2 = row + dir_row * (i + 1)
-                c2 = col + dir_col * (i + 1)
-                inb = BoardHandler.in_bounds(r2, c2)
-
-                def when_in_bounds(carry_in):
-                    moves_arr_, blocked_ = carry_in
-
-                    def if_blocked(c_block):
-                        # Already blocked in this direction: do nothing
-                        return c_block
-
-                    def if_not_blocked(c_not_block):
-                        moves_arr_nb, blocked_nb = c_not_block
-                        target = board[r2, c2]
-                        is_own = BoardHandler.is_same_colour(target, c.COLOUR_BLACK)
-                        is_empty = (target == jnp.int32(c.EMPTY))
-                        is_opp = BoardHandler.is_opponent(target, c.COLOUR_BLACK)
-
-                        # Own piece: cannot move there, ray stops
-                        def own_case():
-                            return moves_arr_nb, True
-
-                        # Opponent piece: can capture, then ray stops
-                        def opp_case():
-                            ma = moves_arr_nb.at[i].set(jnp.stack([r2, c2]).astype(jnp.int32))
-                            return ma, True
-
-                        # Empty square: can move, ray continues
-                        def empty_case():
-                            ma = moves_arr_nb.at[i].set(jnp.stack([r2, c2]).astype(jnp.int32))
-                            return ma, False
-
-                        # Use explicit operand for all jax.lax.cond calls:
-                        return jax.lax.cond(
-                            is_own,
-                            lambda _: own_case(),
-                            lambda _: jax.lax.cond(
-                                is_opp,
-                                lambda __: opp_case(),
-                                lambda __: jax.lax.cond(
-                                    is_empty,
-                                    lambda ___: empty_case(),
-                                    lambda ___: (moves_arr_nb, True),
-                                    (moves_arr_nb, blocked_nb),
-                                ),
-                                (moves_arr_nb, blocked_nb),
-                            ),
-                            (moves_arr_nb, blocked_nb),
-                        )
-
-                    return jax.lax.cond(blocked_, if_blocked, if_not_blocked, (moves_arr_, blocked_))
-
-                def when_out_of_bounds(carry_in):
-                    moves_arr_, _ = carry_in
-                    # Once we leave the board, ray is blocked for further squares
-                    return moves_arr_, True
-
-                return jax.lax.cond(inb, when_in_bounds, when_out_of_bounds, (moves_arr, blocked))
-
-            init_moves = jnp.full((max_steps, 2), -1, dtype=jnp.int32)
-            init_blocked = False
-            moves_arr, _ = jax.lax.fori_loop(0, max_steps, body, (init_moves, init_blocked))
-            return moves_arr
-
-        # Bishop: 4 diagonal rays (4 * 7 = 28)
         def bishop_moves() -> jnp.ndarray:
-            dirs = jnp.array([
-                [-1, -1],
-                [-1,  1],
-                [ 1, -1],
-                [ 1,  1],
-            ], dtype=jnp.int32)
+            dirs = [
+                jnp.int32(-1), jnp.int32(-1),
+                jnp.int32(-1), jnp.int32(1),
+                jnp.int32(1),  jnp.int32(-1),
+                jnp.int32(1),  jnp.int32(1),
+            ]
+            rays = []
+            for i in range(0, 8, 2):
+                dr = dirs[i]
+                dc = dirs[i + 1]
+                rays.append(ray_moves(dr, dc))  # each (7, 2)
+            rays_cat = jnp.concatenate(rays, axis=0)  # (28, 2)
+            pad = jnp.full((56 - 28, 2), -1, dtype=jnp.int32)
+            return jnp.concatenate([rays_cat, pad], axis=0)
 
-            def one(d):
-                return ray_moves(d[0], d[1], 7)
-
-            rays = jax.vmap(one)(dirs)  # (4,7,2)
-            return rays.reshape((28, 2))
-
-        # Rook: 4 orthogonal rays (4 * 7 = 28)
         def rook_moves() -> jnp.ndarray:
-            dirs = jnp.array([
-                [-1,  0],
-                [ 1,  0],
-                [ 0, -1],
-                [ 0,  1],
-            ], dtype=jnp.int32)
+            dirs = [
+                jnp.int32(-1), jnp.int32(0),
+                jnp.int32(1),  jnp.int32(0),
+                jnp.int32(0),  jnp.int32(-1),
+                jnp.int32(0),  jnp.int32(1),
+            ]
+            rays = []
+            for i in range(0, 8, 2):
+                dr = dirs[i]
+                dc = dirs[i + 1]
+                rays.append(ray_moves(dr, dc))  # each (7, 2)
+            rays_cat = jnp.concatenate(rays, axis=0)  # (28, 2)
+            pad = jnp.full((56 - 28, 2), -1, dtype=jnp.int32)
+            return jnp.concatenate([rays_cat, pad], axis=0)
 
-            def one(d):
-                return ray_moves(d[0], d[1], 7)
-
-            rays = jax.vmap(one)(dirs)  # (4,7,2)
-            return rays.reshape((28, 2))
-
-        # Queen: bishop + rook rays, compressed into 28 slots.
         def queen_moves() -> jnp.ndarray:
-            b28 = bishop_moves()   # (28,2) with -1 padding
-            r28 = rook_moves()     # (28,2) with -1 padding
-            both = jnp.concatenate([b28, r28], axis=0)  # (56,2)
+            # bishop + rook rays: 8 directions total -> 56 slots
+            b = bishop_moves()[:28]  # (28,2)
+            r = rook_moves()[:28]    # (28,2)
+            return jnp.concatenate([b, r], axis=0)  # (56,2)
 
-            def pack_56_to_28(moves56: jnp.ndarray) -> jnp.ndarray:
-                def body(i, carry):
-                    res, count = carry
-                    move = moves56[i]
-                    is_valid = (move[0] >= jnp.int32(0))
-
-                    def add(carry2):
-                        res2, count2 = carry2
-
-                        def really_add(c3):
-                            res3, count3 = c3
-                            res3 = res3.at[count3].set(move)
-                            return res3, count3 + jnp.int32(1)
-
-                        def no_add(c3):
-                            return c3
-
-                        return jax.lax.cond(count2 < jnp.int32(28), really_add, no_add, (res2, count2))
-
-                    def skip(carry2):
-                        return carry2
-
-                    return jax.lax.cond(is_valid, add, skip, (res, count))
-
-                init_res = jnp.full((28, 2), -1, dtype=jnp.int32)
-                init_count = jnp.int32(0)
-                res_final, _ = jax.lax.fori_loop(0, 56, body, (init_res, init_count))
-                return res_final
-
-            return pack_56_to_28(both)
-
-        # King: 1-step in 8 directions
         def king_moves() -> jnp.ndarray:
             directions = jnp.array(
                 [[-1, -1], [-1, 0], [-1, 1],
@@ -456,6 +405,7 @@ class BoardHandler:
             def one_dir(delta):
                 r2 = row + delta[0]
                 c2 = col + delta[1]
+
                 inb = BoardHandler.in_bounds(r2, c2)
 
                 target = jax.lax.cond(
@@ -464,7 +414,7 @@ class BoardHandler:
                     lambda: jnp.int32(c.EMPTY),
                 )
 
-                legal = inb & (~BoardHandler.is_same_colour(target, c.COLOUR_BLACK))
+                legal = inb & (~BoardHandler.is_same_colour(target, colour_scalar))
 
                 return jax.lax.cond(
                     legal,
@@ -472,33 +422,62 @@ class BoardHandler:
                     lambda: jnp.array([-1, -1], dtype=jnp.int32),
                 )
 
-            moves_8 = jax.vmap(one_dir)(directions)  # (8,2)
-            pad = jnp.full((28 - 8, 2), -1, dtype=jnp.int32)
-            return jnp.concatenate([moves_8, pad], axis=0)
+            moves8 = jax.vmap(one_dir)(directions)  # (8,2)
+            pad = jnp.full((56 - 8, 2), -1, dtype=jnp.int32)
+            return jnp.concatenate([moves8, pad], axis=0)
 
-        # ----------------------
-        # Piece-type dispatch
-        # ----------------------
-        def moves_if_black_piece() -> jnp.ndarray:
+        # --------------------------------------------------------------
+        # Dispatch by piece code
+        # --------------------------------------------------------------
+        is_own = BoardHandler.is_same_colour(piece, colour_scalar)
+
+        cW, cB = c, c  # shorthand
+
+        is_pawn = (piece == jnp.int32(cW.W_PAWN)) | (piece == jnp.int32(cB.B_PAWN))
+        is_knight = (piece == jnp.int32(cW.W_KNIGHT)) | (piece == jnp.int32(cB.B_KNIGHT))
+        is_bishop = (piece == jnp.int32(cW.W_BISHOP)) | (piece == jnp.int32(cB.B_BISHOP))
+        is_rook = (piece == jnp.int32(cW.W_ROOK)) | (piece == jnp.int32(cB.B_ROOK))
+        is_queen = (piece == jnp.int32(cW.W_QUEEN)) | (piece == jnp.int32(cB.B_QUEEN))
+        is_king = (piece == jnp.int32(cW.W_KING)) |(piece == jnp.int32(cB.B_KING))
+
+        def moves_if_own():
+            def for_pawn():
+                return pawn_moves()
+
+            def for_knight():
+                return knight_moves()
+
+            def for_bishop():
+                return bishop_moves()
+
+            def for_rook():
+                return rook_moves()
+
+            def for_queen():
+                return queen_moves()
+
+            def for_king():
+                return king_moves()
+
             return jax.lax.cond(
-                piece == jnp.int32(c.B_PAWN),
-                pawn_moves,
+                is_pawn,
+                for_pawn,
                 lambda: jax.lax.cond(
-                    piece == jnp.int32(c.B_KNIGHT),
-                    knight_moves,
+                    is_knight,
+                    for_knight,
                     lambda: jax.lax.cond(
-                        piece == jnp.int32(c.B_BISHOP),
-                        bishop_moves,
+                        is_bishop,
+                        for_bishop,
                         lambda: jax.lax.cond(
-                            piece == jnp.int32(c.B_ROOK),
-                            rook_moves,
+                            is_rook,
+                            for_rook,
                             lambda: jax.lax.cond(
-                                piece == jnp.int32(c.B_QUEEN),
-                                queen_moves,
+                                is_queen,
+                                for_queen,
                                 lambda: jax.lax.cond(
-                                    piece == jnp.int32(c.B_KING),
-                                    king_moves,
-                                    no_moves_28,
+                                    is_king,
+                                    for_king,
+                                    no_moves,
                                 ),
                             ),
                         ),
@@ -506,20 +485,28 @@ class BoardHandler:
                 ),
             )
 
-        # If the selected square is not a black piece, return "no moves"
         return jax.lax.cond(
-            BoardHandler.is_black(piece),
-            moves_if_black_piece,
-            no_moves_28,
+            is_own,
+            moves_if_own,
+            no_moves,
+        )
+
+    @staticmethod
+    def legal_moves_for_black_piece(board: jnp.ndarray, from_sq: chex.Array) -> jnp.ndarray:
+        """
+        Backward-compatible wrapper for existing code that expects
+        `legal_moves_for_black_piece`. Internally uses the colour-generic
+        `legal_moves_for_colour` with COLOUR_BLACK.
+        """
+        return BoardHandler.legal_moves_for_colour(
+            board,
+            from_sq,
+            jnp.int32(VideoChessConstants.COLOUR_BLACK),
         )
 
     @staticmethod
     def apply_move(board: jnp.ndarray, from_sq: chex.Array, to_sq: chex.Array) -> jnp.ndarray:
-        """Move piece, with simple pawn promotion to queen for both colours.
-
-        - Black pawn promotes on rank 0 (top of the board) to B_QUEEN.
-        - White pawn promotes on rank 7 (bottom of the board) to W_QUEEN.
-        """
+        """Move a piece and handle simple pawn promotion to a queen for both colours."""
         c = VideoChessConstants
 
         from_row = from_sq[0]
@@ -569,10 +556,10 @@ class BoardHandler:
         return jnp.any(board == king_code)
 
     @staticmethod
-    def has_any_legal_moves_for_black(board: jnp.ndarray) -> bool:
-        """Return True if at least one black piece has any legal move.
+    def has_any_legal_moves_for_colour(board: jnp.ndarray, colour: chex.Array) -> bool:
+        """Return True if at least one piece of the given colour has any legal move.
 
-        Uses the existing legal_moves_for_black_piece() as a backend.
+        Uses legal_moves_for_colour() as a backend.
         """
         c = VideoChessConstants
 
@@ -583,16 +570,17 @@ class BoardHandler:
             piece = board[row, col]
 
             def check_square(_):
-                moves = BoardHandler.legal_moves_for_black_piece(
+                moves = BoardHandler.legal_moves_for_colour(
                     board,
                     jnp.array([row, col], dtype=jnp.int32),
+                    colour,
                 )
                 # Any move where row >= 0 is considered a real move
                 has_move = jnp.any(moves[:, 0] >= jnp.int32(0))
                 return found | has_move
 
             return jax.lax.cond(
-                BoardHandler.is_black(piece),
+                BoardHandler.is_same_colour(piece, colour),
                 check_square,
                 lambda _ : found,
                 operand=None,
@@ -606,6 +594,14 @@ class BoardHandler:
             jnp.bool_(False),
         )
 
+    @staticmethod
+    def has_any_legal_moves_for_black(board: jnp.ndarray) -> bool:
+        """Backward-compatible wrapper for existing black-only callers."""
+        return BoardHandler.has_any_legal_moves_for_colour(
+            board,
+            jnp.int32(VideoChessConstants.COLOUR_BLACK),
+        )
+
 
 # -------------------- ENVIRONMENT --------------------
 
@@ -614,12 +610,7 @@ class JaxVideoChess(
 ):
     @partial(jax.jit, static_argnums=(0,))
     def _update_game_over(self, state: VideoChessState) -> VideoChessState:
-        """Update game_phase and winner based on basic end conditions.
-
-        - If one king is missing -> the other side wins.
-        - If both kings are missing -> draw (winner = -1).
-        - If both kings are present but black has no legal moves -> treat as stalemate (draw).
-        """
+        """Basic end-of-game handling (king captured / simple stalemate)."""
         c = self.consts
         board = state.board
 
@@ -701,7 +692,7 @@ class JaxVideoChess(
         board = BoardHandler.reset_board()
         state = VideoChessState(
             board=board,
-            to_move=c.COLOUR_BLACK,
+            to_move=c.COLOUR_WHITE,
             game_phase=c.PHASE_SELECT_PIECE,
             cursor_pos=jnp.array([4, 3], dtype=jnp.int32),
             selected_square=jnp.array([-1, -1], dtype=jnp.int32),
@@ -729,9 +720,7 @@ class JaxVideoChess(
     # ------------------------------------------------------------------
     @partial(jax.jit, static_argnums=(0,))
     def _move_cursor_basic(self, state: VideoChessState, action: chex.Array) -> VideoChessState:
-        """
-        Move cursor one square in 8 directions based on Atari actions.
-        """
+        """Move cursor one square in 8 directions based on Atari actions."""
         # Direction flags
         up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
         down = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT)
@@ -861,12 +850,13 @@ class JaxVideoChess(
     @partial(jax.jit, static_argnums=(0,))
     def _step_select_piece_phase(self, state: VideoChessState, action: chex.Array) -> VideoChessState:
         """
-        Phase 0: move cursor and select which black piece to move.
+        Phase 0: move cursor and select which piece (of the side to move) to select.
         """
         def select_piece(s: VideoChessState) -> VideoChessState:
             row, col = s.cursor_pos
             piece = s.board[row, col]
-            is_own = BoardHandler.is_same_colour(piece, self.consts.COLOUR_BLACK)
+            # A piece is selectable if it belongs to the side whose turn it is.
+            is_own = BoardHandler.is_same_colour(piece, s.to_move)
             return jax.lax.cond(
                 is_own,
                 lambda st: st._replace(
@@ -894,7 +884,12 @@ class JaxVideoChess(
         FIRE on the original square deselects.
         """
         def try_move(st: VideoChessState) -> VideoChessState:
-            legal_targets = BoardHandler.legal_moves_for_black_piece(st.board, st.selected_square)
+            # Legal moves for the currently selected piece of the side to move.
+            legal_targets = BoardHandler.legal_moves_for_colour(
+                st.board,
+                st.selected_square,
+                st.to_move,
+            )
             is_legal = jnp.any(jnp.all(legal_targets == st.cursor_pos, axis=1))
 
             def do_move():
@@ -907,6 +902,8 @@ class JaxVideoChess(
                     board=new_board,
                     selected_square=jnp.array([-1, -1], dtype=jnp.int32),
                     game_phase=self.consts.PHASE_SELECT_PIECE,
+                    # Switch side to move after a successful move
+                    to_move=jnp.int32(1) - jnp.int32(st.to_move),
                     # After move, cursor jumps back to original square
                     cursor_pos=from_sq,
                     # Remember where we just moved to, so that piece can blink
@@ -925,10 +922,10 @@ class JaxVideoChess(
         def apply_or_deselect(st: VideoChessState) -> VideoChessState:
             same = jnp.all(st.cursor_pos == st.selected_square)
 
-            # Check if the cursor is currently on one of our own (black) pieces
+            # Check if the cursor is currently on one of our own pieces (side to move)
             row, col = st.cursor_pos
             piece = st.board[row, col]
-            is_own = BoardHandler.is_same_colour(piece, self.consts.COLOUR_BLACK)
+            is_own = BoardHandler.is_same_colour(piece, st.to_move)
 
             def reselect(st2: VideoChessState) -> VideoChessState:
                 # Simply change which piece is selected, stay in target phase
@@ -1079,8 +1076,9 @@ class VideoChessRenderer(JAXGameRenderer):
         c = self.consts
 
         # Same blink pattern as overlays (fast, 50% duty cycle)
-        blink_period = jnp.int32(6)
-        blink_on = (state.frame_counter % blink_period) < (blink_period // 2)
+        period = jnp.int32(c.BLINK_PERIOD)
+        half = jnp.int32(c.BLINK_PERIOD // 2)
+        blink_on = (state.frame_counter % period) < half
 
         in_target_phase = (state.game_phase == c.PHASE_SELECT_TARGET)
         sel_row = state.selected_square[0]
@@ -1135,8 +1133,9 @@ class VideoChessRenderer(JAXGameRenderer):
         c = self.consts
 
         # Blink pattern: fast, 50% duty cycle (3 frames on, 3 frames off at 30 FPS)
-        blink_period = jnp.int32(6)
-        blink_on = (state.frame_counter % blink_period) < (blink_period // 2)
+        period = jnp.int32(c.BLINK_PERIOD)
+        half = jnp.int32(c.BLINK_PERIOD // 2)
+        blink_on = (state.frame_counter % period) < half
 
         # Selection / phase flags
         in_select_phase = (state.game_phase == c.PHASE_SELECT_PIECE)
@@ -1159,7 +1158,8 @@ class VideoChessRenderer(JAXGameRenderer):
             is_cursor = (state.cursor_pos[0] == row) & (state.cursor_pos[1] == col)
             is_selected_square = (state.selected_square[0] == row) & (state.selected_square[1] == col)
 
-            is_own = BoardHandler.is_same_colour(piece, VideoChessConstants.COLOUR_BLACK)
+            # "Own" here means: belongs to the side whose turn it is.
+            is_own = BoardHandler.is_same_colour(piece, state.to_move)
 
             same_square = is_cursor & is_selected_square
 
@@ -1179,7 +1179,7 @@ class VideoChessRenderer(JAXGameRenderer):
             def handle_select_phase(r_in):
                 """In piece-selection phase:
                 - Cursor is always visible on its square.
-                - If it is hovering over one of our own (black) pieces, the cursor blinks
+                - If it is hovering over one of our own pieces (side to move), the cursor blinks
                   (i.e., only drawn on blink_on), while the piece beneath never disappears.
                 - On non-own squares, the cursor is drawn every frame (no blinking), so it
                   is easy to track.
