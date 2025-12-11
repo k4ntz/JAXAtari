@@ -8,4 +8,4 @@ env
 results/
 .DS_Store
 docs/build/
-
+Miniforge3-Darwin-x86_64.sh 
