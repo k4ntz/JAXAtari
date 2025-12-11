@@ -1228,6 +1228,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             updated_bullet_active
         )
         
+        """
         # Enemy random walk
         rng, subkey = jax.random.split(state.key)
         enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
@@ -1259,7 +1260,61 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_collisions[:, None],
             state.enemy_positions,
             prop_enemy_positions
+        )"""
+
+        rng, move_key, noise_key = jax.random.split(state.key, 3)
+        enemy_alive = state.enemy_active == 1
+
+        player_center = jnp.array([
+            new_x + self.consts.PLAYER_WIDTH // 2,
+            new_y + self.consts.PLAYER_HEIGHT // 2,
+        ], dtype=jnp.int32)
+
+        vec_to_player = player_center[None, :] - state.enemy_positions 
+        step_towards = jnp.sign(vec_to_player).astype(jnp.int32)
+
+        rand_steps = jax.random.randint(
+            noise_key, (NUM_ENEMIES, 2), minval=-1, maxval=2, dtype=jnp.int32
         )
+
+        type_chase_probs = jnp.array(
+            [0.0, 0.3, 0.5, 0.7, 0.85, 1.0], dtype=jnp.float32
+        )
+        chase_probs = type_chase_probs[state.enemy_types]
+        rand_uniform = jax.random.uniform(move_key, (NUM_ENEMIES,))
+        use_chase = rand_uniform < chase_probs
+
+        chosen_step = jnp.where(
+            use_chase[:, None],
+            step_towards,
+            rand_steps
+        ).astype(jnp.int32)
+
+        chosen_step = chosen_step * enemy_alive[:, None].astype(jnp.int32)
+
+        prop_enemy_positions = state.enemy_positions + chosen_step
+        prop_enemy_positions = jnp.clip(
+            prop_enemy_positions,
+            jnp.array([0, 0]),
+            jnp.array([self.consts.WORLD_WIDTH - 1, self.consts.WORLD_HEIGHT - 1])
+        )
+
+        def check_enemy_collision(enemy_pos):
+            ex, ey = enemy_pos[0], enemy_pos[1]
+            e_overlap_x = (ex <= (WALLS[:, 0] + WALLS[:, 2] - 1)) & \
+                          ((ex + self.consts.ENEMY_WIDTH - 1) >= WALLS[:, 0])
+            e_overlap_y = (ey <= (WALLS[:, 1] + WALLS[:, 3] - 1)) & \
+                          ((ey + self.consts.ENEMY_HEIGHT - 1) >= WALLS[:, 1])
+            return jnp.any(e_overlap_x & e_overlap_y)
+
+        enemy_collisions = jax.vmap(check_enemy_collision)(prop_enemy_positions)
+        enemy_collisions = enemy_collisions & enemy_alive
+        new_enemy_positions = jnp.where(
+            enemy_collisions[:, None],
+            state.enemy_positions,
+            prop_enemy_positions
+        )
+
         
         # Item pickup detection
         def check_item_collision(item_pos):
