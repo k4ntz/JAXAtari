@@ -42,8 +42,9 @@ ITEM_GOLD_CHALICE = 7   # +3000 points
 ITEM_SHIELD = 8         # Damage reduction
 ITEM_GUN = 9            # Faster shooting
 ITEM_BOMB = 10          # Kill all enemies in area
-ITEM_LADDER_UP = 11     # Ladder leading up (larger brown box)
-ITEM_LADDER_DOWN = 12   # Ladder leading down (larger brown box)
+ITEM_KEY = 11           # Key to unlock exit (gated door)
+ITEM_LADDER_UP = 12     # Exit/door leading up (requires key)
+ITEM_LADDER_DOWN = 13   # Ladder leading down (always open)
 
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
@@ -66,6 +67,13 @@ BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
 BULLET_SPEED = 2  # Base speed (slow)
 BULLET_SPEED_WITH_GUN = 4  # Speed with gun powerup
+
+# Wizard projectile configuration
+ENEMY_MAX_BULLETS = 8
+ENEMY_BULLET_WIDTH = 3
+ENEMY_BULLET_HEIGHT = 3
+ENEMY_BULLET_SPEED = 2
+WIZARD_SHOOT_INTERVAL = 20  # steps between shots (gate)
 
 # Spawner configuration
 SPAWNER_WIDTH = 14
@@ -100,7 +108,8 @@ class DarkChambersConstants(NamedTuple):
     SHIELD_COLOR: Tuple[int, int, int] = (80, 120, 255) # Blue shield
     GUN_COLOR: Tuple[int, int, int] = (40, 40, 40) # Black gun
     BOMB_COLOR: Tuple[int, int, int] = (240, 240, 240) # White bomb
-    LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish ladder up
+    KEY_COLOR: Tuple[int, int, int] = (255, 200, 0) # Gold key
+    LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish exit door
     LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
     BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
@@ -156,6 +165,8 @@ class DarkChambersState(NamedTuple):
     
     bullet_positions: chex.Array  # (MAX_BULLETS, 4) - x, y, dx, dy
     bullet_active: chex.Array     # (MAX_BULLETS,) - 1=active, 0=inactive
+    enemy_bullet_positions: chex.Array  # (ENEMY_MAX_BULLETS, 4) - x, y, dx, dy
+    enemy_bullet_active: chex.Array     # (ENEMY_MAX_BULLETS,) - 1=active, 0=inactive
     
     health: chex.Array
     score: chex.Array
@@ -164,6 +175,7 @@ class DarkChambersState(NamedTuple):
     item_types: chex.Array      # 1=heart, 2=poison
     item_active: chex.Array     # 1=active, 0=collected
     
+    has_key: chex.Array         # 1=has key, 0=no key
     shield_active: chex.Array   # 1=shield active, 0=no shield
     gun_active: chex.Array      # 1=gun active, 0=no gun
     bomb_count: chex.Array      # number of bombs (0-15)
@@ -229,8 +241,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.consts.SHIELD_COLOR,       # 15 (shield)
             self.consts.GUN_COLOR,          # 16 (gun)
             self.consts.BOMB_COLOR,         # 17 (bomb)
-            self.consts.LADDER_UP_COLOR,    # 18 (ladder up)
-            self.consts.LADDER_DOWN_COLOR,  # 19 (ladder down)
+            self.consts.KEY_COLOR,          # 18 (key)
+            self.consts.LADDER_UP_COLOR,    # 19 (exit/door up)
+            self.consts.LADDER_DOWN_COLOR,  # 20 (ladder down)
         ], dtype=jnp.uint8)
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
@@ -375,8 +388,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             [6, 6],                 # 8 SHIELD
             [6, 6],                 # 9 GUN
             [6, 6],                 # 10 BOMB
-            [LADDER_WIDTH, LADDER_HEIGHT],  # 11 LADDER_UP (larger)
-            [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_DOWN (larger)
+            [6, 6],                 # 11 KEY (small key)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
         ], dtype=jnp.int32)
 
         # Color id mapping per item type (aligning with palette above)
@@ -392,11 +406,12 @@ class DarkChambersRenderer(JAXGameRenderer):
             15,  # SHIELD (blue)
             16,  # GUN (black)
             17,  # BOMB (white)
-            18,  # LADDER_UP (brown)
-            19,  # LADDER_DOWN (dark brown)
+            18,  # KEY (gold)
+            19,  # LADDER_UP (brown exit door)
+            20,  # LADDER_DOWN (dark brown ladder)
         ], dtype=jnp.int32)
         # Python constants (avoid tracing int() on JAX 0-D arrays inside jit)
-        self.ITEM_TYPE_COLOR_IDS_PY = [8, 9, 13, 12, 12, 12, 12, 15, 16, 17, 18, 19]
+        self.ITEM_TYPE_COLOR_IDS_PY = [8, 9, 13, 12, 12, 12, 12, 15, 16, 17, 18, 19, 20]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
         """Render current game state."""
@@ -783,6 +798,21 @@ class DarkChambersRenderer(JAXGameRenderer):
             sizes=bullet_sizes,
             color_id=11
         )
+        # Enemy bullets
+        ebullet_world_pos = state.enemy_bullet_positions[:, :2].astype(jnp.int32)
+        ebullet_screen_pos = (ebullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        ebullet_mask = state.enemy_bullet_active == 1
+        masked_ebullet_pos = jnp.where(ebullet_mask[:, None], ebullet_screen_pos, off_screen)
+        ebullet_sizes = jnp.tile(
+            jnp.array([ENEMY_BULLET_WIDTH, ENEMY_BULLET_HEIGHT], dtype=jnp.int32)[None, :],
+            (ENEMY_MAX_BULLETS, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=masked_ebullet_pos,
+            sizes=ebullet_sizes,
+            color_id=10
+        )
         
         # Shield indicator in bottom-left corner
         shield_indicator_active = state.shield_active == 1
@@ -1005,21 +1035,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         
         key, subkey = jax.random.split(key)
         item_positions_init = jnp.zeros((NUM_ITEMS, 2), dtype=jnp.int32)
-        # Spawn only regular items (indices 2+), leave first 2 for fixed ladder positions
-        (item_positions_temp, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(2, NUM_ITEMS))
+        # Spawn only regular items (indices 3+), leave first 3 for fixed key, exit, ladder_down
+        (item_positions_temp, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(3, NUM_ITEMS))
         
-        # Place ladders at fixed positions in upper-left area
-        # LADDER_UP at (40, 40), LADDER_DOWN at (40, 70)
-        ladder_positions = jnp.array([
-            [40, 40],   # LADDER_UP
-            [40, 70],   # LADDER_DOWN
-        ], dtype=jnp.int32)
+        # Place key and exit in upper-left corner, ladder down far away (bottom-right)
+        # KEY at (24, 40), LADDER_UP (exit) at (300, 350), LADDER_DOWN at (40, 70)
+        key_pos = jnp.array([24, 40], dtype=jnp.int32)
+        exit_pos = jnp.array([300, 350], dtype=jnp.int32)
+        ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
         
-        # Combine: first 2 are ladders, rest are randomly spawned
-        item_positions = item_positions_temp.at[0:2].set(ladder_positions)
+        # Combine: first 3 positions are key, exit, ladder_down, rest are randomly spawned
+        item_positions = item_positions_temp.at[0:3].set(jnp.array([key_pos, exit_pos, ladder_down_pos]))
         
         # Weighted distribution of item types (more traps)
-        # Reserve first 2 slots for ladders (one up, one down)
+        # Reserve first 3 slots for key, exit, ladder_down, rest are regular items
         key, subkey = jax.random.split(key)
         all_item_types = jnp.array([
             ITEM_HEART,          # health +10
@@ -1033,7 +1062,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_GUN,            # faster shooting
             ITEM_BOMB,           # kill all enemies
         ], dtype=jnp.int32)
-        # Probabilities sum to 1.0; traps boosted
+        # Probabilities sum to 1.0
         spawn_probs = jnp.array([
             0.18,  # heart
             0.08,  # poison
@@ -1046,11 +1075,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             0.07,  # gun
             0.05,  # bomb
         ], dtype=jnp.float32)
-        # Spawn regular items (leave first 2 for ladders)
-        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 2,), p=spawn_probs)
-        # Add ladders at beginning: one up, one down
+        # Spawn regular items (leave first 3 for key, exit, ladder_down)
+        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
+        # Add key, exit, ladder_down at beginning
         item_types = jnp.concatenate([
-            jnp.array([ITEM_LADDER_UP, ITEM_LADDER_DOWN], dtype=jnp.int32),
+            jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN], dtype=jnp.int32),
             regular_items
         ])
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
@@ -1068,11 +1097,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             spawner_timers=spawner_timers,
             bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
             bullet_active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
+            enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
+            enemy_bullet_active=jnp.zeros(ENEMY_MAX_BULLETS, dtype=jnp.int32),
             health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32),
             item_positions=item_positions,
             item_types=item_types,
             item_active=item_active,
+            has_key=jnp.array(0, dtype=jnp.int32),  # Start without key
             shield_active=jnp.array(0, dtype=jnp.int32),
             gun_active=jnp.array(0, dtype=jnp.int32),
             bomb_count=jnp.array(0, dtype=jnp.int32),
@@ -1227,6 +1259,66 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             1,
             updated_bullet_active
         )
+
+        # Wizard shooting: sporadically fire towards player
+        can_enemy_spawn_gate = (state.step_counter % WIZARD_SHOOT_INTERVAL) == 0
+        wizard_mask = (state.enemy_active == 1) & (state.enemy_types == ENEMY_WIZARD)
+        has_wizard = jnp.any(wizard_mask)
+        first_wizard_idx = jnp.argmax(wizard_mask.astype(jnp.int32))
+        enemy_can_spawn = can_enemy_spawn_gate & has_wizard
+        # Use current enemy positions for shooting; movement updates happen later
+        wiz_pos = state.enemy_positions[first_wizard_idx]
+        wiz_cx = wiz_pos[0] + self.consts.ENEMY_WIDTH // 2
+        wiz_cy = wiz_pos[1] + self.consts.ENEMY_HEIGHT // 2
+        p_cx = new_x + self.consts.PLAYER_WIDTH // 2
+        p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
+        dir_x_e = jnp.sign(p_cx - wiz_cx) * ENEMY_BULLET_SPEED
+        dir_y_e = jnp.sign(p_cy - wiz_cy) * ENEMY_BULLET_SPEED
+        enemy_bullet_spawn = jnp.array([wiz_cx, wiz_cy, dir_x_e, dir_y_e], dtype=jnp.int32)
+        e_first_inactive = jnp.argmax(state.enemy_bullet_active == 0)
+        e_can_spawn = jnp.any(state.enemy_bullet_active == 0) & enemy_can_spawn
+        new_enemy_bullet_positions = jnp.where(
+            (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == e_first_inactive) & e_can_spawn,
+            enemy_bullet_spawn,
+            state.enemy_bullet_positions
+        )
+        new_enemy_bullet_active = jnp.where(
+            (jnp.arange(ENEMY_MAX_BULLETS) == e_first_inactive) & e_can_spawn,
+            1,
+            state.enemy_bullet_active
+        )
+        # Move enemy bullets
+        moved_enemy_bullets = state.enemy_bullet_positions + jnp.concatenate([
+            state.enemy_bullet_positions[:, 2:], jnp.zeros((ENEMY_MAX_BULLETS, 2), dtype=jnp.int32)
+        ], axis=1)
+        e_in_bounds = (
+            (moved_enemy_bullets[:, 0] >= 0)
+            & (moved_enemy_bullets[:, 0] < self.consts.WORLD_WIDTH)
+            & (moved_enemy_bullets[:, 1] >= 0)
+            & (moved_enemy_bullets[:, 1] < self.consts.WORLD_HEIGHT)
+        )
+        def check_enemy_bullet_wall_collision(bpos):
+            bx, by = bpos[0], bpos[1]
+            b_overlap_x = (bx <= (WALLS[:,0] + WALLS[:,2] - 1)) & ((bx + ENEMY_BULLET_WIDTH - 1) >= WALLS[:,0])
+            b_overlap_y = (by <= (WALLS[:,1] + WALLS[:,3] - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= WALLS[:,1])
+            return jnp.any(b_overlap_x & b_overlap_y)
+        enemy_bullet_wall_collisions = jax.vmap(check_enemy_bullet_wall_collision)(moved_enemy_bullets[:, :2])
+        updated_enemy_bullet_positions = jnp.where(
+            state.enemy_bullet_active[:, None] == 1,
+            moved_enemy_bullets,
+            state.enemy_bullet_positions
+        )
+        updated_enemy_bullet_active = state.enemy_bullet_active & e_in_bounds.astype(jnp.int32) & (~enemy_bullet_wall_collisions).astype(jnp.int32)
+        final_enemy_bullet_positions = jnp.where(
+            (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == e_first_inactive) & e_can_spawn,
+            enemy_bullet_spawn,
+            updated_enemy_bullet_positions
+        )
+        final_enemy_bullet_active = jnp.where(
+            (jnp.arange(ENEMY_MAX_BULLETS) == e_first_inactive) & e_can_spawn,
+            1,
+            updated_enemy_bullet_active
+        )
         
         """
         # Enemy random walk
@@ -1368,6 +1460,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         collected_shields = jnp.any(item_collisions & (state.item_types == ITEM_SHIELD))
         collected_guns = jnp.any(item_collisions & (state.item_types == ITEM_GUN))
         collected_bombs = jnp.sum(item_collisions & (state.item_types == ITEM_BOMB))
+        collected_keys = jnp.any(item_collisions & (state.item_types == ITEM_KEY))
         # Health change mapping: heart +HEALTH_GAIN, poison -POISON_DAMAGE, trap -TRAP_DAMAGE
         health_change = (
             collected_hearts * self.consts.HEALTH_GAIN
@@ -1382,6 +1475,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Update gun status
         new_gun_active = jnp.where(collected_guns, 1, state.gun_active)
         
+        # Update key status (persists until level change)
+        new_has_key = jnp.where(collected_keys, 1, state.has_key)
+        
         # Update bomb count (capped at MAX_BOMBS)
         new_bomb_count = jnp.clip(state.bomb_count + collected_bombs, 0, MAX_BOMBS)
         
@@ -1389,6 +1485,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         on_ladder_up = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_UP))
         on_ladder_down = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_DOWN))
         on_any_ladder = on_ladder_up | on_ladder_down
+        
+        # Gate UP ladder on key possession
+        on_ladder_up_gated = on_ladder_up & (new_has_key == 1)
         
         # Update ladder timer: increment if on ladder, reset if not
         new_ladder_timer = jnp.where(
@@ -1398,8 +1497,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )
         
         # Level transition when timer reaches threshold
+        # Only allow UP transition if player has key
         should_change_level = new_ladder_timer >= LADDER_INTERACTION_TIME
-        going_up = should_change_level & on_ladder_up
+        going_up = should_change_level & on_ladder_up_gated
         going_down = should_change_level & on_ladder_down
         
         # Calculate new level (clamp to valid range)
@@ -1431,9 +1531,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
         new_score = state.score + gained_points
         
-        # Remove collected items (but NOT ladders - they stay persistent)
+        # Remove collected items (but NOT ladders - they stay persistent, and keys are consumable)
         is_ladder = (state.item_types == ITEM_LADDER_UP) | (state.item_types == ITEM_LADDER_DOWN)
-        should_remove = item_collisions & (~is_ladder)
+        is_key = (state.item_types == ITEM_KEY)
+        should_remove = item_collisions & (~is_ladder) | (is_key & item_collisions)  # Remove keys when collected
         new_item_active = jnp.where(should_remove, 0, state.item_active)
         
         # Bullet-enemy collision detection
@@ -1623,6 +1724,17 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         shield_multiplier = jnp.where(new_shield_active == 1, 0.5, 1.0)
         reduced_damage = (contact_damage * shield_multiplier).astype(jnp.int32)
         final_health = jnp.clip(new_health - reduced_damage, 0, self.consts.MAX_HEALTH)
+
+        # Enemy bullet damage to player only
+        def enemy_bullet_hits_player(bpos):
+            bx, by = bpos[0], bpos[1]
+            overlap_x = (bx <= (new_x + self.consts.PLAYER_WIDTH - 1)) & ((bx + ENEMY_BULLET_WIDTH - 1) >= new_x)
+            overlap_y = (by <= (new_y + self.consts.PLAYER_HEIGHT - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= new_y)
+            return overlap_x & overlap_y
+        enemy_bullet_hits = jax.vmap(enemy_bullet_hits_player)(final_enemy_bullet_positions[:, :2]) & (final_enemy_bullet_active == 1)
+        enemy_bullet_damage = jnp.sum(enemy_bullet_hits.astype(jnp.int32))
+        final_health = jnp.clip(final_health - enemy_bullet_damage, 0, self.consts.MAX_HEALTH)
+        final_enemy_bullet_active = final_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
         
         # Spawner logic: spawn enemies near active spawners
         new_spawner_timers = state.spawner_timers - 1
@@ -1711,10 +1823,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 overlap_y = (y <= (wy + wh - 1)) & ((y + 13 - 1) >= wy)
                 return jnp.any(overlap_x & overlap_y)
 
-            # Fixed ladder positions in upper-left
-            ladder_positions = jnp.array([[40, 40], [40, 70]], dtype=jnp.int32)
+            # Fixed key, exit, and ladder down positions
+            # KEY at (24, 40), LADDER_UP (exit) at (300, 350), LADDER_DOWN at (40, 70)
+            key_pos = jnp.array([24, 40], dtype=jnp.int32)
+            exit_pos = jnp.array([300, 350], dtype=jnp.int32)
+            ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
 
-            # Generate random positions for remaining items with retries to avoid walls
+            # Generate random positions for regular items with retries to avoid walls
             def spawn_regular_item(carry, idx):
                 positions_arr, key_in = carry
 
@@ -1735,13 +1850,18 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 return (positions_arr, key_out), None
 
             key, sk = jax.random.split(key)
-            init_positions = jnp.zeros((NUM_ITEMS - 2, 2), dtype=jnp.int32)
-            (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 2))
+            init_positions = jnp.zeros((NUM_ITEMS - 3, 2), dtype=jnp.int32)  # -3 for key, exit, ladder_down
+            (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 3))
 
-            # Combine: first 2 fixed (ladders), rest spawned with wall avoidance
-            new_positions = jnp.concatenate([ladder_positions, regular_positions], axis=0)
+            # Combine: first 3 are key, exit, ladder_down, rest are regular items
+            new_positions = jnp.concatenate([
+                key_pos[None, :],
+                exit_pos[None, :],
+                ladder_down_pos[None, :],
+                regular_positions
+            ], axis=0)
             
-            # Generate new item types (same spawn logic as reset)
+            # Generate new item types
             key, subkey = jax.random.split(key)
             all_item_types = jnp.array([
                 ITEM_HEART, ITEM_POISON, ITEM_TRAP, ITEM_STRONGBOX,
@@ -1749,8 +1869,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
             ], dtype=jnp.int32)
             spawn_probs = jnp.array([0.18, 0.08, 0.16, 0.11, 0.10, 0.08, 0.08, 0.09, 0.07, 0.05], dtype=jnp.float32)
-            regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 2,), p=spawn_probs)
-            new_types = jnp.concatenate([jnp.array([ITEM_LADDER_UP, ITEM_LADDER_DOWN]), regular_items])
+            regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
+            new_types = jnp.concatenate([jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN]), regular_items])
             new_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
             
             return new_positions, new_types, new_active, key
@@ -1864,11 +1984,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             spawner_timers=use_sp_timers,
             bullet_positions=final_bullet_positions,
             bullet_active=final_bullet_active,
+            enemy_bullet_positions=final_enemy_bullet_positions,
+            enemy_bullet_active=final_enemy_bullet_active,
             health=final_health,
             score=final_score,
             item_positions=transition_item_positions,
             item_types=transition_item_types,
             item_active=transition_item_active,
+            has_key=jnp.where(level_changed, 0, new_has_key),  # Reset key on level change
             shield_active=new_shield_active,
             gun_active=new_gun_active,
             bomb_count=bomb_count_after_detonation,
