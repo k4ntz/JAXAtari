@@ -2017,17 +2017,21 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH - 1, shape=(), dtype=jnp.int32),
-            "player_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT - 1, shape=(), dtype=jnp.int32),
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH - 1, shape=(), dtype=jnp.float64),
+                "y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT - 1, shape=(), dtype=jnp.float64),
+                "width": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.float64),
+                "height": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.float64),
+            }),
             "enemies": spaces.Box(
-                low=0, 
-                high=max(self.consts.WORLD_WIDTH, self.consts.WORLD_HEIGHT), 
+                low=0,
+                high=float(max(self.consts.WORLD_WIDTH, self.consts.WORLD_HEIGHT)),
                 shape=(NUM_ENEMIES, 5),
-                dtype=jnp.float32
+                dtype=jnp.float64,
             ),
-            "health": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=10**9, shape=(), dtype=jnp.int32),
-            "step": spaces.Box(low=0, high=10**9, shape=(), dtype=jnp.int32),
+            "health": spaces.Box(low=0, high=float(self.consts.MAX_HEALTH), shape=(), dtype=jnp.float64),
+            "score": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
+            "step": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
         })
     
     def image_space(self) -> spaces.Box:
@@ -2040,20 +2044,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     
     def _get_observation(self, state: DarkChambersState) -> DarkChambersObservation:
         player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
-            width=jnp.array(self.consts.PLAYER_WIDTH),
-            height=jnp.array(self.consts.PLAYER_HEIGHT)
+            x=jnp.asarray(state.player_x, dtype=jnp.float64),
+            y=jnp.asarray(state.player_y, dtype=jnp.float64),
+            width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.float64),
+            height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.float64),
         )
         
         # Pack enemy data
-        enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float32)
-        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
-        enemy_active = state.enemy_active.astype(jnp.float32)
+        enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float64)
+        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float64)
+        enemy_active = state.enemy_active.astype(jnp.float64)
         
         enemies_array = jnp.stack([
-            state.enemy_positions[:, 0].astype(jnp.float32),
-            state.enemy_positions[:, 1].astype(jnp.float32),
+            state.enemy_positions[:, 0].astype(jnp.float64),
+            state.enemy_positions[:, 1].astype(jnp.float64),
             enemy_widths,
             enemy_heights,
             enemy_active
@@ -2087,10 +2091,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     
 
     def obs_to_flat_array(self, obs: DarkChambersObservation) -> jnp.ndarray:
-        player_data = jnp.array([obs.player.x, obs.player.y], dtype=jnp.float32)
+        player_data = jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height], dtype=jnp.float64)
         enemies_flat = obs.enemies.flatten()
-        health_data = jnp.array([obs.health], dtype=jnp.float32)
-        score_data = jnp.array([obs.score], dtype=jnp.float32)
-        step_data = jnp.array([obs.step], dtype=jnp.float32)
+        health_data = jnp.array([obs.health], dtype=jnp.float64)
+        score_data = jnp.array([obs.score], dtype=jnp.float64)
+        step_data = jnp.array([obs.step], dtype=jnp.float64)
         
         return jnp.concatenate([player_data, enemies_flat, health_data, score_data, step_data])
