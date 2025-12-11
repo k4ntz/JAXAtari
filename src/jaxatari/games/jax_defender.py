@@ -129,9 +129,14 @@ class DefenderConstants(NamedTuple):
     BULLET_MAX_SPREAD: float = 0.3
 
     # Space ship laser
-    LASER_WIDTH: int = 25
+    # Width and height are for each laser
+    # as the final laser is made out of 2
+    LASER_WIDTH: int = 20
     LASER_HEIGHT: int = 1
-    LASER_SPEED: int = 10
+    LASER_2ND_OFFSET: int = 7
+    LASER_FINAL_WIDTH: int = LASER_WIDTH + LASER_2ND_OFFSET
+    LASER_FINAL_HEIHGT: int = LASER_HEIGHT * 2
+    LASER_SPEED: int = 20
     LASER_STATE_INACTIVE: int = 0
     LASER_STATE_ACTIVE: int = 1
 
@@ -621,6 +626,11 @@ class DefenderRenderer(JAXGameRenderer):
             game_x = state.laser_x
             game_y = state.laser_y
             screen_x, screen_y = self.dh._onscreen_pos(state, game_x, game_y)
+            laser2_x = screen_x + (
+                jnp.where(state.space_ship_facing_right, 1.0, -1.0)
+                * self.consts.LASER_2ND_OFFSET
+            )
+            laser2_y = screen_y - self.consts.LASER_HEIGHT
 
             color_id = current_particle_color_id
 
@@ -629,12 +639,21 @@ class DefenderRenderer(JAXGameRenderer):
 
             return self.jr.draw_rects(
                 r,
-                jnp.asarray([[screen_x, screen_y]]),
-                jnp.asarray([[width, height]]),
+                jnp.asarray(
+                    [
+                        [screen_x, screen_y],
+                        [laser2_x, laser2_y],
+                    ]
+                ),
+                jnp.asarray([[width, height], [width, height]]),
                 color_id,
             )
 
-        raster = render_laser(raster)
+        raster = jax.lax.cond(
+            state.laser_state == self.consts.LASER_STATE_ACTIVE,
+            lambda: render_laser(raster),
+            lambda: raster,
+        )
 
         # Render bullet
         def render_bullet(r):
@@ -654,7 +673,11 @@ class DefenderRenderer(JAXGameRenderer):
                 color_id,
             )
 
-        raster = render_bullet(raster)
+        raster = jax.lax.cond(
+            state.bullet_state == self.consts.BULLET_STATE_ACTIVE,
+            lambda: render_bullet(raster),
+            lambda: raster,
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
 
@@ -731,13 +754,15 @@ class JaxDefender(
         return new_game_x, new_game_y
 
     def _shoot_laser(self, state: DefenderState) -> DefenderState:
+        # When spawning, speed gets added instantly, so frame 0 should still be at the right position
+        laser_x_adjust = self.consts.LASER_SPEED - 5
         laser_x = jax.lax.cond(
             state.space_ship_facing_right,
-            lambda: state.space_ship_x + self.consts.SPACE_SHIP_WIDTH,
-            lambda: state.space_ship_x,
+            lambda: state.space_ship_x + self.consts.SPACE_SHIP_WIDTH - laser_x_adjust,
+            lambda: state.space_ship_x - self.consts.LASER_WIDTH + laser_x_adjust,
         )
 
-        laser_y = state.space_ship_y + self.consts.SPACE_SHIP_HEIGHT / 2
+        laser_y = state.space_ship_y + 0.5 + self.consts.SPACE_SHIP_HEIGHT / 2
         laser_dir_x = jnp.where(state.space_ship_facing_right, 1.0, -1.0)
         return state._replace(
             laser_x=laser_x,
@@ -830,9 +855,25 @@ class JaxDefender(
                 ]
             )
         )
-        shoot = action == Action.FIRE
+        shoot = jnp.any(
+            jnp.array(
+                [
+                    action == Action.FIRE,
+                    action == Action.DOWNFIRE,
+                    action == Action.UPFIRE,
+                    action == Action.RIGHTFIRE,
+                    action == Action.LEFTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                    action == Action.DOWNRIGHTFIRE,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.UPLEFTFIRE,
+                ]
+            )
+        )
 
-        self.dh._print_array(shoot)
+        shoot = jnp.logical_and(
+            shoot, state.laser_state == self.consts.LASER_STATE_INACTIVE
+        )
 
         direction_x = jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
         direction_y = jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
