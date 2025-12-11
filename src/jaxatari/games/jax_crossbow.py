@@ -68,6 +68,11 @@ class CrossbowConstants(NamedTuple):
     MAX_LIVES: int = 3
     DYING_DURATION: int = 45
 
+    # Timing
+    GET_READY_DURATION: int = 180
+    FADE_OUT_DURATION: int = 45
+    FADE_IN_DURATION: int = 30
+
     MAX_SCATTER_PIXELS: int = 100
 
     # Dimensions
@@ -85,21 +90,11 @@ def _get_initial_scatter_state(consts: CrossbowConstants):
     num_pixels = consts.MAX_SCATTER_PIXELS
     rel_x = jnp.tile(jnp.arange(0, 8), 13)[:num_pixels]
     rel_y = jnp.repeat(jnp.arange(0, 27, 2), 8)[:num_pixels]
-
-    # 5=Skin, 6=White, 7=Green
-    colors = jnp.concatenate([
-        jnp.full(32, 7),
-        jnp.full(32, 5),
-        jnp.full(36, 6)
-    ])[:num_pixels]
-
-    center_x = 4.0
-    center_y = 13.5
+    colors = jnp.concatenate([jnp.full(32, 7), jnp.full(32, 5), jnp.full(36, 6)])[:num_pixels]
+    center_x = 4.0; center_y = 13.5
     base_dx = (rel_x - center_x) * 0.3
     base_dy = (rel_y - center_y) * 0.3
-
     return rel_x, rel_y, base_dx, base_dy, colors
-
 
 class CrossbowState(NamedTuple):
     cursor_x: chex.Array
@@ -108,17 +103,18 @@ class CrossbowState(NamedTuple):
     friend_x: chex.Array
     friend_y: chex.Array
     friend_active: chex.Array
-
     dying_timer: chex.Array
 
-    # --- Scatter Pixel State ---
+    get_ready_timer: chex.Array
+    fade_in_timer: chex.Array
+    selected_target_map: chex.Array
+
     scatter_px_x: chex.Array
     scatter_px_y: chex.Array
     scatter_px_dx: chex.Array
     scatter_px_dy: chex.Array
     scatter_px_color_idx: chex.Array
     scatter_px_active: chex.Array
-    # ---------------------------
 
     enemies_x: chex.Array
     enemies_y: chex.Array
@@ -140,10 +136,8 @@ class CrossbowObservation(NamedTuple):
     lives: jnp.ndarray
     score: jnp.ndarray
 
-
 class CrossbowInfo(NamedTuple):
     time: jnp.ndarray
-
 
 class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInfo, CrossbowConstants]):
     def __init__(self, consts: CrossbowConstants = None):
@@ -152,18 +146,15 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         self.renderer = CrossbowRenderer(self.consts)
         self.action_set = Action.get_all_values()
 
-    # --- Fixed Scatter Logic ---
+    # ---DEATH LOGIC ---
     def _init_scatter_pixels(self, state: CrossbowState, rng_key: chex.PRNGKey) -> CrossbowState:
         rel_x, rel_y, base_dx, base_dy, colors = _get_initial_scatter_state(self.consts)
         num_pixels = self.consts.MAX_SCATTER_PIXELS
-
         key_dx, key_dy = jax.random.split(rng_key)
         rand_dx = jax.random.uniform(key_dx, (num_pixels,), minval=-1.5, maxval=1.5)
         rand_dy = jax.random.uniform(key_dy, (num_pixels,), minval=-3.0, maxval=-0.5)
-
         final_dx = base_dx + rand_dx
         final_dy = base_dy + rand_dy
-
         return state._replace(
             scatter_px_x=(state.friend_x + rel_x).astype(jnp.float32),
             scatter_px_y=(state.friend_y + rel_y).astype(jnp.float32),
@@ -175,25 +166,44 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _update_scatter_pixels(self, state: CrossbowState) -> CrossbowState:
         GRAVITY = 0.15
-
         new_x = state.scatter_px_x + state.scatter_px_dx
         new_y = state.scatter_px_y + state.scatter_px_dy
         new_dy = state.scatter_px_dy + GRAVITY
+        is_active = jnp.logical_and(state.scatter_px_active, jnp.logical_and(jnp.logical_and(new_x >= -5, new_x < self.consts.WIDTH + 5), jnp.logical_and(new_y >= -5, new_y < self.consts.HEIGHT + 5)))
+        return state._replace(scatter_px_x=new_x, scatter_px_y=new_y, scatter_px_dy=new_dy, scatter_px_active=is_active)
 
-        is_active = jnp.logical_and(
-            state.scatter_px_active,
-            jnp.logical_and(
-                jnp.logical_and(new_x >= -5, new_x < self.consts.WIDTH + 5),
-                jnp.logical_and(new_y >= -5, new_y < self.consts.HEIGHT + 5)
-            )
-        )
+    def _handle_common_death_logic(self, state: CrossbowState, any_friend_hit: chex.Array, rng_key: chex.PRNGKey) -> Tuple[CrossbowState, bool]:
 
-        return state._replace(
-            scatter_px_x=new_x,
-            scatter_px_y=new_y,
-            scatter_px_dy=new_dy,
-            scatter_px_active=is_active
+        is_dying = state.dying_timer > 0
+
+        # Init Scatter on new hit
+        state = jax.lax.cond(any_friend_hit, lambda s: self._init_scatter_pixels(s, rng_key), lambda s: s, state)
+
+        # Update Scatter Physics if Dying
+        state = jax.lax.cond(is_dying, lambda s: self._update_scatter_pixels(s), lambda s: s, state)
+
+        # Update Timer
+        new_timer = jnp.where(any_friend_hit, self.consts.DYING_DURATION, jnp.maximum(0, state.dying_timer - 1))
+
+        # Handle Respawn / End of Death
+        timer_finished = jnp.logical_and(state.dying_timer > 0, new_timer == 0)
+
+        # Reset friend to 0 only when timer finishes
+        friend_x_next = jnp.where(timer_finished, 0, state.friend_x).astype(jnp.int32)
+
+        # Clear scatter pixels when finished
+        scatter_active_next = jnp.where(timer_finished, jnp.zeros_like(state.scatter_px_active), state.scatter_px_active)
+
+        new_lives = jnp.maximum(0, state.lives - jnp.where(any_friend_hit, 1, 0))
+        is_game_over = jnp.logical_and(any_friend_hit, state.lives == 0)
+
+        new_state = state._replace(
+            lives=new_lives.astype(jnp.int32),
+            dying_timer=new_timer.astype(jnp.int32),
+            friend_x=friend_x_next,
+            scatter_px_active=scatter_active_next
         )
+        return new_state, is_game_over
 
     def _cursor_step(self, state: CrossbowState, action: chex.Array) -> CrossbowState:
         is_up = jnp.isin(action, jnp.array([Action.UP, Action.UPRIGHT, Action.UPLEFT, Action.UPFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE]))
@@ -214,7 +224,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             Action.DOWNFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
         ]))
-
         return state._replace(cursor_x=new_x.astype(jnp.int32), cursor_y=new_y.astype(jnp.int32), is_firing=is_fire)
 
     def _friend_step(self, state: CrossbowState) -> CrossbowState:
@@ -227,7 +236,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _desert_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, type_key, scatter_key = jax.random.split(state.key, 4)
-
         is_dying = state.dying_timer > 0
 
         HIT_TOLERANCE = 8
@@ -255,13 +263,14 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         DEPTH_TOLERANCE = 15
         fx, fy = state.friend_x, state.friend_y
-
-        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + self.consts.ENEMY_SIZE[0] > fx)
+        danger_x = jnp.logical_and(
+            final_x < fx + self.consts.FRIEND_SIZE[0],
+            final_x + self.consts.ENEMY_SIZE[0] > fx
+        )
         danger_y = jnp.logical_and(
             final_y < fy + self.consts.FRIEND_SIZE[1] + DEPTH_TOLERANCE,
             final_y + self.consts.ENEMY_SIZE[1] > fy - 5
         )
-
         friend_hit = jnp.logical_and(jnp.logical_and(danger_x, danger_y), jnp.logical_and(surviving_enemies, state.friend_active))
         any_friend_hit = jnp.logical_and(jnp.any(friend_hit), jnp.logical_not(is_dying))
 
@@ -278,111 +287,72 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(should_spawn, spawn_x, final_x)
         final_y = jnp.where(should_spawn, spawn_y, final_y)
         final_types = jnp.where(should_spawn, new_types, state.enemies_type)
-
         final_active = jnp.logical_and(enemies_active_next, final_x > 0)
         final_active = jnp.logical_and(final_active, final_y < self.consts.PLAY_AREA_HEIGHT)
 
-        state_with_scatter = jax.lax.cond(
-            any_friend_hit,
-            lambda s: self._init_scatter_pixels(s, scatter_key),
-            lambda s: s,
-            state
-        )
-
-        state_with_scatter = jax.lax.cond(
-            is_dying,
-            lambda s: self._update_scatter_pixels(s),
-            lambda s: s,
-            state_with_scatter
-        )
-
-        new_timer = jnp.where(any_friend_hit, self.consts.DYING_DURATION, jnp.maximum(0, state.dying_timer - 1))
-
-        timer_finished = jnp.logical_and(state.dying_timer > 0, new_timer == 0)
-        friend_x_next = jnp.where(timer_finished, 0, state.friend_x).astype(jnp.int32)
-        scatter_active_next = jnp.where(timer_finished, jnp.zeros_like(state.scatter_px_active), state_with_scatter.scatter_px_active)
-
-        new_lives = jnp.maximum(0, state.lives - jnp.where(any_friend_hit, 1, 0))
         new_score = state.score + jnp.sum(valid_kill) * 2
-        is_game_over = jnp.logical_and(any_friend_hit, state.lives == 0)
 
-        return state_with_scatter._replace(
+        intermediate_state = state._replace(
             score=new_score.astype(jnp.int32),
-            lives=new_lives.astype(jnp.int32),
-            friend_x=friend_x_next,
             enemies_active=final_active,
             enemies_x=final_x.astype(jnp.int32),
             enemies_y=final_y.astype(jnp.int32),
             enemies_type=final_types.astype(jnp.int32),
-            dying_timer=new_timer.astype(jnp.int32),
-            scatter_px_active=scatter_active_next,
             key=rng
-        ), is_game_over
+        )
+
+        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+
 
     def _generic_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
-        rng, spawn_key = jax.random.split(state.key)
+        rng, spawn_key, scatter_key = jax.random.split(state.key, 3)
+        is_dying = state.dying_timer > 0
 
         HIT_TOLERANCE = 8
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
-
-        # Combat
         hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
         hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
-
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-        # Collision with Friend
         should_move_enemy = state.step_counter % 3 == 0
-        new_enemy_y = state.enemies_y + jnp.where(should_move_enemy, 1, 0) # Enemies move DOWN in generic maps
-
+        new_enemy_y = state.enemies_y + jnp.where(should_move_enemy, 1, 0)
         fx, fy = state.friend_x, state.friend_y
         danger_x = jnp.logical_and(ex < fx + self.consts.FRIEND_SIZE[0], ex + self.consts.ENEMY_SIZE[0] > fx)
         danger_y = jnp.logical_and(new_enemy_y < fy + self.consts.FRIEND_SIZE[1], new_enemy_y + self.consts.ENEMY_SIZE[1] > fy)
-
         friend_hit = jnp.logical_and(jnp.logical_and(danger_x, danger_y), jnp.logical_and(surviving_enemies, state.friend_active))
-        any_friend_hit = jnp.any(friend_hit)
+        any_friend_hit = jnp.logical_and(jnp.any(friend_hit), jnp.logical_not(is_dying))
 
-        # Spawning (Standard Generic Enemies)
         spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < 0.05
         should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), spawn_chance)
-
-        # Spawn randomly at the TOP
         spawn_x = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20)
         spawn_y = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 20, 50)
-
         enemies_active_next = jnp.logical_or(surviving_enemies, should_spawn)
         final_x = jnp.where(should_spawn, spawn_x, state.enemies_x)
         final_y = jnp.where(should_spawn, spawn_y, new_enemy_y)
         final_types = jnp.where(should_spawn, EnemyType.GENERIC, state.enemies_type)
-
         final_active = jnp.logical_and(enemies_active_next, final_y < self.consts.PLAY_AREA_HEIGHT)
 
-        # Update State
         score_gain = jnp.sum(valid_kill) * 1
         new_score = state.score + score_gain
-        new_lives = jnp.maximum(0, state.lives - jnp.where(any_friend_hit, 1, 0))
 
-        # Instant reset
-        friend_x_next = jnp.where(any_friend_hit, 0, state.friend_x).astype(jnp.int32)
-        is_game_over = jnp.logical_and(any_friend_hit, state.lives == 0)
-
-        return state._replace(
+        intermediate_state = state._replace(
             score=new_score.astype(jnp.int32),
-            lives=new_lives.astype(jnp.int32),
-            friend_x=friend_x_next,
             enemies_active=final_active,
             enemies_x=final_x.astype(jnp.int32),
             enemies_y=final_y.astype(jnp.int32),
             enemies_type=final_types.astype(jnp.int32),
             is_firing=state.is_firing,
             key=rng
-        ), is_game_over
+        )
+
+        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
     def _update_game_phase(self, state: CrossbowState, action: chex.Array) -> CrossbowState:
         on_start_screen = state.game_phase == GamePhase.START_SCREEN
+        on_get_ready = state.game_phase == GamePhase.GET_READY
         left_half = state.cursor_x < self.consts.WIDTH // 2
         top_half = state.cursor_y < self.consts.HEIGHT // 2
 
@@ -390,16 +360,22 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         select_map_2 = jnp.logical_and(top_half, ~left_half)
         select_map_3 = jnp.logical_and(~top_half, ~left_half)
 
-        new_phase = jnp.select(
-            [
-                jnp.logical_and(on_start_screen, jnp.logical_and(state.is_firing, select_map_1)),
-                jnp.logical_and(on_start_screen, jnp.logical_and(state.is_firing, select_map_2)),
-                jnp.logical_and(on_start_screen, jnp.logical_and(state.is_firing, select_map_3)),
-            ],
-            [GamePhase.MAP_1, GamePhase.MAP_2, GamePhase.MAP_3],
-            default=state.game_phase
+        input_trigger = jnp.logical_and(on_start_screen, state.is_firing)
+        target_map = jnp.select([select_map_1, select_map_2, select_map_3], [GamePhase.MAP_1, GamePhase.MAP_2, GamePhase.MAP_3], default=GamePhase.MAP_1)
+
+        get_ready_done = jnp.logical_and(on_get_ready, state.get_ready_timer == 0)
+
+        next_phase = jnp.where(input_trigger, GamePhase.GET_READY, jnp.where(get_ready_done, state.selected_target_map, state.game_phase))
+        next_target_map = jnp.where(input_trigger, target_map, state.selected_target_map)
+        next_get_ready_timer = jnp.where(input_trigger, self.consts.GET_READY_DURATION, jnp.where(on_get_ready, jnp.maximum(0, state.get_ready_timer - 1), 0))
+        next_fade_in_timer = jnp.where(get_ready_done, self.consts.FADE_IN_DURATION, jnp.maximum(0, state.fade_in_timer - 1))
+
+        return state._replace(
+            game_phase=next_phase.astype(jnp.int32),
+            selected_target_map=next_target_map.astype(jnp.int32),
+            get_ready_timer=next_get_ready_timer.astype(jnp.int32),
+            fade_in_timer=next_fade_in_timer.astype(jnp.int32)
         )
-        return state._replace(game_phase=new_phase.astype(jnp.int32))
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[CrossbowObservation, CrossbowState]:
         state_key, _ = jax.random.split(key)
@@ -413,11 +389,15 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             friend_active=jnp.array(True),
             dying_timer=jnp.array(0, dtype=jnp.int32),
 
+            get_ready_timer=jnp.array(0, dtype=jnp.int32),
+            fade_in_timer=jnp.array(0, dtype=jnp.int32),
+            selected_target_map=jnp.array(0, dtype=jnp.int32),
+
             scatter_px_x=jnp.zeros(num_pixels, dtype=jnp.float32),
             scatter_px_y=jnp.zeros(num_pixels, dtype=jnp.float32),
             scatter_px_dx=jnp.zeros(num_pixels, dtype=jnp.float32),
             scatter_px_dy=jnp.zeros(num_pixels, dtype=jnp.float32),
-            scatter_px_color_idx=jnp.zeros(num_pixels, dtype=jnp.uint8), # UINT8
+            scatter_px_color_idx=jnp.zeros(num_pixels, dtype=jnp.uint8),
             scatter_px_active=jnp.zeros(num_pixels, dtype=bool),
 
             enemies_x=jnp.zeros(self.consts.MAX_ENEMIES, dtype=jnp.int32),
@@ -443,12 +423,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         is_gameplay = state.game_phase >= GamePhase.MAP_1
 
-        state = jax.lax.cond(
-            jnp.logical_and(is_gameplay, state.friend_active),
-            lambda s: self._friend_step(s),
-            lambda s: s,
-            state
-        )
+        state = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), lambda s: self._friend_step(s), lambda s: s, state)
 
         def _combat_router(s):
             return jax.lax.cond(
@@ -458,13 +433,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                 s
             )
 
-        state, game_over = jax.lax.cond(
-            jnp.logical_and(is_gameplay, state.friend_active),
-            _combat_router,
-            lambda s: (s, False),
-            state
-        )
-
+        state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
         reward = (state.score - prev_score).astype(float)
         done = jnp.logical_or(game_over, state.step_counter > 4000)
@@ -473,10 +442,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _get_observation(self, state):
         return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
-
-    def _get_info(self, state):
-        return CrossbowInfo(time=state.step_counter)
-
+    def _get_info(self, state): return CrossbowInfo(time=state.step_counter)
     def obs_to_flat_array(self, obs): return jnp.array([0])
     def action_space(self): return spaces.Discrete(18)
     def observation_space(self): return spaces.Dict({})
@@ -494,96 +460,54 @@ class CrossbowRenderer(JAXGameRenderer):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         sprite_path = os.path.join(base_dir, "sprites", "crossbow")
 
-        (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
-
-        self.pixel_masks = {
-            c: jnp.array([[c]], dtype=jnp.uint8) for c in range(1, 9)
-        }
+        (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+        self.pixel_masks = {c: jnp.array([[c]], dtype=jnp.uint8) for c in range(1, 9)}
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CrossbowState):
         raster = self.jr.create_object_raster(self.SHAPE_MASKS["backgrounds"][state.game_phase])
-
         is_gameplay = state.game_phase >= GamePhase.MAP_1
         is_dying = state.dying_timer > 0
 
-        # Render Walking Friend
+        # Friend
         friend_walk_mask = self.SHAPE_MASKS["friend"][(state.step_counter // 8) % len(self.SHAPE_MASKS["friend"])]
-        raster = jax.lax.cond(
-            jnp.logical_and(state.friend_active, jnp.logical_and(is_gameplay, jnp.logical_not(is_dying))),
-            lambda r: self.jr.render_at(r, state.friend_x, state.friend_y, friend_walk_mask),
-            lambda r: r,
-            raster
-        )
+        raster = jax.lax.cond(jnp.logical_and(state.friend_active, jnp.logical_and(is_gameplay, jnp.logical_not(is_dying))), lambda r: self.jr.render_at(r, state.friend_x, state.friend_y, friend_walk_mask), lambda r: r, raster)
 
-        # Render Scatter Pixels
+        # Scatter Pixels
         def _draw_scatter_pixel(i, r):
-            px_x = state.scatter_px_x[i].astype(jnp.int32)
-            px_y = state.scatter_px_y[i].astype(jnp.int32)
-            color_idx = state.scatter_px_color_idx[i]
+            px_x = state.scatter_px_x[i].astype(jnp.int32); px_y = state.scatter_px_y[i].astype(jnp.int32); color_idx = state.scatter_px_color_idx[i]
+            pixel_mask = jax.lax.switch(color_idx - 1, [lambda: self.pixel_masks[c] for c in range(1, 9)])
+            return jax.lax.cond(state.scatter_px_active[i], lambda _r: self.jr.render_at(_r, px_x, px_y, pixel_mask), lambda _r: _r, r)
+        raster = jax.lax.cond(is_dying, lambda r: jax.lax.fori_loop(0, self.consts.MAX_SCATTER_PIXELS, _draw_scatter_pixel, r), lambda r: r, raster)
 
-            pixel_mask = jax.lax.switch(
-                color_idx - 1,
-                [lambda: self.pixel_masks[c] for c in range(1, 9)]
-            )
-
-            return jax.lax.cond(
-                state.scatter_px_active[i],
-                lambda _r: self.jr.render_at(_r, px_x, px_y, pixel_mask),
-                lambda _r: _r,
-                r
-            )
-
-        raster = jax.lax.cond(
-            is_dying,
-            lambda r: jax.lax.fori_loop(0, self.consts.MAX_SCATTER_PIXELS, _draw_scatter_pixel, r),
-            lambda r: r,
-            raster
-        )
-
-        mask_generic = self.SHAPE_MASKS["enemy"]
-        mask_scorpion = self.SHAPE_MASKS["scorpion"]
-        mask_ant = self.SHAPE_MASKS["ant"]
-        mask_vulture = self.SHAPE_MASKS["vulture"]
-
+        # Enemies
+        mask_generic = self.SHAPE_MASKS["enemy"]; mask_scorpion = self.SHAPE_MASKS["scorpion"]; mask_ant = self.SHAPE_MASKS["ant"]; mask_vulture = self.SHAPE_MASKS["vulture"]
         def _draw_enemy(i, r):
-            selected_mask = jax.lax.switch(
-                state.enemies_type[i],
-                [lambda: mask_generic, lambda: mask_scorpion, lambda: mask_ant, lambda: mask_vulture]
-            )
-            return jax.lax.cond(
-                jnp.logical_and(state.enemies_active[i], is_gameplay),
-                lambda _r: self.jr.render_at(_r, state.enemies_x[i], state.enemies_y[i], selected_mask),
-                lambda _r: _r,
-                r
-            )
+            selected_mask = jax.lax.switch(state.enemies_type[i], [lambda: mask_generic, lambda: mask_scorpion, lambda: mask_ant, lambda: mask_vulture])
+            return jax.lax.cond(jnp.logical_and(state.enemies_active[i], is_gameplay), lambda _r: self.jr.render_at(_r, state.enemies_x[i], state.enemies_y[i], selected_mask), lambda _r: _r, r)
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, _draw_enemy, raster)
 
         raster = self.jr.render_at(raster, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["cursor"])
-        raster = jax.lax.cond(
-            state.is_firing,
-            lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]),
-            lambda r: r,
-            raster
-        )
+        raster = jax.lax.cond(state.is_firing, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]), lambda r: r, raster)
 
         digit_masks = self.SHAPE_MASKS["digits"]
-        def _get_number_of_digits(val):
-            return jax.lax.cond(val < 10, lambda: 1, lambda:
-            jax.lax.cond(val < 100, lambda: 2, lambda:
-            jax.lax.cond(val < 1000, lambda: 3, lambda:
-            jax.lax.cond(val < 10000, lambda: 4, lambda:
-            jax.lax.cond(val < 100000, lambda: 5, lambda: 6)))))
-
+        def _get_number_of_digits(val): return jax.lax.cond(val < 10, lambda: 1, lambda: jax.lax.cond(val < 100, lambda: 2, lambda: jax.lax.cond(val < 1000, lambda: 3, lambda: jax.lax.cond(val < 10000, lambda: 4, lambda: jax.lax.cond(val < 100000, lambda: 5, lambda: 6)))))
         player_score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         num_score_digits = _get_number_of_digits(state.score)
-        raster = self.jr.render_label_selective(raster, 98 - 8 * (num_score_digits - 1), 186, player_score_digits, digit_masks,
-                                                6 - num_score_digits, num_score_digits, spacing=8, max_digits_to_render=6)
+        raster = self.jr.render_label_selective(raster, 98 - 8 * (num_score_digits - 1), 186, player_score_digits, digit_masks, 6 - num_score_digits, num_score_digits, spacing=8, max_digits_to_render=6)
 
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        img = self.jr.render_from_palette(raster, self.PALETTE)
+
+        is_fading_out = jnp.logical_and(state.game_phase == GamePhase.GET_READY, state.get_ready_timer < self.consts.FADE_OUT_DURATION)
+        is_fading_in = state.fade_in_timer > 0
+
+        def _apply_fade(image):
+            factor = jax.lax.cond(
+                is_fading_out,
+                lambda: state.get_ready_timer / self.consts.FADE_OUT_DURATION,
+                lambda: (self.consts.FADE_IN_DURATION - state.fade_in_timer) / self.consts.FADE_IN_DURATION
+            )
+            return (image * factor).astype(jnp.uint8)
+
+        img = jax.lax.cond(jnp.logical_or(is_fading_out, is_fading_in), _apply_fade, lambda x: x, img)
+        return img
