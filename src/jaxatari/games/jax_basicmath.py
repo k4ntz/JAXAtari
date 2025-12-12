@@ -43,7 +43,7 @@ class BasicMathConstants(NamedTuple):
     ]
 
     INITIAL_NUMARR = chex.Array = jnp.array([
-        None, None, None, None, None, None
+        jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan
     ])
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -104,27 +104,21 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BasicMathState) -> bool:
         return jnp.logical_or(
-            jnp.greater_equal(state.problemNum, 10),
+            jnp.greater_equal(state.numberProb, 10),
         )
     
-    def _generate_problem(state: BasicMathState, action: chex.Array) -> BasicMathState:
+    def _generate_problem(state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
         fire = action == Action.FIRE
 
         key, k1 = jax.random.split(state.key)
         key, k2 = jax.random.split(state.key)
 
-        x = jax.lax.cond(
-            fire,
-            lambda _: jax.random.randint(k1, shape=(), minval=1, maxval=10),
-            lambda s: s,
-            operand=state.problemNum1,
-        )
+        x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
 
         y = jax.lax.cond(
-            fire,
-            lambda _: jax.random.randint(k2, shape=(), minval=1, maxval=10),
-            lambda s: s,
-            operand=state.problemNum2,
+            jnp.logical_and(fire, gameMode != 4),
+            lambda: jax.random.randint(k2, shape=(), minval=1, maxval=10),
+            lambda: jax.random.randint(k2, shape=(), minval=1, maxval=x),
         )
 
         return BasicMathState(
@@ -137,9 +131,19 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             key
         )
     
-    def _evaluate_issue(self, state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
-        fire = action == Action.FIRE
+    def _evaluate_arr(arr: chex.Array):
+        arr = jax.numpy.nan_to_num(arr)
 
+        a, b = arr[:3], arr[3:]
+
+        weights = jnp.array([100, 10, 1], dtype=jnp.int32)
+
+        val_a = jnp.dot(a, weights)
+        val_b = jnp.dot(b, weights)
+
+        return val_a, val_b
+    
+    def _evaluate_issue(self, state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
         ops = [
             lambda a, b: a + b,
             lambda a, b: a - b,
@@ -149,7 +153,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         result = ops[gameMode](state.problemNum1, state.problemNum2)
 
-        eval = True
+        a, b = self._evaluate_arr(state.numArr)
+
+        eval = jnp.logical_and(gameMode != 4, a == result)
+        evalDiv = jnp.logical_and(gameMode == 4, (a, b) == result)
 
         score = jax.lax.cond(
             eval,
@@ -157,6 +164,14 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda s: s,
             operand=state.score,
         )
+
+        score = jax.lax.cond(
+            evalDiv,
+            lambda s: s + 1,
+            lambda s: s,
+            operand=state.score,
+        )
+
 
         return BasicMathState(
             state.numArr,
@@ -173,56 +188,63 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         down = action == Action.DOWN
 
         arr = state.numArr
+        value = arr[state.arrPos]
 
-        non_val_up = jnp.logical_and(up, value == None)
+        is_nan = jnp.isnan(value)
+        non_val_up = jnp.logical_and(up, is_nan)
         up_edge = jnp.logical_and(up, value == 9)
         up_add = jnp.logical_and(up, jnp.logical_and(jnp.logical_not(up_edge), jnp.logical_not(non_val_up)))
 
         value = jax.lax.cond(
             non_val_up,
             lambda: 0,
-            lambda: arr[state.arrPos],
+            lambda: value,
         )
 
         value = jax.lax.cond(
             up_edge,
-            lambda: None,
-            lambda: arr[state.arrPos],
+            lambda: jnp.nan,
+            lambda: value,
         )
 
         value = jax.lax.cond(
             up_add,
-            lambda: arr[state.arrPos] + 1,
-            lambda: arr[state.arrPos],
+            lambda: value + 1,
+            lambda: value,
         )
 
-        non_val_down = jnp.logical_and(down, value == None)
+        non_val_down = jnp.logical_and(down, is_nan)
         down_edge = jnp.logical_and(down, value == 1)
         down_add = jnp.logical_and(down, jnp.logical_and(jnp.logical_not(down_edge), jnp.logical_not(non_val_down)))
 
         value = jax.lax.cond(
             non_val_down,
             lambda: 9,
-            lambda: arr[state.arrPos],
+            lambda: value,
         )
 
         value = jax.lax.cond(
             down_edge,
-            lambda: None,
-            lambda: arr[state.arrPos],
-            value
+            lambda: jnp.nan,
+            lambda: value,
         )
 
         value = jax.lax.cond(
             down_add,
-            lambda: arr[state.arrPos] - 1,
-            lambda: arr[state.arrPos],
+            lambda: value - 1,
+            lambda: value,
         )
 
         new_arr = arr.at[state.arrPos].set(value)
 
         return BasicMathState(
-
+            new_arr,
+            state.arrPos,
+            state.score,
+            state.numberProb,
+            state.problemNum1,
+            state.problemNum2,
+            state.key            
         )
     
     def _change_pos(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
@@ -232,35 +254,32 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         player_pos = state.arrPos
 
         on_left = jnp.logical_and(left, state.arrPos == 0)
+        on_right = jnp.logical_and(right, state.arrPos == 5)
+        move_left = jnp.logical_and(left, jnp.logical_not(on_left))
+        move_right = jnp.logical_and(right, jnp.logical_not(on_right))
+
         player_pos = jax.lax.cond(
             on_left,
-            lambda _: 5,
-            lambda s: s,
-            operand= player_pos
+            lambda: 5,
+            lambda: player_pos,
         )
 
-        on_right = jnp.logical_and(right, state.arrPos == 5)
         player_pos = jax.lax.cond(
             on_right,
-            lambda _: 0,
-            lambda s: s,
-            operand= player_pos
+            lambda: 0,
+            lambda: player_pos,
         )
 
-        move_left = jnp.logical_and(left, jnp.logical_not(on_left))
         player_pos = jax.lax.cond(
             move_left,
-            lambda s: s - 1,
-            lambda s: s,
-            operand= player_pos
+            lambda: player_pos - 1,
+            lambda: player_pos,
         )
 
-        move_right = jnp.logical_and(right, jnp.logical_not(on_right))
         player_pos = jax.lax.cond(
             move_right,
-            lambda s: s + 1,
-            lambda s: s,
-            operand= player_pos
+            lambda: player_pos + 1,
+            lambda: player_pos,
         )
 
         return BasicMathState(
@@ -272,6 +291,19 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.problemNum2,
             state.key
         )
+    
+    def _process_fire(self, state, action, gameMode):
+        is_fire = action == Action.FIRE
+
+        def do_fire(_):
+            s = self._evaluate_issue(state, action, gameMode)
+            s = self._generate_problem(s, action, gameMode)
+            return s
+
+        def no_fire(_):
+            return state
+
+        return jax.lax.cond(is_fire, do_fire, no_fire, operand=None)
     
     def render(self, state: BasicMathState):
         return self.renderer.render(state)
@@ -303,10 +335,11 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.key
         )
 
+        chosenGameMode = (gameMode - 1) % 4
+
         state = self._change_pos(state, action)
         state = self._change_value(state, action)
-        state = self._evaluate_issue(state, action, gameMode)
-        state = self._generate_problem(state, action)
+        state = self._process_fire(state, action, chosenGameMode)
 
         done = self._get_done
         reward = self._get_reward
@@ -314,7 +347,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         state = self._evaluate_issue(state, gameMode)
 
-        return None, state,reward, done, info
+        return None, state, reward, done, info
 
 class BasicMathRenderer(JAXGameRenderer):
     def __init__(self, consts: BasicMathConstants = None):
