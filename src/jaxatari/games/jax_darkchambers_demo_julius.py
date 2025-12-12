@@ -81,6 +81,9 @@ ENEMY_BULLET_HEIGHT = 3
 ENEMY_BULLET_SPEED = 2
 WIZARD_SHOOT_INTERVAL = 20  # steps between shots (gate)
 
+# Lives configuration
+MAX_LIVES = 5  # Number of lives player starts with
+
 # Spawner configuration
 SPAWNER_WIDTH = 14
 SPAWNER_HEIGHT = 14
@@ -206,6 +209,7 @@ class DarkChambersState(NamedTuple):
     
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
     ladder_timer: chex.Array    # time standing on ladder (0 to LADDER_INTERACTION_TIME)
+    lives: chex.Array           # remaining lives (0 to MAX_LIVES)
     
     step_counter: chex.Array
     key: chex.PRNGKey
@@ -726,6 +730,38 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=8
         )
         
+        # Lives count below health digits
+        lives_val = jnp.clip(state.lives, 0, 99).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        lives_tens = lives_val // 10
+        lives_ones = lives_val % 10
+        lives_digits = jnp.array([lives_tens, lives_ones], dtype=jnp.int32)
+        lives_active_mask = jnp.array([lives_tens > 0, True])
+        lives_position_index = (jnp.cumsum(lives_active_mask.astype(jnp.int32)) - 1)
+        lives_base_x = jnp.where(lives_active_mask, 4 + lives_position_index * (digit_width + spacing), -100)
+        lives_patterns = self.DIGIT_PATTERNS[lives_digits]
+        lives_xs = jnp.arange(digit_width)
+        lives_ys = jnp.arange(digit_height)
+        lives_grid_x = lives_xs[None, None, :].repeat(2, axis=0).repeat(digit_height, axis=1)
+        lives_grid_y = lives_ys[None, :, None].repeat(2, axis=0).repeat(digit_width, axis=2)
+        lives_px = lives_base_x[:, None, None] + lives_grid_x
+        lives_py = (4 + ITEM_HEIGHT + 2 + digit_height + 2 + 8) + lives_grid_y  # below health digits
+        lives_pixel_active = (lives_patterns == 1) & (lives_base_x[:, None, None] >= 0)
+        lives_px = jnp.where(lives_pixel_active, lives_px, -100)
+        lives_py = jnp.where(lives_pixel_active, lives_py, -100)
+        lives_flat_px = lives_px.reshape(-1)
+        lives_flat_py = lives_py.reshape(-1)
+        lives_digit_positions = jnp.stack([lives_flat_px, lives_flat_py], axis=1).astype(jnp.int32)
+        lives_digit_sizes = jnp.ones((lives_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=lives_digit_positions,
+            sizes=lives_digit_sizes,
+            color_id=8  # Same color as health
+        )
+        
         # Score display moved to top-right (bar) and numeric score below
         max_score_units = 10  # Reduced to fit on right side
         score_units = jnp.clip(state.score // 10, 0, max_score_units).astype(jnp.int32)
@@ -1049,10 +1085,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[DarkChambersObservation, DarkChambersState]:
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[DarkChambersObservation, DarkChambersState]:
         """Reset game."""
-        if key is None:
-            key = jax.random.PRNGKey(0)
         
         # Use level 0 walls for initial spawn
         WALLS = self.renderer.LEVEL_WALLS[0]
@@ -1243,6 +1277,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
             ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
+            lives=jnp.array(MAX_LIVES, dtype=jnp.int32),  # Start with MAX_LIVES
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=key,
         )
@@ -2215,9 +2250,25 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         use_sp_active = jnp.where(level_changed, transition_sp_active, new_spawner_active)
         use_sp_timers = jnp.where(level_changed, transition_sp_timers, final_spawner_timers)
         
+        # Death and respawn logic
+        player_died = final_health <= 0
+        new_lives = jnp.where(player_died, state.lives - 1, state.lives)
+        
+        # Determine respawn position based on current level
+        # Level 0: spawn at upper-left (PLAYER_START_X, PLAYER_START_Y)
+        # Level > 0: spawn at ladder down position (entry point from above level)
+        respawn_x = jnp.where(new_level == 0, self.consts.PLAYER_START_X, jnp.array(40, dtype=jnp.int32))
+        respawn_y = jnp.where(new_level == 0, self.consts.PLAYER_START_Y, jnp.array(70, dtype=jnp.int32))
+        
+        # Apply respawn: teleport player and restore health (only if still has lives)
+        should_respawn = player_died & (new_lives > 0)
+        final_x = jnp.where(should_respawn, respawn_x, transition_x)
+        final_y = jnp.where(should_respawn, respawn_y, transition_y)
+        final_health_with_respawn = jnp.where(should_respawn, self.consts.STARTING_HEALTH, final_health)
+        
         new_state = DarkChambersState(
-            player_x=transition_x,
-            player_y=transition_y,
+            player_x=final_x,
+            player_y=final_y,
             player_direction=new_direction,
             enemy_positions=relocated_enemy_positions,
             enemy_types=spawned_enemy_types,
@@ -2230,7 +2281,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             bullet_active=final_bullet_active,
             enemy_bullet_positions=final_enemy_bullet_positions,
             enemy_bullet_active=final_enemy_bullet_active,
-            health=final_health,
+            health=final_health_with_respawn,
             score=final_score,
             item_positions=transition_item_positions,
             item_types=transition_item_types,
@@ -2242,13 +2293,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             last_fire_step=new_last_fire_step,
             current_level=new_level,
             ladder_timer=new_ladder_timer,
+            lives=new_lives,
             step_counter=state.step_counter + 1,
             key=rng,
         )
         
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
-        done = False
+        done = self._get_done(new_state)
         info = self._get_info(new_state)
         
         return obs, new_state, reward, done, info
@@ -2327,10 +2379,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
 
     """
-    TODO info whether game is over fo RE Agent later
+    Game is over when player has no lives left and health is 0
     """
     def _get_done(self, state: DarkChambersState) -> bool:
-        return False
+        return (state.lives <= 0) & (state.health <= 0)
     
 
     def obs_to_flat_array(self, obs: DarkChambersObservation) -> jnp.ndarray:
