@@ -38,14 +38,14 @@ class DunkConstants:
     WINDOW_WIDTH: int = 250
     WINDOW_HEIGHT: int = 150
     BALL_SIZE: Tuple[int, int] = (3,3)
-    BALL_START: Tuple [int, int] = (122, 100)
+    BALL_START: Tuple [int, int] = (80, 100)
     JUMP_STRENGTH: int = 5
     PLAYER_MAX_SPEED: int = 2
     PLAYER_Y_MIN: int = 20
-    PLAYER_Y_MAX: int = 120
+    PLAYER_Y_MAX: int = 130
     PLAYER_X_MIN: int  = 0
-    PLAYER_X_MAX: int = 250
-    BASKET_POSITION: Tuple[int,int] = (125,10)
+    PLAYER_X_MAX: int = 145
+    BASKET_POSITION: Tuple[int,int] = (80,10)
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (40, 210, 81) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
     MATCH_STEPS: int = 1200  # number of steps per match (tunable)
@@ -197,10 +197,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _init_state(self, key) -> DunkGameState:
         """Creates the very first state of the game."""
         return DunkGameState(
-            player1_inside=PlayerState(x=125, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            player1_outside=PlayerState(x=80, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            player2_inside=PlayerState(x=170, y=100, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
-            player2_outside=PlayerState(x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player1_inside=PlayerState(x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player1_outside=PlayerState(x=50, y=110, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player2_inside=PlayerState(x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
+            player2_outside=PlayerState(x=120, y=130, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1),
             # Start with a jump ball in the center: no holder and ball sits at the start position
             ball=BallState(x=float(self.constants.BALL_START[0]), y=float(self.constants.BALL_START[1]), vel_x=0.0, vel_y=0.0, holder=PlayerID.NONE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter_id=PlayerID.NONE, receiver_id=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0),
             player_score=0,
@@ -756,12 +756,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _handle_play_selection(self, state: DunkGameState, action: int) -> DunkGameState:
         """Handles the play selection mode."""
 
-        def select_strategy(strategy):
+        def select_strategy(state, strategy):
             # When a strategy is selected, we reset the game to its initial state
             # but keep the selected strategy and switch to IN_PLAY mode.
             # We also keep the current key.
-            new_state = self._init_state(state.key)
-            return new_state.replace(
+            return state.replace(
                 strategy=strategy,
                 game_mode=GameMode.IN_PLAY,
             )
@@ -769,19 +768,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Check for each strategy selection action
         state = jax.lax.cond(
             action == Action.UPFIRE,
-            lambda s: select_strategy(PICK_AND_ROLL),
+            lambda s: select_strategy(s, PICK_AND_ROLL),
             lambda s: s,
             state
         )
         state = jax.lax.cond(
             action == Action.DOWNFIRE,
-            lambda s: select_strategy(GIVE_AND_GO),
+            lambda s: select_strategy(s, GIVE_AND_GO),
             lambda s: s,
             state
         )
         state = jax.lax.cond(
             action == Action.RIGHTFIRE,
-            lambda s: select_strategy(MR_INSIDE_SHOOTS),
+            lambda s: select_strategy(s, MR_INSIDE_SHOOTS),
             lambda s: s,
             state
         )
@@ -864,20 +863,30 @@ class DunkRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
             channels=3,
-            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        # --- UPDATED ASSET CONFIGURATION ---
         asset_config = [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'group', 'files': [f'player_{i}.npy' for i in range(10)]},
-            {'name': 'player_no_ball', 'type': 'single', 'file': 'player_no_ball.npy'},
-            {'name': 'enemy', 'type': 'group', 'files': [f'enemy_{i}.npy' for i in range(10)]},
-            {'name': 'enemy_no_ball', 'type': 'single', 'file': 'enemy_no_ball.npy'},
+            
+            # Team 1 (Player) - Blue/Black
+            {'name': 'player_light', 'type': 'group', 'files': [f'player_light_{i}.npy' for i in range(10)]},
+            {'name': 'player_dark', 'type': 'group', 'files': [f'player_dark_{i}.npy' for i in range(10)]},
+            {'name': 'player_light_no_ball', 'type': 'single', 'file': 'player_light_no_ball.npy'},
+            {'name': 'player_dark_no_ball', 'type': 'single', 'file': 'player_dark_no_ball.npy'},
+
+            # Team 2 (Enemy) - Red/White
+            {'name': 'enemy_light', 'type': 'group', 'files': [f'enemy_light_{i}.npy' for i in range(10)]},
+            {'name': 'enemy_dark', 'type': 'group', 'files': [f'enemy_dark_{i}.npy' for i in range(10)]},
+            {'name': 'enemy_light_no_ball', 'type': 'single', 'file': 'enemy_light_no_ball.npy'},
+            {'name': 'enemy_dark_no_ball', 'type': 'single', 'file': 'enemy_dark_no_ball.npy'},
+
             {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
             {'name': 'player_arrow', 'type': 'single', 'file': 'player_arrow.npy'},
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
         ]
+        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
 
         (
@@ -893,6 +902,7 @@ class DunkRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # --- Prepare player data for sorting ---
+        # 0: P1 Inside, 1: P1 Outside, 2: P2 Inside, 3: P2 Outside
         all_players_x = jnp.array([
             state.player1_inside.x, state.player1_outside.x,
             state.player2_inside.x, state.player2_outside.x,
@@ -910,8 +920,7 @@ class DunkRenderer(JAXGameRenderer):
             state.player2_inside.animation_frame, state.player2_outside.animation_frame,
         ])
 
-        # Identify team and ball holder for each player
-        is_team1 = jnp.array([True, True, False, False])
+        # Identify ball holder
         ball_holder = state.ball.holder
         has_ball = jnp.array([
             ball_holder == PlayerID.PLAYER1_INSIDE,
@@ -925,22 +934,51 @@ class DunkRenderer(JAXGameRenderer):
         sort_indices = jnp.argsort(visual_ys)
 
         def render_player_body(i, current_raster):
-            player_idx = sort_indices[i]
+            player_idx = sort_indices[i] # This is 0, 1, 2, or 3
 
             x = all_players_x[player_idx]
             visual_y = visual_ys[player_idx]
             anim_frame = all_players_anim_frame[player_idx]
-            is_p1 = is_team1[player_idx]
             p_has_ball = has_ball[player_idx]
 
-            # Select the correct mask based on team, ball possession, and animation frame
-            player_mask_with_ball = self.SHAPE_MASKS['player'][anim_frame]
-            player_mask_no_ball = self.SHAPE_MASKS['player_no_ball']
-            enemy_mask_with_ball = self.SHAPE_MASKS['enemy'][anim_frame]
-            enemy_mask_no_ball = self.SHAPE_MASKS['enemy_no_ball']
+            # --- Select Masks based on Player Index ---
+            # 0: P1 Inside (Dark)
+            # 1: P1 Outside (Light)
+            # 2: P2 Inside (Dark)
+            # 3: P2 Outside (Light)
 
-            mask_with_ball = jax.lax.select(is_p1, player_mask_with_ball, enemy_mask_with_ball)
-            mask_no_ball = jax.lax.select(is_p1, player_mask_no_ball, enemy_mask_no_ball)
+            # Retrieve all possible masks for this specific animation frame
+            p_dark_ball = self.SHAPE_MASKS['player_dark'][anim_frame]
+            p_light_ball = self.SHAPE_MASKS['player_light'][anim_frame]
+            e_dark_ball = self.SHAPE_MASKS['enemy_dark'][anim_frame]
+            e_light_ball = self.SHAPE_MASKS['enemy_light'][anim_frame]
+
+            # Retrieve all possible masks for no ball
+            p_dark_no = self.SHAPE_MASKS['player_dark_no_ball']
+            p_light_no = self.SHAPE_MASKS['player_light_no_ball']
+            e_dark_no = self.SHAPE_MASKS['enemy_dark_no_ball']
+            e_light_no = self.SHAPE_MASKS['enemy_light_no_ball']
+
+            # Use jax.lax.switch to pick the correct sprite set based on player_idx
+            mask_with_ball = jax.lax.switch(
+                player_idx,
+                [
+                    lambda: p_dark_ball,  # 0: P1 Inside
+                    lambda: p_light_ball, # 1: P1 Outside
+                    lambda: e_dark_ball,  # 2: P2 Inside
+                    lambda: e_light_ball  # 3: P2 Outside
+                ]
+            )
+
+            mask_no_ball = jax.lax.switch(
+                player_idx,
+                [
+                    lambda: p_dark_no,    # 0: P1 Inside
+                    lambda: p_light_no,   # 1: P1 Outside
+                    lambda: e_dark_no,    # 2: P2 Inside
+                    lambda: e_light_no    # 3: P2 Outside
+                ]
+            )
 
             final_mask = jax.lax.select(p_has_ball, mask_with_ball, mask_no_ball)
 
@@ -949,18 +987,14 @@ class DunkRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
 
         # --- Render Controlled Player Arrow ---        
-        # Only render if a player is controlled (ID is not NONE)
         def render_arrow_body(current_raster):
             controlled_x = all_players_x[state.controlled_player_id - 1]
             controlled_visual_y = visual_ys[state.controlled_player_id - 1]
             arrow_mask = self.SHAPE_MASKS['player_arrow']
             arrow_height = arrow_mask.shape[0]
             
-            # Position the arrow above the player
             arrow_y = controlled_visual_y - arrow_height
-            
-            # Center the arrow horizontally over the player
-            player_width = 10 # from placeholder
+            player_width = 10 
             arrow_width = arrow_mask.shape[1]
             arrow_x = controlled_x + (player_width // 2) - (arrow_width // 2) + 2
 
@@ -992,8 +1026,8 @@ class DunkRenderer(JAXGameRenderer):
         # --- Render Scores ---
         player_score_digits = self.jr.int_to_digits(state.player_score, 2)
         enemy_score_digits = self.jr.int_to_digits(state.enemy_score, 2)
-        player_score_x = 110
-        enemy_score_x = 135 # Start of player score + width of player score + gap
+        player_score_x = 65
+        enemy_score_x = player_score_x+24 
         score_y = 10
 
         raster = self.jr.render_label_selective(raster, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
