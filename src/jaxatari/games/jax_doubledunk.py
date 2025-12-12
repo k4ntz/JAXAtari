@@ -456,8 +456,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         is_p1_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p1_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_inside_shooting = (state.cooldown == 0) & (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_outside_shooting = (state.cooldown == 0) & (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_inside_shooting = (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_outside_shooting = (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
         is_inside_shooting = is_p1_inside_shooting | is_p2_inside_shooting
         is_outside_shooting = is_p1_outside_shooting | is_p2_outside_shooting
@@ -627,16 +627,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state, key, offense_increment = self._handle_offense_actions(state, actions, key)
         state = self._handle_defense_actions(state, actions)
 
-        # 3. Calculate total p1_strategy_step increment
-        total_increment = p1_in_jumped + p1_out_jumped + offense_increment
+        # 3. Update p1_strategy_step
+        new_p1_strategy_step = jnp.minimum(state.p1_strategy_step + offense_increment, len(state.strategy)-1)
         
-        # 4. Update p1_strategy_step
-        new_p1_strategy_step = jnp.minimum(state.p1_strategy_step + total_increment, len(state.strategy)-1)
-        
-        # 5. Print if changed
+        # 4. Print if changed
         # We use jax.lax.cond to ensure we only print when an action actually occurred
         jax.lax.cond(
-            total_increment > 0,
+            offense_increment > 0,
             lambda x: jax.debug.print("Play Step: {}", x),
             lambda x: None,
             new_p1_strategy_step
