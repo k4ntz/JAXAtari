@@ -23,6 +23,15 @@ class GameMode(IntEnum):
     PLAY_SELECTION = 0
     IN_PLAY = 1
 
+class Strategy(IntEnum):
+    PASS = 0
+    JUMP = 1
+    SHOOT = 2
+
+PICK_AND_ROLL = jnp.array([Strategy.PASS, Strategy.JUMP, Strategy.SHOOT, Strategy.SHOOT])
+GIVE_AND_GO = jnp.array([Strategy.PASS, Strategy.PASS, Strategy.JUMP, Strategy.SHOOT])
+MR_INSIDE_SHOOTS = jnp.array([Strategy.JUMP, Strategy.SHOOT, Strategy.SHOOT, Strategy.SHOOT])
+
 @chex.dataclass(frozen=True)
 class DunkConstants:
     """Holds all static values for the game like screen dimensions, player speeds, colors, etc."""
@@ -84,7 +93,9 @@ class DunkGameState:
     step_counter: chex.Array
     acceleration_counter: chex.Array
     game_mode: chex.Array           # Current mode (PLAY_SELECTION or IN_PLAY)
-    play_step: chex.Array           # Tracks progress within a play (e.g., 1st, 2nd, 3rd button press)
+    strategy: Strategy
+    p1_strategy_step: chex.Array           # Tracks progress in p1 strategy (e.g., 1st, 2nd, 3rd button press)
+    p2_strategy_step: chex.Array           # Tracks progress in p2 strategy (e.g., 1st, 2nd, 3rd button press)
     controlled_player_id: chex.Array
     key: chex.PRNGKey
 
@@ -193,8 +204,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             enemy_score=0,
             step_counter=0,
             acceleration_counter=0,
-            game_mode=GameMode.IN_PLAY,
-            play_step=0,
+            game_mode=GameMode.PLAY_SELECTION,
+            strategy = GIVE_AND_GO,
+            p1_strategy_step=0,
+            p2_strategy_step=0,
             controlled_player_id=PlayerID.PLAYER1_INSIDE,
             key=key,
         )
@@ -382,7 +395,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles the logic for passing the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_pass_step = (state.play_step % 3) == 0
+        is_pass_step = (state.strategy[state.p1_strategy_step] == Strategy.PASS)
 
         is_p1_inside_passing = is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_p1_outside_passing = is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
@@ -435,7 +448,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles the logic for shooting the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_shoot_step = (state.play_step % 3) == 2
+        is_shoot_step = (state.strategy[state.p1_strategy_step] == Strategy.SHOOT)
 
         is_p1_inside_shooting = is_shoot_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p1_outside_shooting = is_shoot_step &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
@@ -549,7 +562,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
-        is_jump_step = (state.play_step % 3) == 1
+        is_jump_step = (state.strategy[state.p1_strategy_step] == Strategy.JUMP)
         can_jump = is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
@@ -595,11 +608,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state, key, offense_increment = self._handle_offense_actions(state, actions, key)
         state = self._handle_defense_actions(state, actions)
 
-        # 3. Calculate total play_step increment
+        # 3. Calculate total p1_strategy_step increment
         total_increment = p1_in_jumped + p1_out_jumped + offense_increment
         
-        # 4. Update play_step
-        new_play_step = jnp.minimum(state.play_step + total_increment, 2)
+        # 4. Update p1_strategy_step
+        new_p1_strategy_step = jnp.minimum(state.p1_strategy_step + total_increment, len(state.strategy)-1)
         
         # 5. Print if changed
         # We use jax.lax.cond to ensure we only print when an action actually occurred
@@ -607,10 +620,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             total_increment > 0,
             lambda x: jax.debug.print("Play Step: {}", x),
             lambda x: None,
-            new_play_step
+            new_p1_strategy_step
         )
 
-        return state.replace(play_step=new_play_step), key
+        return state.replace(p1_strategy_step=new_p1_strategy_step), key
 
     def _update_ball(self, state: DunkGameState) -> DunkGameState:
         """Handles ball movement, goals, misses, catches, and possession changes."""
@@ -727,28 +740,81 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         final_state = jax.lax.cond(is_goal_scored, on_goal, continue_play, state)
         return final_state
 
+    def _handle_play_selection(self, state: DunkGameState, action: int) -> DunkGameState:
+        """Handles the play selection mode."""
+
+        def select_strategy(strategy):
+            # When a strategy is selected, we reset the game to its initial state
+            # but keep the selected strategy and switch to IN_PLAY mode.
+            # We also keep the current key.
+            new_state = self._init_state(state.key)
+            return new_state.replace(
+                strategy=strategy,
+                game_mode=GameMode.IN_PLAY,
+            )
+
+        # Check for each strategy selection action
+        state = jax.lax.cond(
+            action == Action.UPFIRE,
+            lambda s: select_strategy(PICK_AND_ROLL),
+            lambda s: s,
+            state
+        )
+        state = jax.lax.cond(
+            action == Action.DOWNFIRE,
+            lambda s: select_strategy(GIVE_AND_GO),
+            lambda s: s,
+            state
+        )
+        state = jax.lax.cond(
+            action == Action.RIGHTFIRE,
+            lambda s: select_strategy(MR_INSIDE_SHOOTS),
+            lambda s: s,
+            state
+        )
+        return state
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """Takes an action in the game and returns the new game state."""
-        # 1. Determine actions for all players
-        actions, key = self._handle_player_actions(state, action, state.key)
 
-        # 2. Update player XY movement
-        state = self._update_players_xy(state, actions)
+        # Handle play selection mode
+        state = jax.lax.cond(
+            state.game_mode == GameMode.PLAY_SELECTION,
+            lambda s: self._handle_play_selection(s, action),
+            lambda s: s,
+            state
+        )
 
-        # 3. Handle interactions (jump, pass, shoot, steal)
-        state, key = self._handle_interactions(state, actions, key)
-        
-        # 4. Update player Z physics (gravity, etc.)
-        state = self._update_players_z(state)
+        def run_game_step(s):
+            # 1. Determine actions for all players
+            actions, key = self._handle_player_actions(s, action, s.key)
 
-        # 5. Update player animations
-        state = self._update_players_animations(state)
+            # 2. Update player XY movement
+            s = self._update_players_xy(s, actions)
 
-        # 6. Process ball flight, goals, misses, and possession changes
-        final_state = self._update_ball(state)
+            # 3. Handle interactions (jump, pass, shoot, steal)
+            s, key = self._handle_interactions(s, actions, key)
+            
+            # 4. Update player Z physics (gravity, etc.)
+            s = self._update_players_z(s)
 
-        final_state = final_state.replace(step_counter=final_state.step_counter + 1, key=key)
+            # 5. Update player animations
+            s = self._update_players_animations(s)
+
+            # 6. Process ball flight, goals, misses, and possession changes
+            final_s = self._update_ball(s)
+
+            final_s = final_s.replace(step_counter=final_s.step_counter + 1, key=key)
+            return final_s
+
+        # Run the game step only if in IN_PLAY mode
+        final_state = jax.lax.cond(
+            state.game_mode == GameMode.IN_PLAY,
+            run_game_step,
+            lambda s: s, # If not in play, do nothing
+            state
+        )
 
         # 7. Generate outputs
         observation = self._get_observation(final_state)
