@@ -103,6 +103,7 @@ class DefenderConstants(NamedTuple):
     MAX_LANDER_AMOUNT: int = 5
     LANDER_Y_SPEED: float = 0.08
     LANDER_PICKUP_X_THRESHOLD: float = 2.0
+    LANDER_PICKUP_DURATION_FRAMES: int = 120  # 4 seconds at 30 fps
     LANDER_STATE_PATROL: int = 0
     LANDER_STATE_DESCEND: int = 1
     LANDER_STATE_PICKUP: int = 2
@@ -406,6 +407,14 @@ class DefenderRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["lander_2"],
             self.SHAPE_MASKS["lander_3"],
             self.SHAPE_MASKS["lander_4"],
+            self.SHAPE_MASKS["lander_5"],
+            self.SHAPE_MASKS["lander_6"],
+            self.SHAPE_MASKS["lander_7"],
+            self.SHAPE_MASKS["lander_8"],
+            self.SHAPE_MASKS["lander_9"],
+            self.SHAPE_MASKS["lander_10"],
+            self.SHAPE_MASKS["lander_11"],
+            self.SHAPE_MASKS["lander_12"],
         ])
 
         # Enemy colors to ids
@@ -435,6 +444,14 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "lander_2", "type": "single", "file": "lander_2.npy"},
             {"name": "lander_3", "type": "single", "file": "lander_3.npy"},
             {"name": "lander_4", "type": "single", "file": "lander_4.npy"},
+            {"name": "lander_5", "type": "single", "file": "lander_5.npy"},
+            {"name": "lander_6", "type": "single", "file": "lander_6.npy"},
+            {"name": "lander_7", "type": "single", "file": "lander_7.npy"},
+            {"name": "lander_8", "type": "single", "file": "lander_8.npy"},
+            {"name": "lander_9", "type": "single", "file": "lander_9.npy"},
+            {"name": "lander_10", "type": "single", "file": "lander_10.npy"},
+            {"name": "lander_11", "type": "single", "file": "lander_11.npy"},
+            {"name": "lander_12", "type": "single", "file": "lander_12.npy"},
             {"name": "mutant", "type": "single", "file": "mutant.npy"},
             {"name": "pod", "type": "single", "file": "pod.npy"},
             {"name": "swarmers", "type": "single", "file": "swarmers.npy"},
@@ -527,28 +544,34 @@ class DefenderRenderer(JAXGameRenderer):
 
             mask = self.ENEMY_MASKS[jnp.array(enemy_type, int)]
 
+            # Calculate mask index based on pickup animation frame
+            mask_index = jnp.clip(jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13)
+            
+            pickup_mask = jax.lax.switch(
+                mask_index,
+                [
+                    lambda: self.LANDER_MASKS[1],  # 0-10
+                    lambda: self.LANDER_MASKS[2],  # 11-20
+                    lambda: self.LANDER_MASKS[3],  # 21-30
+                    lambda: self.LANDER_MASKS[4],  # 31-40
+                    lambda: self.LANDER_MASKS[5],  # 40-50
+                    lambda: self.LANDER_MASKS[6],  # 51-60
+                    lambda: self.LANDER_MASKS[7],  # 61-70
+                    lambda: self.LANDER_MASKS[8],  # 71-80
+                    lambda: self.LANDER_MASKS[9],  # 81-90
+                    lambda: self.LANDER_MASKS[10],  # 91-100
+                    lambda: self.LANDER_MASKS[11],  # 101-110
+                    lambda: self.LANDER_MASKS[12],  # 110-120
+                    lambda: self.LANDER_MASKS[13],  # 120+   
+                ]
+            )
+            
             mask = jax.lax.cond(
                 jnp.logical_and(
                     enemy_type == self.consts.LANDER,
                     enemy[3] == self.consts.LANDER_STATE_PICKUP
                 ),
-                lambda: jax.lax.cond(
-                    enemy[4] <= 10,
-                    lambda: self.LANDER_MASKS[1],
-                    lambda: jax.lax.cond(
-                        enemy[4] <= 20,
-                        lambda: self.LANDER_MASKS[2],
-                        lambda: jax.lax.cond(
-                            enemy[4] <= 30,
-                            lambda: self.LANDER_MASKS[3],
-                            lambda: jax.lax.cond(
-                                enemy[4] <= 40,
-                                lambda: self.LANDER_MASKS[4],
-                                lambda: self.LANDER_MASKS[5],
-                            )
-                        )
-                    )
-                ),
+                lambda: pickup_mask,
                 lambda: mask
             )
 
@@ -1076,7 +1099,13 @@ class JaxDefender(
             speed_x = 0.0
             speed_y = 0.0
             current_counter += 1.0
-            return speed_x, speed_y, self.consts.LANDER_STATE_PICKUP, current_counter
+            lander_state = self.consts.LANDER_STATE_PICKUP
+            lander_state, current_counter = jax.lax.cond(
+                current_counter >= self.consts.LANDER_PICKUP_DURATION_FRAMES,
+                lambda: (self.consts.LANDER_STATE_ASCEND, 0.0),
+                lambda: (lander_state, current_counter)
+            )
+            return speed_x, speed_y, lander_state, current_counter
 
         speed_x, speed_y, lander_state, counter_id = jax.lax.switch(
             jnp.array(lander_state, int),
