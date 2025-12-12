@@ -132,7 +132,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _evaluate_arr(arr: chex.Array):
-        arr = jax.numpy.nan_to_num(arr)
+        arr = jax.numpy.nan_to_num(arr).astype(jnp.int32)
 
         a, b = arr[:3], arr[3:]
 
