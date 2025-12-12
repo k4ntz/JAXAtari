@@ -51,7 +51,10 @@ class DunkConstants:
     MATCH_STEPS: int = 1200  # number of steps per match (tunable)
     MAX_SCORE: int = 10
     DUNK_RADIUS: int = 18
+    INSIDE_RADIUS: int = 50
     BLOCK_RADIUS: int = 14
+    INSIDE_PLAYER_INSIDE_SHOT = 2
+    OUTSIDE_PLAYER_OUTSIDE_SHOT = 2
 
 @chex.dataclass(frozen=True)
 class PlayerState:
@@ -455,6 +458,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_p2_inside_shooting = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p2_outside_shooting = (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
+        is_inside_shooting = is_p1_inside_shooting | is_p2_inside_shooting
+        is_outside_shooting = is_p1_outside_shooting | is_p2_outside_shooting
+
 
         shooter_id = jax.lax.select(is_p1_inside_shooting, PlayerID.PLAYER1_INSIDE,
                      jax.lax.select(is_p1_outside_shooting, PlayerID.PLAYER1_OUTSIDE,
@@ -470,12 +476,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                     jax.lax.select(is_p2_outside_shooting, state.player2_outside.y, 0))))
 
         key, offset_key_x = random.split(key)
-        offset_x = random.uniform(offset_key_x, shape=(), minval=-10, maxval=10)
+
+        shooter_pos = jnp.array([shooter_x, shooter_y], dtype=jnp.float32)
+        basket_pos = jnp.array([self.constants.BASKET_POSITION[0], self.constants.BASKET_POSITION[1]], dtype=jnp.float32)
+        dist_to_basket = jnp.sqrt(jnp.sum((shooter_pos - basket_pos) ** 2))
+        is_inside = dist_to_basket < self.constants.INSIDE_RADIUS
+        shot_bonus = jax.lax.select(is_inside & is_inside_shooting, 2, jax.lax.select(~is_inside & is_outside_shooting, 2, -2))
+
+        offset_x = random.uniform(offset_key_x, shape=(), minval=-10 + shot_bonus, maxval=10 - shot_bonus)
         is_goal = (offset_x >= -5) & (offset_x <= 5)
 
-        basket_pos = jnp.array([self.constants.BASKET_POSITION[0], self.constants.BASKET_POSITION[1]], dtype=jnp.float32)
+
         target_pos = basket_pos + jnp.array([offset_x, 0.0])
-        shooter_pos = jnp.array([shooter_x, shooter_y], dtype=jnp.float32)
+
         # shooter z (height) for dunk/block checks
         shooter_z = jax.lax.select(is_p1_inside_shooting, state.player1_inside.z,
                   jax.lax.select(is_p1_outside_shooting, state.player1_outside.z,
@@ -515,7 +528,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # Determine whether this shot should be a dunk (inside player jumping near basket)
-        dist_to_basket = jnp.sqrt(jnp.sum((shooter_pos - basket_pos)**2))
+
         is_dunk = (dist_to_basket < self.constants.DUNK_RADIUS) & (shooter_z > 0)
 
         def make_shot(b):
