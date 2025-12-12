@@ -377,22 +377,36 @@ class DefenderRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["baiter"],
         ]
 
-        max_h = max(m.shape[0] for m in enemy_mask_before_pad)
-        max_w = max(m.shape[1] for m in enemy_mask_before_pad)
+        def _create_padded_enemy_masks(self, enemy_mask_before_pad):
+            """Create padded enemy masks with uniform dimensions."""
+            max_h = max(m.shape[0] for m in enemy_mask_before_pad)
+            max_w = max(m.shape[1] for m in enemy_mask_before_pad)
 
-        padded_masks = []
-        padded_masks.append(jnp.zeros((max_h, max_w)))
-        for mask in enemy_mask_before_pad:
-            h, w = mask.shape
-            padded_mask = jnp.pad(
-                mask,
-                ((0, max_h - h), (0, max_w - w)),
-                mode="constant",
-                constant_values=self.jr.TRANSPARENT_ID,
-            )
-            padded_masks.append(padded_mask)
+            padded_masks = []
+            padded_masks.append(jnp.zeros((max_h, max_w)))
+            for mask in enemy_mask_before_pad:
+                h, w = mask.shape
+                padded_mask = jnp.pad(
+                    mask,
+                    ((0, max_h - h), (0, max_w - w)),
+                    mode="constant",
+                    constant_values=self.jr.TRANSPARENT_ID,
+                )
+                padded_masks.append(padded_mask)
 
-        self.ENEMY_MASKS = jnp.array(padded_masks)
+            return jnp.array(padded_masks)
+        
+        self.ENEMY_MASKS = _create_padded_enemy_masks(self, enemy_mask_before_pad)
+        # Lander masks for different pickup states
+
+
+        self.LANDER_MASKS = _create_padded_enemy_masks(self, [
+            self.SHAPE_MASKS["lander_0"],
+            self.SHAPE_MASKS["lander_1"],
+            self.SHAPE_MASKS["lander_2"],
+            self.SHAPE_MASKS["lander_3"],
+            self.SHAPE_MASKS["lander_4"],
+        ])
 
         # Enemy colors to ids
         color_ids = []
@@ -512,6 +526,32 @@ class DefenderRenderer(JAXGameRenderer):
             enemy_type = enemy[2]
 
             mask = self.ENEMY_MASKS[jnp.array(enemy_type, int)]
+
+            mask = jax.lax.cond(
+                jnp.logical_and(
+                    enemy_type == self.consts.LANDER,
+                    enemy[3] == self.consts.LANDER_STATE_PICKUP
+                ),
+                lambda: jax.lax.cond(
+                    enemy[4] <= 10,
+                    lambda: self.LANDER_MASKS[1],
+                    lambda: jax.lax.cond(
+                        enemy[4] <= 20,
+                        lambda: self.LANDER_MASKS[2],
+                        lambda: jax.lax.cond(
+                            enemy[4] <= 30,
+                            lambda: self.LANDER_MASKS[3],
+                            lambda: jax.lax.cond(
+                                enemy[4] <= 40,
+                                lambda: self.LANDER_MASKS[4],
+                                lambda: self.LANDER_MASKS[5],
+                            )
+                        )
+                    )
+                ),
+                lambda: mask
+            )
+
             color_id = self.ENEMY_COLOR_IDS[jnp.array(enemy_type, int)]
 
             onscreen = self.dh._is_onscreen_from_screen(
@@ -938,6 +978,7 @@ class JaxDefender(
         lander_x = lander[0]
         lander_y = lander[1]
         lander_state = lander[3]
+        current_counter = lander[4]
 
         def lander_patrol(space_ship_speed: float) -> Tuple[float, float]:
             speed_x, speed_y = jax.lax.cond(
@@ -984,25 +1025,39 @@ class JaxDefender(
                 lambda: self.consts.LANDER_STATE_PATROL,
             )
 
-            return speed_x, speed_y, lander_state
+            return speed_x, speed_y, lander_state, 0.0
 
         def lander_descend(_: float) -> Tuple[float, float]:
             speed_x = 0.0
             speed_y = self.consts.LANDER_Y_SPEED
-            return speed_x, speed_y, self.consts.LANDER_STATE_DESCEND
 
-        speed_x, speed_y, lander_state = jax.lax.switch(
+            # Check if lander reached the bottom (human level)
+            lander_state = jax.lax.cond(
+                lander_y >= 115,
+                lambda: self.consts.LANDER_STATE_PICKUP,
+                lambda: self.consts.LANDER_STATE_DESCEND,
+            )
+
+            return speed_x, speed_y, lander_state, 0.0
+        
+        def lander_pickup(_: float, current_counter: float) -> Tuple[float, float]:
+            speed_x = 0.0
+            speed_y = 0.0
+            current_counter += 1.0
+            return speed_x, speed_y, self.consts.LANDER_STATE_PICKUP, current_counter
+
+        speed_x, speed_y, lander_state, counter_id = jax.lax.switch(
             jnp.array(lander_state, int),
             [
                 lambda: lander_patrol(space_ship_speed),  # Patrol
                 lambda: lander_descend(space_ship_speed),  # Descend
-                lambda: (0.0, 0.0, self.consts.LANDER_STATE_PICKUP),  # Pickup
-                lambda: (0.0, 0.0, self.consts.LANDER_STATE_ASCEND),  # Ascend
+                lambda: lander_pickup(space_ship_speed, current_counter),  # Pickup
+                lambda: (0.0, 0.0, self.consts.LANDER_STATE_ASCEND, 0.0),  # Ascend
             ],
         )
 
         x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
-        new_lander = [x, y, lander[2], lander_state, lander[4]]
+        new_lander = [x, y, lander[2], lander_state, counter_id]
         enemy_states = enemy_states.at[index].set(new_lander)
         return enemy_states
 
