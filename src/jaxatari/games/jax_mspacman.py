@@ -75,8 +75,8 @@ RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 MAX_LIVE_COUNT = 8
-# PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-PELLETS_TO_COLLECT = 4
+PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
+# PELLETS_TO_COLLECT = 4
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -84,7 +84,8 @@ COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 # GHOST TIMINGS
 CHASE_DURATION = 20*4*8 # Estimated for now, should be 20s  TODO: Adjust value
 MAX_CHASE_OFFSET = CHASE_DURATION / 10 # Maximum value that can be added to the chase duration
-SCATTER_DURATION = 7*4*8 # Estimated for now, should be 7s  TODO: Adjust value
+# SCATTER_DURATION = 7*4*8 # Estimated for now, should be 7s  TODO: Adjust value
+SCATTER_DURATION = 50
 MAX_SCATTER_OFFSET = SCATTER_DURATION / 10 # Maximum value that can be added to the scatter duration
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
@@ -149,13 +150,13 @@ class LevelState(NamedTuple):
     power_pellets: chex.Array       # Bool[4] - Indicates wheter the power pill is available
     loaded: chex.Array              # Bool - Indicates whether the level is loaded
 
-class GhostState(NamedTuple):
-    position: chex.Array            # Tuple - (x, y)
-    type: GhostType                 # Enum - 0: BLINKY, 1: PINKY, 2: INKY, 3: SUE
-    action: chex.Array              # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
-    mode: chex.Array                # Enum - 0: RANDOM, 1: CHASE, 2: SCTATTER, 3: FRIGHTENED, 4: BLINKING, 5: RETURNING, 6: ENJAILED
-    timer: chex.Array               # Int - Triggers mode change when reaching 0, decrements every step
-    key: chex.Array                 # chex.PRNGKey - Unique random key, saved in state to prevent repeated generation
+class GhostsState(NamedTuple):
+    positions: chex.Array           # Tuple - (x, y)
+    types: chex.Array               # Enum - 0: BLINKY, 1: PINKY, 2: INKY, 3: SUE
+    actions: chex.Array             # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    modes: chex.Array               # Enum - 0: RANDOM, 1: CHASE, 2: SCTATTER, 3: FRIGHTENED, 4: BLINKING, 5: RETURNING, 6: ENJAILED
+    timers: chex.Array              # Int - Triggers mode change when reaching 0, decrements every step
+    keys: chex.Array                # chex.PRNGKey - Unique random key, saved in state to prevent repeated generation
 
 class PlayerState(NamedTuple):
     position: chex.Array            # Tuple - (x, y)
@@ -176,7 +177,7 @@ class FruitState(NamedTuple):
 class PacmanState(NamedTuple):
     level: LevelState               # LevelState
     player: PlayerState             # PlayerState
-    ghosts: Tuple[GhostState, GhostState, GhostState, GhostState] # GhostState[4]
+    ghosts: GhostsState             # GhostStates
     fruit: FruitState               # FruitState
     lives: chex.Array               # Int - Number of lives left
     score: chex.Array               # Int - Total score reached
@@ -249,7 +250,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             death_state = True
 
         # Pacman movement
-        new_pacman_pos, executed_action, last_action = JaxPacman.pacman_step(state.player, state.level.dofmaze, action)
+        new_pacman_pos, executed_action, last_action = JaxPacman.pacman_step(state, action)
 
         # Pellet handling
         pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, power_mode_timer, pellet_reward = JaxPacman.pellet_step(state, new_pacman_pos)
@@ -261,9 +262,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         new_fruit_state, fruit_reward = JaxPacman.fruit_step(state, new_pacman_pos, collected_pellets, key)
 
         # Ghost handling
-        ghost_positions, ghost_actions, ghost_modes, ghost_timers = JaxPacman.ghosts_step(
-            state.ghosts, state.player, ate_power_pill, state.level.dofmaze, key
-        )
+        ghost_positions, ghost_actions, ghost_modes, ghost_timers = JaxPacman.ghosts_step(state, ate_power_pill, key)
 
         # Ghost collision detection
         ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, ghosts_reward, new_lives, new_death_timer = JaxPacman.ghosts_collision(
@@ -307,15 +306,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     power_mode_timer=power_mode_timer,
                     death_timer=new_death_timer
                 ),
-                ghosts = tuple(
-                    GhostState(
-                        type=GhostType(i),
-                        position=ghost_positions[i],
-                        action=ghost_actions[i],
-                        mode=ghost_modes[i],
-                        timer=ghost_timers[i],
-                        key=state.ghosts[i].key
-                    ) for i in range(4)
+                ghosts = GhostsState(
+                    positions=ghost_positions,
+                    types=state.ghosts.types,
+                    actions=ghost_actions,
+                    modes=ghost_modes,
+                    timers=ghost_timers,
+                    keys=state.ghosts.keys
                 ),
                 fruit = new_fruit_state,
                 lives=new_lives,
@@ -342,24 +339,24 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return new_state, done
 
     @staticmethod
-    def pacman_step(player: PlayerState, dofmaze: chex.Array, action: chex.Array):
+    def pacman_step(state: PacmanState, action: chex.Array):
         """
         Updates the players position and orientation based on his input and the current maze layout.
         """
-        last_action = player.last_action
-        action = last_pressed_action(action, player.current_action)
-        possible_directions = available_directions(player.position, dofmaze)
+        last_action = state.player.last_action
+        action = last_pressed_action(action, state.player.current_action)
+        possible_directions = available_directions(state.player.position, state.level.dofmaze)
         if action < 0 or action > len(ACTIONS) - 1: # Ignore illegal actions
             action = Action.NOOP
         if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
             new_action = action
             last_action = action
         else:
-            if player.current_action > 1 and stop_wall(player.position, dofmaze)[player.current_action - 2]: # check for wall collision
+            if state.player.current_action > 1 and stop_wall(state.player.position, state.level.dofmaze)[state.player.current_action - 2]: # check for wall collision
                 new_action = Action.NOOP
             else:
-                new_action = player.current_action
-        new_pos = player.position + ACTIONS[new_action]
+                new_action = state.player.current_action
+        new_pos = state.player.position + ACTIONS[new_action]
         new_pos = new_pos.at[0].set(new_pos[0] % 160)
         return new_pos, new_action, last_action
 
@@ -408,98 +405,88 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, power_mode_timer, reward
 
     @staticmethod
-    def ghosts_step(ghosts: GhostState[4], player: PlayerState, ate_power_pill: chex.Array, dofmaze: chex.Array, key: chex.Array
+    def ghosts_step(state: PacmanState, ate_power_pill: chex.Array, common_key: chex.Array
                     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         """
         Updates all ghosts.
         'key' can be a PRNGKey or None for deterministic behaviour.
         """
         new_positions = []
-        new_dirs = []
-        modes = []
-        timers = []
-        n_ghosts = len(ghosts)
-        for i in range(n_ghosts):
-            pos, dir, mode, timer = JaxPacman.ghost_step(ghosts[i], ghosts[GhostType.BLINKY].position,
-                                                         player.position, player.current_action,
-                                                         ate_power_pill, dofmaze, key)
-            new_positions.append(pos)
-            new_dirs.append(dir)
-            modes.append(mode)
-            timers.append(timer)
-        return jnp.stack(new_positions), jnp.stack(new_dirs), jnp.array(modes), jnp.array(timers)
+        new_actions = []
+        new_modes = []
+        new_timers = []
 
-    @staticmethod
-    def ghost_step(ghost: GhostState, blinky_pos: chex.Array, player_pos: chex.Array, player_dir: chex.Array,
-                   ate_power_pill: chex.Array, dofmaze: chex.Array, common_key: chex.Array
-                   ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        """
-        Updates a single ghosts position, action, mode and timer.
-        Never stops, never reverses, can change direction at intersections.
-        """
-        # 0) Initialize
-        new_pos = ghost.position
-        new_action = ghost.action
-        new_mode = ghost.mode
-        last_timer = ghost.timer
-        new_timer = ghost.timer
-        if ghost.timer > 0:
-            new_timer = ghost.timer - 1
-        skip = False
+        # 1) Iterate over all ghosts
+        for i in range(len(state.ghosts.types)):
+            position    = state.ghosts.positions[i]
+            action      = state.ghosts.actions[i]
+            mode        = state.ghosts.modes[i]
+            last_timer  = state.ghosts.timers[i]
+            new_timer   = state.ghosts.timers[i]
+            skip        = False
 
-        # 1) Update ghost mode and timer
-        if ate_power_pill and ghost.mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
-            new_mode = GhostMode.FRIGHTENED
-            new_timer = FRIGHTENED_DURATION
-            new_action = reverse_direction(ghost.action)
-            skip = True
-        elif new_timer == 0 and last_timer > 0:
-            match ghost.mode:
-                case GhostMode.CHASE:
-                    new_mode = GhostMode.SCATTER
-                    new_timer = SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET)
-                    new_action = reverse_direction(ghost.action)
-                    skip = True
-                case GhostMode.SCATTER:
-                    new_mode = GhostMode.CHASE
-                    new_timer = CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET)
-                    new_action = reverse_direction(ghost.action)
-                    skip = True
-                case GhostMode.ENJAILED:
-                    new_mode = GhostMode.RETURNING
-                    new_timer = RETURN_DURATION
-                    new_action = Action.UP
-                    skip = True
-                case GhostMode.FRIGHTENED:
-                    new_mode = GhostMode.BLINKING
-                    new_timer = BLINKING_DURATION
-                case GhostMode.BLINKING | GhostMode.RETURNING | GhostMode.RANDOM:
-                    new_mode = GhostMode.CHASE
-                    new_timer = CHASE_DURATION
+            # 2) Update ghost mode and timer
+            if last_timer > 0:
+                new_timer = last_timer - 1
+            if ate_power_pill and mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
+                mode = GhostMode.FRIGHTENED
+                new_timer = FRIGHTENED_DURATION
+                action = reverse_direction(action)
+                skip = True
+            elif new_timer == 0 and last_timer > 0:
+                match mode:
+                    case GhostMode.CHASE:
+                        mode = GhostMode.SCATTER
+                        new_timer = SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET)
+                        action = reverse_direction(action)
+                        skip = True
+                    case GhostMode.SCATTER:
+                        mode = GhostMode.CHASE
+                        new_timer = CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET)
+                        action = reverse_direction(action)
+                        skip = True
+                    case GhostMode.ENJAILED:
+                        mode = GhostMode.RETURNING
+                        new_timer = RETURN_DURATION
+                        action = Action.UP
+                        skip = True
+                    case GhostMode.FRIGHTENED:
+                        mode = GhostMode.BLINKING
+                        new_timer = BLINKING_DURATION
+                    case GhostMode.BLINKING | GhostMode.RETURNING | GhostMode.RANDOM:
+                        mode = GhostMode.CHASE
+                        new_timer = CHASE_DURATION
 
-        # 2) Update ghost action
-        if skip or new_mode == GhostMode.ENJAILED or new_mode == GhostMode.RETURNING:
-            pass
-        else:
-            # 2.2) Choose new direction
-            allowed = get_allowed_directions(ghost.position, ghost.action, dofmaze)
-            if not allowed: # If no direction is allowed - continue forward
+            # 3) Update ghost action
+            if skip or mode == GhostMode.ENJAILED or mode == GhostMode.RETURNING:
                 pass
-            elif len(allowed) == 1: # If only one allowed direction - take it
-                new_action = allowed[0]
-            elif new_mode == GhostMode.FRIGHTENED or new_mode == GhostMode.BLINKING or new_mode == GhostMode.RANDOM or new_mode == GhostMode.RETURNING:
-                new_action = jax.random.choice(ghost.key, jnp.array(allowed))
             else:
-                if new_mode == GhostMode.CHASE:
-                    chase_target = get_chase_target(ghost.type, ghost.position, blinky_pos, player_pos, player_dir)
-                else: # If not CHASE, mode must be SCATTER at this point
-                    chase_target = SCATTER_TARGETS[ghost.type]
-                new_action = pathfind(ghost.position, ghost.action, chase_target, allowed, ghost.key)
+                # Choose new direction
+                allowed = get_allowed_directions(position, action, state.level.dofmaze)
+                if not allowed: # If no direction is allowed - continue forward
+                    pass
+                elif len(allowed) == 1: # If only one allowed direction - take it
+                    action = allowed[0]
+                elif mode == GhostMode.FRIGHTENED or mode == GhostMode.BLINKING or mode == GhostMode.RANDOM or mode == GhostMode.RETURNING:
+                    action = jax.random.choice(state.ghosts.keys[i], jnp.array(allowed))
+                else:
+                    if mode == GhostMode.CHASE:
+                        chase_target = get_chase_target(state.ghosts.types[i], position, state.ghosts.positions[GhostType.BLINKY],
+                                                        state.player.position, state.player.current_action)
+                    else: # If not CHASE, mode must be SCATTER at this point
+                        chase_target = SCATTER_TARGETS[state.ghosts.types[i]]
+                    action = pathfind(position, action, chase_target, allowed, state.ghosts.keys[i])
 
-        # 3) Update ghost position
-        new_pos = ghost.position + ACTIONS[new_action]
-        new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
-        return new_pos, new_action, new_mode, new_timer
+            # 4) Update ghost position
+            position = position + ACTIONS[action]
+            position = position.at[0].set(position[0] % 160) # wrap horizontally
+
+            # 5) Save new ghost state
+            new_positions.append(position)
+            new_actions.append(action)
+            new_modes.append(mode)
+            new_timers.append(new_timer)
+        return jnp.stack(new_positions), jnp.stack(new_actions), jnp.array(new_modes), jnp.array(new_timers)
 
     @staticmethod
     def ghosts_collision(ghost_positions: chex.Array, ghost_actions: chex.Array, ghost_modes: chex.Array, ghost_timers: chex.Array,
@@ -528,25 +515,25 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         return ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, reward, new_lives, new_death_timer
 
     @staticmethod
-    def fruit_move(fruit: FruitState, dofmaze: chex.Array, key: chex.Array
+    def fruit_move(state: PacmanState, key: chex.Array
                    ) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """
         Updates the fruits position, action and timer if one is currently active.
         """
-        allowed = get_allowed_directions(fruit.position, fruit.action, dofmaze)
+        allowed = get_allowed_directions(state.fruit.position, state.fruit.action, state.level.dofmaze)
         if not allowed:
-            new_dir = fruit.action
+            new_dir = state.fruit.action
         if len(allowed) == 1:
             new_dir = allowed[0]
-        elif fruit.timer == 0:
-            new_dir = pathfind(fruit.position, fruit.action, fruit.exit, allowed, key)
+        elif state.fruit.timer == 0:
+            new_dir = pathfind(state.fruit.position, state.fruit.action, state.fruit.exit, allowed, key)
         else:
             new_dir = jax.random.choice(key, jnp.array(allowed))
 
-        new_timer = fruit.timer
-        if fruit.timer > 0:
+        new_timer = state.fruit.timer
+        if state.fruit.timer > 0:
             new_timer -= 1
-        new_pos = jnp.array(fruit.position) + ACTIONS[new_dir]
+        new_pos = jnp.array(state.fruit.position) + ACTIONS[new_dir]
         new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
         return new_pos, new_dir, new_timer
 
@@ -575,7 +562,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 fruit_type = FruitType.NONE
                 fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
             else:
-                fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state.fruit, state.level.dofmaze, key) # Move fruit
+                fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state, key) # Move fruit
         return FruitState(fruit_position, fruit_exit, fruit_type, fruit_action, fruit_timer), reward
 
     @staticmethod
@@ -634,15 +621,15 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
 
-        for i, ghost in enumerate(state.ghosts):
+        for i in range(len(state.ghosts.types)):
             # Render frightened ghost
-            if not (state.ghosts[i].mode == GhostMode.FRIGHTENED or state.ghosts[i].mode == GhostMode.BLINKING):
+            if not (state.ghosts.modes[i] == GhostMode.FRIGHTENED or state.ghosts.modes[i] == GhostMode.BLINKING):
                 g_sprite = self.sprites["ghost"][ghosts_orientation][i]
-            elif state.ghosts[i].mode == GhostMode.BLINKING and ((state.step_count & 0b1000) >> 3):
+            elif state.ghosts.modes[i] == GhostMode.BLINKING and ((state.step_count & 0b1000) >> 3):
                 g_sprite = self.sprites["ghost"][ghosts_orientation][5] # white blinking effect
             else:
                 g_sprite = self.sprites["ghost"][ghosts_orientation][4] # blue ghost
-            raster = aj.render_at(raster, ghost.position[0], ghost.position[1], g_sprite)
+            raster = aj.render_at(raster, state.ghosts.positions[i][0], state.ghosts.positions[i][1], g_sprite)
 
         # Render fruit if present
         if state.fruit.type != FruitType.NONE:
@@ -670,7 +657,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         return raster
 
     @staticmethod
-    def render_lives(raster, current_lives, life_sprite, initial_lives=INITIAL_LIVES, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0])):
+    def render_lives(raster, current_lives, life_sprite, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0])):
         """Render the lives on the raster at a fixed position."""
         bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
         for i in range(MAX_LIVE_COUNT):
@@ -1012,16 +999,13 @@ def reset_ghosts():
     seed = int(time.time() * 1000) % (2**32 - 1)
     base_key = jax.random.PRNGKey(seed)
     unique_keys = jax.random.split(base_key, 4)
-    return tuple(
-        GhostState(
-            type        = jnp.array(GhostType(i)).astype(jnp.uint8),
-            position    = INITIAL_GHOSTS_POSITIONS[i],
-            action      = jnp.array(Action.NOOP).astype(jnp.uint8),
-            mode        = (jnp.array(GhostMode.RANDOM).astype(jnp.uint8) if i < 2 
-                            else jnp.array(GhostMode.SCATTER).astype(jnp.uint8)),
-            timer       = jnp.array(SCATTER_DURATION).astype(jnp.uint16),
-            key         = jnp.array(unique_keys[i], dtype=jnp.uint32)
-        ) for i in range(4)
+    return GhostsState (
+        positions   = INITIAL_GHOSTS_POSITIONS,
+        types       = jnp.array([GhostType.BLINKY, GhostType.PINKY, GhostType.INKY, GhostType.SUE], dtype=jnp.uint8),
+        actions     = jnp.array([Action.NOOP, Action.NOOP, Action.NOOP, Action.NOOP], dtype=jnp.uint8),
+        modes       = jnp.array([GhostMode.RANDOM, GhostMode.RANDOM, GhostMode.SCATTER, GhostMode.SCATTER], dtype=jnp.uint8),
+        timers      = jnp.array([SCATTER_DURATION, SCATTER_DURATION, SCATTER_DURATION, SCATTER_DURATION], dtype=jnp.uint16),
+        keys        = unique_keys
     )
 
 def reset_fruit():
