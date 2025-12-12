@@ -107,9 +107,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             jnp.greater_equal(state.numberProb, 10),
         )
     
-    def _generate_problem(state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
-        fire = action == Action.FIRE
-
+    def _generate_problem(state: BasicMathState, gameMode) -> BasicMathState:
         key, k1 = jax.random.split(state.key)
         key, k2 = jax.random.split(state.key)
 
@@ -143,7 +141,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return val_a, val_b
     
-    def _evaluate_issue(self, state: BasicMathState, action: chex.Array, gameMode) -> BasicMathState:
+    def _evaluate_issue(self, state: BasicMathState, gameMode) -> BasicMathState:
         ops = [
             lambda a, b: a + b,
             lambda a, b: a - b,
@@ -296,8 +294,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         is_fire = action == Action.FIRE
 
         def do_fire(_):
-            s = self._evaluate_issue(state, action, gameMode)
-            s = self._generate_problem(s, action, gameMode)
+            s = self._evaluate_issue(state, gameMode)
+            s = self._generate_problem(s, gameMode)
             return s
 
         def no_fire(_):
