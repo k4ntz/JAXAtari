@@ -135,7 +135,7 @@ class DefenderConstants(NamedTuple):
     LASER_HEIGHT: int = 1
     LASER_2ND_OFFSET: int = 7
     LASER_FINAL_WIDTH: int = LASER_WIDTH + LASER_2ND_OFFSET
-    LASER_FINAL_HEIHGT: int = LASER_HEIGHT * 2
+    LASER_FINAL_HEIGHT: int = LASER_HEIGHT * 2
     LASER_SPEED: int = 20
     LASER_STATE_INACTIVE: int = 0
     LASER_STATE_ACTIVE: int = 1
@@ -713,17 +713,48 @@ class JaxDefender(
             Action.DOWNLEFTFIRE,
         ]
 
-    def is_colliding(self, e1: EntityPosition, e2: EntityPosition) -> chex.Array:
-        e1max_x = e1.x + e1.width
-        e2max_x = e2.x + e2.width
-        e1max_y = e1.y + e1.height
-        e2max_y = e2.y + e2.height
+    def _spawn_enemy(
+        self, state: DefenderState, game_x, game_y, e_type, arg1, arg2
+    ) -> DefenderState:
+        # Find first enemy that is inactive
+        mask = jnp.array(state.enemy_states[:, 2] == self.consts.INACTIVE)
+        match = mask.argmax()
+        # If no open slot availabe, dismiss new enemy
+        open_slot_available = jnp.logical_or(match != 0, mask[0] == True)
+        state = jax.lax.cond(
+            open_slot_available,
+            lambda: self._update_enemy(
+                state, match, game_x, game_y, e_type, arg1, arg2
+            ),
+            lambda: state,
+        )
+        return state
 
-        check_1 = e1.x <= e2max_x
-        check_2 = e1max_x >= e2.x
+    def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
+        is_index = jnp.logical_and(index > 0, index < self.consts.ENEMY_MAX)
+        state = jax.lax.cond(
+            is_index,
+            lambda: self._update_enemy(
+                state, index, 0.0, 0.0, self.consts.INACTIVE, 0.0, 0.0
+            ),
+            lambda: state,
+        )
+        # TODO Add score
+        return state
 
-        check_3 = e1.y <= e2max_y
-        check_4 = e1max_y >= e2.y
+    def _is_colliding(
+        self, e1_x, e1_y, e1_width, e1_height, e2_x, e2_y, e2_width, e2_height
+    ) -> chex.Array:
+        e1max_x = e1_x + e1_width
+        e2max_x = e2_x + e2_width
+        e1max_y = e1_y + e1_height
+        e2max_y = e2_y + e2_height
+
+        check_1 = e1_x <= e2max_x
+        check_2 = e1max_x >= e2_x
+
+        check_3 = e1_y <= e2max_y
+        check_4 = e1max_y >= e2_y
 
         check_x = jnp.logical_and(check_1, check_2)
         check_y = jnp.logical_and(check_3, check_4)
@@ -1441,6 +1472,81 @@ class JaxDefender(
         observation = self._get_observation(initial_state)
         return observation, initial_state
 
+    def _check_space_ship_collision(self, state: DefenderState) -> DefenderState:
+        is_colliding = jax.lax.cond(
+            state.bullet_state == self.consts.BULLET_STATE_ACTIVE,
+            lambda: self._is_colliding(
+                state.space_ship_x,
+                state.space_ship_y,
+                self.consts.SPACE_SHIP_WIDTH,
+                self.consts.SPACE_SHIP_HEIGHT,
+                state.bullet_x,
+                state.bullet_y,
+                self.consts.BULLET_WIDTH,
+                self.consts.BULLET_HEIGHT,
+            ),
+            lambda: False,
+        )
+        # TODO implement game over here
+        state = jax.lax.cond(is_colliding, lambda: state, lambda: state)
+
+        return state
+
+    def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
+        def collision(index, state):
+            e = state.enemy_states[index]
+            e_x = e[0]
+            e_y = e[1]
+            # First check laser
+            laser_is_colliding = jax.lax.cond(
+                state.laser_state == self.consts.LASER_STATE_ACTIVE,
+                lambda: self._is_colliding(
+                    e_x,
+                    e_y,
+                    self.consts.ENEMY_WIDTH,
+                    self.consts.ENEMY_HEIGHT,
+                    state.laser_x,
+                    state.laser_y,
+                    self.consts.LASER_FINAL_WIDTH,
+                    self.consts.LASER_FINAL_HEIGHT,
+                ),
+                lambda: False,
+            )
+
+            # Now check space ship
+            space_ship_is_colliding = self._is_colliding(
+                e_x,
+                e_y,
+                self.consts.ENEMY_WIDTH,
+                self.consts.ENEMY_HEIGHT,
+                state.space_ship_x,
+                state.space_ship_y,
+                self.consts.SPACE_SHIP_WIDTH,
+                self.consts.SPACE_SHIP_HEIGHT,
+            )
+
+            # TODO implement game over here, if space ship is colliding
+            is_dead = jnp.logical_or(laser_is_colliding, space_ship_is_colliding)
+            state = jax.lax.cond(
+                is_dead, lambda: self._delete_enemy(state, index), lambda: state
+            )
+            state = jax.lax.cond(
+                laser_is_colliding,
+                lambda: state._replace(laser_state=self.consts.LASER_STATE_INACTIVE),
+                lambda: state,
+            )
+            return state
+
+        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, collision, state)
+        return state
+
+    def _collision_step(self, state) -> DefenderState:
+        # check player and bullet
+        state = self._check_space_ship_collision(state)
+        # check laser and enemies
+        state = self._check_enemy_collisions(state)
+        return state
+
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: DefenderState, action: chex.Array
@@ -1457,9 +1563,9 @@ class JaxDefender(
         state = self._enemy_step(state)
         state = self._bullet_step(state)
         state = self._laser_step(state)
+        state = self._collision_step(state)
         state = state._replace(step_counter=(state.step_counter + 1))
 
-        # state = self._collision_step(new_state)
         observation = self._get_observation(state)
         env_reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
