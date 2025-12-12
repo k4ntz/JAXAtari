@@ -994,8 +994,23 @@ class JaxDefender(
 
             proximity_checks = jax.vmap(check_proximity)(human_states)
             is_near_human = jnp.any(proximity_checks)
+            # Check if any other lander (not this one) is already descending or picking up
+            indices = jnp.arange(self.consts.ENEMY_MAX)
+            other_landers_descending = jnp.any(
+                jnp.logical_and(
+                    jnp.logical_and(
+                        indices != index,
+                        enemy_states[:, 2] == self.consts.LANDER
+                    ),
+                    jnp.logical_or(
+                        enemy_states[:, 3] == self.consts.LANDER_STATE_DESCEND,
+                        enemy_states[:, 3] == self.consts.LANDER_STATE_PICKUP,
+                    )
+                )
+            )
+
             lander_state = jax.lax.cond(
-                is_near_human,
+                jnp.logical_and(is_near_human, jnp.logical_not(other_landers_descending)),
                 lambda: self.consts.LANDER_STATE_DESCEND,
                 lambda: self.consts.LANDER_STATE_PATROL,
             )
