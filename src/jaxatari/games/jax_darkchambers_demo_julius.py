@@ -19,6 +19,12 @@ GAME_W = 160
 WORLD_W = GAME_W * 2  # World is 2x viewport size
 WORLD_H = GAME_H * 2
 
+# --- Nav grid for enemy pathfinding ---
+CELL_SIZE = 8                      # size of one nav cell in pixels
+GRID_W = WORLD_W // CELL_SIZE
+GRID_H = WORLD_H // CELL_SIZE
+BIG_DIST = 10_000                  # "infinity" for distance field
+
 NUM_ENEMIES = 20  # Increased to allow more spawned enemies
 NUM_SPAWNERS = 3  # Spawner entities
 
@@ -80,6 +86,23 @@ SPAWNER_WIDTH = 14
 SPAWNER_HEIGHT = 14
 SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
 SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
+
+ENEMY_COLLISION_MARGIN = 1  # or 2 pixels if you want more slide room
+
+CHASE_RADIUS = 120          # pixels
+IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
+
+ORBIT_DIRS = jnp.array([
+    [ 1,  0],  # E
+    [ 1, -1],  # NE
+    [ 0, -1],  # N
+    [-1, -1],  # NW
+    [-1,  0],  # W
+    [-1,  1],  # SW
+    [ 0,  1],  # S
+    [ 1,  1],  # SE
+], dtype=jnp.int32)
+
 
 
 class DarkChambersConstants(NamedTuple):
@@ -373,6 +396,33 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Default to level 0 for compatibility
         self.WALLS = level_0_walls
+
+        # --- Navigation grid: mark nav cells that are blocked by walls ---
+        def make_occupancy(walls):
+            # walls: (num_walls, 4) = [x, y, w, h]
+            xs = jnp.arange(GRID_W) * CELL_SIZE
+            ys = jnp.arange(GRID_H) * CELL_SIZE
+            cx, cy = jnp.meshgrid(xs, ys)   # shape (GRID_H, GRID_W)
+
+            # Treat each cell as a CELL_SIZE x CELL_SIZE rect (top-left at cx,cy)
+            cx = cx[..., None]
+            cy = cy[..., None]
+
+            wx = walls[:, 0]
+            wy = walls[:, 1]
+            ww = walls[:, 2]
+            wh = walls[:, 3]
+
+            overlap_x = (cx <= (wx + ww - 1)) & ((cx + CELL_SIZE - 1) >= wx)
+            overlap_y = (cy <= (wy + wh - 1)) & ((cy + CELL_SIZE - 1) >= wy)
+            blocked = jnp.any(overlap_x & overlap_y, axis=-1)  # (GRID_H, GRID_W) bool
+            return blocked
+
+        # Shape: (MAX_LEVELS, GRID_H, GRID_W)
+        self.LEVEL_WALL_GRID = jnp.stack(
+            [make_occupancy(self.LEVEL_WALLS[i]) for i in range(MAX_LEVELS)],
+            axis=0
+        )
         
         # Per-item sizes (width, height) indexed by item type code
         # Index 0 unused placeholder for alignment
@@ -914,6 +964,88 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def __init__(self, consts: DarkChambersConstants = None):
         super().__init__(consts=consts or DarkChambersConstants())
         self.renderer = DarkChambersRenderer(self.consts)
+
+    def _pos_to_cell(self, x, y):
+        """Convert pixel coords (x,y) to nav-grid indices (cy,cx)."""
+        cy = (y // CELL_SIZE).astype(jnp.int32)
+        cx = (x // CELL_SIZE).astype(jnp.int32)
+        cy = jnp.clip(cy, 0, GRID_H - 1)
+        cx = jnp.clip(cx, 0, GRID_W - 1)
+        return cy, cx
+
+    def _distance_field(
+        self,
+        level: chex.Array,
+        player_x: chex.Array,
+        player_y: chex.Array,
+        enemy_positions: chex.Array,
+        enemy_active: chex.Array,
+    ):
+        """
+        BFS / Dijkstra distance from each nav cell to the player.
+        Returns (GRID_H, GRID_W) int32 array of distances.
+
+        Now treats alive enemies as additional obstacles on the nav grid.
+        """
+        # Base wall grid from the level
+        wall_grid = self.renderer.LEVEL_WALL_GRID[level]  # (GRID_H, GRID_W) bool
+        H, W = wall_grid.shape
+
+        # --- Enemy occupancy grid (treat alive enemies as walls) ---
+        # Use enemy centers to map to nav cells
+        centers_x = enemy_positions[:, 0] + self.consts.ENEMY_WIDTH // 2
+        centers_y = enemy_positions[:, 1] + self.consts.ENEMY_HEIGHT // 2
+
+        enemy_cy, enemy_cx = self._pos_to_cell(centers_x, centers_y)  # can handle arrays
+
+        enemy_grid = jnp.zeros((H, W), dtype=bool)
+        enemy_grid = enemy_grid.at[enemy_cy, enemy_cx].set(enemy_active.astype(bool))
+
+        # Combined obstacle grid: walls OR enemies
+        blocked = wall_grid | enemy_grid
+
+        # Distance init
+        dist = jnp.full((H, W), BIG_DIST, dtype=jnp.int32)
+
+        # Player seed cell
+        py, px = self._pos_to_cell(player_x, player_y)
+        dist = dist.at[py, px].set(0)
+
+        frontier = jnp.zeros((H, W), dtype=bool).at[py, px].set(True)
+
+        def body(t, carry):
+            dist, frontier = carry
+
+            def shift_frontier(f, dy, dx):
+                if dy == -1:
+                    f_n = jnp.pad(f[1:, :], ((0, 1), (0, 0)))
+                elif dy == 1:
+                    f_n = jnp.pad(f[:-1, :], ((1, 0), (0, 0)))
+                elif dx == -1:
+                    f_n = jnp.pad(f[:, 1:], ((0, 0), (0, 1)))
+                else:  # dx == 1
+                    f_n = jnp.pad(f[:, :-1], ((0, 0), (1, 0)))
+                return f_n
+
+            # 4-neighbourhood
+            dirs = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+            new_frontier = jnp.zeros_like(frontier)
+            new_dist = dist
+
+            for dy, dx in dirs:
+                f_n = shift_frontier(frontier, dy, dx)
+                # Only expand into non-blocked cells
+                cand = f_n & ~blocked & (dist > t + 1)
+                new_frontier = new_frontier | cand
+                new_dist = jnp.where(cand, t + 1, new_dist)
+
+            return (new_dist, new_frontier)
+
+        max_steps = GRID_W + GRID_H  # enough to cross the map
+        dist, _ = jax.lax.fori_loop(0, max_steps, body, (dist, frontier))
+        return dist
+
     
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1320,98 +1452,166 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             updated_enemy_bullet_active
         )
         
-        """
         # Enemy random walk
         rng, subkey = jax.random.split(state.key)
         enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
         enemy_alive = state.enemy_active == 1
-        
-        prop_enemy_positions = state.enemy_positions + enemy_deltas
-        # Keep dead enemies exactly where they are (typically [0,0])
-        prop_enemy_positions = jnp.where(
-            enemy_alive[:, None],
-            prop_enemy_positions,
-            state.enemy_positions
+
+        player_center = jnp.array(
+            [new_x + self.consts.PLAYER_WIDTH // 2,
+            new_y + self.consts.PLAYER_HEIGHT // 2],
+            dtype=jnp.int32
         )
-        prop_enemy_positions = jnp.clip(
-            prop_enemy_positions,
-            jnp.array([0, 0]),
-            jnp.array([self.consts.WORLD_WIDTH - 1, self.consts.WORLD_HEIGHT - 1])
+
+        enemy_centers = state.enemy_positions + jnp.array(
+            [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
+            dtype=jnp.int32
         )
-        
-        def check_enemy_collision(enemy_pos):
-            ex, ey = enemy_pos[0], enemy_pos[1]
-            e_overlap_x = (ex <= (WALLS[:,0] + WALLS[:,2] - 1)) & ((ex + self.consts.ENEMY_WIDTH - 1) >= WALLS[:,0])
-            e_overlap_y = (ey <= (WALLS[:,1] + WALLS[:,3] - 1)) & ((ey + self.consts.ENEMY_HEIGHT - 1) >= WALLS[:,1])
-            return jnp.any(e_overlap_x & e_overlap_y)
-        
-        enemy_collisions = jax.vmap(check_enemy_collision)(prop_enemy_positions)
-        # Dead enemies cannot collide with walls or move
-        enemy_collisions = enemy_collisions & enemy_alive
-        new_enemy_positions = jnp.where(
-            enemy_collisions[:, None],
+
+        dx = enemy_centers[:, 0] - player_center[0]
+        dy = enemy_centers[:, 1] - player_center[1]
+        dist2 = dx * dx + dy * dy
+
+        chase_mask = (dist2 <= (CHASE_RADIUS * CHASE_RADIUS)) & enemy_alive
+
+
+        # distance field to player over nav grid
+        # enemies are treated as dynamic obstacles
+        dist_field = self._distance_field(
+            state.current_level,
+            new_x,
+            new_y,
             state.enemy_positions,
-            prop_enemy_positions
-        )"""
-
-        # Enemy movement: chase player with some randomness, stronger enemies are more aggressive
-        rng, move_key, noise_key = jax.random.split(state.key, 3)
-        enemy_alive = state.enemy_active == 1
-
-        # Vector from enemy to player (use enemy center vs player center)
-        player_center = jnp.array([
-            new_x + self.consts.PLAYER_WIDTH // 2,
-            new_y + self.consts.PLAYER_HEIGHT // 2,
-        ], dtype=jnp.int32)
-
-        vec_to_player = player_center[None, :] - state.enemy_positions  # (N, 2)
-        # Step of size 1 towards player in each axis (-1, 0, 1)
-        step_towards = jnp.sign(vec_to_player).astype(jnp.int32)
-
-        # Random jitter step (-1, 0, 1) in each axis
-        rand_steps = jax.random.randint(
-            noise_key, (NUM_ENEMIES, 2), minval=-1, maxval=2, dtype=jnp.int32
+            state.enemy_active,
         )
 
-        # Per-type chase probability: zombies dumb, reapers relentless
-        # index: 0=dead, 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim reaper
-        type_chase_probs = jnp.array(
-            [0.0, 0.3, 0.5, 0.7, 0.85, 1.0], dtype=jnp.float32
-        )
-        chase_probs = type_chase_probs[state.enemy_types]          # (N,)
-        rand_uniform = jax.random.uniform(move_key, (NUM_ENEMIES,))
-        use_chase = rand_uniform < chase_probs                    # (N,)
 
-        # Choose per-enemy step: towards player or random
-        chosen_step = jnp.where(
-            use_chase[:, None],
-            step_towards,
-            rand_steps
-        ).astype(jnp.int32)
+        def enemy_step(pos, alive):
+            # pos: [x, y] top-left of enemy
+            # compute nav-cell from enemy center
+            enemy_center = pos + jnp.array(
+                [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
+                dtype=jnp.int32,
+            )
+            cy, cx = self._pos_to_cell(enemy_center[0], enemy_center[1])
 
-        # Dead enemies don’t move
-        chosen_step = chosen_step * enemy_alive[:, None].astype(jnp.int32)
+            cy = jnp.clip(cy, 0, GRID_H - 1)
+            cx = jnp.clip(cx, 0, GRID_W - 1)
 
-        # Helper: check collision for a single enemy position
+            # 4-neighbourhood (no "stay in place" cell)
+            # 8-neighbourhood around (cy, cx)
+            neigh = jnp.array([
+                [cy - 1, cx    ],  # up
+                [cy + 1, cx    ],  # down
+                [cy,     cx - 1],  # left
+                [cy,     cx + 1],  # right
+                [cy - 1, cx - 1],  # up-left
+                [cy - 1, cx + 1],  # up-right
+                [cy + 1, cx - 1],  # down-left
+                [cy + 1, cx + 1],  # down-right
+            ], dtype=jnp.int32)
+
+
+            ny = jnp.clip(neigh[:, 0], 0, GRID_H - 1)
+            nx = jnp.clip(neigh[:, 1], 0, GRID_W - 1)
+
+            in_bounds = (
+                (neigh[:, 0] >= 0) & (neigh[:, 0] < GRID_H) &
+                (neigh[:, 1] >= 0) & (neigh[:, 1] < GRID_W)
+            )
+
+            # distances from distance field
+            dists = dist_field[ny, nx]
+
+            # target centers of neighbour cells
+            target_centers = jnp.stack(
+                [
+                    nx * CELL_SIZE + CELL_SIZE // 2,
+                    ny * CELL_SIZE + CELL_SIZE // 2,
+                ],
+                axis=1,
+            )  # shape (4, 2)
+
+            # step vectors: 1 px per axis towards target center
+            step_vecs = jnp.sign(target_centers - enemy_center).astype(jnp.int32)
+
+            # --- collision check for each candidate step ---
+            def collides_with_wall(step_vec):
+                new_pos = pos + step_vec
+
+                ex = new_pos[0] + ENEMY_COLLISION_MARGIN
+                ey = new_pos[1] + ENEMY_COLLISION_MARGIN
+                w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+                h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+
+                wx = WALLS[:, 0]
+                wy = WALLS[:, 1]
+                ww = WALLS[:, 2]
+                wh = WALLS[:, 3]
+
+                e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+                e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
+                return jnp.any(e_overlap_x & e_overlap_y)
+
+            collisions = jax.vmap(collides_with_wall)(step_vecs)  # (4,)
+
+            # valid = in grid, no wall collision, and enemy is alive
+            valid = in_bounds & (~collisions) & (alive == 1)
+
+            # neighbours that are invalid get BIG_DIST so they won’t be chosen
+            dists_valid = jnp.where(valid, dists, BIG_DIST)
+
+            best_idx = jnp.argmin(dists_valid)
+            best_step = step_vecs[best_idx]
+
+            # if *all* neighbours invalid, don't move
+            any_valid = jnp.any(valid)
+            best_step = jnp.where(
+                any_valid,
+                best_step,
+                jnp.array([0, 0], dtype=jnp.int32),
+            )
+
+            # final step is zero if enemy is dead
+            return best_step * alive.astype(jnp.int32)
+
+
+        chosen_step = jax.vmap(enemy_step)(state.enemy_positions, enemy_alive)
+
+        # --- idle "circular-ish" movement (8-dir orbit) ---
+        idxs = jnp.arange(NUM_ENEMIES, dtype=jnp.int32)
+        phase = (state.step_counter // 12 + idxs) % 8          # 12 = frames per segment
+        idle_step = ORBIT_DIRS[phase] * IDLE_SPEED             # (NUM_ENEMIES, 2)
+        idle_step = idle_step * enemy_alive[:, None].astype(jnp.int32)  # dead enemies don't move
+
+        # --- choose chase vs idle ---
+        final_step = jnp.where(chase_mask[:, None], chosen_step, idle_step)
+
+        # Helper: check collision for a single enemy position (keep your existing function)
         def check_enemy_collision(enemy_pos):
-            ex, ey = enemy_pos[0], enemy_pos[1]
-            e_overlap_x = (ex <= (WALLS[:, 0] + WALLS[:, 2] - 1)) & \
-                          ((ex + self.consts.ENEMY_WIDTH - 1) >= WALLS[:, 0])
-            e_overlap_y = (ey <= (WALLS[:, 1] + WALLS[:, 3] - 1)) & \
-                          ((ey + self.consts.ENEMY_HEIGHT - 1) >= WALLS[:, 1])
+            # shrink collision box by a small margin to allow sliding along walls
+            ex = enemy_pos[0] + ENEMY_COLLISION_MARGIN
+            ey = enemy_pos[1] + ENEMY_COLLISION_MARGIN
+            w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+            h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+
+            wx = WALLS[:, 0]
+            wy = WALLS[:, 1]
+            ww = WALLS[:, 2]
+            wh = WALLS[:, 3]
+
+            e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+            e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
             return jnp.any(e_overlap_x & e_overlap_y)
 
-        # For each enemy: try full step; if blocked, try X-only, then Y-only, else stay
+        # Re-use your axis-separate movement logic
         def move_enemy(enemy_pos, step_vec):
-            # current position if no movement
             cur = enemy_pos
 
-            # three candidate steps
             step_full = step_vec
             step_x = jnp.array([step_vec[0], 0], dtype=jnp.int32)
             step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
 
-            # proposed positions (clipped to world)
             def clip_pos(pos):
                 return jnp.clip(
                     pos,
@@ -1427,7 +1627,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             col_x    = check_enemy_collision(pos_x)
             col_y    = check_enemy_collision(pos_y)
 
-            # preference: full → x-only → y-only → stay
             use_full = ~col_full
             use_x    = col_full & ~col_x
             use_y    = col_full & col_x & ~col_y
@@ -1441,7 +1640,52 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             )
             return pos_after
 
-        new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, chosen_step)
+        # move enemies using your existing collision-aware move_enemy()
+        new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, final_step)
+
+        def resolve_enemy_overlaps(cand_positions, prev_positions, active):
+            # cand_positions, prev_positions: (NUM_ENEMIES, 2)
+            # active: (NUM_ENEMIES,) 1/0
+            w = self.consts.ENEMY_WIDTH
+            h = self.consts.ENEMY_HEIGHT
+
+            ex = cand_positions[:, 0]
+            ey = cand_positions[:, 1]
+
+            ex_i = ex[:, None]
+            ex_j = ex[None, :]
+            ey_i = ey[:, None]
+            ey_j = ey[None, :]
+
+            overlap_x = (ex_i <= ex_j + w - 1) & (ex_i + w - 1 >= ex_j)
+            overlap_y = (ey_i <= ey_j + h - 1) & (ey_i + h - 1 >= ey_j)
+            overlap = overlap_x & overlap_y
+
+            # only consider active enemies
+            a_i = active[:, None].astype(bool)
+            a_j = active[None, :].astype(bool)
+            overlap = overlap & a_i & a_j
+
+            # enemy with smaller index "wins" the tile, later ones lose
+            idx = jnp.arange(NUM_ENEMIES)
+            earlier = idx[:, None] < idx[None, :]  # True for (i,j) with i<j
+
+            loser_matrix = overlap & earlier  # (i,j) True => j loses to i
+            loser_flags = jnp.any(loser_matrix, axis=0)  # for each j
+
+            # losers revert to previous position
+            final_positions = jnp.where(
+                loser_flags[:, None],
+                prev_positions,
+                cand_positions,
+            )
+            return final_positions
+
+        new_enemy_positions = resolve_enemy_overlaps(
+            new_enemy_positions,
+            state.enemy_positions,
+            state.enemy_active,
+        )
 
         
         # Item pickup detection
@@ -2044,24 +2288,23 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     
     def _get_observation(self, state: DarkChambersState) -> DarkChambersObservation:
         player = EntityPosition(
-            x=jnp.asarray(state.player_x, dtype=jnp.float64),
-            y=jnp.asarray(state.player_y, dtype=jnp.float64),
-            width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.float64),
-            height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.float64),
-        )
-        
-        # Pack enemy data
-        enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float64)
-        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float64)
-        enemy_active = state.enemy_active.astype(jnp.float64)
-        
+        x=jnp.asarray(state.player_x, dtype=jnp.float32),
+        y=jnp.asarray(state.player_y, dtype=jnp.float32),
+        width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.float32),
+        height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.float32),
+    )
+
+        enemy_widths  = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH,  dtype=jnp.float32)
+        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
+
         enemies_array = jnp.stack([
-            state.enemy_positions[:, 0].astype(jnp.float64),
-            state.enemy_positions[:, 1].astype(jnp.float64),
+            state.enemy_positions[:, 0].astype(jnp.float32),
+            state.enemy_positions[:, 1].astype(jnp.float32),
             enemy_widths,
             enemy_heights,
-            enemy_active
+            state.enemy_active.astype(jnp.float32),
         ], axis=1)
+
         
         return DarkChambersObservation(
             player=player,
