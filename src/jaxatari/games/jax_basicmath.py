@@ -116,7 +116,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
 
         y = jax.lax.cond(
-            jnp.logical_and(fire, gameMode != 4),
+            gameMode != 3,
             lambda: jax.random.randint(k2, shape=(), minval=1, maxval=10),
             lambda: jax.random.randint(k2, shape=(), minval=1, maxval=x),
         )
@@ -155,8 +155,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         a, b = self._evaluate_arr(state.numArr)
 
-        eval = jnp.logical_and(gameMode != 4, a == result)
-        evalDiv = jnp.logical_and(gameMode == 4, (a, b) == result)
+        eval = jnp.logical_and(gameMode != 3, a == result)
+        evalDiv = jnp.logical_and(gameMode == 3, (a, b) == result)
 
         score = jax.lax.cond(
             eval,
