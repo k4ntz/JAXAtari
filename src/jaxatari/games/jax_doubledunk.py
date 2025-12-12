@@ -654,19 +654,49 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             key, reset_key = random.split(s.key)
             is_p1_scorer = (s.ball.shooter_id == PlayerID.PLAYER1_INSIDE) | (s.ball.shooter_id == PlayerID.PLAYER1_OUTSIDE)
 
-            shooter_x = s.ball.shooter_pos_x
-            shooter_y = s.ball.shooter_pos_y
+            # --- 2 vs 3 Point Logic ---
+            # Based on the background generation script geometry:
+            # 1. Rectangular Zone: x=[25, 135], y <= 90
+            # 2. Elliptical Zone: Center(80, 80), Rx=55, Ry=45 (approx due to perspective)
+            
+            sx = s.ball.shooter_pos_x
+            sy = s.ball.shooter_pos_y
 
-            x_min, x_max, y_arc = self.constants.AREA_3_POINT
-            is_3_pointer = (shooter_y > y_arc) & (shooter_x > x_min) & (shooter_x < x_max)
+            # Check 1: Rectangular Key Area
+            # The script draws vertical lines at x=25 and x=135 down to y=90
+            in_rect_zone = (sx >= 25) & (sx <= 135) & (sy <= 90)
 
-            points = jax.lax.select(is_3_pointer, 3, 2)
+            # Check 2: Elliptical Top of Key
+            # Equation: ((x-h)/rx)^2 + ((y-k)/ry)^2 <= 1
+            # Center (h,k) = (80, 80)
+            dx = sx - 80.0
+            dy = sy - 80.0
+            
+            # We use float division for the ellipse calculation
+            ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
+            
+            # We only care about the ellipse part that extends below the center (y >= 80)
+            in_ellipse_zone = (ellipse_val <= 1.0) & (sy >= 80)
 
+            # A shot is 2 points if it is in EITHER zone. Otherwise, it's a 3-pointer.
+            is_2_point = in_rect_zone | in_ellipse_zone
+            points = jax.lax.select(is_2_point, 2, 3)
+
+            # --- Score Updates ---
             new_player_score = s.player_score + points * is_p1_scorer
             new_enemy_score = s.enemy_score + points * (1 - is_p1_scorer)
 
-            new_state = self._init_state(reset_key).replace(player_score=new_player_score, enemy_score=new_enemy_score, step_counter=s.step_counter)
+            # --- Reset Game State ---
+            # We recreate the initial state but preserve scores and step counter
+            new_state = self._init_state(reset_key).replace(
+                player_score=new_player_score, 
+                enemy_score=new_enemy_score, 
+                step_counter=s.step_counter
+            )
+
+            # Give ball to the team that got scored on
             new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+            
             return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
 
         def continue_play(s):
