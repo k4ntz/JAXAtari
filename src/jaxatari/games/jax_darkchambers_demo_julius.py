@@ -11,6 +11,25 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def _get_default_asset_config():
+    return (
+        # Background (could be procedural or a single tile)
+        {"name": "background", "type": "background", "file": "background.npy"},
+
+        # Player sprite
+        {"name": "player", "type": "single", "file": "player.npy"},
+
+        # Enemy sprites (animated)
+        {"name": "enemy", "type": "group", "files": ["enemy_1.npy", "enemy_2.npy"]},
+
+        # Items
+        {"name": "items", "type": "group", "files": ["heart.npy", "trap.npy", "treasure.npy"]},
+
+        # Digits for UI
+        {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
+    )
+
+
 
 # Game configuration and constants
 
