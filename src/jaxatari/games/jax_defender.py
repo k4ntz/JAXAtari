@@ -999,18 +999,19 @@ class JaxDefender(
             other_landers_descending = jnp.any(
                 jnp.logical_and(
                     jnp.logical_and(
-                        indices != index,
-                        enemy_states[:, 2] == self.consts.LANDER
+                        indices != index, enemy_states[:, 2] == self.consts.LANDER
                     ),
                     jnp.logical_or(
                         enemy_states[:, 3] == self.consts.LANDER_STATE_DESCEND,
                         enemy_states[:, 3] == self.consts.LANDER_STATE_PICKUP,
-                    )
+                    ),
                 )
             )
 
             lander_state = jax.lax.cond(
-                jnp.logical_and(is_near_human, jnp.logical_not(other_landers_descending)),
+                jnp.logical_and(
+                    is_near_human, jnp.logical_not(other_landers_descending)
+                ),
                 lambda: self.consts.LANDER_STATE_DESCEND,
                 lambda: self.consts.LANDER_STATE_PATROL,
             )
