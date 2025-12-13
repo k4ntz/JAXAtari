@@ -378,7 +378,9 @@ class DefenderRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["baiter"],
         ]
 
-        def _create_padded_enemy_masks(self, enemy_mask_before_pad):
+        lander_animatin_before_pad = self.SHAPE_MASKS["lander_pickup"]
+
+        def _create_padded_masks(self, enemy_mask_before_pad):
             """Create padded enemy masks with uniform dimensions."""
             max_h = max(m.shape[0] for m in enemy_mask_before_pad)
             max_w = max(m.shape[1] for m in enemy_mask_before_pad)
@@ -396,26 +398,12 @@ class DefenderRenderer(JAXGameRenderer):
                 padded_masks.append(padded_mask)
 
             return jnp.array(padded_masks)
-        
-        self.ENEMY_MASKS = _create_padded_enemy_masks(self, enemy_mask_before_pad)
-        # Lander masks for different pickup states
 
+        self.ENEMY_MASKS = _create_padded_masks(self, enemy_mask_before_pad)
+        self.ENEMY_MASK_SIZE = self.ENEMY_MASKS[0].shape
 
-        self.LANDER_MASKS = _create_padded_enemy_masks(self, [
-            self.SHAPE_MASKS["lander_0"],
-            self.SHAPE_MASKS["lander_1"],
-            self.SHAPE_MASKS["lander_2"],
-            self.SHAPE_MASKS["lander_3"],
-            self.SHAPE_MASKS["lander_4"],
-            self.SHAPE_MASKS["lander_5"],
-            self.SHAPE_MASKS["lander_6"],
-            self.SHAPE_MASKS["lander_7"],
-            self.SHAPE_MASKS["lander_8"],
-            self.SHAPE_MASKS["lander_9"],
-            self.SHAPE_MASKS["lander_10"],
-            self.SHAPE_MASKS["lander_11"],
-            self.SHAPE_MASKS["lander_12"],
-        ])
+        self.LANDER_MASKS = _create_padded_masks(self, lander_animatin_before_pad)
+        self.LANDER_MASK_SIZE = self.LANDER_MASKS[0].shape
 
         # Enemy colors to ids
         color_ids = []
@@ -439,19 +427,25 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "baiter", "type": "single", "file": "baiter.npy"},
             {"name": "bomber", "type": "single", "file": "bomber.npy"},
             {"name": "lander", "type": "single", "file": "lander.npy"},
-            {"name": "lander_0", "type": "single", "file": "lander_0.npy"},
-            {"name": "lander_1", "type": "single", "file": "lander_1.npy"},
-            {"name": "lander_2", "type": "single", "file": "lander_2.npy"},
-            {"name": "lander_3", "type": "single", "file": "lander_3.npy"},
-            {"name": "lander_4", "type": "single", "file": "lander_4.npy"},
-            {"name": "lander_5", "type": "single", "file": "lander_5.npy"},
-            {"name": "lander_6", "type": "single", "file": "lander_6.npy"},
-            {"name": "lander_7", "type": "single", "file": "lander_7.npy"},
-            {"name": "lander_8", "type": "single", "file": "lander_8.npy"},
-            {"name": "lander_9", "type": "single", "file": "lander_9.npy"},
-            {"name": "lander_10", "type": "single", "file": "lander_10.npy"},
-            {"name": "lander_11", "type": "single", "file": "lander_11.npy"},
-            {"name": "lander_12", "type": "single", "file": "lander_12.npy"},
+            {
+                "name": "lander_pickup",
+                "type": "group",
+                "files": [
+                    "lander_0.npy",
+                    "lander_1.npy",
+                    "lander_2.npy",
+                    "lander_3.npy",
+                    "lander_4.npy",
+                    "lander_5.npy",
+                    "lander_6.npy",
+                    "lander_7.npy",
+                    "lander_8.npy",
+                    "lander_9.npy",
+                    "lander_10.npy",
+                    "lander_11.npy",
+                    "lander_12.npy",
+                ],
+            },
             {"name": "mutant", "type": "single", "file": "mutant.npy"},
             {"name": "pod", "type": "single", "file": "pod.npy"},
             {"name": "swarmers", "type": "single", "file": "swarmers.npy"},
@@ -539,41 +533,8 @@ class DefenderRenderer(JAXGameRenderer):
         def render_enemy(index: int, r):
             enemy = state.enemy_states[index]
             screen_x, screen_y = self.dh._onscreen_pos(state, enemy[0], enemy[1])
-
-            enemy_type = enemy[2]
-
-            mask = self.ENEMY_MASKS[jnp.array(enemy_type, int)]
-
-            # Calculate mask index based on pickup animation frame
-            mask_index = jnp.clip(jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13)
-            
-            pickup_mask = jax.lax.switch(
-                mask_index,
-                [
-                    lambda: self.LANDER_MASKS[1],  # 0-10
-                    lambda: self.LANDER_MASKS[2],  # 11-20
-                    lambda: self.LANDER_MASKS[3],  # 21-30
-                    lambda: self.LANDER_MASKS[4],  # 31-40
-                    lambda: self.LANDER_MASKS[5],  # 40-50
-                    lambda: self.LANDER_MASKS[6],  # 51-60
-                    lambda: self.LANDER_MASKS[7],  # 61-70
-                    lambda: self.LANDER_MASKS[8],  # 71-80
-                    lambda: self.LANDER_MASKS[9],  # 81-90
-                    lambda: self.LANDER_MASKS[10],  # 91-100
-                    lambda: self.LANDER_MASKS[11],  # 101-110
-                    lambda: self.LANDER_MASKS[12],  # 110-120
-                    lambda: self.LANDER_MASKS[13],  # 120+   
-                ]
-            )
-            
-            mask = jax.lax.cond(
-                jnp.logical_and(
-                    enemy_type == self.consts.LANDER,
-                    enemy[3] == self.consts.LANDER_STATE_PICKUP
-                ),
-                lambda: pickup_mask,
-                lambda: mask
-            )
+            enemy_type = enemy[2].astype(int)
+            enemy_arg1 = enemy[3]
 
             color_id = self.ENEMY_COLOR_IDS[jnp.array(enemy_type, int)]
 
@@ -591,19 +552,50 @@ class DefenderRenderer(JAXGameRenderer):
             # Render on scanner
             r = jax.lax.cond(
                 enemy_type != self.consts.INACTIVE,
-                lambda ras: render_on_scanner(
-                    enemy[0], enemy[1], scanner_width, scanner_height, color_id, ras
+                lambda: render_on_scanner(
+                    enemy[0], enemy[1], scanner_width, scanner_height, color_id, r
                 ),
-                lambda ras: ras,
-                r,
+                lambda: r,
             )
+
+            # Render on screen
+            def render_normal(r):
+                mask = self.ENEMY_MASKS[enemy_type]
+                r = self.jr.render_at_clipped(r, screen_x, screen_y, mask)
+                return r
+
+            def render_lander(r):
+                mask_index = jnp.clip(
+                    jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13
+                )
+
+                pickup_mask = self.LANDER_MASKS[mask_index]
+                normal_mask = self.ENEMY_MASKS[enemy_type]
+
+                r = jax.lax.cond(
+                    enemy_arg1 == self.consts.LANDER_STATE_PICKUP,
+                    lambda: self.jr.render_at_clipped(
+                        r, screen_x, screen_y, pickup_mask
+                    ),
+                    lambda: self.jr.render_at_clipped(
+                        r, screen_x, screen_y, normal_mask
+                    ),
+                )
+                return r
+
+            def render_choice(r):
+                r = jax.lax.cond(
+                    enemy_type == self.consts.LANDER,
+                    lambda: render_lander(r),
+                    lambda: render_normal(r),
+                )
+                return r
 
             # Render on screen and return new raster
             return jax.lax.cond(
                 is_active_and_onscreen,
-                lambda ras: self.jr.render_at_clipped(ras, screen_x, screen_y, mask),
-                lambda ras: ras,
-                r,
+                lambda: render_choice(r),
+                lambda: r,
             )
 
         # For each loop renders all enemys on screen and scanner
@@ -1094,7 +1086,7 @@ class JaxDefender(
             )
 
             return speed_x, speed_y, lander_state, 0.0
-        
+
         def lander_pickup(_: float, current_counter: float) -> Tuple[float, float]:
             speed_x = 0.0
             speed_y = 0.0
@@ -1103,7 +1095,7 @@ class JaxDefender(
             lander_state, current_counter = jax.lax.cond(
                 current_counter >= self.consts.LANDER_PICKUP_DURATION_FRAMES,
                 lambda: (self.consts.LANDER_STATE_ASCEND, 0.0),
-                lambda: (lander_state, current_counter)
+                lambda: (lander_state, current_counter),
             )
             return speed_x, speed_y, lander_state, current_counter
 
