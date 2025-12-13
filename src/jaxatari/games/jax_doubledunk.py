@@ -921,6 +921,7 @@ class DunkRenderer(JAXGameRenderer):
             {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
             {'name': 'player_arrow', 'type': 'single', 'file': 'player_arrow.npy'},
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
+            {'name': 'play_selection', 'type': 'single', 'file': 'play_selection.npy'},
         ]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
@@ -1069,4 +1070,48 @@ class DunkRenderer(JAXGameRenderer):
         raster = self.jr.render_label_selective(raster, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
         raster = self.jr.render_label_selective(raster, enemy_score_x, score_y, enemy_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
 
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        # First, always convert the base raster to an image
+        final_image = self.jr.render_from_palette(raster, self.PALETTE)
+
+        def apply_play_selection_overlay(image):
+            # 1. Apply shadow to the whole image
+            shadow_color = jnp.array([0, 0, 0], dtype=jnp.uint8) # Black
+            opacity = 0.7
+            shadowed_image = (image * (1 - opacity) + shadow_color * opacity).astype(jnp.uint8)
+
+            # 2. Stamp the text on top of the shadowed image
+            play_selection_mask = self.SHAPE_MASKS['play_selection']
+            
+            # Convert text mask to RGB
+            text_sprite_rgb = self.PALETTE[play_selection_mask]
+            
+            # Create alpha mask for the text
+            text_alpha_mask = (play_selection_mask != self.jr.TRANSPARENT_ID)[..., None]
+
+            # Position the text
+            text_x = (self.consts.WINDOW_WIDTH - play_selection_mask.shape[1]) // 2
+            text_y = (self.consts.WINDOW_HEIGHT - play_selection_mask.shape[0]) // 2
+
+            # Get the slice from the shadowed image
+            image_slice = jax.lax.dynamic_slice(
+                shadowed_image,
+                (text_y, text_x, 0),
+                (play_selection_mask.shape[0], play_selection_mask.shape[1], 3)
+            )
+
+            # Blend the text onto the slice
+            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
+
+            # Update the image with the blended slice
+            return jax.lax.dynamic_update_slice(
+                shadowed_image,
+                combined_slice,
+                (text_y, text_x, 0)
+            )
+
+        return jax.lax.cond(
+            state.game_mode == GameMode.PLAY_SELECTION,
+            apply_play_selection_overlay,
+            lambda x: x, # If not in play selection, return the original image
+            final_image
+        )
