@@ -569,7 +569,7 @@ class DefenderRenderer(JAXGameRenderer):
                     jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13
                 )
 
-                pickup_mask = self.LANDER_MASKS[mask_index]
+                pickup_mask = self.LANDER_MASKS[mask_index+1]
                 normal_mask = self.ENEMY_MASKS[enemy_type]
 
                 r = jax.lax.cond(
