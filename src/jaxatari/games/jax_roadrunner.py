@@ -230,11 +230,6 @@ class JaxRoadRunner(
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE,
         ]
-        # Debug: Log action set on init
-        import jax
-        jax.debug.print("DEBUG INIT: Action set contains FIRE={has_fire}, action_set={actions}",
-                       has_fire=Action.FIRE in self.action_set,
-                       actions=[a for a in self.action_set[:5]])  # Just first 5 to avoid too much output
         self.obs_size = 2 * 4  # Simplified
 
         # Pre-calculate normalized velocities
@@ -355,9 +350,6 @@ class JaxRoadRunner(
         vel = self._velocities[action_idx]
         # Check if action involves FIRE (jump): FIRE (1) or any *FIRE action (10-17)
         is_fire_action = (action == Action.FIRE) | ((action >= Action.UPFIRE) & (action <= Action.DOWNLEFTFIRE))
-        jax.debug.print("DEBUG INPUT: action={act}, action_idx={idx}, is_fire_action={fire}, FIRE={fire_val}, UPFIRE={upfire}, DOWNLEFTFIRE={dlfire}",
-                       act=action, idx=action_idx, fire=is_fire_action, 
-                       fire_val=Action.FIRE, upfire=Action.UPFIRE, dlfire=Action.DOWNLEFTFIRE)
         return vel[0], vel[1], is_fire_action
 
     def _check_player_bounds(
@@ -408,11 +400,6 @@ class JaxRoadRunner(
         can_start_jump = (state.jump_timer == 0) & jnp.logical_not(state.is_round_over)
         should_start_jump = is_fire_action & can_start_jump
         
-        # Debug logging
-        jax.debug.print("DEBUG: action={action}, is_fire_action={fire}, jump_timer={timer}, can_start={can_start}, should_start={should}",
-                       action=action, fire=is_fire_action, timer=state.jump_timer,
-                       can_start=can_start_jump, should=should_start_jump)
-        
         new_jump_timer = jax.lax.cond(
             should_start_jump,
             lambda: jnp.array(self.consts.JUMP_TIME_DURATION, dtype=jnp.int32),
@@ -421,8 +408,6 @@ class JaxRoadRunner(
         
         # Determine if currently jumping
         is_jumping = new_jump_timer > 0
-        jax.debug.print("DEBUG: new_jump_timer={new_timer}, is_jumping={jumping}", 
-                       new_timer=new_jump_timer, jumping=is_jumping)
 
         # If round is over, player is forced to move right.
         vel_x = jax.lax.cond(
@@ -1290,10 +1275,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-        
-        # Debug: Check if jump sprite loaded
-        jax.debug.print("DEBUG INIT: Checking sprites - has player_jump: {has_jump}", 
-                       has_jump="player_jump" in self.SHAPE_MASKS)
         self._level_count = len(self.consts.levels)
         if self._level_count > 0:
             self._max_road_sections = max(
@@ -1596,7 +1577,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render Player
         def _render_normal_player(c):
-            jax.debug.print("DEBUG RENDER: Using normal player sprite")
             player_mask = self._get_animated_sprite(
                 state.player_is_moving,
                 state.player_looks_right,
@@ -1609,8 +1589,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             return self.jr.render_at(c, state.player_x, state.player_y, player_mask)
         
         def _render_jumping_player(c):
-            jax.debug.print("DEBUG RENDER: Using jump sprite! is_jumping={jumping}, jump_timer={timer}",
-                           jumping=state.is_jumping, timer=state.jump_timer)
             jump_mask = self.SHAPE_MASKS["player_jump"]
             # Flip jump sprite if player looks right
             jump_mask = jax.lax.cond(
@@ -1620,7 +1598,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             )
             return self.jr.render_at(c, state.player_x, state.player_y, jump_mask)
         
-        jax.debug.print("DEBUG RENDER: Checking jump state - is_jumping={jumping}", jumping=state.is_jumping)
         canvas = jax.lax.cond(
             state.is_jumping,
             _render_jumping_player,
