@@ -78,7 +78,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MAX_INTERVAL: int = 80
     LEVEL_TRANSITION_DURATION: int = 30
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
-    JUMP_TIME_DURATION: int = 20  # Jump duration in steps (1 second at 60 FPS)
+    JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     levels: Tuple[LevelConfig, ...] = ()
 
 
