@@ -62,7 +62,7 @@ class RoadRunnerConstants(NamedTuple):
     ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
     SPAWN_Y_RANDOM_OFFSET_MIN: int = -20
     SPAWN_Y_RANDOM_OFFSET_MAX: int = 20
-    BACKGROUND_COLOR: Tuple[int, int, int] = (255, 204, 102)
+    BACKGROUND_COLOR: Tuple[int, int, int] = (236, 168, 128)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
