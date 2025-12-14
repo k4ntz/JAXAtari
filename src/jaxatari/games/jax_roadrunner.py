@@ -331,10 +331,9 @@ class JaxRoadRunner(
         vel = self._velocities[action_idx]
         return vel[0], vel[1]
 
-    def _check_bounds(
+    def _check_player_bounds(
         self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array
     ) -> tuple[chex.Array, chex.Array]:
-        # This assumes player and enemy have the same size
         road_top, road_bottom, _ = self._get_road_bounds(state)
         min_y = road_top - (self.consts.PLAYER_SIZE[1] // 3)
         max_y = road_bottom - self.consts.PLAYER_SIZE[1]
@@ -344,6 +343,20 @@ class JaxRoadRunner(
             0,
             self.consts.WIDTH - self.consts.PLAYER_SIZE[0],
         )
+        return (checked_x, checked_y)
+
+    def _check_enemy_bounds(
+        self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array
+    ) -> tuple[chex.Array, chex.Array]:
+        road_top, road_bottom, _ = self._get_road_bounds(state)
+        min_y = road_top - (self.consts.PLAYER_SIZE[1] // 3)
+        max_y = road_bottom - self.consts.PLAYER_SIZE[1]
+        checked_y = jnp.clip(y_pos, min_y, max_y)
+        
+        # Only clip x on the left side
+        # TODO Generalize this so we don't need to duplicate the bounds checking
+        checked_x = jnp.maximum(x_pos, 0)
+        
         return (checked_x, checked_y)
 
     def _handle_scrolling(self, state: RoadRunnerState, x_pos: chex.Array):
@@ -383,7 +396,7 @@ class JaxRoadRunner(
         player_x = state.player_x + final_vel_x
         player_y = state.player_y + vel_y
 
-        player_x, player_y = self._check_bounds(state, player_x, player_y)
+        player_x, player_y = self._check_player_bounds(state, player_x, player_y)
 
         is_moving = (vel_x != 0) | (vel_y != 0)
 
@@ -425,7 +438,7 @@ class JaxRoadRunner(
     def _enemy_step(self, state: RoadRunnerState) -> RoadRunnerState:
         def game_over_logic(st: RoadRunnerState) -> RoadRunnerState:
             new_enemy_x = st.enemy_x + self.consts.PLAYER_MOVE_SPEED
-            new_enemy_x, new_enemy_y = self._check_bounds(st, new_enemy_x, st.enemy_y)
+            new_enemy_x, new_enemy_y = self._check_enemy_bounds(st, new_enemy_x, st.enemy_y)
             return st._replace(
                 enemy_x=new_enemy_x,
                 enemy_y=new_enemy_y,
@@ -464,7 +477,7 @@ class JaxRoadRunner(
 
             new_enemy_x = self._handle_scrolling(st, new_enemy_x)
 
-            new_enemy_x, new_enemy_y = self._check_bounds(st, new_enemy_x, new_enemy_y)
+            new_enemy_x, new_enemy_y = self._check_enemy_bounds(st, new_enemy_x, new_enemy_y)
             return st._replace(
                 enemy_x=new_enemy_x,
                 enemy_y=new_enemy_y,
@@ -1410,7 +1423,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         return asset_config
 
-    def _render_score(self, raster: jnp.ndarray, score: jnp.ndarray) -> jnp.ndarray:
+    def _render_score(self, canvas: jnp.ndarray, score: jnp.ndarray) -> jnp.ndarray:
         score_digits = self.jr.int_to_digits(score, max_digits=6)
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
 
@@ -1420,8 +1433,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )  # Assuming digit width of 12
         score_y = 16
 
-        raster = self.jr.render_label_selective(
-            raster,
+        canvas = self.jr.render_label_selective(
+            canvas,
             score_x,
             score_y,
             score_digits,
@@ -1431,7 +1444,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             spacing=14,
             max_digits_to_render=6,
         )
-        return raster
+        return canvas
 
     def _render_lives(self, raster: jnp.ndarray, lives: jnp.ndarray) -> jnp.ndarray:
         # Render lives as green squares below the score
@@ -1457,29 +1470,29 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
     def _render_seeds(self, raster: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
         # Only render active seeds (x >= 0)
-        def render_seed(i, r):
+        def render_seed(i, c):
             seed_x = seeds[i, 0]
             seed_y = seeds[i, 1]
             # Only render if seed is active (x >= 0)
             return jax.lax.cond(
                 seed_x >= 0,
-                lambda ras: self.jr.render_at(
-                    ras, seed_x, seed_y, self.SHAPE_MASKS["seed"]
+                lambda can: self.jr.render_at(
+                    can, seed_x, seed_y, self.SHAPE_MASKS["seed"]
                 ),
-                lambda ras: ras,
-                r,
+                lambda can: can,
+                c,
             )
 
         # Use fori_loop to render all seeds
-        return jax.lax.fori_loop(0, seeds.shape[0], render_seed, raster)
+        return jax.lax.fori_loop(0, seeds.shape[0], render_seed, canvas)
 
-    def _render_truck(self, raster: jnp.ndarray, truck_x: chex.Array, truck_y: chex.Array) -> jnp.ndarray:
+    def _render_truck(self, canvas: jnp.ndarray, truck_x: chex.Array, truck_y: chex.Array) -> jnp.ndarray:
         # Only render if truck is active (x >= 0)
         return jax.lax.cond(
             truck_x >= 0,
-            lambda ras: self.jr.render_at(ras, truck_x, truck_y, self.SHAPE_MASKS["truck"]),
-            lambda ras: ras,
-            raster,
+            lambda can: self.jr.render_at(can, truck_x, truck_y, self.SHAPE_MASKS["truck"]),
+            lambda can: can,
+            canvas,
         )
 
     def _get_animated_sprite(
@@ -1515,7 +1528,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+        canvas = self.jr.create_object_raster(self.BACKGROUND)
 
         # --- Animate Road ---
         PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
@@ -1564,7 +1577,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_mask = jnp.where(row_mask, road_mask, background_value)
 
         # Render the sliced road portion
-        raster = self.jr.render_at(raster, 0, self.consts.ROAD_TOP_Y, road_mask)
+        canvas = self.jr.render_at(canvas, 0, self.consts.ROAD_TOP_Y, road_mask)
 
         # Render score
         raster = self._render_score(raster, state.score)
@@ -1582,27 +1595,37 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["player_run1"],
             self.SHAPE_MASKS["player_run2"],
         )
-        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
+        canvas = self.jr.render_at(canvas, state.player_x, state.player_y, player_mask)
 
         # Render Enemy
-        enemy_mask = self._get_animated_sprite(
-            state.enemy_is_moving,
-            state.enemy_looks_right,
-            state.step_counter,
-            self.consts.PLAYER_ANIMATION_SPEED,  # Assuming same speed for now
-            self.SHAPE_MASKS["enemy"],
-            self.SHAPE_MASKS["enemy_run1"],
-            self.SHAPE_MASKS["enemy_run2"],
+        def _render_enemy(c):
+            enemy_mask = self._get_animated_sprite(
+                state.enemy_is_moving,
+                state.enemy_looks_right,
+                state.step_counter,
+                self.consts.PLAYER_ANIMATION_SPEED,  # Assuming same speed for now
+                self.SHAPE_MASKS["enemy"],
+                self.SHAPE_MASKS["enemy_run1"],
+                self.SHAPE_MASKS["enemy_run2"],
+            )
+            return self.jr.render_at(c, state.enemy_x, state.enemy_y, enemy_mask)
+
+        # Render the enemy only if it is on screen
+        # else return the canvas unchanged
+        canvas = jax.lax.cond(
+            state.enemy_x < self.consts.WIDTH,
+            _render_enemy,
+            lambda c: c,
+            canvas,
         )
-        raster = self.jr.render_at(raster, state.enemy_x, state.enemy_y, enemy_mask)
 
         # Render Seeds
-        raster = self._render_seeds(raster, state.seeds)
+        canvas = self._render_seeds(canvas, state.seeds)
 
         # Render Truck
-        raster = self._render_truck(raster, state.truck_x, state.truck_y)
+        canvas = self._render_truck(canvas, state.truck_x, state.truck_y)
 
-        final_frame = self.jr.render_from_palette(raster, self.PALETTE)
+        final_frame = self.jr.render_from_palette(canvas, self.PALETTE)
         transition_frame = jnp.zeros_like(final_frame)
         return jax.lax.cond(
             state.is_in_transition,
