@@ -317,8 +317,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         idx = jnp.argmax(direction)
         offset = offset_xz[idx]
 
-        new_x = enemy.x + offset[0]
-        new_z = enemy.z + offset[1]
+        new_x = enemy.x + offset[0] * enemy.active
+        new_z = enemy.z + offset[1] * enemy.active
 
         return enemy._replace(x=new_x, z=new_z)
 
