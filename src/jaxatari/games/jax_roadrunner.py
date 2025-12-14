@@ -1446,7 +1446,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
         return canvas
 
-    def _render_lives(self, raster: jnp.ndarray, lives: jnp.ndarray) -> jnp.ndarray:
+    def _render_lives(self, canvas: jnp.ndarray, lives: jnp.ndarray) -> jnp.ndarray:
         # Render lives as green squares below the score
         # lives=3 -> 2 squares
         # lives=2 -> 1 square
@@ -1466,9 +1466,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
             x = start_x + i * (square_size + spacing)
             return self.jr.render_at(r, x, start_y, self.SHAPE_MASKS["life"])
             
-        return jax.lax.fori_loop(0, num_squares, render_square, raster)
+        return jax.lax.fori_loop(0, num_squares, render_square, canvas)
 
-    def _render_seeds(self, raster: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
+    def _render_seeds(self, canvas: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
         # Only render active seeds (x >= 0)
         def render_seed(i, c):
             seed_x = seeds[i, 0]
@@ -1580,10 +1580,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
         canvas = self.jr.render_at(canvas, 0, self.consts.ROAD_TOP_Y, road_mask)
 
         # Render score
-        raster = self._render_score(raster, state.score)
+        canvas = self._render_score(canvas, state.score)
         
         # Render Lives
-        raster = self._render_lives(raster, state.lives)
+        canvas = self._render_lives(canvas, state.lives)
 
         # Render Player
         player_mask = self._get_animated_sprite(
