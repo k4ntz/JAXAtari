@@ -155,6 +155,7 @@ class Enemy(NamedTuple):
     distance: chex.Array
     enemy_type: chex.Array
     orientation_angle: chex.Array
+    active: chex.Array
 
 
 class EnemyType(IntEnum):
@@ -269,7 +270,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 z=jnp.array([60.5547], dtype=jnp.float32),
                 distance=jnp.array([60.93576], dtype=jnp.float32),
                 enemy_type=jnp.array([EnemyType.TANK], dtype=jnp.int32),
-                orientation_angle=jnp.array([1.57], dtype=jnp.float32)
+                orientation_angle=jnp.array([1.57], dtype=jnp.float32),
+                active=jnp.array([True], dtype=jnp.bool)
             ),
         )
         initial_obs = self._get_observation(state)
