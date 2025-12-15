@@ -197,6 +197,15 @@ class YarsRevengeConstants(NamedTuple):
         dtype=jnp.bool,
     )
 
+    MISSILE_HIT_KERNEL = jnp.array(
+        [
+            [0, 1, 0],
+            [1, 1, 1],
+            [0, 1, 0],
+        ],
+        dtype=jnp.int32,
+    )
+
 
 class YarsRevengeState(NamedTuple):
     step_counter: jnp.ndarray
@@ -307,8 +316,8 @@ class JaxYarsRevenge(
                     * self.consts.INITIAL_ENERGY_SHIELD[0].shape[1]
                 ).astype(jnp.int32),
                 h=jnp.array(
-                    self.consts.ENERGY_CELL_WIDTH
-                    * self.consts.INITIAL_ENERGY_SHIELD[1].shape[0]
+                    self.consts.ENERGY_CELL_HEIGHT
+                    * self.consts.INITIAL_ENERGY_SHIELD[0].shape[0]
                 ).astype(jnp.int32),
             ),
             energy_shield_state=self.consts.INITIAL_ENERGY_SHIELD[0],
@@ -387,6 +396,35 @@ class JaxYarsRevenge(
             vertical_overlap = jnp.logical_and(a_up < b_down, a_down > b_up)
 
             return horizontal_overlap & vertical_overlap
+
+        @jax.jit
+        def check_energy_shield_collusion(
+            entity: Entity | DirectionEntity,
+            energy_shield: Entity,
+            shield_state: jnp.ndarray,
+            cell_height=self.consts.ENERGY_CELL_HEIGHT,
+            cell_width=self.consts.ENERGY_CELL_WIDTH,
+        ):
+            rows, cols = shield_state.shape
+
+            e_left, e_up = get_entity_position(entity, Direction.UPLEFT)
+            e_right, e_down = get_entity_position(entity, Direction.DOWNRIGHT)
+
+            col_x = jnp.arange(cols) * cell_width
+            row_y = jnp.arange(rows) * cell_height
+
+            cell_left = energy_shield.x + col_x[None, :]
+            cell_top = energy_shield.y + row_y[:, None]
+            cell_right = cell_left + cell_width
+            cell_bottom = cell_top + cell_height
+
+            horiz_overlap = (e_left < cell_right) & (e_right > cell_left)
+            vert_overlap = (e_up < cell_bottom) & (e_down > cell_top)
+
+            collision_mask = horiz_overlap & vert_overlap
+
+            active_hits = collision_mask & shield_state
+            return active_hits
 
         # Extract the direction flags from the actions
         up = (
@@ -499,9 +537,29 @@ class JaxYarsRevenge(
         em_exists = state.energy_missile_exist == 1
 
         energy_missile_hit_boundary = check_entity_boundary(state.energy_missile)
+
+        # Energy Missile Collusion
+        missile_shield = check_energy_shield_collusion(
+            state.energy_missile, state.energy_shield, state.energy_shield_state
+        )
+        missile_hit_shield = jnp.any(missile_shield)
+
+        adj_mask = (
+            jax.scipy.signal.convolve(
+                missile_shield, self.consts.MISSILE_HIT_KERNEL, mode="same"
+            )
+            > 0
+        )
+        new_energy_shield_state = jnp.where(
+            em_exists & adj_mask, False, state.energy_shield_state
+        )
+
         new_em_exists = jnp.logical_or(
             jnp.logical_and(~em_exists, jnp.logical_and(fire, ~yar_neutral)),
-            jnp.logical_and(em_exists, ~energy_missile_hit_boundary),
+            jnp.logical_and(
+                em_exists,
+                jnp.logical_and(~energy_missile_hit_boundary, ~missile_hit_shield),
+            ),
         )
 
         new_energy_missile_direction = jnp.where(
@@ -537,9 +595,6 @@ class JaxYarsRevenge(
             get_entity_position(state.qotile, Direction._CENTER)[1]
             - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
         )
-
-        # Energy Missile Collusion
-        # missile_shield = jnp.where(em_exists, check_entity_collusion(state.energy_missile, state.energy_shield), False)
 
         # Game ending calculations
         yar_destroyer = check_entity_collusion(state.yar, state.destroyer)
@@ -599,7 +654,7 @@ class JaxYarsRevenge(
                     w=state.energy_shield.w,
                     h=state.energy_shield.h,
                 ),
-                energy_shield_state=state.energy_shield_state,
+                energy_shield_state=new_energy_shield_state,
                 neutral_zone=state.neutral_zone,
             ),
         )
