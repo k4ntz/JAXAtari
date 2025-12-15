@@ -12,15 +12,14 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _get_default_asset_config() -> tuple:
-    num_files = [f'num{i}.npy' for i in range(16)]
     sym_files = [f'sym{i}.npy' for i in range(4)]
     underscore_files = [f'underscore{i}.npy' for i in range(2)]
 
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'nums', 'type': 'background', 'digits': num_files},
-        {'name': 'symbols', 'type': 'background', 'file': sym_files},
-        {'name': 'underscore', 'type': 'background', 'file': underscore_files}
+        {'name': 'nums', 'type': 'digits', 'digits': "num{}.npy"},
+        {'name': 'symbols', 'type': 'single', 'file': sym_files},
+        {'name': 'underscore', 'type': 'single', 'file': underscore_files}
     )
 
 class BasicMathConstants(NamedTuple):
@@ -35,12 +34,25 @@ class BasicMathConstants(NamedTuple):
         [(161, 104, 35), (65, 144, 58)]
     ]
 
-    OPERATIONS = [
-        "+",
-        "-",
-        "*",
-        "/"
-    ]
+    X_OFFSET: int = 47 * SCALINGFACTOR
+    Y_OFFSET: int = 55 * SCALINGFACTOR
+
+    num0 = (X_OFFSET + 20 * SCALINGFACTOR, Y_OFFSET + 20 * SCALINGFACTOR)
+    num1 = (num0[0], num0[1] + 40 * SCALINGFACTOR)
+    num2 = (num1[0], num1[1] + 40 * SCALINGFACTOR)
+    bar0 = (num2[0], num2[1] + 29 * SCALINGFACTOR)
+    bar1 = (X_OFFSET, num1[1] + 20 * SCALINGFACTOR)
+    symbol = (X_OFFSET + 5 * SCALINGFACTOR, num1[1])
+
+    POSITIONS = {
+        "num0": num0,
+        "num1": num1,
+        "num2": num2,
+        "bar0": bar0,
+        "bar1": bar1,
+        "symbol": symbol
+    }
+
 
     INITIAL_NUMARR = chex.Array = jnp.array([
         jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan
@@ -352,7 +364,7 @@ class BasicMathRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts or BasicMathConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
             channels=3,
             #downscale=(84, 84)
         )
@@ -362,8 +374,12 @@ class BasicMathRenderer(JAXGameRenderer):
 
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/basicmath"
         (
-            self.NUMS,
-            self.SYMS,
+            self.PALETTE,
+            self.SHAPE_MASKS,
             self.BACKGROUND,
-            self.UNDERSCORE,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+    def render(self, state):
+        return super().render(state)
