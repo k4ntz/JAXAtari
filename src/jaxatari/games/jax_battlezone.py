@@ -266,12 +266,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             grass_anim_counter=jnp.array(0),
             radar_rotation_counter=jnp.array(0),
             enemies = Enemy(
-                x=jnp.array([6.8047], dtype=jnp.float32),
-                z=jnp.array([60.5547], dtype=jnp.float32),
-                distance=jnp.array([60.93576], dtype=jnp.float32),
-                enemy_type=jnp.array([EnemyType.TANK], dtype=jnp.int32),
-                orientation_angle=jnp.array([1.57], dtype=jnp.float32),
-                active=jnp.array([True], dtype=jnp.bool)
+                x=jnp.array([6.8047, 3.8047], dtype=jnp.float32),
+                z=jnp.array([60.5547, 30.5547], dtype=jnp.float32),
+                distance=jnp.array([60.93576, 30.93576], dtype=jnp.float32),
+                enemy_type=jnp.array([EnemyType.TANK, EnemyType.TANK], dtype=jnp.int32),
+                orientation_angle=jnp.array([1.57, 0.5], dtype=jnp.float32),
+                active=jnp.array([True, False], dtype=jnp.bool)
             ),
         )
         initial_obs = self._get_observation(state)
