@@ -72,6 +72,8 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_MAX_SPEED: float = 4.0
     SPACE_SHIP_WIDTH: int = 13
     SPACE_SHIP_HEIGHT: int = 5
+    SPACE_SHIP_LIVES: int = 3
+    SPACE_SHIP_BOMBS: int = 3
 
     # Enemy
     ACTIVE: int = 1
@@ -91,6 +93,12 @@ class DefenderConstants(NamedTuple):
     SWARMERS: int = 4
     MUTANT: int = 5
     BAITER: int = 6
+    DEAD: int = 7  # To keep position to draw animation
+
+    # Dead states, if enemy_type = dead, then arg1 decides color
+    DEAD_YELLOW: int = 0
+    DEAD_BLUE: int = 1
+    DEAD_RED: int = 2
 
     # Bomber
     BOMBER_AMOUNT: Tuple[int, int, int, int, int] = (1, 2, 2, 2, 2)
@@ -405,6 +413,30 @@ class DefenderRenderer(JAXGameRenderer):
         self.LANDER_MASKS = _create_padded_masks(self, lander_animatin_before_pad)
         self.LANDER_MASK_SIZE = self.LANDER_MASKS[0].shape
 
+        self.DEATH_MASKS = jnp.array(
+            [
+                jnp.pad(
+                    self.SHAPE_MASKS["death_yellow"],
+                    ((0, 7), (0, 0)),
+                    mode="constant",
+                    constant_values=self.jr.TRANSPARENT_ID,
+                ),
+                jnp.pad(
+                    self.SHAPE_MASKS["death_blue"],
+                    ((0, 7), (0, 0)),
+                    mode="constant",
+                    constant_values=self.jr.TRANSPARENT_ID,
+                ),
+                jnp.pad(
+                    self.SHAPE_MASKS["death_red"],
+                    ((0, 7), (0, 0)),
+                    mode="constant",
+                    constant_values=self.jr.TRANSPARENT_ID,
+                ),
+            ],
+            float,
+        )
+
         # Enemy colors to ids
         color_ids = []
         for color in self.consts.ENEMY_COLORS:
@@ -446,6 +478,9 @@ class DefenderRenderer(JAXGameRenderer):
                     "lander_12.npy",
                 ],
             },
+            {"name": "death_yellow", "type": "single", "file": "death_yellow.npy"},
+            {"name": "death_blue", "type": "single", "file": "death_blue.npy"},
+            {"name": "death_red", "type": "single", "file": "death_red.npy"},
             {"name": "mutant", "type": "single", "file": "mutant.npy"},
             {"name": "pod", "type": "single", "file": "pod.npy"},
             {"name": "swarmers", "type": "single", "file": "swarmers.npy"},
@@ -560,7 +595,11 @@ class DefenderRenderer(JAXGameRenderer):
 
             # Render on screen
             def render_normal(r):
-                mask = self.ENEMY_MASKS[enemy_type]
+                mask = jax.lax.cond(
+                    enemy_type == self.consts.DEAD,
+                    lambda: self.DEATH_MASKS[enemy_arg1.astype(int)],
+                    lambda: self.ENEMY_MASKS[enemy_type],
+                )
                 r = self.jr.render_at_clipped(r, screen_x, screen_y, mask)
                 return r
 
@@ -569,7 +608,7 @@ class DefenderRenderer(JAXGameRenderer):
                     jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13
                 )
 
-                pickup_mask = self.LANDER_MASKS[mask_index+1]
+                pickup_mask = self.LANDER_MASKS[mask_index + 1]
                 normal_mask = self.ENEMY_MASKS[enemy_type]
 
                 r = jax.lax.cond(
@@ -787,10 +826,28 @@ class JaxDefender(
 
     def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
         is_index = jnp.logical_and(index > 0, index < self.consts.ENEMY_MAX)
+        enemy_type = self._get_enemy(state, index)[2].astype(int)
+        is_dead = enemy_type == self.consts.DEAD
+        new_type = jax.lax.cond(
+            is_dead, lambda: self.consts.INACTIVE, lambda: self.consts.DEAD
+        )
+        color = jax.lax.switch(
+            enemy_type,
+            [
+                lambda: self.consts.DEAD_YELLOW,
+                lambda: self.consts.DEAD_YELLOW,
+                lambda: self.consts.DEAD_YELLOW,
+                lambda: self.consts.DEAD_BLUE,
+                lambda: self.consts.DEAD_YELLOW,
+                lambda: self.consts.DEAD_RED,
+                lambda: self.consts.DEAD_BLUE,
+                lambda: self.consts.DEAD_RED,
+            ],
+        )
         state = jax.lax.cond(
             is_index,
             lambda: self._update_enemy(
-                state, index, 0.0, 0.0, self.consts.INACTIVE, 0.0, 0.0
+                state, index, enemy_type=new_type, arg1=color, arg2=0.0
             ),
             lambda: state,
         )
@@ -1495,6 +1552,7 @@ class JaxDefender(
                     lambda: enemy_states,
                     lambda: enemy_states,
                     lambda: enemy_states,
+                    lambda: self._delete_enemy(state, index).enemy_states,
                 ],
             )
 
