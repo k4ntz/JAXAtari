@@ -68,6 +68,8 @@ class PlayerState:
     animation_frame: chex.Array
     animation_direction: chex.Array
     is_out_of_bounds: chex.Array # Is the character out of bounds
+    jumped_with_ball: chex.Array # Did the character jump while having the ball, jumped_with_ball=False
+    triggered_travel: chex.Array # Check if Player broke the "travel rule": jumped and landed while having the ball, triggered_travel=False
 
 @chex.dataclass(frozen=True)
 class BallState:
@@ -199,10 +201,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _init_state(self, key) -> DunkGameState:
         """Creates the very first state of the game."""
         return DunkGameState(
-            player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False),
-            player1_outside=PlayerState(id=2, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False),
-            player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False),
-            player2_outside=PlayerState(id=4, x=75, y=95, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False),
+            player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player1_outside=PlayerState(id=2, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player2_outside=PlayerState(id=4, x=75, y=95, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
             # Start with a jump ball in the center: no holder and ball sits at the start position
             ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_OUTSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0),
             player_score=0,
@@ -272,9 +274,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # --- Reset Game State ---
         # Give ball to the team that didn't trigger out of bounds
-        new_ball_holder = jax.lax.select(p1_oob, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
-        # We recreate the initial state but step counter and give the ball to the other team
+        new_ball_holder = jax.lax.select(p1_oob, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+        # We recreate the initial state but keep step counter and the scores, and give the ball to the other team
         reset_state = self._init_state(reset_key).replace(
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
             step_counter=state.step_counter,
             ball=state.ball.replace(holder=new_ball_holder)
         )
@@ -292,27 +296,57 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return new_state
 
-    def _update_player_z(self, player: PlayerState, constants: DunkConstants) -> PlayerState:
+    def _update_player_z(self, player: PlayerState, constants: DunkConstants, ball_hold_id: int) -> PlayerState:
         """Applies Z-axis physics (jumping and gravity) to a player."""
+        has_ball = (ball_hold_id == player.id) #check if the player has the ball
         new_z = player.z + player.vel_z
         new_vel_z = player.vel_z - constants.GRAVITY
-        has_landed = new_z <= 0
+        has_landed = new_z <= 0 #check if the player is back on the ground
+        jump_start_with_ball = (player.z == 0) & has_ball #check if the player starts a jump while having the ball
         new_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_z)
         new_vel_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_vel_z)
-        return player.replace(z=new_z, vel_z=new_vel_z)
+        has_triggered_travel = has_landed & player.jumped_with_ball # True if the player lands while having the ball at the start of the jump
+        # update PlayerState value jumped_with_ball
+        updated_jumped_with_ball = jax.lax.select(jump_start_with_ball, ~has_landed,
+                                    jax.lax.select(~has_landed,has_ball & player.jumped_with_ball, False))
+        # update PlayerState with new height and whether or not they started/finished the jump with the ball
+        return player.replace(z=new_z, vel_z=new_vel_z, jumped_with_ball=updated_jumped_with_ball, triggered_travel=has_triggered_travel)
 
     def _update_players_z(self, state: DunkGameState) -> DunkGameState:
         """Applies Z-axis physics for all players."""
-        updated_p1_inside = self._update_player_z(state.player1_inside, self.constants)
-        updated_p1_outside = self._update_player_z(state.player1_outside, self.constants)
-        updated_p2_inside = self._update_player_z(state.player2_inside, self.constants)
-        updated_p2_outside = self._update_player_z(state.player2_outside, self.constants)
-        return state.replace(
+        ball_holder_id = state.ball.holder
+        updated_p1_inside = self._update_player_z(state.player1_inside, self.constants, ball_holder_id)
+        updated_p1_outside = self._update_player_z(state.player1_outside, self.constants, ball_holder_id)
+        updated_p2_inside = self._update_player_z(state.player2_inside, self.constants, ball_holder_id)
+        updated_p2_outside = self._update_player_z(state.player2_outside, self.constants, ball_holder_id)
+
+        # check if any players triggered the travel rule
+        p1_triggered_travel = updated_p1_outside.triggered_travel | updated_p1_inside.triggered_travel
+        p2_triggered_travel = updated_p2_outside.triggered_travel | updated_p2_inside.triggered_travel
+        travel_triggered = p1_triggered_travel | p2_triggered_travel
+
+        key, reset_key = random.split(state.key)
+        new_ball_holder = jax.lax.select(p1_triggered_travel, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+        # We recreate the initial state but step counter and give the ball to the other team
+        reset_state = self._init_state(reset_key).replace(
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            ball=state.ball.replace(holder=new_ball_holder)
+        )
+        # --- Updated Game State ---
+        # If travel isn't triggered, use the updated state (Note: you could probably put both reset/update-state
+        # creations into a jax.lax.cond so we don't need to create two states)
+        updated_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
         )
+
+        new_state = jax.lax.cond(travel_triggered, lambda x: reset_state, lambda x: updated_state, None)
+
+        return new_state
 
     def _update_players_animations(self, state: DunkGameState) -> DunkGameState:
         """Updates animations for all players."""
