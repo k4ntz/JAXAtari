@@ -203,15 +203,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         arr = state.numArr
         value = arr[state.arrPos]
 
-        non_val_up = jnp.logical_and(up, value == -1)
         up_edge = jnp.logical_and(up, value == 9)
-        up_add = jnp.logical_and(up, jnp.logical_and(jnp.logical_not(up_edge), jnp.logical_not(non_val_up)))
-
-        value = jax.lax.cond(
-            non_val_up,
-            lambda: 0,
-            lambda: value,
-        )
+        up_add = jnp.logical_and(up, jnp.logical_not(up_edge))
 
         value = jax.lax.cond(
             up_edge,
@@ -225,19 +218,12 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda: value,
         )
 
-        non_val_down = jnp.logical_and(down, value == -1)
-        down_edge = jnp.logical_and(down, value == 1)
-        down_add = jnp.logical_and(down, jnp.logical_and(jnp.logical_not(down_edge), jnp.logical_not(non_val_down)))
-
-        value = jax.lax.cond(
-            non_val_down,
-            lambda: 9,
-            lambda: value,
-        )
+        down_edge = jnp.logical_and(down, value == -1)
+        down_add = jnp.logical_and(down, jnp.logical_not(down_edge))
 
         value = jax.lax.cond(
             down_edge,
-            lambda: -1,
+            lambda: 9,
             lambda: value,
         )
 
@@ -310,8 +296,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return self.renderer.render(state)
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BasicMathObservation, BasicMathState]:
-        state_key, _step_key = jax.random.split(key)
-
         state = BasicMathState(
             self.consts.INITIAL_NUMARR,
             arrPos= jnp.array(2).astype(jnp.int32),
@@ -319,7 +303,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             numberProb= jnp.array(0).astype(jnp.int32),
             problemNum1=jnp.array(1).astype(jnp.int32),
             problemNum2=jnp.array(1).astype(jnp.int32),
-            key=state_key,
+            key=key,
             step_counter=jnp.array(0).astype(jnp.int32)
         )
 
@@ -393,9 +377,9 @@ class BasicMathRenderer(JAXGameRenderer):
     def render(self, state: BasicMathState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         underscore_mask = self.SHAPE_MASKS["underscore"]
+        symbol = self.SHAPE_MASKS["symbols"]
         raster = self.jr.render_at(raster, 35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
-        symbol = self.SHAPE_MASKS["symbols"]
         raster = self.jr.render_at(raster, *self.consts.symbol, symbol[0])
         digit_masks = self._stack_num_masks()
 
