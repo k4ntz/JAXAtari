@@ -1606,6 +1606,7 @@ class JaxDefender(
                     lambda: (enemy_states, human_states),
                     lambda: (enemy_states, human_states),
                     lambda: (enemy_states, human_states),
+                    lambda: (self._delete_enemy(state, index).enemy_states, human_states),
                 ],
             )
 
