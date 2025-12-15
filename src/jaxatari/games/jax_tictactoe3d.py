@@ -18,17 +18,40 @@ def _create_tictactoe3d_static_grid():
     
     
     
-def _get_default_asset_config():
-    
-    
+def _get_default_asset_config() -> tuple:
+    """
+    Default asset configuration for TicTacToe3D.
+     """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'grid', 'type': 'single', 'file': 'grid.npy'},
-        {'name': 'x', 'type': 'single', 'file': 'x.npy'},
-        {'name': 'o', 'type': 'single', 'file': 'o.npy'},
+        {'name': 'X', 'type': 'single', 'file': 'X.npy'},
+        {'name': 'O', 'type': 'single', 'file': 'O.npy'},
     )
     
 class TicTacToe3DConstants(NamedTuple):
+    
+     # --- Board ---
+    BOARD_SIZE: int = 4
+    
+    # --- Cell encoding ---
+    EMPTY: int = 0
+    PLAYER_X: int = 1
+    PLAYER_O: int = 2
+    
+     # --- Rendering layout  ---
+    ORIGIN_X: int = 20
+    ORIGIN_Y: int = 18
+    CELL_W: int = 18
+    CELL_H: int = 18
+    
+    LAYER_OFFSETS: Tuple[Tuple[int, int], ...] = (
+        (0, 0),
+        (10, 18),
+        (20, 36),
+        (30, 54),
+    )
+    
+    ASSET_CONFIG: tuple = _get_default_asset_config()
         
         
         
@@ -45,10 +68,86 @@ class TicTacToe3DRenderer(JAXGameRenderer):
     def __init__(self, consts : TicTacToe3DConstants= None):
         super().__init__(consts)
         self.consts = consts or TicTacToe3DConstants()
+        h, w, _ = self.BACKGROUND.shape
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(h, w),
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config) 
-    
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        sprite_path =f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config,sprite_path)
+        
+        self.ORIGIN_X = 20
+        self.ORIGIN_Y = 18
+
+        # Cell spacing within a single 4x4 layer
+        self.CELL_W = 18
+        self.CELL_H = 18
+
+        # Layer offsets to create the "stacked 3D" illusion (z=0..3)
+        # (dx, dy) per layer
+        self.LAYER_OFFSETS = jnp.array(
+            [
+                [0, 0],
+                [10, 18],
+                [20, 36],
+                [30, 54],
+            ],
+            dtype=jnp.int32,
+        )
+    def cell_to_pixel(self, x: jnp.ndarray, y: jnp.ndarray, z: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Convert board coordinates (x,y,z) in [0..3] to screen pixel (px,py).
+        JIT-safe (pure JAX ops).
+        """
+        dz = self.LAYER_OFFSETS[z]  # shape (2,)
+        px = jnp.int32(self.ORIGIN_X) + jnp.int32(x) * jnp.int32(self.CELL_W) + dz[0]
+        py = jnp.int32(self.ORIGIN_Y) + jnp.int32(y) * jnp.int32(self.CELL_H) + dz[1]
+        return px, py    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
+        """
+        Returns an RGB frame (H, W, 3) uint8.
+        """
+        # Start from baked background as an object raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        x_mask = self.SHAPE_MASKS["x"]
+        o_mask = self.SHAPE_MASKS["o"]
+        board = state.board  # (4,4,4)
+
+        def render_one_cell(r, idx):
+            # idx in [0..63]
+            z = idx // 16
+            rem = idx - z * 16
+            y = rem // 4
+            x = rem - y * 4
+
+            v = board[z, y, x]  # 0/1/2
+
+            px, py = self.cell_to_pixel(x, y, z)
+
+            def draw_x(rr):
+                return self.jr.render_at(rr, px, py, x_mask)
+
+            def draw_o(rr):
+                return self.jr.render_at(rr, px, py, o_mask)
+
+            # v == 0 -> no-op, v == 1 -> X, v == 2 -> O
+            r = jax.lax.cond(v == 1, draw_x, lambda rr: rr, r)
+            r = jax.lax.cond(v == 2, draw_o, lambda rr: rr, r)
+            return r, None
+
+        raster, _ = jax.lax.scan(render_one_cell, raster, jnp.arange(64, dtype=jnp.int32))
+
+        # Convert palette raster to final RGB image
+        return self.jr.render_from_palette(raster, self.PALETTE)
         
