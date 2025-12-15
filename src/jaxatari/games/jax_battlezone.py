@@ -630,13 +630,18 @@ class BattlezoneRenderer(JAXGameRenderer):
 
 
     def render_single_enemy(self, raster, enemy:Enemy):
-        enemy_mask = self.get_enemy_mask(enemy)
-        zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z))-20.0) *
-                        self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
-        zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
-        x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+        def enemy_active(enemy):
+            enemy_mask = self.get_enemy_mask(enemy)
+            zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
+                           self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
+            zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
+            x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-        return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+            return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+        def enemy_inactive(_):
+            return raster
+
+        return jax.lax.cond(enemy.active, enemy_active, enemy_inactive, enemy)
 
 
 
