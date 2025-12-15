@@ -79,6 +79,7 @@ class RoadRunnerConstants(NamedTuple):
     LEVEL_TRANSITION_DURATION: int = 30
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
+    SIDE_MARGIN: int = 8
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -96,7 +97,7 @@ RoadRunner_Level_1 = LevelConfig(
         RoadSectionConfig(
             scroll_start=0,
             scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
-            road_width=_BASE_CONSTS.WIDTH,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=0,
             road_height=_DEFAULT_ROAD_HEIGHT,
             road_pattern_style=0,
@@ -121,21 +122,21 @@ RoadRunner_Level_2 = LevelConfig(
         RoadSectionConfig(
             scroll_start=0,
             scroll_end=300,
-            road_width=_BASE_CONSTS.WIDTH,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=_centered_top(70),
             road_height=70,
         ),
         RoadSectionConfig(
             scroll_start=300,
             scroll_end=700,
-            road_width=_BASE_CONSTS.WIDTH,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=_centered_top(50),
             road_height=50,
         ),
         RoadSectionConfig(
             scroll_start=700,
             scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
-            road_width=_BASE_CONSTS.WIDTH,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=_centered_top(60),
             road_height=60,
         ),
@@ -361,8 +362,8 @@ class JaxRoadRunner(
         checked_y = jnp.clip(y_pos, min_y, max_y)
         checked_x = jnp.clip(
             x_pos,
-            0,
-            self.consts.WIDTH - self.consts.PLAYER_SIZE[0],
+            self.consts.SIDE_MARGIN,
+            self.consts.WIDTH - self.consts.PLAYER_SIZE[0] - self.consts.SIDE_MARGIN,
         )
         return (checked_x, checked_y)
 
@@ -376,7 +377,7 @@ class JaxRoadRunner(
 
         # Only clip x on the left side
         # TODO Generalize this so we don't need to duplicate the bounds checking
-        checked_x = jnp.maximum(x_pos, 0)
+        checked_x = jnp.maximum(x_pos, self.consts.SIDE_MARGIN)
 
         return (checked_x, checked_y)
 
@@ -1436,7 +1437,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         score_x = (
             self.consts.WIDTH // 2 - (score_digits.shape[0] * 6) // 2
         )  # Assuming digit width of 6
-        score_y = 2
+        score_y = 4 # 2 for the black border, 2 for spacing
 
         canvas = self.jr.render_label_selective(
             canvas,
@@ -1624,6 +1625,21 @@ class RoadRunnerRenderer(JAXGameRenderer):
         canvas = self._render_truck(canvas, state.truck_x, state.truck_y)
 
         final_frame = self.jr.render_from_palette(canvas, self.PALETTE)
+
+        # --- Mask Side Margins ---
+        # Force pixels in the side margins to be black
+        margin = self.consts.SIDE_MARGIN
+        width = self.consts.WIDTH
+
+        # Create a mask for valid gameplay area (True for valid, False for margin)
+        col_indices = jnp.arange(width)
+        valid_cols = (col_indices >= margin) & (col_indices < (width - margin))
+        # Broadcast to full image shape (H, W, 3)
+        margin_mask = jnp.broadcast_to(valid_cols[None, :, None], final_frame.shape)
+
+        # Use black for the margins
+        final_frame = jnp.where(margin_mask, final_frame, jnp.zeros_like(final_frame))
+
         transition_frame = jnp.zeros_like(final_frame)
         return jax.lax.cond(
             state.is_in_transition,
