@@ -343,7 +343,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
 
         chosenGameMode = (gameMode - 1) % 4
-
         is_fire = action == Action.FIRE
 
         state = self._change_pos(state, action)
@@ -401,11 +400,10 @@ class BasicMathRenderer(JAXGameRenderer):
         digit_masks = self._stack_num_masks()
 
         digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=1)
-        
-        raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=16)
-
         digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=1)
-        raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=16)
+        
+        raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=0)
+        raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=0)
 
         # --- Render Asteroids ---
         def render_nums(i, r):
@@ -415,7 +413,7 @@ class BasicMathRenderer(JAXGameRenderer):
             is_active = num != -1
             
             return jax.lax.cond(is_active, 
-                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, state.arrPos, num, spacing=16), 
+                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, state.arrPos, num, spacing=0), 
                                 lambda ras: ras, 
                                 r)
         raster = jax.lax.fori_loop(0, 6, render_nums, raster)
