@@ -103,6 +103,7 @@ class DefenderConstants(NamedTuple):
     MAX_LANDER_AMOUNT: int = 5
     LANDER_Y_SPEED: float = 0.08
     LANDER_PICKUP_X_THRESHOLD: float = 2.0
+    LANDER_START_Y: float = 10.0
     LANDER_PICKUP_DURATION_FRAMES: int = 120  # 4 seconds at 30 fps
     LANDER_STATE_PATROL: int = 0
     LANDER_STATE_DESCEND: int = 1
@@ -1026,17 +1027,9 @@ class JaxDefender(
         lander_state = lander[3]
         current_counter = lander[4]
 
-        def lander_patrol(space_ship_speed: float) -> Tuple[float, float]:
-            speed_x, speed_y = jax.lax.cond(
-                space_ship_speed > 0,
-                lambda: (-self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
-                lambda: (self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
-            )
+        new_human_states = human_states
 
-            speed_x += space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED
-            # check if on top of human to switch to descend
-
-            def check_proximity(human_state: chex.Array) -> chex.Array:
+        def check_proximity(human_state: chex.Array) -> chex.Array:
                 on_screen_lander_x, _ = self.dh._onscreen_pos(state, lander_x, lander_y)
                 on_screen_human_x, _ = self.dh._onscreen_pos(
                     state, human_state[0], human_state[1]
@@ -1047,6 +1040,18 @@ class JaxDefender(
                     < self.consts.LANDER_PICKUP_X_THRESHOLD,
                     human_state[2] == self.consts.HUMAN_STATE_IDLE,
                 )
+        
+        def lander_patrol(space_ship_speed: float) -> Tuple[float, float]:
+            speed_x, speed_y = jax.lax.cond(
+                space_ship_speed > 0,
+                lambda: (-self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
+                lambda: (self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
+            )
+
+            speed_x += space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED
+            # check if on top of human to switch to descend
+
+           
 
             proximity_checks = jax.vmap(check_proximity)(human_states)
             is_near_human = jnp.any(proximity_checks)
@@ -1076,7 +1081,7 @@ class JaxDefender(
 
         def lander_descend(_: float) -> Tuple[float, float]:
             speed_x = 0.0
-            speed_y = self.consts.LANDER_Y_SPEED
+            speed_y = self.consts.LANDER_Y_SPEED * 5
 
             # Check if lander reached the bottom (human level)
             lander_state = jax.lax.cond(
@@ -1092,27 +1097,75 @@ class JaxDefender(
             speed_y = 0.0
             current_counter += 1.0
             lander_state = self.consts.LANDER_STATE_PICKUP
+                            
+            near = jax.vmap(check_proximity)(human_states)
+            human_index = jnp.argmax(near)
+
             lander_state, current_counter = jax.lax.cond(
                 current_counter >= self.consts.LANDER_PICKUP_DURATION_FRAMES,
-                lambda: (self.consts.LANDER_STATE_ASCEND, 0.0),
+                lambda: (self.consts.LANDER_STATE_ASCEND, jnp.array(human_index, float)),
                 lambda: (lander_state, current_counter),
             )
             return speed_x, speed_y, lander_state, current_counter
 
-        speed_x, speed_y, lander_state, counter_id = jax.lax.switch(
+        def lander_ascend(
+            human_id: float,
+        ) -> Tuple[float, float]:
+            speed_x = 0.0
+            speed_y = -self.consts.LANDER_Y_SPEED
+
+            def lander_reached_top(human_index: int) -> Tuple[float, float, float, float]:
+                # Mark human as rescued
+                human = human_states[human_index]
+                human_x = human[0]
+                human_y = human[1]
+                new_human = [
+                    human_x,
+                    human_y,
+                    self.consts.INACTIVE,
+                ]
+                new_human_states = human_states.at[human_index].set(new_human)
+                return self.consts.LANDER_STATE_PATROL, new_human_states
+                
+
+            def lander_ascend_continue(human_index: int, lander_y: float) -> Tuple[float, float, float, float]:
+                
+                human = human_states[human_index]
+                # jax.debug.print("Lander ascending, lander_y: {}, human_index: {}, human state: {}", lander_y, human_index, human)
+                human_x = human[0] 
+                human_y = lander_y + 5  # Move human up with lander
+                new_human = [
+                    human_x,
+                    human_y,
+                    self.consts.HUMAN_STATE_ABDUCTED,
+                ]
+                new_human_states = human_states.at[human_index].set(new_human)
+                return self.consts.LANDER_STATE_ASCEND, new_human_states
+
+            # Check if lander reached the top
+            lander_state, new_human_states = jax.lax.cond(
+                lander_y <= self.consts.LANDER_START_Y,
+                lambda: lander_reached_top(jnp.array(human_id, int)),
+                lambda: lander_ascend_continue(jnp.array(human_id, int), lander_y)
+            )
+
+            return speed_x, speed_y, lander_state, human_id, new_human_states
+        
+        counter_id = lander[4]
+        speed_x, speed_y, lander_state, counter_id, new_human_states = jax.lax.switch(
             jnp.array(lander_state, int),
             [
-                lambda: lander_patrol(space_ship_speed),  # Patrol
-                lambda: lander_descend(space_ship_speed),  # Descend
-                lambda: lander_pickup(space_ship_speed, current_counter),  # Pickup
-                lambda: (0.0, 0.0, self.consts.LANDER_STATE_ASCEND, 0.0),  # Ascend
+                lambda: (*lander_patrol(space_ship_speed), new_human_states),  # Patrol
+                lambda: (*lander_descend(space_ship_speed), new_human_states),  # Descend
+                lambda: (*lander_pickup(space_ship_speed, current_counter), new_human_states),  # Pickup
+                lambda: lander_ascend(counter_id),  # Ascend
             ],
         )
 
         x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
         new_lander = [x, y, lander[2], lander_state, counter_id]
         enemy_states = enemy_states.at[index].set(new_lander)
-        return enemy_states
+        return enemy_states, new_human_states
 
     def _pod_movement(
         self, index: int, enemy_states: chex.Array, space_ship_speed: float
@@ -1473,40 +1526,41 @@ class JaxDefender(
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(index: int, enemy_states: chex.Array):
+            enemy_states, human_states = enemy_states
             enemy = enemy_states[index]
             enemy_type = enemy[2]
-            enemy_states = jax.lax.switch(
+            enemy_states, human_states = jax.lax.switch(
                 jnp.array(enemy_type, int),
                 [
-                    lambda: enemy_states,
+                    lambda: (enemy_states, human_states),
                     lambda: self._lander_movement(
                         index,
                         enemy_states,
                         state.space_ship_speed,
-                        state.human_states,
+                        human_states,
                         state,
                     ),
-                    lambda: self._pod_movement(
+                    lambda: (self._pod_movement(
                         index, enemy_states, state.space_ship_speed
-                    ),
-                    lambda: self._bomber_movement(
+                    ), human_states),
+                    lambda: (self._bomber_movement(
                         index, enemy_states, state.space_ship_speed, state.space_ship_x
-                    ),
-                    lambda: enemy_states,
-                    lambda: enemy_states,
-                    lambda: enemy_states,
+                    ), human_states),
+                    lambda: (enemy_states, human_states),
+                    lambda: (enemy_states, human_states),
+                    lambda: (enemy_states, human_states),
                 ],
             )
 
-            return enemy_states
+            return enemy_states, human_states
 
         enemy_states = state.enemy_states
         human_states = state.human_states
-        enemy_states = jax.lax.fori_loop(
-            0, self.consts.ENEMY_MAX, _enemy_move_switch, enemy_states
+        enemy_states, human_states = jax.lax.fori_loop(
+            0, self.consts.ENEMY_MAX, _enemy_move_switch, (enemy_states, human_states)
         )
 
-        return state._replace(enemy_states=enemy_states)
+        return state._replace(enemy_states=enemy_states, human_states=human_states)
 
     def _camera_step(self, state: DefenderState) -> DefenderState:
         # Returns: camera_offset
