@@ -991,7 +991,7 @@ class JaxRoadRunner(
                 return self._initialize_spawn_timers(reset_state, level_idx)
 
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
-            
+
             def handle_round_end(inner_st: RoadRunnerState) -> RoadRunnerState:
                  return jax.lax.cond(
                      inner_st.lives > 1,
@@ -1286,7 +1286,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         truck_sprite = self._create_truck_sprite()
         life_sprite = self._create_life_sprite()
         asset_config = self._get_asset_config(
-            background_sprite, road_sprite, wall_sprite_bottom, truck_sprite, life_sprite
+            road_sprite, wall_sprite_bottom, truck_sprite, life_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -1489,21 +1489,21 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # lives=3 -> 2 squares
         # lives=2 -> 1 square
         # lives=1 -> 0 squares
-        
+
         num_squares = jnp.maximum(lives - 1, 0)
-        
+
         start_y = 40
         square_size = 6
         spacing = 2
-        
+
         # We can render up to 2 squares (assuming max 3 lives for now, but let's support more generically)
         total_width = num_squares * square_size + jnp.maximum(num_squares - 1, 0) * spacing
         start_x = (self.consts.WIDTH - total_width) // 2
-        
+
         def render_square(i, r):
             x = start_x + i * (square_size + spacing)
             return self.jr.render_at(r, x, start_y, self.SHAPE_MASKS["life"])
-            
+
         return jax.lax.fori_loop(0, num_squares, render_square, canvas)
 
     def _render_seeds(self, canvas: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
@@ -1619,7 +1619,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render score
         canvas = self._render_score(canvas, state.score)
-        
+
         # Render Lives
         canvas = self._render_lives(canvas, state.lives)
 
