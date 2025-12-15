@@ -11,19 +11,27 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+from dataclasses import dataclass
+
+def _create_background_sprite(consts: "BasicMathConstants", gameMode: int) -> jnp.ndarray:
+    bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
+    return jnp.tile(
+        jnp.array(bg_color_rgba, dtype=jnp.uint8),
+        (consts.SCREEN_HEIGHT, consts.SCREEN_WIDTH, 1),
+    )
+
 def _get_default_asset_config() -> tuple:
     sym_files = [f'sym{i}.npy' for i in range(4)]
     underscore_files = [f'underscore{i}.npy' for i in range(2)]
 
     return (
-        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'nums', 'type': 'digits', 'digits': "num{}.npy"},
-        {'name': 'symbols', 'type': 'single', 'file': sym_files},
-        {'name': 'underscore', 'type': 'single', 'file': underscore_files}
+        {'name': 'nums', 'type': 'digits', 'pattern': "num{}.npy"},
+        {'name': 'symbols', 'type': 'group', 'files': sym_files},
+        {'name': 'underscore', 'type': 'group', 'files': underscore_files}
     )
 
 class BasicMathConstants(NamedTuple):
-    SCALINGFACTOR: int = 3
+    SCALINGFACTOR: int = 1
     SCREEN_WIDTH: int = 160 * SCALINGFACTOR
     SCREEN_HEIGHT: int = 210 * SCALINGFACTOR
 
@@ -36,7 +44,6 @@ class BasicMathConstants(NamedTuple):
 
     X_OFFSET: int = 47 * SCALINGFACTOR
     Y_OFFSET: int = 55 * SCALINGFACTOR
-
     num0 = (X_OFFSET + 20 * SCALINGFACTOR, Y_OFFSET + 20 * SCALINGFACTOR)
     num1 = (num0[0], num0[1] + 40 * SCALINGFACTOR)
     num2 = (num1[0], num1[1] + 40 * SCALINGFACTOR)
@@ -44,19 +51,8 @@ class BasicMathConstants(NamedTuple):
     bar1 = (X_OFFSET, num1[1] + 20 * SCALINGFACTOR)
     symbol = (X_OFFSET + 5 * SCALINGFACTOR, num1[1])
 
-    POSITIONS = {
-        "num0": num0,
-        "num1": num1,
-        "num2": num2,
-        "bar0": bar0,
-        "bar1": bar1,
-        "symbol": symbol
-    }
 
-
-    INITIAL_NUMARR = chex.Array = jnp.array([
-        jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan
-    ])
+    INITIAL_NUMARR = chex.Array = jnp.array([-1, -1, -1, -1, -1, -1], dtype=jnp.int32)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -68,6 +64,7 @@ class BasicMathState(NamedTuple):
     problemNum1: chex.Array
     problemNum2: chex.Array
     key: chex.PRNGKey
+    step_counter: chex.PRNGKey
 
 class BasicMathObservation(NamedTuple):
     numArr: chex.Array
@@ -81,7 +78,7 @@ class BasicMathInfo(NamedTuple):
 
 class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMathInfo, BasicMathConstants]):
     def __init__(self, consts: BasicMathConstants = None):
-        consts = consts or BasicMathConstants
+        consts = consts or BasicMathConstants()
         super().__init__(consts)
         self.renderer = BasicMathRenderer(self.consts)
         self.action_set = [
@@ -112,36 +109,37 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return (state.score) - (
             previous_state.score
         )
+    
+    def _get_observation(self, state: BasicMathState):
+        return BasicMathObservation(
+            state.numArr, 
+            state.arrPos, 
+            state.problemNum1, 
+            state.problemNum2
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BasicMathState) -> bool:
-        return jnp.logical_or(
-            jnp.greater_equal(state.numberProb, 10),
-        )
+        return jnp.greater_equal(state.numberProb, 10)
+
     
-    def _generate_problem(state: BasicMathState, gameMode) -> BasicMathState:
+    def _generate_problem(self, state: BasicMathState, gameMode) -> BasicMathState:
         key, k1 = jax.random.split(state.key)
-        key, k2 = jax.random.split(state.key)
+        key, k2 = jax.random.split(key)
 
         x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
 
         y = jax.lax.cond(
             gameMode != 3,
-            lambda: jax.random.randint(k2, shape=(), minval=1, maxval=10),
-            lambda: jax.random.randint(k2, shape=(), minval=1, maxval=x),
+            lambda _: jax.random.randint(k2, shape=(), minval=1, maxval=10),
+            lambda s: jax.random.randint(k2, shape=(), minval=1, maxval=s),
+            operand=x
         )
 
-        return BasicMathState(
-            state.numArr,
-            state.arrPos,
-            state.score,
-            state.numberProb,
-            x,
-            y,
-            key
-        )
+        return x, y, key
+        
     
-    def _evaluate_arr(arr: chex.Array):
+    def _evaluate_arr(self, arr: chex.Array):
         arr = jax.numpy.nan_to_num(arr, nan=0).astype(jnp.int32)
 
         a, b = arr[:3], arr[3:]
@@ -155,9 +153,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     
     def _evaluate_issue(self, state: BasicMathState, gameMode) -> BasicMathState:
         ops = [
-            lambda a, b: a + b,
-            lambda a, b: a - b,
-            lambda a, b: a * b,
+            lambda a, b: (a + b, 0),
+            lambda a, b: (a - b, 0),
+            lambda a, b: (a * b, 0),
             lambda a, b: (a / b, a % b)
         ]
 
@@ -165,8 +163,11 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         a, b = self._evaluate_arr(state.numArr)
 
-        eval = jnp.logical_and(gameMode != 3, a == result)
-        evalDiv = jnp.logical_and(gameMode == 3, (a, b) == result)
+        eval = jnp.logical_and(gameMode != 3, a == result[0])
+        evalDiv = jnp.logical_and(
+            gameMode == 3,
+            jnp.logical_and(a == result[0], b == result[1])
+        )
 
         score = jax.lax.cond(
             eval,
@@ -182,15 +183,17 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             operand=state.score,
         )
 
+        x, y, key = self._generate_problem(state, gameMode)
 
         return BasicMathState(
-            state.numArr,
+            self.consts.INITIAL_NUMARR,
             state.arrPos,
             score,
-            state.numberProb,
-            state.problemNum1,
-            state.problemNum2,
-            state.key
+            state.numberProb + 1,
+            x,
+            y,
+            key,
+            state.step_counter
         )
     
     def _change_value(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
@@ -200,8 +203,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         arr = state.numArr
         value = arr[state.arrPos]
 
-        is_nan = jnp.isnan(value)
-        non_val_up = jnp.logical_and(up, is_nan)
+        non_val_up = jnp.logical_and(up, value == -1)
         up_edge = jnp.logical_and(up, value == 9)
         up_add = jnp.logical_and(up, jnp.logical_and(jnp.logical_not(up_edge), jnp.logical_not(non_val_up)))
 
@@ -213,7 +215,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         value = jax.lax.cond(
             up_edge,
-            lambda: jnp.nan,
+            lambda: -1,
             lambda: value,
         )
 
@@ -223,7 +225,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda: value,
         )
 
-        non_val_down = jnp.logical_and(down, is_nan)
+        non_val_down = jnp.logical_and(down, value == -1)
         down_edge = jnp.logical_and(down, value == 1)
         down_add = jnp.logical_and(down, jnp.logical_and(jnp.logical_not(down_edge), jnp.logical_not(non_val_down)))
 
@@ -235,7 +237,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         value = jax.lax.cond(
             down_edge,
-            lambda: jnp.nan,
+            lambda: -1,
             lambda: value,
         )
 
@@ -254,7 +256,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
-            state.key            
+            state.key,
+            state.step_counter
         )
     
     def _change_pos(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
@@ -299,42 +302,35 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
-            state.key
+            state.key,
+            state.step_counter
         )
     
-    def _process_fire(self, state, action, gameMode):
-        is_fire = action == Action.FIRE
-
-        def do_fire(_):
-            s = self._evaluate_issue(state, gameMode)
-            s = self._generate_problem(s, gameMode)
-            return s
-
-        def no_fire(_):
-            return state
-
-        return jax.lax.cond(is_fire, do_fire, no_fire, operand=None)
-    
-    def render(self, state: BasicMathState):
+    def render(self, state: BasicMathState) -> jnp.ndarray:
         return self.renderer.render(state)
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BasicMathObservation, BasicMathState]:
         state_key, _step_key = jax.random.split(key)
 
         state = BasicMathState(
-            numArr=jnp.array(self.consts.INITIAL_NUMARR).astype(jnp.int32),
+            self.consts.INITIAL_NUMARR,
             arrPos= jnp.array(2).astype(jnp.int32),
             score= jnp.array(0).astype(jnp.int32),
             numberProb= jnp.array(0).astype(jnp.int32),
-            problemNum1= jnp.array(1).astype(jnp.int32),
-            problemNum2= jnp.array(1).astype(jnp.int32),
-            key= state_key           
+            problemNum1=jnp.array(1).astype(jnp.int32),
+            problemNum2=jnp.array(1).astype(jnp.int32),
+            key=state_key,
+            step_counter=jnp.array(0).astype(jnp.int32)
         )
 
-        return None, state
+        obs = self._get_observation(state)
+
+        return obs, state
     
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BasicMathState, action: chex.Array, gameMode: int = 5) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
+        previous_state = state
+
         state = BasicMathState(
             state.numArr,
             state.arrPos,
@@ -342,35 +338,42 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
-            state.key
+            state.key,
+            state.step_counter
         )
 
         chosenGameMode = (gameMode - 1) % 4
 
+        is_fire = action == Action.FIRE
+
         state = self._change_pos(state, action)
         state = self._change_value(state, action)
-        state = self._process_fire(state, action, chosenGameMode)
+        state = jax.lax.cond(
+            is_fire, lambda s: self._evaluate_issue(s, chosenGameMode), lambda s: s, operand=state
+        )
 
-        done = self._get_done
-        reward = self._get_reward
-        info = self._get_info
+        done = self._get_done(state)
+        reward = self._get_reward(previous_state, state)
+        info = self._get_info(state)
+        obs = self._get_observation(state)
 
-        state = self._evaluate_issue(state, gameMode)
-
-        return None, state, reward, done, info
+        return obs, state, reward, done, info
 
 class BasicMathRenderer(JAXGameRenderer):
     def __init__(self, consts: BasicMathConstants = None):
         super().__init__(consts)
         self.consts = consts or BasicMathConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            game_dimensions=(210, 160),
             channels=3,
-            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        wall_sprite = _create_background_sprite(self.consts, 0)
+
+        final_asset_config.append({'name': 'background', 'type': 'background', 'data': wall_sprite},)
 
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/basicmath"
         (
@@ -381,5 +384,40 @@ class BasicMathRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-    def render(self, state):
-        return super().render(state)
+        self.NUM_MASKS_STACKED = self._stack_num_masks
+
+    def _stack_num_masks(self) -> jnp.ndarray:
+        """Helper to get all player-related masks from the main padded group."""
+        # The first 16 are rotation, the next 3 are death animations
+        return self.SHAPE_MASKS['nums']
+
+    def render(self, state: BasicMathState):
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        underscore_mask = self.SHAPE_MASKS["underscore"]
+        raster = self.jr.render_at(raster, 35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
+        raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
+        symbol = self.SHAPE_MASKS["symbols"]
+        raster = self.jr.render_at(raster, *self.consts.symbol, symbol[0])
+        digit_masks = self._stack_num_masks()
+
+        digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=1)
+        
+        raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=16)
+
+        digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=1)
+        raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=16)
+
+        # --- Render Asteroids ---
+        def render_nums(i, r):
+            num = state.numArr[i]
+            digit = self.jr.int_to_digits(num, max_digits=1)
+
+            is_active = num != -1
+            
+            return jax.lax.cond(is_active, 
+                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, state.arrPos, num, spacing=16), 
+                                lambda ras: ras, 
+                                r)
+        raster = jax.lax.fori_loop(0, 6, render_nums, raster)
+
+        return self.jr.render_from_palette(raster, self.PALETTE)
