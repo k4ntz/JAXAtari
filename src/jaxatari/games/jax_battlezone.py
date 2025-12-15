@@ -535,8 +535,8 @@ class BattlezoneRenderer(JAXGameRenderer):
         return img
 
     def check_in_radar(self, enemies: Enemy) -> chex.Array:
-        bool_in_radar = enemies.distance <= self.consts.RADAR_MAX_SCAN_RADIUS
-        return bool_in_radar
+        return((enemies.distance <= self.consts.RADAR_MAX_SCAN_RADIUS)&enemies.active)
+
 
 
     def pad_to_shape(self, arr: jnp.ndarray, shape_target_x: int, shape_target_y: int) -> jnp.ndarray:
