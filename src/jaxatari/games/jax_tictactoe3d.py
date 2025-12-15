@@ -11,17 +11,9 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from typing import Optional
 
-def _create_tictactoe3d_static_grid():
-    
-    
-    
-    
-    
-    
 def _get_default_asset_config() -> tuple:
     """
-    Default asset configuration for TicTacToe3D.
-     """
+    Default asset configuration for TicTacToe3D. """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'X', 'type': 'single', 'file': 'X.npy'},
