@@ -261,16 +261,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         #--------------------update positions based on player movement-------------------
-        #angle_change = ((jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
-         #                   -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0)) *
-           #             self.consts.PLAYER_ROTATION_SPEED)
+        angle_change = ((jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
+                           -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0)) *
+                       self.consts.PLAYER_ROTATION_SPEED)
 
 
         updated_enemies = jax.vmap(self._obj_player_position_update, in_axes=(0, None))(state.enemies, direction)
 
         new_player_projectile = self._obj_player_position_update(new_player_projectile, direction)
-        #new_player_projectile = new_player_projectile._replace(orientation_angle=
-        #                                                       new_player_projectile.orientation_angle+angle_change)
+        new_player_projectile = new_player_projectile._replace(orientation_angle=
+                                            (new_player_projectile.orientation_angle-angle_change)%(2*jnp.pi))
 
 
 
