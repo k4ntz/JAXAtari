@@ -200,7 +200,8 @@ class DefenderConstants(NamedTuple):
     HUMAN_MAX: int = 6
     HUMAN_WIDTH: int = 3
     HUMAN_HEIGHT: int = 3
-    HUMAN_FALLING_SPEED: float = 1.5
+    HUMAN_FALLING_SPEED: float = 1
+    HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
     GROUND_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
     HUMAN_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
     HUMAN_X: Tuple[float, float, float, float, float] = (
@@ -854,6 +855,12 @@ class JaxDefender(
             ),
             lambda: state,
         )
+
+        state = jax.lax.cond(
+            jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
+            lambda: self._set_human_from_lander_falling(state, index),
+            lambda: state,
+        )
         # TODO Add score
         return state
 
@@ -1384,6 +1391,44 @@ class JaxDefender(
         )
         return state._replace(enemy_states=enemy_state)
 
+    def _set_human_from_lander_falling(
+        self,
+        state: DefenderState,
+        lander_index,
+    ) -> DefenderState:
+
+        human_states = state.human_states
+        enemy_states = state.enemy_states
+
+        human_index = enemy_states[lander_index][4].astype(int)
+        human = state.human_states[human_index]
+        human_height = human[1]
+
+        new_human_states = jax.lax.cond(
+            jnp.logical_and(enemy_states[lander_index][2] != self.consts.LANDER, 
+                           enemy_states[lander_index][3] != self.consts.LANDER_STATE_ASCEND),
+            lambda: state.human_states,  # Only Ascending landers can update humans
+            lambda: jax.lax.cond(
+                human_height > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
+                lambda: human_states.at[human_index].set(
+                    [
+                        human[0],
+                        human[1],
+                        self.consts.HUMAN_STATE_FALLING,
+                    ]
+                ),
+                lambda: human_states.at[human_index].set(
+                    [
+                        human[0],
+                        human[1],
+                        self.consts.HUMAN_STATE_FALLING_DEADLY,
+                    ]
+                )
+            )
+        )
+
+        return state._replace(human_states=new_human_states)
+
     def _get_enemy(self, state: DefenderState, index):
         # Returns the enemy list at index
         return state.enemy_states[index]
@@ -1650,30 +1695,28 @@ class JaxDefender(
             human = human_states[index]
             human_y = human[1]
             human_y += self.consts.HUMAN_FALLING_SPEED
-            if human_y >= self.consts.GROUND_Y:
-                if not deadly:
-                    human_y = self.consts.GROUND_Y
-                    new_human = [
+            # Check if human reached ground
+            human_states = jax.lax.cond(
+                human_y >= self.consts.GROUND_Y,
+                lambda: jax.lax.cond(
+                    not deadly,
+                    lambda: human_states.at[index].set([
                         human[0],
-                        human_y,
+                        self.consts.GROUND_Y,
                         self.consts.HUMAN_STATE_IDLE,
-                    ]
-                    human_states = human_states.at[index].set(new_human)
-                else:
-                    new_human = [
+                    ]),
+                    lambda: human_states.at[index].set([
                         human[0],
-                        human_y,
+                        self.consts.GROUND_Y,
                         self.consts.INACTIVE,
-                    ]
-                    human_states = human_states.at[index].set(new_human)
-                return human_states
-            
-            new_human = [
-                human[0],
-                human_y,
-                self.consts.HUMAN_STATE_FALLING_DEADLY if deadly else self.consts.HUMAN_STATE_FALLING,
-            ]
-            human_states = human_states.at[index].set(new_human)
+                    ])
+                ),
+                lambda: human_states.at[index].set([
+                    human[0],
+                    human_y,
+                    human[2],
+                    ])
+            )
 
             return human_states
         
@@ -1684,20 +1727,20 @@ class JaxDefender(
             human_states = jax.lax.switch(
                 jnp.array(human_states[index][2], int),
                 [
-                    lambda _: human_states,  # Idle
-                    lambda _: human_states,  # Abducted
-                    lambda _: _human_falling(human_states, index, False),  # Falling
-                    lambda _: _human_falling(human_states, index, True),  # Falling Deadly
-                    lambda _: human_states,  # Catched
+                    lambda: human_states,  # Idle
+                    lambda: human_states,  # Abducted
+                    lambda: _human_falling(human_states, index, False),  # Falling
+                    lambda: _human_falling(human_states, index, True),  # Falling Deadly
+                    lambda: human_states,  # Catched
                 ],
             )
+
+            return human_states
 
         human_states = jax.lax.fori_loop(
             0,
             self.consts.HUMAN_MAX,
-            lambda index, hs: _human_move_switch(
-                index, hs, state, self.consts
-            ),
+            _human_move_switch,
             human_states,
         )
 
@@ -1858,6 +1901,7 @@ class JaxDefender(
         state = self._space_ship_step(state, action)
         state = self._camera_step(state)
         state = self._enemy_step(state)
+        state = self._human_step(state)
         state = self._bullet_step(state)
         state = self._laser_step(state)
         state = self._collision_step(state)
