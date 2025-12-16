@@ -49,12 +49,12 @@ class BasicMathConstants(NamedTuple):
     ]
 
     X_OFFSET: int = 47 * SCALINGFACTOR
-    Y_OFFSET: int = 55 * SCALINGFACTOR
+    Y_OFFSET: int = 35 * SCALINGFACTOR
     num0 = (X_OFFSET + 20 * SCALINGFACTOR, Y_OFFSET + 20 * SCALINGFACTOR)
     num1 = (num0[0], num0[1] + 40 * SCALINGFACTOR)
     num2 = (num1[0], num1[1] + 40 * SCALINGFACTOR)
     bar0 = (num2[0], num2[1] + 29 * SCALINGFACTOR)
-    bar1 = (X_OFFSET, num1[1] + 20 * SCALINGFACTOR)
+    bar1 = (X_OFFSET, num1[1] + 30 * SCALINGFACTOR)
     symbol = (X_OFFSET + 5 * SCALINGFACTOR, num1[1])
 
 
