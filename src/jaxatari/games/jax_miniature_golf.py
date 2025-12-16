@@ -10,6 +10,28 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+def get_default_asset_config() -> list:
+    """Returns the declarative manifest of all default assets for the game."""
+    return [
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+        {'name': 'hole', 'type': 'single', 'file': 'hole.npy'},
+        {'name': 'obstacle', 'type': 'single', 'file': 'obstacle.npy'},
+        {'name': 'left_digits', 'type': 'digits', 'pattern': 'left_{}.npy'},
+        {'name': 'right_digits', 'type': 'digits', 'pattern': 'right_{}.npy'},
+        {'name': 'level_1', 'type': 'single', 'file': 'level_1.npy'},
+        {'name': 'level_2', 'type': 'single', 'file': 'level_2.npy'},
+        {'name': 'level_3', 'type': 'single', 'file': 'level_3.npy'},
+        {'name': 'level_4', 'type': 'single', 'file': 'level_4.npy'},
+        {'name': 'level_5', 'type': 'single', 'file': 'level_5.npy'},
+        {'name': 'level_6', 'type': 'single', 'file': 'level_6.npy'},
+        {'name': 'level_7', 'type': 'single', 'file': 'level_7.npy'},
+        {'name': 'level_8', 'type': 'single', 'file': 'level_8.npy'},
+        {'name': 'level_9', 'type': 'single', 'file': 'level_9.npy'},
+    ]
+
+
 class MiniatureGolfConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
@@ -22,14 +44,16 @@ class MiniatureGolfConstants(NamedTuple):
     OBSTACLE_COLOR: Tuple[int, int, int] = (214, 92, 92)
     OBSTACLE_MIN_X: chex.Array = jnp.array([1, 1, 1, 55, 69, 67, 78, 26, 1])               # special case level 8:
     OBSTACLE_MAX_X: chex.Array = jnp.array([35, 107, 35, 103, 69, 67, 78, 26, 109])        # barrier y counts down
-    OBSTACLE_MIN_Y: chex.Array = jnp.array([155, 155, 133, 81, 197, 219, 211, 0, 155])      # from 255 to 0
-    OBSTACLE_MAX_Y: chex.Array = jnp.array([155, 155, 133, 81, 121, 61, 91, 255, 155])      # wrapping back to 255
+    OBSTACLE_MIN_Y: chex.Array = jnp.array([121, 121, 99, 47, 87, 27, 57, 0, 121])      # from 255 to 0
+    OBSTACLE_MAX_Y: chex.Array = jnp.array([121, 121, 99, 47, 163, 185, 177, 255, 121])      # wrapping back to 255
     HOLE_COLOR: Tuple[int, int, int] = (66, 72, 200)
     BALL_COLOR: Tuple[int, int, int] = (210, 210, 64)
     WALL_COLOR: Tuple[int, int, int] = (210, 210, 64)
     SCORE_COLOR: Tuple[int, int, int] = (66, 72, 200)
     PLAYER_START_X: chex.Array = jnp.array([133, 78, 6, 8, 26, 8, 8, 138, 128])
     PLAYER_START_Y: chex.Array = jnp.array([175, 185, 45, 143, 33, 107, 51, 45, 129])
+    PLAYER_MIN_Y: int = 23
+    PLAYER_MAX_Y: int = 195
     PAR_VALUES: chex.Array = jnp.array([4, 3, 4, 4, 4, 3, 7, 3, 4])
     PLAYER_SIZE: Tuple[int, int] = (4, 8)
     BALL_SIZE: Tuple[int, int] = (2, 4)
@@ -38,7 +62,7 @@ class MiniatureGolfConstants(NamedTuple):
     DIGIT_SIZE: Tuple[int, int] = (12, 10)
     SCORE_POS_TENS_DIGIT: Tuple[int, int] = (16, 9)
     SCORE_POS_ONES_DIGIT: Tuple[int, int] = (32, 9)
-    PAR_POS: Tuple[int, int] = (111, 9)
+    PAR_POS: Tuple[int, int] = (112, 9)
 
     LEVEL_1: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_1.npy")
     LEVEL_2: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_2.npy")
@@ -59,6 +83,8 @@ class MiniatureGolfConstants(NamedTuple):
     WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
     WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
     WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
+
+    ASSET_CONFIG: list = get_default_asset_config()
 
 
 # immutable state container
@@ -183,7 +209,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         ball_delta_x, ball_x_subpixel_new = jnp.divmod(ball_x_subpixel_new, 16)
         ball_delta_y, ball_y_subpixel_new = jnp.divmod(ball_y_subpixel_new, 16)
         ball_x_new = state.ball_x + ball_delta_x
-        ball_y_new = state.ball_y + ball_delta_y
+        ball_y_new = state.ball_y + ball_delta_y * 2
 
         overlap_top_left_corner = self._overlaps_wall(state.wall_layout, ball_x_new, ball_y_new)
         overlap_top_right_corner = self._overlaps_wall(state.wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new)
@@ -329,7 +355,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         ball_vel_x_new = jnp.where(decelerate, ball_vel_x_new, state.ball_vel_x)
         ball_vel_y_new = jnp.where(decelerate, ball_vel_y_new, state.ball_vel_y)
         acceleration_threshold_new = jnp.where(decelerate, 1, state.acceleration_threshold)
-        acceleration_counter_new = jnp.where(decelerate, acceleration_threshold_new, acceleration_counter)
+        acceleration_counter_new = jnp.where(decelerate, state.acceleration_threshold, acceleration_counter)
 
         return MiniatureGolfState(
             player_x=state.player_x,
@@ -364,7 +390,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         # as in the original game, only move every fourth frame when player is close to the ball
         player_close_to_ball = jnp.logical_and(
             jnp.abs(state.ball_x - state.player_x) < 0x15,
-            jnp.abs(state.ball_y - state.player_y) < 0x0b
+            jnp.abs(state.ball_y - state.player_y) < 2 * 0x0b
         )
         should_move = jnp.logical_or(jnp.logical_not(player_close_to_ball), jnp.equal(state.mod_4_counter, 0))
         up = jnp.logical_and(up, should_move)
@@ -381,24 +407,25 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         fire = jnp.logical_and(fire, jnp.logical_not(state.fire_prev))
 
         ball_vel_x_new = jnp.where(fire, (state.ball_x - state.player_x) // 4, ball_vel_x_new)
-        ball_vel_y_new = jnp.where(fire, (state.ball_y - state.player_y) // 4, ball_vel_y_new)
+        ball_vel_y_new = jnp.where(fire, (state.ball_y - state.player_y) // 8, ball_vel_y_new)
         ball_stationary_now = jnp.logical_and(jnp.equal(ball_vel_x_new, 0), jnp.equal(ball_vel_y_new, 0))
         fire_had_effect = jnp.logical_and(jnp.logical_and(ball_stationary, fire), jnp.logical_not(ball_stationary_now))
         shot_count_new = jnp.where(fire_had_effect, state.shot_count + 1, state.shot_count)
 
         v_abs_x = jnp.abs(ball_vel_x_new)
         v_abs_y = jnp.abs(ball_vel_y_new) * 2
-        tempo = (jnp.where(v_abs_x > v_abs_y, v_abs_x, v_abs_y) + 0x74) // 2
+        tempo = jnp.where(v_abs_x > v_abs_y, v_abs_x, v_abs_y) + 0x74
+        tempo = jnp.where(tempo >= 0x80, 0x100 - tempo, tempo) // 4  # see ROM, arithmetic in two's complement
 
         acceleration_threshold_new = jnp.where(fire_had_effect, tempo, temporary_state.acceleration_threshold)
         acceleration_counter_new = jnp.where(fire_had_effect, tempo, temporary_state.acceleration_counter)
 
-        player_y_dec = jnp.where(up, 1, 0)
-        player_y_inc = jnp.where(down, 1, 0)
+        player_y_dec = jnp.where(up, 2, 0)
+        player_y_inc = jnp.where(down, 2, 0)
         player_x_inc = jnp.where(right, 1, 0)
         player_x_dec = jnp.where(left, 1, 0)
         player_x_without_fire = jnp.clip(state.player_x + player_x_inc - player_x_dec, 1, self.consts.WIDTH - self.consts.PLAYER_SIZE[0] - 1)
-        player_y_without_fire = jnp.clip(state.player_y + player_y_inc - player_y_dec, 1, self.consts.HEIGHT - self.consts.PLAYER_SIZE[1] - 1)
+        player_y_without_fire = jnp.clip(state.player_y + player_y_inc - player_y_dec, self.consts.PLAYER_MIN_Y, self.consts.PLAYER_MAX_Y)
         player_x_new = jnp.where(fire, state.ball_x, player_x_without_fire)
         player_y_new = jnp.where(fire, state.ball_y, player_y_without_fire)
 
@@ -426,9 +453,12 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             right_number=jnp.where(fire_had_effect, 0, state.right_number),
         )
 
+    def _is_ball_in_hole(self, state: MiniatureGolfState):
+        return self._is_overlapping(state.ball_x, state.ball_y, self.consts.BALL_SIZE[0], self.consts.BALL_SIZE[1],
+                                    state.hole_x, state.hole_y, self.consts.HOLE_SIZE[0], self.consts.HOLE_SIZE[1])
+
     def _score_and_reset(self, state: MiniatureGolfState) -> MiniatureGolfState:
-        player_goal = self._is_overlapping(state.ball_x, state.ball_y, self.consts.BALL_SIZE[0], self.consts.BALL_SIZE[1],
-                                           state.hole_x, state.hole_y, self.consts.HOLE_SIZE[0], self.consts.HOLE_SIZE[1])
+        player_goal = self._is_ball_in_hole(state)
 
         level_new = jnp.where(player_goal,
             state.level + 1,
@@ -764,6 +794,10 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             right_number=state.right_number,
         )
 
+    def _hole_step(self, state: MiniatureGolfState) -> MiniatureGolfState:
+        """Has no effect unless overridden by mods."""
+        return state
+
     def reset(self, key=None) -> Tuple[MiniatureGolfObservation, MiniatureGolfState]:
         state = MiniatureGolfState(
             player_x=self.consts.PLAYER_START_X[0],
@@ -798,6 +832,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         state = self._ball_step(state)
         state = self._player_step(state, action)
         state = self._obstacle_step(state)
+        state = self._hole_step(state)
         state = self._score_and_reset(state)
 
         done = self._get_done(state)
@@ -937,12 +972,10 @@ class MiniatureGolfRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
-            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Update asset config to include both walls
-        asset_config = self._get_asset_config()
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf"
 
         # 3. Make a single call to the setup function
@@ -952,28 +985,7 @@ class MiniatureGolfRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        return [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-            {'name': 'hole', 'type': 'single', 'file': 'hole.npy'},
-            {'name': 'obstacle', 'type': 'single', 'file': 'obstacle.npy'},
-            {'name': 'left_digits', 'type': 'digits', 'pattern': 'left_{}.npy'},
-            {'name': 'right_digits', 'type': 'digits', 'pattern': 'right_{}.npy'},
-            {'name': 'level_1', 'type': 'single', 'file': 'level_1.npy'},
-            {'name': 'level_2', 'type': 'single', 'file': 'level_2.npy'},
-            {'name': 'level_3', 'type': 'single', 'file': 'level_3.npy'},
-            {'name': 'level_4', 'type': 'single', 'file': 'level_4.npy'},
-            {'name': 'level_5', 'type': 'single', 'file': 'level_5.npy'},
-            {'name': 'level_6', 'type': 'single', 'file': 'level_6.npy'},
-            {'name': 'level_7', 'type': 'single', 'file': 'level_7.npy'},
-            {'name': 'level_8', 'type': 'single', 'file': 'level_8.npy'},
-            {'name': 'level_9', 'type': 'single', 'file': 'level_9.npy'},
-        ]
+        ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
