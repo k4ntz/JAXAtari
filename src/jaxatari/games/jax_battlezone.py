@@ -91,6 +91,13 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 #------------------------named Tuples---------------------------
+class EnemyType(IntEnum):
+    TANK = 0
+    SUPER_TANK = 1
+    MISSILE = 2
+    SAUCER = 3
+
+
 class BattlezoneConstants(NamedTuple):
     WIDTH: int = 160  #rgb_array size
     HEIGHT: int = 210
@@ -108,6 +115,7 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
     MOUNTAINS_Y: int = 36
     GRASS_BACK_Y: int = 95
+    HORIZON_Y: int = 90
     GRASS_FRONT_Y: int = 137
     RADAR_ROTATION_SPEED:float = -0.1
     RADAR_CENTER_X:int = 80
@@ -125,28 +133,18 @@ class BattlezoneConstants(NamedTuple):
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.24804691667
+    PROJECTILE_SPEED:float = 0.5
     ENEMY_POS_Y:int = 85
+    FIRE_CD:int = 200 #todo change
+    HITBOX_SIZE:int = 6
 
 
-# immutable state container
-class BattlezoneState(NamedTuple):
-    score: chex.Array
-    life: chex.Array
-    step_counter: chex.Array
-    chains_l_anim_counter: chex.Array
-    chains_r_anim_counter: chex.Array
-    mountains_anim_counter:chex.Array
-    grass_anim_counter:chex.Array
-    radar_rotation_counter:chex.Array
-    enemies: chex.Array
-
-
-class BattlezoneObservation(NamedTuple):
-    score: jnp.ndarray
-
-
-class BattlezoneInfo(NamedTuple):
-    time: jnp.ndarray
+class Projectile(NamedTuple):
+    x: chex.Array
+    z: chex.Array
+    orientation_angle: chex.Array
+    active: chex.Array
+    distance: chex.Array
 
 
 class Enemy(NamedTuple):
@@ -158,11 +156,28 @@ class Enemy(NamedTuple):
     active: chex.Array
 
 
-class EnemyType(IntEnum):
-    TANK = 0
-    SUPER_TANK = 1
-    MISSILE = 2
-    SAUCER = 3
+# immutable state container
+class BattlezoneState(NamedTuple):
+    score: chex.Array
+    life: chex.Array
+    cur_fire_cd: chex.Array
+    step_counter: chex.Array
+    chains_l_anim_counter: chex.Array
+    chains_r_anim_counter: chex.Array
+    mountains_anim_counter:chex.Array
+    grass_anim_counter:chex.Array
+    radar_rotation_counter:chex.Array
+    enemies: Enemy
+    player_projectile: Projectile #player can only fire 1 projectile
+    enemy_projectiles: Projectile #per enemy 1 projectile
+
+
+class BattlezoneObservation(NamedTuple):
+    score: jnp.ndarray
+
+
+class BattlezoneInfo(NamedTuple):
+    time: jnp.ndarray
 
 
 
@@ -196,7 +211,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             Action.DOWNLEFTFIRE]
         self.obs_size = 3*4+1+1  #?? TODO: change later from pong currently
 
+    @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
+        noop = (action == Action.NOOP)
         up = jnp.logical_or(action==Action.UP,action==Action.UPFIRE)
         down = jnp.logical_or(action==Action.DOWN,action==Action.DOWNFIRE)
         right = jnp.logical_or(action==Action.RIGHT,action==Action.RIGHTFIRE)
@@ -205,9 +222,30 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         upRight = jnp.logical_or(action==Action.UPRIGHT,action==Action.UPRIGHTFIRE)
         downLeft = jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE)
         downRight = jnp.logical_or(action==Action.DOWNRIGHT,action==Action.DOWNRIGHTFIRE)
-        fire = jnp.any(jnp.stack([action == Action.FIRE, action == Action.LEFTFIRE,
+        wants_fire = jnp.any(jnp.stack([action == Action.FIRE, action == Action.LEFTFIRE,
                                  action == Action.UPFIRE, action == Action.UPLEFTFIRE,
                                  action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
+        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
+        #-------------------fire--------------
+        will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd<=0)
+        def fire_projectile(state:BattlezoneState):
+            return state._replace(
+                cur_fire_cd=jnp.array(self.consts.FIRE_CD, dtype=jnp.int32),
+                player_projectile= Projectile(
+                    x=jnp.array(-0.2, dtype=jnp.float32),
+                    z=jnp.array(7, dtype=jnp.float32),
+                    orientation_angle=jnp.array(0, dtype=jnp.float32),
+                    active=jnp.array(True, dtype=jnp.bool),
+                    distance=jnp.array(0, dtype=jnp.float32)
+                )
+            )
+
+        def dont_fire(state:BattlezoneState):
+            return state
+
+        new_player_projectile = jax.lax.cond(will_fire, fire_projectile, dont_fire, state).player_projectile
+
+
         #--------------------anims--------------------
         chain_r_offset = (-jnp.where(jnp.any(jnp.stack([upLeft, up, left])), 1.0, 0.0)
                           +jnp.where(jnp.any(jnp.stack([right, down, downRight])), 1.0, 0.0)
@@ -222,37 +260,48 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                         - jnp.where(jnp.any(jnp.stack([down, downRight, downLeft])), 1.0, 0.0))
 
 
-        return BattlezoneState(
-            score=state.score,
-            life=state.life,
-            step_counter=state.step_counter,
-            enemies=state.enemies,
+        #--------------------update positions based on player movement-------------------
+        #angle_change = ((jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
+         #                   -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0)) *
+           #             self.consts.PLAYER_ROTATION_SPEED)
+
+
+        updated_enemies = jax.vmap(self._obj_player_position_update, in_axes=(0, None))(state.enemies, direction)
+
+        new_player_projectile = self._obj_player_position_update(new_player_projectile, direction)
+        #new_player_projectile = new_player_projectile._replace(orientation_angle=
+        #                                                       new_player_projectile.orientation_angle+angle_change)
+
+
+
+        return state._replace(
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
             chains_r_anim_counter=(state.chains_r_anim_counter + chain_r_offset)%32,
             mountains_anim_counter=(state.mountains_anim_counter + mountains_offset)%160,
             grass_anim_counter= (state.grass_anim_counter + grass_offset)%30,
-            radar_rotation_counter=state.radar_rotation_counter
+            radar_rotation_counter=state.radar_rotation_counter,
+            enemies=updated_enemies,
+            player_projectile=new_player_projectile
         )
 
+
     @partial(jax.jit, static_argnums=(0,))
-    def _enemy_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
-        #jax.debug.print("Action: {}",action)
-        noop = (action==Action.NOOP)
-        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
-        right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-        left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        upLeft = jnp.logical_or(action == Action.UPLEFT, action == Action.UPLEFTFIRE)
-        upRight = jnp.logical_or(action == Action.UPRIGHT, action == Action.UPRIGHTFIRE)
-        downLeft = jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE)
-        downRight = jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNRIGHTFIRE)
-        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
-        # updating enemy x and z based on player movement
-        update_all_positions = jax.vmap(self._enemy_position_update, in_axes=(None, 0, None))(state, state.enemies, direction)
-        update_all_distance = jax.vmap(self._enemy_distance_update, in_axes=(None, 0))(state, update_all_positions)
-        return state._replace(enemies=update_all_distance)
+    def _enemy_step(self, state: BattlezoneState) -> BattlezoneState:
+        #todo
+        return state._replace(enemies=state.enemies)
 
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _single_projectile_step(self, projectile:Projectile) -> Projectile:
+        dir_x = -jnp.sin(projectile.orientation_angle)
+        dir_z = jnp.cos(projectile.orientation_angle)
+        new_x = projectile.x + dir_x*self.consts.PROJECTILE_SPEED
+        new_z = projectile.z + dir_z*self.consts.PROJECTILE_SPEED
+
+        return projectile._replace(
+            x=new_x,
+            z=new_z,
+        )
 
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
@@ -260,6 +309,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             score=jnp.array(123400),
             life=jnp.array(5),
             step_counter=jnp.array(0),
+            cur_fire_cd=jnp.array(0, dtype=jnp.int32),
             chains_l_anim_counter=jnp.array(0),
             chains_r_anim_counter=jnp.array(0),
             mountains_anim_counter=jnp.array(0),
@@ -273,6 +323,20 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 orientation_angle=jnp.array([1.57, 0.5], dtype=jnp.float32),
                 active=jnp.array([True, False], dtype=jnp.bool)
             ),
+            player_projectile=Projectile(
+                x=jnp.array(0, dtype=jnp.float32),
+                z=jnp.array(0, dtype=jnp.float32),
+                orientation_angle=jnp.array(0, dtype=jnp.float32),
+                active=jnp.array(False, dtype=jnp.bool),
+                distance=jnp.array(0, dtype=jnp.float32)
+            ),
+            enemy_projectiles=Projectile(
+                x=jnp.array(0),
+                z=jnp.array(0),
+                orientation_angle=jnp.array(0),
+                active=jnp.array(False),
+                distance=jnp.array(0)
+            )
         )
         initial_obs = self._get_observation(state)
 
@@ -285,8 +349,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_state = state._replace(step_counter=state.step_counter+1)
         new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
                                                            +self.consts.RADAR_ROTATION_SPEED)%360)
+
+        new_player_projectile = self._single_projectile_step(state.player_projectile)
+        new_state = new_state._replace(player_projectile=new_player_projectile)
         new_state = self._player_step(new_state, action)
-        new_state = self._enemy_step(new_state, action)
+        new_state = self._enemy_step(new_state)
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(previous_state, new_state)
@@ -295,7 +362,20 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         return observation, new_state, env_reward, done, info
 
-    def _enemy_position_update(self, state: BattlezoneState, enemy: Enemy, direction) -> Enemy:
+
+    def _obj_player_position_update(self, obj:NamedTuple, player_direction)->Enemy:
+        """
+        _position_update version for named tuples that contain x, z, distance
+        """
+        new_x, new_z = self._position_update(obj.x, obj.z, obj.active, player_direction)
+        return obj._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
+
+
+
+    def _position_update(self, prev_x, prev_z, active, player_direction):
+        """
+        updates the x, z coordinates according to the current player movement
+        """
         #jax.debug.print("{}",direction)
         ###
         alpha = self.consts.PLAYER_ROTATION_SPEED
@@ -305,27 +385,27 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         offset_xz = jnp.array([
             [0, 0],     # Noop
             [0, -speed],  # Up
-            [(enemy.x*jnp.cos(alpha)-enemy.z*jnp.sin(alpha))-enemy.x, (enemy.x*jnp.sin(alpha)+enemy.z*jnp.cos(alpha))-enemy.z],  # Right
-            [(enemy.x*jnp.cos(-alpha)-enemy.z*jnp.sin(-alpha))-enemy.x, (enemy.x*jnp.sin(-alpha)+enemy.z*jnp.cos(-alpha))-enemy.z],  # Left
+            [(prev_x*jnp.cos(alpha)-prev_z*jnp.sin(alpha))-prev_x, (prev_x*jnp.sin(alpha)+prev_z*jnp.cos(alpha))-prev_z],  # Right
+            [(prev_x*jnp.cos(-alpha)-prev_z*jnp.sin(-alpha))-prev_x, (prev_x*jnp.sin(-alpha)+prev_z*jnp.cos(-alpha))-prev_z],  # Left
             [0, speed],  # Down
-            [(enemy.x * jnp.cos(alpha) - (enemy.z - speed) * jnp.sin(alpha)) - enemy.x, (enemy.x * jnp.sin(alpha) + (enemy.z - speed) * jnp.cos(alpha)) - enemy.z], # UpRight
-            [(enemy.x * jnp.cos(alpha) + (enemy.z - speed) * jnp.sin(alpha)) - enemy.x, (-enemy.x * jnp.sin(alpha) + (enemy.z - speed) * jnp.cos(alpha)) - enemy.z],  # UpLeft
-            [(enemy.x * jnp.cos(alpha) + (enemy.z + speed) * jnp.sin(alpha)) - enemy.x, (-enemy.x * jnp.sin(alpha) + (enemy.z + speed) * jnp.cos(alpha)) - enemy.z],  # DownRight
-            [(enemy.x * jnp.cos(alpha) - (enemy.z + speed) * jnp.sin(alpha)) - enemy.x, (enemy.x * jnp.sin(alpha) + (enemy.z + speed) * jnp.cos(alpha)) - enemy.z]  # DownLeft
+            [(prev_x * jnp.cos(alpha) - (prev_z - speed) * jnp.sin(alpha)) - prev_x, (prev_x * jnp.sin(alpha) + (prev_z - speed) * jnp.cos(alpha)) - prev_z], # UpRight
+            [(prev_x * jnp.cos(alpha) + (prev_z - speed) * jnp.sin(alpha)) - prev_x, (-prev_x * jnp.sin(alpha) + (prev_z - speed) * jnp.cos(alpha)) - prev_z],  # UpLeft
+            [(prev_x * jnp.cos(alpha) + (prev_z + speed) * jnp.sin(alpha)) - prev_x, (-prev_x * jnp.sin(alpha) + (prev_z + speed) * jnp.cos(alpha)) - prev_z],  # DownRight
+            [(prev_x * jnp.cos(alpha) - (prev_z + speed) * jnp.sin(alpha)) - prev_x, (prev_x * jnp.sin(alpha) + (prev_z + speed) * jnp.cos(alpha)) - prev_z]  # DownLeft
         ])
         #jax.debug.print("{}",jnp.argmax(direction)
-        idx = jnp.argmax(direction)
+        idx = jnp.argmax(player_direction)
         offset = offset_xz[idx]
 
-        new_x = enemy.x + offset[0] * enemy.active
-        new_z = enemy.z + offset[1] * enemy.active
+        new_x = prev_x + offset[0] * active
+        new_z = prev_z + offset[1] * active
 
-        return enemy._replace(x=new_x, z=new_z)
+        return new_x, new_z
 
-    def _enemy_distance_update(self, state: BattlezoneState, enemy: Enemy) -> Enemy:
-        new_distance = jnp.sqrt(enemy.x ** 2 + enemy.z ** 2)
+    def _get_distance(self, x, z):
+        distance = jnp.sqrt(x ** 2 + z ** 2)
         #Room for distance specific actions
-        return enemy._replace(distance=new_distance)
+        return distance
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
@@ -449,6 +529,8 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'tank_enemy_left', 'type': 'single', 'file': 'tank_enemy_left.npy'},   #summarize them like digits
             {'name': 'saucer_left', 'type': 'single', 'file': 'saucer_left.npy'},
             {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
+            {'name': 'projectile_big', 'type': 'single', 'file': 'projectile_big.npy'},
+            {'name': 'projectile_small', 'type': 'single', 'file': 'projectile_small.npy'},
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
@@ -568,8 +650,8 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         def uvMap(_):
             u = ((f * (x / z))+self.consts.WIDTH/2).astype(int)
-            vOffset = self.consts.ENEMY_POS_Y   #todo change to tune for missiles
-            v = ((f/z) + vOffset).astype(int)
+            vOffset = self.consts.HORIZON_Y
+            v = ((f/(z-self.consts.HITBOX_SIZE)) + vOffset).astype(int)
             return u, v
 
         return jax.lax.cond(z<=0, anchor, uvMap, operand=None)
@@ -644,6 +726,20 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jax.lax.cond(enemy.active, enemy_active, enemy_inactive, enemy)
 
 
+    def render_single_projectile(self, raster, projectile:Projectile):
+        def projectile_active(projectile):
+            projectile_mask = self.SHAPE_MASKS["projectile_big"]#todo
+            x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
+            return self.jr.render_at_clipped(raster, x, y, projectile_mask)
+        def projectile_inactive(_):
+            return raster
+
+        render_condition = jnp.all(jnp.stack([projectile.active,
+                                              projectile.z >=self.consts.HITBOX_SIZE,
+                                              projectile.distance <= self.consts.RADAR_MAX_SCAN_RADIUS]))
+        return jax.lax.cond(render_condition, projectile_active, projectile_inactive, projectile)
+
+
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -665,24 +761,6 @@ class BattlezoneRenderer(JAXGameRenderer):
                                    self.consts.GRASS_BACK_Y, grass_back_mask)
 
 
-        tank_mask = self.SHAPE_MASKS["tank"]
-        raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
-                                   self.consts.TANK_SPRITE_POS_Y, tank_mask)
-
-        raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
-                                    self.consts.RADAR_RADIUS, self.COLOR_TO_ID[self.consts.RADAR_COLOR_1],
-                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2])
-
-        #--------------chains---------
-        chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
-        color_shifted_chain_l = self._scroll_chain_colors(chains_l_mask, state.chains_l_anim_counter)
-        raster = self.jr.render_at(raster, self.consts.CHAINS_L_POS_X,
-                                   self.consts.CHAINS_POS_Y, color_shifted_chain_l)
-
-        chains_r_mask = self.SHAPE_MASKS["chainsRight"]
-        color_shifted_chain_r = self._scroll_chain_colors(chains_r_mask, state.chains_r_anim_counter)
-        raster = self.jr.render_at(raster, self.consts.CHAINS_R_POS_X,
-                                   self.consts.CHAINS_POS_Y, color_shifted_chain_r)
 
         #----------------life---------------------------
         life_mask = self.SHAPE_MASKS["life"]
@@ -712,6 +790,33 @@ class BattlezoneRenderer(JAXGameRenderer):
 
 
         raster, _ = jax.lax.scan(render_single_enemy_wrapped, raster, state.enemies)
+
+        #------------------------------projectiles---------------
+        raster = self.render_single_projectile(raster, state.player_projectile)
+
+
+
+
+
+        # -------------------------foreground---------------------------------------------------------------
+        tank_mask = self.SHAPE_MASKS["tank"]
+        raster = self.jr.render_at(raster, self.consts.TANK_SPRITE_POS_X,
+                                   self.consts.TANK_SPRITE_POS_Y, tank_mask)
+
+        raster = self._render_radar(raster, state, self.consts.RADAR_CENTER_X, self.consts.RADAR_CENTER_Y,
+                                    self.consts.RADAR_RADIUS, self.COLOR_TO_ID[self.consts.RADAR_COLOR_1],
+                                    self.COLOR_TO_ID[self.consts.RADAR_COLOR_2])
+
+        # --------------chains---------
+        chains_l_mask = self.SHAPE_MASKS["chainsLeft"]
+        color_shifted_chain_l = self._scroll_chain_colors(chains_l_mask, state.chains_l_anim_counter)
+        raster = self.jr.render_at(raster, self.consts.CHAINS_L_POS_X,
+                                   self.consts.CHAINS_POS_Y, color_shifted_chain_l)
+
+        chains_r_mask = self.SHAPE_MASKS["chainsRight"]
+        color_shifted_chain_r = self._scroll_chain_colors(chains_r_mask, state.chains_r_anim_counter)
+        raster = self.jr.render_at(raster, self.consts.CHAINS_R_POS_X,
+                                   self.consts.CHAINS_POS_Y, color_shifted_chain_r)
 
 
 
