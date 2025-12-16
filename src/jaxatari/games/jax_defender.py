@@ -856,10 +856,13 @@ class JaxDefender(
                 lambda: self.consts.DEAD_RED,
             ],
         )
+
+
+
         state = jax.lax.cond(
             is_index,
             lambda: self._update_enemy(
-                state, index, enemy_type=new_type, arg1=color, arg2=0.0
+                state, index, enemy_type=new_type, arg1=color, arg2=self._get_enemy(state, index)[4]
             ),
             lambda: state,
         )
@@ -869,6 +872,7 @@ class JaxDefender(
             lambda: self._set_human_from_lander_falling(state, index),
             lambda: state,
         )
+
         # TODO Add score
         return state
 
@@ -1136,13 +1140,9 @@ class JaxDefender(
         new_human_states = human_states
 
         def check_proximity(human_state: chex.Array) -> chex.Array:
-            on_screen_lander_x, _ = self.dh._onscreen_pos(state, lander_x, lander_y)
-            on_screen_human_x, _ = self.dh._onscreen_pos(
-                state, human_state[0], human_state[1]
-            )
 
             return jnp.logical_and(
-                jnp.abs(on_screen_human_x - on_screen_lander_x - 5)
+                jnp.abs(human_state[0] - lander_x - 5)
                 < self.consts.LANDER_PICKUP_X_THRESHOLD,
                 human_state[2] == self.consts.HUMAN_STATE_IDLE,
             )
@@ -1219,7 +1219,7 @@ class JaxDefender(
             human_id: float,
         ) -> Tuple[float, float]:
             speed_x = 0.0
-            speed_y = -self.consts.LANDER_Y_SPEED
+            speed_y = -self.consts.LANDER_Y_SPEED * 5
 
             def lander_reached_top(
                 human_index: int,
