@@ -866,7 +866,6 @@ class JaxDefender(
                 lambda: self.consts.DEAD_RED,
             ],
         )
-        
 
         state = jax.lax.cond(
             jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
@@ -1171,9 +1170,15 @@ class JaxDefender(
             space_ship_facing_right=space_ship_facing_right,
         )
 
+        hyperspace = space_ship_y < (2 - self.consts.SPACE_SHIP_HEIGHT)
+
+        # Shooting a laser active again
         shoot_laser = jnp.logical_and(
             shoot, state.laser_state == self.consts.LASER_STATE_INACTIVE
         )
+
+        # Not be able to shoot in hyperspace
+        shoot_laser = jnp.logical_and(shoot_laser, jnp.logical_not(hyperspace))
 
         shoot_smart_bomb = jnp.logical_and(
             shoot,
@@ -1317,7 +1322,6 @@ class JaxDefender(
             ) -> Tuple[float, float, float, float]:
 
                 human = human_states[human_index]
-                # jax.debug.print("Lander ascending, lander_y: {}, human_index: {}, human state: {}", lander_y, human_index, human)
                 human_x = human[0]
                 human_y = lander_y + 5  # Move human up with lander
                 new_human = [
@@ -1522,7 +1526,6 @@ class JaxDefender(
 
         new_human_states = jax.lax.cond(
             enemy_states[lander_index][2] != self.consts.LANDER,
-
             lambda: state.human_states,  # Only Ascending landers can update humans
             lambda: jax.lax.cond(
                 human_height > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
@@ -1542,7 +1545,6 @@ class JaxDefender(
                 ),
             ),
         )
-        jax.debug.print("Updated human {} state to {}", human_index, new_human_states[human_index][2])
         return state._replace(human_states=new_human_states)
 
     def _get_enemy(self, state: DefenderState, index):
@@ -1833,7 +1835,7 @@ class JaxDefender(
             )
 
             return human_states
-        
+
         def _human_catched(human_states: chex.Array, index: int) -> chex.Array:
             human = human_states[index]
 
@@ -1842,9 +1844,16 @@ class JaxDefender(
             # Update human position
 
             human_states = jax.lax.cond(
-                human[1] >= self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT - self.consts.HUMAN_HEIGHT,
-                lambda: human_states.at[index].set([human[0], human[1], self.consts.HUMAN_STATE_RELEASED]),
-                lambda: human_states.at[index].set([state.space_ship_x + 5, state.space_ship_y + 4, human[2]]),
+                human[1]
+                >= self.consts.GAME_HEIGHT
+                - self.consts.CITY_HEIGHT
+                - self.consts.HUMAN_HEIGHT,
+                lambda: human_states.at[index].set(
+                    [human[0], human[1], self.consts.HUMAN_STATE_RELEASED]
+                ),
+                lambda: human_states.at[index].set(
+                    [state.space_ship_x + 5, state.space_ship_y + 4, human[2]]
+                ),
             )
 
             return human_states
@@ -1956,7 +1965,7 @@ class JaxDefender(
         state = jax.lax.cond(is_colliding, lambda: state, lambda: state)
 
         return state
-    
+
     def _space_ship_catching_human(self, state: DefenderState) -> DefenderState:
         def check_human_collision(index, state: DefenderState) -> DefenderState:
             human = state.human_states[index]
@@ -1992,7 +2001,10 @@ class JaxDefender(
 
         def check_for_falling(index, state):
             human = state.human_states[index]
-            is_falling = jnp.logical_or(human[2] == self.consts.HUMAN_STATE_FALLING, human[2] == self.consts.HUMAN_STATE_FALLING_DEADLY)
+            is_falling = jnp.logical_or(
+                human[2] == self.consts.HUMAN_STATE_FALLING,
+                human[2] == self.consts.HUMAN_STATE_FALLING_DEADLY,
+            )
             state = jax.lax.cond(
                 is_falling, lambda: check_human_collision(index, state), lambda: state
             )
@@ -2060,8 +2072,11 @@ class JaxDefender(
         return state
 
     def _collision_step(self, state) -> DefenderState:
-        # check player and bullet
-        state = self._check_space_ship_collision(state)
+        # check space ship and bullet
+        hyperspace = state.space_ship_y < (1 - self.consts.SPACE_SHIP_HEIGHT)
+        state = jax.lax.cond(
+            hyperspace, lambda: state, lambda: self._check_space_ship_collision(state)
+        )
         # check laser and enemies
         state = self._check_enemy_collisions(state)
         # check space ship and humans
