@@ -36,6 +36,7 @@ class TicTacToe3DConstants(NamedTuple):
     EMPTY: int = 0
     PLAYER_X: int = 1
     PLAYER_O: int = 2
+    FIRST_PLAYER: int = PLAYER_X
     
      # --- Rendering layout  ---
     ORIGIN_X: int = 20
@@ -114,10 +115,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts or TicTacToe3DConstants()
         h, w, _ = self.BACKGROUND.shape
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(h, w),
-            channels=3,
-        )
+        self.config = render_utils.RendererConfig(game_dimensions=(h, w),channels=3)
         self.jr = render_utils.JaxRenderingUtils(self.config) 
         final_asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path =f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
@@ -128,13 +126,16 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config,sprite_path)
+        h, w, _ = self.BACKGROUND.shape
+        self.config = render_utils.RendererConfig(game_dimensions=(h, w), channels=3)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        self.ORIGIN_X = 20
-        self.ORIGIN_Y = 18
+        self.ORIGIN_X = self.consts.ORIGIN_X
+        self.ORIGIN_Y = self.consts.ORIGIN_Y
 
         # Cell spacing within a single 4x4 layer
-        self.CELL_W = 18
-        self.CELL_H = 18
+        self.CELL_W = self.consts.CELL_W
+        self.CELL_H = self.consts.CELL_H
 
         # Layer offsets to create the "stacked 3D" illusion (z=0..3)
         # (dx, dy) per layer
@@ -150,11 +151,13 @@ class TicTacToe3DRenderer(JAXGameRenderer):
     def cell_to_pixel(self, x: jnp.ndarray, y: jnp.ndarray, z: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
         Convert board coordinates (x,y,z) in [0..3] to screen pixel (px,py).
-        JIT-safe (pure JAX ops).
+        
         """
-        dz = self.LAYER_OFFSETS[z]  # shape (2,)
-        px = jnp.int32(self.ORIGIN_X) + jnp.int32(x) * jnp.int32(self.CELL_W) + dz[0]
-        py = jnp.int32(self.ORIGIN_Y) + jnp.int32(y) * jnp.int32(self.CELL_H) + dz[1]
+        consts= self.consts
+        
+        dx, dy = consts.LAYER_OFFSETS[z]
+        px = consts.ORIGIN_X + x * consts.CELL_W + dx
+        py = consts.ORIGIN_Y + y * consts.CELL_H + dy
         return px, py    
 
     @partial(jax.jit, static_argnums=(0,))
@@ -188,8 +191,8 @@ class TicTacToe3DRenderer(JAXGameRenderer):
                 return self.jr.render_at(rr, px, py, o_mask)
 
             # v == 0 -> nothing, v == 1 -> X, v == 2 -> O
-            r = jax.lax.cond(v == 1, draw_x, lambda rr: rr, r)
-            r = jax.lax.cond(v == 2, draw_o, lambda rr: rr, r)
+            r = jax.lax.cond(v == self.consts.PLAYER_X, draw_x, lambda rr: rr, r)
+            r = jax.lax.cond(v == self.consts.PLAYER_O, draw_o, lambda rr: rr, r)
             return r, None
 
         raster, _ = jax.lax.scan(render_one_cell, raster, jnp.arange(64, dtype=jnp.int32))
