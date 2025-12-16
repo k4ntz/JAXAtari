@@ -418,19 +418,19 @@ class DefenderRenderer(JAXGameRenderer):
             [
                 jnp.pad(
                     self.SHAPE_MASKS["death_yellow"],
-                    ((0, 7), (0, 0)),
+                    ((0, 10), (0, 0)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
                 jnp.pad(
                     self.SHAPE_MASKS["death_blue"],
-                    ((0, 7), (0, 0)),
+                    ((0, 10), (0, 0)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
                 jnp.pad(
                     self.SHAPE_MASKS["death_red"],
-                    ((0, 7), (0, 0)),
+                    ((0, 10), (0, 0)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
@@ -1087,17 +1087,17 @@ class JaxDefender(
         new_human_states = human_states
 
         def check_proximity(human_state: chex.Array) -> chex.Array:
-                on_screen_lander_x, _ = self.dh._onscreen_pos(state, lander_x, lander_y)
-                on_screen_human_x, _ = self.dh._onscreen_pos(
-                    state, human_state[0], human_state[1]
-                )
+            on_screen_lander_x, _ = self.dh._onscreen_pos(state, lander_x, lander_y)
+            on_screen_human_x, _ = self.dh._onscreen_pos(
+                state, human_state[0], human_state[1]
+            )
 
-                return jnp.logical_and(
-                    jnp.abs(on_screen_human_x - on_screen_lander_x - 5)
-                    < self.consts.LANDER_PICKUP_X_THRESHOLD,
-                    human_state[2] == self.consts.HUMAN_STATE_IDLE,
-                )
-        
+            return jnp.logical_and(
+                jnp.abs(on_screen_human_x - on_screen_lander_x - 5)
+                < self.consts.LANDER_PICKUP_X_THRESHOLD,
+                human_state[2] == self.consts.HUMAN_STATE_IDLE,
+            )
+
         def lander_patrol(space_ship_speed: float) -> Tuple[float, float]:
             speed_x, speed_y = jax.lax.cond(
                 space_ship_speed > 0,
@@ -1107,8 +1107,6 @@ class JaxDefender(
 
             speed_x += space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED
             # check if on top of human to switch to descend
-
-           
 
             proximity_checks = jax.vmap(check_proximity)(human_states)
             is_near_human = jnp.any(proximity_checks)
@@ -1154,13 +1152,16 @@ class JaxDefender(
             speed_y = 0.0
             current_counter += 1.0
             lander_state = self.consts.LANDER_STATE_PICKUP
-                            
+
             near = jax.vmap(check_proximity)(human_states)
             human_index = jnp.argmax(near)
 
             lander_state, current_counter = jax.lax.cond(
                 current_counter >= self.consts.LANDER_PICKUP_DURATION_FRAMES,
-                lambda: (self.consts.LANDER_STATE_ASCEND, jnp.array(human_index, float)),
+                lambda: (
+                    self.consts.LANDER_STATE_ASCEND,
+                    jnp.array(human_index, float),
+                ),
                 lambda: (lander_state, current_counter),
             )
             return speed_x, speed_y, lander_state, current_counter
@@ -1171,7 +1172,9 @@ class JaxDefender(
             speed_x = 0.0
             speed_y = -self.consts.LANDER_Y_SPEED
 
-            def lander_reached_top(human_index: int) -> Tuple[float, float, float, float]:
+            def lander_reached_top(
+                human_index: int,
+            ) -> Tuple[float, float, float, float]:
                 # Mark human as rescued
                 human = human_states[human_index]
                 human_x = human[0]
@@ -1183,13 +1186,14 @@ class JaxDefender(
                 ]
                 new_human_states = human_states.at[human_index].set(new_human)
                 return self.consts.LANDER_STATE_PATROL, new_human_states
-                
 
-            def lander_ascend_continue(human_index: int, lander_y: float) -> Tuple[float, float, float, float]:
-                
+            def lander_ascend_continue(
+                human_index: int, lander_y: float
+            ) -> Tuple[float, float, float, float]:
+
                 human = human_states[human_index]
                 # jax.debug.print("Lander ascending, lander_y: {}, human_index: {}, human state: {}", lander_y, human_index, human)
-                human_x = human[0] 
+                human_x = human[0]
                 human_y = lander_y + 5  # Move human up with lander
                 new_human = [
                     human_x,
@@ -1203,18 +1207,24 @@ class JaxDefender(
             lander_state, new_human_states = jax.lax.cond(
                 lander_y <= self.consts.LANDER_START_Y,
                 lambda: lander_reached_top(jnp.array(human_id, int)),
-                lambda: lander_ascend_continue(jnp.array(human_id, int), lander_y)
+                lambda: lander_ascend_continue(jnp.array(human_id, int), lander_y),
             )
 
             return speed_x, speed_y, lander_state, human_id, new_human_states
-        
+
         counter_id = lander[4]
         speed_x, speed_y, lander_state, counter_id, new_human_states = jax.lax.switch(
             jnp.array(lander_state, int),
             [
                 lambda: (*lander_patrol(space_ship_speed), new_human_states),  # Patrol
-                lambda: (*lander_descend(space_ship_speed), new_human_states),  # Descend
-                lambda: (*lander_pickup(space_ship_speed, current_counter), new_human_states),  # Pickup
+                lambda: (
+                    *lander_descend(space_ship_speed),
+                    new_human_states,
+                ),  # Descend
+                lambda: (
+                    *lander_pickup(space_ship_speed, current_counter),
+                    new_human_states,
+                ),  # Pickup
                 lambda: lander_ascend(counter_id),  # Ascend
             ],
         )
@@ -1567,7 +1577,6 @@ class JaxDefender(
         state = jax.lax.cond(
             bullet_is_active, lambda: state, lambda: self._bullet_spawn(state)
         )
-
         # Update bullet is active
         bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
         state = jax.lax.cond(
@@ -1597,16 +1606,26 @@ class JaxDefender(
                         human_states,
                         state,
                     ),
-                    lambda: (self._pod_movement(
-                        index, enemy_states, state.space_ship_speed
-                    ), human_states),
-                    lambda: (self._bomber_movement(
-                        index, enemy_states, state.space_ship_speed, state.space_ship_x
-                    ), human_states),
+                    lambda: (
+                        self._pod_movement(index, enemy_states, state.space_ship_speed),
+                        human_states,
+                    ),
+                    lambda: (
+                        self._bomber_movement(
+                            index,
+                            enemy_states,
+                            state.space_ship_speed,
+                            state.space_ship_x,
+                        ),
+                        human_states,
+                    ),
                     lambda: (enemy_states, human_states),
                     lambda: (enemy_states, human_states),
                     lambda: (enemy_states, human_states),
-                    lambda: (self._delete_enemy(state, index).enemy_states, human_states),
+                    lambda: (
+                        self._delete_enemy(state, index).enemy_states,
+                        human_states,
+                    ),
                 ],
             )
 
@@ -1741,7 +1760,17 @@ class JaxDefender(
             )
             return state
 
-        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, collision, state)
+        def check_for_inactive(index, state):
+            enemy = self._get_enemy(state, index)
+            is_active = jnp.logical_and(
+                enemy[2] != self.consts.INACTIVE, enemy[2] != self.consts.DEAD
+            )
+            state = jax.lax.cond(
+                is_active, lambda: collision(index, state), lambda: state
+            )
+            return state
+
+        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX, check_for_inactive, state)
         return state
 
     def _collision_step(self, state) -> DefenderState:
