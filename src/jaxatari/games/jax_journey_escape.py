@@ -15,11 +15,11 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
-    chicken_width: int = 8
-    chicken_height: int = 10
-    start_chicken_x: int = 44  # Fixed x position
-    start_chicken_y: int = 166  # Fixed y position
-    chicken_speed: int = 2  # constant downward speed
+    player_width: int = 8
+    player_height: int = 10
+    start_player_x: int = 44  # Fixed x position
+    start_player_y: int = 166  # Fixed y position
+    player_speed: int = 2  # constant downward speed
 
     # Standard sizes
     obstacle_width: int = 8
@@ -53,8 +53,8 @@ class JourneyEscapeConstants(NamedTuple):
 
     hit_cooldown_frames: int = 8
 
-    # chicken position rules
-    min_chicken_position_y: int = top_border + (screen_height // 4)
+    # player position rules
+    min_player_position_y: int = top_border + (screen_height // 4)
 
     
     MAX_OBS = 64
@@ -116,8 +116,8 @@ class JourneyEscapeConstants(NamedTuple):
 class JourneyEscapeState(NamedTuple):
     """Represents the current state of the game"""
 
-    chicken_y: chex.Array
-    chicken_x: chex.Array
+    player_y: chex.Array
+    player_x: chex.Array
     score: chex.Array
     time: chex.Array
     walking_frames: chex.Array
@@ -141,7 +141,7 @@ class EntityPosition(NamedTuple):
 
 
 class JourneyEscapeObservation(NamedTuple):
-    chicken: EntityPosition
+    player: EntityPosition
     obstacles: chex.Array
 
 
@@ -163,9 +163,9 @@ class JaxJourneyEscape(
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[JourneyEscapeObservation, JourneyEscapeState]:
         """Initialize a new game state"""
-        # Start chicken at bottom
-        chicken_y = self.consts.start_chicken_y
-        chicken_x = self.consts.start_chicken_x
+        # Start player at bottom
+        player_y = self.consts.start_player_y
+        player_x = self.consts.start_player_x
 
         empty_boxes = jnp.zeros((self.consts.MAX_OBS, 5), dtype=jnp.int32)
         rng_key = jax.random.PRNGKey(0)
@@ -174,8 +174,8 @@ class JaxJourneyEscape(
         spawn_count = jnp.array(2, dtype=jnp.int32)
 
         state = JourneyEscapeState(
-            chicken_y=jnp.array(chicken_y, dtype=jnp.int32),
-            chicken_x=jnp.array(chicken_x, dtype=jnp.int32),
+            player_y=jnp.array(player_y, dtype=jnp.int32),
+            player_x=jnp.array(player_x, dtype=jnp.int32),
             score=jnp.array(self.consts.starting_score, dtype=jnp.int32),
             time=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
@@ -200,10 +200,10 @@ class JaxJourneyEscape(
         # Compute vertical movement
         dy_int = jnp.where(
             (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT),
-            -self.consts.chicken_speed,
+            -self.consts.player_speed,
             jnp.where(
                 (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT),
-                self.consts.chicken_speed,
+                self.consts.player_speed,
                 0
             ),
         )
@@ -211,10 +211,10 @@ class JaxJourneyEscape(
         # Compute horizontal movement
         dx_int = jnp.where(
             (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
-            -self.consts.chicken_speed,
+            -self.consts.player_speed,
             jnp.where(
                 (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT),
-                self.consts.chicken_speed,
+                self.consts.player_speed,
                 0
             ),
         )
@@ -237,14 +237,14 @@ class JaxJourneyEscape(
         new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
 
         # Effective player movement boundaries
-        player_min_y = self.consts.min_chicken_position_y
-        player_max_y = self.consts.bottom_border + self.consts.chicken_height - 1
+        player_min_y = self.consts.min_player_position_y
+        player_max_y = self.consts.bottom_border + self.consts.player_height - 1
         player_min_x = self.consts.left_border
-        player_max_x = self.consts.right_border - self.consts.chicken_width - 1
+        player_max_x = self.consts.right_border - self.consts.player_width - 1
 
         # "Proposed" movement from input only (used for collision detection)
-        pre_y = jnp.clip(state.chicken_y + dy_int, player_min_y, player_max_y).astype(jnp.int32)
-        pre_x = jnp.clip(state.chicken_x + dx_int, player_min_x, player_max_x).astype(jnp.int32)
+        pre_y = jnp.clip(state.player_y + dy_int, player_min_y, player_max_y).astype(jnp.int32)
+        pre_x = jnp.clip(state.player_x + dx_int, player_min_x, player_max_x).astype(jnp.int32)
 
         #---OBSTACLES---
 
@@ -254,7 +254,7 @@ class JaxJourneyEscape(
         active = boxes[:, 3] > 0  # Active mask: entries with height > 0 are “alive”
 
         # obstacle speed +1 when player hits top border
-        obstacles_dy_int = jnp.where(state.chicken_y == self.consts.min_chicken_position_y, 1, 0)
+        obstacles_dy_int = jnp.where(state.player_y == self.consts.min_player_position_y, 1, 0)
 
         # Move down by constant speed only for active entries
         dy_obs = jnp.where(active, self.consts.obstacle_speed_px_per_frame + obstacles_dy_int,
@@ -393,11 +393,11 @@ class JaxJourneyEscape(
             # It is only "dangerous" if it exists AND is not a ghost
             is_dangerous = active & jnp.logical_not(is_ghost)
 
-            # --- Chicken AABB  --- [axis-aligned bounding box]
+            # --- Player AABB  --- [axis-aligned bounding box]
 
             ch_x0 = pre_x
-            ch_x1 = pre_x + self.consts.chicken_width
-            ch_y0 = pre_y - self.consts.chicken_height
+            ch_x1 = pre_x + self.consts.player_width
+            ch_y0 = pre_y - self.consts.player_height
             ch_y1 = pre_y
 
             # --- Obstacle AABB ---
@@ -463,7 +463,7 @@ class JaxJourneyEscape(
             #  - if not at bottom: move down with the obstacle speed
             #  - if at bottom: stay at bottom vertically
             moved_down_y = jnp.clip(
-                state.chicken_y + self.consts.obstacle_speed_px_per_frame,
+                state.player_y + self.consts.obstacle_speed_px_per_frame,
                 player_min_y,
                 player_max_y,
             )
@@ -479,7 +479,7 @@ class JaxJourneyEscape(
             slow_dx = dx_int // 2
 
             # Stay in screen
-            cand_x_side = jnp.clip(state.chicken_x + slow_dx, player_min_x, player_max_x)
+            cand_x_side = jnp.clip(state.player_x + slow_dx, player_min_x, player_max_x)
 
             # [avoid moving behind the obstacle]
             # Check if cand_x_side would break the collision -> only execute it in this case
@@ -500,8 +500,8 @@ class JaxJourneyEscape(
                 is_solid = active_box & jnp.logical_not(is_ghost)
 
                 ch_x0 = cand_x_side
-                ch_x1 = cand_x_side + self.consts.chicken_width
-                ch_y0 = new_y0 - self.consts.chicken_height
+                ch_x1 = cand_x_side + self.consts.player_width
+                ch_y0 = new_y0 - self.consts.player_height
                 ch_y1 = new_y0
 
                 ob_x0 = box_x
@@ -519,7 +519,7 @@ class JaxJourneyEscape(
 
             allowed_x_side = jax.lax.cond(
                 still_collide_side,
-                lambda _: state.chicken_x,  # block pushing further into the obstacle
+                lambda _: state.player_x,  # block pushing further into the obstacle
                 lambda _: cand_x_side,  # allow movement if it resolves collision
                 operand=None,
             )
@@ -549,8 +549,8 @@ class JaxJourneyEscape(
         )
 
         new_state = JourneyEscapeState(
-            chicken_y=new_y,
-            chicken_x=new_x,
+            player_y=new_y,
+            player_x=new_x,
             score=new_score,
             time=new_time,
             walking_frames=new_walking_frames.astype(jnp.int32),
@@ -572,12 +572,12 @@ class JaxJourneyEscape(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: JourneyEscapeState):
-        # create chicken
-        chicken = EntityPosition(
-            x=state.chicken_x,
-            y=state.chicken_y,
-            width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
-            height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
+        # create player
+        player = EntityPosition(
+            x=state.player_x,
+            y=state.player_y,
+            width=jnp.array(self.consts.player_width, dtype=jnp.int32),
+            height=jnp.array(self.consts.player_height, dtype=jnp.int32),
         )
 
         # create obstacle
@@ -595,7 +595,7 @@ class JaxJourneyEscape(
                     dtype=jnp.int32
                 )
             )
-        return JourneyEscapeObservation(chicken=chicken, obstacles=obstacles)
+        return JourneyEscapeObservation(player=player, obstacles=obstacles)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: JourneyEscapeState) -> JourneyEscapeInfo:
@@ -621,11 +621,11 @@ class JaxJourneyEscape(
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for JourneyEscape.
         The observation contains:
-        - chicken: EntityPosition (x, y, width, height)
-        - car: array of shape (10, 4) with x,y,width,height for each car
+        - player: EntityPosition (x, y, width, height)
+        - obstacles: array of shape (10, 4) with x,y,width,height for each obstacle
         """
         return spaces.Dict({
-            "chicken": spaces.Dict({
+            "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -651,18 +651,18 @@ class JaxJourneyEscape(
 
     def obs_to_flat_array(self, obs: JourneyEscapeObservation) -> jnp.ndarray:
         """Convert observation to a flat array."""
-        # Flatten chicken position and dimensions
-        chicken_flat = jnp.concatenate([
-            obs.chicken.x.reshape(-1),
-            obs.chicken.y.reshape(-1),
-            obs.chicken.width.reshape(-1),
-            obs.chicken.height.reshape(-1)
+        # Flatten player position and dimensions
+        player_flat = jnp.concatenate([
+            obs.player.x.reshape(-1),
+            obs.player.y.reshape(-1),
+            obs.player.width.reshape(-1),
+            obs.player.height.reshape(-1)
         ])
 
         obstacles_flat = obs.obstacles.reshape(-1)
 
         # Concatenate all components
-        return jnp.concatenate([chicken_flat, obstacles_flat]).astype(jnp.int32)
+        return jnp.concatenate([player_flat, obstacles_flat]).astype(jnp.int32)
 
 
 class JourneyEscapeRenderer(JAXGameRenderer):
@@ -794,13 +794,13 @@ class JourneyEscapeRenderer(JAXGameRenderer):
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Select chicken sprite based on walking frames and direction
+        # Select player sprite based on walking frames and direction
         use_idle = state.walking_frames < 4
         sprite_index = state.walking_direction * 2
-        chicken_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index + 1)
+        player_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index + 1)
 
-        chicken_mask = self.SHAPE_MASKS["player"][chicken_frame_index]
-        raster = self.jr.render_at(raster, state.chicken_x, state.chicken_y, chicken_mask)
+        player_mask = self.SHAPE_MASKS["player"][player_frame_index]
+        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         # Render obstacles
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
