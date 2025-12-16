@@ -1758,19 +1758,12 @@ class JaxDefender(
                         self.consts.GROUND_Y,
                         self.consts.INACTIVE,
                     ]
-                    human_states = human_states.at[index].set(new_human)
-                return human_states
-
-            new_human = [
-                human[0],
-                human_y,
-                (
-                    self.consts.HUMAN_STATE_FALLING_DEADLY
-                    if deadly
-                    else self.consts.HUMAN_STATE_FALLING
+                    )
                 ),
-            ]
-            human_states = human_states.at[index].set(new_human)
+                lambda: human_states.at[index].set(
+                    [human[0], human_y, human[2]]
+                ),
+            )
 
             return human_states
 
