@@ -30,6 +30,12 @@ def _get_default_asset_config() -> tuple:
         {'name': 'underscore', 'type': 'group', 'files': underscore_files}
     )
 
+class EntityPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
 class BasicMathConstants(NamedTuple):
     SCALINGFACTOR: int = 1
     SCREEN_WIDTH: int = 160 * SCALINGFACTOR
@@ -67,6 +73,7 @@ class BasicMathState(NamedTuple):
     step_counter: chex.PRNGKey
 
 class BasicMathObservation(NamedTuple):
+    pos: EntityPosition
     numArr: chex.Array
     arrPos: chex.Array
     problemNum1: chex.Array
@@ -111,7 +118,14 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
+        pos = EntityPosition(
+            x=jnp.array(35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR),
+            y=jnp.array(self.consts.bar0[1]),
+            width=jnp.array(20),
+            height=jnp.array(2),
+        )
         return BasicMathObservation(
+            pos,
             state.numArr, 
             state.arrPos, 
             state.problemNum1, 
@@ -140,7 +154,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         
     
     def _evaluate_arr(self, arr: chex.Array):
-        arr = jax.numpy.nan_to_num(arr, nan=0).astype(jnp.int32)
+        arr = arr.clip(min=0)
 
         a, b = arr[:3], arr[3:]
 
@@ -156,28 +170,22 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda a, b: (a + b, 0),
             lambda a, b: (a - b, 0),
             lambda a, b: (a * b, 0),
-            lambda a, b: (a / b, a % b)
+            lambda a, b: (a // b, a % b)
         ]
 
         result = ops[gameMode](state.problemNum1, state.problemNum2)
 
         a, b = self._evaluate_arr(state.numArr)
 
-        eval = jnp.logical_and(gameMode != 3, a == result[0])
-        evalDiv = jnp.logical_and(
+        is_correct = jax.lax.cond(
             gameMode == 3,
-            jnp.logical_and(a == result[0], b == result[1])
+            lambda _: jnp.logical_and(a == result[0], b == result[1]),
+            lambda _: a == result[0],
+            operand=None,
         )
 
         score = jax.lax.cond(
-            eval,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.score,
-        )
-
-        score = jax.lax.cond(
-            evalDiv,
+            is_correct,
             lambda s: s + 1,
             lambda s: s,
             operand=state.score,
@@ -367,8 +375,6 @@ class BasicMathRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-        self.NUM_MASKS_STACKED = self._stack_num_masks
-
     def _stack_num_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""
         # The first 16 are rotation, the next 3 are death animations
@@ -389,7 +395,6 @@ class BasicMathRenderer(JAXGameRenderer):
         raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=0)
         raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=0)
 
-        # --- Render Asteroids ---
         def render_nums(i, r):
             num = state.numArr[i]
             digit = self.jr.int_to_digits(num, max_digits=1)
