@@ -671,24 +671,22 @@ class DefenderRenderer(JAXGameRenderer):
             # Render on scanner
             r = jax.lax.cond(
                 human_state != self.consts.INACTIVE,
-                lambda ras: render_on_scanner(
-                    human[0], human[1], scanner_width, scanner_height, color_id, ras
+                lambda: render_on_scanner(
+                    human[0], human[1], scanner_width, scanner_height, color_id, r
                 ),
-                lambda ras: ras,
-                r,
+                lambda: r,
             )
 
             # Render on screen and return the changed raster
             return jax.lax.cond(
                 is_active_and_onscreen,
-                lambda ras: self.jr.draw_rects(
-                    ras,
+                lambda: self.jr.draw_rects(
+                    r,
                     jnp.asarray([[screen_x, screen_y]]),
                     jnp.asarray([[self.consts.HUMAN_WIDTH, self.consts.HUMAN_HEIGHT]]),
                     color_id,
                 ),
-                lambda ras: ras,
-                r,
+                lambda: r,
             )
 
         # For each loop renders all humans on screen and scanner
@@ -830,7 +828,7 @@ class JaxDefender(
         return state
 
     def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
-        is_index = jnp.logical_and(index > 0, index < self.consts.ENEMY_MAX)
+        is_index = jnp.logical_and(index >= 0, index < self.consts.ENEMY_MAX)
         enemy_type = self._get_enemy(state, index)[2].astype(int)
         is_dead = enemy_type == self.consts.DEAD
         new_type = jax.lax.cond(
