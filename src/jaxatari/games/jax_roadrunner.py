@@ -1686,7 +1686,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 self.SHAPE_MASKS["end_of_level_1"]
             )
 
-            # 3. Convert the index-based canvas to RGB colors
             return self.jr.render_from_palette(t_canvas, self.PALETTE)
 
         # Render Seeds
