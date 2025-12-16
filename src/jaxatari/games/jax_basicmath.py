@@ -323,7 +323,21 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def step(self, state: BasicMathState, action: chex.Array, gameMode: int = 5) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
         previous_state = state
 
-        state = BasicMathState(
+        chosenGameMode = (gameMode - 1) % 4
+        act = state.step_counter % 2 == 0
+        is_fire = action == Action.FIRE
+
+        state = jax.lax.cond(
+            act, lambda s: self._change_pos(s, action), lambda s: s, operand=state
+        )
+        state = jax.lax.cond(
+            act, lambda s: self._change_value(s, action), lambda s: s, operand=state
+        )
+        state = jax.lax.cond(
+            jnp.logical_and(is_fire, act), lambda s: self._evaluate_issue(s, chosenGameMode), lambda s: s, operand=state
+        )
+
+        new_state = BasicMathState(
             state.numArr,
             state.arrPos,
             state.score,
@@ -331,16 +345,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.problemNum1,
             state.problemNum2,
             state.key,
-            state.step_counter
-        )
-
-        chosenGameMode = (gameMode - 1) % 4
-        is_fire = action == Action.FIRE
-
-        state = self._change_pos(state, action)
-        state = self._change_value(state, action)
-        state = jax.lax.cond(
-            is_fire, lambda s: self._evaluate_issue(s, chosenGameMode), lambda s: s, operand=state
+            state.step_counter + 1
         )
 
         done = self._get_done(state)
@@ -348,7 +353,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         info = self._get_info(state)
         obs = self._get_observation(state)
 
-        return obs, state, reward, done, info
+        return obs, new_state, reward, done, info
 
 class BasicMathRenderer(JAXGameRenderer):
     def __init__(self, consts: BasicMathConstants = None):
