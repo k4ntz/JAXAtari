@@ -219,12 +219,11 @@ class DefenderConstants(NamedTuple):
     INITIAL_HUMAN_STATES: chex.Array = jnp.array(
         [
             # x, y, state
-            [0, HUMAN_Y, HUMAN_STATE_IDLE],
+            [10, HUMAN_Y, HUMAN_STATE_IDLE],
             [HUMAN_X[0], HUMAN_Y, HUMAN_STATE_IDLE],
             [HUMAN_X[0] * 2, HUMAN_Y, HUMAN_STATE_IDLE],
             [HUMAN_X[0] * 3, HUMAN_Y, HUMAN_STATE_IDLE],
             [HUMAN_X[0] * 4, HUMAN_Y, HUMAN_STATE_IDLE],
-            [HUMAN_X[0] * 5, HUMAN_Y, INACTIVE],
         ]
     )
 
@@ -1453,6 +1452,7 @@ class JaxDefender(
         enemy_states = state.enemy_states
 
         human_index = enemy_states[lander_index][4].astype(int)
+        jax.debug.print("Lander {} crashed, setting human {} to falling", lander_index, human_index)
         human = state.human_states[human_index]
         human_height = human[1]
 
@@ -1480,7 +1480,7 @@ class JaxDefender(
                 ),
             ),
         )
-
+        jax.debug.print("Updated human {} state to {}", human_index, new_human_states[human_index][2])
         return state._replace(human_states=new_human_states)
 
     def _get_enemy(self, state: DefenderState, index):
@@ -1744,6 +1744,7 @@ class JaxDefender(
         human_states = state.human_states
 
         def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
+            jax.debug.print("Human {} is falling deadly={}", index, deadly)
             human = human_states[index]
             human_y = human[1]
             human_y += self.consts.HUMAN_FALLING_SPEED
@@ -1773,10 +1774,10 @@ class JaxDefender(
             return human_states
 
         def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
-
             human_states = jax.lax.switch(
                 jnp.array(human_states[index][2], int),
                 [
+                    lambda: human_states,  # Inactive
                     lambda: human_states,  # Idle
                     lambda: human_states,  # Abducted
                     lambda: _human_falling(human_states, index, False),  # Falling
