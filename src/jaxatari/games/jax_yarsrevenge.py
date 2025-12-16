@@ -139,6 +139,7 @@ class YarsRevengeConstants(NamedTuple):
     HEIGHT: int = 210
 
     INITIAL_LIVES: int = 4
+    DEVOUR_THRESHOLD: int = 5
 
     # Entity sizes (width, height), horizontal orientation
     YAR_SIZE: Tuple[int, int] = (8, 16)  # Facing to right
@@ -215,6 +216,7 @@ class YarsRevengeState(NamedTuple):
 
     yar: DirectionEntity
     yar_state: jnp.ndarray  # as YarState enum
+    yar_devour_count: jnp.ndarray
     qotile: DirectionEntity
     destroyer: Entity
 
@@ -278,6 +280,7 @@ class JaxYarsRevenge(
                 direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
             ),
             yar_state=jnp.array(YarState.STEADY).astype(jnp.int32),
+            yar_devour_count=jnp.array(0).astype(jnp.int32),
             qotile=DirectionEntity(
                 x=jnp.array(150).astype(jnp.float32),
                 y=jnp.array(self.consts.QOTILE_MIN_Y).astype(jnp.float32),
@@ -485,6 +488,45 @@ class JaxYarsRevenge(
             wrap_y=True,
         )
 
+        new_yar_entity = state.yar._replace(x=new_yar_x, y=new_yar_y)
+        yar_shield_collusion = check_energy_shield_collusion(
+            new_yar_entity, state.energy_shield, state.energy_shield_state
+        )
+        yar_hit_shield = jnp.any(yar_shield_collusion)
+
+        # Shift yar to left if it hits shield
+        new_yar_x = jnp.where(
+            yar_hit_shield, new_yar_x - self.consts.ENERGY_CELL_WIDTH, new_yar_x
+        )
+        new_yar_devour_count = jnp.where(
+            yar_hit_shield & yar_moving,
+            state.yar_devour_count + 1,
+            state.yar_devour_count,
+        )
+
+        # Devour Check
+        def energy_shield_devour():
+            rows, _ = yar_shield_collusion.shape
+            row_has_true = jnp.any(yar_shield_collusion, axis=1)
+            n_rows = jnp.sum(row_has_true)
+            k = n_rows // 2 + 1
+            cumulative_row = jnp.cumsum(row_has_true.astype(jnp.int32))
+            median_row_idx = jnp.argmax(cumulative_row >= k)
+            left_col = jnp.argmax(yar_shield_collusion[median_row_idx])
+            return state.energy_shield_state.at[median_row_idx, left_col].set(False)
+
+        new_energy_shield_state = jax.lax.cond(
+            new_yar_devour_count == self.consts.DEVOUR_THRESHOLD,
+            energy_shield_devour,
+            lambda: state.energy_shield_state,
+        )
+
+        new_yar_devour_count = jnp.where(
+            new_yar_devour_count == self.consts.DEVOUR_THRESHOLD,
+            0,
+            new_yar_devour_count,
+        )
+
         yar_neutral = check_entity_collusion(state.yar, state.neutral_zone)
 
         # Qotile Movement
@@ -550,8 +592,9 @@ class JaxYarsRevenge(
             )
             > 0
         )
+
         new_energy_shield_state = jnp.where(
-            em_exists & adj_mask, False, state.energy_shield_state
+            em_exists & adj_mask, False, new_energy_shield_state
         )
 
         new_em_exists = jnp.logical_or(
@@ -618,6 +661,7 @@ class JaxYarsRevenge(
                     direction=new_yar_direction,
                 ),
                 yar_state=new_yar_state,
+                yar_devour_count=new_yar_devour_count,
                 qotile=DirectionEntity(
                     x=state.qotile.x,
                     y=new_qotile_y,
