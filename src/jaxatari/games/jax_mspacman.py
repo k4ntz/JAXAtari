@@ -1,9 +1,11 @@
 from functools import partial
 from typing import NamedTuple, Tuple
+import os
 
 import chex
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
@@ -18,7 +20,7 @@ class EntityPosition(NamedTuple):
     height: chex.Array
 
 
-class MsPackmanObservation(NamedTuple):
+class MsPacmanObservation(NamedTuple):
     pacman: EntityPosition
     ghosts: chex.Array
     pellets: chex.Array
@@ -26,17 +28,17 @@ class MsPackmanObservation(NamedTuple):
     lives: chex.Array
 
 
-class MsPackmanInfo(NamedTuple):
+class MsPacmanInfo(NamedTuple):
     time: chex.Array
     pellets_remaining: chex.Array
     lives: chex.Array
 
 
-class MsPackmanConstants(NamedTuple):
-    screen_width: int = 190
+class MsPacmanConstants(NamedTuple):
+    screen_width: int = 200
     screen_height: int = 210
     cell_size: int = 10
-    grid_width: int = 19
+    grid_width: int = 20
     grid_height: int = 21
     num_ghosts: int = 2
     pellet_reward: int = 1
@@ -46,11 +48,17 @@ class MsPackmanConstants(NamedTuple):
     frightened_duration: int = 60
     initial_lives: int = 3
     max_steps: int = 2000
+    ghost_spawn_delay: int = 60
+    ghost_move_period: int = 6  # ghosts move every N frames
+    player_move_period: int = 3  # pacman moves every N frames
+    ghost_move_period: int = 2  # ghosts move every N frames
     background_color: Tuple[int, int, int] = (0, 0, 0)
     wall_color: Tuple[int, int, int] = (33, 33, 255)
     pellet_color: Tuple[int, int, int] = (255, 184, 151)
     power_pellet_color: Tuple[int, int, int] = (255, 255, 255)
+    button_color: Tuple[int, int, int] = (255, 105, 180)
     pacman_color: Tuple[int, int, int] = (255, 255, 0)
+    button_power_duration: int = 40
     ghost_colors: Tuple[Tuple[int, int, int], ...] = (
         (255, 0, 0),
         (255, 184, 222),
@@ -58,33 +66,34 @@ class MsPackmanConstants(NamedTuple):
         (255, 128, 0),
     )
     maze_layout: Tuple[str, ...] = (
-        "###################",
-        "#P..#.....#.....o.#",
-        "#.#.#.###.#.###.#.#",
-        "#.#.#.###.#.###.#.#",
-        "#.#.#.....#.....#.#",
-        "#.#.#####.#.#####.#",
-        "#...#.#####.#...#.#",
-        "#.#.....###.....#.#",
-        "#.###.#.....#.###.#",
-        "#.....#.###.#.....#",
-        "###.###.#.#.###..##",
-        "....#...GG..#.##...",
-        "###.###.#.#.###..##",
-        "#.....#.###.#.....#",
-        "#.###.#.....#.###.#",
-        "#.#.....###.....#.#",
-        "#.#.#####.#.#####.#",
-        "#.#.#.....#.....#.#",
-        "#.#.#.###.#.###.#.#",
-        "#o..#.....#.....o.#",
-        "###################",
+        "####################",
+        "#....#........#....#",
+        "#P##.#.######.#.##P#",
+        "#..................#",
+        "#.#.##.####.#.##.#.#",
+        "#.#..............#.#",
+        "##...#.#####.#.B.#.#",
+        "##......###..B..#.##",
+        "#####.#.....#.###.##",
+        "#.....#.###.#.....##",
+        "###.###.#.#.###..###",
+        "#.B.#..BGG..#.##.B##",
+        "###.###.#.#.###..###",
+        "#.....#.###.#.....##",
+        "#.###.#.....#.###.##",
+        "#.#.....###.....#.##",
+        "#.#.#####.#.#####.##",
+        "#.#.#.....#.....#.##",
+        "#.#.#.###.#.###.#.##",
+        "#o..#..B..#..B..o.##",
+        "####################",
     )
 
 
-class MsPackmanState(NamedTuple):
+class MsPacmanState(NamedTuple):
     pacman_x: chex.Array
     pacman_y: chex.Array
+    direction: chex.Array
     ghost_positions: chex.Array
     pellets: chex.Array
     power_timer: chex.Array
@@ -98,35 +107,48 @@ class MsPackmanState(NamedTuple):
 def _parse_layout(layout: Tuple[str, ...], expected_ghosts: int):
     wall_rows = []
     pellet_rows = []
+    button_rows = []
     pacman_spawn = None
     ghost_positions: list[Tuple[int, int]] = []
 
     for y, row in enumerate(layout):
         wall_row = []
         pellet_row = []
+        button_row = []
         for x, char in enumerate(row):
             if char == "#":
                 wall_row.append(1)
                 pellet_row.append(0)
+                button_row.append(0)
             elif char == ".":
                 wall_row.append(0)
                 pellet_row.append(1)
+                button_row.append(0)
             elif char == "o":
                 wall_row.append(0)
                 pellet_row.append(2)
+                button_row.append(0)
+            elif char == "B":
+                wall_row.append(0)
+                pellet_row.append(0)
+                button_row.append(1)
             elif char == "P":
                 pacman_spawn = (x, y)
                 wall_row.append(0)
                 pellet_row.append(0)
+                button_row.append(0)
             elif char == "G":
                 ghost_positions.append((x, y))
                 wall_row.append(0)
                 pellet_row.append(0)
+                button_row.append(0)
             else:
                 wall_row.append(0)
                 pellet_row.append(0)
+                button_row.append(0)
         wall_rows.append(wall_row)
         pellet_rows.append(pellet_row)
+        button_rows.append(button_row)
 
     if pacman_spawn is None:
         pacman_spawn = (1, 1)
@@ -146,12 +168,13 @@ def _parse_layout(layout: Tuple[str, ...], expected_ghosts: int):
         jnp.array(pacman_spawn, dtype=jnp.int32),
         jnp.array(ghost_positions, dtype=jnp.int32),
         jnp.array(pellet_count, dtype=jnp.int32),
+        jnp.array(button_rows, dtype=jnp.int32),
     )
 
 
-class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackmanInfo, MsPackmanConstants]):
-    def __init__(self, consts: MsPackmanConstants = None, reward_funcs: list[callable] = None):
-        consts = consts or MsPackmanConstants()
+class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInfo, MsPacmanConstants]):
+    def __init__(self, consts: MsPacmanConstants = None, reward_funcs: list[callable] = None):
+        consts = consts or MsPacmanConstants()
         super().__init__(consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -163,6 +186,7 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
             self.pacman_spawn,
             self.ghost_spawn_positions,
             self.initial_pellet_count,
+            self.button_grid,
         ) = _parse_layout(self.consts.maze_layout, self.consts.num_ghosts)
 
         self._action_deltas = jnp.array(
@@ -190,12 +214,18 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         )
 
         self.state = self.reset()[1]
-        self.renderer = MsPackmanRenderer(self.consts, self.wall_grid, self.initial_pellets)
+        self.renderer = MsPacmanRenderer(
+            self.consts,
+            self.wall_grid,
+            self.initial_pellets,
+            self.button_grid,
+        )
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[MsPackmanObservation, MsPackmanState]:
-        state = MsPackmanState(
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[MsPacmanObservation, MsPacmanState]:
+        state = MsPacmanState(
             pacman_x=self.pacman_spawn[0],
             pacman_y=self.pacman_spawn[1],
+            direction=jnp.array([0, 0], dtype=jnp.int32),
             ghost_positions=self.ghost_spawn_positions,
             pellets=self.initial_pellets,
             power_timer=jnp.array(0, dtype=jnp.int32),
@@ -209,17 +239,25 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: MsPackmanState, action: int) -> Tuple[MsPackmanObservation, MsPackmanState, float, bool, MsPackmanInfo]:
+    def step(self, state: MsPacmanState, action: int) -> Tuple[MsPacmanObservation, MsPacmanState, float, bool, MsPacmanInfo]:
         action = jnp.asarray(action, dtype=jnp.int32)
         action_idx = jnp.clip(action, 0, self._action_deltas.shape[0] - 1)
         delta = self._action_deltas[action_idx]
 
-        tentative_x = jnp.mod(state.pacman_x + delta[0], self.consts.grid_width)
-        tentative_y = jnp.clip(state.pacman_y + delta[1], 0, self.consts.grid_height - 1)
+        has_new_direction = jnp.any(delta != 0)
+        direction = jnp.where(has_new_direction, delta, state.direction)
+        can_move = (state.time % jnp.maximum(self.consts.player_move_period, 1)) == 0
+
+        tentative_x = jnp.mod(state.pacman_x + direction[0], self.consts.grid_width)
+        tentative_y = jnp.clip(state.pacman_y + direction[1], 0, self.consts.grid_height - 1)
 
         hit_wall = self.wall_grid[tentative_y, tentative_x] == 1
         pacman_x = jnp.where(hit_wall, state.pacman_x, tentative_x)
         pacman_y = jnp.where(hit_wall, state.pacman_y, tentative_y)
+        zero_dir = jnp.array([0, 0], dtype=jnp.int32)
+        direction = jnp.where(hit_wall, zero_dir, direction)
+        pacman_x = jnp.where(can_move, pacman_x, state.pacman_x)
+        pacman_y = jnp.where(can_move, pacman_y, state.pacman_y)
 
         pellet_value = state.pellets[pacman_y, pacman_x]
         ate_pellet = pellet_value > 0
@@ -238,14 +276,21 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
             0,
         )
 
+        decayed_timer = jnp.maximum(state.power_timer - 1, 0)
         power_timer = jnp.where(
             ate_power,
             jnp.array(self.consts.frightened_duration, dtype=jnp.int32),
-            jnp.maximum(state.power_timer - 1, 0),
+            decayed_timer,
+        )
+        on_button = self.button_grid[pacman_y, pacman_x] == 1
+        power_timer = jnp.where(
+            on_button,
+            jnp.array(self.consts.button_power_duration, dtype=jnp.int32),
+            power_timer,
         )
         frightened = power_timer > 0
 
-        ghost_positions = self._move_ghosts(state.ghost_positions, pacman_x, pacman_y, frightened)
+        ghost_positions = self._move_ghosts(state.ghost_positions, pacman_x, pacman_y, frightened, state.time)
 
         ghost_overlap = jnp.logical_and(
             ghost_positions[:, 0] == pacman_x,
@@ -271,6 +316,7 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         pacman_y = jax.lax.select(hit_without_power, self.pacman_spawn[1], pacman_y)
         ghost_positions = jax.lax.select(hit_without_power, self.ghost_spawn_positions, ghost_positions)
         power_timer = jax.lax.select(hit_without_power, jnp.array(0, dtype=jnp.int32), power_timer)
+        direction = jax.lax.select(hit_without_power, zero_dir, direction)
 
         time = state.time + 1
 
@@ -282,9 +328,10 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
             ),
         )
 
-        new_state = MsPackmanState(
+        new_state = MsPacmanState(
             pacman_x=pacman_x,
             pacman_y=pacman_y,
+            direction=direction,
             ghost_positions=ghost_positions,
             pellets=pellets,
             power_timer=power_timer,
@@ -309,7 +356,11 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         pacman_x: chex.Array,
         pacman_y: chex.Array,
         frightened: chex.Array,
+        time: chex.Array,
     ) -> chex.Array:
+        idx = jnp.arange(self.consts.num_ghosts, dtype=jnp.int32)
+        active = time >= (idx * self.consts.ghost_spawn_delay)
+        can_move = (time % jnp.maximum(self.consts.ghost_move_period, 1)) == 0
         gx = ghost_positions[:, 0]
         gy = ghost_positions[:, 1]
         dx = pacman_x - gx
@@ -340,11 +391,36 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
 
         new_x = jnp.where(stay, gx, jnp.where(use_second, cand2_x, cand1_x))
         new_y = jnp.where(stay, gy, jnp.where(use_second, cand2_y, cand1_y))
+        new_x = jnp.where(can_move, new_x, gx)
+        new_y = jnp.where(can_move, new_y, gy)
 
-        return jnp.stack([new_x, new_y], axis=1).astype(jnp.int32)
+        # Add more randomness so ghosts are less perfect: 70% chance to take a random step (including staying put).
+        key = jax.random.PRNGKey(time)
+        keys = jax.random.split(key, self.consts.num_ghosts + 1)
+        noise_mask = jax.random.bernoulli(keys[0], p=0.7, shape=(self.consts.num_ghosts,))
+        rand_keys = keys[1:]
+        rand_idx = jax.vmap(lambda k: jax.random.randint(k, (), 0, 5))(rand_keys)
+        dir_table = jnp.array([[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]], dtype=jnp.int32)
+        rand_delta = dir_table[rand_idx]
+        rand_x = jnp.mod(gx + rand_delta[:, 0], self.consts.grid_width)
+        rand_y = jnp.clip(gy + rand_delta[:, 1], 0, self.consts.grid_height - 1)
+        rand_blocked = self.wall_grid[rand_y, rand_x] == 1
+        rand_x = jnp.where(rand_blocked, gx, rand_x)
+        rand_y = jnp.where(rand_blocked, gy, rand_y)
+
+        final_x = jnp.where(noise_mask, rand_x, new_x)
+        final_y = jnp.where(noise_mask, rand_y, new_y)
+
+        # Respect spawn delays: inactive ghosts stay at their spawn positions.
+        spawn_x = self.ghost_spawn_positions[:, 0]
+        spawn_y = self.ghost_spawn_positions[:, 1]
+        final_x = jnp.where(active, final_x, spawn_x)
+        final_y = jnp.where(active, final_y, spawn_y)
+
+        return jnp.stack([final_x, final_y], axis=1).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: MsPackmanState) -> MsPackmanObservation:
+    def _get_observation(self, state: MsPacmanState) -> MsPacmanObservation:
         pacman = EntityPosition(
             x=state.pacman_x,
             y=state.pacman_y,
@@ -355,7 +431,7 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         ghost_dims = jnp.ones((self.consts.num_ghosts, 2), dtype=jnp.int32)
         ghosts = jnp.concatenate([state.ghost_positions, ghost_dims], axis=1)
 
-        return MsPackmanObservation(
+        return MsPacmanObservation(
             pacman=pacman,
             ghosts=ghosts,
             pellets=state.pellets,
@@ -364,19 +440,19 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: MsPackmanState) -> MsPackmanInfo:
-        return MsPackmanInfo(
+    def _get_info(self, state: MsPacmanState) -> MsPacmanInfo:
+        return MsPacmanInfo(
             time=state.time,
             pellets_remaining=state.pellets_remaining,
             lives=state.lives,
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: MsPackmanState, state: MsPackmanState):
+    def _get_reward(self, previous_state: MsPacmanState, state: MsPacmanState):
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: MsPackmanState) -> bool:
+    def _get_done(self, state: MsPacmanState) -> bool:
         return state.game_over
 
     def action_space(self) -> spaces.Discrete:
@@ -414,10 +490,10 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
             dtype=jnp.uint8,
         )
 
-    def render(self, state: MsPackmanState) -> jnp.ndarray:
+    def render(self, state: MsPacmanState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: MsPackmanObservation) -> jnp.ndarray:
+    def obs_to_flat_array(self, obs: MsPacmanObservation) -> jnp.ndarray:
         pacman_flat = jnp.array([obs.pacman.x, obs.pacman.y, obs.pacman.width, obs.pacman.height], dtype=jnp.int32)
         ghosts_flat = obs.ghosts.reshape(-1)
         pellets_flat = obs.pellets.reshape(-1)
@@ -425,15 +501,10 @@ class JaxMsPackman(JaxEnvironment[MsPackmanState, MsPackmanObservation, MsPackma
         return jnp.concatenate([pacman_flat, ghosts_flat, pellets_flat, extras]).astype(jnp.int32)
 
 
-class MsPackmanRenderer(JAXGameRenderer):
-    def __init__(
-        self,
-        consts: MsPackmanConstants = None,
-        wall_grid: jnp.ndarray = None,
-        pellet_template: jnp.ndarray = None,
-    ):
+class MsPacmanRenderer(JAXGameRenderer):
+    def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, button_grid: jnp.ndarray = None,):
         super().__init__()
-        self.consts = consts or MsPackmanConstants()
+        self.consts = consts or MsPacmanConstants()
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
@@ -441,6 +512,9 @@ class MsPackmanRenderer(JAXGameRenderer):
         if wall_grid is None:
             wall_grid = jnp.zeros((self.consts.grid_height, self.consts.grid_width), dtype=jnp.int32)
         self.wall_grid = jnp.asarray(wall_grid, dtype=jnp.int32)
+        if button_grid is None:
+            button_grid = jnp.zeros_like(self.wall_grid)
+        self.button_grid = jnp.asarray(button_grid, dtype=jnp.int32)
         self.offset_x = (self.consts.screen_width - self.consts.grid_width * self.consts.cell_size) // 2
         self.offset_y = (self.consts.screen_height - self.consts.grid_height * self.consts.cell_size) // 2
 
@@ -448,29 +522,86 @@ class MsPackmanRenderer(JAXGameRenderer):
         self.wall_color = jnp.asarray(self.consts.wall_color, dtype=jnp.uint8)
         self.pellet_color = jnp.asarray(self.consts.pellet_color, dtype=jnp.uint8)
         self.power_pellet_color = jnp.asarray(self.consts.power_pellet_color, dtype=jnp.uint8)
+        self.button_color = jnp.asarray(self.consts.button_color, dtype=jnp.uint8)
         self.pacman_color = jnp.asarray(self.consts.pacman_color, dtype=jnp.uint8)
         self.ghost_colors = jnp.asarray(self.consts.ghost_colors, dtype=jnp.uint8)
+        self.background_image = self._load_freeway_background()
+        self.pac_sprite = self._load_car_sprite()
+        self._base_grid_pixels = self._create_base_grid()
+        self._base_canvas = self._create_base_canvas(self._base_grid_pixels)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: MsPackmanState) -> jnp.ndarray:
+    def _load_freeway_background(self) -> jnp.ndarray | None:
+        """Load the Freeway background sprite as a quick visual test, if available."""
+        try:
+            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "background.npy")
+            bg_rgba = np.load(path)
+            return jnp.asarray(bg_rgba, dtype=jnp.uint8)
+        except Exception:
+            return None
+
+    def _load_car_sprite(self) -> jnp.ndarray | None:
+        """Load the Freeway red car sprite to use as MsPacman."""
+        try:
+            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "car_red.npy")
+            car_rgba = np.load(path)
+            return jnp.asarray(car_rgba, dtype=jnp.uint8)
+        except Exception:
+            return None
+
+    def _create_base_grid(self) -> jnp.ndarray:
+        """Pre-draw the static maze (background + walls) once."""
         cell = self.consts.cell_size
-
         base_shape = (self.consts.grid_height, self.consts.grid_width, 3)
         wall_mask = (self.wall_grid == 1)[..., None]
         background_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.background_color
         wall_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.wall_color
         grid = jnp.where(wall_mask, wall_layer, background_layer)
+        grid_pixels = jnp.repeat(grid, cell, axis=0)
+        grid_pixels = jnp.repeat(grid_pixels, cell, axis=1)
+        return grid_pixels
+
+    def _create_base_canvas(self, grid_pixels: jnp.ndarray) -> jnp.ndarray:
+        """Place the pre-drawn maze onto a background-colored canvas."""
+        canvas = jnp.ones((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8) * self.background_color
+        if self.background_image is not None:
+            bg = self.background_image
+            h = min(bg.shape[0], canvas.shape[0])
+            w = min(bg.shape[1], canvas.shape[1])
+            alpha = bg[:h, :w, 3:4].astype(jnp.uint16)
+            fg_rgb = bg[:h, :w, :3].astype(jnp.uint16)
+            bg_rgb = canvas[:h, :w, :].astype(jnp.uint16)
+            blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
+            canvas = canvas.at[:h, :w, :].set(blended.astype(jnp.uint8))
+        return canvas.at[
+            self.offset_y:self.offset_y + grid_pixels.shape[0],
+            self.offset_x:self.offset_x + grid_pixels.shape[1],
+        ].set(grid_pixels)
+
+    def _alpha_blend(self, canvas: jnp.ndarray, patch: jnp.ndarray, top: int, left: int) -> jnp.ndarray:
+        """Alpha blend an RGBA patch onto canvas at (top, left)."""
+        h, w = patch.shape[0], patch.shape[1]
+        region = jax.lax.dynamic_slice(canvas, (top, left, 0), (h, w, 3))
+        alpha = patch[:, :, 3:4].astype(jnp.uint16)
+        fg_rgb = patch[:, :, :3].astype(jnp.uint16)
+        bg_rgb = region.astype(jnp.uint16)
+        blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
+        return jax.lax.dynamic_update_slice(canvas, blended.astype(jnp.uint8), (top, left, 0))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: MsPacmanState) -> jnp.ndarray:
+        cell = self.consts.cell_size
 
         pellet_tiles = (state.pellets == 1)[..., None]
         power_tiles = (state.pellets == 2)[..., None]
+        button_tiles = (self.button_grid == 1)[..., None]
 
-        grid_pixels = jnp.repeat(grid, cell, axis=0)
-        grid_pixels = jnp.repeat(grid_pixels, cell, axis=1)
-
+        grid_pixels = self._base_grid_pixels
         pellet_pixels = jnp.repeat(pellet_tiles, cell, axis=0)
         pellet_pixels = jnp.repeat(pellet_pixels, cell, axis=1)
         power_pixels = jnp.repeat(power_tiles, cell, axis=0)
         power_pixels = jnp.repeat(power_pixels, cell, axis=1)
+        button_pixels = jnp.repeat(button_tiles, cell, axis=0)
+        button_pixels = jnp.repeat(button_pixels, cell, axis=1)
 
         row_idx = jnp.arange(grid_pixels.shape[0]) % cell
         col_idx = jnp.arange(grid_pixels.shape[1]) % cell
@@ -491,23 +622,37 @@ class MsPackmanRenderer(JAXGameRenderer):
 
         pellet_pixels = jnp.logical_and(pellet_pixels, pellet_center)
         power_pixels = jnp.logical_and(power_pixels, power_center)
+        button_center = jnp.logical_and(
+            jnp.abs(row_idx - cell // 2) < power_half,
+            jnp.logical_or(
+                jnp.abs(row_idx - cell // 4) < power_half // 2,
+                jnp.abs(col_idx - cell // 4) < power_half // 2,
+            ),
+        )[..., None]
+        button_pixels = jnp.logical_and(button_pixels, button_center)
 
         pellet_layer_px = jnp.ones_like(grid_pixels) * self.pellet_color
         power_layer_px = jnp.ones_like(grid_pixels) * self.power_pellet_color
+        button_layer_px = jnp.ones_like(grid_pixels) * self.button_color
         grid_pixels = jnp.where(pellet_pixels, pellet_layer_px, grid_pixels)
         grid_pixels = jnp.where(power_pixels, power_layer_px, grid_pixels)
+        grid_pixels = jnp.where(button_pixels, button_layer_px, grid_pixels)
 
-        canvas = jnp.ones((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8) * self.background_color
-
+        canvas = self._base_canvas
         canvas = canvas.at[
             self.offset_y:self.offset_y + grid_pixels.shape[0],
             self.offset_x:self.offset_x + grid_pixels.shape[1],
         ].set(grid_pixels)
 
-        pac_block = jnp.ones((cell, cell, 3), dtype=jnp.uint8) * self.pacman_color
         pac_px = self.offset_x + state.pacman_x * cell
         pac_py = self.offset_y + state.pacman_y * cell
-        canvas = jax.lax.dynamic_update_slice(canvas, pac_block, (pac_py, pac_px, 0))
+        if self.pac_sprite is not None:
+            sx = max((cell - self.pac_sprite.shape[1]) // 2, 0)
+            sy = max((cell - self.pac_sprite.shape[0]) // 2, 0)
+            canvas = self._alpha_blend(canvas, self.pac_sprite, pac_py + sy, pac_px + sx)
+        else:
+            pac_block = jnp.ones((cell, cell, 3), dtype=jnp.uint8) * self.pacman_color
+            canvas = jax.lax.dynamic_update_slice(canvas, pac_block, (pac_py, pac_px, 0))
 
         color_indices = jnp.mod(jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), self.ghost_colors.shape[0])
         ghost_palette = self.ghost_colors[color_indices]
@@ -555,7 +700,7 @@ import time
 import pygame
 import jax
 import jax.random as jr
-from jaxatari.games.jax_mspackman import JaxMsPackman
+from jaxatari.games.jax_mspacman import JaxMsPacman
 from jaxatari.environment import JAXAtariAction as Action
 
 UPSCALE = 4
@@ -563,7 +708,7 @@ FPS = 8
 
 def main():
     pygame.init()
-    env = JaxMsPackman()
+    env = JaxMsPacman()
     render = jax.jit(env.render)
     step = jax.jit(env.step)
 
