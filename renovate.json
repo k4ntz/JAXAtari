@@ -1,0 +1,12 @@
+{
+  "baseBranches": ["test_renovate"],
+  "dependencyDashboard": true,
+  "dependencyDashboardApproval": true,
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch", "major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
+
