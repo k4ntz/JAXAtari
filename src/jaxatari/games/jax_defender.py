@@ -200,11 +200,12 @@ class DefenderConstants(NamedTuple):
     HUMAN_STATE_FALLING: int = 3
     HUMAN_STATE_FALLING_DEADLY: int = 4
     HUMAN_STATE_CATCHED: int = 5
+    HUMAN_STATE_RELEASED: int = 6
     HUMAN_AMOUNT: Tuple[int, int, int, int, int] = (5, 5, 6, 6, 6)
     HUMAN_MAX: int = 6
     HUMAN_WIDTH: int = 3
     HUMAN_HEIGHT: int = 3
-    HUMAN_FALLING_SPEED: float = 1
+    HUMAN_FALLING_SPEED: float = 0.5
     HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
     GROUND_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
     HUMAN_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
@@ -863,6 +864,13 @@ class JaxDefender(
                 lambda: self.consts.DEAD_RED,
             ],
         )
+        
+
+        state = jax.lax.cond(
+            jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
+            lambda: self._set_human_from_lander_falling(state, index),
+            lambda: state,
+        )
 
         state = jax.lax.cond(
             is_index,
@@ -873,12 +881,6 @@ class JaxDefender(
                 arg1=color,
                 arg2=self._get_enemy(state, index)[4],
             ),
-            lambda: state,
-        )
-
-        state = jax.lax.cond(
-            jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
-            lambda: self._set_human_from_lander_falling(state, index),
             lambda: state,
         )
 
@@ -1463,10 +1465,8 @@ class JaxDefender(
         human_height = human[1]
 
         new_human_states = jax.lax.cond(
-            jnp.logical_and(
-                enemy_states[lander_index][2] != self.consts.LANDER,
-                enemy_states[lander_index][3] != self.consts.LANDER_STATE_ASCEND,
-            ),
+            enemy_states[lander_index][2] != self.consts.LANDER,
+
             lambda: state.human_states,  # Only Ascending landers can update humans
             lambda: jax.lax.cond(
                 human_height > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
@@ -1750,7 +1750,6 @@ class JaxDefender(
         human_states = state.human_states
 
         def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
-            jax.debug.print("Human {} is falling deadly={}", index, deadly)
             human = human_states[index]
             human_y = human[1]
             human_y += self.consts.HUMAN_FALLING_SPEED
@@ -1778,6 +1777,21 @@ class JaxDefender(
             )
 
             return human_states
+        
+        def _human_catched(human_states: chex.Array, index: int) -> chex.Array:
+            human = human_states[index]
+
+            # Move human with spaceship
+
+            # Update human position
+
+            human_states = jax.lax.cond(
+                human[1] >= self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT - self.consts.HUMAN_HEIGHT,
+                lambda: human_states.at[index].set([human[0], human[1], self.consts.HUMAN_STATE_RELEASED]),
+                lambda: human_states.at[index].set([state.space_ship_x + 5, state.space_ship_y + 4, human[2]]),
+            )
+
+            return human_states
 
         def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
             human_states = jax.lax.switch(
@@ -1788,7 +1802,8 @@ class JaxDefender(
                     lambda: human_states,  # Abducted
                     lambda: _human_falling(human_states, index, False),  # Falling
                     lambda: _human_falling(human_states, index, True),  # Falling Deadly
-                    lambda: human_states,  # Catched
+                    lambda: _human_catched(human_states, index),  # Catched
+                    lambda: _human_falling(human_states, index, False),  # Released
                 ],
             )
 
@@ -1883,6 +1898,50 @@ class JaxDefender(
         state = jax.lax.cond(is_colliding, lambda: state, lambda: state)
 
         return state
+    
+    def _space_ship_catching_human(self, state: DefenderState) -> DefenderState:
+        def check_human_collision(index, state: DefenderState) -> DefenderState:
+            human = state.human_states[index]
+            h_x = human[0]
+            h_y = human[1]
+            is_colliding = self._is_colliding(
+                h_x,
+                h_y,
+                self.consts.HUMAN_WIDTH,
+                self.consts.HUMAN_HEIGHT,
+                state.space_ship_x,
+                state.space_ship_y,
+                self.consts.SPACE_SHIP_WIDTH,
+                self.consts.SPACE_SHIP_HEIGHT,
+            )
+
+            def catch_human(state: DefenderState, index: int) -> DefenderState:
+                human = state.human_states[index]
+                human_x = human[0]
+                human_y = human[1]
+                new_human = [
+                    human_x,
+                    human_y,
+                    self.consts.HUMAN_STATE_CATCHED,
+                ]
+                new_human_states = state.human_states.at[index].set(new_human)
+                return state._replace(human_states=new_human_states)
+
+            state = jax.lax.cond(
+                is_colliding, lambda: catch_human(state, index), lambda: state
+            )
+            return state
+
+        def check_for_falling(index, state):
+            human = state.human_states[index]
+            is_falling = jnp.logical_or(human[2] == self.consts.HUMAN_STATE_FALLING, human[2] == self.consts.HUMAN_STATE_FALLING_DEADLY)
+            state = jax.lax.cond(
+                is_falling, lambda: check_human_collision(index, state), lambda: state
+            )
+            return state
+
+        state = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, check_for_falling, state)
+        return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
         def collision(index, state: DefenderState) -> DefenderState:
@@ -1947,6 +2006,8 @@ class JaxDefender(
         state = self._check_space_ship_collision(state)
         # check laser and enemies
         state = self._check_enemy_collisions(state)
+        # check space ship and humans
+        state = self._space_ship_catching_human(state)
         return state
 
     @partial(jax.jit, static_argnums=(0,))
