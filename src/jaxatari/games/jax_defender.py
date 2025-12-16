@@ -659,7 +659,7 @@ class DefenderRenderer(JAXGameRenderer):
 
             # Render on screen
             r = jax.lax.cond(
-                screen_y > (self.consts.GAME_AREA_TOP - 3),
+                screen_y > (self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT),
                 lambda: self.jr.render_at(
                     r, screen_x, screen_y, mask, flip_horizontal=facing_right
                 ),
