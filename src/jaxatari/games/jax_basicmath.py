@@ -380,6 +380,10 @@ class BasicMathRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
+        sprite_color = jnp.array([*self.consts.COLOR_CODES[0][1]], dtype=jnp.uint8)
+
+        self.PALETTE = self.PALETTE.at[:5].set(sprite_color)
+
     def _stack_num_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""
         # The first 16 are rotation, the next 3 are death animations
