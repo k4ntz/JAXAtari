@@ -724,8 +724,6 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = render_city(raster)
 
-        raster = self.jr.render_at(raster, 0, 0, self.BACKGROUND)
-
         def render_human(index: int, r):
             human = state.human_states[index]
             screen_x, screen_y = self.dh._onscreen_pos(state, human[0], human[1])
@@ -859,12 +857,14 @@ class JaxDefender(
             ],
         )
 
-
-
         state = jax.lax.cond(
             is_index,
             lambda: self._update_enemy(
-                state, index, enemy_type=new_type, arg1=color, arg2=self._get_enemy(state, index)[4]
+                state,
+                index,
+                enemy_type=new_type,
+                arg1=color,
+                arg2=self._get_enemy(state, index)[4],
             ),
             lambda: state,
         )
@@ -1455,8 +1455,10 @@ class JaxDefender(
         human_height = human[1]
 
         new_human_states = jax.lax.cond(
-            jnp.logical_and(enemy_states[lander_index][2] != self.consts.LANDER, 
-                           enemy_states[lander_index][3] != self.consts.LANDER_STATE_ASCEND),
+            jnp.logical_and(
+                enemy_states[lander_index][2] != self.consts.LANDER,
+                enemy_states[lander_index][3] != self.consts.LANDER_STATE_ASCEND,
+            ),
             lambda: state.human_states,  # Only Ascending landers can update humans
             lambda: jax.lax.cond(
                 human_height > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
@@ -1473,8 +1475,8 @@ class JaxDefender(
                         human[1],
                         self.consts.HUMAN_STATE_FALLING_DEADLY,
                     ]
-                )
-            )
+                ),
+            ),
         )
 
         return state._replace(human_states=new_human_states)
@@ -1748,21 +1750,22 @@ class JaxDefender(
                 human_y >= self.consts.GROUND_Y,
                 lambda: jax.lax.cond(
                     not deadly,
-                    lambda: human_states.at[index].set([
-                        human[0],
-                        self.consts.GROUND_Y,
-                        self.consts.HUMAN_STATE_IDLE,
-                    ]),
-                    lambda: human_states.at[index].set([
-                        human[0],
-                        self.consts.GROUND_Y,
-                        self.consts.INACTIVE,
-                    ]
-                    )
+                    lambda: human_states.at[index].set(
+                        [
+                            human[0],
+                            self.consts.GROUND_Y,
+                            self.consts.HUMAN_STATE_IDLE,
+                        ]
+                    ),
+                    lambda: human_states.at[index].set(
+                        [
+                            human[0],
+                            self.consts.GROUND_Y,
+                            self.consts.INACTIVE,
+                        ]
+                    ),
                 ),
-                lambda: human_states.at[index].set(
-                    [human[0], human_y, human[2]]
-                ),
+                lambda: human_states.at[index].set([human[0], human_y, human[2]]),
             )
 
             return human_states
