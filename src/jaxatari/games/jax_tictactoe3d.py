@@ -49,44 +49,48 @@ class TicTacToe3DConstants(NamedTuple):
         (10, 18),
         (20, 36),
         (30, 54),
-    )
+        )
     
     ASSET_CONFIG: tuple = _get_default_asset_config()
         
         
         
 class TicTacToe3DState(NamedTuple):
-    board: jnp.ndarray          # (4, 4, 4) shape, values 0/1/2
-    current_player: int         # 1 for X, 2 for O
-    game_over: bool
-    winner: int                 # 0=no winner, 1=X wins, 2=O wins
-    move_count: int
+    board: jnp.ndarray          # (4, 4, 4), uint8 or int32
+    current_player: jnp.ndarray # scalar int32
+    game_over: jnp.ndarray      # scalar bool_
+    winner: jnp.ndarray         # scalar int32
+    move_count: jnp.ndarray     # scalar int32
 
     
     
 
 class JaxTicTacToe3D(JaxEnvironment):
-    def __init__(self):
-        self.consts = TicTacToe3DConstants()
-        self.renderer = TicTacToe3DRenderer(self.consts)
-        super().__init__()
+    def __init__(self,consts: TicTacToe3DConstants=None):
+        consts= consts or TicTacToe3DConstants()
+        super().__init__(consts)
+        self.renderer= TicTacToe3DRenderer(self.consts)
+        
+        
+
+    def step(self, state: TicTacToe3DState, action: jnp.ndarray):
+     # Decode action -> (x, y, z)
+     pass
+    
+
     
     def reset(self):
-        """Reset game to initial state."""
-        board = jnp.zeros((4, 4, 4), dtype=jnp.int32)
+        """Reset game state to initial state"""
         return TicTacToe3DState(
-            board=board,
-            current_player=1,  # X starts
-            game_over=False,
-            winner=0,
-            move_count=0,
-        )
+        board=jnp.zeros((4, 4, 4), dtype=jnp.uint8),
+        current_player=jnp.int32(self.consts.FIRST_PLAYER),
+        game_over=jnp.bool_(False),
+        winner=jnp.int32(0),
+        move_count=jnp.int32(0),
+    )
+
     
-    def step(self, state, action):
-        """Execute one game action."""
-        # action should encode (x, y, z) position
-        # Returns: next_state, reward, done, info
-        pass
+    
     
     def render(self, state):
         """Render current game state."""
@@ -114,8 +118,11 @@ class TicTacToe3DRenderer(JAXGameRenderer):
     def __init__(self, consts : TicTacToe3DConstants= None):
         super().__init__(consts)
         self.consts = consts or TicTacToe3DConstants()
-        h, w, _ = self.BACKGROUND.shape
-        self.config = render_utils.RendererConfig(game_dimensions=(h, w),channels=3)
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=3,
+            #downscale=(84, 84)
+        )
         self.jr = render_utils.JaxRenderingUtils(self.config) 
         final_asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path =f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
@@ -126,10 +133,6 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config,sprite_path)
-        h, w, _ = self.BACKGROUND.shape
-        self.config = render_utils.RendererConfig(game_dimensions=(h, w), channels=3)
-        self.jr = render_utils.JaxRenderingUtils(self.config)
-        
         self.ORIGIN_X = self.consts.ORIGIN_X
         self.ORIGIN_Y = self.consts.ORIGIN_Y
 
@@ -139,25 +142,19 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
         # Layer offsets to create the "stacked 3D" illusion (z=0..3)
         # (dx, dy) per layer
-        self.LAYER_OFFSETS = jnp.array(
-            [
-                [0, 0],
-                [10, 18],
-                [20, 36],
-                [30, 54],
-            ],
-            dtype=jnp.int32,
-        )
+        self.LAYER_OFFSETS = jnp.array(consts.LAYER_OFFSETS, dtype=jnp.int32)
+
+        
     def cell_to_pixel(self, x: jnp.ndarray, y: jnp.ndarray, z: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
-        Convert board coordinates (x,y,z) in [0..3] to screen pixel (px,py).
+        Convert board coordinates x,y,z) in [0..3] to screen pixel (px,py).
         
         """
         consts= self.consts
         
-        dx, dy = consts.LAYER_OFFSETS[z]
-        px = consts.ORIGIN_X + x * consts.CELL_W + dx
-        py = consts.ORIGIN_Y + y * consts.CELL_H + dy
+        dx, dy = self.LAYER_OFFSETS[z]
+        px = jnp.int32(consts.ORIGIN_X) + x * jnp.int32(consts.CELL_W) + dx
+        py = jnp.int32(consts.ORIGIN_Y) + y * jnp.int32(consts.CELL_H) + dy
         return px, py    
 
     @partial(jax.jit, static_argnums=(0,))
@@ -172,9 +169,9 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         o_mask = self.SHAPE_MASKS["o"]
         board = state.board  # (4,4,4)
 
-        def render_one_cell(r, idx):
+        def render_one_cell(idx, r):
             # board size is always 4x4x4
-            # idx in [0..63]
+            # idx in [0..63] since 64 cells in a board
             z = idx // 16
             rem = idx - z * 16
             y = rem // 4
@@ -193,9 +190,9 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             # v == 0 -> nothing, v == 1 -> X, v == 2 -> O
             r = jax.lax.cond(v == self.consts.PLAYER_X, draw_x, lambda rr: rr, r)
             r = jax.lax.cond(v == self.consts.PLAYER_O, draw_o, lambda rr: rr, r)
-            return r, None
+            return r
 
-        raster, _ = jax.lax.scan(render_one_cell, raster, jnp.arange(64, dtype=jnp.int32))
+        raster = jax.lax.fori_loop(0, 64, render_one_cell , raster)
 
         # Convert palette raster to final RGB image
         return self.jr.render_from_palette(raster, self.PALETTE)
