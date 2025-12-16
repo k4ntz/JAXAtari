@@ -7,6 +7,8 @@ Inherits from JaxEnvironment base class
 """
 
 from typing import NamedTuple, Tuple
+import os
+from functools import partial
 import jax
 import jax.numpy as jnp
 import chex
@@ -14,7 +16,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from typing import Optional
+
 
 def _get_default_asset_config() -> tuple:
     """
@@ -53,11 +55,57 @@ class TicTacToe3DConstants(NamedTuple):
         
         
 class TicTacToe3DState(NamedTuple):
-    
-    
+    board: jnp.ndarray          # (4, 4, 4) shape, values 0/1/2
+    current_player: int         # 1 for X, 2 for O
+    game_over: bool
+    winner: int                 # 0=no winner, 1=X wins, 2=O wins
+    move_count: int
 
+    
+    
 
 class JaxTicTacToe3D(JaxEnvironment):
+    def __init__(self):
+        self.consts = TicTacToe3DConstants()
+        self.renderer = TicTacToe3DRenderer(self.consts)
+        super().__init__()
+    
+    def reset(self):
+        """Reset game to initial state."""
+        board = jnp.zeros((4, 4, 4), dtype=jnp.int32)
+        return TicTacToe3DState(
+            board=board,
+            current_player=1,  # X starts
+            game_over=False,
+            winner=0,
+            move_count=0,
+        )
+    
+    def step(self, state, action):
+        """Execute one game action."""
+        # action should encode (x, y, z) position
+        # Returns: next_state, reward, done, info
+        pass
+    
+    def render(self, state):
+        """Render current game state."""
+        return self.renderer.render(state)
+    
+    def _check_winner(self, board):
+        """Check if there's a winner on the 3D board."""
+        # Check all lines (rows, columns, diagonals, verticals across layers)
+        pass
+    @property
+    def observation_space(self):
+        """Board state: (4,4,4) with values 0/1/2."""
+        return spaces.Box(0, 2, shape=(4, 4, 4), dtype=jnp.uint8)
+
+    @property
+    def action_space(self):
+        """64 possible moves (4×4×4 cells)."""
+        return spaces.Discrete(64)
+
+
     
     
 
