@@ -1457,6 +1457,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
             {"name": "truck", "type": "procedural", "data": truck_sprite},
             {"name": "life", "type": "procedural", "data": life_sprite},
+            {"name": "end_of_level_1", "type": "single", "file": "end_of_level_1.npy"},
         ]
 
         return asset_config
@@ -1675,6 +1676,19 @@ class RoadRunnerRenderer(JAXGameRenderer):
             canvas,
         )
 
+        def _render_transition(_):
+            t_canvas = self.jr.create_object_raster(self.BACKGROUND)
+
+            t_canvas = self.jr.render_at(
+                t_canvas,
+                0,
+                0,
+                self.SHAPE_MASKS["end_of_level_1"]
+            )
+
+            # 3. Convert the index-based canvas to RGB colors
+            return self.jr.render_from_palette(t_canvas, self.PALETTE)
+
         # Render Seeds
         canvas = self._render_seeds(canvas, state.seeds)
 
@@ -1697,10 +1711,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Use black for the margins
         final_frame = jnp.where(margin_mask, final_frame, jnp.zeros_like(final_frame))
 
-        transition_frame = jnp.zeros_like(final_frame)
         return jax.lax.cond(
             state.is_in_transition,
-            lambda _: transition_frame,
+            _render_transition,
             lambda _: final_frame,
             operand=None,
         )
