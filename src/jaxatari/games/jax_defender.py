@@ -657,10 +657,16 @@ class DefenderRenderer(JAXGameRenderer):
                 game_x, game_y, scanner_width, scanner_height, color_id, r
             )
 
-            # Render on screen and return
-            return self.jr.render_at(
-                r, screen_x, screen_y, mask, flip_horizontal=facing_right
+            # Render on screen
+            r = jax.lax.cond(
+                screen_y > (self.consts.GAME_AREA_TOP - 3),
+                lambda: self.jr.render_at(
+                    r, screen_x, screen_y, mask, flip_horizontal=facing_right
+                ),
+                lambda: r,
             )
+
+            return r
 
         raster = render_space_ship(raster)
 
