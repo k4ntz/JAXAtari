@@ -198,10 +198,14 @@ class DefenderConstants(NamedTuple):
     HUMAN_STATE_IDLE: int = 1
     HUMAN_STATE_ABDUCTED: int = 2
     HUMAN_STATE_FALLING: int = 3
+    HUMAN_STATE_FALLING_DEADLY: int = 4
+    HUMAN_STATE_CATCHED: int = 5
     HUMAN_AMOUNT: Tuple[int, int, int, int, int] = (5, 5, 6, 6, 6)
     HUMAN_MAX: int = 6
     HUMAN_WIDTH: int = 3
     HUMAN_HEIGHT: int = 3
+    HUMAN_FALLING_SPEED: float = 1.5
+    GROUND_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
     HUMAN_Y: int = GAME_HEIGHT - HUMAN_HEIGHT
     HUMAN_X: Tuple[float, float, float, float, float] = (
         GAME_WIDTH / HUMAN_AMOUNT[0],
@@ -821,7 +825,7 @@ class JaxDefender(
         mask = jnp.array(state.enemy_states[:, 2] == self.consts.INACTIVE)
         match = mask.argmax()
         # If no open slot availabe, dismiss new enemy
-        open_slot_available = jnp.logical_or(match != 0, mask[0] == True)
+        open_slot_available = jnp.logical_or(match != 0, mask[0])
         state = jax.lax.cond(
             open_slot_available,
             lambda: self._update_enemy(
@@ -1563,6 +1567,7 @@ class JaxDefender(
         b_dir_x = state.bullet_dir_x
         b_dir_y = state.bullet_dir_y
 
+
         is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
 
         def _ttl_death():
@@ -1676,6 +1681,67 @@ class JaxDefender(
         )
 
         return state._replace(enemy_states=enemy_states, human_states=human_states)
+    
+
+    def _human_step(self, state: DefenderState) -> DefenderState:
+        human_states = state.human_states
+        
+        def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
+            human = human_states[index]
+            human_y = human[1]
+            human_y += self.consts.HUMAN_FALLING_SPEED
+            if human_y >= self.consts.GROUND_Y:
+                if not deadly:
+                    human_y = self.consts.GROUND_Y
+                    new_human = [
+                        human[0],
+                        human_y,
+                        self.consts.HUMAN_STATE_IDLE,
+                    ]
+                    human_states = human_states.at[index].set(new_human)
+                else:
+                    new_human = [
+                        human[0],
+                        human_y,
+                        self.consts.INACTIVE,
+                    ]
+                    human_states = human_states.at[index].set(new_human)
+                return human_states
+            
+            new_human = [
+                human[0],
+                human_y,
+                self.consts.HUMAN_STATE_FALLING_DEADLY if deadly else self.consts.HUMAN_STATE_FALLING,
+            ]
+            human_states = human_states.at[index].set(new_human)
+
+            return human_states
+        
+
+
+        def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
+            
+            human_states = jax.lax.switch(
+                jnp.array(human_states[index][2], int),
+                [
+                    lambda _: human_states,  # Idle
+                    lambda _: human_states,  # Abducted
+                    lambda _: _human_falling(human_states, index, False),  # Falling
+                    lambda _: _human_falling(human_states, index, True),  # Falling Deadly
+                    lambda _: human_states,  # Catched
+                ],
+            )
+
+        human_states = jax.lax.fori_loop(
+            0,
+            self.consts.HUMAN_MAX,
+            lambda index, hs: _human_move_switch(
+                index, hs, state, self.consts
+            ),
+            human_states,
+        )
+
+        return state._replace(human_states=human_states)
 
     def _camera_step(self, state: DefenderState) -> DefenderState:
         # Returns: camera_offset
@@ -1759,7 +1825,7 @@ class JaxDefender(
         return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
-        def collision(index, state):
+        def collision(index, state: DefenderState) -> DefenderState:
             e = state.enemy_states[index]
             e_x = e[0]
             e_y = e[1]
