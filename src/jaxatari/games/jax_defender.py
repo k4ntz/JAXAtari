@@ -150,6 +150,10 @@ class DefenderConstants(NamedTuple):
     LASER_STATE_INACTIVE: int = 0
     LASER_STATE_ACTIVE: int = 1
 
+    # SMART BOMB
+    SMART_BOMB_MAX_AMOUNT: int = 3
+    SMART_BOMB_INIT_AMOUNT: int = 3
+
     # Initial Wave State
     # Positions are in game world positions
     INITIAL_SPACE_SHIP_X: int = INITIAL_CAMERA_GAME_X - INITIAL_CAMERA_OFFSET
@@ -248,6 +252,7 @@ class DefenderState(NamedTuple):
     space_ship_x: chex.Array
     space_ship_y: chex.Array
     space_ship_facing_right: chex.Array
+    space_ship_lives: chex.Array
     # Bullet
     bullet_state: chex.Array
     bullet_x: chex.Array
@@ -259,6 +264,8 @@ class DefenderState(NamedTuple):
     laser_x: chex.Array
     laser_y: chex.Array
     laser_dir_x: chex.Array
+    # Smart bomb
+    smart_bomb_amount: chex.Array
     # Enemies
     enemy_states: chex.Array
     # Human
@@ -522,31 +529,6 @@ class DefenderRenderer(JAXGameRenderer):
     def render(self, state: DefenderState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Render City
-        # Get the next city starting position to the left
-        city_game_x = jnp.multiply(
-            jnp.floor_divide(
-                state.space_ship_x + state.camera_offset, self.consts.CITY_WIDTH
-            ),
-            self.consts.CITY_WIDTH,
-        )
-
-        city_game_y = self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT
-        city_screen_x, city_screen_y = self.dh._onscreen_pos(
-            state, city_game_x, city_game_y
-        )
-
-        city_mask = self.SHAPE_MASKS["city"]
-        raster = self.jr.render_at_clipped(
-            raster, city_screen_x, city_screen_y, city_mask
-        )
-        raster = self.jr.render_at_clipped(
-            raster, city_screen_x + self.consts.CITY_WIDTH, city_screen_y, city_mask
-        )
-        raster = self.jr.render_at_clipped(
-            raster, city_screen_x - self.consts.CITY_WIDTH, city_screen_y, city_mask
-        )
-
         # TODO Render Score
 
         def render_on_scanner(game_x, game_y, width, height, color_id, r):
@@ -753,6 +735,32 @@ class DefenderRenderer(JAXGameRenderer):
             lambda: raster,
         )
 
+        def render_city(r):
+            # Get the next city starting position to the left
+            city_game_x = jnp.multiply(
+                jnp.floor_divide(
+                    state.space_ship_x + state.camera_offset, self.consts.CITY_WIDTH
+                ),
+                self.consts.CITY_WIDTH,
+            )
+
+            city_game_y = self.consts.GAME_HEIGHT - self.consts.CITY_HEIGHT
+            city_screen_x, city_screen_y = self.dh._onscreen_pos(
+                state, city_game_x, city_game_y
+            )
+
+            city_mask = self.SHAPE_MASKS["city"]
+            r = self.jr.render_at_clipped(r, city_screen_x, city_screen_y, city_mask)
+            r = self.jr.render_at_clipped(
+                r, city_screen_x + self.consts.CITY_WIDTH, city_screen_y, city_mask
+            )
+            r = self.jr.render_at_clipped(
+                r, city_screen_x - self.consts.CITY_WIDTH, city_screen_y, city_mask
+            )
+            return r
+
+        raster = render_city(raster)
+
         # Render bullet
         def render_bullet(r):
             game_x = state.bullet_x
@@ -906,6 +914,18 @@ class JaxDefender(
         new_game_x, new_game_y = self.wrap_pos(new_game_x, new_game_y)
         return new_game_x, new_game_y
 
+    def _shoot_smart_bomb(self, state: DefenderState) -> DefenderState:
+        # Get all enemies on screen and delete them
+        enemy_indices, max_indice = self._enemies_on_screen(state)
+
+        def delete_enemy(index, state: DefenderState) -> DefenderState:
+            return self._delete_enemy(state, enemy_indices[index])
+
+        state = jax.lax.fori_loop(0, max_indice, delete_enemy, state)
+        smart_bomb_amount = state.smart_bomb_amount - 1
+        state = state._replace(smart_bomb_amount=smart_bomb_amount)
+        return state
+
     def _shoot_laser(self, state: DefenderState) -> DefenderState:
         # When spawning, speed gets added instantly, so frame 0 should still be at the right position
         laser_x_adjust = self.consts.LASER_SPEED - 5
@@ -1024,10 +1044,6 @@ class JaxDefender(
             )
         )
 
-        shoot = jnp.logical_and(
-            shoot, state.laser_state == self.consts.LASER_STATE_INACTIVE
-        )
-
         direction_x = jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
         direction_y = jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
 
@@ -1075,8 +1091,32 @@ class JaxDefender(
             space_ship_facing_right=space_ship_facing_right,
         )
 
-        state = jax.lax.cond(shoot, lambda: self._shoot_laser(state), lambda: state)
+        shoot_laser = jnp.logical_and(
+            shoot, state.laser_state == self.consts.LASER_STATE_INACTIVE
+        )
 
+        shoot_smart_bomb = jnp.logical_and(
+            shoot,
+            space_ship_y
+            > (
+                self.consts.GAME_HEIGHT
+                - self.consts.CITY_HEIGHT
+                - self.consts.SPACE_SHIP_HEIGHT
+            ),
+        )
+
+        shoot_laser = jnp.logical_xor(shoot_laser, shoot_smart_bomb)
+
+        shoot_smart_bomb = jnp.logical_and(
+            shoot_smart_bomb, state.smart_bomb_amount > 0
+        )
+
+        state = jax.lax.cond(
+            shoot_laser, lambda: self._shoot_laser(state), lambda: state
+        )
+        state = jax.lax.cond(
+            shoot_smart_bomb, lambda: self._shoot_smart_bomb(state), lambda: state
+        )
         return state
 
     def _lander_movement(
@@ -1777,11 +1817,16 @@ class JaxDefender(
             space_ship_facing_right=jnp.array(
                 self.consts.INITIAL_SPACE_SHIP_FACING_RIGHT, dtype=jnp.bool
             ),
+            space_ship_lives=jnp.array(self.consts.SPACE_SHIP_LIVES).astype(jnp.int32),
             # Laser
             laser_state=jnp.array(0).astype(jnp.int32),
             laser_x=jnp.array(0).astype(jnp.float32),
             laser_y=jnp.array(0).astype(jnp.float32),
             laser_dir_x=jnp.array(0).astype(jnp.float32),
+            # Smart Bomb
+            smart_bomb_amount=jnp.array(self.consts.SMART_BOMB_INIT_AMOUNT).astype(
+                jnp.int32
+            ),
             # Bullet
             bullet_state=jnp.array(0).astype(jnp.int32),
             bullet_x=jnp.array(0).astype(jnp.float32),
