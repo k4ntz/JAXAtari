@@ -638,43 +638,6 @@ class DefenderRenderer(JAXGameRenderer):
             )
         ]
 
-        def render_human(index: int, r):
-            human = state.human_states[index]
-            screen_x, screen_y = self.dh._onscreen_pos(state, human[0], human[1])
-            human_state = human[2]
-            onscreen = self.dh._is_onscreen_from_screen(screen_x, screen_y, 5, 5)
-            is_active_and_onscreen = jnp.logical_and(
-                human_state != self.consts.INACTIVE, onscreen
-            )
-
-            color_id = current_particle_color_id
-            scanner_width = self.consts.HUMAN_SCANNER_WIDTH
-            scanner_height = self.consts.HUMAN_SCANNER_HEIGHT
-
-            # Render on scanner
-            r = jax.lax.cond(
-                human_state != self.consts.INACTIVE,
-                lambda: render_on_scanner(
-                    human[0], human[1], scanner_width, scanner_height, color_id, r
-                ),
-                lambda: r,
-            )
-
-            # Render on screen and return the changed raster
-            return jax.lax.cond(
-                is_active_and_onscreen,
-                lambda: self.jr.draw_rects(
-                    r,
-                    jnp.asarray([[screen_x, screen_y]]),
-                    jnp.asarray([[self.consts.HUMAN_WIDTH, self.consts.HUMAN_HEIGHT]]),
-                    color_id,
-                ),
-                lambda: r,
-            )
-
-        # For each loop renders all humans on screen and scanner
-        raster = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, render_human, raster)
-
         def render_space_ship(r):
             mask = self.SHAPE_MASKS["space_ship"]
             game_x = state.space_ship_x
@@ -760,6 +723,45 @@ class DefenderRenderer(JAXGameRenderer):
             return r
 
         raster = render_city(raster)
+
+        raster = self.jr.render_at(raster, 0, 0, self.BACKGROUND)
+
+        def render_human(index: int, r):
+            human = state.human_states[index]
+            screen_x, screen_y = self.dh._onscreen_pos(state, human[0], human[1])
+            human_state = human[2]
+            onscreen = self.dh._is_onscreen_from_screen(screen_x, screen_y, 5, 5)
+            is_active_and_onscreen = jnp.logical_and(
+                human_state != self.consts.INACTIVE, onscreen
+            )
+
+            color_id = current_particle_color_id
+            scanner_width = self.consts.HUMAN_SCANNER_WIDTH
+            scanner_height = self.consts.HUMAN_SCANNER_HEIGHT
+
+            # Render on scanner
+            r = jax.lax.cond(
+                human_state != self.consts.INACTIVE,
+                lambda: render_on_scanner(
+                    human[0], human[1], scanner_width, scanner_height, color_id, r
+                ),
+                lambda: r,
+            )
+
+            # Render on screen and return the changed raster
+            return jax.lax.cond(
+                is_active_and_onscreen,
+                lambda: self.jr.draw_rects(
+                    r,
+                    jnp.asarray([[screen_x, screen_y]]),
+                    jnp.asarray([[self.consts.HUMAN_WIDTH, self.consts.HUMAN_HEIGHT]]),
+                    color_id,
+                ),
+                lambda: r,
+            )
+
+        # For each loop renders all humans on screen and scanner
+        raster = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, render_human, raster)
 
         # Render bullet
         def render_bullet(r):
@@ -909,7 +911,15 @@ class JaxDefender(
         new_game_y = game_y + y_speed
         # Wrap only around x, y not needed
         new_game_x, _ = self.wrap_pos(new_game_x, 0)
-        return new_game_x, new_game_y
+        return new_game_x, new_game_y.astype(float)
+
+    def _move_and_clip(
+        self, game_x, game_y, x_speed, y_speed, height
+    ) -> Tuple[float, float]:
+        new_game_x, new_game_y = self._move(game_x, game_y, x_speed, y_speed)
+        new_game_y = jnp.clip(new_game_y, 0 - height, self.consts.GAME_HEIGHT - height)
+
+        return new_game_x, new_game_y.astype(float)
 
     def _move_and_wrap(
         self, game_x: float, game_y: float, x_speed: float, y_speed: float
@@ -1071,7 +1081,7 @@ class JaxDefender(
             self.consts.SPACE_SHIP_MAX_SPEED,
         )
 
-        space_ship_stopping_deadzone = 0.0001
+        space_ship_stopping_deadzone = 0.001
 
         space_ship_speed = jnp.where(
             jnp.abs(space_ship_speed) <= space_ship_stopping_deadzone,
@@ -1084,8 +1094,8 @@ class JaxDefender(
 
         x_speed = space_ship_speed
         y_speed = direction_y
-        space_ship_x, space_ship_y = self._move(
-            space_ship_x, space_ship_y, x_speed, y_speed
+        space_ship_x, space_ship_y = self._move_and_clip(
+            space_ship_x, space_ship_y, x_speed, y_speed, self.consts.SPACE_SHIP_HEIGHT
         )
 
         state = state._replace(
@@ -1612,7 +1622,6 @@ class JaxDefender(
         b_dir_x = state.bullet_dir_x
         b_dir_y = state.bullet_dir_y
 
-
         is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
 
         def _ttl_death():
@@ -1726,11 +1735,10 @@ class JaxDefender(
         )
 
         return state._replace(enemy_states=enemy_states, human_states=human_states)
-    
 
     def _human_step(self, state: DefenderState) -> DefenderState:
         human_states = state.human_states
-        
+
         def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
             human = human_states[index]
             human_y = human[1]
@@ -1749,21 +1757,25 @@ class JaxDefender(
                         human[0],
                         self.consts.GROUND_Y,
                         self.consts.INACTIVE,
-                    ])
+                    ]
+                    human_states = human_states.at[index].set(new_human)
+                return human_states
+
+            new_human = [
+                human[0],
+                human_y,
+                (
+                    self.consts.HUMAN_STATE_FALLING_DEADLY
+                    if deadly
+                    else self.consts.HUMAN_STATE_FALLING
                 ),
-                lambda: human_states.at[index].set([
-                    human[0],
-                    human_y,
-                    human[2],
-                    ])
-            )
+            ]
+            human_states = human_states.at[index].set(new_human)
 
             return human_states
-        
-
 
         def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
-            
+
             human_states = jax.lax.switch(
                 jnp.array(human_states[index][2], int),
                 [
