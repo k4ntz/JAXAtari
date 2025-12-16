@@ -23,8 +23,8 @@ def _get_default_asset_config() -> tuple:
     Default asset configuration for TicTacToe3D. """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'X', 'type': 'single', 'file': 'X.npy'},
-        {'name': 'O', 'type': 'single', 'file': 'O.npy'},
+        {'name': 'x', 'type': 'single', 'file': 'X.npy'},
+        {'name': 'o', 'type': 'single', 'file': 'O.npy'},
     )
     
 class TicTacToe3DConstants(NamedTuple):
@@ -170,6 +170,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         board = state.board  # (4,4,4)
 
         def render_one_cell(r, idx):
+            # board size is always 4x4x4
             # idx in [0..63]
             z = idx // 16
             rem = idx - z * 16
@@ -186,7 +187,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             def draw_o(rr):
                 return self.jr.render_at(rr, px, py, o_mask)
 
-            # v == 0 -> no-op, v == 1 -> X, v == 2 -> O
+            # v == 0 -> nothing, v == 1 -> X, v == 2 -> O
             r = jax.lax.cond(v == 1, draw_x, lambda rr: rr, r)
             r = jax.lax.cond(v == 2, draw_o, lambda rr: rr, r)
             return r, None
