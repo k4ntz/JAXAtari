@@ -553,7 +553,7 @@ class JaxJourneyEscape(
 
         # Check game over
         game_over = jnp.where(
-            new_time >= 255 * 32,  # 2 minute time limit
+            new_countdown <= 0,
             jnp.array(True),
             state.game_over,
         )
@@ -578,6 +578,13 @@ class JaxJourneyEscape(
         env_reward = self._get_reward(state, new_state)
         obs = self._get_observation(new_state)
         info = self._get_info(new_state)
+
+        
+        def after_timer_end(_):
+            obs2, st2 = self.reset()
+            return obs2, st2, jnp.array(0, dtype=jnp.int32), jnp.array(False, dtype=jnp.bool_), JourneyEscapeInfo(time=jnp.array(0, dtype=jnp.int32))
+
+        obs, _, env_reward, done, info = jax.lax.cond(state.game_over, after_timer_end, lambda _: (obs, state, env_reward, done, info), state)
 
         return obs, new_state, env_reward, done, info
 
