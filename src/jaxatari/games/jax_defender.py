@@ -467,7 +467,7 @@ class DefenderRenderer(JAXGameRenderer):
     def _get_asset_config(self) -> list:
         # Returns the declarative manifest of all assets for the game, including both wall sprites
         return [
-            {"name": "background", "type": "background", "file": "ui_overlay.npy"},
+            {"name": "background", "type": "background", "file": "background.npy"},
             {"name": "space_ship", "type": "single", "file": "space_ship.npy"},
             {"name": "baiter", "type": "single", "file": "baiter.npy"},
             {"name": "bomber", "type": "single", "file": "bomber.npy"},
@@ -723,6 +723,8 @@ class DefenderRenderer(JAXGameRenderer):
             return r
 
         raster = render_city(raster)
+
+        raster = self.jr.render_at(raster, 0, 0, self.SHAPE_MASKS["ui_overlay"])
 
         def render_human(index: int, r):
             human = state.human_states[index]
