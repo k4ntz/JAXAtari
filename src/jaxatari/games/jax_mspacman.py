@@ -74,9 +74,9 @@ class GhostMode(IntEnum):
 RESET_LEVEL = 1 # the starting level, loaded when reset is called
 RESET_TIMER = 40  # Timer for resetting the game after death
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-# MAX_LIVE_COUNT = 8
+MAX_LIVE_COUNT = 8
 PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-PELLETS_TO_COLLECT = 4
+# PELLETS_TO_COLLECT = 4
 INITIAL_LIVES = 2 # Number of starting bonus lives
 BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
@@ -164,7 +164,6 @@ class PlayerState(NamedTuple):
     action: chex.Array              # Enum - 0: NOOP, 1: FURE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
     has_pellet: chex.Array          # Bool - Indicates if pacman just collected a pellet
     eaten_ghosts: chex.Array        # Int - Indicates the number of ghosts eaten since the last power pellet
-    death_timer: chex.Array         # Int - Timer for death animation, decrements every step
 
 class FruitState(NamedTuple):
     position: chex.Array            # Tuple - (x, y)
@@ -181,6 +180,7 @@ class PacmanState(NamedTuple):
     lives: chex.Array               # Int - Number of lives left
     score: chex.Array               # Int - Total score reached
     score_changed: chex.Array       # Bool[] - Indicates which score digit changed since the last step
+    freeze_timer: chex.Array        # Int - Time until game is unfrozen, decrements every step
     step_count: chex.Array          # Int - Number of steps made in the current level
 
 class PacmanObservation(NamedTuple):
@@ -250,11 +250,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         ( # 1) If in death animation, decrement timer and freeze everything
             new_state,
-            freeze,
+            frozen,
             done
         ) = self.death_step(state)
-        if freeze:
-            return self.get_observation(new_state), new_state, 0.0, done, self.get_info(new_state)
         
         ( # 2) Pacman handling
             player_position,
@@ -290,42 +288,49 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         score_changed = self.flag_score_change(state.score, new_score)
 
         # 6) Update state
-        if level_id != state.level.id:
-            new_state = reset_game(level_id, state.lives, new_score)
-        else:
-            new_state = PacmanState(
-                level = LevelState(
-                    id=level_id,
-                    collected_pellets=collected_pellets,
-                    dofmaze=state.level.dofmaze,
-                    pellets=pellets,
-                    power_pellets=power_pellets,
-                    loaded=jnp.array(True, dtype=jnp.bool_)
-                ),
-                player = PlayerState(
-                    position=player_position,
-                    action=player_action,
-                    has_pellet=has_pellet,
-                    eaten_ghosts=eaten_ghosts,
-                    death_timer=new_death_timer
-                ),
-                ghosts = GhostsState(
-                    positions=ghost_positions,
-                    types=state.ghosts.types,
-                    actions=ghost_actions,
-                    modes=ghost_modes,
-                    timers=ghost_timers,
-                    keys=state.ghosts.keys
-                ),
-                fruit = fruit_state,
-                lives=new_lives,
-                score=new_score,
-                score_changed=score_changed,
-                step_count=state.step_count + 1
+        new_state = jax.lax.cond(
+            frozen,
+            lambda: new_state,
+            lambda: jax.lax.cond(
+                level_id != state.level.id,
+                lambda: reset_game(level_id, state.lives, new_score),
+                lambda: PacmanState(
+                    level = LevelState(
+                        id=level_id,
+                        collected_pellets=collected_pellets,
+                        dofmaze=state.level.dofmaze,
+                        pellets=pellets,
+                        power_pellets=power_pellets,
+                        loaded=jnp.array(True, dtype=jnp.bool_)
+                    ),
+                    player = PlayerState(
+                        position=player_position,
+                        action=player_action,
+                        has_pellet=has_pellet,
+                        eaten_ghosts=eaten_ghosts
+                    ),
+                    ghosts = GhostsState(
+                        positions=ghost_positions,
+                        types=state.ghosts.types,
+                        actions=ghost_actions,
+                        modes=ghost_modes,
+                        timers=ghost_timers,
+                        keys=state.ghosts.keys
+                    ),
+                    fruit = fruit_state,
+                    lives=new_lives,
+                    score=new_score,
+                    score_changed=score_changed,
+                    freeze_timer=new_death_timer,
+                    step_count=state.step_count + 1
+                )
             )
+        )
 
+        # 7) Get observation, info and reward
         observation = self.get_observation(new_state)
         info = self.get_info(new_state)
+        reward = jax.lax.cond(frozen, lambda: (0.0), lambda: (reward))
         return observation, new_state, reward, done, info
     
     @staticmethod
@@ -359,19 +364,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the game state when a deadly collision occured.
         """
-        freeze = False
-        done = jnp.array(False, dtype=jnp.bool_)
-        if state.player.death_timer > 0:
-            freeze = True
-            new_death_timer = state.player.death_timer - 1
-            if new_death_timer == 0: # Reset entities when death animation is over
-                state = reset_entities(state)
-                if state.lives < 0: # Flag game over if no lives remain
-                    done = jnp.array(True, dtype=jnp.bool_)
-            else: # Freeze game when still in death animation
-                updated_player = state.player._replace(death_timer=new_death_timer)
-                state = state._replace(player=updated_player)
-        return state, freeze, done
+        def decrement_timer(state: PacmanState):
+            return state._replace(freeze_timer=state.freeze_timer - 1)
+
+        return jax.lax.cond(
+            state.freeze_timer == 0,
+            lambda: (state, False, False), # Alive
+            lambda: jax.lax.cond(
+                state.freeze_timer > 1,
+                lambda: (decrement_timer(state), True, False), # Frozen
+                lambda: jax.lax.cond(
+                    state.lives < 0,
+                    lambda: (decrement_timer(state), True, True), # Game Over,
+                    lambda: (reset_entities(decrement_timer(state)), True, False) # Level Reset
+                )
+            )
+        )
 
     @staticmethod
     def player_step(state: PacmanState, action: chex.Array):
@@ -730,7 +738,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
 
         # Remove one life if a life is lost
-        if state.player.death_timer == RESET_TIMER-1:
+        if state.freeze_timer == RESET_TIMER-1:
             self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, state.lives, self.sprites["pacman"][1][1])
         return raster
     
@@ -1079,8 +1087,7 @@ def reset_player():
         position            = INITIAL_PACMAN_POSITION,
         action              = INITIAL_ACTION,
         has_pellet          = jnp.array(False),
-        eaten_ghosts        = jnp.array(0).astype(jnp.uint8), # number of eaten ghost since power pellet consumed
-        death_timer         = jnp.array(0).astype(jnp.uint8)
+        eaten_ghosts        = jnp.array(0).astype(jnp.uint8) # number of eaten ghost since power pellet consumed
     )
 
 def reset_ghosts():
@@ -1114,6 +1121,7 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
         lives           = jnp.array(lives, dtype=jnp.int8),
         score           = jnp.array(score, dtype=jnp.uint32),
         score_changed   = jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)),
+        freeze_timer    = jnp.array(0, dtype=jnp.uint32),
         step_count      = jnp.array(0, dtype=jnp.uint32),
     )
 
@@ -1133,5 +1141,6 @@ def reset_entities(state: PacmanState):
         lives           = state.lives,
         score           = state.score,
         score_changed   = state.score_changed,
+        freeze_timer    = state.freeze_timer,
         step_count      = state.step_count,
     )
