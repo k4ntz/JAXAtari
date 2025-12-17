@@ -19,14 +19,8 @@ def _get_default_asset_config():
         # Player sprite
         {"name": "player", "type": "single", "file": "player.npy"},
 
-        # Enemy sprites (animated)
-        {"name": "enemy", "type": "group", "files": ["enemy_1.npy", "enemy_2.npy"]},
-
-        # Items
-        {"name": "items", "type": "group", "files": ["heart.npy", "trap.npy", "treasure.npy"]},
-
-        # Digits for UI
-        {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
+        # Digits for UI - commented out, using hardcoded digit patterns instead
+        # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
     )
 
 
@@ -87,11 +81,12 @@ ITEM_WIDTH = 6
 ITEM_HEIGHT = 6
 
 # Bullet configuration
-MAX_BULLETS = 5
+# Player bullet configuration
+MAX_BULLETS = 64             # Drastically higher simultaneous bullets
 BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
-BULLET_SPEED = 2  # Base speed (slow)
-BULLET_SPEED_WITH_GUN = 4  # Speed with gun powerup
+BULLET_SPEED = 3             # Slightly faster than player speed (2)
+BULLET_SPEED_WITH_GUN = 6    # Much faster when gun is active
 
 # Wizard projectile configuration
 ENEMY_MAX_BULLETS = 8
@@ -153,7 +148,7 @@ class DarkChambersConstants(NamedTuple):
     SHIELD_COLOR: Tuple[int, int, int] = (80, 120, 255) # Blue shield
     GUN_COLOR: Tuple[int, int, int] = (40, 40, 40) # Black gun
     BOMB_COLOR: Tuple[int, int, int] = (240, 240, 240) # White bomb
-    KEY_COLOR: Tuple[int, int, int] = (255, 200, 0) # Gold key
+    KEY_COLOR: Tuple[int, int, int] = (0, 255, 255) # Cyan key (easy to distinguish from gold)
     LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish exit door
     LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
@@ -259,38 +254,128 @@ class DarkChambersRenderer(JAXGameRenderer):
     """Handles rendering."""
     
     def __init__(self, consts: DarkChambersConstants = None):
-        config = render_utils.RendererConfig(
+        super().__init__(consts)
+        self.consts = consts or DarkChambersConstants()
+        self.config = render_utils.RendererConfig(
             game_dimensions=(GAME_H, GAME_W),
             channels=3
         )
-        super().__init__(consts=consts, config=config)
-        self.consts = consts or DarkChambersConstants()
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        # Color palette
-        self.PALETTE = jnp.array([
-            self.consts.BACKGROUND_COLOR,  # 0
-            self.consts.PLAYER_COLOR,       # 1
-            self.consts.ZOMBIE_COLOR,       # 2
-            self.consts.WRAITH_COLOR,       # 3
-            self.consts.SKELETON_COLOR,     # 4
-            self.consts.WIZARD_COLOR,       # 5
-            self.consts.GRIM_REAPER_COLOR,  # 6
-            self.consts.WALL_COLOR,         # 7
-            self.consts.HEART_COLOR,        # 8
-            self.consts.POISON_COLOR,       # 9
-            self.consts.UI_COLOR,           # 10
-            self.consts.BULLET_COLOR,       # 11
-            self.consts.TREASURE_COLOR,     # 12 (treasures)
-            self.consts.TRAP_COLOR,         # 13 (trap)
-            self.consts.SPAWNER_COLOR,      # 14 (spawner)
-            self.consts.SHIELD_COLOR,       # 15 (shield)
-            self.consts.GUN_COLOR,          # 16 (gun)
-            self.consts.BOMB_COLOR,         # 17 (bomb)
-            self.consts.KEY_COLOR,          # 18 (key)
-            self.consts.LADDER_UP_COLOR,    # 19 (exit/door up)
-            self.consts.LADDER_DOWN_COLOR,  # 20 (ladder down)
-        ], dtype=jnp.uint8)
+        # Load sprites using the asset system
+        final_asset_config = list(_get_default_asset_config())
+        
+        # Create procedural sprites for colors not in the main sprites (enemies, items, UI, etc.)
+        def create_color_sprite(color):
+            """Create a 1x1 pixel sprite for a color to ensure it's in the palette."""
+            rgba = (*color, 255)
+            return jnp.array([[rgba]], dtype=jnp.uint8)
+        
+        # Add all game colors as procedural sprites to ensure they're in the palette
+        color_sprites = {
+            'zombie_color': create_color_sprite(self.consts.ZOMBIE_COLOR),
+            'wraith_color': create_color_sprite(self.consts.WRAITH_COLOR),
+            'skeleton_color': create_color_sprite(self.consts.SKELETON_COLOR),
+            'wizard_color': create_color_sprite(self.consts.WIZARD_COLOR),
+            'grim_reaper_color': create_color_sprite(self.consts.GRIM_REAPER_COLOR),
+            'wall_color': create_color_sprite(self.consts.WALL_COLOR),
+            'heart_color': create_color_sprite(self.consts.HEART_COLOR),
+            'poison_color': create_color_sprite(self.consts.POISON_COLOR),
+            'trap_color': create_color_sprite(self.consts.TRAP_COLOR),
+            'treasure_color': create_color_sprite(self.consts.TREASURE_COLOR),
+            'spawner_color': create_color_sprite(self.consts.SPAWNER_COLOR),
+            'shield_color': create_color_sprite(self.consts.SHIELD_COLOR),
+            'gun_color': create_color_sprite(self.consts.GUN_COLOR),
+            'bomb_color': create_color_sprite(self.consts.BOMB_COLOR),
+            'key_color': create_color_sprite(self.consts.KEY_COLOR),
+            'ladder_up_color': create_color_sprite(self.consts.LADDER_UP_COLOR),
+            'ladder_down_color': create_color_sprite(self.consts.LADDER_DOWN_COLOR),
+            'ui_color': create_color_sprite(self.consts.UI_COLOR),
+            'bullet_color': create_color_sprite(self.consts.BULLET_COLOR),
+        }
+        
+        # Append procedural color sprites to asset config
+        for name, sprite_data in color_sprites.items():
+            final_asset_config.append({'name': name, 'type': 'procedural', 'data': sprite_data})
+        
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/darkchambers"
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # Helper to scale palette-index masks to a target size (centered pad/crop)
+        def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
+            if mask is None:
+                return None
+            if mask.ndim == 2:
+                h, w = int(mask.shape[0]), int(mask.shape[1])
+                sx = max(1, target_w // w)
+                sy = max(1, target_h // h)
+                scaled = jnp.repeat(jnp.repeat(mask, sy, axis=0), sx, axis=1)
+                sh, sw = int(scaled.shape[0]), int(scaled.shape[1])
+                pad_h = max(0, target_h - sh)
+                pad_w = max(0, target_w - sw)
+                pad_top = pad_h // 2
+                pad_bottom = pad_h - pad_top
+                pad_left = pad_w // 2
+                pad_right = pad_w - pad_left
+                scaled_padded = jnp.pad(scaled, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=0)
+                final_h = int(scaled_padded.shape[0])
+                final_w = int(scaled_padded.shape[1])
+                ct = max(0, (final_h - target_h) // 2)
+                cl = max(0, (final_w - target_w) // 2)
+                cb = ct + target_h
+                cr = cl + target_w
+                return scaled_padded[ct:cb, cl:cr]
+            elif mask.ndim == 3:
+                # Assume (N, H, W) stack
+                N = int(mask.shape[0])
+                def _scale_one(m):
+                    return _scale_mask(m, target_h, target_w)
+                return jax.vmap(_scale_one, in_axes=0, out_axes=0)(mask)
+            else:
+                return mask
+
+        # Ensure player sprite visually matches gameplay size by upscaling if needed
+        player_mask = self.SHAPE_MASKS.get("player")
+        if player_mask is not None:
+            target_w = int(self.consts.PLAYER_WIDTH)
+            target_h = int(self.consts.PLAYER_HEIGHT)
+            self.PLAYER_SCALED_MASK = _scale_mask(player_mask, target_h, target_w)
+        else:
+            # Fallback: use original player mask without scaling
+            self.PLAYER_SCALED_MASK = self.SHAPE_MASKS.get("player")
+
+        # No enemy/item sprite scaling; enemies/items stay as colored boxes
+        self.ENEMY_SCALED_MASKS = None
+        self.HEART_MASK_6 = None
+        self.POISON_MASK_6 = None
+        self.TREASURE_MASKS = {}
+
+        # Create color ID mapping for easy access
+        self.WALL_ID = self.COLOR_TO_ID[self.consts.WALL_COLOR]
+        self.HEART_ID = self.COLOR_TO_ID[self.consts.HEART_COLOR]
+        self.POISON_ID = self.COLOR_TO_ID[self.consts.POISON_COLOR]
+        self.TRAP_ID = self.COLOR_TO_ID[self.consts.TRAP_COLOR]
+        self.TREASURE_ID = self.COLOR_TO_ID[self.consts.TREASURE_COLOR]
+        self.SPAWNER_ID = self.COLOR_TO_ID[self.consts.SPAWNER_COLOR]
+        self.SHIELD_ID = self.COLOR_TO_ID[self.consts.SHIELD_COLOR]
+        self.GUN_ID = self.COLOR_TO_ID[self.consts.GUN_COLOR]
+        self.BOMB_ID = self.COLOR_TO_ID[self.consts.BOMB_COLOR]
+        self.KEY_ID = self.COLOR_TO_ID[self.consts.KEY_COLOR]
+        self.LADDER_UP_ID = self.COLOR_TO_ID[self.consts.LADDER_UP_COLOR]
+        self.LADDER_DOWN_ID = self.COLOR_TO_ID[self.consts.LADDER_DOWN_COLOR]
+        self.UI_ID = self.COLOR_TO_ID[self.consts.UI_COLOR]
+        self.BULLET_ID = self.COLOR_TO_ID[self.consts.BULLET_COLOR]
+        self.ZOMBIE_ID = self.COLOR_TO_ID[self.consts.ZOMBIE_COLOR]
+        self.WRAITH_ID = self.COLOR_TO_ID[self.consts.WRAITH_COLOR]
+        self.SKELETON_ID = self.COLOR_TO_ID[self.consts.SKELETON_COLOR]
+        self.WIZARD_ID = self.COLOR_TO_ID[self.consts.WIZARD_COLOR]
+        self.GRIM_REAPER_ID = self.COLOR_TO_ID[self.consts.GRIM_REAPER_COLOR]
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
         # 1 = pixel on, 0 = off
@@ -483,16 +568,27 @@ class DarkChambersRenderer(JAXGameRenderer):
             19,  # LADDER_UP (brown exit door)
             20,  # LADDER_DOWN (dark brown ladder)
         ], dtype=jnp.int32)
-        # Python constants (avoid tracing int() on JAX 0-D arrays inside jit)
-        self.ITEM_TYPE_COLOR_IDS_PY = [8, 9, 13, 12, 12, 12, 12, 15, 16, 17, 18, 19, 20]
+        # Python constants for item type color IDs (indexed by item_type - 1)
+        self.ITEM_TYPE_COLOR_IDS_PY = [
+            self.HEART_ID,         # 1: ITEM_HEART
+            self.POISON_ID,        # 2: ITEM_POISON
+            self.TRAP_ID,          # 3: ITEM_TRAP
+            self.TREASURE_ID,      # 4: ITEM_STRONGBOX
+            self.TREASURE_ID,      # 5: ITEM_SILVER_CHALICE
+            self.TREASURE_ID,      # 6: ITEM_AMULET
+            self.TREASURE_ID,      # 7: ITEM_GOLD_CHALICE
+            self.SHIELD_ID,        # 8: ITEM_SHIELD
+            self.GUN_ID,           # 9: ITEM_GUN
+            self.BOMB_ID,          # 10: ITEM_BOMB
+            self.KEY_ID,           # 11: ITEM_KEY
+            self.LADDER_UP_ID,     # 12: ITEM_LADDER_UP
+            self.LADDER_DOWN_ID,   # 13: ITEM_LADDER_DOWN
+        ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
         """Render current game state."""
-        object_raster = jnp.full(
-            (self.config.game_dimensions[0], self.config.game_dimensions[1]), 
-            0,
-            dtype=jnp.uint8
-        )
+        # Start with background sprite
+        object_raster = self.jr.create_object_raster(self.BACKGROUND)
         
         # Camera follows player
         cam_x = jnp.clip(
@@ -514,7 +610,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster, 
             positions=wall_positions, 
             sizes=wall_sizes, 
-            color_id=7
+            color_id=self.WALL_ID
         )
 
         # Level indicator: "LEVEL X" under health bar (top-left)
@@ -565,7 +661,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=letter_positions,
             sizes=letter_sizes,
-            color_id=10  # UI color
+            color_id=self.UI_ID
         )
 
         # Render level number (1-based)
@@ -593,22 +689,15 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=digit_positions,
             sizes=digit_sizes,
-            color_id=10
+            color_id=self.UI_ID
         )
         
-        # Player
+        # Player (use scaled sprite if available)
         player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
         player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
-        player_pos = jnp.array([[player_screen_x, player_screen_y]], dtype=jnp.int32)
-        player_size = jnp.array([[self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT]], dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster, 
-            positions=player_pos, 
-            sizes=player_size, 
-            color_id=1
-        )
+        object_raster = self.jr.render_at(object_raster, player_screen_x, player_screen_y, self.PLAYER_SCALED_MASK)
         
-        # Enemies (render by type with different colors, mask out dead ones)
+        # Enemies (colored rectangles)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
         enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         num_enemies = enemy_screen_pos.shape[0]
@@ -623,9 +712,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             enemy_screen_pos,
             _off
         )
-        
         # Draw each enemy type separately with its color
-        for enemy_type in range(1, 6):  # 1=zombie to 5=grim_reaper
+        for enemy_type, color_id in [(1, self.ZOMBIE_ID), (2, self.WRAITH_ID), (3, self.SKELETON_ID), (4, self.WIZARD_ID), (5, self.GRIM_REAPER_ID)]:
             type_mask = (state.enemy_types == enemy_type) & enemy_active_mask
             type_positions = jnp.where(
                 type_mask[:, None],
@@ -636,7 +724,7 @@ class DarkChambersRenderer(JAXGameRenderer):
                 object_raster,
                 positions=type_positions,
                 sizes=enemy_sizes,
-                color_id=enemy_type + 1  # +1 because palette starts at 0, zombie=2, wraith=3, etc.
+                color_id=color_id
             )
         
         # Items - mask inactive ones by moving off-screen
@@ -651,7 +739,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             off_screen
         )
         
-        # Draw items by type using size and color mappings
+        # Draw items by type using size and color mappings (rectangles)
         def draw_item_type(raster, t, positions_world):
             mask = (state.item_types == t) & (state.item_active == 1)
             pos = jnp.where(mask[:, None], positions_world, off_screen)
@@ -684,7 +772,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=masked_spawner_pos,
             sizes=spawner_sizes,
-            color_id=14
+            color_id=self.SPAWNER_ID
         )
         
         # Health bar (5 boxes proportional to max health=31) top-left
@@ -706,7 +794,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=bar_positions,
             sizes=bar_sizes,
-            color_id=8
+            color_id=self.HEART_ID
         )
         # Health digits below bar (supports up to 1000)
         digit_width = 3
@@ -746,7 +834,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=digit_positions,
             sizes=pixel_sizes,
-            color_id=8
+            color_id=self.HEART_ID
         )
         
         # Lives count below health digits
@@ -778,56 +866,41 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=lives_digit_positions,
             sizes=lives_digit_sizes,
-            color_id=8  # Same color as health
+            color_id=self.HEART_ID
         )
         
-        # Score display moved to top-right (bar) and numeric score below
-        max_score_units = 10  # Reduced to fit on right side
-        score_units = jnp.clip(state.score // 10, 0, max_score_units).astype(jnp.int32)
-        score_spacing = ITEM_WIDTH + 2
-        score_indices = jnp.arange(max_score_units)
-        total_score_width = max_score_units * score_spacing
-        score_start_x = self.config.game_dimensions[1] - total_score_width - 4
-        score_x = score_start_x + score_indices * score_spacing
-        score_y = jnp.full(max_score_units, 4, dtype=jnp.int32)
-        score_visible = score_indices < score_units
-        score_pos_x = jnp.where(score_visible, score_x, -100)
-        score_positions = jnp.stack([score_pos_x, score_y], axis=1).astype(jnp.int32)
-        score_sizes = jnp.tile(
-            jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
-            (max_score_units, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=score_positions,
-            sizes=score_sizes,
-            color_id=10
-        )
-        # Numeric score digits (0-9999) below score bar
-        score_val = jnp.clip(state.score, 0, 9999).astype(jnp.int32)
+        # Numeric score display (7 digits: 0-9999999, no bar)
+        score_val = jnp.clip(state.score, 0, 9999999).astype(jnp.int32)
         digit_width = 3
         digit_height = 5
         spacing = 1
-        thousands = score_val // 1000
+        millions = score_val // 1000000
+        hundred_thousands = (score_val // 100000) % 10
+        ten_thousands = (score_val // 10000) % 10
+        thousands = (score_val // 1000) % 10
         hundreds = (score_val // 100) % 10
         tens = (score_val // 10) % 10
         ones = score_val % 10
-        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
+        digits = jnp.array([millions, hundred_thousands, ten_thousands, thousands, hundreds, tens, ones], dtype=jnp.int32)
         active_mask = jnp.array([
-            thousands > 0,
-            (thousands > 0) | (hundreds > 0),
-            (thousands > 0) | (hundreds > 0) | (tens > 0),
-            True
+            millions > 0,
+            (millions > 0) | (hundred_thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True  # ones always shown
         ])
         position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        score_start_x = self.config.game_dimensions[1] - 7 * (digit_width + spacing) - 4  # right-aligned
         base_x = jnp.where(active_mask, score_start_x + position_index * (digit_width + spacing), -100)
         patterns = self.DIGIT_PATTERNS[digits]
         xs = jnp.arange(digit_width)
         ys = jnp.arange(digit_height)
-        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
-        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
+        grid_x = xs[None, None, :].repeat(7, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(7, axis=0).repeat(digit_width, axis=2)
         px = base_x[:, None, None] + grid_x
-        py = (4 + ITEM_HEIGHT + 2) + grid_y  # below score bar
+        py = 4 + grid_y  # top-right, no bar above
         pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
         px = jnp.where(pixel_active, px, -100)
         py = jnp.where(pixel_active, py, -100)
@@ -839,7 +912,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=score_digit_positions,
             sizes=score_digit_sizes,
-            color_id=10
+            color_id=self.UI_ID
         )
         
         # Step counter display (center top)
@@ -881,7 +954,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=step_digit_positions,
             sizes=step_digit_sizes,
-            color_id=10
+            color_id=self.UI_ID
         )
         
         # Bullets
@@ -901,7 +974,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=masked_bullet_pos,
             sizes=bullet_sizes,
-            color_id=11
+            color_id=self.BULLET_ID
         )
         # Enemy bullets
         ebullet_world_pos = state.enemy_bullet_positions[:, :2].astype(jnp.int32)
@@ -916,7 +989,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=masked_ebullet_pos,
             sizes=ebullet_sizes,
-            color_id=10
+            color_id=self.UI_ID
         )
         
         # Shield indicator in bottom-left corner
@@ -933,7 +1006,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=shield_pos,
             sizes=shield_size,
-            color_id=15
+            color_id=self.SHIELD_ID
         )
         
         # Gun indicator next to shield (bottom-left corner)
@@ -950,7 +1023,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=gun_pos,
             sizes=gun_size,
-            color_id=16
+            color_id=self.GUN_ID
         )
         
         # Bomb indicator next to gun (bottom-left corner)
@@ -1005,7 +1078,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster,
             positions=bomb_digit_positions,
             sizes=bomb_digit_sizes,
-            color_id=17
+            color_id=self.BOMB_ID
         )
         
         # Convert to RGB
@@ -1232,7 +1305,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Combine: first 3 positions are key, exit, ladder_down, rest are randomly spawned
         item_positions = item_positions_temp.at[0:3].set(jnp.array([key_pos, exit_pos, ladder_down_pos]))
         
-        # Weighted distribution of item types (more traps)
+        # Weighted distribution of item types (more keys and traps)
         # Reserve first 3 slots for key, exit, ladder_down, rest are regular items
         key, subkey = jax.random.split(key)
         all_item_types = jnp.array([
@@ -1246,19 +1319,21 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_SHIELD,         # damage reduction
             ITEM_GUN,            # faster shooting
             ITEM_BOMB,           # kill all enemies
+            ITEM_KEY,            # key for unlock (extra spawns beyond guaranteed one)
         ], dtype=jnp.int32)
-        # Probabilities sum to 1.0
+        # Probabilities sum to 1.0 (increased key spawn probability)
         spawn_probs = jnp.array([
-            0.18,  # heart
-            0.08,  # poison
-            0.16,  # trap
-            0.11,  # strongbox
-            0.10,  # silver chalice
-            0.08,  # amulet
-            0.08,  # gold chalice
-            0.09,  # shield
-            0.07,  # gun
-            0.05,  # bomb
+            0.12,  # heart
+            0.06,  # poison
+            0.14,  # trap
+            0.08,  # strongbox
+            0.08,  # silver chalice
+            0.06,  # amulet
+            0.06,  # gold chalice
+            0.07,  # shield
+            0.06,  # gun
+            0.04,  # bomb
+            0.17,  # key (high spawn rate to find more keys)
         ], dtype=jnp.float32)
         # Spawn regular items (leave first 3 for key, exit, ladder_down)
         regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
@@ -2284,6 +2359,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         final_x = jnp.where(should_respawn, respawn_x, transition_x)
         final_y = jnp.where(should_respawn, respawn_y, transition_y)
         final_health_with_respawn = jnp.where(should_respawn, self.consts.STARTING_HEALTH, final_health)
+
+        # On respawn: reset score to 0 and re-activate picked items (except ladders)
+        is_ladder_mask = (transition_item_types == ITEM_LADDER_UP) | (transition_item_types == ITEM_LADDER_DOWN)
+        item_active_after_death = jnp.where(
+            should_respawn,
+            jnp.where(is_ladder_mask, transition_item_active, jnp.ones_like(transition_item_active)),
+            transition_item_active,
+        )
+        # Clear carried item effects on respawn
+        shield_after_death = jnp.where(should_respawn, 0, new_shield_active)
+        gun_after_death = jnp.where(should_respawn, 0, new_gun_active)
+        bomb_count_after_death = jnp.where(should_respawn, 0, bomb_count_after_detonation)
+        has_key_after_death = jnp.where(should_respawn, 0, jnp.where(level_changed, 0, new_has_key))
+        final_score_after_death = jnp.where(should_respawn, 0, final_score)
         
         new_state = DarkChambersState(
             player_x=final_x,
@@ -2301,14 +2390,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_bullet_positions=final_enemy_bullet_positions,
             enemy_bullet_active=final_enemy_bullet_active,
             health=final_health_with_respawn,
-            score=final_score,
+            score=final_score_after_death,
             item_positions=transition_item_positions,
             item_types=transition_item_types,
-            item_active=transition_item_active,
-            has_key=jnp.where(level_changed, 0, new_has_key),  # Reset key on level change
-            shield_active=new_shield_active,
-            gun_active=new_gun_active,
-            bomb_count=bomb_count_after_detonation,
+            item_active=item_active_after_death,
+            has_key=has_key_after_death,  # Reset key on respawn or level change
+            shield_active=shield_after_death,
+            gun_active=gun_after_death,
+            bomb_count=bomb_count_after_death,
             last_fire_step=new_last_fire_step,
             current_level=new_level,
             ladder_timer=new_ladder_timer,
