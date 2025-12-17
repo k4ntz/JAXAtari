@@ -494,10 +494,15 @@ class JaxYarsRevenge(
         )
         yar_hit_shield = jnp.any(yar_shield_collusion)
 
-        # Shift yar to left if it hits shield
+        yar_qotile_collusion = check_entity_collusion(new_yar_entity, state.qotile)
+
+        # Shift yar to left if it hits shield or qotile
         new_yar_x = jnp.where(
-            yar_hit_shield, new_yar_x - self.consts.ENERGY_CELL_WIDTH, new_yar_x
+            yar_hit_shield | yar_qotile_collusion,
+            new_yar_x - self.consts.ENERGY_CELL_WIDTH,
+            new_yar_x,
         )
+
         new_yar_devour_count = jnp.where(
             yar_hit_shield & yar_moving,
             state.yar_devour_count + 1,
@@ -515,14 +520,16 @@ class JaxYarsRevenge(
             left_col = jnp.argmax(yar_shield_collusion[median_row_idx])
             return state.energy_shield_state.at[median_row_idx, left_col].set(False)
 
+        devour_reset = new_yar_devour_count == self.consts.DEVOUR_THRESHOLD
+
         new_energy_shield_state = jax.lax.cond(
-            new_yar_devour_count == self.consts.DEVOUR_THRESHOLD,
+            devour_reset,
             energy_shield_devour,
             lambda: state.energy_shield_state,
         )
 
         new_yar_devour_count = jnp.where(
-            new_yar_devour_count == self.consts.DEVOUR_THRESHOLD,
+            devour_reset,
             0,
             new_yar_devour_count,
         )
