@@ -6,6 +6,8 @@ from jax._src.pjit import JitWrapped
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
+from enum import IntEnum
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -14,6 +16,15 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+
+class WhiteUFOPattern(IntEnum):
+    IDLE = 0
+    DROP_STRAIGHT = 1
+    DROP_RIGHT = 2
+    DROP_LEFT = 3
+    RETREAT = 4
+    SHOOT = 5
+
 
 class BeamriderConstants(NamedTuple):
     RENDER_SCALE_FACTOR: int = 4
@@ -26,15 +37,15 @@ class BeamriderConstants(NamedTuple):
     PLAYER_COLOR: Tuple[int, int, int] = (223, 183, 85)
     LEFT_CLIP_PLAYER: int = 27
     RIGHT_CLIP_PLAYER: int = 137
-    LANES: Tuple[int, int, int, int, int] = (27,52,77,102,127)
-    TOP_OF_LANES: Tuple[int, int, int, int, int] = (38,61,71,81,91,102,123)
-    ENEMY_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1.5,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(1.5,4))
+    BOTTOM_OF_LANES: Tuple[int, int, int, int, int] = (27,52,77,102,127)
+    TOP_OF_LANES: Tuple[int, int, int, int, int] = (38,61,71,81,91,102,123)  #lane 0,6 are connected to points in middle of the map, not to bottom lane points
+    TOP_TO_BOTTOM_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1.5,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(1.5,4))
 
 
     MAX_LASER_Y: int = 67
     MIN_BULLET_Y:int =156
     MAX_TORPEDO_Y: int = 60
-    LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
+    BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
 
     PLAYER_POS_Y: int = 165
     PLAYER_SPEED: float = 2.5
@@ -49,6 +60,9 @@ class BeamriderConstants(NamedTuple):
     ENEMY_OFFSCREEN_POS: Tuple[int,int] = (2000,2000)
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
+    WHITE_UFO_RETREAT_DURATION: int = 28
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int] = (0, 42, 42, 42, 28, 12)
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2)
 
 
     INTERVAL_PER_MOVE = jnp.array([
@@ -98,6 +112,8 @@ class LevelState(NamedTuple):
     enemy_shot_vel : chex.Array
     white_ufo_time_on_lane: chex.Array
     white_ufo_time_allowed:chex.Array
+    white_ufo_pattern_id: chex.Array
+    white_ufo_pattern_timer: chex.Array
 
     line_positions: chex.Array
     line_velocities: chex.Array 
@@ -192,6 +208,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
                 enemy_shot_vel=jnp.array([0, 0, 0]),
                 white_ufo_time_on_lane=jnp.array([0,0,0]),
                 white_ufo_time_allowed=jnp.array([400,600,800]),
+                white_ufo_pattern_id=jnp.zeros(3, dtype=jnp.int32),
+                white_ufo_pattern_timer=jnp.zeros(3, dtype=jnp.int32),
 
                 line_positions= self.consts.INIT_LINE_POS,
                 line_velocities= self.consts.INIT_LINE_VEL
@@ -237,10 +255,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             bullet_type
         ) = self._player_step(state, action)
 
-        #ufo test
-        (white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y,white_ufo_1_time_on_lane,key) = self._white_ufo_1_step(state)
-        (white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y,white_ufo_2_time_on_lane) = self._white_ufo_2_step(state)
-        (white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y,white_ufo_3_time_on_lane) = self._white_ufo_3_step(state)
+        rngs = jax.random.split(state.rng, 4)
+        next_rng = rngs[0]
+        ufo_keys = rngs[1:]
+
+        white_ufo_1_position, white_ufo_1_vel_x, white_ufo_1_vel_y, white_ufo_1_time_on_lane, white_ufo_1_pattern_id, white_ufo_1_pattern_timer = self._white_ufo_step(state, 0, ufo_keys[0])
+        white_ufo_2_position, white_ufo_2_vel_x, white_ufo_2_vel_y, white_ufo_2_time_on_lane, white_ufo_2_pattern_id, white_ufo_2_pattern_timer = self._white_ufo_step(state, 1, ufo_keys[1])
+        white_ufo_3_position, white_ufo_3_vel_x, white_ufo_3_vel_y, white_ufo_3_time_on_lane, white_ufo_3_pattern_id, white_ufo_3_pattern_timer = self._white_ufo_step(state, 2, ufo_keys[2])
 
         white_ufo_pos = jnp.array([[white_ufo_1_position[0],white_ufo_2_position[0],white_ufo_3_position[0]],
                                [white_ufo_1_position[1],white_ufo_2_position[1],white_ufo_3_position[1]]])
@@ -266,11 +287,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             #enemies
             enemy_type=jnp.array([0, 0, 0]),
             white_ufo_pos=white_ufo_pos,
-            white_ufo_vel=jnp.array([[white_ufo_1_vel_x,white_ufo_2_vel_x,white_ufo_3_vel_x],[0.0,0.0,0.0]]),
+            white_ufo_vel=jnp.array([[white_ufo_1_vel_x,white_ufo_2_vel_x,white_ufo_3_vel_x],[white_ufo_1_vel_y,white_ufo_2_vel_y,white_ufo_3_vel_y]]),
             enemy_shot_pos=jnp.array([[0,0,0],[0,0,0]]),       
             enemy_shot_vel=jnp.array([0, 0, 0]),
             white_ufo_time_on_lane=jnp.array([white_ufo_1_time_on_lane,white_ufo_2_time_on_lane,white_ufo_3_time_on_lane]),
             white_ufo_time_allowed=state.level.white_ufo_time_allowed,
+            white_ufo_pattern_id=jnp.array([white_ufo_1_pattern_id, white_ufo_2_pattern_id, white_ufo_3_pattern_id]),
+            white_ufo_pattern_timer=jnp.array([white_ufo_1_pattern_timer, white_ufo_2_pattern_timer, white_ufo_3_pattern_timer]),
 
             line_positions= line_positions,
             line_velocities= line_velocities
@@ -284,7 +307,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             reset_coords=jnp.array(False),
             lives=jnp.array(3),
             steps=next_step,
-            rng= key
+            rng= next_rng
         )
 
         done = self._get_done(new_state)
@@ -325,7 +348,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
             )
         )
 
-        is_in_lane = jnp.isin(x, jnp.array(self.consts.LANES)) # predicate: x is one of LANES
+        is_in_lane = jnp.isin(x, jnp.array(self.consts.BOTTOM_OF_LANES)) # predicate: x is one of LANES
 
         v = jax.lax.cond(
             is_in_lane,          
@@ -354,8 +377,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         new_torpedo = jnp.logical_and(press_up, can_spawn_torpedo)
         new_bullet = jnp.logical_or(new_torpedo, new_laser)
 
-        lanes = jnp.array(self.consts.LANES)
-        lane_velocities = jnp.array(self.consts.LANE_VECTORS)
+        lanes = jnp.array(self.consts.BOTTOM_OF_LANES)
+        lane_velocities = jnp.array(self.consts.BOTTOM_TO_TOP_LANE_VECTORS)
         lane_index = jnp.argmax(x_before_change == lanes) 
         lane_velocity = lane_velocities[lane_index]
 
@@ -401,79 +424,142 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
 
 
 
-    def _white_ufo_1_step(self, state: BeamriderState):
-        white_ufo_1_position= jnp.array([state.level.white_ufo_pos[0][0],state.level.white_ufo_pos[1][0]])
-        
-        white_ufo_1_vel_x = state.level.white_ufo_vel[0][0]
-        white_ufo_1_vel_y = state.level.white_ufo_vel[1][0]
-        time_on_lane_1 = state.level.white_ufo_time_on_lane[0]
+    def _white_ufo_step(self, state: BeamriderState, index: int, key: chex.Array):
+        white_ufo_position = jnp.array([state.level.white_ufo_pos[0][index], state.level.white_ufo_pos[1][index]])
+        white_ufo_vel_x = state.level.white_ufo_vel[0][index]
+        white_ufo_vel_y = state.level.white_ufo_vel[1][index]
+        time_on_lane = state.level.white_ufo_time_on_lane[index]
+        pattern_id = state.level.white_ufo_pattern_id[index]
+        pattern_timer = state.level.white_ufo_pattern_timer[index]
 
-        p_swap = self.entropy_heat_prob(time_on_lane_1)
-        key, subkey = jax.random.split(state.rng)
-
-        new_y = white_ufo_1_position[1]
-        jax.debug.print("x: {}", state.level.white_ufo_pos[0][0])
-
-
-        white_ufo_1_vel_x,white_ufo_1_vel_y = jax.lax.cond(
-            new_y == 43.0,
-            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_1_position,white_ufo_1_vel_x,state.level.white_ufo_time_on_lane[0]),
-            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y),
-            white_ufo_1_vel_x,white_ufo_1_vel_y
-        )
-        
-        new_y = jax.lax.cond(
-            time_on_lane_1 == state.level.white_ufo_time_allowed[0],
-            lambda pos_y : pos_y + 1,
-            lambda pos_y: pos_y,
-            new_y
-        )
-        time_on_lane_1 += 1
-
-        white_ufo_1_position = white_ufo_1_position.at[0].add(white_ufo_1_vel_x)
-        white_ufo_1_position = white_ufo_1_position.at[1].add(white_ufo_1_vel_y)
-        return white_ufo_1_position,white_ufo_1_vel_x,white_ufo_1_vel_y,time_on_lane_1,key
-    
-    def _white_ufo_2_step(self, state: BeamriderState):
-        white_ufo_2_position= jnp.array([state.level.white_ufo_pos[0][1],state.level.white_ufo_pos[1][1]])
-        
-        white_ufo_2_vel_x = state.level.white_ufo_vel[0][1]
-        white_ufo_2_vel_y = state.level.white_ufo_vel[1][1]
-        time_on_lane_2 = state.level.white_ufo_time_on_lane[1]
-
-        white_ufo_2_vel_x,white_ufo_2_vel_y = jax.lax.cond(
-            white_ufo_2_position[1] == 43.0,
-            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_2_position,white_ufo_2_vel_x,state.level.white_ufo_time_on_lane[1]),
-            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y),
-            white_ufo_2_vel_x,white_ufo_2_vel_y
+        pattern_id, pattern_timer, time_on_lane = self._white_ufo_update_pattern_state(
+            white_ufo_position, time_on_lane, pattern_id, pattern_timer, key
         )
 
-        time_on_lane_2 += 1
-        white_ufo_2_position = white_ufo_2_position.at[0].add(white_ufo_2_vel_x)
-        return white_ufo_2_position,white_ufo_2_vel_x,white_ufo_2_vel_y,time_on_lane_2
-    
-    def _white_ufo_3_step(self, state: BeamriderState):
-        white_ufo_3_position= jnp.array([state.level.white_ufo_pos[0][2],state.level.white_ufo_pos[1][2]])
-
-        white_ufo_3_vel_x = state.level.white_ufo_vel[0][2]
-        white_ufo_3_vel_y = state.level.white_ufo_vel[1][2]
-        time_on_lane_3 = state.level.white_ufo_time_on_lane[2]
-
-        white_ufo_3_vel_x,white_ufo_3_vel_y = jax.lax.cond(
-            white_ufo_3_position[1] == 43.0,
-            lambda vel_x, vel_y: self._white_ufo_top_lane(white_ufo_3_position,white_ufo_3_vel_x,state.level.white_ufo_time_on_lane[2]),
-            lambda vel_x, vel_y: self._white_ufo_normal(white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y),
-            white_ufo_3_vel_x,white_ufo_3_vel_y
+        requires_lane_motion = jnp.logical_or(
+            white_ufo_position[1] > self.consts.TOP_CLIP,
+            self._white_ufo_pattern_requires_lane_motion(pattern_id)
         )
-        time_on_lane_3 += 1
-        white_ufo_3_position = white_ufo_3_position.at[0].add(white_ufo_3_vel_x)
-        
 
-        return white_ufo_3_position,white_ufo_3_vel_x,white_ufo_3_vel_y, time_on_lane_3
-    
-    ####################benes code
-    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x,time_on_lane):
-        
+        def follow_lane(_):
+            return self._white_ufo_normal(white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id)
+
+        def stay_on_top(_):
+            return self._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id)
+
+        white_ufo_vel_x, white_ufo_vel_y = jax.lax.cond(
+            requires_lane_motion,
+            follow_lane,
+            stay_on_top,
+            operand=None
+        )
+
+        new_x = white_ufo_position[0] + white_ufo_vel_x
+        new_y = white_ufo_position[1] + white_ufo_vel_y
+        new_x = jnp.clip(new_x, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER)
+        new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.BOTTOM_CLIP)
+        white_ufo_position = jnp.array([new_x, new_y])
+
+        return (
+            white_ufo_position,
+            white_ufo_vel_x,
+            white_ufo_vel_y,
+            time_on_lane,
+            pattern_id,
+            pattern_timer,
+        )
+
+    def _white_ufo_pattern_requires_lane_motion(self, pattern_id: chex.Array) -> chex.Array:
+        drop_straight = pattern_id == int(WhiteUFOPattern.DROP_STRAIGHT)
+        drop_left = pattern_id == int(WhiteUFOPattern.DROP_LEFT)
+        drop_right = pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
+        retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        return jnp.logical_or(
+            drop_straight,
+            jnp.logical_or(drop_left, jnp.logical_or(drop_right, retreat)),
+        )
+
+    def _white_ufo_update_pattern_state(
+        self,
+        position: chex.Array,
+        time_on_lane: chex.Array,
+        pattern_id: chex.Array,
+        pattern_timer: chex.Array,
+        key: chex.Array,
+    ):
+        on_top_lane = position[1] <= self.consts.TOP_CLIP
+        time_on_lane = jnp.where(on_top_lane, time_on_lane + 1, 0)
+        pattern_timer = jnp.maximum(pattern_timer - 1, jnp.zeros_like(pattern_timer))
+
+        is_attack_pattern = jnp.logical_or(
+            pattern_id == int(WhiteUFOPattern.DROP_STRAIGHT),
+            jnp.logical_or(
+                pattern_id == int(WhiteUFOPattern.DROP_LEFT),
+                pattern_id == int(WhiteUFOPattern.DROP_RIGHT),
+            ),
+        )
+
+        should_retreat = jnp.logical_and(is_attack_pattern, pattern_timer == 0)
+        pattern_id = jnp.where(should_retreat, int(WhiteUFOPattern.RETREAT), pattern_id)
+        pattern_timer = jnp.where(
+            should_retreat, self.consts.WHITE_UFO_RETREAT_DURATION, pattern_timer
+        )
+
+        is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        retreat_finished = jnp.logical_and(is_retreat, on_top_lane)
+        pattern_id = jnp.where(retreat_finished, int(WhiteUFOPattern.IDLE), pattern_id)
+        pattern_timer = jnp.where(retreat_finished, 0, pattern_timer)
+
+        finished_shoot = jnp.logical_and(
+            pattern_id == int(WhiteUFOPattern.SHOOT), pattern_timer == 0
+        )
+        pattern_id = jnp.where(finished_shoot, int(WhiteUFOPattern.IDLE), pattern_id)
+
+        should_choose_new = jnp.logical_and.reduce(jnp.array([
+            on_top_lane,
+            pattern_id == int(WhiteUFOPattern.IDLE),
+            pattern_timer == 0,
+        ]))
+        p_start = self.entropy_heat_prob(time_on_lane)
+        key_start, key_choice = jax.random.split(key)
+        start_roll = jax.random.uniform(key_start)
+        start_attack = jnp.logical_and(should_choose_new, start_roll < p_start)
+
+        def choose_new_pattern(_):
+            pattern, duration = self._white_ufo_choose_pattern(key_choice)
+            return pattern, duration
+
+        def keep_pattern(_):
+            return pattern_id, pattern_timer
+
+        pattern_id, pattern_timer = jax.lax.cond(
+            start_attack,
+            choose_new_pattern,
+            keep_pattern,
+            operand=None,
+        )
+
+        return pattern_id, pattern_timer, time_on_lane
+
+    def _white_ufo_choose_pattern(self, key: chex.Array):
+        pattern_choices = jnp.array(
+            [
+                int(WhiteUFOPattern.DROP_STRAIGHT),
+                int(WhiteUFOPattern.DROP_LEFT),
+                int(WhiteUFOPattern.DROP_RIGHT),
+                int(WhiteUFOPattern.SHOOT),
+            ]
+        )
+        pattern_probs = jnp.array(self.consts.WHITE_UFO_PATTERN_PROBS)
+        pattern = jax.random.choice(key, pattern_choices, shape=(), p=pattern_probs)
+        pattern_durations = jnp.array(self.consts.WHITE_UFO_PATTERN_DURATIONS)
+        duration = pattern_durations[pattern]
+        return pattern, duration
+
+    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id):
+        hold_position = pattern_id == int(WhiteUFOPattern.SHOOT)
+        white_ufo_vel_x = jnp.where(hold_position, 0.0, white_ufo_vel_x)
+
         white_ufo_vel_x = jax.lax.cond(
             white_ufo_pos[0] >= self.consts.RIGHT_CLIP_PLAYER,
             lambda v: -0.5,
@@ -482,37 +568,52 @@ class JaxBeamrider(JaxEnvironment[BeamriderState,BeamriderObservation,BeamriderI
         )
 
         white_ufo_vel_x = jax.lax.cond(
-            white_ufo_pos[0]<= self.consts.LEFT_CLIP_PLAYER,
+            white_ufo_pos[0] <= self.consts.LEFT_CLIP_PLAYER,
             lambda v: 0.5,
             lambda v: v,
             white_ufo_vel_x,
         )
-        return white_ufo_vel_x,0.0
+        return white_ufo_vel_x, 0.0
     
     ########
-    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y):
-        x=white_ufo_pos[0]
+    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id):
+        x = white_ufo_pos[0]
         lanes = jnp.array(self.consts.TOP_OF_LANES)
-        distances = jnp.abs(lanes-x)
-        lane_id = jnp.argmin(distances)
-        lane_vector = jnp.array(self.consts.ENEMY_LANE_VECTORS)[lane_id]
+        lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS)
+        base_lane_id = jnp.argmin(jnp.abs(lanes - x))
 
-        def seek_lane():
-            direction = jnp.sign(lanes[lane_id]-x)
-            new_vx = direction * 0.5
-            return new_vx,0.25
-        
-        def follow_lane():
-            return lane_vector[0],lane_vector[1]
-        
-        new_vx,new_vy = jax.lax.cond(
-            distances[lane_id]<= 0.25,
-            lambda vx,vy:follow_lane(),
-            lambda vx,vy:seek_lane(),
-            white_ufo_vel_x,white_ufo_vel_y
+        lane_offset = jnp.where(
+            pattern_id == int(WhiteUFOPattern.DROP_RIGHT),
+            1,
+            jnp.where(pattern_id == int(WhiteUFOPattern.DROP_LEFT), -1, 0),
+        )
+        target_lane_id = jnp.clip(
+            base_lane_id + lane_offset, 0, lanes.shape[0] - 1
+        )
+        target_lane_x = lanes[target_lane_id]
+        lane_vector = lane_vectors[target_lane_id]
+
+        is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        distance_to_lane = jnp.abs(target_lane_x - x)
+        direction = jnp.sign(target_lane_x - x)
+
+        def seek_lane(_):
+            new_vx = jnp.where(direction == 0, 0.0, direction * 0.5)
+            new_vy = jnp.where(is_retreat, -2.5, 0.25)
+            return new_vx, new_vy
+
+        def follow_lane(_):
+            target_vy = jnp.where(is_retreat, -jnp.abs(lane_vector[1]), lane_vector[1])
+            return lane_vector[0], target_vy
+
+        new_vx, new_vy = jax.lax.cond(
+            distance_to_lane <= 0.25,
+            follow_lane,
+            seek_lane,
+            operand=None,
         )
 
-        return new_vx,new_vy
+        return new_vx, new_vy
 
 
 
@@ -696,5 +797,3 @@ class BeamriderRenderer(JAXGameRenderer):
         #if bullet is laser, no offset
         result = jnp.where(bullet_type == self.consts.LASER_ID, 0, 4-(stage_1 + stage_2 + stage_3))
         return result
-
-
