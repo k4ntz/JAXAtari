@@ -41,6 +41,11 @@ class DefenderConstants(NamedTuple):
     # UI
     CITY_WIDTH: int = 80
     CITY_HEIGHT: int = 13
+    SCORE_Y: int = 177
+    SCORE_X: int = 57
+    DIGIT_WIDTH: int = 7
+    DIGIT_PADDING: int = 1
+    SCORE_MAX_DIGITS: int = 6
 
     COLOR_SPACE_SHIP_BLUE: Tuple[int, int, int] = (132, 144, 252)
     COLOR_BOMBER_BLUE: Tuple[int, int, int] = (104, 116, 208)
@@ -241,12 +246,28 @@ class DefenderConstants(NamedTuple):
     HUMAN_SCANNER_WIDTH: int = 1
     HUMAN_SCANNER_HEIGHT: int = 1
 
+    # Score
+    SCORE_LANDER_DEATH: int = 150
+    SCORE_MUTANT_DEATH: int = 150
+    SCORE_BAITER_DEATH: int = 200
+    SCORE_BOMBER_DEATH: int = 250
+    SCORE_SWARMER_DEATH: int = 500
+    SCORE_POD_DEATH: int = 1000
+
+    # HUMAN RESCURE SCORES
+    SCORE_FALL_AND_LIVE: int = 250
+    SCORE_CAUGHT_BUT_FORGOTTEN: int = 500
+    SCORE_CAUGHT_AND_RETURNED: int = 1000
+
+    SCORE_BONUS_THRESHOLD: int = 10000
+
 
 # immutable state container
 class DefenderState(NamedTuple):
     # Game
     step_counter: chex.Array
     level: chex.Array
+    score: chex.Array
     # Camera
     camera_offset: chex.Array
     # Space Ship
@@ -504,6 +525,7 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "swarmers", "type": "single", "file": "swarmers.npy"},
             {"name": "ui_overlay", "type": "single", "file": "ui_overlay.npy"},
             {"name": "city", "type": "single", "file": "city.npy"},
+            {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
         ]
 
     def on_scanner_pos(self, state: DefenderState, game_x, game_y):
@@ -533,8 +555,6 @@ class DefenderRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: DefenderState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
-
-        # TODO Render Score
 
         def render_on_scanner(game_x, game_y, width, height, color_id, r):
             scanner_x, scanner_y = self.on_scanner_pos(state, game_x, game_y)
@@ -798,6 +818,38 @@ class DefenderRenderer(JAXGameRenderer):
             lambda: raster,
         )
 
+        def render_score(r):
+            max_digits = self.consts.SCORE_MAX_DIGITS
+
+            digit_spacing = self.consts.DIGIT_PADDING + self.consts.DIGIT_WIDTH
+            score_digits = self.jr.int_to_digits(state.score, max_digits=max_digits)
+
+            # Implement logic to get more digits
+            num_digits = jnp.where(
+                state.score == 0,
+                2,
+                jnp.floor(jnp.log10(state.score.astype(jnp.float32)) + 1),
+            )
+
+            start_index = max_digits - num_digits
+
+            screen_x = self.consts.SCORE_X + start_index * digit_spacing
+            screen_y = self.consts.SCORE_Y
+
+            return self.jr.render_label_selective(
+                r,
+                screen_x,
+                screen_y,
+                score_digits,
+                self.SHAPE_MASKS["score_digits"],
+                start_index.astype(int),
+                num_digits.astype(int),
+                digit_spacing,
+                max_digits,
+            )
+
+        raster = render_score(raster)
+
         return self.jr.render_from_palette(raster, self.PALETTE)
 
 
@@ -832,6 +884,10 @@ class JaxDefender(
             Action.DOWNLEFTFIRE,
         ]
 
+    def _add_score(self, state: DefenderState, score) -> DefenderState:
+        score += state.score
+        return state._replace(score=score)
+
     def _spawn_enemy(
         self, state: DefenderState, game_x, game_y, e_type, arg1, arg2
     ) -> DefenderState:
@@ -852,10 +908,13 @@ class JaxDefender(
     def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
         is_index = jnp.logical_and(index >= 0, index < self.consts.ENEMY_MAX)
         enemy_type = self._get_enemy(state, index)[2].astype(int)
+
+        # When iterating in enemy_step, dead ones go to inactive, only one frame dead for animation
         is_dead = enemy_type == self.consts.DEAD
         new_type = jax.lax.cond(
             is_dead, lambda: self.consts.INACTIVE, lambda: self.consts.DEAD
         )
+
         color = jax.lax.switch(
             enemy_type,
             [
@@ -869,6 +928,25 @@ class JaxDefender(
                 lambda: self.consts.DEAD_RED,
             ],
         )
+
+        # Score gets subtracted by 50, as when an enemy dies, the score increases
+        # and adds itself -50, then when going from dead to inactive, the other 50 get added, to simulate
+        # number going up
+        score = jax.lax.switch(
+            enemy_type,
+            [
+                lambda: 50,
+                lambda: self.consts.SCORE_LANDER_DEATH,
+                lambda: self.consts.SCORE_POD_DEATH,
+                lambda: self.consts.SCORE_BOMBER_DEATH,
+                lambda: self.consts.SCORE_SWARMER_DEATH,
+                lambda: self.consts.SCORE_MUTANT_DEATH,
+                lambda: self.consts.SCORE_BAITER_DEATH,
+                lambda: 100,
+            ],
+        )
+
+        state = self._add_score(state, score - 50)
 
         state = jax.lax.cond(
             jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
@@ -901,19 +979,12 @@ class JaxDefender(
             lambda: state,
         )
 
-        state = jax.lax.cond(
-            is_index,
-            lambda: self._update_enemy(
-                state,
-                index,
-                enemy_type=new_type,
-                arg1=color,
-                arg2=self._get_enemy(state, index)[4],
-            ),
-            lambda: state,
+        state = self._update_enemy(
+            state,
+            index,
+            enemy_type=new_type,
+            arg1=color,
         )
-
-        # TODO Add score
         return state
 
     def get_random_position_not_on_screen(
@@ -1924,6 +1995,7 @@ class JaxDefender(
             # Game
             step_counter=jnp.array(0).astype(jnp.int32),
             level=jnp.array(1).astype(jnp.int32),
+            score=jnp.array(0).astype(jnp.int32),
             # Camera
             camera_offset=jnp.array(self.consts.INITIAL_CAMERA_OFFSET).astype(
                 jnp.int32
