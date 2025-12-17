@@ -24,6 +24,7 @@ class WhiteUFOPattern(IntEnum):
     DROP_LEFT = 3
     RETREAT = 4
     SHOOT = 5
+    MOVE_BACK = 6
 
 
 class BeamriderConstants(NamedTuple):
@@ -64,14 +65,14 @@ class BeamriderConstants(NamedTuple):
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int] = (0, 42, 42, 42, 28, 12)
-    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2)
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0, 42, 42, 42, 28, 12, 42)
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] = (0.3, 0.2, 0.2, 0.2, 0.1)
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
     WHITE_UFO_RETREAT_P_MIN: float = 0.005
     WHITE_UFO_RETREAT_P_MAX: float = 0.1
     WHITE_UFO_RETREAT_ALPHA: float = 0.01
-    WHITE_UFO_RETREAT_SPEED_MULT: float = 1.5
+    WHITE_UFO_RETREAT_SPEED_MULT: float = 2.5
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
     WHITE_UFO_TOP_LANE_TURN_SPEED: float = 0.5
 
@@ -528,9 +529,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         drop_left = pattern_id == int(WhiteUFOPattern.DROP_LEFT)
         drop_right = pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
         retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
         return jnp.logical_or(
             drop_straight,
-            jnp.logical_or(drop_left, jnp.logical_or(drop_right, retreat)),
+            jnp.logical_or(drop_left, jnp.logical_or(drop_right, jnp.logical_or(retreat, move_back))),
         )
 
     def _white_ufo_update_pattern_state(
@@ -555,7 +557,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             pattern_id == int(WhiteUFOPattern.DROP_STRAIGHT),
             jnp.logical_or(
                 pattern_id == int(WhiteUFOPattern.DROP_LEFT),
-                pattern_id == int(WhiteUFOPattern.DROP_RIGHT),
+                jnp.logical_or(
+                    pattern_id == int(WhiteUFOPattern.DROP_RIGHT),
+                    pattern_id == int(WhiteUFOPattern.MOVE_BACK)
+                ),
             ),
         )
         is_shoot_pattern = pattern_id == int(WhiteUFOPattern.SHOOT)
@@ -567,10 +572,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
-        retreat_finished = jnp.logical_and(is_retreat, on_top_lane)
-        pattern_id = jnp.where(retreat_finished, int(WhiteUFOPattern.IDLE), pattern_id)
-        pattern_timer = jnp.where(retreat_finished, 0, pattern_timer)
-        attack_time = jnp.where(retreat_finished, 0, attack_time)
+        is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
+        movement_finished = jnp.logical_and(jnp.logical_or(is_retreat, is_move_back), on_top_lane)
+        pattern_id = jnp.where(movement_finished, int(WhiteUFOPattern.IDLE), pattern_id)
+        pattern_timer = jnp.where(movement_finished, 0, pattern_timer)
+        attack_time = jnp.where(movement_finished, 0, attack_time)
 
         pattern_finished_off_top = jnp.logical_and.reduce(jnp.array([
             jnp.logical_not(on_top_lane),
@@ -652,11 +658,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 int(WhiteUFOPattern.DROP_LEFT),
                 int(WhiteUFOPattern.DROP_RIGHT),
                 int(WhiteUFOPattern.SHOOT),
+                int(WhiteUFOPattern.MOVE_BACK),
             ],
             dtype=jnp.int32,
         )
         pattern_probs = jnp.array(self.consts.WHITE_UFO_PATTERN_PROBS, dtype=jnp.float32)
-        shoot_mask = jnp.array([1.0, 1.0, 1.0, 0.0], dtype=jnp.float32)
+        shoot_mask = jnp.array([1.0, 1.0, 1.0, 0.0, 1.0], dtype=jnp.float32)
         pattern_probs = jnp.where(allow_shoot, pattern_probs, pattern_probs * shoot_mask)
         pattern_probs = pattern_probs / jnp.sum(pattern_probs)
         pattern = jax.random.choice(key, pattern_choices, shape=(), p=pattern_probs)
@@ -718,6 +725,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         target_lane_x = lane_x_at_y[target_lane_id]
 
         is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
         cross_track = target_lane_x - x
         distance_to_lane = jnp.abs(cross_track)
         direction = jnp.sign(cross_track)
@@ -727,11 +735,25 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             retreat_vx = jnp.where(direction == 0, 0.0, direction * speed_factor * retreat_mult * 2.0)
             new_vx = jnp.where(is_retreat, retreat_vx, attack_vx)
             new_vy = jnp.where(is_retreat, -lane_vector[1] * speed_factor * retreat_mult, 0.25)
+            
+            # If moving back, we want negative Y velocity, similar to retreat but controlled by speed factor
+            new_vy = jnp.where(is_move_back, -lane_vector[1] * speed_factor, new_vy)
+            
             return new_vx, new_vy
 
         def follow_lane(_):
-            new_vx = jnp.where(is_retreat, -lane_vector[0] * speed_factor * retreat_mult, lane_vector[0] * speed_factor)
-            new_vy = jnp.where(is_retreat, -lane_vector[1] * speed_factor * retreat_mult, lane_vector[1] * speed_factor)
+            normal_vx = lane_vector[0] * speed_factor
+            normal_vy = lane_vector[1] * speed_factor
+            
+            retreat_vx = -lane_vector[0] * speed_factor * retreat_mult
+            retreat_vy = -lane_vector[1] * speed_factor * retreat_mult
+            
+            move_back_vx = -lane_vector[0] * speed_factor
+            move_back_vy = -lane_vector[1] * speed_factor
+            
+            new_vx = jnp.where(is_retreat, retreat_vx, jnp.where(is_move_back, move_back_vx, normal_vx))
+            new_vy = jnp.where(is_retreat, retreat_vy, jnp.where(is_move_back, move_back_vy, normal_vy))
+            
             return new_vx, new_vy
 
         return jax.lax.cond(
