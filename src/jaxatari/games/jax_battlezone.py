@@ -138,6 +138,7 @@ class BattlezoneConstants(NamedTuple):
     FIRE_CD:int = 200 #todo change
     HITBOX_SIZE:int = 6
     ENEMY_SCORES:chex.Array = jnp.array([1000,3000,5000,2000], dtype=jnp.int32)
+    ENEMY_DEATH_ANIM_LENGTH:int = 15
 
 
 class Projectile(NamedTuple):
@@ -155,6 +156,7 @@ class Enemy(NamedTuple):
     enemy_type: chex.Array
     orientation_angle: chex.Array
     active: chex.Array
+    death_anim_counter: chex.Array
 
 
 # immutable state container
@@ -286,8 +288,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _enemy_step(self, state: BattlezoneState) -> BattlezoneState:
-        #todo
-        return state._replace(enemies=state.enemies)
+        d_anim_counter = state.enemies.death_anim_counter
+        new_death_anim_counter = jnp.where(d_anim_counter > 0, d_anim_counter-1,d_anim_counter)
+        return state._replace(enemies=state.enemies._replace(
+            death_anim_counter=new_death_anim_counter
+        ))
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -312,12 +317,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
         new_enemies_active = jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
+        new_enemies_death_anim_counter = jnp.where(hit_arr,
+                            self.consts.ENEMY_DEATH_ANIM_LENGTH, new_state.enemies.death_anim_counter)
         new_player_projectile_active = jnp.logical_and(new_state.player_projectile.active, jnp.invert(jnp.any(hit_arr)))
         return new_state._replace(
-            enemies=new_state.enemies._replace(active=new_enemies_active),
+            enemies=new_state.enemies._replace(active=new_enemies_active,
+                                               death_anim_counter=new_enemies_death_anim_counter),
             player_projectile=new_state.player_projectile._replace(active=new_player_projectile_active)
         )
-
 
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
@@ -337,7 +344,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 distance=jnp.array([60.93576, 30.93576], dtype=jnp.float32),
                 enemy_type=jnp.array([EnemyType.TANK, EnemyType.TANK], dtype=jnp.int32),
                 orientation_angle=jnp.array([1.57, 0.5], dtype=jnp.float32),
-                active=jnp.array([True, False], dtype=jnp.bool)
+                active=jnp.array([True, False], dtype=jnp.bool),
+                death_anim_counter=jnp.array([0,0], dtype=jnp.int32)
             ),
             player_projectile=Projectile(
                 x=jnp.array(0, dtype=jnp.float32),
@@ -538,6 +546,9 @@ class BattlezoneRenderer(JAXGameRenderer):
              ],
 
              ])
+        self.enemy_explosion_mask = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_1"], pad, pad),
+                                self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_2"], pad, pad),
+                                self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_3"], pad, pad)])
 
 
 
@@ -568,6 +579,10 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
             {'name': 'projectile_big', 'type': 'single', 'file': 'projectile_big.npy'},
             {'name': 'projectile_small', 'type': 'single', 'file': 'projectile_small.npy'},
+            #anims
+            {'name': 'enemy_explosion_1', 'type': 'single', 'file': 'enemy_explosion_1.npy'},
+            {'name': 'enemy_explosion_2', 'type': 'single', 'file': 'enemy_explosion_2.npy'},
+            {'name': 'enemy_explosion_3', 'type': 'single', 'file': 'enemy_explosion_3.npy'},
             # Add the procedurally created sprites to the manifest
             {'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
@@ -757,8 +772,21 @@ class BattlezoneRenderer(JAXGameRenderer):
             x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
             return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
-        def enemy_inactive(_):
-            return raster
+        def enemy_inactive(enemy):
+            def render_death(enemy):
+                n = enemy.death_anim_counter
+                index =jnp.where(n >= 12,0,jnp.where((n >= 6), 1, 2)) #if it works it works
+                mask = self.enemy_explosion_mask[index]
+                zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
+                               self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
+                zoomed_mask = self.zoom_mask(mask, zoom_factor)
+                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+
+                return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+            def _pass(_):
+                return raster
+
+            return jax.lax.cond(enemy.death_anim_counter==0, _pass, render_death, enemy)
 
         return jax.lax.cond(enemy.active, enemy_active, enemy_inactive, enemy)
 
@@ -775,7 +803,6 @@ class BattlezoneRenderer(JAXGameRenderer):
                                               projectile.z >=self.consts.HITBOX_SIZE,
                                               projectile.distance <= self.consts.RADAR_MAX_SCAN_RADIUS]))
         return jax.lax.cond(render_condition, projectile_active, projectile_inactive, projectile)
-
 
 
     @partial(jax.jit, static_argnums=(0,))
