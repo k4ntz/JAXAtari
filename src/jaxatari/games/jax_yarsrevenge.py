@@ -163,6 +163,8 @@ class YarsRevengeConstants(NamedTuple):
     ENERGY_MISSILE_SPEED = 4.0
     CANNON_SPEED = 2.0
 
+    SNAKE_FRAME = 4
+
     STEADY_YAR_MOVEMENT_FRAME = (
         4  # Movement animation change interval for Yar (no action)
     )
@@ -453,6 +455,20 @@ class JaxYarsRevenge(
             active_hits = collision_mask & shield_state
             return active_hits
 
+        @jax.jit
+        def snake_shift(shield: jnp.ndarray):
+            n_rows, n_cols = shield.shape
+            r = jnp.arange(n_rows).reshape(-1, 1)
+            c = jnp.arange(n_cols).reshape(1, -1)
+            idx_normal = r * n_cols + c
+            idx_reversed = r * n_cols + (n_cols - 1 - c)
+            snake_idx = jnp.where(r % 2 == 0, idx_normal, idx_reversed)
+
+            s_flat_snake = shield.reshape(-1)[snake_idx.ravel()]
+            shifted = jnp.roll(s_flat_snake, 1)
+            new_snake = shifted.reshape(n_rows, n_cols)
+            return jnp.where(r % 2 == 0, new_snake, new_snake[:, ::-1])
+
         # Extract the direction flags from the actions
         up = (
             (action == Action.UP)
@@ -735,6 +751,15 @@ class JaxYarsRevenge(
             - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
         )
 
+        # Stage Specific
+        shield_snake_apply = jnp.logical_and(state.stage == 1, (state.step_counter % self.consts.SNAKE_FRAME == 0))
+
+        new_energy_shield_state = jnp.where(
+            shield_snake_apply,
+            snake_shift(new_energy_shield_state),
+            new_energy_shield_state,
+        )
+
         # Game ending calculations
         yar_destroyer = check_entity_collusion(state.yar, state.destroyer)
         yar_destroyer_hits = jnp.logical_and(yar_destroyer, ~yar_neutral)
@@ -749,11 +774,16 @@ class JaxYarsRevenge(
 
         new_state = jax.lax.cond(
             game_advance,
-            lambda: self.construct_initial_state((state.stage + 1) % 2),
+            lambda: self.construct_initial_state((state.stage + 1) % 2)._replace(
+                step_counter=state.step_counter + 1,
+                level=state.level + 1,
+            ),
             lambda: jax.lax.cond(
                 life_lost,
                 lambda: self.construct_initial_state(state.stage)._replace(
-                    lives=new_lives, energy_shield_state=new_energy_shield_state
+                    step_counter=state.step_counter + 1,
+                    lives=new_lives,
+                    energy_shield_state=new_energy_shield_state,
                 ),
                 lambda: YarsRevengeState(
                     step_counter=state.step_counter + 1,
