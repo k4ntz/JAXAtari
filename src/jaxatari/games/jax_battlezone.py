@@ -115,7 +115,7 @@ class BattlezoneConstants(NamedTuple):
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
     MOUNTAINS_Y: int = 36
     GRASS_BACK_Y: int = 95
-    HORIZON_Y: int = 90
+    HORIZON_Y: int = 92
     GRASS_FRONT_Y: int = 137
     RADAR_ROTATION_SPEED:float = -0.1
     RADAR_CENTER_X:int = 80
@@ -136,7 +136,8 @@ class BattlezoneConstants(NamedTuple):
     PROJECTILE_SPEED:float = 0.5
     ENEMY_POS_Y:int = 85
     FIRE_CD:int = 200 #todo change
-    HITBOX_SIZE:int = 6
+    HITBOX_SIZE:float = 6.0
+    ENEMY_HITBOX_SIZE: float = 4.5
     ENEMY_SCORES:chex.Array = jnp.array([1000,3000,5000,2000], dtype=jnp.int32)
     ENEMY_DEATH_ANIM_LENGTH:int = 15
 
@@ -308,7 +309,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         )
 
     def _player_projectile_col_check(self, state:BattlezoneState):
-        hit_arr = (jax.vmap(self._obj_collision_check, in_axes=(0, None))
+        hit_arr = (jax.vmap(self._enemy_projectile_collision_check, in_axes=(0, None))
                    (state.enemies, state.player_projectile))
         def _score_func(state1:BattlezoneState, in_tuple):
             enemy, hit = in_tuple
@@ -329,7 +330,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
         state = BattlezoneState(
-            score=jnp.array(123400),
+            score=jnp.array(0),
             life=jnp.array(5),
             step_counter=jnp.array(0),
             cur_fire_cd=jnp.array(0, dtype=jnp.int32),
@@ -441,9 +442,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                             (obj.orientation_angle-angle)%(2*jnp.pi))
 
 
-    def _obj_collision_check(self, obj1, obj2):
-        distx = jnp.abs(obj1.x-obj2.x)<=self.consts.HITBOX_SIZE
-        distz = jnp.abs(obj1.z - obj2.z) <= self.consts.HITBOX_SIZE
+    def _enemy_projectile_collision_check(self, obj1:Enemy, obj2:Projectile):
+        s = self.consts.ENEMY_HITBOX_SIZE
+        distx = jnp.abs((obj1.x+s) - obj2.x) <= s
+        distz = jnp.abs((obj1.z+s) - obj2.z) <= s
         return jnp.all(jnp.stack([distx, distz, obj1.active, obj2.active]))
 
 
@@ -549,6 +551,14 @@ class BattlezoneRenderer(JAXGameRenderer):
         self.enemy_explosion_mask = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_1"], pad, pad),
                                 self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_2"], pad, pad),
                                 self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_3"], pad, pad)])
+        self.projectile_masks = jnp.array([
+            self.pad_to_shape(self.SHAPE_MASKS["projectile_big"], 3, 3),
+            self.pad_to_shape(self.SHAPE_MASKS["projectile_small"], 3, 3)
+        ])
+        self.projectile_masks = jnp.array([
+            self.pad_to_shape(self.SHAPE_MASKS["projectile_big"], 6, 3),
+            self.pad_to_shape(self.SHAPE_MASKS["projectile_small"], 6, 3)
+        ])
 
 
 
@@ -793,7 +803,8 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     def render_single_projectile(self, raster, projectile:Projectile):
         def projectile_active(projectile):
-            projectile_mask = self.SHAPE_MASKS["projectile_big"]#todo
+            projectile_mask_index = jnp.where(projectile.distance <= 15,0,1)
+            projectile_mask = self.projectile_masks[projectile_mask_index]
             x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
             return self.jr.render_at_clipped(raster, x, y, projectile_mask)
         def projectile_inactive(_):
