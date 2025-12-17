@@ -114,6 +114,8 @@ class UpNDownState(NamedTuple):
     is_on_road: chex.Array
     player_car: Car
     step_counter: chex.Array
+    round_started: chex.Array
+    movement_steps: chex.Array
     # Flag state - tracks all 8 flags
     flags: Flag  # Contains arrays of size NUM_FLAGS for each field
     flags_collected_mask: chex.Array  # Boolean mask of which flag colors have been collected (size NUM_FLAGS)
@@ -621,6 +623,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 type=state.player_car.type,
             ),
             step_counter=state.step_counter + 1,
+            round_started=jnp.logical_or(state.round_started, player_speed != 0),
+            movement_steps=jax.lax.cond(
+                jnp.logical_or(state.round_started, player_speed != 0),
+                lambda s: state.movement_steps + 1,
+                lambda s: state.movement_steps,
+                operand=None,
+            ),
             flags=state.flags,
             flags_collected_mask=state.flags_collected_mask,
             collectibles=state.collectibles,
@@ -645,6 +654,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_on_road=state.is_on_road,
             player_car=state.player_car,
             step_counter=state.step_counter,
+            round_started=state.round_started,
+            movement_steps=state.movement_steps,
             flags=new_flags,
             flags_collected_mask=new_flags_collected_mask,
             collectibles=state.collectibles,
@@ -669,10 +680,37 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_on_road=state.is_on_road,
             player_car=state.player_car,
             step_counter=state.step_counter,
+            round_started=state.round_started,
+            movement_steps=state.movement_steps,
             flags=state.flags,
             flags_collected_mask=state.flags_collected_mask,
             collectibles=updated_collectibles,
             collectible_spawn_timer=new_collectible_timer,
+        )
+
+    def _passive_score_step_main(self, state: UpNDownState) -> UpNDownState:
+        """Award passive score every 60 steps after the player has started moving."""
+        bonus = jax.lax.cond(
+            jnp.logical_and(state.round_started, state.movement_steps % 60 == 0),
+            lambda _: jnp.int32(10),
+            lambda _: jnp.int32(0),
+            operand=None,
+        )
+
+        return UpNDownState(
+            score=state.score + bonus,
+            difficulty=state.difficulty,
+            jump_cooldown=state.jump_cooldown,
+            is_jumping=state.is_jumping,
+            is_on_road=state.is_on_road,
+            player_car=state.player_car,
+            step_counter=state.step_counter,
+            round_started=state.round_started,
+            movement_steps=state.movement_steps,
+            flags=state.flags,
+            flags_collected_mask=state.flags_collected_mask,
+            collectibles=state.collectibles,
+            collectible_spawn_timer=state.collectible_spawn_timer,
         )
 
 
@@ -741,6 +779,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 type=0,
             ),
             step_counter=jnp.array(0),
+            round_started=jnp.array(False),
+            movement_steps=jnp.array(0),
             flags=flags,
             flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
             collectibles=collectibles,
@@ -753,6 +793,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def step(self, state: UpNDownState, action: chex.Array) -> Tuple[UpNDownObservation, UpNDownState, float, bool, UpNDownInfo]:
         previous_state = state
         state = self._player_step(state, action)
+        state = self._passive_score_step_main(state)
         state = self._flag_step_main(state)
         state = self._collectible_step_main(state)
 
@@ -880,6 +921,13 @@ class UpNDownRenderer(JAXGameRenderer):
         self.ice_cream_solid_mask = self.ice_cream_base_mask != self.jr.TRANSPARENT_ID
         self.ice_cream_palette_ids = self._compute_flag_palette_ids()
 
+        # Score rendering helpers
+        self.score_digit_masks = self.SHAPE_MASKS["score_digits"]
+        self.score_max_digits = 6
+        self.score_digit_spacing = int(self.score_digit_masks.shape[2]) + 1
+        self.score_render_y = 6
+        self.score_center_x = self.config.game_dimensions[1] // 2 - self.config.game_dimensions[1] // 4
+
     def _createBackgroundSprite(self, dimensions: Tuple[int, int]) -> jnp.ndarray:
         """Creates a procedural background sprite for the game."""
         height, width = dimensions
@@ -929,6 +977,7 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
             {'name': 'all_flags_top', 'type': 'single', 'file': 'all_flags_top.npy'},
             {'name': 'all_lives_bottom', 'type': 'single', 'file': 'all_lives_bottom.npy'},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
             {'name': 'pink_flag', 'type': 'single', 'file': 'pink_flag.npy'},
             {'name': 'flag_pole', 'type': 'single', 'file': 'flag_pole.npy'},
             {'name': 'cherry', 'type': 'single', 'file': 'cherry.npy'},
@@ -1000,6 +1049,29 @@ class UpNDownRenderer(JAXGameRenderer):
 
         all_flags_top_mask = self.SHAPE_MASKS["all_flags_top"]
         raster = self.jr.render_at(raster, 10, 20, all_flags_top_mask)
+
+        # Render score centered at the top using dedicated score digit sprites
+        score_digits = self.jr.int_to_digits(state.score, max_digits=self.score_max_digits)
+        non_zero_mask = score_digits != 0
+        has_non_zero = jnp.any(non_zero_mask)
+        first_non_zero = jnp.argmax(non_zero_mask)
+        start_index = jax.lax.select(has_non_zero, first_non_zero, self.score_max_digits - 1)
+        num_to_render = jax.lax.select(has_non_zero, self.score_max_digits - start_index, 1)
+
+        total_width = num_to_render * self.score_digit_spacing
+        score_x = self.score_center_x - (total_width // 2)
+
+        raster = self.jr.render_label_selective(
+            raster,
+            jnp.int32(score_x),
+            self.score_render_y,
+            score_digits,
+            self.score_digit_masks,
+            start_index,
+            num_to_render,
+            spacing=self.score_digit_spacing,
+            max_digits_to_render=self.score_max_digits,
+        )
 
         # Render flags on the road
         flag_pole_mask = self.SHAPE_MASKS["flag_pole"]
