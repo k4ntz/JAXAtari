@@ -46,6 +46,10 @@ class DefenderConstants(NamedTuple):
     DIGIT_WIDTH: int = 7
     DIGIT_PADDING: int = 1
     SCORE_MAX_DIGITS: int = 6
+    SMART_BOMB_X: int = 110
+    LIVES_X: int = 5
+    UI_BAR_Y: int = 190
+    UI_BAR_PADDING: int = 17
 
     COLOR_SPACE_SHIP_BLUE: Tuple[int, int, int] = (132, 144, 252)
     COLOR_BOMBER_BLUE: Tuple[int, int, int] = (104, 116, 208)
@@ -525,6 +529,7 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "swarmers", "type": "single", "file": "swarmers.npy"},
             {"name": "ui_overlay", "type": "single", "file": "ui_overlay.npy"},
             {"name": "city", "type": "single", "file": "city.npy"},
+            {"name": "smart_bomb", "type": "single", "file": "smart_bomb.npy"},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
         ]
 
@@ -755,7 +760,36 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = render_city(raster)
 
+        def render_ui(index: int, r):
+            # Smart bombs
+            padding = self.consts.UI_BAR_PADDING * index
+            r = jax.lax.cond(
+                index < state.smart_bomb_amount,
+                lambda: self.jr.render_at(
+                    r,
+                    self.consts.SMART_BOMB_X + padding,
+                    self.consts.UI_BAR_Y,
+                    self.SHAPE_MASKS["smart_bomb"],
+                ),
+                lambda: r,
+            )
+
+            # Lives
+            r = jax.lax.cond(
+                index < state.space_ship_lives,
+                lambda: self.jr.render_at(
+                    r,
+                    self.consts.LIVES_X + padding,
+                    self.consts.UI_BAR_Y,
+                    self.SHAPE_MASKS["space_ship"],
+                ),
+                lambda: r,
+            )
+            return r
+
         raster = self.jr.render_at(raster, 0, 0, self.SHAPE_MASKS["ui_overlay"])
+
+        raster = jax.lax.fori_loop(0, 3, render_ui, raster)
 
         def render_human(index: int, r):
             human = state.human_states[index]
