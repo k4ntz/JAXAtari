@@ -21,6 +21,10 @@ class JourneyEscapeConstants(NamedTuple):
     start_player_y: int = 166  # Fixed y position
     player_speed: int = 2  # constant downward speed
 
+    # frame countdown for timer
+    countdown_frame: int = 50 # countdown decreases by one second every 50 frames
+    start_countdown: int = 59 # for a 59 second countdown
+
     # Standard sizes
     obstacle_width: int = 8
     obstacle_height: int = 10
@@ -132,6 +136,7 @@ class JourneyEscapeState(NamedTuple):
 
     hit_cooldown: chex.Array  # int32
 
+    countdown: chex.Array
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -187,6 +192,7 @@ class JaxJourneyEscape(
             spawn_count=spawn_count,
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
+            countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32)
         )
 
         return self._get_observation(state), state
@@ -541,9 +547,13 @@ class JaxJourneyEscape(
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
 
+        # Update countdown
+        update_countdown = (new_time % self.consts.countdown_frame == 0)
+        new_countdown = jnp.where(update_countdown, state.countdown - 1, state.countdown)
+
         # Check game over
         game_over = jnp.where(
-            new_time >= 255 * 32,  # 2 minute time limit
+            new_countdown <= 0,
             jnp.array(True),
             state.game_over,
         )
@@ -562,11 +572,19 @@ class JaxJourneyEscape(
             spawn_count=new_spawn_count,
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
+            countdown=new_countdown.astype(jnp.int32)
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
         obs = self._get_observation(new_state)
         info = self._get_info(new_state)
+
+        
+        def after_timer_end(_):
+            obs2, st2 = self.reset()
+            return obs2, st2, jnp.array(0, dtype=jnp.int32), jnp.array(False, dtype=jnp.bool_), JourneyEscapeInfo(time=jnp.array(0, dtype=jnp.int32))
+
+        obs, _, env_reward, done, info = jax.lax.cond(state.game_over, after_timer_end, lambda _: (obs, state, env_reward, done, info), state)
 
         return obs, new_state, env_reward, done, info
 
@@ -788,6 +806,8 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {'name': 'obstacle_fence', 'type': 'single', 'file': 'obs_fence.npy'},
             {'name': 'obstacle_light', 'type': 'single', 'file': 'obs_light.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+            {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
+            {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -894,6 +914,17 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         render_x = jax.lax.select(is_single_digit, 49 + 8 // 2, 49)
         raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index,
                                                 num_to_render, spacing=8)
+
+        # 6. Render Countdown (On top of Blue Header)
+        countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
+        countdown_digit_masks = self.SHAPE_MASKS["timer_digits"]
+        num_to_render = 2
+        render_x_pos = (self.consts.screen_width // 2) - 2
+        raster = self.jr.render_at(raster, render_x_pos - 9, 20, self.SHAPE_MASKS["timer_digits"][0]) # Renders the fixed leading 0
+        raster = self.jr.render_at(raster, render_x_pos - 3, 20, self.SHAPE_MASKS["timer_colon"]) 
+        raster = self.jr.render_label_selective(raster, render_x_pos, 20,
+                                                countdown_digits, # the remaining seconds
+                                                countdown_digit_masks, start_index, num_to_render, spacing=7)
 
         # Render Side Bars (Black)
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
