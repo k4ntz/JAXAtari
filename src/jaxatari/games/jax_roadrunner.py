@@ -43,12 +43,12 @@ class RoadRunnerConstants(NamedTuple):
     PLAYER_ANIMATION_SPEED: int = 2
     # If the players x coordinate would be below this value after applying movement, we move everything one to the right to simulate movement.
     X_SCROLL_THRESHOLD: int = 50
-    ENEMY_MOVE_SPEED: int = 3
+    ENEMY_MOVE_SPEED: int = 2
     ENEMY_REACTION_DELAY: int = 6
-    PLAYER_START_X: int = 70  # Start farther left (ahead of enemy at 16)
-    PLAYER_START_Y: int = 96
+    PLAYER_START_X: int = 70
+    PLAYER_START_Y: int = 120
     ENEMY_X: int = 140
-    ENEMY_Y: int = 96
+    ENEMY_Y: int = 120
     PLAYER_SIZE: Tuple[int, int] = (8, 32)
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
@@ -86,8 +86,8 @@ class RoadRunnerConstants(NamedTuple):
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     SIDE_MARGIN: int = 8
     RAVINE_SIZE: Tuple[int, int] = (13, 32)
-    RAVINE_SPAWN_MIN_INTERVAL: int = 80
-    RAVINE_SPAWN_MAX_INTERVAL: int = 150
+    RAVINE_SPAWN_MIN_INTERVAL: int = 30
+    RAVINE_SPAWN_MAX_INTERVAL: int = 60
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -196,7 +196,7 @@ class RoadRunnerState(NamedTuple):
     lives: chex.Array
     jump_timer: chex.Array  # Countdown timer for jump (0 when not jumping)
     is_jumping: chex.Array  # Boolean flag indicating if player is currently jumping
-    ravines: chex.Array # 2D array of shape (3, 2)
+    ravines: chex.Array 
     next_ravine_spawn_scroll_step: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
 
@@ -932,10 +932,8 @@ class JaxRoadRunner(
 
         # Get current road bounds to check if height matches ravine height
         road_top, road_bottom, road_height = self._get_road_bounds(state)
-        road_width = self._get_current_road_section(state).road_width
         
         # Only spawn if road height is compatible (== 32)
-        # We use a small tolerance or exact match. Here exact match as per plan.
         height_compatible = road_height == 32
         
         should_spawn_active = spawn_ravines_enabled & height_compatible
@@ -945,92 +943,6 @@ class JaxRoadRunner(
         ravine_x = state.ravines[:, 0]
         
         scroll_offset = jnp.where(state.is_scrolling, consts.PLAYER_MOVE_SPEED, 0)
-        
-        # Ravines move towards 0 (left) relative to the screen when scrolling happens
-        # Wait, everything moves left when scrolling?
-        # Seeds: updated_x = jnp.where(seed_x >= 0, seed_x + scroll_offset, seed_x) ... wait, if scrolling moves map left, items should move LEFT.
-        # Let's check seed logic:
-        # seed logic: updated_x = jnp.where(seed_x >= 0, seed_x + scroll_offset, seed_x)
-        # if seed_x increases, it moves RIGHT.
-        # But scrolling means player moves right, so world moves left relative to camera?
-        # No, in this game typically scrolling means player is at edge, and world moves.
-        # The code for seeds says `seed_x + scroll_offset` where scroll_offset is +PLAYER_MOVE_SPEED.
-        # This implies items move RIGHT?
-        # Ah, handle_scrolling function:
-        # state.is_scrolling -> player_x + PLAYER_MOVE_SPEED
-        # If is_scrolling is true, player KEEPS moving right.
-        # But `_handle_scrolling` conditional subtracts from player velocity to keep him at threshold?
-        # Let's re-read `_player_step`:
-        # final_vel_x = -PLAYER_MOVE_SPEED if scrolling.
-        # So player stays put visually (relative to screen), but world "moves".
-        # If player stays put, and we are scrolling RIGHT, then objects should move LEFT (decrease x).
-        # But seed logic adds scroll_offset?
-        # "updated_x = jnp.where(seed_x >= 0, seed_x + scroll_offset, seed_x)"
-        # If `scroll_offset` is positive, seeds move RIGHT.
-        # This seems wrong if we are scrolling rightwards through the level.
-        # Let's check `_handle_level_completion`. `scrolling_step_counter` increases.
-        # If `scrolling_step_counter` increases, we are moving forward.
-        # Items should appear from right and move left, OR appear from left and we pass them?
-        # In Road Runner, player runs RIGHT.
-        # IF player runs RIGHT, new items should spawn at RIGHT edge and move LEFT relative to camera?
-        # Or they spawn ahead and we catch up?
-        # The seed spawning spawns at `next_spawn_step`.
-        # `seed_x = ...`
-        # Wait, if seed x increases, it moves across screen to the right.
-        # If player is at left and runs right...
-        # Let's look at `_update_and_spawn_seeds` again.
-        # `updated_x = jnp.where(seed_x >= 0, seed_x + scroll_offset, seed_x)`
-        # `seed_active = (updated_x >= 0) & (updated_x < consts.WIDTH)`
-        # If it moves right and despawns at WIDTH, then items move Left->Right.
-        # Does the player run Left->Right? Yes.
-        # So items are moving WITH the player?
-        # Ah, maybe the "Camera" is fixed and the player moves?
-        # If `is_scrolling` is true, player `final_vel_x` is negative. So player is pushed LEFT.
-        # To make it look like he is running right, the world must stay put? No...
-        # If `final_vel_x` is negative, player x decreases (moves left).
-        # If he was at threshold (50), he stays at 50.
-        # If items move RIGHT, they move faster than him?
-        # This seems to imply items coming from behind?
-        # But `_spawn` sets seed_y and `updated_seeds...`
-        # Where is x initialized?
-        # `seeds=updated_seeds.at[slot_idx].set(jnp.array([0, seed_y, seed_id], ...))`
-        # It spawns at 0 (LEFT).
-        # So seeds appear at LEFT and move RIGHT.
-        # Player is at ~140 (RIGHT).
-        # Player runs LEFT? `PLAYER_START_X = 140`.
-        # `consts.X_SCROLL_THRESHOLD = 50`.
-        # If player x < 50, we scroll.
-        # So player moves Left (towards 0).
-        # So player runs Right-to-Left?
-        # Let's check velocities. Left action = [-1, 0].
-        # Player start X=140.
-        # If I press LEFT, x decreases.
-        # If x < 50, scrolling starts.
-        # So the game is Right-to-Left scrolling!
-        # Road Runner runs away from Wile E. Coyote (who is at left?).
-        # `ENEMY_X = 16`.
-        # Player `140`.
-        # So Player runs Left (towards 0) to escape Enemy (at 16)? No, Enemy is at 16, Player at 140.
-        # If Player runs Left, he runs INTO the enemy.
-        # Maybe Enemy chases Player?
-        # If Player is at 140 and runs Left -> x decreases.
-        # If x < 50 -> scroll.
-        # So the "goal" is to the Left?
-        # Level complete when `scrolling_step_counter >= target`.
-        # So we definitely scroll by moving Left.
-        # So new items should spawn at LEFT (0) and move RIGHT (towards WIDTH) or spawn at RIGHT?
-        # If we move Left, the "camera" moves Left.
-        # Objects at 0 (Left edge) should move Right (into view) or Left (out of view)?
-        # If camera moves Left, objects should appear to move Right relative to camera.
-        # So `seed_x + scroll_offset` (positive) makes sense.
-        # They spawn at 0?
-        # `jnp.array([0, seed_y, seed_id]` -> Yes, spawn at 0.
-        # So items spawn at Left edge and move Right.
-        # So Ravines should behave similarly.
-        
-        # Ravine Spawing:
-        # Spawn at x=0 (Left).
-        # Move Right (x increases).
         
         # Update positions
         ravine_x = jnp.where(
@@ -1060,13 +972,6 @@ class JaxRoadRunner(
         def _spawn_ravine(st: RoadRunnerState) -> RoadRunnerState:
             slot_idx = jnp.argmax(available_slots)
             
-            # Y position is fixed to road top (since it spans road height)
-            # Actually, per plan: "The ravine spans the height of the road"
-            # road_height is 32. Ravine sprite is 32.
-            # So y should be road_top.
-            
-            # Note: road_top from _get_road_bounds includes margin.
-            # Just use road_top computed above.
             spawn_y = road_top
             
             next_spawn_step = state.scrolling_step_counter + jax.random.randint(
@@ -1076,10 +981,6 @@ class JaxRoadRunner(
                 ravine_spawn_bounds[1] + 1,
                 dtype=jnp.int32,
             )
-            
-            # Spawn at x=0
-            # Note: Ravine width is 13.
-            # If we spawn at 0, it appears at left edge.
             
             new_ravine = jnp.array([0, spawn_y], dtype=jnp.int32)
             
@@ -1104,24 +1005,6 @@ class JaxRoadRunner(
         player_x = state.player_x
         player_y = state.player_y
         
-        # Player feet/bottom area for falling
-        # Let's be generous: if the center of player's bottom edge is over ravine.
-        # Player Size: (8, 32).
-        # Center X = player_x + 4.
-        # Bottom Y = player_y + 32.
-        
-        # Ravine Size: (13, 32).
-        
-        # AABB Check? 
-        # Requirement: "If they jump while crossing the ravine, they do not lose a life."
-        # This implies if is_jumping is True, we skip check.
-        
-        # If !is_jumping:
-        # Check overlap.
-        # Let's use strict overlap for feet.
-        # Player feet are at bottom of sprite.
-        # Let's say bottom 4 pixels.
-        
         player_feet_left = player_x
         player_feet_right = player_x + self.consts.PLAYER_SIZE[0]
         player_feet_top = player_y + self.consts.PLAYER_SIZE[1] - 4
@@ -1139,13 +1022,9 @@ class JaxRoadRunner(
 
             # Check overlap
             overlap_x = (player_feet_left < r_right) & (player_feet_right > r_left)
-            # Overlap y? Ravine is on road, player is walking on road.
             overlap_y = (player_feet_top < r_bottom) & (player_feet_bottom > r_top)
             
             collision = active & overlap_x & overlap_y & jnp.logical_not(st.is_jumping)
-            
-            # If collision, trigger death
-            # We want instant reset.
             
             return jax.lax.cond(
                 collision,
@@ -1519,22 +1398,10 @@ class JaxRoadRunner(
             width=jnp.array(self.consts.ENEMY_SIZE[0]),
             height=jnp.array(self.consts.ENEMY_SIZE[1]),
         )
-        # Find nearest upcoming ravine
-        # We look for active ravines (x >= 0) that are to the right of the player or overlapping
-        # Since ravines are sorted by spawn order (roughly), we can just check all and take min positive distance
-        # But simpler: just take the first active one, or a placeholder if none.
-        # Ravines are active if x >= -100 (visible or just passed).
-        # Let's just return the first ravine in the array for now (simplification)
-        # Better: Return the ravine with min x > player_x - width
         
         # Valid ravines have x >= 0 (strictly active in our logic, although we set to -1 when inactive)
         active_ravines_mask = state.ravines[:, 0] >= 0
-        
-        # We want the ravine that is closest to the player but not fully passed?
-        # For simplicity in this observation, let's just expose the first ravine slot.
-        # A more complex observation might sort them.
-        # Given max 3 ravines, maybe just exposing the closest one is enough.
-        
+
         # Let's find the ravine with smallest x >= 0
         ravine_x = state.ravines[:, 0]
         ravine_y = state.ravines[:, 1]
@@ -1647,14 +1514,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         road_sprite = self._create_road_sprite()
         life_sprite = self._create_life_sprite()
-        # No create_ravine_sprite because we load it from file directly via asset config name
-        # But we need to update asset config to load it.
-        # Actually, in _get_asset_config, "ravine" is not there, so we must add it.
-        # But wait, create_sprites.py didn't create ravine.npy?
-        # User said "The ravine uses the ravine.npy sprite".
-        # I checked it exists in `src/jaxatari/games/sprites/roadrunner/ravine.npy`.
-        # So I just need to add it to asset config.
-        
         asset_config = self._get_asset_config(
             road_sprite, wall_sprite_bottom, life_sprite
         )
