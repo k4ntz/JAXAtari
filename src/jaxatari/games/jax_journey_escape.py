@@ -927,15 +927,13 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # 6. Render Countdown (On top of Blue Header)
         countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
         countdown_digit_masks = self.SHAPE_MASKS["timer_digits"]
-        is_single_digit = state.countdown < 10
-        start_index = jax.lax.select(is_single_digit, 1, 0)
         num_to_render = 2
         render_x_pos = (self.consts.screen_width // 2) - 2
         raster = self.jr.render_at(raster, render_x_pos - 9, 20, self.SHAPE_MASKS["timer_digits"][0]) # Renders the fixed leading 0
         raster = self.jr.render_at(raster, render_x_pos - 3, 20, self.SHAPE_MASKS["timer_colon"]) 
         raster = self.jr.render_label_selective(raster, render_x_pos, 20,
                                                 countdown_digits, # the remaining seconds
-                                                countdown_digit_masks, start_index, num_to_render, spacing=7)
+                                                countdown_digit_masks, 0, num_to_render, spacing=7)
 
         # Render Side Bars (Black)
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
