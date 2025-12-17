@@ -74,6 +74,7 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_HEIGHT: int = 5
     SPACE_SHIP_LIVES: int = 3
     SPACE_SHIP_BOMBS: int = 3
+    SHOOTING_CD_IN_SEC: float = 0.2
 
     # Enemy
     ACTIVE: int = 1
@@ -272,6 +273,8 @@ class DefenderState(NamedTuple):
     killed_landers: chex.Array
     # Human
     human_states: chex.Array
+    # Cooldowns
+    shooting_cooldown: chex.Array
     # Randomness
     key: chex.Array
 
@@ -873,7 +876,9 @@ class JaxDefender(
             lambda: state,
         )
 
-        def spawn_on_random_position_not_on_screen(state: DefenderState, e_type: int) -> DefenderState:
+        def spawn_on_random_position_not_on_screen(
+            state: DefenderState, e_type: int
+        ) -> DefenderState:
             state = state._replace(killed_landers=state.killed_landers + 1)
             random_x, random_y, new_key = self.get_random_position_not_on_screen(
                 state,
@@ -881,15 +886,17 @@ class JaxDefender(
                 self.consts.ENEMY_HEIGHT,
                 state.key,
             )
-            state = self._spawn_enemy(
-                state, random_x, random_y, e_type, 0, 0
-            )
+            state = self._spawn_enemy(state, random_x, random_y, e_type, 0, 0)
 
             return state._replace(key=new_key)
 
         state = jax.lax.cond(
-            jnp.logical_and(jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
-                             self.consts.LANDER_AMOUNT[jnp.remainder(state.level, 5)] - self.consts.MAX_LANDER_AMOUNT > state.killed_landers),
+            jnp.logical_and(
+                jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
+                self.consts.LANDER_AMOUNT[jnp.remainder(state.level, 5)]
+                - self.consts.MAX_LANDER_AMOUNT
+                > state.killed_landers,
+            ),
             lambda: spawn_on_random_position_not_on_screen(state, self.consts.LANDER),
             lambda: state,
         )
@@ -908,7 +915,6 @@ class JaxDefender(
 
         # TODO Add score
         return state
-    
 
     def get_random_position_not_on_screen(
         self, state: DefenderState, width: int, height: int, key: chex.Array
@@ -1002,7 +1008,12 @@ class JaxDefender(
 
         state = jax.lax.fori_loop(0, max_indice, delete_enemy, state)
         smart_bomb_amount = state.smart_bomb_amount - 1
-        state = state._replace(smart_bomb_amount=smart_bomb_amount)
+
+        shooting_cooldown = self.consts.SHOOTING_CD_IN_SEC
+
+        state = state._replace(
+            smart_bomb_amount=smart_bomb_amount, shooting_cooldown=shooting_cooldown
+        )
         return state
 
     def _shoot_laser(self, state: DefenderState) -> DefenderState:
@@ -1013,15 +1024,20 @@ class JaxDefender(
             lambda: state.space_ship_x + self.consts.SPACE_SHIP_WIDTH - laser_x_adjust,
             lambda: state.space_ship_x - self.consts.LASER_WIDTH + laser_x_adjust,
         )
-
         laser_y = state.space_ship_y + 0.5 + self.consts.SPACE_SHIP_HEIGHT / 2
         laser_dir_x = jnp.where(state.space_ship_facing_right, 1.0, -1.0)
-        return state._replace(
+
+        shooting_cooldown = self.consts.SHOOTING_CD_IN_SEC
+
+        state = state._replace(
             laser_x=laser_x,
             laser_y=laser_y,
             laser_dir_x=laser_dir_x,
             laser_state=self.consts.LASER_STATE_ACTIVE,
+            shooting_cooldown=shooting_cooldown,
         )
+
+        return state
 
     def _check_laser(self, state: DefenderState) -> DefenderState:
         laser_x = state.laser_x
@@ -1163,35 +1179,43 @@ class JaxDefender(
             space_ship_x, space_ship_y, x_speed, y_speed, self.consts.SPACE_SHIP_HEIGHT
         )
 
+        # Decrease shooting cooldown
+        shooting_cooldown = jax.lax.cond(
+            state.shooting_cooldown > 0,
+            lambda: state.shooting_cooldown - self.consts.GAME_TICK_PER_FRAME,
+            lambda: 0.0,
+        )
+
         state = state._replace(
             space_ship_speed=space_ship_speed,
             space_ship_x=space_ship_x,
             space_ship_y=space_ship_y,
             space_ship_facing_right=space_ship_facing_right,
+            shooting_cooldown=shooting_cooldown,
         )
 
-        hyperspace = space_ship_y < (2 - self.consts.SPACE_SHIP_HEIGHT)
-
-        # Shooting a laser active again
-        shoot_laser = jnp.logical_and(
-            shoot, state.laser_state == self.consts.LASER_STATE_INACTIVE
-        )
+        # Shooting if the cooldown is down
+        shoot = jnp.logical_and(shoot, shooting_cooldown <= 0)
 
         # Not be able to shoot in hyperspace
-        shoot_laser = jnp.logical_and(shoot_laser, jnp.logical_not(hyperspace))
+        hyperspace = space_ship_y < (2 - self.consts.SPACE_SHIP_HEIGHT)
+        shoot_laser = jnp.logical_and(shoot, jnp.logical_not(hyperspace))
 
+        # Shoot bomb if inside city
+        in_city = (
+            self.consts.GAME_HEIGHT
+            - self.consts.CITY_HEIGHT
+            - self.consts.SPACE_SHIP_HEIGHT
+        )
         shoot_smart_bomb = jnp.logical_and(
             shoot,
-            space_ship_y
-            > (
-                self.consts.GAME_HEIGHT
-                - self.consts.CITY_HEIGHT
-                - self.consts.SPACE_SHIP_HEIGHT
-            ),
+            space_ship_y > in_city,
         )
 
+        # Shoot laser if not in hyperspace and city
         shoot_laser = jnp.logical_xor(shoot_laser, shoot_smart_bomb)
 
+        # If smart bomb is the chosen shot, look up if it is available
         shoot_smart_bomb = jnp.logical_and(
             shoot_smart_bomb, state.smart_bomb_amount > 0
         )
@@ -1940,6 +1964,8 @@ class JaxDefender(
             human_states=jnp.array(self.consts.INITIAL_HUMAN_STATES).astype(
                 jnp.float32
             ),
+            # Cooldowns
+            shooting_cooldown=jnp.array(0).astype(jnp.float32),
             # Randomness
             key=jnp.array(jax.random.PRNGKey(0)),
         )
