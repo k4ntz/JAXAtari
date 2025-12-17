@@ -337,7 +337,7 @@ class JaxYarsRevenge(
             ),
             energy_shield=Entity(
                 x=jnp.array(128).astype(jnp.float32),
-                y=jnp.array(100).astype(jnp.float32),
+                y=jnp.array(0).astype(jnp.float32),
                 w=jnp.array(
                     self.consts.ENERGY_CELL_WIDTH
                     * self.consts.INITIAL_ENERGY_SHIELD[stage].shape[1]
@@ -735,7 +735,8 @@ class JaxYarsRevenge(
             jnp.where(
                 cannon_fired,
                 state.cannon.y,
-                get_entity_position(state.yar, Direction._CENTER)[1],
+                get_entity_position(state.yar, Direction._CENTER)[1]
+                - (state.cannon.h // 2),
             ),
             0,
             self.consts.HEIGHT,
@@ -753,7 +754,9 @@ class JaxYarsRevenge(
         )
 
         # Stage Specific
-        shield_snake_apply = jnp.logical_and(state.stage == 1, (state.step_counter % self.consts.SNAKE_FRAME == 0))
+        shield_snake_apply = jnp.logical_and(
+            state.stage == 1, (state.step_counter % self.consts.SNAKE_FRAME == 0)
+        )
 
         new_energy_shield_state = jnp.where(
             shield_snake_apply,
@@ -765,8 +768,12 @@ class JaxYarsRevenge(
         yar_destroyer = check_entity_collusion(state.yar, state.destroyer)
         yar_destroyer_hits = jnp.logical_and(yar_destroyer, ~yar_neutral)
 
-        qotile_cannon = check_entity_collusion(state.qotile, state.cannon)
-        yar_cannon = check_entity_collusion(state.yar, state.cannon)
+        qotile_cannon = jnp.logical_and(
+            cannon_exists, cannon_fired
+        ) & check_entity_collusion(state.qotile, state.cannon)
+        yar_cannon = jnp.logical_and(
+            cannon_exists, cannon_fired
+        ) & check_entity_collusion(state.yar, state.cannon)
 
         life_lost = yar_destroyer_hits | yar_cannon
         new_lives = jnp.where(life_lost, state.lives - 1, state.lives)
@@ -1174,7 +1181,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         qotile_mask = self.SHAPE_MASKS["qotile"]
 
-        swirl_idx = self.get_animation_idx(state.step_counter, 0, self.consts.SWIRL_MOVEMENT_FRAME, 4)
+        swirl_idx = self.get_animation_idx(
+            state.step_counter, 0, self.consts.SWIRL_MOVEMENT_FRAME, 4
+        )
         swirl_mask = self.SHAPE_MASKS["swirl"][swirl_idx]
 
         raster = jnp.where(
