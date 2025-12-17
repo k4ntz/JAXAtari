@@ -311,10 +311,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             return state1._replace(score=new_score), None
 
         new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
-        new_state = new_state._replace(enemies=new_state.enemies._replace(
-            active=jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
-        ))
-        return new_state
+        new_enemies_active = jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
+        new_player_projectile_active = jnp.logical_and(new_state.player_projectile.active, jnp.invert(jnp.any(hit_arr)))
+        return new_state._replace(
+            enemies=new_state.enemies._replace(active=new_enemies_active),
+            player_projectile=new_state.player_projectile._replace(active=new_player_projectile_active)
+        )
 
 
 
@@ -344,7 +346,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=jnp.array(False, dtype=jnp.bool),
                 distance=jnp.array(0, dtype=jnp.float32)
             ),
-            enemy_projectiles=Projectile(
+            enemy_projectiles=Projectile(#todo
                 x=jnp.array(0),
                 z=jnp.array(0),
                 orientation_angle=jnp.array(0),
@@ -366,10 +368,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         #-------------------projectiles-------------
         new_player_projectile = self._single_projectile_step(state.player_projectile)
-        new_state = self._player_projectile_col_check(state)
+        new_state = new_state._replace(player_projectile=new_player_projectile)
+        new_state = self._player_projectile_col_check(new_state)
         #------------------------------------------
 
-        new_state = new_state._replace(player_projectile=new_player_projectile)
         new_state = self._player_step(new_state, action)
         new_state = self._enemy_step(new_state)
 
