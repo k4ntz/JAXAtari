@@ -1104,9 +1104,6 @@ class YarsRevengeRenderer(JAXGameRenderer):
         yar_mask = self.SHAPE_MASKS["yar"][yar_sprite_idx]
         raster = self.jr.render_at(raster, state.yar.x, state.yar.y, yar_mask)
 
-        qotile_mask = self.SHAPE_MASKS["qotile"]
-        raster = self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask)
-
         raster = self.jr.render_grid_inverse(
             raster=raster,
             grid_state=state.energy_shield_state.astype(jnp.int32),
@@ -1163,5 +1160,8 @@ class YarsRevengeRenderer(JAXGameRenderer):
             self.jr.render_at(raster, state.cannon.x, state.cannon.y, cannon_mask),
             raster,
         )
+
+        qotile_mask = self.SHAPE_MASKS["qotile"]
+        raster = self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
