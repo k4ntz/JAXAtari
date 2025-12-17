@@ -495,8 +495,23 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         clipped_x = jnp.clip(new_x, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER)
         new_x = jnp.where(on_top_lane, clipped_x, new_x)
 
-        new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.BOTTOM_CLIP)
-        white_ufo_position = jnp.array([new_x, new_y])
+        new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.PLAYER_POS_Y + 1.0)
+        
+        should_respawn = jnp.logical_or(
+            new_x < 0,
+            jnp.logical_or(
+                new_x > self.consts.SCREEN_WIDTH,
+                new_y > self.consts.PLAYER_POS_Y
+            )
+        )
+
+        white_ufo_position = jnp.where(should_respawn, jnp.array([77.0, 43.0]), jnp.array([new_x, new_y]))
+        white_ufo_vel_x = jnp.where(should_respawn, 0.0, white_ufo_vel_x)
+        white_ufo_vel_y = jnp.where(should_respawn, 0.0, white_ufo_vel_y)
+        time_on_lane = jnp.where(should_respawn, 0, time_on_lane)
+        attack_time = jnp.where(should_respawn, 0, attack_time)
+        pattern_id = jnp.where(should_respawn, int(WhiteUFOPattern.IDLE), pattern_id)
+        pattern_timer = jnp.where(should_respawn, 0, pattern_timer)
 
         return (
             white_ufo_position,
@@ -693,7 +708,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         lane_offset = jnp.where(pattern_id == int(WhiteUFOPattern.DROP_LEFT), -1, lane_offset)
 
         # 3. Apply offset and clip to valid lane indices (0 to 6)
-        target_lane_id = jnp.clip(closest_lane_id + lane_offset, 0, 6)
+        # Stage 6 starts at y=86. When in Stage 6 or 7, restrict to lanes 1-5.
+        in_restricted_stage = y >= 86.0
+        min_lane = jnp.where(in_restricted_stage, 1, 0)
+        max_lane = jnp.where(in_restricted_stage, 5, 6)
+        target_lane_id = jnp.clip(closest_lane_id + lane_offset, min_lane, max_lane)
 
         lane_vector = lane_vectors[target_lane_id]
         target_lane_x = lane_x_at_y[target_lane_id]
