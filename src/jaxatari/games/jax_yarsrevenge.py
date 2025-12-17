@@ -148,6 +148,7 @@ class YarsRevengeConstants(NamedTuple):
     SWIRL_SIZE: Tuple[int, int] = (8, 16)
     DESTROYER_SIZE: Tuple[int, int] = (4, 2)
     ENERGY_MISSILE_SIZE: Tuple[int, int] = (1, 2)
+    CANNON_SIZE: Tuple[int, int] = (8, 8)
 
     QOTILE_MIN_Y: int = 55
     QOTILE_MAX_Y: int = 155
@@ -160,6 +161,7 @@ class YarsRevengeConstants(NamedTuple):
     SWIRL_SPEED = 2.0
     DESTROYER_SPEED = 0.125
     ENERGY_MISSILE_SPEED = 4.0
+    CANNON_SPEED = 1.0
 
     STEADY_YAR_MOVEMENT_FRAME = (
         4  # Movement animation change interval for Yar (no action)
@@ -225,6 +227,9 @@ class YarsRevengeState(NamedTuple):
     swirl: DirectionEntity
     energy_missile_exist: jnp.ndarray
     energy_missile: DirectionEntity
+    cannon_exist: jnp.ndarray
+    cannon_fired: jnp.ndarray
+    cannon: DirectionEntity
 
     energy_shield: Entity
     energy_shield_state: jnp.ndarray
@@ -241,6 +246,9 @@ class YarsRevengeObservation(NamedTuple):
     swirl: DirectionEntity
     energy_missile_exist: jnp.ndarray
     energy_missile: DirectionEntity
+    cannon_exist: jnp.ndarray
+    cannon_fired: jnp.ndarray
+    cannon: DirectionEntity
     energy_shield: Entity
     energy_shield_state: jnp.ndarray
     lives: chex.Array
@@ -309,6 +317,15 @@ class JaxYarsRevenge(
                 y=jnp.array(0).astype(jnp.float32),
                 w=jnp.array(self.consts.ENERGY_MISSILE_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.ENERGY_MISSILE_SIZE[1]).astype(jnp.int32),
+                direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
+            ),
+            cannon_exist=jnp.array(0).astype(jnp.bool),
+            cannon_fired=jnp.array(0).astype(jnp.bool),
+            cannon=DirectionEntity(
+                x=jnp.array(1).astype(jnp.float32),
+                y=jnp.array(0).astype(jnp.float32),
+                w=jnp.array(self.consts.CANNON_SIZE[0]).astype(jnp.int32),
+                h=jnp.array(self.consts.CANNON_SIZE[1]).astype(jnp.int32),
                 direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
             ),
             energy_shield=Entity(
@@ -641,6 +658,57 @@ class JaxYarsRevenge(
             self.consts.HEIGHT,
         )
 
+        # Cannon Calculations
+        cannon_exists = state.cannon_exist == 1
+        cannon_fired = state.cannon_fired == 1
+        cannon_hit_boundary = check_entity_boundary(state.cannon)
+
+        cannon_shield = check_energy_shield_collusion(
+            state.cannon, state.energy_shield, state.energy_shield_state
+        )
+        cannon_hit_shield = jnp.any(cannon_shield)
+
+        adj_mask = (
+            jax.scipy.signal.convolve(
+                missile_shield, self.consts.MISSILE_HIT_KERNEL, mode="same"
+            )
+            > 0
+        )
+
+        new_cannon_exists = jnp.logical_or(
+            jnp.logical_and(~cannon_exists, devour_reset),
+            jnp.logical_and(
+                cannon_exists,
+                jnp.logical_and(~cannon_hit_boundary, ~cannon_hit_shield),
+            ),
+        )
+
+        cannon_dx, _ = Direction.to_delta(
+            Direction.to_flags(state.cannon.direction),
+            self.consts.CANNON_SPEED,
+        )
+
+        new_cannon_x = jnp.clip(
+            jnp.where(
+                cannon_fired,
+                state.cannon.x + cannon_dx,
+                jnp.array(1).astype(jnp.float32),
+            ),
+            0,
+            self.consts.WIDTH,
+        )
+
+        new_cannon_y = jnp.clip(
+            jnp.where(
+                cannon_fired,
+                state.cannon.y,
+                get_entity_position(state.yar, Direction._CENTER)[1],
+            ),
+            0,
+            self.consts.HEIGHT,
+        )
+
+        # Energy Shield Y calculation
         new_energy_shield_y = (
             get_entity_position(state.qotile, Direction._CENTER)[1]
             - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
@@ -698,6 +766,15 @@ class JaxYarsRevenge(
                     w=state.energy_missile.w,
                     h=state.energy_missile.h,
                     direction=new_energy_missile_direction,
+                ),
+                cannon_exist=new_cannon_exists,
+                cannon_fired=state.cannon_fired,
+                cannon=DirectionEntity(
+                    x=new_cannon_x,
+                    y=new_cannon_y,
+                    w=state.cannon.w,
+                    h=state.cannon.h,
+                    direction=state.cannon.direction,
                 ),
                 energy_shield=Entity(
                     x=state.energy_shield.x,
@@ -770,6 +847,16 @@ class JaxYarsRevenge(
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
+                "cannon_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
+                "cannon_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
+                "cannon": spaces.Dict(
+                    {
+                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                    }
+                ),
                 "energy_shield": spaces.Dict(
                     {
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -799,6 +886,9 @@ class JaxYarsRevenge(
             swirl=state.swirl,
             energy_missile_exist=state.energy_missile_exist,
             energy_missile=state.energy_missile,
+            cannon_exist=state.cannon_exist,
+            cannon_fired=state.cannon_fired,
+            cannon=state.cannon,
             energy_shield=state.energy_shield,
             energy_shield_state=state.energy_shield_state,
             lives=state.lives,
@@ -835,6 +925,13 @@ class JaxYarsRevenge(
                 obs.energy_missile.w.flatten(),
                 obs.energy_missile.h.flatten(),
                 obs.energy_missile.direction.flatten(),
+                obs.cannon_exist.flatten(),
+                obs.cannon_fired.flatten(),
+                obs.cannon.x.flatten(),
+                obs.cannon.y.flatten(),
+                obs.cannon.w.flatten(),
+                obs.cannon.h.flatten(),
+                obs.cannon.direction.flatten(),
                 obs.energy_shield.x.flatten(),
                 obs.energy_shield.y.flatten(),
                 obs.energy_shield.w.flatten(),
@@ -977,6 +1074,13 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 state.energy_missile.y,
                 energy_missile_mask,
             ),
+            raster,
+        )
+
+        cannon_mask = jnp.ones((self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0]))
+        raster = jnp.where(
+            state.cannon_exist,
+            self.jr.render_at(raster, state.cannon.x, state.cannon.y, cannon_mask),
             raster,
         )
 
