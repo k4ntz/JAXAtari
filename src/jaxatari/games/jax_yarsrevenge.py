@@ -216,6 +216,7 @@ class YarsRevengeState(NamedTuple):
     level: jnp.ndarray
     score: jnp.ndarray
     lives: jnp.ndarray
+    stage: jnp.ndarray
 
     yar: DirectionEntity
     yar_state: jnp.ndarray  # as YarState enum
@@ -275,12 +276,14 @@ class JaxYarsRevenge(
         super().__init__(consts)
         self.renderer = YarsRevengeRenderer(self.consts)
 
-    def reset(self, key=None):
-        state = YarsRevengeState(
+    @partial(jax.jit, static_argnums=(0,))
+    def construct_initial_state(self, stage):
+        return YarsRevengeState(
             step_counter=jnp.array(0).astype(jnp.int32),
             level=jnp.array(1).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
+            stage=jnp.array(stage).astype(jnp.int32),
             yar=DirectionEntity(
                 x=jnp.array(10).astype(jnp.float32),
                 y=jnp.array(105).astype(jnp.float32),
@@ -334,14 +337,14 @@ class JaxYarsRevenge(
                 y=jnp.array(100).astype(jnp.float32),
                 w=jnp.array(
                     self.consts.ENERGY_CELL_WIDTH
-                    * self.consts.INITIAL_ENERGY_SHIELD[0].shape[1]
+                    * self.consts.INITIAL_ENERGY_SHIELD[stage].shape[1]
                 ).astype(jnp.int32),
                 h=jnp.array(
                     self.consts.ENERGY_CELL_HEIGHT
-                    * self.consts.INITIAL_ENERGY_SHIELD[0].shape[0]
+                    * self.consts.INITIAL_ENERGY_SHIELD[stage].shape[0]
                 ).astype(jnp.int32),
             ),
-            energy_shield_state=self.consts.INITIAL_ENERGY_SHIELD[0],
+            energy_shield_state=self.consts.INITIAL_ENERGY_SHIELD[stage],
             neutral_zone=Entity(
                 x=jnp.array(self.consts.NEUTRAL_ZONE_POSITION[0]).astype(jnp.float32),
                 y=jnp.array(self.consts.NEUTRAL_ZONE_POSITION[1]).astype(jnp.float32),
@@ -349,6 +352,9 @@ class JaxYarsRevenge(
                 h=jnp.array(self.consts.NEUTRAL_ZONE_SIZE[1]).astype(jnp.int32),
             ),
         )
+
+    def reset(self, key=None):
+        state = self.construct_initial_state(0)
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -522,7 +528,7 @@ class JaxYarsRevenge(
         )
 
         new_yar_devour_count = jnp.where(
-            yar_hit_shield & yar_moving,
+            yar_hit_shield & yar_moving | yar_qotile_collusion,
             state.yar_devour_count + 1,
             state.yar_devour_count,
         )
@@ -736,72 +742,82 @@ class JaxYarsRevenge(
         qotile_cannon = check_entity_collusion(state.qotile, state.cannon)
         yar_cannon = check_entity_collusion(state.yar, state.cannon)
 
-        game_advance = yar_destroyer_hits | qotile_cannon | yar_cannon
+        life_lost = yar_destroyer_hits | yar_cannon
+        new_lives = jnp.where(life_lost, state.lives - 1, state.lives)
+
+        game_advance = qotile_cannon
 
         new_state = jax.lax.cond(
             game_advance,
-            lambda: self.reset()[1],
-            lambda: YarsRevengeState(
-                step_counter=state.step_counter + 1,
-                level=state.level,
-                score=state.score,
-                lives=state.lives,
-                yar=DirectionEntity(
-                    x=new_yar_x,
-                    y=new_yar_y,
-                    w=state.yar.w,
-                    h=state.yar.h,
-                    direction=new_yar_direction,
+            lambda: self.construct_initial_state((state.stage + 1) % 2),
+            lambda: jax.lax.cond(
+                life_lost,
+                lambda: self.construct_initial_state(state.stage)._replace(
+                    lives=new_lives, energy_shield_state=new_energy_shield_state
                 ),
-                yar_state=new_yar_state,
-                yar_devour_count=new_yar_devour_count,
-                qotile=DirectionEntity(
-                    x=state.qotile.x,
-                    y=new_qotile_y,
-                    w=state.qotile.w,
-                    h=state.qotile.h,
-                    direction=new_qotile_direction,
+                lambda: YarsRevengeState(
+                    step_counter=state.step_counter + 1,
+                    level=state.level,
+                    score=state.score,
+                    lives=new_lives,
+                    stage=state.stage,
+                    yar=DirectionEntity(
+                        x=new_yar_x,
+                        y=new_yar_y,
+                        w=state.yar.w,
+                        h=state.yar.h,
+                        direction=new_yar_direction,
+                    ),
+                    yar_state=new_yar_state,
+                    yar_devour_count=new_yar_devour_count,
+                    qotile=DirectionEntity(
+                        x=state.qotile.x,
+                        y=new_qotile_y,
+                        w=state.qotile.w,
+                        h=state.qotile.h,
+                        direction=new_qotile_direction,
+                    ),
+                    destroyer=Entity(
+                        x=new_destroyer_x,
+                        y=new_destroyer_y,
+                        w=state.destroyer.w,
+                        h=state.destroyer.h,
+                    ),
+                    swirl_exist=state.swirl_exist,
+                    swirl_fired=state.swirl_fired,
+                    swirl=DirectionEntity(
+                        x=state.swirl.x,
+                        y=state.swirl.y,
+                        w=state.swirl.w,
+                        h=state.swirl.h,
+                        direction=state.swirl.direction,
+                    ),
+                    energy_missile_exist=new_em_exists,
+                    energy_missile=DirectionEntity(
+                        x=new_energy_missile_x,
+                        y=new_energy_missile_y,
+                        w=state.energy_missile.w,
+                        h=state.energy_missile.h,
+                        direction=new_energy_missile_direction,
+                    ),
+                    cannon_exist=new_cannon_exists,
+                    cannon_fired=new_cannon_fired,
+                    cannon=DirectionEntity(
+                        x=new_cannon_x,
+                        y=new_cannon_y,
+                        w=state.cannon.w,
+                        h=state.cannon.h,
+                        direction=state.cannon.direction,
+                    ),
+                    energy_shield=Entity(
+                        x=state.energy_shield.x,
+                        y=new_energy_shield_y,
+                        w=state.energy_shield.w,
+                        h=state.energy_shield.h,
+                    ),
+                    energy_shield_state=new_energy_shield_state,
+                    neutral_zone=state.neutral_zone,
                 ),
-                destroyer=Entity(
-                    x=new_destroyer_x,
-                    y=new_destroyer_y,
-                    w=state.destroyer.w,
-                    h=state.destroyer.h,
-                ),
-                swirl_exist=state.swirl_exist,
-                swirl_fired=state.swirl_fired,
-                swirl=DirectionEntity(
-                    x=state.swirl.x,
-                    y=state.swirl.y,
-                    w=state.swirl.w,
-                    h=state.swirl.h,
-                    direction=state.swirl.direction,
-                ),
-                energy_missile_exist=new_em_exists,
-                energy_missile=DirectionEntity(
-                    x=new_energy_missile_x,
-                    y=new_energy_missile_y,
-                    w=state.energy_missile.w,
-                    h=state.energy_missile.h,
-                    direction=new_energy_missile_direction,
-                ),
-                cannon_exist=new_cannon_exists,
-                cannon_fired=new_cannon_fired,
-                cannon=DirectionEntity(
-                    x=new_cannon_x,
-                    y=new_cannon_y,
-                    w=state.cannon.w,
-                    h=state.cannon.h,
-                    direction=state.cannon.direction,
-                ),
-                energy_shield=Entity(
-                    x=state.energy_shield.x,
-                    y=new_energy_shield_y,
-                    w=state.energy_shield.w,
-                    h=state.energy_shield.h,
-                ),
-                energy_shield_state=new_energy_shield_state,
-                neutral_zone=state.neutral_zone,
             ),
         )
 
