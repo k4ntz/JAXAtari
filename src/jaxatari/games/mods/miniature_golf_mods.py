@@ -1,6 +1,6 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.miniature_golf_mod_plugins import (LargeHoleMod, MovingHoleMod, MultipleHolesMod,
-                                                            PermeableObstacleMod, PermeableWallMod, SoftShotRequiredMod,
+from jaxatari.games.mods.miniature_golf_mod_plugins import (LargeHoleMod, MovingHoleMod, PermeableObstacleMod,
+                                                            PermeableWallMod, SecondHoleMod, SoftShotRequiredMod,
                                                             StationaryObstacleMod, AlwaysZeroShotsMod)
 
 class MiniatureGolfEnvMod(JaxAtariModController):
@@ -12,9 +12,9 @@ class MiniatureGolfEnvMod(JaxAtariModController):
     REGISTRY = {
         "large_hole": LargeHoleMod,
         "moving_hole": MovingHoleMod,
-        "multiple_holes": MultipleHolesMod,
         "permeable_obstacle": PermeableObstacleMod,
         "permeable_wall": PermeableWallMod,
+        "second_hole": SecondHoleMod,
         "soft_shot_required": SoftShotRequiredMod,
         "stationary_obstacle": StationaryObstacleMod,
         "zero_shots": AlwaysZeroShotsMod,

@@ -106,10 +106,104 @@ class MovingHoleMod(JaxAtariInternalModPlugin):
         )
 
 
-class MultipleHolesMod(JaxAtariInternalModPlugin):
-    # is this even possible, when MiniatureGolfObservation has only one hole?
-    pass
+class SecondHoleMod(JaxAtariInternalModPlugin):
+    """Replaces the obstacle with a second hole."""
+    conflicts_with = ["permeable_obstacle"]
+    constants_overrides = {
+        "OBSTACLE_COLOR": (66, 72, 200),
+        "OBSTACLE_SIZE": (3, 4),
+    }
+    asset_overrides = {
+        "obstacle": {
+            'name': 'obstacle',
+            'type': 'single',
+            'file': 'hole.npy',
+        }
+    }
 
+    def _is_ball_in_hole(self, state: MiniatureGolfState):
+        overlaps_hole = self._env._is_overlapping(state.ball_x, state.ball_y, self._env.consts.BALL_SIZE[0], self._env.consts.BALL_SIZE[1],
+                                                  state.hole_x, state.hole_y, self._env.consts.HOLE_SIZE[0], self._env.consts.HOLE_SIZE[1])
+        overlaps_obstacle = self._env._is_overlapping(state.ball_x, state.ball_y, self._env.consts.BALL_SIZE[0], self._env.consts.BALL_SIZE[1],
+                                                      state.obstacle_x, state.obstacle_y, self._env.consts.OBSTACLE_SIZE[0], self._env.consts.OBSTACLE_SIZE[1])
+        return jnp.logical_or(overlaps_hole, overlaps_obstacle)
+
+    def _obstacle_step(self, state: MiniatureGolfState) -> MiniatureGolfState:
+        min_x = jax.lax.select_n(
+            state.level,
+            self._env.consts.OBSTACLE_MIN_X[0],
+            self._env.consts.OBSTACLE_MIN_X[1],
+            self._env.consts.OBSTACLE_MIN_X[2],
+            self._env.consts.OBSTACLE_MIN_X[3],
+            self._env.consts.OBSTACLE_MIN_X[4],
+            self._env.consts.OBSTACLE_MIN_X[5],
+            self._env.consts.OBSTACLE_MIN_X[6],
+            self._env.consts.OBSTACLE_MIN_X[7],
+            self._env.consts.OBSTACLE_MIN_X[8],
+        )
+        max_x = jax.lax.select_n(
+            state.level,
+            self._env.consts.OBSTACLE_MAX_X[0],
+            self._env.consts.OBSTACLE_MAX_X[1],
+            self._env.consts.OBSTACLE_MAX_X[2],
+            self._env.consts.OBSTACLE_MAX_X[3],
+            self._env.consts.OBSTACLE_MAX_X[4],
+            self._env.consts.OBSTACLE_MAX_X[5],
+            self._env.consts.OBSTACLE_MAX_X[6],
+            self._env.consts.OBSTACLE_MAX_X[7],
+            self._env.consts.OBSTACLE_MAX_X[8],
+        )
+        min_y = jax.lax.select_n(
+            state.level,
+            self._env.consts.OBSTACLE_MIN_Y[0],
+            self._env.consts.OBSTACLE_MIN_Y[1],
+            self._env.consts.OBSTACLE_MIN_Y[2],
+            self._env.consts.OBSTACLE_MIN_Y[3],
+            self._env.consts.OBSTACLE_MIN_Y[4],
+            self._env.consts.OBSTACLE_MIN_Y[5],
+            self._env.consts.OBSTACLE_MIN_Y[6],
+            self._env.consts.OBSTACLE_MIN_Y[7],
+            self._env.consts.OBSTACLE_MIN_Y[8],
+        )
+        max_y = jax.lax.select_n(
+            state.level,
+            self._env.consts.OBSTACLE_MAX_Y[0],
+            self._env.consts.OBSTACLE_MAX_Y[1],
+            self._env.consts.OBSTACLE_MAX_Y[2],
+            self._env.consts.OBSTACLE_MAX_Y[3],
+            self._env.consts.OBSTACLE_MAX_Y[4],
+            self._env.consts.OBSTACLE_MAX_Y[5],
+            self._env.consts.OBSTACLE_MAX_Y[6],
+            self._env.consts.OBSTACLE_MAX_Y[7],
+            self._env.consts.OBSTACLE_MAX_Y[8],
+        )
+
+        obstacle_x = (min_x + max_x) // 2
+        obstacle_y = (min_y + max_y) // 2
+
+        return MiniatureGolfState(
+            player_x=state.player_x,
+            player_y=state.player_y,
+            ball_x=state.ball_x,
+            ball_y=state.ball_y,
+            ball_x_subpixel=state.ball_x_subpixel,
+            ball_y_subpixel=state.ball_y_subpixel,
+            ball_vel_x=state.ball_vel_x,
+            ball_vel_y=state.ball_vel_y,
+            hole_x=state.hole_x,
+            hole_y=state.hole_y,
+            obstacle_x=obstacle_x,
+            obstacle_y=obstacle_y,
+            obstacle_dir=state.obstacle_dir,
+            shot_count=state.shot_count,
+            level=state.level,
+            wall_layout=state.wall_layout,
+            acceleration_threshold=state.acceleration_threshold,
+            acceleration_counter=state.acceleration_counter,
+            mod_4_counter=state.mod_4_counter,
+            fire_prev=state.fire_prev,
+            right_number=state.right_number,
+        )
 
 class PermeableObstacleMod(JaxAtariInternalModPlugin):
     def _obstacle_step(self, state: MiniatureGolfState) -> MiniatureGolfState:
