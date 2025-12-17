@@ -68,8 +68,8 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2)
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
-    WHITE_UFO_RETREAT_P_MIN: float = 0.05
-    WHITE_UFO_RETREAT_P_MAX: float = 0.9
+    WHITE_UFO_RETREAT_P_MIN: float = 0.005
+    WHITE_UFO_RETREAT_P_MAX: float = 0.1
     WHITE_UFO_RETREAT_ALPHA: float = 0.01
     WHITE_UFO_RETREAT_SPEED_MULT: float = 1.5
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
@@ -272,8 +272,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ufo_keys = rngs[1:]
 
         ufo_update = self._advance_white_ufos(state, ufo_keys)
-        white_ufo_pos, player_shot_position = self._collision_handler(
-            state, ufo_update.pos, player_shot_position, bullet_type
+        white_ufo_pos, player_shot_position, white_ufo_pattern_id, white_ufo_pattern_timer = self._collision_handler(
+            state, ufo_update.pos, player_shot_position, bullet_type, ufo_update.pattern_id, ufo_update.pattern_timer
         )
         enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, lives = self._enemy_shot_step(
             state,
@@ -305,8 +305,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_time_on_lane=ufo_update.time_on_lane,
             white_ufo_attack_time=ufo_update.attack_time,
             white_ufo_time_allowed=state.level.white_ufo_time_allowed,
-            white_ufo_pattern_id=ufo_update.pattern_id,
-            white_ufo_pattern_timer=ufo_update.pattern_timer,
+            white_ufo_pattern_id=white_ufo_pattern_id,
+            white_ufo_pattern_timer=white_ufo_pattern_timer,
             line_positions=line_positions,
             line_velocities=line_velocities,
         )
@@ -412,7 +412,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         #####
         return(x,v,shot_position, shot_velocity, torpedos_left, bullet_type)
 
-    def _collision_handler(self, state: BeamriderState, new_white_ufo_pos, new_shot_pos, new_bullet_type):
+    def _collision_handler(self, state: BeamriderState, new_white_ufo_pos, new_shot_pos, new_bullet_type, current_patterns, current_timers):
         enemies = new_white_ufo_pos.T
         distance_to_bullet = jnp.abs(enemies - new_shot_pos)
         bullet_type_is_laser = new_bullet_type == self.consts.LASER_ID
@@ -421,12 +421,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         mask = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
         hit_index = jnp.argmax(mask)
         hit_exists = jnp.any(mask) 
-        white_ufo_pos_after_hit = enemies.at[hit_index].set(jnp.array(self.consts.ENEMY_OFFSCREEN_POS)).T
+        white_ufo_pos_after_hit = enemies.at[hit_index].set(jnp.array([77.0, 43.0])).T
+        
+        # Reset pattern and timer for hit UFO
+        new_patterns = jnp.where(mask, int(WhiteUFOPattern.IDLE), current_patterns)
+        new_timers = jnp.where(mask, 0, current_timers)
+        
         player_shot_pos = jnp.where(hit_exists, jnp.array(self.consts.BULLET_OFFSCREEN_POS), new_shot_pos)
         enemie_pos = jnp.where(hit_exists, white_ufo_pos_after_hit ,new_white_ufo_pos)
-        return (enemie_pos, player_shot_pos)
+        return (enemie_pos, player_shot_pos, new_patterns, new_timers)
 
-    def entropy_heat_prob(self, steps_static, alpha=0.002, p_min=0.0002, p_max=0.8):
+    def entropy_heat_prob(self, steps_static, alpha=0.0005, p_min=0.0002, p_max=0.8):
         steps =steps_static/10
         # steps_static: scalar integer or array
         heat = 1.0 - jnp.exp(-alpha * steps)
@@ -484,7 +489,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         new_x = white_ufo_position[0] + white_ufo_vel_x
         new_y = white_ufo_position[1] + white_ufo_vel_y
-        new_x = jnp.clip(new_x, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER)
+        
+        # Only clip horizontally if on top lane
+        on_top_lane = new_y <= self.consts.TOP_CLIP
+        clipped_x = jnp.clip(new_x, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER)
+        new_x = jnp.where(on_top_lane, clipped_x, new_x)
+
         new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.BOTTOM_CLIP)
         white_ufo_position = jnp.array([new_x, new_y])
 
