@@ -58,7 +58,7 @@ class TicTacToe3DConstants(NamedTuple):
 class TicTacToe3DState(NamedTuple):
     board: jnp.ndarray          # (4, 4, 4), uint8 or int32
     current_player: jnp.ndarray # scalar int32
-    game_over: jnp.ndarray      # scalar bool_
+    game_over: jnp.ndarray     # scalar bool_
     winner: jnp.ndarray         # scalar int32
     move_count: jnp.ndarray     # scalar int32
 
@@ -66,16 +66,15 @@ class TicTacToe3DState(NamedTuple):
     
 
 class JaxTicTacToe3D(JaxEnvironment):
-    def __init__(self,consts: TicTacToe3DConstants=None):
-        consts= consts or TicTacToe3DConstants()
-        super().__init__(consts)
-        self.renderer= TicTacToe3DRenderer(self.consts)
+    def __init__(self, consts: TicTacToe3DConstants=None):
+        self.consts = consts or TicTacToe3DConstants()
+        super().__init__(self.consts)
+        self.renderer = TicTacToe3DRenderer(self.consts)
         
         
-
     def step(self, state: TicTacToe3DState, action: jnp.ndarray):
      # Decode action -> (x, y, z)
-     pass
+          pass
     
 
     
@@ -100,31 +99,46 @@ class JaxTicTacToe3D(JaxEnvironment):
         """Check if there's a winner on the 3D board."""
         # Check all lines (rows, columns, diagonals, verticals across layers)
         pass
-    @property
     def observation_space(self):
         """Board state: (4,4,4) with values 0/1/2."""
         return spaces.Box(0, 2, shape=(4, 4, 4), dtype=jnp.uint8)
 
-    @property
     def action_space(self):
         """64 possible moves (4×4×4 cells)."""
         return spaces.Discrete(64)
-
+    
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, prev_state, state):
+       return jnp.int32(0)
 
     
     
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state):
+       return {}
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: TicTacToe3DState) -> jnp.ndarray:
+        return jnp.logical_or(
+        state.game_over,
+        state.move_count >= 64
+    )
+
+    
+    
 class TicTacToe3DRenderer(JAXGameRenderer):
-    def __init__(self, consts : TicTacToe3DConstants= None):
-        super().__init__(consts)
-        self.consts = consts or TicTacToe3DConstants()
+    def __init__(self, consts: TicTacToe3DConstants = None):
+        self.consts = consts or TicTacToe3DConstants()   
+        super().__init__(self.consts)                   
+
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
             #downscale=(84, 84)
         )
-        self.jr = render_utils.JaxRenderingUtils(self.config) 
-        final_asset_config = list(self.consts.ASSET_CONFIG)
+        self.jr = render_utils.JaxRenderingUtils(self.config)  
+        final_asset_config = list(self.consts.ASSET_CONFIG) 
         sprite_path =f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
         (
             self.PALETTE,
