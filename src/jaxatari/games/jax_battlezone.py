@@ -94,8 +94,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 class EnemyType(IntEnum):
     TANK = 0
     SUPER_TANK = 1
-    MISSILE = 2
-    SAUCER = 3
+    SAUCER = 2
+    FIGHTER_JET = 3
 
 
 class BattlezoneConstants(NamedTuple):
@@ -137,6 +137,7 @@ class BattlezoneConstants(NamedTuple):
     ENEMY_POS_Y:int = 85
     FIRE_CD:int = 200 #todo change
     HITBOX_SIZE:int = 6
+    ENEMY_SCORES:chex.Array = jnp.array([1000,3000,5000,2000], dtype=jnp.int32)
 
 
 class Projectile(NamedTuple):
@@ -301,6 +302,21 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             z=new_z,
         )
 
+    def _player_projectile_col_check(self, state:BattlezoneState):
+        hit_arr = (jax.vmap(self._obj_collision_check, in_axes=(0, None))
+                   (state.enemies, state.player_projectile))
+        def _score_func(state1:BattlezoneState, in_tuple):
+            enemy, hit = in_tuple
+            new_score = state.score + jnp.where(hit, self.consts.ENEMY_SCORES[enemy.enemy_type], 0)
+            return state1._replace(score=new_score), None
+
+        new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
+        #new_state = new_state._replace(enemies=new_state.enemies._replace(
+            #active=jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
+        #))
+        return new_state
+
+
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
         state = BattlezoneState(
@@ -348,7 +364,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
                                                            +self.consts.RADAR_ROTATION_SPEED)%360)
 
+        #-------------------projectiles-------------
         new_player_projectile = self._single_projectile_step(state.player_projectile)
+        new_state = self._player_projectile_col_check(state)
+        #------------------------------------------
+
         new_state = new_state._replace(player_projectile=new_player_projectile)
         new_state = self._player_step(new_state, action)
         new_state = self._enemy_step(new_state)
@@ -409,6 +429,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         angle = ((jnp.pi/2)-beta)*angle_change
         return obj._replace(orientation_angle=
                             (obj.orientation_angle-angle)%(2*jnp.pi))
+
+
+    def _obj_collision_check(self, obj1, obj2):
+        distx = jnp.abs(obj1.x-obj2.x)<=self.consts.HITBOX_SIZE
+        distz = jnp.abs(obj1.z - obj2.z) <= self.consts.HITBOX_SIZE
+        return jnp.all(jnp.stack([distx, distz, obj1.active, obj2.active]))
 
 
     def _get_distance(self, x, z):
