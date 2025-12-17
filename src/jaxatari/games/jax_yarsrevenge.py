@@ -170,6 +170,7 @@ class YarsRevengeConstants(NamedTuple):
     )
     MOVING_YAR_MOVEMENT_FRAME = 1  # Movement animation change interval for Yar (moving)
     CANNON_MOVEMENT_FRAME = 8  # Animation change interval for cannon
+    SWIRL_MOVEMENT_FRAME = 2
 
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
 
@@ -1066,6 +1067,16 @@ class YarsRevengeRenderer(JAXGameRenderer):
             },
             {"name": "qotile", "type": "single", "file": "qotile.npy"},
             {
+                "name": "swirl",
+                "type": "group",
+                "files": [
+                    "swirl_0.npy",
+                    "swirl_1.npy",
+                    "swirl_2.npy",
+                    "swirl_3.npy",
+                ],
+            },
+            {
                 "name": "energy_shield",
                 "type": "procedural",
                 "data": jnp.array(
@@ -1077,7 +1088,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def get_animation_idx(
         self,
         step: jnp.ndarray,
-        group: jnp.ndarray,
+        group: jnp.ndarray | int,
         duration: int,
         group_item_count: int,
     ):
@@ -1162,6 +1173,14 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )
 
         qotile_mask = self.SHAPE_MASKS["qotile"]
-        raster = self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask)
+
+        swirl_idx = self.get_animation_idx(state.step_counter, 0, self.consts.SWIRL_MOVEMENT_FRAME, 4)
+        swirl_mask = self.SHAPE_MASKS["swirl"][swirl_idx]
+
+        raster = jnp.where(
+            state.swirl_exist,
+            self.jr.render_at(raster, state.qotile.x, state.qotile.y, swirl_mask),
+            self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask),
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
