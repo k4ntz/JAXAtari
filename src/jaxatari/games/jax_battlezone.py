@@ -307,13 +307,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                    (state.enemies, state.player_projectile))
         def _score_func(state1:BattlezoneState, in_tuple):
             enemy, hit = in_tuple
-            new_score = state.score + jnp.where(hit, self.consts.ENEMY_SCORES[enemy.enemy_type], 0)
+            new_score = state1.score + jnp.where(hit, self.consts.ENEMY_SCORES[enemy.enemy_type], 0)
             return state1._replace(score=new_score), None
 
         new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
-        #new_state = new_state._replace(enemies=new_state.enemies._replace(
-            #active=jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
-        #))
+        new_state = new_state._replace(enemies=new_state.enemies._replace(
+            active=jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
+        ))
         return new_state
 
 
