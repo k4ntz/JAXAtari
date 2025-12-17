@@ -595,7 +595,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chain_next = jnp.logical_and(pattern_finished_off_top, jnp.logical_not(retreat_now))
 
         def choose_chain_pattern(_):
-            pattern, duration = self._white_ufo_choose_pattern(key_chain_choice, allow_shoot=allow_shoot)
+            pattern, duration = self._white_ufo_choose_pattern(key_chain_choice, allow_shoot=allow_shoot, prev_pattern=pattern_id)
             return pattern, duration
 
         def keep_after_chain(_):
@@ -618,7 +618,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         start_attack = jnp.logical_and(should_choose_new, start_roll < p_start)
 
         def choose_new_pattern(_):
-            pattern, duration = self._white_ufo_choose_pattern(key_start_choice, allow_shoot=jnp.array(False))
+            pattern, duration = self._white_ufo_choose_pattern(key_start_choice, allow_shoot=jnp.array(False), prev_pattern=pattern_id)
             return pattern, duration
 
         def keep_pattern(_):
@@ -651,7 +651,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         heat = 1.0 - jnp.exp(-alpha * t)
         return p_min + (p_max - p_min) * heat
 
-    def _white_ufo_choose_pattern(self, key: chex.Array, *, allow_shoot: chex.Array):
+    def _white_ufo_choose_pattern(self, key: chex.Array, *, allow_shoot: chex.Array, prev_pattern: chex.Array):
         pattern_choices = jnp.array(
             [
                 int(WhiteUFOPattern.DROP_STRAIGHT),
@@ -663,9 +663,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             dtype=jnp.int32,
         )
         pattern_probs = jnp.array(self.consts.WHITE_UFO_PATTERN_PROBS, dtype=jnp.float32)
+
+        # Restriction: Cannot follow MOVE_BACK with DROP_STRAIGHT (idx 0)
+        is_move_back = (prev_pattern == int(WhiteUFOPattern.MOVE_BACK))
+        # Mask DROP_STRAIGHT (index 0) if prev was MOVE_BACK
+        chain_mask = jnp.ones_like(pattern_probs).at[0].set(jnp.where(is_move_back, 0.0, 1.0))
+        pattern_probs = pattern_probs * chain_mask
+
         shoot_mask = jnp.array([1.0, 1.0, 1.0, 0.0, 1.0], dtype=jnp.float32)
         pattern_probs = jnp.where(allow_shoot, pattern_probs, pattern_probs * shoot_mask)
-        pattern_probs = pattern_probs / jnp.sum(pattern_probs)
+        
+        # Avoid division by zero if all probs masked (shouldn't happen with standard probs, but for safety/testing)
+        prob_sum = jnp.sum(pattern_probs)
+        pattern_probs = jnp.where(prob_sum > 0, pattern_probs / prob_sum, pattern_probs)
+        
         pattern = jax.random.choice(key, pattern_choices, shape=(), p=pattern_probs)
         pattern_durations = jnp.array(self.consts.WHITE_UFO_PATTERN_DURATIONS)
         duration = pattern_durations[pattern]
