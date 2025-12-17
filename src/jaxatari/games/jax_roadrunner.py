@@ -1283,10 +1283,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
         wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         road_sprite = self._create_road_sprite()
-        truck_sprite = self._create_truck_sprite()
         life_sprite = self._create_life_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, wall_sprite_bottom, truck_sprite, life_sprite
+            road_sprite, wall_sprite_bottom, life_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -1392,13 +1391,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             jnp.array(life_color_rgba, dtype=jnp.uint8), (*life_shape[:2], 1)
         )
 
-    def _create_truck_sprite(self) -> jnp.ndarray:
-        truck_color_rgba = (*self.consts.TRUCK_COLOR, 255)
-        truck_shape = (self.consts.TRUCK_SIZE[0], self.consts.TRUCK_SIZE[1], 4)
-        return jnp.tile(
-            jnp.array(truck_color_rgba, dtype=jnp.uint8), (*truck_shape[:2], 1)
-        )
-
     def _get_render_section(self, state: RoadRunnerState) -> RoadSectionConfig:
         if self._level_count == 0 or self._max_road_sections == 0:
             return RoadSectionConfig(
@@ -1439,7 +1431,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         self,
         road_sprite: jnp.ndarray,
         wall_sprite_bottom: jnp.ndarray,
-        truck_sprite: jnp.ndarray,
         life_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
@@ -1454,10 +1445,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
-            {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
-            {"name": "truck", "type": "procedural", "data": truck_sprite},
-            {"name": "life", "type": "procedural", "data": life_sprite},
+            {"name": "seed", "type": "single", "file": "birdseed.npy"},
+            {"name": "truck", "type": "single", "file": "truck.npy"},
+            {"name": "life", "type": "single", "file": "lives.npy"},
             {"name": "end_of_level_1", "type": "single", "file": "end_of_level_1.npy"},
+
         ]
 
         return asset_config
