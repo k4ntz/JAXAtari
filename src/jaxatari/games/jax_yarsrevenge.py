@@ -538,7 +538,7 @@ class JaxYarsRevenge(
 
         # Shift yar to left if it hits shield or qotile
         new_yar_x = jnp.where(
-            yar_hit_shield | yar_qotile_collusion,
+            yar_hit_shield,
             new_yar_x - self.consts.ENERGY_CELL_WIDTH,
             new_yar_x,
         )
