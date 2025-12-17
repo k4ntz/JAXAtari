@@ -78,15 +78,18 @@ class JaxTicTacToe3D(JaxEnvironment):
     
 
     
-    def reset(self):
-        """Reset game state to initial state"""
-        return TicTacToe3DState(
+    def reset(self, key: chex.PRNGKey):
+        state = TicTacToe3DState(
         board=jnp.zeros((4, 4, 4), dtype=jnp.uint8),
         current_player=jnp.int32(self.consts.FIRST_PLAYER),
         game_over=jnp.bool_(False),
         winner=jnp.int32(0),
         move_count=jnp.int32(0),
     )
+
+        observation = state.board
+        return observation, state
+
 
     
     
@@ -109,7 +112,7 @@ class JaxTicTacToe3D(JaxEnvironment):
     
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, prev_state, state):
+    def _get_reward(self, previous_state, state):
        return jnp.int32(0)
 
     
@@ -128,7 +131,7 @@ class JaxTicTacToe3D(JaxEnvironment):
     
     
 class TicTacToe3DRenderer(JAXGameRenderer):
-    def __init__(self, consts: TicTacToe3DConstants = None):
+    def __init__(self, consts: TicTacToe3DConstants=None):
         self.consts = consts or TicTacToe3DConstants()   
         super().__init__(self.consts)                   
 
@@ -138,6 +141,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)  
+        self.LAYER_OFFSETS= jnp.array(self.consts.LAYER_OFFSETS, dtype=jnp.int32)
         final_asset_config = list(self.consts.ASSET_CONFIG) 
         sprite_path =f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
         (
@@ -154,10 +158,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         self.CELL_W = self.consts.CELL_W
         self.CELL_H = self.consts.CELL_H
 
-        # Layer offsets to create the "stacked 3D" illusion (z=0..3)
-        # (dx, dy) per layer
-        self.LAYER_OFFSETS = jnp.array(consts.LAYER_OFFSETS, dtype=jnp.int32)
-
+        
         
     def cell_to_pixel(self, x: jnp.ndarray, y: jnp.ndarray, z: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
