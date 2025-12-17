@@ -154,6 +154,9 @@ class YarsRevengeConstants(NamedTuple):
     QOTILE_MAX_Y: int = 155
     NEUTRAL_ZONE_POSITION: Tuple[int, int] = (60, 0)
 
+    SWIRL_PER_STEP: int = 1500
+    SWIRL_FIRE_PER_STEP: int = 1000
+
     # Entity Speeds, X pixel per 1 frame
     QOTILE_SPEED = 0.5
     YAR_SPEED = 2.0
@@ -231,7 +234,9 @@ class YarsRevengeState(NamedTuple):
 
     swirl_exist: jnp.ndarray
     swirl_fired: jnp.ndarray
-    swirl: DirectionEntity
+    swirl: Entity
+    swirl_dx: jnp.ndarray
+    swirl_dy: jnp.ndarray
     energy_missile_exist: jnp.ndarray
     energy_missile: DirectionEntity
     cannon_exist: jnp.ndarray
@@ -250,7 +255,9 @@ class YarsRevengeObservation(NamedTuple):
     destroyer: Entity
     swirl_exist: jnp.ndarray
     swirl_fired: jnp.ndarray
-    swirl: DirectionEntity
+    swirl: Entity
+    swirl_dx: jnp.ndarray
+    swirl_dy: jnp.ndarray
     energy_missile_exist: jnp.ndarray
     energy_missile: DirectionEntity
     cannon_exist: jnp.ndarray
@@ -313,13 +320,14 @@ class JaxYarsRevenge(
             ),
             swirl_exist=jnp.array(0).astype(jnp.bool),
             swirl_fired=jnp.array(0).astype(jnp.bool),
-            swirl=DirectionEntity(
+            swirl=Entity(
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0).astype(jnp.float32),
                 w=jnp.array(self.consts.SWIRL_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.SWIRL_SIZE[1]).astype(jnp.int32),
-                direction=jnp.array(Direction.LEFT).astype(jnp.int32),
             ),
+            swirl_dx=jnp.array(0).astype(jnp.float32),
+            swirl_dy=jnp.array(0).astype(jnp.float32),
             energy_missile_exist=jnp.array(0).astype(jnp.bool),
             energy_missile=DirectionEntity(
                 x=jnp.array(0).astype(jnp.float32),
@@ -795,68 +803,47 @@ class JaxYarsRevenge(
                     lives=new_lives,
                     energy_shield_state=new_energy_shield_state,
                 ),
-                lambda: YarsRevengeState(
+                lambda: state._replace(
                     step_counter=state.step_counter + 1,
-                    level=state.level,
-                    score=state.score,
                     lives=new_lives,
-                    stage=state.stage,
-                    yar=DirectionEntity(
+                    yar=state.yar._replace(
                         x=new_yar_x,
                         y=new_yar_y,
-                        w=state.yar.w,
-                        h=state.yar.h,
                         direction=new_yar_direction,
                     ),
                     yar_state=new_yar_state,
                     yar_devour_count=new_yar_devour_count,
-                    qotile=DirectionEntity(
+                    qotile=state.qotile._replace(
                         x=state.qotile.x,
                         y=new_qotile_y,
-                        w=state.qotile.w,
-                        h=state.qotile.h,
                         direction=new_qotile_direction,
                     ),
-                    destroyer=Entity(
+                    destroyer=state.destroyer._replace(
                         x=new_destroyer_x,
                         y=new_destroyer_y,
-                        w=state.destroyer.w,
-                        h=state.destroyer.h,
                     ),
                     swirl_exist=state.swirl_exist,
                     swirl_fired=state.swirl_fired,
-                    swirl=DirectionEntity(
+                    swirl=state.swirl._replace(
                         x=state.swirl.x,
                         y=state.swirl.y,
-                        w=state.swirl.w,
-                        h=state.swirl.h,
-                        direction=state.swirl.direction,
                     ),
                     energy_missile_exist=new_em_exists,
-                    energy_missile=DirectionEntity(
+                    energy_missile=state.energy_missile._replace(
                         x=new_energy_missile_x,
                         y=new_energy_missile_y,
-                        w=state.energy_missile.w,
-                        h=state.energy_missile.h,
                         direction=new_energy_missile_direction,
                     ),
                     cannon_exist=new_cannon_exists,
                     cannon_fired=new_cannon_fired,
-                    cannon=DirectionEntity(
+                    cannon=state.cannon._replace(
                         x=new_cannon_x,
                         y=new_cannon_y,
-                        w=state.cannon.w,
-                        h=state.cannon.h,
-                        direction=state.cannon.direction,
                     ),
-                    energy_shield=Entity(
-                        x=state.energy_shield.x,
+                    energy_shield=state.energy_shield._replace(
                         y=new_energy_shield_y,
-                        w=state.energy_shield.w,
-                        h=state.energy_shield.h,
                     ),
                     energy_shield_state=new_energy_shield_state,
-                    neutral_zone=state.neutral_zone,
                 ),
             ),
         )
@@ -882,6 +869,7 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "qotile": spaces.Dict(
@@ -890,6 +878,7 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "destroyer": spaces.Dict(
@@ -910,6 +899,8 @@ class JaxYarsRevenge(
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                     }
                 ),
+                "swirl_dx": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+                "swirl_dy": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
                 "energy_missile_exists": spaces.Box(
                     low=0, high=1, shape=(), dtype=jnp.bool
                 ),
@@ -919,6 +910,7 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "cannon_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
@@ -929,6 +921,7 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
                     }
                 ),
                 "energy_shield": spaces.Dict(
@@ -958,6 +951,8 @@ class JaxYarsRevenge(
             swirl_exist=state.swirl_exist,
             swirl_fired=state.swirl_fired,
             swirl=state.swirl,
+            swirl_dx=state.swirl_dx,
+            swirl_dy=state.swirl_dy,
             energy_missile_exist=state.energy_missile_exist,
             energy_missile=state.energy_missile,
             cannon_exist=state.cannon_exist,
@@ -992,7 +987,8 @@ class JaxYarsRevenge(
                 obs.swirl.y.flatten(),
                 obs.swirl.w.flatten(),
                 obs.swirl.h.flatten(),
-                obs.swirl.direction.flatten(),
+                obs.swirl_dx.flatten(),
+                obs.swirl_dy.flatten(),
                 obs.energy_missile_exist.flatten(),
                 obs.energy_missile.x.flatten(),
                 obs.energy_missile.y.flatten(),
