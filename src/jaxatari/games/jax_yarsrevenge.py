@@ -173,6 +173,8 @@ class YarsRevengeConstants(NamedTuple):
     SWIRL_MOVEMENT_FRAME = 2
 
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
+    NEUTRAL_ZONE_COLOR: Tuple[int, int, int] = (20, 20, 20)
+
 
     # Each energy cell has width = 4, height = 8
     ENERGY_CELL_WIDTH = 4
@@ -1090,6 +1092,13 @@ class YarsRevengeRenderer(JAXGameRenderer):
                     self.consts.ENERGY_SHIELD_COLOR + (255,), dtype=jnp.uint8
                 ).reshape(1, 1, 4),
             },
+            {
+                "name": "neutral_zone",
+                "type": "procedural",
+                "data": jnp.array(
+                    self.consts.NEUTRAL_ZONE_COLOR + (255,), dtype=jnp.uint8
+                ).reshape(1, 1, 4),
+            },
         ]
 
     def get_animation_idx(
@@ -1104,8 +1113,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def render(self, state: YarsRevengeState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        neutral_zone_mask = jnp.ones(
-            (self.consts.NEUTRAL_ZONE_SIZE[1], self.consts.NEUTRAL_ZONE_SIZE[0])
+        neutral_zone_mask = jnp.full(
+            (self.consts.NEUTRAL_ZONE_SIZE[1], self.consts.NEUTRAL_ZONE_SIZE[0]),
+            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR]
         )
         raster = self.jr.render_at(
             raster, state.neutral_zone.x, state.neutral_zone.y, neutral_zone_mask
