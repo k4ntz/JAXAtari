@@ -7,11 +7,13 @@ import random
 import time
 from dataclasses import dataclass
 from functools import partial
+from turtle import end_fill
 from typing import Sequence, NamedTuple
 
 import flax
 import flax.linen as nn
 import gym
+from gymnasium.wrappers import NormalizeObservation
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,9 +23,11 @@ from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from torch.utils.tensorboard import SummaryWriter
 import jaxatari
-from jaxatari.wrappers import PixelObsWrapper, AtariWrapper, LogWrapper
+from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
 from ppo_jaxatari_vmap_eval import evaluate
+
+from rtpt import RTPT
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
@@ -50,6 +54,12 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    eval_during_train: bool = False # If this is active, compile and run times will increase!
+    """whether to evaluate the agent periodically during training"""
+    eval_every: int = 1000 #  1000 -> all 1M steps
+    """how often to evaluate the agent during training (in num. of iterations)"""
+    pixel_based: bool = True # If False -> Object-centric observations
+    """whether the environment should use pixel-based observations"""
     save_model: bool = True
     """whether to save model into the `runs/{run_name}` folder"""
     upload_model: bool = False
@@ -60,6 +70,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "freeway"
     """the id of the environment"""
+    mods: tuple[str] = ("no_falling_coconut", )
     total_timesteps: int = 10_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
@@ -102,13 +113,13 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, seed, num_envs):
+def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
     def thunk():
-        env = jaxatari.make(env_id)
-        env = PixelObsWrapper(AtariWrapper(
+        env = jaxatari.make(env_id, mods_config=mods)
+        env = AtariWrapper(
                 env,
-                episodic_life=True, # explicitly set in cleanRL-envpool
-                clip_reward=True, # explicitly set in cleanRL-envpool
+                episodic_life=not eval, # only active during training 
+                clip_reward=not eval, # only active during training
                 max_episode_length=108000,
                 frame_stack_size=4,
                 max_pooling=True,
@@ -117,11 +128,16 @@ def make_env(env_id, seed, num_envs):
                 sticky_actions=False, # seems to be default in envpool
                 first_fire=True,
                 #full_action_space=False # TODO: this is missing in jaxatari, although default is reduced action space
-            ),
-            do_pixel_resize=True,
-            pixel_resize_shape=(84, 84),
-            grayscale=True
         )
+        if pixel_based:
+            env = PixelObsWrapper(
+                env,
+                do_pixel_resize=True,
+                pixel_resize_shape=(84, 84),
+                grayscale=True
+            )
+        else:
+            env = FlattenObservationWrapper(NormalizeObservationWrapper(ObjectCentricWrapper(env)))
         env = LogWrapper(env)
         env.num_envs = num_envs
         env.single_action_space = env.action_space
@@ -129,7 +145,6 @@ def make_env(env_id, seed, num_envs):
         env.is_vector_env = True
         #TODO: Do we need actionset_wrapper? (like the videopinball guys did)
         return env
-
     return thunk
 
 
@@ -170,6 +185,25 @@ class Network(nn.Module):
         x = nn.relu(x)
         return x
 
+class MLP_Network(nn.Module):
+    @nn.compact
+    def __call__(self, x):
+        # 1. Hidden Layer
+        x = nn.Dense(
+            461,  # Hidden size H=461
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0)
+        )(x)
+        x = nn.relu(x)
+
+        # 2. Output Layer (matches the last layer of the CNN)
+        x = nn.Dense(
+            512,  # Output size
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0)
+        )(x)
+        x = nn.relu(x)  # The CNN's last layer also has a ReLU
+        return x
 
 class Critic(nn.Module):
     @nn.compact
@@ -216,7 +250,7 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}_{"oc" if not args.pixel_based else "pixel"}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
 
@@ -243,7 +277,11 @@ if __name__ == "__main__":
     key, obs_sample_key1, obs_sample_key2, obs_sample_key3 = jax.random.split(key, 4)
 
     # env setup
-    env = make_env(args.env_id, args.seed, args.num_envs)()
+    env = make_env(args.env_id, args.seed, args.num_envs, list(args.mods), args.pixel_based)()
+
+    renderer = None
+    if args.capture_video:
+        renderer = jaxatari.make_renderer(args.env_id)
    
     # vmap and squeeze observations in order to get (B, F, H, W, 1) -> (B, F, H, W),
     # where F is the frame stack which becomes the channel for the convolutions
@@ -269,10 +307,11 @@ if __name__ == "__main__":
         frac = 1.0 - (count // (args.num_minibatches * args.update_epochs)) / args.num_iterations
         return args.learning_rate * frac
 
-    network = Network()
+    network = Network() if args.pixel_based else MLP_Network()
     actor = Actor(action_dim=env.action_space().n)
     critic = Critic()
     # network_params = network.init(network_key, env.observation_space().sample(obs_sample_key1).squeeze()[None, ...])
+    # Init shape is (1,4,84,84) (which will be transposed inside the network to (1,84,84,4))
     network_params = network.init(network_key, env.observation_space().sample(obs_sample_key1).squeeze()[None, ...])
     agent_state = TrainState.create(
         apply_fn=None,
@@ -428,6 +467,41 @@ if __name__ == "__main__":
             update_epoch, (agent_state, key), (), length=args.update_epochs
         )
         return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
+    
+    def eval_and_vid(iteration, global_step):
+        model_path = f"runs/{run_name}/{args.exp_name}_{iteration}.cleanrl_model"
+        with open(model_path, "wb") as f:
+            f.write(
+                flax.serialization.to_bytes(
+                    [
+                        vars(args),
+                        [
+                            agent_state.params.network_params,
+                            agent_state.params.actor_params,
+                            agent_state.params.critic_params,
+                        ],
+                    ]
+                )
+            )
+        print(f"model saved to {model_path}")
+
+        #TODO: fix non-pixel based model loading in evaluate
+        episodic_returns, env_states = evaluate(
+            model_path,
+            partial(make_env, mods=list(args.mods), pixel_based=args.pixel_based, eval=True),
+            args.env_id,
+            eval_episodes=10,
+            run_name=f"{run_name}-eval",
+            Model=(Network, Actor, Critic) if args.pixel_based else (MLP_Network, Actor, Critic)
+        )
+        writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step) 
+
+        if args.capture_video and renderer is not None: 
+            frames = jax.vmap(renderer.render)(env_states)
+            # currently (N, W, H, C), need (N, C, H, W)
+            frames = jnp.transpose(frames, (0, 3, 1, 2)) 
+            writer.add_video("video", np.array(frames)[None, ...], global_step=global_step, fps=60)
+            print(f"New video of length {frames.shape[0]} at step {global_step} recorded.")
 
     # TRY NOT TO MODIFY: start the game
     key, reset_key = jax.random.split(key)
@@ -462,11 +536,16 @@ if __name__ == "__main__":
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=args.num_steps)
 
+    rtpt = RTPT(name_initials='RE', experiment_name='PPO_JAXAtari', max_iterations=args.num_iterations)
+    rtpt.start()
+    start_time = time.time()
     for iteration in range(1, args.num_iterations + 1):
+        rtpt.step()
+
+        if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
+           eval_and_vid(iteration, global_step) 
+
         iteration_time_start = time.time()
-        # agent_state, episode_stats, next_obs, next_done, storage, key, handle = rollout(
-        #     agent_state, episode_stats, next_obs, next_done, key, handle
-        # )
         agent_state, next_obs, next_done, storage, key, env_state = rollout(
             agent_state, next_obs, next_done, key, env_state
         )
@@ -496,34 +575,15 @@ if __name__ == "__main__":
         writer.add_scalar(
             "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)), global_step
         )
-    print("Training done.")
-    if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
-        with open(model_path, "wb") as f:
-            f.write(
-                flax.serialization.to_bytes(
-                    [
-                        vars(args),
-                        [
-                            agent_state.params.network_params,
-                            agent_state.params.actor_params,
-                            agent_state.params.critic_params,
-                        ],
-                    ]
-                )
-            )
-        print(f"model saved to {model_path}")
-
-        episodic_returns = evaluate(
-            model_path,
-            make_env,
-            args.env_id,
-            eval_episodes=10,
-            run_name=f"{run_name}-eval",
-            Model=(Network, Actor, Critic),
+        writer.add_scalar(
+            "charts/time", time.time() - start_time, global_step
         )
-        for idx, episodic_return in enumerate(episodic_returns):
-            writer.add_scalar("eval/episodic_return", np.array(jax.device_get(episodic_return)), idx)
+    end_time = time.time()
+    print("Training done.")
+    print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
+
+    if args.save_model:
+        eval_and_vid(iteration, global_step)
 
         # if args.upload_model:
         #     from cleanrl_utils.huggingface import push_to_hub
