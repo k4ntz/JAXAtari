@@ -77,6 +77,7 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_ATTACK_P_MIN: float = 0.0002
     WHITE_UFO_ATTACK_P_MAX: float = 0.8
     WHITE_UFO_ATTACK_ALPHA: float = 0.0001
+    WHITE_UFO_EXPLOSION_FRAMES: int = 21
 
     # Blue line constants
     INIT_BLUE_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
@@ -119,6 +120,8 @@ class LevelState(NamedTuple):
     white_ufo_time_allowed: chex.Array
     white_ufo_pattern_id: chex.Array
     white_ufo_pattern_timer: chex.Array
+    white_ufo_explosion_frame: chex.Array
+    white_ufo_explosion_pos: chex.Array
 
     line_positions: chex.Array
     line_velocities: chex.Array
@@ -232,6 +235,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_time_allowed=jnp.array([400, 600, 800]),
             white_ufo_pattern_id=jnp.zeros(3, dtype=jnp.int32),
             white_ufo_pattern_timer=jnp.zeros(3, dtype=jnp.int32),
+            white_ufo_explosion_frame=jnp.zeros((3,), dtype=jnp.int32),
+            white_ufo_explosion_pos=jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+                (1, 3),
+            ),
             line_positions=self.consts.INIT_BLUE_LINE_POS,
             line_velocities=self.consts.INIT_BLUE_LINE_VEL,
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -303,6 +311,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             bullet_type,
             ufo_update.pattern_id,
             ufo_update.pattern_timer,
+        )
+        white_ufo_explosion_frame, white_ufo_explosion_pos = self._update_white_ufo_explosions(
+            state.level.white_ufo_explosion_frame,
+            state.level.white_ufo_explosion_pos,
+            hit_mask,
+            ufo_update.pos,
         )
         enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, hit_count = self._enemy_shot_step(
             state,
@@ -409,6 +423,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_time_allowed=state.level.white_ufo_time_allowed,
             white_ufo_pattern_id=white_ufo_pattern_id,
             white_ufo_pattern_timer=white_ufo_pattern_timer,
+            white_ufo_explosion_frame=white_ufo_explosion_frame,
+            white_ufo_explosion_pos=white_ufo_explosion_pos,
             line_positions=line_positions,
             line_velocities=line_velocities,
             death_timer=next_death_timer,
@@ -566,6 +582,29 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         score = jnp.where(hit_exists, state.score + self.consts.SCORE_PER_WHITE_UFO, state.score)
         return (enemy_pos, player_shot_pos, new_patterns, new_timers, white_ufo_left, score, hit_mask)
+    
+    def _update_white_ufo_explosions(
+        self,
+        current_frames: chex.Array,
+        current_positions: chex.Array,
+        hit_mask: chex.Array,
+        ufo_positions: chex.Array,
+    ):
+        """Advance current explosion animations and start new ones when UFOs get hit."""
+        offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=ufo_positions.dtype).reshape(2, 1),
+            (1, 3),
+        )
+
+        active_frames = current_frames > 0
+        advanced_frames = jnp.where(active_frames, current_frames + 1, current_frames)
+        finished = advanced_frames > self.consts.WHITE_UFO_EXPLOSION_FRAMES
+        cleared_frames = jnp.where(finished, 0, advanced_frames)
+        cleared_positions = jnp.where(finished[None, :], offscreen, current_positions)
+
+        next_frames = jnp.where(hit_mask, jnp.ones_like(cleared_frames), cleared_frames)
+        next_positions = jnp.where(hit_mask[None, :], ufo_positions, cleared_positions)
+        return next_frames, next_positions
 
     def entropy_heat_prob(self, steps_static, alpha=0.0005, p_min=0.0002, p_max=0.8):
         steps =steps_static/10
@@ -1144,6 +1183,14 @@ class BeamriderRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        self._ufo_explosion_sprite_seq = jnp.array(
+            [0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5],
+            dtype=jnp.int32,
+        )
+        self._ufo_explosion_y_offsets = jnp.array(
+            [0, 0, 0, 0, -1, -1, -1, -1, -2, -2, -2, -2, -3, -3, -3, -3, -4, -4, -4, -4, -5],
+            dtype=jnp.int32,
+        )
 
     # def _create_player_sprite(self) -> jnp.ndarray:
     #     """Procedurally creates an RGBA sprite for the background"""
@@ -1159,6 +1206,14 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'player_sprite', 'type': 'single', 'file': 'player.npy'},
             {'name': 'dead_player', 'type': 'single', 'file': 'Dead_Player.npy'},
             {'name': 'white_ufo', 'type': 'group', 'files': ['White_Ufo_Stage_1.npy', 'White_Ufo_Stage_2.npy', 'White_Ufo_Stage_3.npy', 'White_Ufo_Stage_4.npy', 'White_Ufo_Stage_5.npy', 'White_Ufo_Stage_6.npy', 'White_Ufo_Stage_7.npy']},
+            {'name': 'white_ufo_explosion', 'type': 'group', 'files': [
+                'White_Ufo_Explosion/White_Ufo_Explosion_1.npy',
+                'White_Ufo_Explosion/White_Ufo_Explosion_2.npy',
+                'White_Ufo_Explosion/White_Ufo_Explosion_3.npy',
+                'White_Ufo_Explosion/White_Ufo_Explosion_4.npy',
+                'White_Ufo_Explosion/White_Ufo_Explosion_5.npy',
+                'White_Ufo_Explosion/White_Ufo_Explosion_6.npy',
+            ]},
             {'name': 'laser_sprite', 'type': 'single', 'file': 'Laser.npy'},
             {'name': 'bullet_sprite', 'type': 'group', 'files': ['Laser.npy', 'Torpedo/Torpedo_3.npy', 'Torpedo/Torpedo_2.npy', 'Torpedo/Torpedo_1.npy']},
             {'name': 'enemy_shot', 'type': 'group', 'files': ['Enemy_Shot/Enemy_Shot_Vertical.npy', 'Enemy_Shot/Enemy_Shot_Horizontal.npy']},
@@ -1313,13 +1368,33 @@ class BeamriderRenderer(JAXGameRenderer):
 
     def _render_white_ufos(self, raster, state):
         white_ufo_masks = self.SHAPE_MASKS["white_ufo"]
+        explosion_masks = self.SHAPE_MASKS["white_ufo_explosion"]
         for idx in range(3):
-            sprite_idx = self._get_index_ufo(state.level.white_ufo_pos[1][idx]) - 1
-            raster = self.jr.render_at_clipped(
+            explosion_frame = state.level.white_ufo_explosion_frame[idx]
+
+            def render_explosion(r_in):
+                sprite_idx, y_offset = self._get_white_ufo_explosion_visuals(explosion_frame)
+                sprite = explosion_masks[sprite_idx]
+                x_pos = state.level.white_ufo_explosion_pos[0][idx] + self._get_ufo_alignment(
+                    state.level.white_ufo_explosion_pos[1][idx]
+                )
+                y_pos = state.level.white_ufo_explosion_pos[1][idx] + y_offset
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+            def render_ufo(r_in):
+                sprite_idx = self._get_index_ufo(state.level.white_ufo_pos[1][idx]) - 1
+                sprite = white_ufo_masks[sprite_idx]
+                x_pos = state.level.white_ufo_pos[0][idx] + self._get_ufo_alignment(
+                    state.level.white_ufo_pos[1][idx]
+                )
+                y_pos = state.level.white_ufo_pos[1][idx]
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+            raster = jax.lax.cond(
+                explosion_frame > 0,
+                render_explosion,
+                render_ufo,
                 raster,
-                state.level.white_ufo_pos[0][idx] + self._get_ufo_alignment(state.level.white_ufo_pos[1][idx]),
-                state.level.white_ufo_pos[1][idx],
-                white_ufo_masks[sprite_idx],
             )
         return raster
 
@@ -1346,6 +1421,12 @@ class BeamriderRenderer(JAXGameRenderer):
         stage_6 = (pos >= 86).astype(jnp.int32) 
         stage_7 = (pos >= 121).astype(jnp.int32)
         return 4-(stage_1+stage_2+stage_3+stage_5+stage_7)
+
+    def _get_white_ufo_explosion_visuals(self, frame: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        clamped = jnp.clip(frame - 1, 0, self._ufo_explosion_sprite_seq.shape[0] - 1)
+        sprite_idx = self._ufo_explosion_sprite_seq[clamped]
+        y_offset = self._ufo_explosion_y_offsets[clamped]
+        return sprite_idx, y_offset
     
     def _get_index_bullet(self, pos, bullet_type) -> chex.Array:
         stage_1 = (pos >= 100).astype(jnp.int32)
