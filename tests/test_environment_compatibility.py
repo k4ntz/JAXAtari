@@ -30,7 +30,7 @@ from conftest import load_game_environment, WRAPPER_RECIPES
 try:
     from flax.training.checkpoints import serialization
     FLAX_AVAILABLE = True
-except (ImportError, AttributeError):
+except ImportError:
     FLAX_AVAILABLE = False
 
 
