@@ -16,7 +16,24 @@ class UpNDownConstants(NamedTuple):
     FRAME_SKIP: int = 4
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
     ACTION_REPEAT_PROBS: float = 0.25
-    MAX_SPEED: int = 4
+    MAX_SPEED: int = 5
+    # Enemy spawning and movement
+    MAX_ENEMY_CARS: int = 6
+    ENEMY_SPAWN_INTERVAL: int = 80
+    ENEMY_DESPAWN_DISTANCE: int = 300
+    ENEMY_SPEED_MIN: int = 2
+    ENEMY_SPEED_MAX: int = 5
+    ENEMY_DIRECTION_SWITCH_PROB: float = 0.005
+    ENEMY_OFFSCREEN_SPAWN_OFFSET: float = 100.0
+    ENEMY_MIN_SPAWN_GAP: float = 40.0
+    ENEMY_MAX_AGE: int = 900
+    INITIAL_ENEMY_COUNT: int = 3
+    INITIAL_ENEMY_BASE_OFFSET: float = 40.0
+    INITIAL_ENEMY_GAP: float = 50.0
+    ENEMY_TYPE_CAMERO: int = 0
+    ENEMY_TYPE_FLAG_CARRIER: int = 1
+    ENEMY_TYPE_PICKUP: int = 2
+    ENEMY_TYPE_TRUCK: int = 3
     JUMP_FRAMES: int = 10
     LANDING_ZONE: int = 15
     FIRST_ROAD_LENGTH: int = 4
@@ -106,6 +123,19 @@ class Collectible(NamedTuple):
     type_id: chex.Array  # Type of collectible (0=cherry, 1=balloon, 2=lollypop, 3=ice_cream)
     active: chex.Array  # Whether this collectible slot is active (spawned)
 
+
+class EnemyCars(NamedTuple):
+    """Pool of enemy cars that share the same road-following logic as the player."""
+    position: EntityPosition  # vectorized position fields, size MAX_ENEMY_CARS
+    speed: chex.Array  # signed speed per car
+    type: chex.Array  # type id per car
+    current_road: chex.Array
+    road_index_A: chex.Array
+    road_index_B: chex.Array
+    direction_x: chex.Array
+    active: chex.Array
+    age: chex.Array
+
 class UpNDownState(NamedTuple):
     score: chex.Array
     difficulty: chex.Array
@@ -122,6 +152,9 @@ class UpNDownState(NamedTuple):
     # Collectible state - dynamic spawning (mixed types: cherry, balloon, lollypop, ice cream)
     collectibles: Collectible  # Contains arrays of size MAX_COLLECTIBLES for each field
     collectible_spawn_timer: chex.Array  # Counter for collectible spawn timing
+    # Enemy cars - dynamic spawning and movement
+    enemy_cars: EnemyCars
+    enemy_spawn_timer: chex.Array
 
 
 
@@ -152,20 +185,39 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         self.obs_size = 3*4+1+1
 
     @partial(jax.jit, static_argnums=(0,))
-    def _getSlopeAndB(self, state: UpNDownState) -> chex.Array:
-        trackx, tracky, roadIndex = jax.lax.cond(
-            state.player_car.current_road == 0,
-            lambda s: (self.consts.FIRST_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, state.player_car.road_index_A),
-            lambda s: (self.consts.SECOND_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, state.player_car.road_index_B),
-            operand=None,)
-        slope = jax.lax.cond(
-            trackx[roadIndex+1] - trackx[roadIndex] != 0,
-            lambda s: (tracky[roadIndex+1] - tracky[roadIndex]) / (trackx[roadIndex+1] - trackx[roadIndex]),
-            lambda s: 300.0,
+    def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        trackx, tracky, road_index = jax.lax.cond(
+            current_road == 0,
+            lambda _: (self.consts.FIRST_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, road_index_A),
+            lambda _: (self.consts.SECOND_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, road_index_B),
             operand=None,
         )
-        b = tracky[roadIndex] - slope * trackx[roadIndex]
+        slope = jax.lax.cond(
+            trackx[road_index+1] - trackx[road_index] != 0,
+            lambda _: (tracky[road_index+1] - tracky[road_index]) / (trackx[road_index+1] - trackx[road_index]),
+            lambda _: 300.0,
+            operand=None,
+        )
+        b = tracky[road_index] - slope * trackx[road_index]
         return slope, b
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _getSlopeAndB(self, state: UpNDownState) -> chex.Array:
+        return self._get_slope_and_intercept_from_indices(
+            state.player_car.current_road,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _is_on_line_for_position(self, position: EntityPosition, slope: chex.Array, b: chex.Array, player_speed: chex.Array, turn: chex.Array) -> chex.Array:
+        x_step = abs(jnp.subtract(position.y, slope * (position.x) + b))
+        y_step = abs(jnp.subtract(position.y - player_speed, slope * position.x + b))
+        prefer_y = jnp.less_equal(y_step, x_step)
+        return jnp.logical_or(
+            jnp.logical_and(turn == 1, prefer_y),
+            jnp.logical_and(turn == 2, jnp.logical_not(prefer_y)),
+        )
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
@@ -187,13 +239,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _isOnLine(self, state: UpNDownState,  player_speed: chex.Array, turn: chex.Array) -> chex.Array:
         slope, b = self._getSlopeAndB(state)
-        x_step = abs(jnp.subtract(state.player_car.position.y, slope * (state.player_car.position.x) + b))
-        y_step = abs(jnp.subtract(state.player_car.position.y - player_speed, slope * state.player_car.position.x + b))
-        prefer_y = jnp.less_equal(y_step, x_step)
-        return jnp.logical_or(
-            jnp.logical_and(turn == 1, prefer_y),
-            jnp.logical_and(turn == 2, jnp.logical_not(prefer_y)),
-        )
+        return self._is_on_line_for_position(state.player_car.position, slope, b, player_speed, turn)
     
     @partial(jax.jit, static_argnums=(0,))
     def _landing_in_water(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
@@ -204,6 +250,181 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         landing_in_Water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_ZONE, distance_to_road_B > self.consts.LANDING_ZONE)
         between_roads = jnp.logical_and(new_position_x > jnp.minimum(road_A_x, road_B_x), new_position_x < jnp.maximum(road_A_x, road_B_x))
         return landing_in_Water, between_roads, road_A_x, road_B_x
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _landing_in_water_for_indices(self, road_index_A: chex.Array, road_index_B: chex.Array, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
+        road_A_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[road_index_A]) / (self.consts.TRACK_CORNERS_Y[road_index_A+1] - self.consts.TRACK_CORNERS_Y[road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
+        road_B_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[road_index_B]) / (self.consts.TRACK_CORNERS_Y[road_index_B+1] - self.consts.TRACK_CORNERS_Y[road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
+        distance_to_road_A = jnp.abs(new_position_x - road_A_x)
+        distance_to_road_B = jnp.abs(new_position_x - road_B_x)
+        landing_in_water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_ZONE, distance_to_road_B > self.consts.LANDING_ZONE)
+        between_roads = jnp.logical_and(new_position_x > jnp.minimum(road_A_x, road_B_x), new_position_x < jnp.maximum(road_A_x, road_B_x))
+        return landing_in_water, between_roads, road_A_x, road_B_x
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _advance_car_core(
+        self,
+        position_x: chex.Array,
+        position_y: chex.Array,
+        road_index_A: chex.Array,
+        road_index_B: chex.Array,
+        current_road: chex.Array,
+        speed: chex.Array,
+        is_jumping: chex.Array,
+        is_on_road: chex.Array,
+        step_counter: chex.Array,
+        width: chex.Array,
+        height: chex.Array,
+        car_type: chex.Array,
+        landing_check: chex.Array,
+    ) -> Car:
+        dividers = jnp.array([0, 1, 2, 4, 8, 16])
+        abs_speed = jnp.abs(speed)
+        speed_divider = dividers[abs_speed]
+        effective_divider = jnp.maximum(1, speed_divider)
+        period = jnp.maximum(1, 16 // effective_divider)
+        half_period = jnp.maximum(1, period // 2)
+        speed_sign = jax.lax.cond(speed != 0, lambda _: jax.lax.abs(speed) / speed, lambda _: jnp.array(0.0), operand=None)
+
+        slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
+
+        direction_raw = jax.lax.cond(
+            current_road == 0,
+            lambda _: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
+            lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
+            operand=None,
+        )
+        car_direction_x = jax.lax.cond(direction_raw > 0, lambda _: 1, lambda _: -1, operand=None)
+
+        move_y = jnp.logical_and((step_counter % period) == (half_period % period), speed != 0)
+        move_x = jnp.logical_and((step_counter % period) == 0, speed != 0)
+
+        position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
+
+        new_player_y = jax.lax.cond(
+            move_y,
+            lambda _: jax.lax.cond(
+                is_jumping,
+                lambda _: position_y + speed_sign * -1,
+                lambda _: jax.lax.cond(
+                    self._is_on_line_for_position(position, slope, b, speed_sign, 1),
+                    lambda _: position_y + speed_sign * -1,
+                    lambda _: jnp.array(position_y, float),
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            lambda _: jnp.array(position_y, float),
+            operand=None,
+        )
+
+        new_player_x = jax.lax.cond(
+            move_x,
+            lambda _: jax.lax.cond(
+                is_jumping,
+                lambda _: position_x + speed_sign * car_direction_x,
+                lambda _: jax.lax.cond(
+                    self._is_on_line_for_position(position, slope, b, speed_sign, 2),
+                    lambda _: position_x + speed_sign * car_direction_x,
+                    lambda _: jnp.array(position_x, float),
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            lambda _: jnp.array(position_x, float),
+            operand=None,
+        )
+
+        landing_in_water, between_roads, road_A_x, road_B_x = self._landing_in_water_for_indices(road_index_A, road_index_B, new_player_x, new_player_y)
+        landing_in_water = jnp.logical_and(landing_check, landing_in_water)
+
+        updated_current_road = jax.lax.cond(
+            landing_in_water,
+            lambda _: 2,
+            lambda _: jax.lax.cond(
+                is_on_road,
+                lambda _: current_road,
+                lambda _: jax.lax.cond(
+                    jnp.abs(new_player_x - road_A_x) < jnp.abs(new_player_x - road_B_x),
+                    lambda _: 0,
+                    lambda _: 1,
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        next_road_index_A = jax.lax.cond(
+            updated_current_road == 2,
+            lambda _: road_index_A,
+            lambda _: jax.lax.cond(
+                self.consts.TRACK_CORNERS_Y[road_index_A] < new_player_y,
+                lambda _: road_index_A - 1,
+                lambda _: jax.lax.cond(
+                    len(self.consts.TRACK_CORNERS_Y) == road_index_A + 1,
+                    lambda _: jax.lax.cond(
+                        self.consts.TRACK_CORNERS_Y[0] > new_player_y,
+                        lambda _: 0,
+                        lambda _: road_index_A,
+                        operand=None,
+                    ),
+                    lambda _: jax.lax.cond(
+                        self.consts.TRACK_CORNERS_Y[road_index_A+1] > new_player_y,
+                        lambda _: road_index_A + 1,
+                        lambda _: road_index_A,
+                        operand=None,
+                    ),
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        next_road_index_B = jax.lax.cond(
+            updated_current_road == 2,
+            lambda _: road_index_B,
+            lambda _: jax.lax.cond(
+                self.consts.TRACK_CORNERS_Y[road_index_B] < new_player_y,
+                lambda _: road_index_B - 1,
+                lambda _: jax.lax.cond(
+                    len(self.consts.TRACK_CORNERS_Y) == road_index_B + 1,
+                    lambda _: jax.lax.cond(
+                        self.consts.TRACK_CORNERS_Y[0] > new_player_y,
+                        lambda _: 0,
+                        lambda _: road_index_B,
+                        operand=None,
+                    ),
+                    lambda _: jax.lax.cond(
+                        self.consts.TRACK_CORNERS_Y[road_index_B+1] > new_player_y,
+                        lambda _: road_index_B + 1,
+                        lambda _: road_index_B,
+                        operand=None,
+                    ),
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        wrapped_y = -((new_player_y * -1) % 1036)
+
+        return Car(
+            position=EntityPosition(
+                x=new_player_x,
+                y=wrapped_y,
+                width=width,
+                height=height,
+            ),
+            speed=speed,
+            direction_x=car_direction_x,
+            current_road=updated_current_road,
+            road_index_A=next_road_index_A,
+            road_index_B=next_road_index_B,
+            type=car_type,
+        )
 
     def _flag_step(self, state: UpNDownState, new_player_y: chex.Array, player_x: chex.Array, current_road: chex.Array) -> Tuple[Flag, chex.Array, chex.Array]:
         """Update flag collection state and score.
@@ -426,9 +647,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-
-
-
         player_speed = state.player_car.speed
 
         player_speed = jax.lax.cond(
@@ -444,9 +662,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             lambda s: s,
             operand=player_speed,
         )
-        dividers = jnp.array([0, 1, 2, 4, 8])
-        speed_divider = dividers[jnp.abs(player_speed)]
-
 
         is_jumping = jnp.logical_or(jnp.logical_and(state.is_jumping, state.jump_cooldown > 0), jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed >= 0, jnp.logical_and(state.jump_cooldown == 0, jump))))
         jump_cooldown = jax.lax.cond(
@@ -458,170 +673,32 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                                operand=None),
             operand=state.jump_cooldown,
         )
-
-
-
-
-        ##check if player is on the the road
-        is_on_road = ~state.is_jumping
-
-        '''direction_change = jax.lax.cond(
-            jnp.logical_and(is_on_road, jnp.logical_or(jnp.logical_and(jnp.equal(road_index_A, state.player_car.road_index_A) , state.player_car.current_road == 0), (jnp.logical_and(jnp.equal(road_index_B, state.player_car.road_index_B) , state.player_car.current_road == 1)))) ,
-            lambda s: False,
-            lambda s: True,
-            operand=None,
-        )'''
-        road_index_A = state.player_car.road_index_A
-        road_index_B = state.player_car.road_index_B
-
-        car_direction_x = jax.lax.cond(state.player_car.current_road == 0,
-            lambda s: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
-            lambda s: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
-            operand=None),
-        car_direction_x = jax.lax.cond(
-            car_direction_x[0] > 0,
-            lambda s: 1,
-            lambda s: -1,
-            operand=car_direction_x,
-        )
-
+        is_on_road = ~is_jumping
         is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
-        ##calculate new position with speed (TODO: calculate better speed)
-        player_y = jax.lax.cond(
-            jnp.logical_and((state.step_counter % (16/ speed_divider) == 8 / speed_divider), player_speed != 0,),
-            lambda s: jax.lax.cond(
-                is_jumping,
-                lambda s: state.player_car.position.y + jax.lax.abs(player_speed) / player_speed * -1,
-                lambda s: jax.lax.cond(
-                    self._isOnLine(state, jax.lax.abs(player_speed) / player_speed, 1),
-                    lambda s: s + jax.lax.abs(player_speed) / player_speed * -1,
-                    lambda s: jnp.array(s, float),
-                    operand=state.player_car.position.y,
-                ),
-                operand=state.player_car.position.y),
-            lambda s: jnp.array(s, float),
-            operand=state.player_car.position.y,
-        )
-        player_x = jax.lax.cond(
-            jnp.logical_and((state.step_counter % (16/ speed_divider) == 0), player_speed != 0,),
-            lambda s: jax.lax.cond(
-                is_jumping,
-                lambda s: s + jax.lax.abs(player_speed) / player_speed * car_direction_x,
-                lambda s: jax.lax.cond(
-                    self._isOnLine(state, jax.lax.abs(player_speed) / player_speed, 2),
-                    lambda s: s + jax.lax.abs(player_speed) / player_speed * car_direction_x,
-                    lambda s: jnp.array(s, float),
-                    operand=state.player_car.position.x,
-                ),
-                operand=state.player_car.position.x),
-            lambda s: jnp.array(s, float),
-            operand=state.player_car.position.x,
+
+        updated_player_car = self._advance_car_core(
+            position_x=state.player_car.position.x,
+            position_y=state.player_car.position.y,
+            road_index_A=state.player_car.road_index_A,
+            road_index_B=state.player_car.road_index_B,
+            current_road=state.player_car.current_road,
+            speed=player_speed,
+            is_jumping=is_jumping,
+            is_on_road=is_on_road,
+            step_counter=state.step_counter,
+            width=state.player_car.position.width,
+            height=state.player_car.position.height,
+            car_type=state.player_car.type,
+            landing_check=is_landing,
         )
 
-        ##if y not on mx +b then no move
-
-        
-
-        landing_in_Water, between_roads, road_A_x, road_B_x = self._landing_in_water(state, player_x, player_y)
-        landing_in_Water = jnp.logical_and(is_landing, landing_in_Water)
-        
-
-        current_road = jax.lax.cond(
-            landing_in_Water,
-            lambda s: 2,
-            lambda s: jax.lax.cond(
-                is_on_road,
-                lambda s: state.player_car.current_road,
-                lambda s: jax.lax.cond(
-                    jnp.abs(player_x - road_A_x) < jnp.abs(player_x - road_B_x),
-                    lambda s: 0,
-                    lambda s: 1,
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            operand=None,
-        )
-        
-        road_index_A = jax.lax.cond(
-            current_road == 2,
-            lambda s: road_index_A,
-            lambda s: jax.lax.cond(
-                self.consts.TRACK_CORNERS_Y[road_index_A] < player_y,
-                lambda s: road_index_A - 1,
-                lambda s: jax.lax.cond(
-                    len(self.consts.TRACK_CORNERS_Y) == road_index_A + 1,
-                    lambda s: jax.lax.cond(
-                        self.consts.TRACK_CORNERS_Y[0] > player_y,
-                        lambda s: 0,
-                        lambda s: road_index_A,
-                        operand=None,
-                    ),
-                    lambda s: jax.lax.cond(
-                        self.consts.TRACK_CORNERS_Y[road_index_A+1] > player_y,
-                        lambda s: road_index_A + 1,
-                        lambda s: road_index_A,
-                        operand=None,
-                    ),
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            operand=None,
-        )
-
-        road_index_B = jax.lax.cond(
-            current_road == 2,
-            lambda s: road_index_B,
-            lambda s: jax.lax.cond(
-                self.consts.TRACK_CORNERS_Y[road_index_B] < player_y,
-                lambda s: road_index_B - 1,
-                lambda s: jax.lax.cond(
-                    len(self.consts.TRACK_CORNERS_Y) == road_index_B + 1,
-                    lambda s: jax.lax.cond(
-                        self.consts.TRACK_CORNERS_Y[0] > player_y,
-                        lambda s: 0,
-                        lambda s: road_index_B,
-                        operand=None,
-                    ),
-                    lambda s: jax.lax.cond(
-                        self.consts.TRACK_CORNERS_Y[road_index_B+1] > player_y,
-                        lambda s: road_index_B + 1,
-                        lambda s: road_index_B,
-                        operand=None,
-                    ),
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            operand=None,
-        )
-
-        jax.debug.print("Player X: {}, Player Y: {}, car_direction_x: {}", player_x, player_y, car_direction_x)
-        
-        # Calculate new player y position after wrapping
-        new_player_y = -((player_y * -1) % 1036)
-        
         return UpNDownState(
             score=state.score,
             difficulty=state.difficulty,
             jump_cooldown=jump_cooldown,
             is_jumping=is_jumping,
             is_on_road=is_on_road,
-            player_car=Car(
-                position=EntityPosition(
-                    x=player_x,
-                    y=new_player_y,
-                    width=state.player_car.position.width,
-                    height=state.player_car.position.height,
-                ),
-                speed=player_speed,
-                direction_x=car_direction_x,
-                current_road=current_road,
-                road_index_A=road_index_A,
-                road_index_B=road_index_B,
-                type=state.player_car.type,
-            ),
+            player_car=updated_player_car,
             step_counter=state.step_counter + 1,
             round_started=jnp.logical_or(state.round_started, player_speed != 0),
             movement_steps=jax.lax.cond(
@@ -634,6 +711,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags_collected_mask=state.flags_collected_mask,
             collectibles=state.collectibles,
             collectible_spawn_timer=state.collectible_spawn_timer,
+            enemy_cars=state.enemy_cars,
+            enemy_spawn_timer=state.enemy_spawn_timer,
         )
 
     def _flag_step_main(self, state: UpNDownState) -> UpNDownState:
@@ -660,6 +739,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags_collected_mask=new_flags_collected_mask,
             collectibles=state.collectibles,
             collectible_spawn_timer=state.collectible_spawn_timer,
+            enemy_cars=state.enemy_cars,
+            enemy_spawn_timer=state.enemy_spawn_timer,
         )
     
     def _collectible_step_main(self, state: UpNDownState) -> UpNDownState:
@@ -686,6 +767,159 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags_collected_mask=state.flags_collected_mask,
             collectibles=updated_collectibles,
             collectible_spawn_timer=new_collectible_timer,
+            enemy_cars=state.enemy_cars,
+            enemy_spawn_timer=state.enemy_spawn_timer,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _enemy_step_main(self, state: UpNDownState) -> UpNDownState:
+        """Spawn and move enemy cars that share the player's road logic."""
+        base_key = jax.random.PRNGKey(2025)
+        step_key = jax.random.fold_in(base_key, state.step_counter)
+        key_spawn_offset, key_spawn_side, key_spawn_speed, key_spawn_direction, key_spawn_type, key_spawn_sign, key_flip_root = jax.random.split(step_key, 7)
+
+        active_mask = state.enemy_cars.active
+        active_count = jnp.sum(active_mask.astype(jnp.int32))
+        can_spawn = active_count < self.consts.MAX_ENEMY_CARS
+
+        spawn_timer = jax.lax.cond(
+            jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn),
+            lambda _: self.consts.ENEMY_SPAWN_INTERVAL,
+            lambda _: state.enemy_spawn_timer - 1,
+            operand=None,
+        )
+        should_spawn = jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn)
+
+        inactive_mask = jnp.logical_not(active_mask)
+        first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
+        has_inactive = jnp.any(inactive_mask)
+        spawn_idx = jax.lax.cond(has_inactive, lambda _: first_inactive, lambda _: jnp.array(0, dtype=jnp.int32), operand=None)
+        spawn_mask = (jnp.arange(self.consts.MAX_ENEMY_CARS) == spawn_idx) & should_spawn & has_inactive
+
+        spawn_offset = self.consts.ENEMY_OFFSCREEN_SPAWN_OFFSET + active_count * self.consts.ENEMY_MIN_SPAWN_GAP + jax.random.uniform(key_spawn_offset, minval=0.0, maxval=40.0)
+        spawn_side = jax.random.choice(key_spawn_side, jnp.array([-1.0, 1.0]))
+        raw_spawn_y = state.player_car.position.y + spawn_side * spawn_offset
+        spawn_y = -(((raw_spawn_y) * -1) % 1036)
+        spawn_road = jax.random.randint(key_spawn_direction, shape=(), minval=0, maxval=2)
+
+        def get_road_segment(y):
+            segments = jnp.sum(self.consts.TRACK_CORNERS_Y > y)
+            return jnp.clip(segments - 1, 0, len(self.consts.TRACK_CORNERS_Y) - 2)
+
+        segment_spawn = get_road_segment(spawn_y)
+        spawn_x = jax.lax.cond(
+            spawn_road == 0,
+            lambda _: self._get_x_on_road(spawn_y, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
+            lambda _: self._get_x_on_road(spawn_y, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
+            operand=None,
+        )
+
+        spawn_speed_mag = jax.random.randint(key_spawn_speed, shape=(), minval=self.consts.ENEMY_SPEED_MIN, maxval=self.consts.ENEMY_SPEED_MAX + 1)
+        spawn_speed_sign = jax.random.choice(key_spawn_sign, jnp.array([-1, 1]))
+        spawn_speed = spawn_speed_mag * spawn_speed_sign
+        spawn_type = jax.random.randint(key_spawn_type, shape=(), minval=0, maxval=4)
+
+        direction_raw = jax.lax.cond(
+            spawn_road == 0,
+            lambda _: self.consts.FIRST_TRACK_CORNERS_X[segment_spawn+1] - self.consts.FIRST_TRACK_CORNERS_X[segment_spawn],
+            lambda _: self.consts.SECOND_TRACK_CORNERS_X[segment_spawn+1] - self.consts.SECOND_TRACK_CORNERS_X[segment_spawn],
+            operand=None,
+        )
+        spawn_direction_x = jax.lax.cond(direction_raw > 0, lambda _: 1, lambda _: -1, operand=None)
+
+        enemy_position_x = jnp.where(spawn_mask, spawn_x, state.enemy_cars.position.x)
+        enemy_position_y = jnp.where(spawn_mask, spawn_y, state.enemy_cars.position.y)
+        enemy_width = state.enemy_cars.position.width
+        enemy_height = state.enemy_cars.position.height
+        enemy_speed = jnp.where(spawn_mask, spawn_speed, state.enemy_cars.speed)
+        enemy_type = jnp.where(spawn_mask, spawn_type, state.enemy_cars.type)
+        enemy_current_road = jnp.where(spawn_mask, spawn_road, state.enemy_cars.current_road)
+        enemy_road_index_A = jnp.where(spawn_mask, segment_spawn, state.enemy_cars.road_index_A)
+        enemy_road_index_B = jnp.where(spawn_mask, segment_spawn, state.enemy_cars.road_index_B)
+        enemy_direction_x = jnp.where(spawn_mask, spawn_direction_x, state.enemy_cars.direction_x)
+        enemy_active = jnp.where(spawn_mask, True, state.enemy_cars.active)
+        enemy_age = jnp.where(spawn_mask, jnp.zeros_like(state.enemy_cars.age), state.enemy_cars.age)
+
+        flip_keys = jax.random.split(key_flip_root, self.consts.MAX_ENEMY_CARS)
+        flip_mask = jax.vmap(lambda k: jax.random.uniform(k) < self.consts.ENEMY_DIRECTION_SWITCH_PROB)(flip_keys)
+        enemy_speed = jnp.where(jnp.logical_and(enemy_active, flip_mask), -enemy_speed, enemy_speed)
+
+        move_fn = lambda px, py, ra, rb, cr, sp, tp: self._advance_car_core(
+            position_x=px,
+            position_y=py,
+            road_index_A=ra,
+            road_index_B=rb,
+            current_road=cr,
+            speed=sp,
+            is_jumping=False,
+            is_on_road=True,
+            step_counter=state.step_counter,
+            width=self.consts.PLAYER_SIZE[0],
+            height=self.consts.PLAYER_SIZE[1],
+            car_type=tp,
+            landing_check=False,
+        )
+
+        advanced_cars = jax.vmap(move_fn)(
+            enemy_position_x,
+            enemy_position_y,
+            enemy_road_index_A,
+            enemy_road_index_B,
+            enemy_current_road,
+            enemy_speed,
+            enemy_type,
+        )
+
+        moved_position_x = jnp.where(enemy_active, advanced_cars.position.x, enemy_position_x)
+        moved_position_y = jnp.where(enemy_active, advanced_cars.position.y, enemy_position_y)
+        moved_road_index_A = jnp.where(enemy_active, advanced_cars.road_index_A, enemy_road_index_A)
+        moved_road_index_B = jnp.where(enemy_active, advanced_cars.road_index_B, enemy_road_index_B)
+        moved_current_road = jnp.where(enemy_active, advanced_cars.current_road, enemy_current_road)
+        moved_direction_x = jnp.where(enemy_active, advanced_cars.direction_x, enemy_direction_x)
+
+        enemy_age = jnp.where(enemy_active, enemy_age + 1, enemy_age)
+
+        delta_y = moved_position_y - state.player_car.position.y
+        wrapped_dist = jnp.minimum(jnp.abs(delta_y), 1036 - jnp.abs(delta_y))
+        far_mask = wrapped_dist > self.consts.ENEMY_DESPAWN_DISTANCE
+        age_mask = enemy_age > self.consts.ENEMY_MAX_AGE
+        despawn_mask = jnp.logical_and(enemy_active, jnp.logical_or(far_mask, age_mask))
+        final_active = jnp.logical_and(enemy_active, jnp.logical_not(despawn_mask))
+        enemy_age = jnp.where(despawn_mask, jnp.zeros_like(enemy_age), enemy_age)
+
+        next_enemy_cars = EnemyCars(
+            position=EntityPosition(
+                x=moved_position_x,
+                y=moved_position_y,
+                width=enemy_width,
+                height=enemy_height,
+            ),
+            speed=enemy_speed,
+            type=enemy_type,
+            current_road=moved_current_road,
+            road_index_A=moved_road_index_A,
+            road_index_B=moved_road_index_B,
+            direction_x=moved_direction_x,
+            active=final_active,
+            age=enemy_age,
+        )
+
+        return UpNDownState(
+            score=state.score,
+            difficulty=state.difficulty,
+            jump_cooldown=state.jump_cooldown,
+            is_jumping=state.is_jumping,
+            is_on_road=state.is_on_road,
+            player_car=state.player_car,
+            step_counter=state.step_counter,
+            round_started=state.round_started,
+            movement_steps=state.movement_steps,
+            flags=state.flags,
+            flags_collected_mask=state.flags_collected_mask,
+            collectibles=state.collectibles,
+            collectible_spawn_timer=state.collectible_spawn_timer,
+            enemy_cars=next_enemy_cars,
+            enemy_spawn_timer=spawn_timer,
         )
 
     def _passive_score_step_main(self, state: UpNDownState) -> UpNDownState:
@@ -711,6 +945,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags_collected_mask=state.flags_collected_mask,
             collectibles=state.collectibles,
             collectible_spawn_timer=state.collectible_spawn_timer,
+            enemy_cars=state.enemy_cars,
+            enemy_spawn_timer=state.enemy_spawn_timer,
         )
 
 
@@ -757,6 +993,59 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             type_id=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
             active=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.bool_),
         )
+
+        def get_road_segment(y):
+            segments = jnp.sum(self.consts.TRACK_CORNERS_Y > y)
+            return jnp.clip(segments - 1, 0, len(self.consts.TRACK_CORNERS_Y) - 2)
+
+        # Seed initial visible enemies spaced around the player
+        key_init, key_type, key_road, key_speed, key_sign = jax.random.split(key, 5)
+        player_start_y = 0.0
+        offsets = self.consts.INITIAL_ENEMY_BASE_OFFSET + self.consts.INITIAL_ENEMY_GAP * jnp.arange(self.consts.INITIAL_ENEMY_COUNT)
+        spawn_signs = jax.random.choice(key_sign, jnp.array([-1.0, 1.0]), shape=(self.consts.INITIAL_ENEMY_COUNT,))
+        raw_spawn_y = player_start_y + spawn_signs * offsets
+        init_y = -(((raw_spawn_y) * -1) % 1036)
+        init_road = jax.random.randint(key_road, shape=(self.consts.INITIAL_ENEMY_COUNT,), minval=0, maxval=2)
+        init_segments = jax.vmap(get_road_segment)(init_y)
+        init_x = jax.vmap(lambda y, seg, road: jax.lax.cond(
+            road == 0,
+            lambda _: self._get_x_on_road(y, seg, self.consts.FIRST_TRACK_CORNERS_X),
+            lambda _: self._get_x_on_road(y, seg, self.consts.SECOND_TRACK_CORNERS_X),
+            operand=None,
+        ))(init_y, init_segments, init_road)
+        init_type = jax.random.randint(key_type, shape=(self.consts.INITIAL_ENEMY_COUNT,), minval=0, maxval=4)
+        init_speed_mag = jax.random.randint(key_speed, shape=(self.consts.INITIAL_ENEMY_COUNT,), minval=self.consts.ENEMY_SPEED_MIN, maxval=self.consts.ENEMY_SPEED_MAX + 1)
+        init_speed_sign = jax.random.choice(key_init, jnp.array([-1, 1]), shape=(self.consts.INITIAL_ENEMY_COUNT,))
+        init_speed = init_speed_mag * init_speed_sign
+
+        def init_direction(seg, road):
+            raw = jax.lax.cond(
+                road == 0,
+                lambda _: self.consts.FIRST_TRACK_CORNERS_X[seg+1] - self.consts.FIRST_TRACK_CORNERS_X[seg],
+                lambda _: self.consts.SECOND_TRACK_CORNERS_X[seg+1] - self.consts.SECOND_TRACK_CORNERS_X[seg],
+                operand=None,
+            )
+            return jax.lax.cond(raw > 0, lambda _: 1, lambda _: -1, operand=None)
+
+        init_dir = jax.vmap(init_direction)(init_segments, init_road)
+
+        pad = self.consts.MAX_ENEMY_CARS - self.consts.INITIAL_ENEMY_COUNT
+        enemy_cars = EnemyCars(
+            position=EntityPosition(
+                x=jnp.concatenate([init_x, jnp.zeros(pad, dtype=jnp.float32)]),
+                y=jnp.concatenate([init_y, jnp.zeros(pad, dtype=jnp.float32)]),
+                width=jnp.full((self.consts.MAX_ENEMY_CARS,), self.consts.PLAYER_SIZE[0]),
+                height=jnp.full((self.consts.MAX_ENEMY_CARS,), self.consts.PLAYER_SIZE[1]),
+            ),
+            speed=jnp.concatenate([init_speed, jnp.zeros(pad, dtype=jnp.int32)]),
+            type=jnp.concatenate([init_type, jnp.zeros(pad, dtype=jnp.int32)]),
+            current_road=jnp.concatenate([init_road, jnp.zeros(pad, dtype=jnp.int32)]),
+            road_index_A=jnp.concatenate([init_segments, jnp.zeros(pad, dtype=jnp.int32)]),
+            road_index_B=jnp.concatenate([init_segments, jnp.zeros(pad, dtype=jnp.int32)]),
+            direction_x=jnp.concatenate([init_dir, jnp.zeros(pad, dtype=jnp.int32)]),
+            active=jnp.concatenate([jnp.ones(self.consts.INITIAL_ENEMY_COUNT, dtype=jnp.bool_), jnp.zeros(pad, dtype=jnp.bool_)]),
+            age=jnp.concatenate([jnp.zeros(self.consts.INITIAL_ENEMY_COUNT, dtype=jnp.int32), jnp.zeros(pad, dtype=jnp.int32)]),
+        )
         
         state = UpNDownState(
             score=0,
@@ -785,6 +1074,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
             collectibles=collectibles,
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_cars=enemy_cars,
+            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -796,6 +1087,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = self._passive_score_step_main(state)
         state = self._flag_step_main(state)
         state = self._collectible_step_main(state)
+        state = self._enemy_step_main(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -898,6 +1190,37 @@ class UpNDownRenderer(JAXGameRenderer):
         repeats = max(1, math.ceil(self.view_height / road_cycle) + 2)
         self._road_tile_offsets = jnp.arange(-repeats, repeats + 1, dtype=jnp.int32) * jnp.int32(self.complete_road_size)
         self._num_road_tiles = int(self._road_tile_offsets.shape[0])
+
+        self.enemy_sprite_names = {
+            self.consts.ENEMY_TYPE_CAMERO: ("camero_left", "camero_right"),
+            self.consts.ENEMY_TYPE_FLAG_CARRIER: ("flag_carrier_left", "flag_carrier_right"),
+            self.consts.ENEMY_TYPE_PICKUP: ("pick_up_truck_left", "pick_up_truck_right"),
+            self.consts.ENEMY_TYPE_TRUCK: ("truck_left", "truck_right"),
+        }
+
+        # Pre-pad enemy masks to a common shape so switch/array indexing works under jit
+        enemy_left_raw = [
+            self.SHAPE_MASKS["camero_left"],
+            self.SHAPE_MASKS["flag_carrier_left"],
+            self.SHAPE_MASKS["pick_up_truck_left"],
+            self.SHAPE_MASKS["truck_left"],
+        ]
+        enemy_right_raw = [
+            self.SHAPE_MASKS["camero_right"],
+            self.SHAPE_MASKS["flag_carrier_right"],
+            self.SHAPE_MASKS["pick_up_truck_right"],
+            self.SHAPE_MASKS["truck_right"],
+        ]
+        max_h = max([m.shape[0] for m in enemy_left_raw + enemy_right_raw])
+        max_w = max([m.shape[1] for m in enemy_left_raw + enemy_right_raw])
+
+        def _pad_mask(mask):
+            pad_h = max_h - mask.shape[0]
+            pad_w = max_w - mask.shape[1]
+            return jnp.pad(mask, ((0, pad_h), (0, pad_w)), constant_values=self.jr.TRANSPARENT_ID)
+
+        self.enemy_left_masks = jnp.stack([_pad_mask(m) for m in enemy_left_raw], axis=0)
+        self.enemy_right_masks = jnp.stack([_pad_mask(m) for m in enemy_right_raw], axis=0)
         
         # Precompute flag mask data for recoloring without special-casing pink
         self.flag_base_mask = self.SHAPE_MASKS["pink_flag"]
@@ -973,6 +1296,14 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
             {'name': 'road', 'type': 'group', 'files': roads},
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
+            {'name': 'camero_left', 'type': 'single', 'file': 'enemy_cars/camero_left.npy'},
+            {'name': 'camero_right', 'type': 'single', 'file': 'enemy_cars/camero_right.npy'},
+            {'name': 'flag_carrier_left', 'type': 'single', 'file': 'enemy_cars/flag_carrier_left.npy'},
+            {'name': 'flag_carrier_right', 'type': 'single', 'file': 'enemy_cars/flag_carrier_right.npy'},
+            {'name': 'pick_up_truck_left', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_left.npy'},
+            {'name': 'pick_up_truck_right', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_right.npy'},
+            {'name': 'truck_left', 'type': 'single', 'file': 'enemy_cars/truck_left.npy'},
+            {'name': 'truck_right', 'type': 'single', 'file': 'enemy_cars/truck_right.npy'},
             {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
             {'name': 'all_flags_top', 'type': 'single', 'file': 'all_flags_top.npy'},
@@ -1037,6 +1368,32 @@ class UpNDownRenderer(JAXGameRenderer):
             return jnp.where(over != self.jr.TRANSPARENT_ID, over, acc)
 
         raster = jax.lax.fori_loop(0, total_segments, combine, raster)
+
+        def select_enemy_mask(enemy_type: chex.Array, going_left: chex.Array):
+            left_mask = self.enemy_left_masks[enemy_type]
+            right_mask = self.enemy_right_masks[enemy_type]
+            return jax.lax.cond(going_left, lambda _: left_mask, lambda _: right_mask, operand=None)
+
+        def render_enemy(carry, enemy_idx):
+            raster = carry
+            enemy_active = state.enemy_cars.active[enemy_idx]
+            enemy_x = state.enemy_cars.position.x[enemy_idx]
+            enemy_y = state.enemy_cars.position.y[enemy_idx]
+            enemy_type = state.enemy_cars.type[enemy_idx]
+            direction_x = state.enemy_cars.direction_x[enemy_idx]
+            screen_y = 105 + (enemy_y - state.player_car.position.y)
+            is_visible = jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195))
+            enemy_mask = select_enemy_mask(enemy_type, direction_x < 0)
+
+            raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(r, enemy_x.astype(jnp.int32), screen_y.astype(jnp.int32), enemy_mask),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
+
+        raster, _ = jax.lax.scan(render_enemy, raster, jnp.arange(self.consts.MAX_ENEMY_CARS))
 
         player_mask = self.SHAPE_MASKS["player"]
         raster = self.jr.render_at(raster, state.player_car.position.x, 105, player_mask)
