@@ -699,7 +699,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         attack_time = jnp.where(on_top_lane, 0, attack_time)
         pattern_timer = jnp.maximum(pattern_timer - 1, jnp.zeros_like(pattern_timer))
 
-        closest_lane_id = self._white_ufo_closest_lane_id(position)
+        # Calculate closest lane and distance to it to determine if we are "on a lane"
+        lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS, dtype=jnp.float32)
+        lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=jnp.float32)
+        lane_dx_over_dy = lane_vectors[:, 0] / lane_vectors[:, 1]
+
+        ufo_x = position[0].astype(jnp.float32)
+        ufo_y = position[1].astype(jnp.float32)
+        lane_x_at_ufo_y = lanes_top_x + lane_dx_over_dy * (ufo_y - float(self.consts.TOP_CLIP))
+        closest_lane_id = jnp.argmin(jnp.abs(lane_x_at_ufo_y - ufo_x)).astype(jnp.int32)
+
+        closest_lane_x = lane_x_at_ufo_y[closest_lane_id]
+        dist_to_lane = jnp.abs(closest_lane_x - ufo_x)
+        is_on_lane = dist_to_lane <= 0.25
+
         shootable_lane = jnp.logical_and(closest_lane_id > 0, closest_lane_id < 6)
         allow_shoot = jnp.logical_and(jnp.logical_not(on_top_lane), shootable_lane)
 
@@ -732,6 +745,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             jnp.logical_not(on_top_lane),
             is_engagement_pattern,
             pattern_timer == 0,
+            is_on_lane,
         ]))
 
         key_start_roll, key_start_choice, key_retreat_roll, key_chain_choice = jax.random.split(key, 4)
