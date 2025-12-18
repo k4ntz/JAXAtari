@@ -37,6 +37,10 @@ def test_ufo_clipping():
     # Test 2: On top lane, SHOULD be clipped to LEFT_CLIP_PLAYER (27)
     # We'll put it at x=10, y=43
     test_pos_top = jnp.array([10.0, 43.0])
+
+    # Avoid reusing buffers that may have been donated by the previous jitted `step`.
+    obs, state = env.reset(jax.random.key(1))
+    current_ufo_pos = state.level.white_ufo_pos
     
     new_white_ufo_pos_top = current_ufo_pos.at[0, ufo_idx].set(test_pos_top[0])
     new_white_ufo_pos_top = new_white_ufo_pos_top.at[1, ufo_idx].set(test_pos_top[1])
