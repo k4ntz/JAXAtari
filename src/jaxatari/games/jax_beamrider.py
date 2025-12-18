@@ -1162,7 +1162,7 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'background_sprite', 'type': 'background', 'file': 'new_background.npy'},
             {'name': 'player_sprite', 'type': 'single', 'file': 'player.npy'},
             {'name': 'dead_player', 'type': 'single', 'file': 'Dead_Player.npy'},
-            {'name': 'white_ufo', 'type': 'group', 'files': ['Ufo_Player_Stage_1.npy', 'Ufo_Player_Stage_2.npy', 'Ufo_Player_Stage_3.npy', 'Ufo_Player_Stage_4.npy', 'Ufo_Player_Stage_5.npy', 'Ufo_Player_Stage_6.npy', 'Ufo_Player_Stage_7.npy']},
+            {'name': 'white_ufo', 'type': 'group', 'files': ['White_Ufo_Stage_1.npy', 'White_Ufo_Stage_2.npy', 'White_Ufo_Stage_3.npy', 'White_Ufo_Stage_4.npy', 'White_Ufo_Stage_5.npy', 'White_Ufo_Stage_6.npy', 'White_Ufo_Stage_7.npy']},
             {'name': 'laser_sprite', 'type': 'single', 'file': 'Laser.npy'},
             {'name': 'bullet_sprite', 'type': 'group', 'files': ['Laser.npy', 'Torpedo/Torpedo_3.npy', 'Torpedo/Torpedo_2.npy', 'Torpedo/Torpedo_1.npy']},
             {'name': 'enemy_shot', 'type': 'group', 'files': ['Enemy_Shot/Enemy_Shot_Vertical.npy', 'Enemy_Shot/Enemy_Shot_Horizontal.npy']},
