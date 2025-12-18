@@ -33,10 +33,10 @@ class JourneyEscapeConstants(NamedTuple):
     big_obstacle_width: int = 16
     big_obstacle_height: int = 20
 
-    # Define the Width and Height for every ID (0 to 7)
-    # 0: Fence, 1: Robot, 2: Heart, 3: Manager, 4: Light, 5: BigHeart, 6: BigManager, 7: BigLight
-    TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16)
-    TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15)
+    # Define the Width and Height for every ID (0 to 9)
+    # 0: Fence, 1: Robot, 2: Heart, 3: Manager, 4: Light, 5: BigRobot, 6: BigHeart, 7: BigManager, 8: BigLight, 9: BigFireFace
+    TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16, 16, 17)
+    TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15, 15, 15)
 
     # Line where the obstacles disappear behind
     bottom_blue_area: int = screen_height - 24
@@ -69,51 +69,57 @@ class JourneyEscapeConstants(NamedTuple):
         2: Heart
         3: Manager
         4: Lightbulb
-        -: Big Blue Robot (not yet implemented)
-        5: Big Heart
-        6: Big Manager
-        7: Big Lightbulb
-        -: Big Fire Face (not yet implemented)
+        5: Big Blue Robot
+        6: Big Heart
+        7: Big Manager
+        8: Big Lightbulb
+        9: Big Fire Face
     """
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
         (0, 1, 0),  # Fence
         (1, 2, 20),  # Blue Robots
+        (5, 1, 0),  # Big Robot (1)
 
         (2, 1, 0),  # Heart (1)
         (2, 2, 55),  # Hearts (2, Wide spacing)
         (2, 3, 10),  # Hearts (3, Tight spacing)
         (2, 3, 45),  # Hearts (3, Wide spacing)
-        (5, 1, 0),  # Big Heart (1)
+        (6, 1, 0),  # Big Heart (1)
 
         (3, 1, 0),  # Manager (1)
         (3, 3, 15),  # Manager (3, Tight spacing)
         (3, 2, 55),  # Manager (2, Wide spacing)
-        (6, 1, 0),  # Big Manager (1)
+        (7, 1, 0),  # Big Manager (1)
 
         (4, 3, 20),  # Lightbulbs (3, Tight spacing)
         (4, 2, 70),  # Lightbulbs (2, Very wide spacing)
-        (7, 1, 0),  # Big Lightbulb (1)
+        (8, 1, 0),  # Big Lightbulb (1)
+
+        (9, 1, 0),  # Big Fire Face (1)
     )
     # SPAWN PROBABILITIES
     spawn_weights: chex.Array = jnp.array([
         0.07017544,     # 0: (0, 1, 0)   Fence
-        0.0175,         # 1: (1, 2, 20) ROBOTS
+        0.0175,         # 1: (1, 2, 20) Robot
+        0.0175,         # 2: (5, 1, 0)  Big Robot
 
-        0.08771930,     # 2: (2, 1, 0)   Heart (1)
-        0.22807018,     # 3: (2, 2, 55)  Hearts (2)
-        0.10526316,     # 4: (2, 3, 10)  Hearts (3,T)
-        0.10526316,     # 5: (2, 3, 45)  Hearts (3,W)
-        0.03508772,     # 6: (5, 1, 0)   Big Heart (1)
+        0.08771930,     # 3: (2, 1, 0)   Heart (1)
+        0.22807018,     # 4: (2, 2, 55)  Hearts (2)
+        0.10526316,     # 5: (2, 3, 10)  Hearts (3,T)
+        0.10526316,     # 6: (2, 3, 45)  Hearts (3,W)
+        0.03508772,     # 7: (6, 1, 0)   Big Heart (1)
 
-        0.05263158,     # 7: (3, 1, 0)   Manager (1)
-        0.08771930,     # 8: (3, 3, 15)  Manager (3,T)
-        0.08771930,     # 9: (3, 2, 55)  Manager (2,W)
-        0.05263158,     # 10: (6, 1, 0)  Big Manager
+        0.05263158,     # 8: (3, 1, 0)   Manager (1)
+        0.08771930,     # 9: (3, 3, 15)  Manager (3,T)
+        0.08771930,     # 10: (3, 2, 55)  Manager (2,W)
+        0.05263158,     # 11: (7, 1, 0)  Big Manager
 
-        0.05263158,     # 11: (4, 3, 20)  Lightbulbs (3)
-        0.05263158,     # 12: (4, 2, 70)  Lightbulbs (2)
-        0.05263158,     # 13: (7, 1, 0)   Big Lightbulb
+        0.05263158,     # 12: (4, 3, 20)  Lightbulbs (3)
+        0.05263158,     # 13: (4, 2, 70)  Lightbulbs (2)
+        0.05263158,     # 14: (8, 1, 0)   Big Lightbulb
+
+        0.000001,       # 15: (9, 1, 0) Big Fire Face
     ])
 
 
@@ -802,7 +808,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                 'files': ['2_Heart_0.npy', '2_Heart_1.npy']
             },
             {
-                'name': 'obstacle_item', 'type': 'group',
+                'name': 'obstacle_robot', 'type': 'group',
                 'files': ['1_Blue_Robot_0.npy', '1_Blue_Robot_1.npy']
             },
             {
@@ -812,6 +818,14 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {
                 'name': 'obstacle_face_big', 'type': 'group',
                 'files': ['7_Big_Manager_0.npy', '7_Big_Manager_1.npy']
+            },
+            {
+                'name': 'obstacle_robot_big', 'type': 'group',
+                'files': ['5_Big_Blue_Robot_0.npy', '5_Big_Blue_Robot_1.npy']
+            },
+            {
+                'name': 'obstacle_fire_face_big', 'type': 'group',
+                'files': ['9_Big_Fire_Face_0.npy', '9_Big_Fire_Face_1.npy']
             },
             {'name': 'obstacle_fence', 'type': 'single', 'file': '0_Fence.npy'},
             {'name': 'obstacle_light', 'type': 'single', 'file': '4_Lightbulb.npy'},
@@ -844,9 +858,11 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         2: Heart
         3: Manager
         4: Lightbulb
-        5: Big Heart
-        6: Big Manager
-        7: Big Lightbulb
+        5: Big Blue Robot
+        6: Big Heart
+        7: Big Manager
+        8: Big Lightbulb
+        9: Big Fire Face
         """
 
         # Fence (ID 0) - Returns 32x15
@@ -855,19 +871,22 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # Table for Small Items (IDs 1-4) - Returns 8x15
         # Note: These lambda functions expect indices 0, 1, 2, 3, so we will subtract 1 from the ID
         SMALL_TABLE = [
-            lambda frame: self.SHAPE_MASKS["obstacle_item"][frame],  # 1 -> 0
+            lambda frame: self.SHAPE_MASKS["obstacle_robot"][frame],  # 1 -> 0
             lambda frame: self.SHAPE_MASKS["obstacle_heart"][frame],  # 2 -> 1
             lambda frame: self.SHAPE_MASKS["obstacle_face"][frame],  # 3 -> 2
             lambda frame: self.SHAPE_MASKS["obstacle_light"],  # 4 -> 3
         ]
 
-        # Table for Big Items (IDs 5-7) - Returns 16x15
+        # Table for Big Items (IDs 5-8) - Returns 16x15
         # Note: These lambda functions expect indices 0, 1, 2, so we will subtract 5 from the ID
         BIG_TABLE = [
-            lambda frame: self.SHAPE_MASKS["obstacle_heart_big"][frame],  # 5 -> 0
-            lambda frame: self.SHAPE_MASKS["obstacle_face_big"][frame],  # 6 -> 1
-            lambda frame: self.SHAPE_MASKS["obstacle_light_big"],  # 7 -> 2
+            lambda frame: self.SHAPE_MASKS["obstacle_robot_big"][frame],  # 5 -> 0
+            lambda frame: self.SHAPE_MASKS["obstacle_heart_big"][frame],  # 6 -> 1
+            lambda frame: self.SHAPE_MASKS["obstacle_face_big"][frame],  # 7 -> 2
+            lambda frame: self.SHAPE_MASKS["obstacle_light_big"],  # 8 -> 3
         ]
+
+        FIRE_FACE_MASK = lambda frame: self.SHAPE_MASKS["obstacle_fire_face_big"][frame]  # 9
 
         def draw_fence(r, x, y):
             mask = FENCE_MASK
@@ -878,8 +897,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_big(r, x, y, type_idx, frame_idx):
-            # Map global ID (5,6,7) to local table index (0,1,2)
+            # Map global ID (5,6,7,8) to local table index (0,1,2,3)
             mask = jax.lax.switch(type_idx - 5, BIG_TABLE, frame_idx)
+            return self.jr.render_at_clipped(r, x, y, mask)
+        
+        def draw_fire_face(r, x, y, frame_idx):
+            mask = FIRE_FACE_MASK(frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def body(i, r):
@@ -891,7 +914,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             does_exist = box_h > 0
 
             # 2. Blink Logic
-            is_lightbulb = (obs_type == 4) | (obs_type == 7)
+            is_lightbulb = (obs_type == 4) | (obs_type == 8)
             phase = (state.time // self.consts.lightbulb_blink_period) % 2
             is_ghost = is_lightbulb & (phase == 1)
 
@@ -904,7 +927,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             def render_op(curr_raster):
                 return jax.lax.cond(
                     obs_type >= 5,
-                    lambda _r: draw_big(_r, x, y, obs_type, obs_frame_idx),
+                    lambda _r: jax.lax.cond(
+                                    obs_type == 9,
+                                    lambda _r: draw_fire_face(_r, x, y, obs_frame_idx),
+                                    lambda _r: draw_big(_r, x, y, obs_type, obs_frame_idx),
+                                    _r
+                                ),
                     lambda _r: jax.lax.cond(
                                     obs_type == 0,
                                     lambda _r: draw_fence(_r, x, y),
