@@ -396,7 +396,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         split_key, key = jax.random.split(new_state.random_key, 2)
         new_state = new_state._replace(random_key=key)
         new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))
-            (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, state.score))
+            (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score))
         #-------------------------------------------
 
         new_state = self._player_step(new_state, action)
@@ -504,6 +504,18 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
         return self.renderer.render(state)
+
+    def player_shot(self, state:BattlezoneState) -> BattlezoneState:
+        split_key, key = jax.random.split(state.random_key, 2)
+        # Set enemies to inactive
+        inactive_enemies = state.enemies._replace(active=jnp.zeros_like(state.enemies.active))
+        new_state = state._replace(enemies = inactive_enemies)
+        new_state = new_state._replace(
+            life=new_state.life-1,
+            enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))(jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score))
+        new_state = new_state._replace(key=key)
+
+        return new_state
 
     def _get_observation(self, state: BattlezoneState):
         return BattlezoneObservation(
