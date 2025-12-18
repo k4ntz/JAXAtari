@@ -1203,7 +1203,7 @@ class BeamriderRenderer(JAXGameRenderer):
         """Returns the declarative manifest of all assets for the game, including both wall sprites."""
         return [
             {'name': 'background_sprite', 'type': 'background', 'file': 'new_background.npy'},
-            {'name': 'player_sprite', 'type': 'single', 'file': 'player.npy'},
+            {'name': 'player_sprite', 'type': 'group', 'files': [f'Player/Player_{i}.npy' for i in range(1, 17)]},
             {'name': 'dead_player', 'type': 'single', 'file': 'Dead_Player.npy'},
             {'name': 'white_ufo', 'type': 'group', 'files': ['White_Ufo_Stage_1.npy', 'White_Ufo_Stage_2.npy', 'White_Ufo_Stage_3.npy', 'White_Ufo_Stage_4.npy', 'White_Ufo_Stage_5.npy', 'White_Ufo_Stage_6.npy', 'White_Ufo_Stage_7.npy']},
             {'name': 'white_ufo_explosion', 'type': 'group', 'files': [
@@ -1326,14 +1326,16 @@ class BeamriderRenderer(JAXGameRenderer):
         return raster
 
     def _render_player_and_bullet(self, raster, state):
-        player_mask = self.SHAPE_MASKS["player_sprite"]
+        player_masks = self.SHAPE_MASKS["player_sprite"]
         dead_player_mask = self.SHAPE_MASKS["dead_player"]
         
         # Determine which mask to use
         is_dead = state.level.death_timer > 0
         
         def render_alive(r):
-            return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, player_mask)
+            sprite_idx = (state.steps // 2) % 16
+            mask = player_masks[sprite_idx]
+            return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, mask)
 
         def render_dead(r):
             return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, dead_player_mask)
