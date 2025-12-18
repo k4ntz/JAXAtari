@@ -56,8 +56,8 @@ class BeamriderConstants(NamedTuple):
 
     BOTTOM_CLIP:int = 160
     TOP_CLIP:int=43
-    LASER_HIT_RADIUS: Tuple[int, int] = (4, 2)
-    TORPEDO_HIT_RADIUS: Tuple[int, int] = (3, 2)
+    LASER_HIT_RADIUS: Tuple[int, int] = (7, 2)
+    TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 2)
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
     BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
@@ -65,8 +65,8 @@ class BeamriderConstants(NamedTuple):
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
-    ####                                        IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK 
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0, 42, 42, 42, 28, 0, 42) 
+    ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK 
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0,          42,            42,         42,         28,     0,      42) 
     WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] = (0.3, 0.2, 0.2, 0.2, 0.1)
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
@@ -796,7 +796,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         return vx, 0.0
     
-    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id):
+    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id): #velocities not used anymore
         speed_factor = self.consts.WHITE_UFO_SPEED_FACTOR
         retreat_mult = self.consts.WHITE_UFO_RETREAT_SPEED_MULT
         x, y = white_ufo_pos[0], white_ufo_pos[1]
