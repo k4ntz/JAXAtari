@@ -174,6 +174,7 @@ class BattlezoneState(NamedTuple):
     enemies: Enemy
     player_projectile: Projectile #player can only fire 1 projectile
     enemy_projectiles: Projectile #per enemy 1 projectile
+    random_key: chex.PRNGKey
 
 
 class BattlezoneObservation(NamedTuple):
@@ -329,6 +330,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
+        if key is None:
+            key = jax.random.PRNGKey(0)
         state = BattlezoneState(
             score=jnp.array(0),
             life=jnp.array(5),
@@ -361,7 +364,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 orientation_angle=jnp.array(0),
                 active=jnp.array(False),
                 distance=jnp.array(0)
-            )
+            ),
+            random_key=key
         )
         initial_obs = self._get_observation(state)
 
@@ -380,6 +384,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_state = new_state._replace(player_projectile=new_player_projectile)
         new_state = self._player_projectile_col_check(new_state)
         #------------------------------------------
+
+        #-------------------spawn-------------------
+        split_key, key = jax.random.split(new_state.random_key, 2)
+        new_state = new_state._replace(random_key=key)
+        new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0))(jax.random.split(split_key, new_state.enemies.active.shape[0]), new_state.enemies))
+        #-------------------------------------------
 
         new_state = self._player_step(new_state, action)
         new_state = self._enemy_step(new_state)
@@ -453,6 +463,26 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         distance = jnp.sqrt(x ** 2 + z ** 2)
         #Room for distance specific actions
         return distance
+
+    def spawn_enemy(self, key, enemy):
+        def is_active(args):
+            return enemy
+        def not_active(args):
+            enemy, key = args
+            # Random keys
+            key, k_dist, k_theta, k_type, k_orient = jax.random.split(key, 5)
+            # Enemy position
+            distance = jnp.sqrt(jax.random.uniform(k_dist, minval=0.0, maxval=1.0))*self.consts.RADAR_MAX_SCAN_RADIUS
+            theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
+            return enemy._replace(x=distance*jnp.cos(theta),
+                                  z=distance*jnp.sin(theta),
+                                  distance=distance,
+                                  enemy_type=jax.random.randint(k_type,  shape=(), minval=0, maxval=len(EnemyType)),
+                                  orientation_angle=jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi),
+                                  active=True
+                                  )
+
+        return jax.lax.cond(enemy.active, is_active, not_active, (enemy, key))
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
