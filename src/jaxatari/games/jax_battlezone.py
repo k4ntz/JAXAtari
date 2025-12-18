@@ -93,9 +93,9 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 #------------------------named Tuples---------------------------
 class EnemyType(IntEnum):
     TANK = 0
-    SUPER_TANK = 1
-    SAUCER = 2
-    FIGHTER_JET = 3
+    SAUCER = 1
+    #FIGHTER_JET = 2
+    #SUPER_TANK = 3
 
 
 class BattlezoneConstants(NamedTuple):
@@ -140,6 +140,13 @@ class BattlezoneConstants(NamedTuple):
     ENEMY_HITBOX_SIZE: float = 4.5
     ENEMY_SCORES:chex.Array = jnp.array([1000,3000,5000,2000], dtype=jnp.int32)
     ENEMY_DEATH_ANIM_LENGTH:int = 15
+    ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
+        # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
+        [1.0, 0.0],# 0.0, 0.0],   #1_000
+        [0.6, 0.4],# 0.0, 0.0],   #2_000
+        [0.5, 0.4],# 0.1, 0.0],   #7_000
+        [0.4, 0.3]#, 0.2, 0.1]    #12_000
+        ])
 
 
 class Projectile(NamedTuple):
@@ -388,7 +395,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #-------------------spawn-------------------
         split_key, key = jax.random.split(new_state.random_key, 2)
         new_state = new_state._replace(random_key=key)
-        new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0))(jax.random.split(split_key, new_state.enemies.active.shape[0]), new_state.enemies))
+        new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))(jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, state.score))
         #-------------------------------------------
 
         new_state = self._player_step(new_state, action)
@@ -464,25 +471,32 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #Room for distance specific actions
         return distance
 
-    def spawn_enemy(self, key, enemy):
-        def is_active(args):
+    def spawn_enemy(self, key, enemy, score):
+        def score_to_spawn_indx(score):
+            threshold = jnp.array([1000, 2000, 7000, 12000])
+            return jnp.sum(score >= threshold)
+        def is_active(_):
             return enemy
         def not_active(args):
-            enemy, key = args
+            enemy, key, score = args
+            # Enemy spawnprobs
+            spawn_probs_index = score_to_spawn_indx(score)
+            spawn_probs = self.consts.ENEMY_SPAWN_PROBS[spawn_probs_index]
             # Random keys
             key, k_dist, k_theta, k_type, k_orient = jax.random.split(key, 5)
             # Enemy position
             distance = jnp.sqrt(jax.random.uniform(k_dist, minval=0.0, maxval=1.0))*self.consts.RADAR_MAX_SCAN_RADIUS
             theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
+
             return enemy._replace(x=distance*jnp.cos(theta),
                                   z=distance*jnp.sin(theta),
                                   distance=distance,
-                                  enemy_type=jax.random.randint(k_type,  shape=(), minval=0, maxval=len(EnemyType)),
+                                  enemy_type=jax.random.choice(k_type, a=len(EnemyType), p=spawn_probs),
                                   orientation_angle=jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi),
                                   active=True
                                   )
 
-        return jax.lax.cond(enemy.active, is_active, not_active, (enemy, key))
+        return jax.lax.cond((enemy.active) | (score<1000), is_active, not_active, (enemy, key, score))
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
