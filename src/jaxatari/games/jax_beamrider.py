@@ -54,7 +54,7 @@ class BeamriderConstants(NamedTuple):
     PLAYER_POS_Y: int = 165
     PLAYER_SPEED: float = 2.5
 
-    BOTTOM_CLIP:int = 160
+    BOTTOM_CLIP:int = 175
     TOP_CLIP:int=43
     LASER_HIT_RADIUS: Tuple[int, int] = (7, 2)
     TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 2)
