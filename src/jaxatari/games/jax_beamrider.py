@@ -65,7 +65,8 @@ class BeamriderConstants(NamedTuple):
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0, 42, 42, 42, 28, 12, 42)
+    ####                                        IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK 
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0, 42, 42, 42, 28, 0, 42) 
     WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] = (0.3, 0.2, 0.2, 0.2, 0.1)
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
@@ -76,14 +77,15 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
     WHITE_UFO_TOP_LANE_TURN_SPEED: float = 0.5
 
-    INIT_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
-
-    INIT_LINE_VEL = jnp.array([0.31581876, 0.22127658, 0.4507547, 0.07610765, 0.10862522, 0.15503621])
+    # Blue line constants
+    INIT_BLUE_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
+    INIT_BLUE_LINE_VEL = jnp.array([0.31581876, 0.22127658, 0.4507547, 0.07610765, 0.10862522, 0.15503621])
     NEW_LINE_VEL = 0.06528
     LINE_ACCELERATION = 1.007
     MAX_LINE_VEL = 0.6665
     BLUE_LINE_OFFSCREEN_Y = 500
     NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
+
     WHITE_UFOS_PER_SECTOR: int = 15
     SCORE_PER_WHITE_UFO: int = 48
     MOTHERSHIP_VELOCITY: int = 1
@@ -227,8 +229,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_time_allowed=jnp.array([400, 600, 800]),
             white_ufo_pattern_id=jnp.zeros(3, dtype=jnp.int32),
             white_ufo_pattern_timer=jnp.zeros(3, dtype=jnp.int32),
-            line_positions=self.consts.INIT_LINE_POS,
-            line_velocities=self.consts.INIT_LINE_VEL,
+            line_positions=self.consts.INIT_BLUE_LINE_POS,
+            line_velocities=self.consts.INIT_BLUE_LINE_VEL,
         )
 
         return BeamriderState(
@@ -935,18 +937,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_timer = jnp.where(moved_offscreen, 0, shot_timer)
         shot_active = jnp.logical_and(shot_active, jnp.logical_not(moved_offscreen))
 
-        player_xy = jnp.array([state.level.player_pos, float(self.consts.PLAYER_POS_Y)], dtype=jnp.float32)
-        shot_xy = shot_pos.T
-        delta = jnp.abs(shot_xy - player_xy[None, :])
-        player_hit_radius = jnp.array(
-            [float(self.consts.PLAYER_WIDTH) / 2.0, float(self.consts.PLAYER_HEIGHT) / 2.0],
-            dtype=jnp.float32,
-        )
+        player_left = state.level.player_pos.astype(jnp.float32)
+        player_right = player_left + float(self.consts.PLAYER_WIDTH)
+        player_y = float(self.consts.PLAYER_POS_Y)
+
+        shot_x = shot_pos[0]
+        shot_y = shot_pos[1]
+
         hits = jnp.logical_and.reduce(jnp.array([
             shot_active,
-            delta[:, 0] <= player_hit_radius[0],
-            delta[:, 1] <= player_hit_radius[1],
+            shot_y >= player_y - 7.0,
+            shot_x >= player_left,
+            shot_x <= player_right,
         ]))
+
 
         hit_count = jnp.sum(hits.astype(jnp.int32))
         lives = jnp.maximum(state.lives - hit_count, 0)
