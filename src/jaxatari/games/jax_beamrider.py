@@ -1111,7 +1111,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             # Calculate pos_x based on timer (2..15)
             s = jnp.clip((timer - 1) // 2, 0, 6)
             rel_x = jnp.take(jnp.array(self.consts.MOTHERSHIP_ANIM_X), s)
-            calculated_pos = jnp.where(is_ltr, rel_x.astype(jnp.float32), (160 - 16 - rel_x).astype(jnp.float32))
+            calculated_pos = jnp.where(is_ltr, rel_x.astype(jnp.float32), (160 - 16 - rel_x + 8).astype(jnp.float32))
             
             return jnp.where(finished, 2, 1), jnp.where(finished, 1, next_timer), calculated_pos
 
@@ -1126,7 +1126,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             dx = jnp.where(is_ltr, 1.0, -1.0)
             next_pos_x = pos_x + jnp.where(should_move, dx, 0.0)
             
-            target_x = jnp.where(is_ltr, 137.0, 7.0)
+            stable_rel_x = jnp.array(self.consts.MOTHERSHIP_ANIM_X)[6].astype(jnp.float32)
+            target_x = jnp.where(is_ltr, 160.0 - 16.0 - stable_rel_x + 8.0, stable_rel_x)
             reached = jnp.where(is_ltr, next_pos_x >= target_x, next_pos_x <= target_x)
             
             return jnp.where(reached, 3, 2), jnp.where(reached, 1, timer + 1), next_pos_x
@@ -1140,7 +1141,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rel_x = jnp.take(jnp.array(self.consts.MOTHERSHIP_ANIM_X), s)
             # During descending, we are at the opposite side from where we started
             # If we started LTR (Left), we are now at Right.
-            calculated_pos = jnp.where(is_ltr, (160 - 16 - rel_x).astype(jnp.float32), rel_x.astype(jnp.float32))
+            calculated_pos = jnp.where(is_ltr, (160 - 16 - rel_x + 8).astype(jnp.float32), rel_x.astype(jnp.float32))
             
             return jnp.where(finished, 4, 3), jnp.where(finished, 0, next_timer), calculated_pos
 
@@ -1286,8 +1287,8 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = self._render_player_and_bullet(raster, state)
         raster = self._render_enemy_shots(raster, state)
         raster = self._render_white_ufos(raster, state)
-        raster = self._render_mothership(raster, state)
         raster = self._render_hud(raster, state)
+        raster = self._render_mothership(raster, state)
         return self.jr.render_from_palette(raster, self.PALETTE)
 
     def _render_blue_lines(self, raster, state):
