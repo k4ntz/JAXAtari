@@ -90,7 +90,7 @@ class BeamriderConstants(NamedTuple):
     SCORE_PER_WHITE_UFO: int = 48
     MOTHERSHIP_VELOCITY: int = 1
     MOTHERSHIP_OFFSCREEN_POS: int = 500
-
+    DEATH_DURATION: int = 120
 
 
 class LevelState(NamedTuple):
@@ -121,6 +121,8 @@ class LevelState(NamedTuple):
 
     line_positions: chex.Array
     line_velocities: chex.Array
+    
+    death_timer: chex.Array
 
 
 class BeamriderState(NamedTuple):
@@ -200,16 +202,18 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         observation = self._get_observation(state)
         return observation, state
 
-    def reset_level(self, next_level=1) -> BeamriderState:
+    def _create_level_state(self, white_ufo_left=None) -> LevelState:
+        white_ufo_left = white_ufo_left if white_ufo_left is not None else jnp.array(self.consts.WHITE_UFOS_PER_SECTOR)
+        
         enemy_shot_offscreen = jnp.tile(
             jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
             (1, 3),
         )
 
-        level_state = LevelState(
+        return LevelState(
             player_pos=jnp.array(77.0),
             player_vel=jnp.array(0.0),
-            white_ufo_left=jnp.array(self.consts.WHITE_UFOS_PER_SECTOR),
+            white_ufo_left=white_ufo_left,
             comet_positions=jnp.array(0),
             mothership_position=jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS),
             mothership_velocity=jnp.array(0),
@@ -231,8 +235,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_pattern_timer=jnp.zeros(3, dtype=jnp.int32),
             line_positions=self.consts.INIT_BLUE_LINE_POS,
             line_velocities=self.consts.INIT_BLUE_LINE_VEL,
+            death_timer=jnp.array(0, dtype=jnp.int32),
         )
 
+    def reset_level(self, next_level=1) -> BeamriderState:
+        level_state = self._create_level_state()
+        
         return BeamriderState(
             level=level_state,
             score=jnp.array(0),
@@ -297,7 +305,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ufo_update.pattern_id,
             ufo_update.pattern_timer,
         )
-        enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, lives = self._enemy_shot_step(
+        enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, hit_count = self._enemy_shot_step(
             state,
             white_ufo_pos,
             white_ufo_pattern_id,
@@ -342,6 +350,42 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
         enemy_shot_lane = jnp.where(sector_advanced, 0, enemy_shot_lane)
 
+        # --- Death Logic ---
+        current_death_timer = state.level.death_timer
+        is_hit = hit_count > 0
+        
+        # Start dying if we got hit and weren't already dying
+        start_dying = jnp.logical_and(is_hit, current_death_timer == 0)
+        
+        # Next timer value
+        next_death_timer = jnp.where(
+            start_dying, 
+            self.consts.DEATH_DURATION, 
+            jnp.maximum(current_death_timer - 1, 0)
+        )
+        
+        is_dying_sequence = next_death_timer > 0
+        
+        # Check if we just finished the death sequence (transition 1 -> 0)
+        just_died = jnp.logical_and(current_death_timer > 0, next_death_timer == 0)
+
+        # Apply Death State Overrides (if dying)
+        # - Despawn enemies
+        # - Stop player
+        # - Despawn shots
+        
+        # If dying, force enemies/shots offscreen
+        white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
+        enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
+        mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
+        
+        # If dying, player shouldn't move (though visualization might handle the sprite)
+        # We'll keep the position but zero velocity
+        vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
+        # Also maybe reset player shot?
+        player_shot_position = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+
+        # Construct new state (Pre-Reset Logic)
         next_step = state.steps + 1
         new_level_state = LevelState(
             player_pos=player_x,
@@ -368,15 +412,31 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_pattern_timer=white_ufo_pattern_timer,
             line_positions=line_positions,
             line_velocities=line_velocities,
+            death_timer=next_death_timer,
         )
 
+        # Calculate final state, handling Reset if `just_died`
+        # If just_died, we reset the level state but keep UFOs count
+        reset_level_state = self._create_level_state(white_ufo_left=white_ufo_left)
+        
+        final_level_state = jax.tree_util.tree_map(
+            lambda normal, reset: jnp.where(just_died, reset, normal),
+            new_level_state,
+            reset_level_state
+        )
+        
+        # Decrement lives if just_died
+        new_lives = jnp.where(just_died, state.lives - 1, state.lives)
+        # Ensure lives don't go below 0 (though game should end)
+        new_lives = jnp.maximum(new_lives, 0)
+
         new_state = BeamriderState(
-            level=new_level_state,
+            level=final_level_state,
             score=score,
             sector=sector,
             level_finished=jnp.array(0),
             reset_coords=jnp.array(False),
-            lives=lives,
+            lives=new_lives,
             steps=next_step,
             rng=next_rng,
         )
@@ -953,11 +1013,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
 
         hit_count = jnp.sum(hits.astype(jnp.int32))
-        lives = jnp.maximum(state.lives - hit_count, 0)
-
+        
         shot_pos = jnp.where(hits[None, :], offscreen, shot_pos)
         shot_timer = jnp.where(hits, 0, shot_timer)
-        return shot_pos, shot_lane, shot_timer, lives
+        return shot_pos, shot_lane, shot_timer, hit_count
 
 
     def _mothership_step(self, state: BeamriderState):
@@ -1080,6 +1139,7 @@ class BeamriderRenderer(JAXGameRenderer):
         return [
             {'name': 'background_sprite', 'type': 'background', 'file': 'new_background.npy'},
             {'name': 'player_sprite', 'type': 'single', 'file': 'player.npy'},
+            {'name': 'dead_player', 'type': 'single', 'file': 'Dead_Player.npy'},
             {'name': 'white_ufo', 'type': 'group', 'files': ['Ufo_Player_Stage_1.npy', 'Ufo_Player_Stage_2.npy', 'Ufo_Player_Stage_3.npy', 'Ufo_Player_Stage_4.npy', 'Ufo_Player_Stage_5.npy', 'Ufo_Player_Stage_6.npy', 'Ufo_Player_Stage_7.npy']},
             {'name': 'laser_sprite', 'type': 'single', 'file': 'Laser.npy'},
             {'name': 'bullet_sprite', 'type': 'group', 'files': ['Laser.npy', 'Torpedo/Torpedo_3.npy', 'Torpedo/Torpedo_2.npy', 'Torpedo/Torpedo_1.npy']},
@@ -1157,18 +1217,60 @@ class BeamriderRenderer(JAXGameRenderer):
 
     def _render_lives(self, raster, state):
         hp_mask = self.SHAPE_MASKS["live"]
+        death_timer = state.level.death_timer
+        is_dead = death_timer > 0
+        
+        # Flashing logic: 0.25 sec on, 0.25 sec off.
+        # Assuming 60fps, 15 frames.
+        flash_visible = (death_timer // 15) % 2 == 0
+        
         for idx in range(3):
-            should_render = state.lives > idx
-            pos_x = jnp.where(should_render, 32 + (idx * 9), 500)
+            # Normal logic: render if idx < state.lives - 1 (Bonus HP display)
+            # If lives=3, we render indices 0, 1 (2 icons).
+            # If lives=1, we render nothing.
+            
+            # Flashing logic: if is_dead, we are about to lose a life.
+            # We want to flash the icon that represents the life we are losing.
+            # If we have 3 lives (2 icons), we lose one -> 2 lives (1 icon).
+            # The icon disappearing is at index 1.
+            # So we flash if idx == state.lives - 2.
+            
+            is_last_life = (idx == state.lives - 2)
+            should_flash = jnp.logical_and(is_dead, is_last_life)
+            
+            visible_normally = (state.lives - 1) > idx
+            
+            # If flashing, visibility depends on flash_visible.
+            # If not flashing, depends on visible_normally.
+            
+            is_visible = jnp.where(
+                should_flash,
+                jnp.logical_and(visible_normally, flash_visible),
+                visible_normally
+            )
+            
+            pos_x = jnp.where(is_visible, 32 + (idx * 9), 500)
             raster = self.jr.render_at_clipped(raster, pos_x, 183, hp_mask)
         return raster
 
     def _render_player_and_bullet(self, raster, state):
         player_mask = self.SHAPE_MASKS["player_sprite"]
+        dead_player_mask = self.SHAPE_MASKS["dead_player"]
+        
+        # Determine which mask to use
+        is_dead = state.level.death_timer > 0
+        
+        def render_alive(r):
+            return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, player_mask)
+
+        def render_dead(r):
+            return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, dead_player_mask)
+
+        raster = jax.lax.cond(is_dead, render_dead, render_alive, raster)
+
         bullet_mask = self.SHAPE_MASKS["bullet_sprite"][
             self._get_index_bullet(state.level.player_shot_pos[1], state.level.bullet_type)
         ]
-        raster = self.jr.render_at(raster, state.level.player_pos, self.consts.PLAYER_POS_Y, player_mask)
         raster = self.jr.render_at_clipped(
             raster,
             state.level.player_shot_pos[0] + self._get_bullet_alignment(state.level.player_shot_pos[1], state.level.bullet_type),
