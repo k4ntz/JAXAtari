@@ -7,7 +7,6 @@ import chex
 import jax
 import jax.numpy as jnp
 from jax import Array
-from numpy import int32
 
 from jaxatari import spaces
 from jaxatari.environment import JAXAtariAction as Action
@@ -205,7 +204,7 @@ class YarsRevengeConstants(NamedTuple):
             ],
             jnp.ones((16, 8)),
         ],
-        dtype=jnp.bool,
+        dtype=jnp.int32,
     )
 
     MISSILE_HIT_KERNEL = jnp.array(
@@ -262,7 +261,7 @@ class YarsRevengeObservation(NamedTuple):
     cannon: DirectionEntity
     energy_shield: Entity
     energy_shield_state: jnp.ndarray
-    lives: chex.Array
+    lives: jnp.ndarray
 
 
 class YarsRevengeInfo(NamedTuple):
@@ -315,7 +314,7 @@ class JaxYarsRevenge(
                 w=jnp.array(self.consts.DESTROYER_SIZE[0]).astype(jnp.int32),
                 h=jnp.array(self.consts.DESTROYER_SIZE[1]).astype(jnp.int32),
             ),
-            swirl_exist=jnp.array(0).astype(jnp.bool),
+            swirl_exist=jnp.array(0).astype(jnp.int32),
             swirl=Entity(
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0).astype(jnp.float32),
@@ -324,7 +323,7 @@ class JaxYarsRevenge(
             ),
             swirl_dx=jnp.array(0).astype(jnp.float32),
             swirl_dy=jnp.array(0).astype(jnp.float32),
-            energy_missile_exist=jnp.array(0).astype(jnp.bool),
+            energy_missile_exist=jnp.array(0).astype(jnp.int32),
             energy_missile=DirectionEntity(
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0).astype(jnp.float32),
@@ -332,8 +331,8 @@ class JaxYarsRevenge(
                 h=jnp.array(self.consts.ENERGY_MISSILE_SIZE[1]).astype(jnp.int32),
                 direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
             ),
-            cannon_exist=jnp.array(0).astype(jnp.bool),
-            cannon_fired=jnp.array(0).astype(jnp.bool),
+            cannon_exist=jnp.array(0).astype(jnp.int32),
+            cannon_fired=jnp.array(0).astype(jnp.int32),
             cannon=DirectionEntity(
                 x=jnp.array(1).astype(jnp.float32),
                 y=jnp.array(0).astype(jnp.float32),
@@ -875,46 +874,45 @@ class JaxYarsRevenge(
                 ),
                 lambda: state._replace(
                     step_counter=state.step_counter + 1,
-                    lives=new_lives,
+                    lives=new_lives.astype(jnp.int32),
                     yar=state.yar._replace(
-                        x=new_yar_x,
-                        y=new_yar_y,
-                        direction=new_yar_direction,
+                        x=new_yar_x.astype(jnp.float32),
+                        y=new_yar_y.astype(jnp.float32),
+                        direction=new_yar_direction.astype(jnp.int32),
                     ),
-                    yar_state=new_yar_state,
-                    yar_devour_count=new_yar_devour_count,
+                    yar_state=new_yar_state.astype(jnp.int32),
+                    yar_devour_count=new_yar_devour_count.astype(jnp.int32),
                     qotile=state.qotile._replace(
-                        x=state.qotile.x,
-                        y=new_qotile_y,
+                        y=new_qotile_y.astype(jnp.float32),
                         direction=new_qotile_direction,
                     ),
                     destroyer=state.destroyer._replace(
-                        x=new_destroyer_x,
-                        y=new_destroyer_y,
+                        x=new_destroyer_x.astype(jnp.float32),
+                        y=new_destroyer_y.astype(jnp.float32),
                     ),
-                    swirl_exist=new_swirl_exists,
+                    swirl_exist=new_swirl_exists.astype(jnp.int32),
                     swirl=state.swirl._replace(
-                        x=new_swirl_x,
-                        y=new_swirl_y,
+                        x=new_swirl_x.astype(jnp.float32),
+                        y=new_swirl_y.astype(jnp.float32),
                     ),
-                    swirl_dx=new_swirl_dx,
-                    swirl_dy=new_swirl_dy,
-                    energy_missile_exist=new_em_exists,
+                    swirl_dx=new_swirl_dx.astype(jnp.float32),
+                    swirl_dy=new_swirl_dy.astype(jnp.float32),
+                    energy_missile_exist=new_em_exists.astype(jnp.int32),
                     energy_missile=state.energy_missile._replace(
-                        x=new_energy_missile_x,
-                        y=new_energy_missile_y,
-                        direction=new_energy_missile_direction,
+                        x=new_energy_missile_x.astype(jnp.float32),
+                        y=new_energy_missile_y.astype(jnp.float32),
+                        direction=new_energy_missile_direction.astype(jnp.int32),
                     ),
-                    cannon_exist=new_cannon_exists,
-                    cannon_fired=new_cannon_fired,
+                    cannon_exist=new_cannon_exists.astype(jnp.int32),
+                    cannon_fired=new_cannon_fired.astype(jnp.int32),
                     cannon=state.cannon._replace(
-                        x=new_cannon_x,
-                        y=new_cannon_y,
+                        x=new_cannon_x.astype(jnp.float32),
+                        y=new_cannon_y.astype(jnp.float32),
                     ),
                     energy_shield=state.energy_shield._replace(
-                        y=new_energy_shield_y,
+                        y=new_energy_shield_y.astype(jnp.float32),
                     ),
-                    energy_shield_state=new_energy_shield_state,
+                    energy_shield_state=new_energy_shield_state.astype(jnp.int32),
                 ),
             ),
         )
@@ -936,84 +934,84 @@ class JaxYarsRevenge(
             {
                 "yar": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.int32
+                            low=0, high=7, shape=(), dtype=jnp.float32
                         ),
                     }
                 ),
                 "qotile": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.int32
+                            low=0, high=7, shape=(), dtype=jnp.float32
                         ),
                     }
                 ),
                 "destroyer": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
                 ),
-                "swirl_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
+                "swirl_exist": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
                 "swirl": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
                 ),
-                "swirl_dx": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
-                "swirl_dy": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
-                "energy_missile_exists": spaces.Box(
-                    low=0, high=1, shape=(), dtype=jnp.bool
+                "swirl_dx": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
+                "swirl_dy": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
+                "energy_missile_exist": spaces.Box(
+                    low=0, high=1, shape=(), dtype=jnp.float32
                 ),
                 "energy_missile": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.int32
+                            low=0, high=7, shape=(), dtype=jnp.float32
                         ),
                     }
                 ),
-                "cannon_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
-                "cannon_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
+                "cannon_exist": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
+                "cannon_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
                 "cannon": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.int32
+                            low=0, high=7, shape=(), dtype=jnp.float32
                         ),
                     }
                 ),
                 "energy_shield": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                        "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
                 ),
                 "energy_shield_state": spaces.Box(
-                    low=0, high=1, shape=(8, 16), dtype=jnp.int32
+                    low=0, high=1, shape=(16, 8), dtype=jnp.float32
                 ),
-                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.float32),
             }
         )
 
@@ -1044,45 +1042,46 @@ class JaxYarsRevenge(
     def obs_to_flat_array(self, obs):
         return jnp.concatenate(
             [
-                obs.yar.x.flatten(),
-                obs.yar.y.flatten(),
-                obs.yar.w.flatten(),
-                obs.yar.h.flatten(),
-                obs.yar.direction.flatten(),
-                obs.qotile.x.flatten(),
-                obs.qotile.y.flatten(),
-                obs.qotile.w.flatten(),
-                obs.qotile.h.flatten(),
-                obs.qotile.direction.flatten(),
-                obs.destroyer.x.flatten(),
-                obs.destroyer.y.flatten(),
-                obs.destroyer.w.flatten(),
-                obs.destroyer.h.flatten(),
-                obs.swirl_exist.flatten(),
-                obs.swirl.x.flatten(),
-                obs.swirl.y.flatten(),
-                obs.swirl.w.flatten(),
-                obs.swirl.h.flatten(),
-                obs.swirl_dx.flatten(),
-                obs.swirl_dy.flatten(),
-                obs.energy_missile_exist.flatten(),
-                obs.energy_missile.x.flatten(),
-                obs.energy_missile.y.flatten(),
-                obs.energy_missile.w.flatten(),
-                obs.energy_missile.h.flatten(),
-                obs.energy_missile.direction.flatten(),
-                obs.cannon_exist.flatten(),
-                obs.cannon_fired.flatten(),
-                obs.cannon.x.flatten(),
-                obs.cannon.y.flatten(),
-                obs.cannon.w.flatten(),
-                obs.cannon.h.flatten(),
-                obs.cannon.direction.flatten(),
-                obs.energy_shield.x.flatten(),
-                obs.energy_shield.y.flatten(),
-                obs.energy_shield.w.flatten(),
-                obs.energy_shield.h.flatten(),
-                obs.energy_shield_state.flatten(),
+                obs.yar.x.flatten().astype(jnp.float32),
+                obs.yar.y.flatten().astype(jnp.float32),
+                obs.yar.w.flatten().astype(jnp.float32),
+                obs.yar.h.flatten().astype(jnp.float32),
+                obs.yar.direction.flatten().astype(jnp.float32),
+                obs.qotile.x.flatten().astype(jnp.float32),
+                obs.qotile.y.flatten().astype(jnp.float32),
+                obs.qotile.w.flatten().astype(jnp.float32),
+                obs.qotile.h.flatten().astype(jnp.float32),
+                obs.qotile.direction.flatten().astype(jnp.float32),
+                obs.destroyer.x.flatten().astype(jnp.float32),
+                obs.destroyer.y.flatten().astype(jnp.float32),
+                obs.destroyer.w.flatten().astype(jnp.float32),
+                obs.destroyer.h.flatten().astype(jnp.float32),
+                obs.swirl_exist.flatten().astype(jnp.float32),
+                obs.swirl.x.flatten().astype(jnp.float32),
+                obs.swirl.y.flatten().astype(jnp.float32),
+                obs.swirl.w.flatten().astype(jnp.float32),
+                obs.swirl.h.flatten().astype(jnp.float32),
+                obs.swirl_dx.flatten().astype(jnp.float32),
+                obs.swirl_dy.flatten().astype(jnp.float32),
+                obs.energy_missile_exist.flatten().astype(jnp.float32),
+                obs.energy_missile.x.flatten().astype(jnp.float32),
+                obs.energy_missile.y.flatten().astype(jnp.float32),
+                obs.energy_missile.w.flatten().astype(jnp.float32),
+                obs.energy_missile.h.flatten().astype(jnp.float32),
+                obs.energy_missile.direction.flatten().astype(jnp.float32),
+                obs.cannon_exist.flatten().astype(jnp.float32),
+                obs.cannon_fired.flatten().astype(jnp.float32),
+                obs.cannon.x.flatten().astype(jnp.float32),
+                obs.cannon.y.flatten().astype(jnp.float32),
+                obs.cannon.w.flatten().astype(jnp.float32),
+                obs.cannon.h.flatten().astype(jnp.float32),
+                obs.cannon.direction.flatten().astype(jnp.float32),
+                obs.energy_shield.x.flatten().astype(jnp.float32),
+                obs.energy_shield.y.flatten().astype(jnp.float32),
+                obs.energy_shield.w.flatten().astype(jnp.float32),
+                obs.energy_shield.h.flatten().astype(jnp.float32),
+                obs.energy_shield_state.flatten().astype(jnp.float32),
+                obs.lives.flatten().astype(jnp.float32),
             ]
         )
 
@@ -1180,7 +1179,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         duration: int,
         group_item_count: int,
     ):
-        return group * 2 + (jnp.floor(step / duration).astype(int32) % group_item_count)
+        return group * 2 + (jnp.floor(step / duration).astype(jnp.int32) % group_item_count)
 
     def render(self, state: YarsRevengeState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
