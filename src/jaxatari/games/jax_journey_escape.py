@@ -16,9 +16,9 @@ class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     player_width: int = 8
-    player_height: int = 10
+    player_height: int = 25
     start_player_x: int = 44  # Fixed x position
-    start_player_y: int = 166  # Fixed y position
+    start_player_y: int = 162  # Fixed y position
     player_speed: int = 2  # constant downward speed
 
     # frame countdown for timer
@@ -48,7 +48,7 @@ class JourneyEscapeConstants(NamedTuple):
 
     # border of the valid game space
     top_border: int = 33
-    bottom_border: int = screen_height - 53
+    bottom_border: int = screen_height - player_height - 47
 
     left_border: int = 8
     right_border: int = screen_width - 8
