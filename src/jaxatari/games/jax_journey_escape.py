@@ -16,7 +16,7 @@ class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     player_width: int = 8
-    player_height: int = 10
+    player_height: int = 14
     start_player_x: int = 44  # Fixed x position
     start_player_y: int = 166  # Fixed y position
     player_speed: int = 2  # constant downward speed
@@ -35,8 +35,8 @@ class JourneyEscapeConstants(NamedTuple):
 
     # Define the Width and Height for every ID (0 to 7)
     # 0: Fence, 1: Robot, 2: Heart, 3: Manager, 4: Light, 5: BigHeart, 6: BigManager, 7: BigLight
-    TYPE_WIDTHS: Tuple[int, ...] = (8, 8, 8, 8, 8, 16, 16, 16)
-    TYPE_HEIGHTS: Tuple[int, ...] = (10, 10, 10, 10, 10, 20, 20, 20)
+    TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16)
+    TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15)
 
     # Line where the obstacles disappear behind
     bottom_blue_area: int = screen_height - 24
@@ -48,7 +48,7 @@ class JourneyEscapeConstants(NamedTuple):
 
     # border of the valid game space
     top_border: int = 33
-    bottom_border: int = screen_height - 53
+    bottom_border: int = screen_height - 57
 
     left_border: int = 8
     right_border: int = screen_width - 8
@@ -77,7 +77,7 @@ class JourneyEscapeConstants(NamedTuple):
     """
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
-        (0, 4, 0),  # Fence
+        (0, 1, 0),  # Fence
         (1, 2, 20),  # Blue Robots
 
         (2, 1, 0),  # Heart (1)
@@ -748,7 +748,8 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         def scale_sprite(mask):
             """Scales a sprite 2x using nearest neighbor (repeat)"""
             return mask.repeat(2, axis=0).repeat(2, axis=1)
-
+        
+        """ not needed as big versions are preloaded
         new_masks = {}
 
         for name, mask in self.SHAPE_MASKS.items():
@@ -765,6 +766,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                 new_masks[name] = mask
 
         self.SHAPE_MASKS = new_masks
+        """
 
     def _create_solid_block(self, width: int, height: int, color: Tuple[int, int, int]) -> jnp.ndarray:
         """Creates a solid color sprite with full alpha."""
@@ -793,18 +795,27 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             },
             {
                 'name': 'obstacle_face', 'type': 'group',
-                'files': ['obs_face_0.npy', 'obs_face_1.npy']
+                'files': ['3_Manager_0.npy', '3_Manager_1.npy']
             },
             {
                 'name': 'obstacle_heart', 'type': 'group',
-                'files': ['obs_heart_0.npy', 'obs_heart_1.npy']
+                'files': ['2_Heart_0.npy', '2_Heart_1.npy']
             },
             {
                 'name': 'obstacle_item', 'type': 'group',
-                'files': ['obs_item_0.npy', 'obs_item_1.npy']
+                'files': ['1_Blue_Robot_0.npy', '1_Blue_Robot_1.npy']
             },
-            {'name': 'obstacle_fence', 'type': 'single', 'file': 'obs_fence.npy'},
-            {'name': 'obstacle_light', 'type': 'single', 'file': 'obs_light.npy'},
+            {
+                'name': 'obstacle_heart_big', 'type': 'group',
+                'files': ['6_Big_heart_0.npy', '6_Big_heart_1.npy']
+            },
+            {
+                'name': 'obstacle_face_big', 'type': 'group',
+                'files': ['7_Big_Manager_0.npy', '7_Big_Manager_1.npy']
+            },
+            {'name': 'obstacle_fence', 'type': 'single', 'file': '0_Fence.npy'},
+            {'name': 'obstacle_light', 'type': 'single', 'file': '4_Lightbulb.npy'},
+            {'name': 'obstacle_light_big', 'type': 'single', 'file': '8_Big_Lightbulb.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
             {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
             {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
@@ -838,16 +849,19 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         7: Big Lightbulb
         """
 
-        # Table for Small Items (IDs 0-4) - Returns 8x10
+        # Fence (ID 0) - Returns 32x15
+        FENCE_MASK = self.SHAPE_MASKS["obstacle_fence"] # 0
+
+        # Table for Small Items (IDs 1-4) - Returns 8x15
+        # Note: These lambda functions expect indices 0, 1, 2, 3, so we will subtract 1 from the ID
         SMALL_TABLE = [
-            lambda frame: self.SHAPE_MASKS["obstacle_fence"],  # 0
-            lambda frame: self.SHAPE_MASKS["obstacle_item"][frame],  # 1
-            lambda frame: self.SHAPE_MASKS["obstacle_heart"][frame],  # 2
-            lambda frame: self.SHAPE_MASKS["obstacle_face"][frame],  # 3
-            lambda frame: self.SHAPE_MASKS["obstacle_light"],  # 4
+            lambda frame: self.SHAPE_MASKS["obstacle_item"][frame],  # 1 -> 0
+            lambda frame: self.SHAPE_MASKS["obstacle_heart"][frame],  # 2 -> 1
+            lambda frame: self.SHAPE_MASKS["obstacle_face"][frame],  # 3 -> 2
+            lambda frame: self.SHAPE_MASKS["obstacle_light"],  # 4 -> 3
         ]
 
-        # Table for Big Items (IDs 5-7) - Returns 16x20
+        # Table for Big Items (IDs 5-7) - Returns 16x15
         # Note: These lambda functions expect indices 0, 1, 2, so we will subtract 5 from the ID
         BIG_TABLE = [
             lambda frame: self.SHAPE_MASKS["obstacle_heart_big"][frame],  # 5 -> 0
@@ -855,8 +869,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             lambda frame: self.SHAPE_MASKS["obstacle_light_big"],  # 7 -> 2
         ]
 
+        def draw_fence(r, x, y):
+            mask = FENCE_MASK
+            return self.jr.render_at_clipped(r, x, y, mask)
+
         def draw_small(r, x, y, type_idx, frame_idx):
-            mask = jax.lax.switch(type_idx, SMALL_TABLE, frame_idx)
+            mask = jax.lax.switch(type_idx - 1, SMALL_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_big(r, x, y, type_idx, frame_idx):
@@ -887,7 +905,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                 return jax.lax.cond(
                     obs_type >= 5,
                     lambda _r: draw_big(_r, x, y, obs_type, obs_frame_idx),
-                    lambda _r: draw_small(_r, x, y, obs_type, obs_frame_idx),
+                    lambda _r: jax.lax.cond(
+                                    obs_type == 0,
+                                    lambda _r: draw_fence(_r, x, y),
+                                    lambda _r: draw_small(_r, x, y, obs_type, obs_frame_idx),
+                                    _r
+                                ),
                     curr_raster
                 )
 
