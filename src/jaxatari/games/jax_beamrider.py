@@ -46,7 +46,7 @@ class BeamriderConstants(NamedTuple):
 
     MAX_LASER_Y: int = 67
     MIN_BULLET_Y:int =156
-    MAX_TORPEDO_Y: int = 60
+    MAX_TORPEDO_Y: int = 35
     BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
 
     PLAYER_POS_Y: int = 165
@@ -78,6 +78,13 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_ATTACK_P_MAX: float = 0.8
     WHITE_UFO_ATTACK_ALPHA: float = 0.0001
     WHITE_UFO_EXPLOSION_FRAMES: int = 21
+
+    # Mothership Explosion
+    # Sequence: 1, 2, 1, 2, 3, 2, 3, 2, 3 (indices 0, 1, 0, 1, 2, 1, 2, 1, 2)
+    # 8 frames per sprite step -> total 9 steps * 8 frames = 72 frames
+    MOTHERSHIP_EXPLOSION_SEQUENCE: Tuple[int, ...] = (0, 1, 0, 1, 2, 1, 2, 1, 2)
+    MOTHERSHIP_EXPLOSION_STEP_DURATION: int = 8
+    MOTHERSHIP_HITBOX_SIZE: int = 16
 
     # Blue line constants
     INIT_BLUE_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
@@ -319,6 +326,41 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ufo_update.pattern_id,
             ufo_update.pattern_timer,
         )
+
+        # --- Mothership Collision Check ---
+        ms_stage = state.level.mothership_stage
+        ms_pos = state.level.mothership_position
+        ms_y = self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT
+        
+        # Hitbox is square around sprite. 
+        # Sprite top-left is (ms_pos, ms_y).
+        box_size = self.consts.MOTHERSHIP_HITBOX_SIZE
+        
+        # Center of mothership sprite roughly
+        ms_center_x = ms_pos + 8.0 
+        ms_center_y = ms_y + 3.5 
+        
+        # Check collision with player shot
+        shot_x = player_shot_position[0]
+        shot_y = player_shot_position[1]
+        
+        # Simple AABB
+        dx = jnp.abs(shot_x - ms_center_x)
+        dy = jnp.abs(shot_y - ms_center_y)
+        
+        shot_active = shot_y < self.consts.BOTTOM_CLIP 
+        is_torpedo = bullet_type == self.consts.TORPEDO_ID
+        ms_vulnerable = ms_stage == 2 # Only vulnerable when moving across top
+        
+        half_size = box_size / 2.0
+        hit_mothership = (dx < half_size) & (dy < half_size) & shot_active & is_torpedo & ms_vulnerable
+        
+        # Update state if hit
+        # Reset shot
+        player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+        
+        # ----------------------------------
+
         white_ufo_explosion_frame, white_ufo_explosion_pos = self._update_white_ufo_explosions(
             state.level.white_ufo_explosion_frame,
             state.level.white_ufo_explosion_pos,
@@ -333,7 +375,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         line_positions, line_velocities = self._line_step(state)
-        mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(state, white_ufo_left, white_ufo_explosion_frame)
+        mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(
+            state, 
+            white_ufo_left, 
+            white_ufo_explosion_frame,
+            hit_mothership
+        )
         sector_advanced = jnp.logical_or(False, sector_advanced_m)
         sector = state.sector + sector_advanced.astype(jnp.int32)
 
@@ -1089,7 +1136,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return shot_pos, shot_lane, shot_timer, hit_count
 
 
-    def _mothership_step(self, state: BeamriderState, white_ufo_left: chex.Array, white_ufo_explosion_frame: chex.Array):
+    def _mothership_step(self, state: BeamriderState, white_ufo_left: chex.Array, white_ufo_explosion_frame: chex.Array, is_hit: chex.Array):
         """Spawn and move the mothership once all white UFOs are cleared."""
         stage = state.level.mothership_stage
         timer = state.level.mothership_timer
@@ -1130,7 +1177,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             target_x = jnp.where(is_ltr, 160.0 - 16.0 - stable_rel_x + 8.0, stable_rel_x)
             reached = jnp.where(is_ltr, next_pos_x >= target_x, next_pos_x <= target_x)
             
-            return jnp.where(reached, 3, 2), jnp.where(reached, 1, timer + 1), next_pos_x
+            next_stage = jnp.where(reached, 3, 2)
+            next_timer = jnp.where(reached, 1, timer + 1)
+            
+            # Transition to explosion if hit
+            final_stage = jnp.where(is_hit, 5, next_stage)
+            final_timer = jnp.where(is_hit, 0, next_timer)
+            
+            return final_stage, final_timer, next_pos_x
 
         def descending_logic():
             next_timer = timer + 1
@@ -1147,13 +1201,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         def done_logic():
             return 0, 0, jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS, dtype=jnp.float32)
+            
+        def exploding_logic():
+            # 9 steps * 8 frames = 72 frames total
+            duration = 9 * self.consts.MOTHERSHIP_EXPLOSION_STEP_DURATION
+            finished = timer >= duration
+            return jnp.where(finished, 4, 5), timer + 1, pos_x
 
         new_stage, new_timer, new_pos = jax.lax.switch(
             stage.astype(jnp.int32),
-            [idle_logic, emergence_logic, moving_logic, descending_logic, done_logic]
+            [idle_logic, emergence_logic, moving_logic, descending_logic, done_logic, exploding_logic]
         )
         
-        sector_advance = (stage == 3) & (new_stage == 4)
+        # Advance sector when mothership finishes descending (3->4) OR finishes exploding (5->4)
+        sector_advance = (new_stage == 4)
         
         return new_pos, new_timer, new_stage, sector_advance
 
@@ -1278,6 +1339,11 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'yellow_numbers', 'type': 'digits', 'pattern': 'yellow_nums/yellow_{}.npy'},
             {'name': 'live', 'type': 'single', 'file': 'lives.npy'},
             {'name': 'mothership', 'type': 'single', 'file': 'Mothership.npy'},
+            {'name': 'mothership_explosion', 'type': 'group', 'files': [
+                'Mothership/Mothership_explosion1.npy',
+                'Mothership/Mothership_explosion2.npy',
+                'Mothership/Mothership_explosion3.npy',
+            ]},
         ]
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1493,9 +1559,20 @@ class BeamriderRenderer(JAXGameRenderer):
             num_lines = s + 1
             return render_clipping(r, num_lines)
 
+        def render_exploding(r):
+            explosion_masks = self.SHAPE_MASKS["mothership_explosion"]
+            step_duration = self.consts.MOTHERSHIP_EXPLOSION_STEP_DURATION
+            step_idx = timer // step_duration
+            step_idx = jnp.clip(step_idx, 0, 8)
+            seq = jnp.array(self.consts.MOTHERSHIP_EXPLOSION_SEQUENCE)
+            sprite_idx = seq[step_idx]
+            exp_mask = explosion_masks[sprite_idx]
+            y = self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT
+            return self.jr.render_at_clipped(r, pos_x, y, exp_mask)
+
         return jax.lax.switch(
             stage.astype(jnp.int32),
-            [render_none, render_emergence, render_moving, render_descending, render_none],
+            [render_none, render_emergence, render_moving, render_descending, render_none, render_exploding],
             raster
         )
 
