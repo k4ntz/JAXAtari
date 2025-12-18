@@ -92,6 +92,9 @@ class BeamriderConstants(NamedTuple):
     SCORE_PER_WHITE_UFO: int = 48
     MOTHERSHIP_VELOCITY: int = 1
     MOTHERSHIP_OFFSCREEN_POS: int = 500
+    MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (7, 2, 3, 3, 4, 5, 5)
+    MOTHERSHIP_HEIGHT: int = 7
+    MOTHERSHIP_EMERGE_Y: int = 43
     DEATH_DURATION: int = 120
 
 
@@ -102,6 +105,8 @@ class LevelState(NamedTuple):
     comet_positions: chex.Array
     mothership_position: chex.Array
     mothership_velocity: chex.Array
+    mothership_timer: chex.Array
+    mothership_stage: chex.Array
     player_shot_pos: chex.Array
     player_shot_vel: chex.Array
     torpedoes_left: chex.Array
@@ -217,8 +222,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_vel=jnp.array(0.0),
             white_ufo_left=white_ufo_left,
             comet_positions=jnp.array(0),
-            mothership_position=jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS),
-            mothership_velocity=jnp.array(0),
+            mothership_position=jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS, dtype=jnp.float32),
+            mothership_velocity=jnp.array(0, dtype=jnp.float32),
+            mothership_timer=jnp.array(0, dtype=jnp.int32),
+            mothership_stage=jnp.array(0, dtype=jnp.int32),
             player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS),
             player_shot_vel=jnp.array([0, 0]),
             torpedoes_left=jnp.array(3),
@@ -326,9 +333,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         line_positions, line_velocities = self._line_step(state)
-        mothership_position, mothership_velocity, sector = self._mothership_step(state)
+        mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(state, white_ufo_left)
+        sector_advanced = jnp.logical_or(False, sector_advanced_m) # sector_advanced from enemy_shot_step is not boolean, it's sector_advanced from sector > state.sector? wait.
+        sector = state.sector + sector_advanced.astype(jnp.int32)
 
-        sector_advanced = sector > state.sector
         white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
         torpedos_left = jnp.where(sector_advanced, 3, torpedos_left)
 
@@ -390,7 +398,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # If dying, force enemies/shots offscreen
         white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
         enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
+        # Reset mothership if dying
         mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
+        mothership_timer = jnp.where(is_dying_sequence, 0, mothership_timer)
+        mothership_stage = jnp.where(is_dying_sequence, 0, mothership_stage)
         
         # If dying, player shouldn't move (though visualization might handle the sprite)
         # We'll keep the position but zero velocity
@@ -406,7 +417,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_left=white_ufo_left,
             comet_positions=jnp.array(0),
             mothership_position=mothership_position,
-            mothership_velocity=mothership_velocity,
+            mothership_velocity=jnp.array(0, dtype=jnp.float32), # No longer used for velocity
+            mothership_timer=mothership_timer,
+            mothership_stage=mothership_stage,
             player_shot_pos=player_shot_position,
             player_shot_vel=player_shot_velocity,
             torpedoes_left=torpedos_left,
@@ -1076,31 +1089,71 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return shot_pos, shot_lane, shot_timer, hit_count
 
 
-    def _mothership_step(self, state: BeamriderState):
+    def _mothership_step(self, state: BeamriderState, white_ufo_left: chex.Array):
         """Spawn and move the mothership once all white UFOs are cleared."""
+        stage = state.level.mothership_stage
+        timer = state.level.mothership_timer
+        pos_x = state.level.mothership_position
+        sector = state.sector
+        
+        is_ltr = (sector % 2) != 0
 
-        no_ufos_left = state.level.white_ufo_left == 0
-        mothership_offscreen = state.level.mothership_position == self.consts.MOTHERSHIP_OFFSCREEN_POS
+        def idle_logic():
+            start = white_ufo_left == 0
+            # Start at stage 1, timer 1
+            return jnp.where(start, 1, 0), jnp.where(start, 1, 0), pos_x.astype(jnp.float32)
 
-        moving_pos = state.level.mothership_position + state.level.mothership_velocity
-        current_calculated_pos = jnp.where(no_ufos_left, moving_pos, state.level.mothership_position)
+        def emergence_logic():
+            next_timer = timer + 1
+            finished = next_timer > 15
+            
+            # Calculate pos_x based on timer (2..15)
+            s = jnp.clip((timer - 1) // 2, 0, 6)
+            rel_x = jnp.take(jnp.array(self.consts.MOTHERSHIP_ANIM_X), s)
+            calculated_pos = jnp.where(is_ltr, rel_x.astype(jnp.float32), (160 - 16 - rel_x).astype(jnp.float32))
+            
+            return jnp.where(finished, 2, 1), jnp.where(finished, 1, next_timer), calculated_pos
 
-        should_spawn = jnp.logical_and(no_ufos_left, mothership_offscreen)
-        mothership_position = jnp.where(should_spawn, 20, current_calculated_pos)
-        mothership_velocity = jnp.where(
-            should_spawn,
-            self.consts.MOTHERSHIP_VELOCITY,
-            state.level.mothership_velocity,
+        def moving_logic():
+            # Interval 2, 4, 2, 4...
+            # timer=2: move (after 2)
+            # timer=6: move (after 4)
+            # timer=8: move (after 2)
+            # timer=12: move (after 4)
+            # should_move if timer % 6 in {2, 0}
+            should_move = (timer % 6 == 2) | (timer % 6 == 0)
+            dx = jnp.where(is_ltr, 1.0, -1.0)
+            next_pos_x = pos_x + jnp.where(should_move, dx, 0.0)
+            
+            target_x = jnp.where(is_ltr, 137.0, 7.0)
+            reached = jnp.where(is_ltr, next_pos_x >= target_x, next_pos_x <= target_x)
+            
+            return jnp.where(reached, 3, 2), jnp.where(reached, 1, timer + 1), next_pos_x
+
+        def descending_logic():
+            next_timer = timer + 1
+            finished = next_timer > 15
+            
+            # Calculate pos_x based on timer (1..14)
+            s = jnp.clip(6 - (timer - 1) // 2, 0, 6)
+            rel_x = jnp.take(jnp.array(self.consts.MOTHERSHIP_ANIM_X), s)
+            # During descending, we are at the opposite side from where we started
+            # If we started LTR (Left), we are now at Right.
+            calculated_pos = jnp.where(is_ltr, (160 - 16 - rel_x).astype(jnp.float32), rel_x.astype(jnp.float32))
+            
+            return jnp.where(finished, 4, 3), jnp.where(finished, 0, next_timer), calculated_pos
+
+        def done_logic():
+            return 0, 0, jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS, dtype=jnp.float32)
+
+        new_stage, new_timer, new_pos = jax.lax.switch(
+            stage.astype(jnp.int32),
+            [idle_logic, emergence_logic, moving_logic, descending_logic, done_logic]
         )
-
-        end_of_appearance_pos = jnp.logical_or(mothership_position <= 19, mothership_position >= 141)
-        should_despawn = jnp.logical_and(
-            end_of_appearance_pos, mothership_position != self.consts.MOTHERSHIP_OFFSCREEN_POS
-        )
-        final_position = jnp.where(should_despawn, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
-        final_velocity = jnp.where(should_despawn, 0, mothership_velocity)
-
-        return (final_position, final_velocity, state.sector + should_despawn)
+        
+        sector_advance = (stage == 3) & (new_stage == 4)
+        
+        return new_pos, new_timer, new_stage, sector_advance
 
 
 
@@ -1222,7 +1275,7 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'green_numbers', 'type': 'digits', 'pattern': 'green_nums/green_{}.npy'},
             {'name': 'yellow_numbers', 'type': 'digits', 'pattern': 'yellow_nums/yellow_{}.npy'},
             {'name': 'live', 'type': 'single', 'file': 'lives.npy'},
-            {'name': 'mothership', 'type': 'single', 'file': 'Ufo_Boss.npy'},
+            {'name': 'mothership', 'type': 'single', 'file': 'Mothership.npy'},
         ]
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1265,13 +1318,19 @@ class BeamriderRenderer(JAXGameRenderer):
         return raster
 
     def _render_white_ufo_counter(self, raster, state):
+        # Hide counter if mothership animation is active
+        should_hide = state.level.mothership_stage > 0
+        
         ufos_left_digits = self.jr.int_to_digits(state.level.white_ufo_left, max_digits=2)
         ufos_left_masks = self.SHAPE_MASKS["green_numbers"]
         is_double_digit = state.level.white_ufo_left >= 10
         start_index = jnp.where(is_double_digit, 0, 1)
         numbers_to_render = jnp.where(is_double_digit, 2, 1)
+        
+        final_numbers_to_render = jnp.where(should_hide, 0, numbers_to_render)
+        
         return self.jr.render_label_selective(
-            raster, 19, 32, ufos_left_digits, ufos_left_masks, start_index, numbers_to_render, spacing=6
+            raster, 19, 32, ufos_left_digits, ufos_left_masks, start_index, final_numbers_to_render, spacing=6
         )
 
     def _render_score(self, raster, state):
@@ -1401,8 +1460,42 @@ class BeamriderRenderer(JAXGameRenderer):
         return raster
 
     def _render_mothership(self, raster, state):
-        mothership_mask = self.SHAPE_MASKS["mothership"]
-        return self.jr.render_at_clipped(raster, state.level.mothership_position, 37, mothership_mask)
+        stage = state.level.mothership_stage
+        timer = state.level.mothership_timer
+        pos_x = state.level.mothership_position
+        
+        mask = self.SHAPE_MASKS["mothership"]
+
+        def render_none(r):
+            return r
+
+        def render_clipping(r, num_lines):
+            # Clip the mask to only show top num_lines
+            y_indices = jnp.arange(7)[:, None]
+            active_rows = y_indices < num_lines
+            effective_mask = jnp.where(active_rows, mask, self.jr.TRANSPARENT_ID)
+            y = 43 - num_lines
+            return self.jr.render_at_clipped(r, pos_x, y, effective_mask)
+
+        def render_emergence(r):
+            num_lines = jnp.clip(timer // 2, 0, 7)
+            return jax.lax.cond(num_lines > 0, 
+                               lambda r_: render_clipping(r_, num_lines),
+                               lambda r_: r_, r)
+
+        def render_moving(r):
+            return self.jr.render_at_clipped(r, pos_x, 36, mask)
+
+        def render_descending(r):
+            s = jnp.clip(6 - (timer - 1) // 2, 0, 6)
+            num_lines = s + 1
+            return render_clipping(r, num_lines)
+
+        return jax.lax.switch(
+            stage.astype(jnp.int32),
+            [render_none, render_emergence, render_moving, render_descending, render_none],
+            raster
+        )
 
     def _get_index_ufo(self,pos)->chex.Array:
         stage_1 = (pos >= 0).astype(jnp.int32)
