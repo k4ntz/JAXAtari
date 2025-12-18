@@ -28,8 +28,6 @@ class WhiteUFOPattern(IntEnum):
 
 
 class BeamriderConstants(NamedTuple):
-    """All tunable constants for the Beamrider environment."""
-
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
@@ -171,8 +169,6 @@ class WhiteUFOUpdate(NamedTuple):
 
 
 class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, BeamriderInfo, BeamriderConstants]):
-    """JAX implementation of the Beamrider environment."""
-
     def __init__(self, consts: Optional[BeamriderConstants] = None):
         super().__init__(consts)
         self.consts = consts or BeamriderConstants()
