@@ -53,7 +53,7 @@ class JourneyEscapeConstants(NamedTuple):
     left_border: int = 8
     right_border: int = screen_width - 8
 
-    starting_score: int = 99
+    starting_score: int = 50000
 
     hit_cooldown_frames: int = 8
 
@@ -922,6 +922,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             {'name': 'obstacle_light', 'type': 'single', 'file': '4_Lightbulb.npy'},
             {'name': 'obstacle_light_big', 'type': 'single', 'file': '8_Big_Lightbulb.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+            {'name': 'dollar', 'type': 'single', 'file': 'dollar.npy'},
             {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
             {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
         ]
@@ -1048,14 +1049,22 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, 0, footer_y, footer_mask)
 
         # 5. Render Score (On top of Blue Header)
-        score_digits = self.jr.int_to_digits(state.score, max_digits=2)
+        score_digits = self.jr.int_to_digits(state.score, max_digits=5)
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
-        is_single_digit = state.score < 10
-        start_index = jax.lax.select(is_single_digit, 1, 0)
-        num_to_render = jax.lax.select(is_single_digit, 1, 2)
-        render_x = jax.lax.select(is_single_digit, 49 + 8 // 2, 49)
-        raster = self.jr.render_label_selective(raster, render_x, 5, score_digits, score_digit_masks, start_index,
-                                                num_to_render, spacing=8)
+        num_to_render = (
+            1 
+            + (state.score >= 10).astype(jnp.int32)
+            + (state.score >= 100).astype(jnp.int32)
+            + (state.score >= 1000).astype(jnp.int32)
+            + (state.score >= 10000).astype(jnp.int32)
+        )
+        start_index = 5 - num_to_render
+        render_x_pos = ((self.consts.screen_width // 2) + 20) - (num_to_render * 8)
+        raster = self.jr.render_at(raster, render_x_pos - 9, 5, self.SHAPE_MASKS["dollar"])
+        raster = self.jr.render_label_selective(raster, render_x_pos, 5,
+                                                score_digits,
+                                                score_digit_masks, start_index,num_to_render, spacing=8, 
+                                                max_digits_to_render=5)
 
         # 6. Render Countdown (On top of Blue Header)
         countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
@@ -1066,7 +1075,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, render_x_pos - 3, 20, self.SHAPE_MASKS["timer_colon"]) 
         raster = self.jr.render_label_selective(raster, render_x_pos, 20,
                                                 countdown_digits, # the remaining seconds
-                                                countdown_digit_masks, start_index, num_to_render, spacing=7)
+                                                countdown_digit_masks, 0, num_to_render, spacing=7)
 
         # Render Side Bars (Black)
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
