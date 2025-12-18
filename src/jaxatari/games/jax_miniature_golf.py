@@ -742,7 +742,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
                 ),
                 jnp.where(
                     bounce_horizontally,
-                    -jnp.sign(state.ball_vel_x) * 32,
+                    -state.ball_vel_x,
                     state.ball_vel_x
                 )
             ),
@@ -764,7 +764,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
                 jnp.where(
                     bounce_horizontally,
                     state.ball_vel_y,
-                    -jnp.sign(state.ball_vel_y) * 32,
+                    -state.ball_vel_y
                 )
             ),
             state.ball_vel_y
