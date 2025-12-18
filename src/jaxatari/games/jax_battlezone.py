@@ -552,7 +552,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BattlezoneState) -> bool:
-        return False #if lives are < 0 change later
+        player_dead = state.life == 0
+        return player_dead  # if lives are < 0 change later
 
 
 
