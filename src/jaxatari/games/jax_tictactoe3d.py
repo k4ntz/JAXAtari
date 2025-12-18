@@ -32,6 +32,9 @@ class TicTacToe3DConstants(NamedTuple):
     
      # --- Board ---
     BOARD_SIZE: int = 4
+    BOARD_OFFSET_X: int = 18
+    BOARD_OFFSET_Y: int = 14
+
     
     # --- Cell encoding ---
     EMPTY: int = 0
@@ -247,21 +250,29 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
         
         
-    def cell_to_pixel(self, x: jnp.ndarray, y: jnp.ndarray, z: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Convert board coordinates x,y,z) in [0..3] to screen pixel (px,py).
-        
-        """
-        consts= self.consts
-        
+    def cell_center_to_pixel(self, x, y, z):
         dx, dy = self.LAYER_OFFSETS[z]
-        px = jnp.int32(consts.ORIGIN_X) + x * jnp.int32(consts.CELL_W) + dx
-        py = jnp.int32(consts.ORIGIN_Y) + y * jnp.int32(consts.CELL_H) + dy
-        return px, py    
 
+        px = (
+            self.consts.ORIGIN_X
+            + self.consts.BOARD_OFFSET_X
+            + x * self.consts.CELL_W
+            + dx
+            + self.consts.CELL_W // 2
+        )
+
+        py = (
+            self.consts.ORIGIN_Y
+            + self.consts.BOARD_OFFSET_Y
+            + y * self.consts.CELL_H
+         + dy
+            + self.consts.CELL_H // 2
+        )
+
+        return px, py
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-    # 1) Start from background
+        # 1) Start from background
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         board = state.board
@@ -269,15 +280,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         o_mask = self.SHAPE_MASKS["o"]
         cursor_mask = self.SHAPE_MASKS["cursor"]
 
-        # 2) DEBUG: draw cursor at ORIGIN to locate grid start
-        raster = self.jr.render_at(
-            raster,
-            self.consts.ORIGIN_X,
-            self.consts.ORIGIN_Y,
-            cursor_mask,
-        )
-
-        # 3) Draw pieces only
+        # 2) Draw pieces (use CENTER mapping for symbolic sprites)
         def render_one_cell(idx, r):
             z = idx // 16
             rem = idx - z * 16
@@ -285,7 +288,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             x = rem - y * 4
 
             v = board[z, y, x]
-            px, py = self.cell_to_pixel(x, y, z)
+            px, py = self.cell_center_to_pixel(x, y, z)
 
             r = jax.lax.cond(
                 v == self.consts.PLAYER_X,
@@ -303,10 +306,17 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, 64, render_one_cell, raster)
 
-        # 4) Draw actual cursor
+        # 3) Blinking cursor (also CENTER mapping)
         cx, cy, cz = state.cursor_x, state.cursor_y, state.cursor_z
-        px, py = self.cell_to_pixel(cx, cy, cz)
+        cpx, cpy = self.cell_center_to_pixel(cx, cy, cz)
 
-        raster = self.jr.render_at(raster, px, py, cursor_mask)
+        blink_on = (state.frame // 15) % 2 == 0
+
+        raster = jax.lax.cond(
+            blink_on,
+            lambda r: self.jr.render_at(r, cpx, cpy, cursor_mask),
+            lambda r: r,
+            raster,
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
