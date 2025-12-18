@@ -152,16 +152,16 @@ class YarsRevengeConstants(NamedTuple):
 
     QOTILE_MIN_Y: int = 55
     QOTILE_MAX_Y: int = 155
-    NEUTRAL_ZONE_POSITION: Tuple[int, int] = (60, 0)
+    NEUTRAL_ZONE_POSITION: Tuple[int, int] = (50, 0)
 
-    SWIRL_PER_STEP: int = 1500
-    SWIRL_FIRE_PER_STEP: int = 1000
+    SWIRL_PER_STEP: int = 1000
+    SWIRL_FIRE_PER_STEP: int = 250
 
     # Entity Speeds, X pixel per 1 frame
     QOTILE_SPEED = 0.5
     YAR_SPEED = 2.0
     YAR_DIAGONAL_SPEED = 1.0
-    SWIRL_SPEED = 2.0
+    SWIRL_SPEED = 3.0
     DESTROYER_SPEED = 0.125
     ENERGY_MISSILE_SPEED = 4.0
     CANNON_SPEED = 2.0
@@ -177,7 +177,6 @@ class YarsRevengeConstants(NamedTuple):
 
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
     NEUTRAL_ZONE_COLOR: Tuple[int, int, int] = (20, 20, 20)
-
 
     # Each energy cell has width = 4, height = 8
     ENERGY_CELL_WIDTH = 4
@@ -233,7 +232,6 @@ class YarsRevengeState(NamedTuple):
     destroyer: Entity
 
     swirl_exist: jnp.ndarray
-    swirl_fired: jnp.ndarray
     swirl: Entity
     swirl_dx: jnp.ndarray
     swirl_dy: jnp.ndarray
@@ -254,7 +252,6 @@ class YarsRevengeObservation(NamedTuple):
     qotile: DirectionEntity
     destroyer: Entity
     swirl_exist: jnp.ndarray
-    swirl_fired: jnp.ndarray
     swirl: Entity
     swirl_dx: jnp.ndarray
     swirl_dy: jnp.ndarray
@@ -319,7 +316,6 @@ class JaxYarsRevenge(
                 h=jnp.array(self.consts.DESTROYER_SIZE[1]).astype(jnp.int32),
             ),
             swirl_exist=jnp.array(0).astype(jnp.bool),
-            swirl_fired=jnp.array(0).astype(jnp.bool),
             swirl=Entity(
                 x=jnp.array(0).astype(jnp.float32),
                 y=jnp.array(0).astype(jnp.float32),
@@ -763,6 +759,72 @@ class JaxYarsRevenge(
             - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
         )
 
+        # Swirl Calculation
+        swirl_exists = state.swirl_exist == 1
+        swirl_fired = jnp.logical_or(state.swirl_dx != 0, state.swirl_dy != 0)
+
+        should_spawn_swirl = state.step_counter % self.consts.SWIRL_PER_STEP == 0
+        swirl_hit_boundary = check_entity_boundary(state.swirl)
+
+        new_swirl_exists = jnp.logical_or(
+            jnp.logical_and(swirl_exists, ~swirl_hit_boundary),
+            jnp.logical_and(
+                ~swirl_exists,
+                jnp.logical_and(state.step_counter != 0, should_spawn_swirl),
+            ),
+        )
+
+        should_fire_swirl = state.step_counter % self.consts.SWIRL_FIRE_PER_STEP == 0
+        new_swirl_fired = jnp.logical_or(
+            jnp.logical_and(swirl_exists, swirl_fired),
+            jnp.logical_and(
+                swirl_exists, jnp.logical_and(should_fire_swirl, ~swirl_fired)
+            ),
+        )
+
+        swirl_delta_x = state.yar.x - state.swirl.x
+        swirl_delta_y = state.yar.y - state.swirl.y
+        swirl_delta = jnp.hypot(swirl_delta_x, swirl_delta_y)
+
+        new_swirl_dx = jnp.where(
+            jnp.logical_and(swirl_exists, swirl_fired),
+            state.swirl_dx,
+            jnp.where(
+                new_swirl_fired,
+                (self.consts.SWIRL_SPEED * swirl_delta_x / swirl_delta),
+                0,
+            ),
+        )
+        new_swirl_dy = jnp.where(
+            jnp.logical_and(swirl_exists, swirl_fired),
+            state.swirl_dy,
+            jnp.where(
+                new_swirl_fired,
+                (self.consts.SWIRL_SPEED * swirl_delta_y / swirl_delta),
+                0,
+            ),
+        )
+
+        new_swirl_x = jnp.clip(
+            jnp.where(
+                jnp.logical_and(swirl_exists, swirl_fired),
+                state.swirl.x + state.swirl_dx,
+                state.qotile.x,
+            ),
+            0,
+            self.consts.WIDTH,
+        )
+
+        new_swirl_y = jnp.clip(
+            jnp.where(
+                jnp.logical_and(swirl_exists, swirl_fired),
+                state.swirl.y + state.swirl_dy,
+                state.qotile.y,
+            ),
+            0,
+            self.consts.HEIGHT,
+        )
+
         # Stage Specific
         shield_snake_apply = jnp.logical_and(
             state.stage == 1, (state.step_counter % self.consts.SNAKE_FRAME == 0)
@@ -785,7 +847,10 @@ class JaxYarsRevenge(
             cannon_exists, cannon_fired
         ) & check_entity_collusion(state.yar, state.cannon)
 
-        life_lost = yar_destroyer_hits | yar_cannon
+        yar_swirl = check_entity_collusion(state.yar, state.swirl)
+        yar_swirl_hits = jnp.logical_and(yar_swirl, state.swirl_exist)
+
+        life_lost = yar_destroyer_hits | yar_cannon | yar_swirl_hits
         new_lives = jnp.where(life_lost, state.lives - 1, state.lives)
 
         game_advance = qotile_cannon
@@ -794,14 +859,19 @@ class JaxYarsRevenge(
             game_advance,
             lambda: self.construct_initial_state((state.stage + 1) % 2)._replace(
                 step_counter=state.step_counter + 1,
+                lives=new_lives,
                 level=state.level + 1,
             ),
             lambda: jax.lax.cond(
                 life_lost,
-                lambda: self.construct_initial_state(state.stage)._replace(
-                    step_counter=state.step_counter + 1,
-                    lives=new_lives,
-                    energy_shield_state=new_energy_shield_state,
+                lambda: jax.lax.cond(
+                    new_lives == 0,
+                    lambda: self.construct_initial_state(0),
+                    lambda: self.construct_initial_state(state.stage)._replace(
+                        step_counter=state.step_counter + 1,
+                        lives=new_lives,
+                        energy_shield_state=new_energy_shield_state,
+                    ),
                 ),
                 lambda: state._replace(
                     step_counter=state.step_counter + 1,
@@ -822,12 +892,13 @@ class JaxYarsRevenge(
                         x=new_destroyer_x,
                         y=new_destroyer_y,
                     ),
-                    swirl_exist=state.swirl_exist,
-                    swirl_fired=state.swirl_fired,
+                    swirl_exist=new_swirl_exists,
                     swirl=state.swirl._replace(
-                        x=state.swirl.x,
-                        y=state.swirl.y,
+                        x=new_swirl_x,
+                        y=new_swirl_y,
                     ),
+                    swirl_dx=new_swirl_dx,
+                    swirl_dy=new_swirl_dy,
                     energy_missile_exist=new_em_exists,
                     energy_missile=state.energy_missile._replace(
                         x=new_energy_missile_x,
@@ -869,7 +940,9 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(
+                            low=0, high=7, shape=(), dtype=jnp.int32
+                        ),
                     }
                 ),
                 "qotile": spaces.Dict(
@@ -878,7 +951,9 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(
+                            low=0, high=7, shape=(), dtype=jnp.int32
+                        ),
                     }
                 ),
                 "destroyer": spaces.Dict(
@@ -890,7 +965,6 @@ class JaxYarsRevenge(
                     }
                 ),
                 "swirl_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
-                "swirl_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
                 "swirl": spaces.Dict(
                     {
                         "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -910,7 +984,9 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(
+                            low=0, high=7, shape=(), dtype=jnp.int32
+                        ),
                     }
                 ),
                 "cannon_exists": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool),
@@ -921,7 +997,9 @@ class JaxYarsRevenge(
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                        "direction": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
+                        "direction": spaces.Box(
+                            low=0, high=7, shape=(), dtype=jnp.int32
+                        ),
                     }
                 ),
                 "energy_shield": spaces.Dict(
@@ -949,7 +1027,6 @@ class JaxYarsRevenge(
             qotile=state.qotile,
             destroyer=state.destroyer,
             swirl_exist=state.swirl_exist,
-            swirl_fired=state.swirl_fired,
             swirl=state.swirl,
             swirl_dx=state.swirl_dx,
             swirl_dy=state.swirl_dy,
@@ -982,7 +1059,6 @@ class JaxYarsRevenge(
                 obs.destroyer.w.flatten(),
                 obs.destroyer.h.flatten(),
                 obs.swirl_exist.flatten(),
-                obs.swirl_fired.flatten(),
                 obs.swirl.x.flatten(),
                 obs.swirl.y.flatten(),
                 obs.swirl.w.flatten(),
@@ -1111,7 +1187,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         neutral_zone_mask = jnp.full(
             (self.consts.NEUTRAL_ZONE_SIZE[1], self.consts.NEUTRAL_ZONE_SIZE[0]),
-            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR]
+            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR],
         )
         raster = self.jr.render_at(
             raster, state.neutral_zone.x, state.neutral_zone.y, neutral_zone_mask
@@ -1194,7 +1270,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         raster = jnp.where(
             state.swirl_exist,
-            self.jr.render_at(raster, state.qotile.x, state.qotile.y, swirl_mask),
+            self.jr.render_at(raster, state.swirl.x, state.swirl.y, swirl_mask),
             self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask),
         )
 
