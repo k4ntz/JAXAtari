@@ -76,6 +76,9 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_RETREAT_SPEED_MULT: float = 2.5
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
     WHITE_UFO_TOP_LANE_TURN_SPEED: float = 0.5
+    WHITE_UFO_ATTACK_P_MIN: float = 0.0002
+    WHITE_UFO_ATTACK_P_MAX: float = 0.8
+    WHITE_UFO_ATTACK_ALPHA: float = 0.0001
 
     # Blue line constants
     INIT_BLUE_LINE_POS = jnp.array([118.08385, 90.88263, 156.90707, 49.115276, 58.471092, 71.82423 ])
@@ -760,7 +763,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             pattern_id == int(WhiteUFOPattern.IDLE),
             pattern_timer == 0,
         ]))
-        p_start = self.entropy_heat_prob(time_on_lane)
+        p_start = self.entropy_heat_prob(
+            time_on_lane,
+            alpha=self.consts.WHITE_UFO_ATTACK_ALPHA,
+            p_min=self.consts.WHITE_UFO_ATTACK_P_MIN,
+            p_max=self.consts.WHITE_UFO_ATTACK_P_MAX,
+        )
         start_roll = jax.random.uniform(key_start_roll)
         start_attack = jnp.logical_and(should_choose_new, start_roll < p_start)
 
