@@ -17,7 +17,7 @@ class OthelloConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
 
-    BOARD_SIZE: int = 8
+    BOARD_SIZE: int = 8 
     EMPTY: int = 0
     PLAYER_1: int = 1
     PLAYER_2: int = 2
