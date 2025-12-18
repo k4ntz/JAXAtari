@@ -1220,9 +1220,8 @@ class BeamriderRenderer(JAXGameRenderer):
         death_timer = state.level.death_timer
         is_dead = death_timer > 0
         
-        # Flashing logic: 0.25 sec on, 0.25 sec off.
-        # Assuming 60fps, 15 frames.
-        flash_visible = (death_timer // 15) % 2 == 0
+        # Flashing logic: 8 frames on, 8 frames off.
+        flash_visible = (death_timer // 8) % 2 == 0
         
         for idx in range(3):
             # Normal logic: render if idx < state.lives - 1 (Bonus HP display)
