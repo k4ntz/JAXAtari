@@ -138,7 +138,7 @@ class BattlezoneConstants(NamedTuple):
     FIRE_CD:int = 200 #todo change
     HITBOX_SIZE:float = 6.0
     ENEMY_HITBOX_SIZE: float = 4.5
-    ENEMY_SCORES:chex.Array = jnp.array([1000,3000,5000,2000], dtype=jnp.int32)
+    ENEMY_SCORES:chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
     ENEMY_DEATH_ANIM_LENGTH:int = 15
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
@@ -395,7 +395,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #-------------------spawn-------------------
         split_key, key = jax.random.split(new_state.random_key, 2)
         new_state = new_state._replace(random_key=key)
-        new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))(jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, state.score))
+        new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))
+            (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, state.score))
         #-------------------------------------------
 
         new_state = self._player_step(new_state, action)
@@ -471,7 +472,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #Room for distance specific actions
         return distance
 
-    def spawn_enemy(self, key, enemy, score):
+    def spawn_enemy(self, key, enemy:Enemy, score):
         def score_to_spawn_indx(score):
             threshold = jnp.array([1000, 2000, 7000, 12000])
             return jnp.sum(score >= threshold)
@@ -496,7 +497,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                   active=True
                                   )
 
-        return jax.lax.cond((enemy.active) | (score<1000), is_active, not_active, (enemy, key, score))
+        return jax.lax.cond(jnp.any(jnp.array([enemy.active, enemy.death_anim_counter>0, (score<1000)])),
+                            is_active, not_active,
+                            (enemy, key, score))
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
