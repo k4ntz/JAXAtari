@@ -84,8 +84,6 @@ class RoadRunnerConstants(NamedTuple):
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
     STARTING_LIVES: int = 5
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
-    STARTING_LIVES: int = 5
-    JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     SIDE_MARGIN: int = 8
     RAVINE_SIZE: Tuple[int, int] = (13, 32)
     RAVINE_SPAWN_MIN_INTERVAL: int = 30
@@ -173,6 +171,210 @@ DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
     RoadRunner_Level_1,
     RoadRunner_Level_2,
 )
+
+
+# --- Helper Functions ---
+def _build_road_section_arrays(
+    levels: Tuple[LevelConfig, ...], consts: RoadRunnerConstants
+) -> Tuple[int, jnp.ndarray, jnp.ndarray]:
+    """
+    Build road section data arrays from level configs.
+    Returns (max_road_sections, road_section_data, road_section_counts).
+    """
+    if not levels:
+        return 0, jnp.array([], dtype=jnp.int32).reshape(0, 0, 6), jnp.array([], dtype=jnp.int32)
+
+    max_road_sections = max(len(cfg.road_sections) for cfg in levels)
+    road_sections_data = []
+    road_section_counts = []
+    default_section = [
+        0,
+        consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
+        consts.WIDTH,
+        0,
+        0,
+        consts.ROAD_HEIGHT,
+    ]
+    for cfg in levels:
+        rows = [
+            [
+                section.scroll_start,
+                section.scroll_end,
+                section.road_width,
+                section.road_pattern_style,
+                section.road_top,
+                section.road_height,
+            ]
+            for section in cfg.road_sections
+        ]
+        if not rows:
+            rows = [default_section[:]]
+        road_section_counts.append(len(rows))
+        while len(rows) < max_road_sections:
+            rows.append(rows[-1][:])
+        road_sections_data.append(rows)
+
+    return (
+        max_road_sections,
+        jnp.array(road_sections_data, dtype=jnp.int32),
+        jnp.array(road_section_counts, dtype=jnp.int32),
+    )
+
+
+def _build_spawn_interval_array(
+    levels: Tuple[LevelConfig, ...],
+    config_attr: str,
+    default_min: int,
+    default_max: int,
+) -> jnp.ndarray:
+    """
+    Build spawn interval array from level configs.
+
+    Args:
+        levels: Tuple of level configurations
+        config_attr: Name of the config attribute (e.g., 'seed_spawn_config')
+        default_min: Default minimum interval
+        default_max: Default maximum interval
+
+    Returns:
+        Array of shape (num_levels, 2) with [min, max] intervals per level
+    """
+    if not levels:
+        return jnp.array([], dtype=jnp.int32).reshape(0, 2)
+
+    return jnp.array(
+        [
+            [
+                (getattr(cfg, config_attr) or (default_min, default_max))[0],
+                (getattr(cfg, config_attr) or (default_min, default_max))[1],
+            ]
+            for cfg in levels
+        ],
+        dtype=jnp.int32,
+    )
+
+
+def _build_spawn_enabled_array(
+    levels: Tuple[LevelConfig, ...],
+    spawn_attr: str,
+) -> jnp.ndarray:
+    """
+    Build spawn enabled boolean array from level configs.
+
+    Args:
+        levels: Tuple of level configurations
+        spawn_attr: Name of the spawn attribute (e.g., 'spawn_seeds')
+
+    Returns:
+        Boolean array indicating if spawning is enabled per level
+    """
+    if not levels:
+        return jnp.array([], dtype=jnp.bool_)
+
+    return jnp.array(
+        [getattr(cfg, spawn_attr) for cfg in levels], dtype=jnp.bool_
+    )
+
+
+def _check_aabb_collision(
+    x1: chex.Array, y1: chex.Array, w1: int, h1: int,
+    x2: chex.Array, y2: chex.Array, w2: int, h2: int,
+) -> chex.Array:
+    """
+    Check if two axis-aligned bounding boxes overlap.
+
+    Args:
+        x1, y1: Top-left corner of first box
+        w1, h1: Width and height of first box
+        x2, y2: Top-left corner of second box
+        w2, h2: Width and height of second box
+
+    Returns:
+        Boolean indicating if boxes overlap
+    """
+    overlap_x = (x1 < x2 + w2) & (x1 + w1 > x2)
+    overlap_y = (y1 < y2 + h2) & (y1 + h1 > y2)
+    return overlap_x & overlap_y
+
+
+def _update_orientation(
+    vel_x: chex.Array,
+    current_looks_right: chex.Array,
+) -> chex.Array:
+    """
+    Update orientation based on horizontal velocity.
+
+    Args:
+        vel_x: Horizontal velocity
+        current_looks_right: Current orientation
+
+    Returns:
+        Updated orientation (True = right, False = left)
+    """
+    return jax.lax.cond(
+        vel_x > 0,
+        lambda: True,
+        lambda: jax.lax.cond(
+            vel_x < 0, lambda: False, lambda: current_looks_right
+        ),
+    )
+
+
+def _get_road_section_for_scroll(
+    state: "RoadRunnerState",
+    level_count: int,
+    max_road_sections: int,
+    road_section_data: jnp.ndarray,
+    road_section_counts: jnp.ndarray,
+    consts: RoadRunnerConstants,
+) -> RoadSectionConfig:
+    """
+    Get the current road section based on scroll position.
+
+    Args:
+        state: Current game state
+        level_count: Number of levels
+        max_road_sections: Maximum number of road sections across all levels
+        road_section_data: Array of road section data per level
+        road_section_counts: Array of section counts per level
+        consts: Game constants
+
+    Returns:
+        The current RoadSectionConfig
+    """
+    if level_count == 0 or max_road_sections == 0:
+        return RoadSectionConfig(
+            0,
+            consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            consts.WIDTH,
+            0,
+            consts.ROAD_HEIGHT,
+            0,
+        )
+
+    max_index = level_count - 1
+    level_idx = jnp.clip(state.current_level, 0, max_index).astype(jnp.int32)
+    sections = road_section_data[level_idx]
+    section_count = road_section_counts[level_idx]
+    indices = jnp.arange(max_road_sections, dtype=jnp.int32)
+    valid_section = indices < section_count
+    counter = state.scrolling_step_counter
+    in_section = (counter >= sections[:, 0]) & (counter < sections[:, 1])
+    active_sections = jnp.where(valid_section, in_section, False)
+    no_match_value = jnp.array(max_road_sections, dtype=jnp.int32)
+    candidate_indices = jnp.where(active_sections, indices, no_match_value)
+    match_idx = jnp.min(candidate_indices)
+    fallback_idx = jnp.maximum(section_count - 1, 0)
+    section_idx = jnp.where(match_idx < max_road_sections, match_idx, fallback_idx)
+    selected = sections[section_idx]
+    return RoadSectionConfig(
+        selected[0],
+        selected[1],
+        selected[2],
+        selected[4],
+        selected[5],
+        selected[3],
+    )
 
 
 # --- State and Observation ---
@@ -290,130 +492,38 @@ class JaxRoadRunner(
             * self.consts.PLAYER_MOVE_SPEED
         )
         self._level_count = len(self.consts.levels)
-        if self._level_count > 0:
-            self._level_spawn_seeds = jnp.array(
-                [cfg.spawn_seeds for cfg in self.consts.levels], dtype=jnp.bool_
-            )
-            self._seed_spawn_intervals = jnp.array(
-                [
-                    [
-                        (cfg.seed_spawn_config or (
-                            self.consts.SEED_SPAWN_MIN_INTERVAL,
-                            self.consts.SEED_SPAWN_MAX_INTERVAL,
-                        ))[0],
-                        (cfg.seed_spawn_config or (
-                            self.consts.SEED_SPAWN_MIN_INTERVAL,
-                            self.consts.SEED_SPAWN_MAX_INTERVAL,
-                        ))[1],
-                    ]
-                    for cfg in self.consts.levels
-                ],
-                dtype=jnp.int32,
-            )
-            self._level_spawn_trucks = jnp.array(
-                [cfg.spawn_trucks for cfg in self.consts.levels], dtype=jnp.bool_
-            )
-            self._truck_spawn_intervals = jnp.array(
-                [
-                    [
-                        (cfg.truck_spawn_config or (
-                            self.consts.TRUCK_SPAWN_MIN_INTERVAL,
-                            self.consts.TRUCK_SPAWN_MAX_INTERVAL,
-                        ))[0],
-                        (cfg.truck_spawn_config or (
-                            self.consts.TRUCK_SPAWN_MIN_INTERVAL,
-                            self.consts.TRUCK_SPAWN_MAX_INTERVAL,
-                        ))[1],
-                    ]
-                    for cfg in self.consts.levels
-                ],
-                dtype=jnp.int32,
-            )
-            self._level_spawn_ravines = jnp.array(
-                [cfg.spawn_ravines for cfg in self.consts.levels], dtype=jnp.bool_
-            )
-            self._ravine_spawn_intervals = jnp.array(
-                [
-                    [
-                        (cfg.ravine_spawn_config or (
-                            self.consts.RAVINE_SPAWN_MIN_INTERVAL,
-                            self.consts.RAVINE_SPAWN_MAX_INTERVAL,
-                        ))[0],
-                        (cfg.ravine_spawn_config or (
-                            self.consts.RAVINE_SPAWN_MIN_INTERVAL,
-                            self.consts.RAVINE_SPAWN_MAX_INTERVAL,
-                        ))[1],
-                    ]
-                    for cfg in self.consts.levels
-                ],
-                dtype=jnp.int32,
-            )
-            self._max_road_sections = max(
-                len(cfg.road_sections) for cfg in self.consts.levels
-            )
-            road_sections_data = []
-            road_section_counts = []
-            default_section = [
-                0,
-                self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
-                self.consts.WIDTH,
-                0,
-                0,
-                self.consts.ROAD_HEIGHT,
-            ]
-            for cfg in self.consts.levels:
-                rows = [
-                    [
-                        section.scroll_start,
-                        section.scroll_end,
-                        section.road_width,
-                        section.road_pattern_style,
-                        section.road_top,
-                        section.road_height,
-                    ]
-                    for section in cfg.road_sections
-                ]
-                if not rows:
-                    rows = [default_section[:]]
-                road_section_counts.append(len(rows))
-                while len(rows) < self._max_road_sections:
-                    rows.append(rows[-1][:])
-                road_sections_data.append(rows)
-            self._road_section_data = jnp.array(road_sections_data, dtype=jnp.int32)
-            self._road_section_counts = jnp.array(
-                road_section_counts, dtype=jnp.int32
-            )
-            self._level_spawn_landmines = jnp.array(
-                [cfg.spawn_landmines for cfg in self.consts.levels], dtype=jnp.bool_
-            )
-            self._landmine_spawn_intervals = jnp.array(
-                [
-                    [
-                        (cfg.landmine_spawn_config or (
-                            self.consts.LANDMINE_SPAWN_MIN_INTERVAL,
-                            self.consts.LANDMINE_SPAWN_MAX_INTERVAL,
-                        ))[0],
-                        (cfg.landmine_spawn_config or (
-                            self.consts.LANDMINE_SPAWN_MIN_INTERVAL,
-                            self.consts.LANDMINE_SPAWN_MAX_INTERVAL,
-                        ))[1],
-                    ]
-                    for cfg in self.consts.levels
-                ],
-                dtype=jnp.int32,
-            )
-        else:
-            self._level_spawn_seeds = jnp.array([], dtype=jnp.bool_)
-            self._seed_spawn_intervals = jnp.array([], dtype=jnp.int32).reshape(0, 2)
-            self._level_spawn_trucks = jnp.array([], dtype=jnp.bool_)
-            self._truck_spawn_intervals = jnp.array([], dtype=jnp.int32).reshape(0, 2)
-            self._level_spawn_ravines = jnp.array([], dtype=jnp.bool_)
-            self._ravine_spawn_intervals = jnp.array([], dtype=jnp.int32).reshape(0, 2)
-            self._level_spawn_landmines = jnp.array([], dtype=jnp.bool_)
-            self._landmine_spawn_intervals = jnp.array([], dtype=jnp.int32).reshape(0, 2)
-            self._max_road_sections = 0
-            self._road_section_data = jnp.array([], dtype=jnp.int32).reshape(0, 0, 6)
-            self._road_section_counts = jnp.array([], dtype=jnp.int32)
+        levels = self.consts.levels
+
+        # Build spawn enabled arrays
+        self._level_spawn_seeds = _build_spawn_enabled_array(levels, 'spawn_seeds')
+        self._level_spawn_trucks = _build_spawn_enabled_array(levels, 'spawn_trucks')
+        self._level_spawn_ravines = _build_spawn_enabled_array(levels, 'spawn_ravines')
+        self._level_spawn_landmines = _build_spawn_enabled_array(levels, 'spawn_landmines')
+
+        # Build spawn interval arrays
+        self._seed_spawn_intervals = _build_spawn_interval_array(
+            levels, 'seed_spawn_config',
+            self.consts.SEED_SPAWN_MIN_INTERVAL, self.consts.SEED_SPAWN_MAX_INTERVAL
+        )
+        self._truck_spawn_intervals = _build_spawn_interval_array(
+            levels, 'truck_spawn_config',
+            self.consts.TRUCK_SPAWN_MIN_INTERVAL, self.consts.TRUCK_SPAWN_MAX_INTERVAL
+        )
+        self._ravine_spawn_intervals = _build_spawn_interval_array(
+            levels, 'ravine_spawn_config',
+            self.consts.RAVINE_SPAWN_MIN_INTERVAL, self.consts.RAVINE_SPAWN_MAX_INTERVAL
+        )
+        self._landmine_spawn_intervals = _build_spawn_interval_array(
+            levels, 'landmine_spawn_config',
+            self.consts.LANDMINE_SPAWN_MIN_INTERVAL, self.consts.LANDMINE_SPAWN_MAX_INTERVAL
+        )
+
+        # Build road section arrays
+        (
+            self._max_road_sections,
+            self._road_section_data,
+            self._road_section_counts,
+        ) = _build_road_section_arrays(levels, self.consts)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Handles user input to determine player velocity and jump action."""
@@ -509,13 +619,7 @@ class JaxRoadRunner(
         is_moving = (vel_x != 0) | (vel_y != 0)
 
         # Update player orientation based on horizontal movement
-        player_looks_right = jax.lax.cond(
-            vel_x > 0,
-            lambda: True,
-            lambda: jax.lax.cond(
-                vel_x < 0, lambda: False, lambda: state.player_looks_right
-            ),
-        )
+        player_looks_right = _update_orientation(vel_x, state.player_looks_right)
 
         # Update the state with the scrolling flag for other parts of the game (e.g., rendering).
         state = state._replace(is_scrolling=is_scrolling)
@@ -569,13 +673,7 @@ class JaxRoadRunner(
 
             # Determine enemy movement and orientation
             enemy_is_moving = (delta_x != 0) | (delta_y != 0)
-            enemy_looks_right = jax.lax.cond(
-                delta_x > 0,
-                lambda: True,
-                lambda: jax.lax.cond(
-                    delta_x < 0, lambda: False, lambda: st.enemy_looks_right
-                ),
-            )
+            enemy_looks_right = _update_orientation(delta_x, st.enemy_looks_right)
 
             # Update enemy position, clipping movement to ENEMY_MOVE_SPEED to prevent jittering
             new_enemy_x = st.enemy_x + jnp.clip(
@@ -598,18 +696,13 @@ class JaxRoadRunner(
         return jax.lax.cond(state.is_round_over, game_over_logic, normal_logic, state)
 
     def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
-        # Here we check if the enemy and the player overlap
-        player_x2 = state.player_x + self.consts.PLAYER_SIZE[0]
-        player_y2 = state.player_y + self.consts.PLAYER_SIZE[1]
-        enemy_x2 = state.enemy_x + self.consts.ENEMY_SIZE[0]
-        enemy_y2 = state.enemy_y + self.consts.ENEMY_SIZE[1]
-
-        # Check for overlap on both axes
-        overlap_x = (state.player_x < enemy_x2) & (player_x2 > state.enemy_x)
-        overlap_y = (state.player_y < enemy_y2) & (player_y2 > state.enemy_y)
-
-        # Collision happens if there is overlap on both axes
-        collision = overlap_x & overlap_y
+        # Check if the enemy and the player overlap
+        collision = _check_aabb_collision(
+            state.player_x, state.player_y,
+            self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1],
+            state.enemy_x, state.enemy_y,
+            self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
+        )
 
         return jax.lax.cond(
             collision,
@@ -658,19 +751,13 @@ class JaxRoadRunner(
         Check for collisions between player and all active seeds.
         Uses AABB (Axis-Aligned Bounding Box) collision detection.
         """
-        # Calculate player pickup area bounding box
-        player_left_x = state.player_x
-        player_right_x = state.player_x + self.consts.PLAYER_SIZE[0]
-        # Pickup area starts at PLAYER_PICKUP_OFFSET from top of player
+        # Player pickup area starts at PLAYER_PICKUP_OFFSET from top
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
-        player_bottom_y = state.player_y + self.consts.PLAYER_SIZE[1]
+        pickup_height = self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_PICKUP_OFFSET
 
         def check_and_pickup_seed(i: int, st: RoadRunnerState) -> RoadRunnerState:
             """Check collision for seed at index i and pick it up if colliding."""
             seed_x = st.seeds[i, 0]
-            seed_y = st.seeds[i, 1]
-
-            # Early return if seed is inactive
             is_active = seed_x >= 0
             return jax.lax.cond(
                 is_active,
@@ -684,18 +771,13 @@ class JaxRoadRunner(
             seed_x = st.seeds[seed_idx, 0]
             seed_y = st.seeds[seed_idx, 1]
 
-            # Calculate seed bounding box
-            seed_left_x = seed_x
-            seed_right_x = seed_x + self.consts.SEED_SIZE[0]
-            seed_top_y = seed_y
-            seed_bottom_y = seed_y + self.consts.SEED_SIZE[1]
+            collision = _check_aabb_collision(
+                state.player_x, player_pickup_y,
+                self.consts.PLAYER_SIZE[0], pickup_height,
+                seed_x, seed_y,
+                self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1],
+            )
 
-            # Check for overlap on both axes (AABB collision)
-            overlap_x = (player_left_x < seed_right_x) & (player_right_x > seed_left_x)
-            overlap_y = (player_pickup_y < seed_bottom_y) & (player_bottom_y > seed_top_y)
-            collision = overlap_x & overlap_y
-
-            # Pick up seed if collision detected
             return jax.lax.cond(
                 collision,
                 lambda s: self._seed_picked_up(s, seed_idx),
@@ -890,35 +972,29 @@ class JaxRoadRunner(
 
     def _check_truck_collisions_active(self, state: RoadRunnerState) -> RoadRunnerState:
         """Check collisions when truck is active."""
-        # Calculate truck collision area (only lower half, using TRUCK_COLLISION_OFFSET)
-        truck_left_x = state.truck_x
-        truck_right_x = state.truck_x + self.consts.TRUCK_SIZE[0]
-        # Collision area starts at TRUCK_COLLISION_OFFSET from top of truck (lower half)
+        # Truck collision area (lower half, using TRUCK_COLLISION_OFFSET)
         truck_collision_y = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
-        truck_bottom_y = state.truck_y + self.consts.TRUCK_SIZE[1]
+        truck_collision_height = self.consts.TRUCK_SIZE[1] - self.consts.TRUCK_COLLISION_OFFSET
 
-        # Calculate player pickup area bounding box (same as seeds)
-        player_left_x = state.player_x
-        player_right_x = state.player_x + self.consts.PLAYER_SIZE[0]
-        # Pickup area starts at PLAYER_PICKUP_OFFSET from top of player
+        # Player pickup area (lower portion)
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
-        player_bottom_y = state.player_y + self.consts.PLAYER_SIZE[1]
+        pickup_height = self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_PICKUP_OFFSET
 
-        # Calculate enemy bounding box
-        enemy_left_x = state.enemy_x
-        enemy_right_x = state.enemy_x + self.consts.ENEMY_SIZE[0]
-        enemy_top_y = state.enemy_y
-        enemy_bottom_y = state.enemy_y + self.consts.ENEMY_SIZE[1]
+        # Check player-truck collision
+        player_collision = _check_aabb_collision(
+            state.player_x, player_pickup_y,
+            self.consts.PLAYER_SIZE[0], pickup_height,
+            state.truck_x, truck_collision_y,
+            self.consts.TRUCK_SIZE[0], truck_collision_height,
+        )
 
-        # Check player-truck collision (player uses pickup area, truck uses collision area)
-        player_overlap_x = (player_left_x < truck_right_x) & (player_right_x > truck_left_x)
-        player_overlap_y = (player_pickup_y < truck_bottom_y) & (player_bottom_y > truck_collision_y)
-        player_collision = player_overlap_x & player_overlap_y
-
-        # Check enemy-truck collision (truck uses collision area)
-        enemy_overlap_x = (enemy_left_x < truck_right_x) & (enemy_right_x > truck_left_x)
-        enemy_overlap_y = (enemy_top_y < truck_bottom_y) & (enemy_bottom_y > truck_collision_y)
-        enemy_collision = enemy_overlap_x & enemy_overlap_y
+        # Check enemy-truck collision
+        enemy_collision = _check_aabb_collision(
+            state.enemy_x, state.enemy_y,
+            self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
+            state.truck_x, truck_collision_y,
+            self.consts.TRUCK_SIZE[0], truck_collision_height,
+        )
 
         # Handle player collision (triggers round reset)
         def handle_player_collision(st: RoadRunnerState) -> RoadRunnerState:
@@ -1038,30 +1114,24 @@ class JaxRoadRunner(
         Check collision with ravines.
         If player overlaps with ravine AND is NOT jumping, they fall (die).
         """
-        player_x = state.player_x
-        player_y = state.player_y
-        
-        player_feet_left = player_x
-        player_feet_right = player_x + self.consts.PLAYER_SIZE[0]
-        player_feet_top = player_y + self.consts.PLAYER_SIZE[1] - 4
-        player_feet_bottom = player_y + self.consts.PLAYER_SIZE[1]
-        
+        # Player feet area (bottom 4 pixels)
+        player_feet_y = state.player_y + self.consts.PLAYER_SIZE[1] - 4
+        feet_height = 4
+
         def check_ravine(i, st):
             r_x = st.ravines[i, 0]
             r_y = st.ravines[i, 1]
             active = r_x >= 0
-            
-            r_left = r_x
-            r_right = r_x + self.consts.RAVINE_SIZE[0]
-            r_top = r_y
-            r_bottom = r_y + self.consts.RAVINE_SIZE[1] # Should match road bottom
 
-            # Check overlap
-            overlap_x = (player_feet_left < r_right) & (player_feet_right > r_left)
-            overlap_y = (player_feet_top < r_bottom) & (player_feet_bottom > r_top)
-            
-            collision = active & overlap_x & overlap_y & jnp.logical_not(st.is_jumping)
-            
+            overlap = _check_aabb_collision(
+                state.player_x, player_feet_y,
+                self.consts.PLAYER_SIZE[0], feet_height,
+                r_x, r_y,
+                self.consts.RAVINE_SIZE[0], self.consts.RAVINE_SIZE[1],
+            )
+
+            collision = active & overlap & jnp.logical_not(st.is_jumping)
+
             return jax.lax.cond(
                 collision,
                 lambda s: s._replace(instant_death=True),
@@ -1162,26 +1232,20 @@ class JaxRoadRunner(
         """
         Check collision between player and landmine.
         """
-        # Early return if inactive
         active = state.landmine_x >= 0
-        
-        # Player box for collision (only lower part)
-        p_x = state.player_x
-        p_w = self.consts.PLAYER_SIZE[0]
-        
+
+        # Player pickup area (lower portion)
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
-        player_bottom_y = state.player_y + self.consts.PLAYER_SIZE[1]
-        
-        # Landmine box
-        m_x = state.landmine_x
-        m_y = state.landmine_y
-        m_w, m_h = self.consts.LANDMINE_SIZE
-        
-        # Check overlap
-        overlap_x = (p_x < m_x + m_w) & (p_x + p_w > m_x)
-        overlap_y = (player_pickup_y < m_y + m_h) & (player_bottom_y > m_y)
-        collision = active & overlap_x & overlap_y & (state.death_timer == 0)
-        
+        pickup_height = self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_PICKUP_OFFSET
+
+        overlap = _check_aabb_collision(
+            state.player_x, player_pickup_y,
+            self.consts.PLAYER_SIZE[0], pickup_height,
+            state.landmine_x, state.landmine_y,
+            self.consts.LANDMINE_SIZE[0], self.consts.LANDMINE_SIZE[1],
+        )
+        collision = active & overlap & (state.death_timer == 0)
+
         def handle_collision(st: RoadRunnerState) -> RoadRunnerState:
             # Trigger death animation
             # Set timer. The step function handles the rest (freeze and then reset).
@@ -1279,66 +1343,12 @@ class JaxRoadRunner(
             st = self._check_landmine_collisions(st)
             st = self._check_level_completion(st)
 
-            def game_over_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
-                 # Game Over: Restart from beginning
-                 # We use the current RNG to generate a new key for the next game to ensure randomness
-                 rng, new_key = jax.random.split(inner_state.rng)
-                 _, new_state = self.reset(new_key)
-                 return new_state
-
-            def next_life_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
-                # Lost a life: Partial reset
-                reset_state = inner_state._replace(
-                    player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
-                    player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
-                    player_x_history=jnp.array(
-                        [self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY,
-                        dtype=jnp.int32,
-                    ),
-                    player_y_history=jnp.array(
-                        [self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY,
-                        dtype=jnp.int32,
-                    ),
-                    enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
-                    enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
-                    is_round_over=jnp.array(False, dtype=jnp.bool_),
-                    seeds=jnp.full((4, 3), -1, dtype=jnp.int32),
-                    scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
-                    seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
-                    last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
-                    next_seed_id=jnp.array(0, dtype=jnp.int32),
-                    truck_x=jnp.array(-1, dtype=jnp.int32),
-                    truck_y=jnp.array(-1, dtype=jnp.int32),
-                    next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
-                    next_truck_spawn_step=jnp.array(0, dtype=jnp.int32),
-                    lives=inner_state.lives - 1,
-                    jump_timer=jnp.array(0, dtype=jnp.int32),
-                    is_jumping=jnp.array(False, dtype=jnp.bool_),
-                    instant_death=jnp.array(False, dtype=jnp.bool_),
-                    ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
-                    landmine_x=jnp.array(-1, dtype=jnp.int32),
-                    landmine_y=jnp.array(-1, dtype=jnp.int32),
-                    next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
-                    death_timer=jnp.array(0, dtype=jnp.int32),
-                )
-                level_idx = self._get_level_index(reset_state)
-                return self._initialize_spawn_timers(reset_state, level_idx)
-
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
-
-            def handle_round_end(inner_st: RoadRunnerState) -> RoadRunnerState:
-                 return jax.lax.cond(
-                     inner_st.lives > 1,
-                     next_life_reset,
-                     game_over_reset,
-                     inner_st
-                 )
-
             # Check if we should reset immediately (instant_death) OR if standard round end condition met (player reached end)
             should_reset = st.instant_death | (st.is_round_over & player_at_end)
 
             st = jax.lax.cond(
-                should_reset, handle_round_end, lambda inner: inner, st
+                should_reset, self._handle_round_end, lambda inner: inner, st
             )
 
             st = st._replace(step_counter=st.step_counter + 1)
@@ -1349,7 +1359,7 @@ class JaxRoadRunner(
              st, _ = data
              # Decrement death timer
              st = st._replace(death_timer=jnp.maximum(st.death_timer - 1, 0))
-             
+
              # If timer finished, trigger life loss
              should_reset = st.death_timer == 0
              st = jax.lax.cond(
@@ -1358,60 +1368,11 @@ class JaxRoadRunner(
                  lambda s: s,
                  st
              )
-             
-             def game_over_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
-                  rng, new_key = jax.random.split(inner_state.rng)
-                  _, new_state = self.reset(new_key)
-                  return new_state
 
-             def next_life_reset(inner_state: RoadRunnerState) -> RoadRunnerState:
-                reset_state = inner_state._replace(
-                    player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
-                    player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
-                    player_x_history=jnp.array(
-                        [self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY,
-                        dtype=jnp.int32,
-                    ),
-                    player_y_history=jnp.array(
-                        [self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY,
-                        dtype=jnp.int32,
-                    ),
-                    enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
-                    enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
-                    is_round_over=jnp.array(False, dtype=jnp.bool_),
-                    seeds=jnp.full((4, 3), -1, dtype=jnp.int32),
-                    scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
-                    seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
-                    last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
-                    next_seed_id=jnp.array(0, dtype=jnp.int32),
-                    truck_x=jnp.array(-1, dtype=jnp.int32),
-                    truck_y=jnp.array(-1, dtype=jnp.int32),
-                    next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
-                    next_truck_spawn_step=jnp.array(0, dtype=jnp.int32),
-                    lives=inner_state.lives - 1,
-                    jump_timer=jnp.array(0, dtype=jnp.int32),
-                    is_jumping=jnp.array(False, dtype=jnp.bool_),
-                    instant_death=jnp.array(False, dtype=jnp.bool_),
-                    ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
-                    landmine_x=jnp.array(-1, dtype=jnp.int32),
-                    landmine_y=jnp.array(-1, dtype=jnp.int32),
-                    death_timer=jnp.array(0, dtype=jnp.int32),
-                )
-                level_idx = self._get_level_index(reset_state)
-                return self._initialize_spawn_timers(reset_state, level_idx)
-
-             def handle_round_end(inner_st: RoadRunnerState) -> RoadRunnerState:
-                  return jax.lax.cond(
-                      inner_st.lives > 1,
-                      next_life_reset,
-                      game_over_reset,
-                      inner_st
-                  )
-             
              st = jax.lax.cond(
-                 st.instant_death, handle_round_end, lambda inner: inner, st
+                 st.instant_death, self._handle_round_end, lambda inner: inner, st
              )
-             
+
              obs = self._get_observation(st)
              return obs, st, 0.0, False, None
 
@@ -1432,6 +1393,59 @@ class JaxRoadRunner(
         )
 
         return observation, state, reward, done, info
+
+    def _game_over_reset(self, state: RoadRunnerState) -> RoadRunnerState:
+        """Game Over: Restart from beginning."""
+        rng, new_key = jax.random.split(state.rng)
+        _, new_state = self.reset(new_key)
+        return new_state
+
+    def _next_life_reset(self, state: RoadRunnerState) -> RoadRunnerState:
+        """Lost a life: Partial reset."""
+        reset_state = state._replace(
+            player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+            player_x_history=jnp.array(
+                [self.consts.PLAYER_START_X] * self.consts.ENEMY_REACTION_DELAY,
+                dtype=jnp.int32,
+            ),
+            player_y_history=jnp.array(
+                [self.consts.PLAYER_START_Y] * self.consts.ENEMY_REACTION_DELAY,
+                dtype=jnp.int32,
+            ),
+            enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
+            enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
+            is_round_over=jnp.array(False, dtype=jnp.bool_),
+            seeds=jnp.full((4, 3), -1, dtype=jnp.int32),
+            scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
+            seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
+            last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
+            next_seed_id=jnp.array(0, dtype=jnp.int32),
+            truck_x=jnp.array(-1, dtype=jnp.int32),
+            truck_y=jnp.array(-1, dtype=jnp.int32),
+            next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
+            next_truck_spawn_step=jnp.array(0, dtype=jnp.int32),
+            lives=state.lives - 1,
+            jump_timer=jnp.array(0, dtype=jnp.int32),
+            is_jumping=jnp.array(False, dtype=jnp.bool_),
+            instant_death=jnp.array(False, dtype=jnp.bool_),
+            ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
+            landmine_x=jnp.array(-1, dtype=jnp.int32),
+            landmine_y=jnp.array(-1, dtype=jnp.int32),
+            next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
+            death_timer=jnp.array(0, dtype=jnp.int32),
+        )
+        level_idx = self._get_level_index(reset_state)
+        return self._initialize_spawn_timers(reset_state, level_idx)
+
+    def _handle_round_end(self, state: RoadRunnerState) -> RoadRunnerState:
+        """Handle end of round - either next life or game over."""
+        return jax.lax.cond(
+            state.lives > 1,
+            self._next_life_reset,
+            self._game_over_reset,
+            state
+        )
 
     def _check_level_completion(self, state: RoadRunnerState) -> RoadRunnerState:
         target_distance = self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE
@@ -1603,38 +1617,13 @@ class JaxRoadRunner(
         )
 
     def _get_current_road_section(self, state: RoadRunnerState) -> RoadSectionConfig:
-        if self._level_count == 0 or self._max_road_sections == 0:
-            return RoadSectionConfig(
-                0,
-                self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
-                self.consts.WIDTH,
-                0,
-                self.consts.ROAD_HEIGHT,
-                0,
-            )
-        level_idx = self._get_level_index(state)
-        sections = self._road_section_data[level_idx]
-        section_count = self._road_section_counts[level_idx]
-        indices = jnp.arange(self._max_road_sections, dtype=jnp.int32)
-        valid_section = indices < section_count
-        counter = state.scrolling_step_counter
-        in_section = (counter >= sections[:, 0]) & (counter < sections[:, 1])
-        active_sections = jnp.where(valid_section, in_section, False)
-        no_match_value = jnp.array(self._max_road_sections, dtype=jnp.int32)
-        candidate_indices = jnp.where(
-            active_sections, indices, no_match_value
-        )
-        match_idx = jnp.min(candidate_indices)
-        fallback_idx = jnp.maximum(section_count - 1, 0)
-        section_idx = jnp.where(match_idx < self._max_road_sections, match_idx, fallback_idx)
-        selected = sections[section_idx]
-        return RoadSectionConfig(
-            selected[0],
-            selected[1],
-            selected[2],
-            selected[4],
-            selected[5],
-            selected[3],
+        return _get_road_section_for_scroll(
+            state,
+            self._level_count,
+            self._max_road_sections,
+            self._road_section_data,
+            self._road_section_counts,
+            self.consts,
         )
 
     def _get_road_bounds(self, state: RoadRunnerState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -1791,46 +1780,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
         self._level_count = len(self.consts.levels)
-        if self._level_count > 0:
-            self._max_road_sections = max(
-                len(cfg.road_sections) for cfg in self.consts.levels
-            )
-            road_sections_data = []
-            road_section_counts = []
-            default_section = [
-                0,
-                self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
-                self.consts.WIDTH,
-                0,
-                0,
-                self.consts.ROAD_HEIGHT,
-            ]
-            for cfg in self.consts.levels:
-                rows = [
-                    [
-                        section.scroll_start,
-                        section.scroll_end,
-                        section.road_width,
-                        section.road_pattern_style,
-                        section.road_top,
-                        section.road_height,
-                    ]
-                    for section in cfg.road_sections
-                ]
-                if not rows:
-                    rows = [default_section[:]]
-                road_section_counts.append(len(rows))
-                while len(rows) < self._max_road_sections:
-                    rows.append(rows[-1][:])
-                road_sections_data.append(rows)
-            self._road_section_data = jnp.array(road_sections_data, dtype=jnp.int32)
-            self._road_section_counts = jnp.array(
-                road_section_counts, dtype=jnp.int32
-            )
-        else:
-            self._max_road_sections = 0
-            self._road_section_data = jnp.array([], dtype=jnp.int32).reshape(0, 0, 6)
-            self._road_section_counts = jnp.array([], dtype=jnp.int32)
+        (
+            self._max_road_sections,
+            self._road_section_data,
+            self._road_section_counts,
+        ) = _build_road_section_arrays(self.consts.levels, self.consts)
 
     def _create_road_sprite(self) -> jnp.ndarray:
         ROAD_HEIGHT = self.consts.ROAD_HEIGHT
@@ -1886,39 +1840,13 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
 
     def _get_render_section(self, state: RoadRunnerState) -> RoadSectionConfig:
-        if self._level_count == 0 or self._max_road_sections == 0:
-            return RoadSectionConfig(
-                0,
-                self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE,
-                self.consts.WIDTH,
-                0,
-                self.consts.ROAD_HEIGHT,
-                0,
-            )
-        max_index = self._level_count - 1
-        level_idx = jnp.clip(state.current_level, 0, max_index).astype(jnp.int32)
-        sections = self._road_section_data[level_idx]
-        section_count = self._road_section_counts[level_idx]
-        indices = jnp.arange(self._max_road_sections, dtype=jnp.int32)
-        valid_section = indices < section_count
-        counter = state.scrolling_step_counter
-        in_section = (counter >= sections[:, 0]) & (counter < sections[:, 1])
-        active_sections = jnp.where(valid_section, in_section, False)
-        no_match_value = jnp.array(self._max_road_sections, dtype=jnp.int32)
-        candidate_indices = jnp.where(active_sections, indices, no_match_value)
-        match_idx = jnp.min(candidate_indices)
-        fallback_idx = jnp.maximum(section_count - 1, 0)
-        section_idx = jnp.where(
-            match_idx < self._max_road_sections, match_idx, fallback_idx
-        )
-        selected = sections[section_idx]
-        return RoadSectionConfig(
-            selected[0],
-            selected[1],
-            selected[2],
-            selected[4],
-            selected[5],
-            selected[3],
+        return _get_road_section_for_scroll(
+            state,
+            self._level_count,
+            self._max_road_sections,
+            self._road_section_data,
+            self._road_section_counts,
+            self.consts,
         )
 
     def _get_asset_config(
@@ -2226,9 +2154,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             )
 
             return self.jr.render_from_palette(t_canvas, self.PALETTE)
-
-        # Render Seeds
-        canvas = self._render_seeds(canvas, state.seeds)
 
         # Render Truck
         canvas = self._render_truck(canvas, state.truck_x, state.truck_y)
