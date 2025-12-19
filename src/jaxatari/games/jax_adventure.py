@@ -20,6 +20,7 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'Room_YellowCastle.npy'},
         {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'}
     )
 
 
@@ -36,6 +37,8 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     player_x: chex.Array
     player_y:chex.Array
+    key_yellow_x:chex.Array
+    key_yellow_y:chex.Array
     step_counter: chex.Array
 
 
@@ -48,6 +51,7 @@ class EntityPosition(NamedTuple):
 
 class AdventureObservation(NamedTuple):
     player: EntityPosition
+    key_yellow: EntityPosition
 
 
 class AdventureInfo(NamedTuple):
@@ -71,13 +75,41 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
     def _player_step(self, state: AdventureState, action: chex.Array) -> AdventureState:
         left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
         right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
+        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         new_player_x = state.player_x
-        
+        new_player_x = jax.lax.cond(
+            left,
+            lambda x: x-1,
+            lambda x: x,
+            operand = new_player_x,
+        )
+        new_player_x = jax.lax.cond(
+            right,
+            lambda x: x+1,
+            lambda x: x,
+            operand = new_player_x,
+        )
 
+        new_player_y = state.player_y
+        new_player_y = jax.lax.cond(
+            down,
+            lambda y: y+1,
+            lambda y: y,
+            operand = new_player_y,
+        )
+        new_player_y = jax.lax.cond(
+            up,
+            lambda y: y-1,
+            lambda y: y,
+            operand = new_player_y,
+        )
 
         return AdventureState(
             player_x = new_player_x,
-            player_y = state.player_y,
+            player_y = new_player_y,
+            key_yellow_x = state.key_yellow_x,
+            key_yellow_y = state.key_yellow_y,
             step_counter = state.step_counter
         )
 
@@ -91,8 +123,10 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
         state = AdventureState(
-            player_x=jnp.array(80).astype(jnp.int32),
-            player_y=jnp.array(180).astype(jnp.int32),
+            player_x=jnp.array(78).astype(jnp.int32),
+            player_y=jnp.array(174).astype(jnp.int32),
+            key_yellow_x=jnp.array(31).astype(jnp.int32),
+            key_yellow_y=jnp.array(110).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
         )
         initial_obs = self._get_observation(state)
@@ -107,6 +141,8 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
         state = AdventureState(
             player_x = state.player_x,
             player_y=state.player_y,
+            key_yellow_x = state.key_yellow_x,
+            key_yellow_y = state.key_yellow_y,
             step_counter=state.step_counter,
         )
         state = self._player_step(state, action)
@@ -130,9 +166,16 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             width=4,
             height=8
         )
+        key_yellow = EntityPosition(
+            x=state.key_yellow_x,
+            y=state.key_yellow_y,
+            width=10,
+            height=4
+        )
 
         return AdventureObservation(
             player=player,
+            key_yellow=key_yellow
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -151,6 +194,12 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
+            }),
+            "key_yellow": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
@@ -209,4 +258,6 @@ class AdventureRenderer(JAXGameRenderer):
         player_mask = self.SHAPE_MASKS["player"]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
+        key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
+        raster = self.jr.render_at(raster, state.key_yellow_x, state.key_yellow_y, key_yellow_mask)
         return self.jr.render_from_palette(raster, self.PALETTE)
