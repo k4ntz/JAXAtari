@@ -3,7 +3,7 @@ import os
 from enum import IntEnum
 from functools import partial
 from typing import NamedTuple, Optional, Tuple
-
+#sometimes the player laser shot doesnt hit the white ufo's, when player is in following lanes: far left low, far right middle, far right high.....what i found in 2 mins
 import chex
 import jax
 import jax.lax
@@ -67,8 +67,8 @@ class BeamriderConstants(NamedTuple):
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
     ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK | KAMIKAZE
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] =                          (0,          42,            42,         42,         28,     0,      42,     100)
-    WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] =                            (            0.3,           0.2,        0.2,                0.2,    0.1,    0.3) #these probas are not 1:1, as some patterns have activation conditions
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] =                          (0,          42,            42,         42,         28,     0,      42,         100)
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] =                            (            0.3,           0.2,        0.2,                0.2,    0.1,        0.3) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
     WHITE_UFO_RETREAT_P_MIN: float = 0.005
@@ -644,8 +644,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         current_patterns: chex.Array,
         current_timers: chex.Array,
     ):
-        enemies = new_white_ufo_pos.T
-        distance_to_bullet = jnp.abs(enemies - new_shot_pos)
+        enemies_raw = new_white_ufo_pos.T
+
+        # Collision should match what the player sees on screen:
+        # - white UFO x-pos is shifted based on its y-pos (_get_ufo_alignment)
+        # - player bullet x-pos is shifted based on its y-pos and type (_get_bullet_alignment)
+        ufo_pos_screen = new_white_ufo_pos.at[0, :].add(self._get_ufo_alignment(new_white_ufo_pos[1, :]))
+        shot_pos_screen = new_shot_pos.at[0].add(
+            self._get_bullet_alignment(new_shot_pos[1], new_bullet_type)
+        )
+
+        distance_to_bullet = jnp.abs(ufo_pos_screen.T - shot_pos_screen)
         bullet_type_is_laser = new_bullet_type == self.consts.LASER_ID
         bullet_radius = jnp.where(
             bullet_type_is_laser,
@@ -656,7 +665,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         hit_mask = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
         hit_index = jnp.argmax(hit_mask)
         hit_exists = jnp.any(hit_mask)
-        enemy_pos_after_hit = enemies.at[hit_index].set(jnp.array([77.0, 43.0], dtype=enemies.dtype)).T
+        enemy_pos_after_hit = enemies_raw.at[hit_index].set(
+            jnp.array([77.0, 43.0], dtype=enemies_raw.dtype)
+        ).T
 
         # Reset pattern and timer for hit UFO
         new_patterns = jnp.where(hit_mask, int(WhiteUFOPattern.IDLE), current_patterns)
