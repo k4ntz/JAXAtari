@@ -108,6 +108,46 @@ class BeamriderConstants(NamedTuple):
     DEATH_DURATION: int = 120
 
 
+def _get_index_ufo(pos: chex.Array) -> chex.Array:
+    stage_1 = (pos >= 0).astype(jnp.int32)
+    stage_2 = (pos >= 48).astype(jnp.int32)
+    stage_3 = (pos >= 57).astype(jnp.int32)
+    stage_4 = (pos >= 62).astype(jnp.int32)  # in reference game he chills there for a frame, only then switches
+    stage_5 = (pos >= 69).astype(jnp.int32)  # in reference game he chills there for a frame, only then switches
+    stage_6 = (pos >= 86).astype(jnp.int32)  # ab hier werden die schneller
+    stage_7 = (pos >= 121).astype(jnp.int32)
+    return stage_1 + stage_2 + stage_3 + stage_4 + stage_5 + stage_6 + stage_7
+
+
+def _get_ufo_alignment(pos: chex.Array) -> chex.Array:
+    stage_1 = (pos >= 0).astype(jnp.int32)
+    stage_2 = (pos >= 48).astype(jnp.int32)
+    stage_3 = (pos >= 57).astype(jnp.int32)
+    stage_4 = (pos >= 62).astype(jnp.int32)
+    stage_5 = (pos >= 69).astype(jnp.int32)
+    stage_6 = (pos >= 86).astype(jnp.int32)
+    stage_7 = (pos >= 121).astype(jnp.int32)
+    return 4 - (stage_1 + stage_2 + stage_3 + stage_5 + stage_7)
+
+
+def _get_index_bullet(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
+    stage_1 = (pos >= 100).astype(jnp.int32)
+    stage_2 = (pos >= 80).astype(jnp.int32)
+    stage_3 = (pos >= 0).astype(jnp.int32)
+    result = jnp.where(bullet_type == laser_id, 0, stage_1 + stage_2 + stage_3)
+    return result
+
+
+def _get_bullet_alignment(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
+    stage_1 = (pos >= 100).astype(jnp.int32)
+    stage_2 = (pos >= 80).astype(jnp.int32)
+    stage_3 = (pos >= 0).astype(jnp.int32)
+    # default alignment if smallest torpedo is +3
+    # if bullet is laser, no offset
+    result = jnp.where(bullet_type == laser_id, 0, 4 - (stage_1 + stage_2 + stage_3))
+    return result
+
+
 class LevelState(NamedTuple):
     player_pos: chex.Array
     player_vel: chex.Array
@@ -650,10 +690,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # - white UFO x-pos is shifted based on its y-pos (_get_ufo_alignment)
         # - player bullet x-pos is shifted based on its y-pos and type (_get_bullet_alignment)
         ufo_pos_screen = new_white_ufo_pos.at[0, :].add(
-            self.renderer._get_ufo_alignment(new_white_ufo_pos[1, :])
+            _get_ufo_alignment(new_white_ufo_pos[1, :])
         )
         shot_pos_screen = new_shot_pos.at[0].add(
-            self.renderer._get_bullet_alignment(new_shot_pos[1], new_bullet_type)
+            _get_bullet_alignment(new_shot_pos[1], new_bullet_type, self.consts.LASER_ID)
         )
 
         distance_to_bullet = jnp.abs(ufo_pos_screen.T - shot_pos_screen)
@@ -1549,11 +1589,11 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = jax.lax.cond(is_dead, render_dead, render_alive, raster)
 
         bullet_mask = self.SHAPE_MASKS["bullet_sprite"][
-            self._get_index_bullet(state.level.player_shot_pos[1], state.level.bullet_type)
+            _get_index_bullet(state.level.player_shot_pos[1], state.level.bullet_type, self.consts.LASER_ID)
         ]
         raster = self.jr.render_at_clipped(
             raster,
-            state.level.player_shot_pos[0] + self._get_bullet_alignment(state.level.player_shot_pos[1], state.level.bullet_type),
+            state.level.player_shot_pos[0] + _get_bullet_alignment(state.level.player_shot_pos[1], state.level.bullet_type, self.consts.LASER_ID),
             state.level.player_shot_pos[1],
             bullet_mask,
         )
@@ -1583,16 +1623,16 @@ class BeamriderRenderer(JAXGameRenderer):
             def render_explosion(r_in):
                 sprite_idx, y_offset = self._get_white_ufo_explosion_visuals(explosion_frame)
                 sprite = explosion_masks[sprite_idx]
-                x_pos = state.level.white_ufo_explosion_pos[0][idx] + self._get_ufo_alignment(
+                x_pos = state.level.white_ufo_explosion_pos[0][idx] + _get_ufo_alignment(
                     state.level.white_ufo_explosion_pos[1][idx]
                 )
                 y_pos = state.level.white_ufo_explosion_pos[1][idx] + y_offset
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
             def render_ufo(r_in):
-                sprite_idx = self._get_index_ufo(state.level.white_ufo_pos[1][idx]) - 1
+                sprite_idx = _get_index_ufo(state.level.white_ufo_pos[1][idx]) - 1
                 sprite = white_ufo_masks[sprite_idx]
-                x_pos = state.level.white_ufo_pos[0][idx] + self._get_ufo_alignment(
+                x_pos = state.level.white_ufo_pos[0][idx] + _get_ufo_alignment(
                     state.level.white_ufo_pos[1][idx]
                 )
                 y_pos = state.level.white_ufo_pos[1][idx]
@@ -1655,44 +1695,8 @@ class BeamriderRenderer(JAXGameRenderer):
             raster
         )
 
-    def _get_index_ufo(self,pos)->chex.Array:
-        stage_1 = (pos >= 0).astype(jnp.int32)
-        stage_2 = (pos >= 48).astype(jnp.int32)
-        stage_3 = (pos >= 57).astype(jnp.int32) 
-        stage_4 = (pos >= 62).astype(jnp.int32) #in reference game he chills there for a frame, only then switches
-        stage_5 = (pos >= 69).astype(jnp.int32) #in reference game he chills there for a frame, only then switches
-        stage_6 = (pos >= 86).astype(jnp.int32) #ab hier werden die schneller
-        stage_7 = (pos >= 121).astype(jnp.int32)
-        return stage_1 + stage_2 + stage_3 + stage_4 + stage_5 + stage_6 + stage_7
-    
-    def _get_ufo_alignment(self,pos)->chex.Array:
-        stage_1 = (pos >= 0).astype(jnp.int32)
-        stage_2 = (pos >= 48).astype(jnp.int32)
-        stage_3 = (pos >= 57).astype(jnp.int32) 
-        stage_4 = (pos >= 62).astype(jnp.int32) 
-        stage_5 = (pos >= 69).astype(jnp.int32) 
-        stage_6 = (pos >= 86).astype(jnp.int32) 
-        stage_7 = (pos >= 121).astype(jnp.int32)
-        return 4-(stage_1+stage_2+stage_3+stage_5+stage_7)
-
     def _get_white_ufo_explosion_visuals(self, frame: chex.Array) -> Tuple[chex.Array, chex.Array]:
         clamped = jnp.clip(frame - 1, 0, self._ufo_explosion_sprite_seq.shape[0] - 1)
         sprite_idx = self._ufo_explosion_sprite_seq[clamped]
         y_offset = self._ufo_explosion_y_offsets[clamped]
         return sprite_idx, y_offset
-    
-    def _get_index_bullet(self, pos, bullet_type) -> chex.Array:
-        stage_1 = (pos >= 100).astype(jnp.int32)
-        stage_2 = (pos >= 80).astype(jnp.int32)
-        stage_3 = (pos >= 0).astype(jnp.int32) 
-        result = jnp.where(bullet_type == self.consts.LASER_ID, 0, stage_1 + stage_2 + stage_3)
-        return result
-    
-    def _get_bullet_alignment(self, pos, bullet_type) -> chex.Array:
-        stage_1 = (pos >= 100).astype(jnp.int32)
-        stage_2 = (pos >= 80).astype(jnp.int32)
-        stage_3 = (pos >= 0).astype(jnp.int32) 
-        #default alignment if smallest torpedo is +3
-        #if bullet is laser, no offset
-        result = jnp.where(bullet_type == self.consts.LASER_ID, 0, 4-(stage_1 + stage_2 + stage_3))
-        return result
