@@ -25,6 +25,7 @@ class WhiteUFOPattern(IntEnum):
     RETREAT = 4
     SHOOT = 5
     MOVE_BACK = 6
+    KAMIKAZE = 7
 
 
 class BeamriderConstants(NamedTuple):
@@ -65,9 +66,9 @@ class BeamriderConstants(NamedTuple):
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
-    ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK 
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0,          42,            42,         42,         28,     0,      42) 
-    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] =     (            0.3,           0.2,        0.2,                0.2,    0.1)
+    ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK | KAMIKAZE
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] =                          (0,          42,            42,         42,         28,     0,      42,     100)
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] =                            (            0.3,           0.2,        0.2,                0.2,    0.1,    0.3) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
     WHITE_UFO_RETREAT_P_MIN: float = 0.005
@@ -80,6 +81,7 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_ATTACK_P_MAX: float = 0.8
     WHITE_UFO_ATTACK_ALPHA: float = 0.0001
     WHITE_UFO_EXPLOSION_FRAMES: int = 21
+    KAMIKAZE_Y_THRESHOLD: float = 86.0
 
     # Mothership Explosion
     # Sequence: 1, 2, 1, 2, 3, 2, 3, 2, 3 (indices 0, 1, 0, 1, 2, 1, 2, 1, 2)
@@ -802,9 +804,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         drop_right = pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
         retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
         move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
+        kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
         return jnp.logical_or(
             drop_straight,
-            jnp.logical_or(drop_left, jnp.logical_or(drop_right, jnp.logical_or(retreat, move_back))),
+            jnp.logical_or(
+                drop_left,
+                jnp.logical_or(
+                    drop_right,
+                    jnp.logical_or(retreat, jnp.logical_or(move_back, kamikaze))
+                )
+            ),
         )
 
     def _white_ufo_update_pattern_state(
@@ -870,7 +879,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             is_on_lane,
         ]))
 
-        key_start_roll, key_start_choice, key_retreat_roll, key_chain_choice = jax.random.split(key, 4)
+        key_start_roll, key_start_choice, key_retreat_roll, key_chain_choice, key_kamikaze_roll = jax.random.split(key, 5)
         retreat_roll = jax.random.uniform(key_retreat_roll)
         retreat_prob = self._white_ufo_retreat_prob(attack_time)
         retreat_now = jnp.logical_and(pattern_finished_off_top, retreat_roll < retreat_prob)
@@ -881,7 +890,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chain_next = jnp.logical_and(pattern_finished_off_top, jnp.logical_not(retreat_now))
 
         def choose_chain_pattern(_):
-            pattern, duration = self._white_ufo_choose_pattern(key_chain_choice, allow_shoot=allow_shoot, prev_pattern=pattern_id)
+            is_kamikaze_zone = position[1] >= self.consts.KAMIKAZE_Y_THRESHOLD
+            pattern, duration = self._white_ufo_choose_pattern(
+                key_chain_choice, 
+                allow_shoot=allow_shoot, 
+                prev_pattern=pattern_id,
+                is_kamikaze_zone=is_kamikaze_zone
+            )
             return pattern, duration
 
         def keep_after_chain(_):
@@ -909,7 +924,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         start_attack = jnp.logical_and(should_choose_new, start_roll < p_start)
 
         def choose_new_pattern(_):
-            pattern, duration = self._white_ufo_choose_pattern(key_start_choice, allow_shoot=jnp.array(False), prev_pattern=pattern_id)
+            pattern, duration = self._white_ufo_choose_pattern(
+                key_start_choice, 
+                allow_shoot=jnp.array(False), 
+                prev_pattern=pattern_id,
+                is_kamikaze_zone=jnp.array(False)
+            )
             return pattern, duration
 
         def keep_pattern(_):
@@ -932,7 +952,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         heat = 1.0 - jnp.exp(-alpha * t)
         return p_min + (p_max - p_min) * heat
 
-    def _white_ufo_choose_pattern(self, key: chex.Array, *, allow_shoot: chex.Array, prev_pattern: chex.Array):
+    def _white_ufo_choose_pattern(
+        self, 
+        key: chex.Array, 
+        *, 
+        allow_shoot: chex.Array, 
+        prev_pattern: chex.Array,
+        is_kamikaze_zone: chex.Array
+    ):
         pattern_choices = jnp.array(
             [
                 int(WhiteUFOPattern.DROP_STRAIGHT),
@@ -940,6 +967,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 int(WhiteUFOPattern.DROP_RIGHT),
                 int(WhiteUFOPattern.SHOOT),
                 int(WhiteUFOPattern.MOVE_BACK),
+                int(WhiteUFOPattern.KAMIKAZE),
             ],
             dtype=jnp.int32,
         )
@@ -948,11 +976,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Restriction: Cannot follow MOVE_BACK with DROP_STRAIGHT (idx 0)
         is_move_back = (prev_pattern == int(WhiteUFOPattern.MOVE_BACK))
         # Mask DROP_STRAIGHT (index 0) if prev was MOVE_BACK
+        # Since we added Kamikaze at index 5, mask is length 6
         chain_mask = jnp.ones_like(pattern_probs).at[0].set(jnp.where(is_move_back, 0.0, 1.0))
         pattern_probs = pattern_probs * chain_mask
 
-        shoot_mask = jnp.array([1.0, 1.0, 1.0, 0.0, 1.0], dtype=jnp.float32)
+        # Mask out SHOOT (index 3) if not allowed. Allow others including Kamikaze (index 5)
+        shoot_mask = jnp.array([1.0, 1.0, 1.0, 0.0, 1.0, 1.0], dtype=jnp.float32)
         pattern_probs = jnp.where(allow_shoot, pattern_probs, pattern_probs * shoot_mask)
+        
+        # Mask out KAMIKAZE (index 5) if not in zone
+        kamikaze_mask = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.0], dtype=jnp.float32)
+        pattern_probs = jnp.where(is_kamikaze_zone, pattern_probs, pattern_probs * kamikaze_mask)
         
         # Avoid division by zero if all probs masked (shouldn't happen with standard probs, but for safety/testing)
         prob_sum = jnp.sum(pattern_probs)
@@ -1021,6 +1055,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
         is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
+        is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+        
         cross_track = target_lane_x - x
         distance_to_lane = jnp.abs(cross_track)
         direction = jnp.sign(cross_track)
@@ -1028,11 +1064,18 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         def seek_lane(_):
             attack_vx = jnp.where(direction == 0, 0.0, direction * 0.5)
             retreat_vx = jnp.where(direction == 0, 0.0, direction * speed_factor * retreat_mult * 2.0)
-            new_vx = jnp.where(is_retreat, retreat_vx, attack_vx)
-            new_vy = jnp.where(is_retreat, -lane_vector[1] * speed_factor * retreat_mult, 0.25)
             
-            # If moving back, we want negative Y velocity, similar to retreat but controlled by speed factor
-            new_vy = jnp.where(is_move_back, -lane_vector[1] * speed_factor, new_vy)
+            # For Kamikaze, use retreat lateral speed (fast seek)
+            new_vx = jnp.where(is_retreat, retreat_vx, jnp.where(is_kamikaze, retreat_vx, attack_vx))
+            
+            normal_vy = 0.25
+            retreat_vy = -lane_vector[1] * speed_factor * retreat_mult
+            move_back_vy = -lane_vector[1] * speed_factor
+            kamikaze_vy = lane_vector[1] * speed_factor * retreat_mult
+
+            new_vy = jnp.where(is_retreat, retreat_vy, normal_vy)
+            new_vy = jnp.where(is_move_back, move_back_vy, new_vy)
+            new_vy = jnp.where(is_kamikaze, kamikaze_vy, new_vy)
             
             return new_vx, new_vy
 
@@ -1046,8 +1089,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             move_back_vx = -lane_vector[0] * speed_factor
             move_back_vy = -lane_vector[1] * speed_factor
             
+            kamikaze_vx = lane_vector[0] * speed_factor * retreat_mult
+            kamikaze_vy = lane_vector[1] * speed_factor * retreat_mult
+            
             new_vx = jnp.where(is_retreat, retreat_vx, jnp.where(is_move_back, move_back_vx, normal_vx))
+            new_vx = jnp.where(is_kamikaze, kamikaze_vx, new_vx)
+            
             new_vy = jnp.where(is_retreat, retreat_vy, jnp.where(is_move_back, move_back_vy, normal_vy))
+            new_vy = jnp.where(is_kamikaze, kamikaze_vy, new_vy)
             
             return new_vx, new_vy
 
