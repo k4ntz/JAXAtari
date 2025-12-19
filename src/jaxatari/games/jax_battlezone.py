@@ -273,13 +273,18 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         #--------------------update positions based on player movement-------------------
-        angle_change = (jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
-                           -jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))
-
-
         updated_enemies = jax.vmap(self._obj_player_position_update, in_axes=(0, None))(state.enemies, direction)
-
+        updated_projectiles = (jax.vmap(self._obj_player_position_update, in_axes=(0, None))
+                               (state.enemy_projectiles, direction))
         new_player_projectile = self._obj_player_position_update(new_player_projectile, direction)
+
+        #--------------------update angles based on player movement-----------------------
+        angle_change = (jnp.where(jnp.any(jnp.stack([left, upLeft, downRight])), 1.0, 0.0)
+                        - jnp.where(jnp.any(jnp.stack([right, upRight, downLeft])), 1.0, 0.0))
+
+        updated_enemies = jax.vmap(self._obj_player_rotation_update, in_axes=(0,None))(updated_enemies, angle_change)
+        updated_projectiles = (jax.vmap(self._obj_player_rotation_update, in_axes=(0,None))
+                               (updated_projectiles, angle_change))
         new_player_projectile = self._obj_player_rotation_update(new_player_projectile, angle_change)
 
 
@@ -291,7 +296,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             grass_anim_counter= (state.grass_anim_counter + grass_offset)%30,
             radar_rotation_counter=state.radar_rotation_counter,
             enemies=updated_enemies,
-            player_projectile=new_player_projectile
+            player_projectile=new_player_projectile,
+            enemy_projectiles=updated_projectiles
         )
 
 
@@ -301,6 +307,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_death_anim_counter = jnp.where(d_anim_counter > 0, d_anim_counter-1,d_anim_counter)
         return state._replace(enemies=state.enemies._replace(
             death_anim_counter=new_death_anim_counter
+
         ))
 
 
@@ -365,12 +372,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=jnp.array(False, dtype=jnp.bool),
                 distance=jnp.array(0, dtype=jnp.float32)
             ),
-            enemy_projectiles=Projectile(#todo
-                x=jnp.array(0),
-                z=jnp.array(0),
-                orientation_angle=jnp.array(0),
-                active=jnp.array(False),
-                distance=jnp.array(0)
+            enemy_projectiles=Projectile(
+                x=jnp.array([0, 0], dtype=jnp.float32),
+                z=jnp.array([0, 0], dtype=jnp.float32),
+                orientation_angle=jnp.array([0, 0], dtype=jnp.float32),
+                active=jnp.array([False, False], dtype=jnp.bool),
+                distance=jnp.array([0, 0], dtype=jnp.float32)
             ),
             random_key=key
         )
@@ -602,11 +609,21 @@ class BattlezoneRenderer(JAXGameRenderer):
         #----------------------create padded enemy masks for uniform shape-----------------------
         pad = 140
         self.padded_enemy_masks = jnp.array([
-            [self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_front"],pad, pad),
-            self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_left"],pad, pad)
+            [self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_01"],pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_02"],pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_03"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_04"], pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["tank_enemy_03"], axis=1), pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["tank_enemy_02"], axis=1), pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["tank_enemy_01"], axis=1), pad, pad),
              ],
             [self.pad_to_shape(self.SHAPE_MASKS["saucer_left"],pad, pad),
-            self.pad_to_shape(self.SHAPE_MASKS["saucer_right"],pad, pad)
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
+            self.pad_to_shape(self.SHAPE_MASKS["saucer_right"],pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad)
              ],
 
              ])
@@ -645,8 +662,10 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'life', 'type': 'single', 'file': 'life.npy'},
             {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
             #enemies
-            {'name': 'tank_enemy_front', 'type': 'single', 'file': 'tank_enemy_front.npy'}, #not sure if we can/should
-            {'name': 'tank_enemy_left', 'type': 'single', 'file': 'tank_enemy_left.npy'},   #summarize them like digits
+            {'name': 'tank_enemy_01', 'type': 'single', 'file': 'tank_enemy_01.npy'}, #not sure if we can/should
+            {'name': 'tank_enemy_02', 'type': 'single', 'file': 'tank_enemy_02.npy'},   #summarize them like digits
+            {'name': 'tank_enemy_03', 'type': 'single', 'file': 'tank_enemy_03.npy'},
+            {'name': 'tank_enemy_04', 'type': 'single', 'file': 'tank_enemy_04.npy'},
             {'name': 'saucer_left', 'type': 'single', 'file': 'saucer_left.npy'},
             {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
             {'name': 'projectile_big', 'type': 'single', 'file': 'projectile_big.npy'},
@@ -757,10 +776,15 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #----------------select sprite based on rotation------------
         n, _, _ = jnp.shape(selected_enemy_type)
-        circle = 360  #change to 2pi if radians
-        angle = enemy.orientation_angle % circle
-        #flip = enemy.orientation_angle > halfcircle
-        index = jnp.round((angle/circle) * (n-1)).astype(int)
+        circle = 2*jnp.pi  #change to 2pi if radians
+        v = jnp.array([enemy.x, enemy.z])
+        w = jnp.array([0, 1])
+        #to_screen_angle = (jnp.dot(v, w)/jnp.linalg.norm(v))
+        #angle = (enemy.orientation_angle + to_screen_angle - (jnp.pi/2)) % circle
+        angle = (enemy.orientation_angle - (jnp.pi/2)) % circle
+        angle = jnp.where(angle<=jnp.pi, angle, jnp.where(angle <= jnp.pi+jnp.pi/2, jnp.pi, 0))
+        #flip = angle > jnp.pi
+        index = jnp.round((angle/jnp.pi) * (n-1)).astype(int)
         rotated_sprite = selected_enemy_type[index]
 
         return rotated_sprite
@@ -868,7 +892,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             projectile_mask_index = jnp.where(projectile.distance <= 15,0,1)
             projectile_mask = self.projectile_masks[projectile_mask_index]
             x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
-            return self.jr.render_at_clipped(raster, x, y, projectile_mask)
+            return self.jr.render_at_clipped(raster, x+projectile_mask_index, y, projectile_mask)
         def projectile_inactive(_):
             return raster
 
@@ -930,6 +954,9 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         #------------------------------projectiles---------------
         raster = self.render_single_projectile(raster, state.player_projectile)
+        #raster = jax.lax.cond(state.step_counter%2==0, self.render_single_projectile, lambda r, _: r,
+                     #raster, state.player_projectile)
+        # probably more accurate but looks stoopid because different frame rates
 
 
 
