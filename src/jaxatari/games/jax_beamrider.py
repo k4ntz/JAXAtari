@@ -51,6 +51,8 @@ class BeamriderConstants(NamedTuple):
 
     PLAYER_POS_Y: int = 165
     PLAYER_SPEED: float = 2.5
+    PLAYER_LASER_COOLDOWN: int = 23
+    PLAYER_TORPEDO_COOLDOWN: int = 31
 
     BOTTOM_CLIP:int = 175
     TOP_CLIP:int=43
@@ -95,7 +97,7 @@ class BeamriderConstants(NamedTuple):
     BLUE_LINE_OFFSCREEN_Y = 500
     NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
 
-    WHITE_UFOS_PER_SECTOR: int = 1
+    WHITE_UFOS_PER_SECTOR: int = 15
     SCORE_PER_WHITE_UFO: int = 48
     MOTHERSHIP_VELOCITY: int = 1
     MOTHERSHIP_OFFSCREEN_POS: int = 500
@@ -303,6 +305,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_shot_velocity,
             torpedos_left,
             bullet_type,
+            shooting_cooldown,
         ) = self._player_step(state, action)
 
         rngs = jax.random.split(state.rng, 4)
@@ -470,7 +473,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_shot_pos=player_shot_position,
             player_shot_vel=player_shot_velocity,
             torpedoes_left=torpedos_left,
-            shooting_cooldown=jnp.array(0),
+            shooting_cooldown=shooting_cooldown,
             bullet_type=bullet_type,
             enemy_type=jnp.array([0, 0, 0]),
             white_ufo_pos=white_ufo_pos,
@@ -574,9 +577,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         ####### Ab hier von Lasse shot gedöns
         bullet_exists= self._bullet_infos(state)
-
+        shooting_cooldown = state.level.shooting_cooldown
 
         can_spawn_bullet = jnp.logical_and(jnp.logical_not(bullet_exists), is_in_lane)
+        can_spawn_bullet = jnp.logical_and(can_spawn_bullet, shooting_cooldown == 0)
+        
         can_spawn_torpedo = jnp.logical_and(can_spawn_bullet, state.level.torpedoes_left >= 1)
 
         new_laser = jnp.logical_and(press_fire, can_spawn_bullet)
@@ -603,8 +608,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         bullet_type_if_new = jnp.where(new_laser, self.consts.LASER_ID, self.consts.TORPEDO_ID)
         bullet_type = jnp.where(new_bullet, bullet_type_if_new, state.level.bullet_type)
 
+        current_cooldown = jnp.where(
+            bullet_type_if_new == self.consts.LASER_ID,
+            self.consts.PLAYER_LASER_COOLDOWN,
+            self.consts.PLAYER_TORPEDO_COOLDOWN
+        )
+
+        shooting_cooldown = jnp.where(
+            new_bullet,
+            current_cooldown,
+            jnp.maximum(shooting_cooldown - 1, 0)
+        )
+
         #####
-        return(x,v,shot_position, shot_velocity, torpedos_left, bullet_type)
+        return(x,v,shot_position, shot_velocity, torpedos_left, bullet_type, shooting_cooldown)
 
     def _collision_handler(
         self,
