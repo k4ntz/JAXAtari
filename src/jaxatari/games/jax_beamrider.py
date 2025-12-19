@@ -568,13 +568,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # --- Dynamic Scoring for Mothership and HP Bonus ---
         clamped_sector = jnp.minimum(state.sector, 89)
         ms_score_val = 300 + 30 * clamped_sector
-        hp_bonus_per_life = 100 + 10 * clamped_sector
+        hp_bonus_per_life_val = 100 + 10 * clamped_sector
         
-        # Add mothership hit score
-        score = jnp.where(hit_mothership, score + ms_score_val, score)
-        
-        # Add HP bonus when sector is completed via mothership
-        score = jnp.where(sector_advanced_m, score + (hp_bonus_per_life * state.lives), score)
+        # Add mothership hit score AND HP bonus when hit
+        # HP remaining is the number of reserve lives (state.lives - 1)
+        hp_bonus = jnp.maximum(state.lives - 1, 0) * hp_bonus_per_life_val
+        score = jnp.where(hit_mothership, score + ms_score_val + hp_bonus, score)
 
         # Advance sector if mothership finishes OR player died after clearing UFOs
         died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
