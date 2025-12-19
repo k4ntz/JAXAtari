@@ -94,6 +94,7 @@ class MsPacmanState(NamedTuple):
     pacman_x: chex.Array
     pacman_y: chex.Array
     direction: chex.Array
+    facing_direction: chex.Array  # Last non-zero direction for sprite rotation
     ghost_positions: chex.Array
     pellets: chex.Array
     power_timer: chex.Array
@@ -226,6 +227,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             pacman_x=self.pacman_spawn[0],
             pacman_y=self.pacman_spawn[1],
             direction=jnp.array([0, 0], dtype=jnp.int32),
+            facing_direction=jnp.array([-1, 0], dtype=jnp.int32),  # Start facing left
             ghost_positions=self.ghost_spawn_positions,
             pellets=self.initial_pellets,
             power_timer=jnp.array(0, dtype=jnp.int32),
@@ -328,10 +330,24 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             ),
         )
 
+        # Update facing_direction only when actually moving (direction != [0, 0])
+        # Also reset facing_direction to right when respawning after ghost collision
+        is_moving = jnp.any(direction != 0)
+        facing_direction = jnp.where(
+            hit_without_power,
+            jnp.array([-1, 0], dtype=jnp.int32),  # Reset to facing left on respawn
+            jnp.where(
+                is_moving,
+                direction,
+                state.facing_direction  # Keep previous facing direction when stopped
+            )
+        )
+
         new_state = MsPacmanState(
             pacman_x=pacman_x,
             pacman_y=pacman_y,
             direction=direction,
+            facing_direction=facing_direction,
             ghost_positions=ghost_positions,
             pellets=pellets,
             power_timer=power_timer,
@@ -502,6 +518,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
 
 class MsPacmanRenderer(JAXGameRenderer):
+    """Renderer for the Ms. Pac-Man game using authentic sprites."""
+    
     def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, button_grid: jnp.ndarray = None,):
         super().__init__()
         self.consts = consts or MsPacmanConstants()
@@ -525,28 +543,100 @@ class MsPacmanRenderer(JAXGameRenderer):
         self.button_color = jnp.asarray(self.consts.button_color, dtype=jnp.uint8)
         self.pacman_color = jnp.asarray(self.consts.pacman_color, dtype=jnp.uint8)
         self.ghost_colors = jnp.asarray(self.consts.ghost_colors, dtype=jnp.uint8)
-        self.background_image = self._load_freeway_background()
-        self.pac_sprite = self._load_car_sprite()
+        
+        # Load Ms. Pac-Man specific sprites (authentic extracted sprites)
+        # Load Pac-Man animation frames (pacman_0 through pacman_3)
+        self.pac_sprites = self._load_pacman_sprites()
+        self.pac_sprite = self.pac_sprites[0] if self.pac_sprites else None  # Default to first frame
+        
+        # Load ghost sprites: Blinky (red), Pinky (pink), Inky (cyan), Sue (orange)
+        self.ghost_sprites = self._load_ghost_sprites()
+        self.ghost_frightened_sprite = self._load_sprite("ghost_blue")
+        self.ghost_frightened_white_sprite = self._load_sprite("ghost_white")  # For flashing effect
+        
+        # Pre-stack sprites into JAX arrays for efficient rendering
+        self._pac_sprite_array = self._build_pacman_sprite_array()
+        self._ghost_sprite_array = self._build_ghost_sprite_array()
+        self._frightened_sprite_array = self._build_frightened_sprite_array()
+        
         self._base_grid_pixels = self._create_base_grid()
         self._base_canvas = self._create_base_canvas(self._base_grid_pixels)
 
-    def _load_freeway_background(self) -> jnp.ndarray | None:
-        """Load the Freeway background sprite as a quick visual test, if available."""
+    def _load_sprite(self, name: str) -> jnp.ndarray | None:
+        """Load a sprite from the mspacman sprites folder."""
         try:
-            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "background.npy")
-            bg_rgba = np.load(path)
-            return jnp.asarray(bg_rgba, dtype=jnp.uint8)
+            path = os.path.join(os.path.dirname(__file__), "sprites", "mspacman", f"{name}.npy")
+            sprite_rgba = np.load(path)
+            return jnp.asarray(sprite_rgba, dtype=jnp.uint8)
         except Exception:
             return None
 
-    def _load_car_sprite(self) -> jnp.ndarray | None:
-        """Load the Freeway red car sprite to use as MsPacman."""
-        try:
-            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "car_red.npy")
-            car_rgba = np.load(path)
-            return jnp.asarray(car_rgba, dtype=jnp.uint8)
-        except Exception:
+    def _load_pacman_sprites(self) -> list:
+        """Load all Pac-Man animation frames."""
+        sprites = []
+        for i in range(4):
+            sprite = self._load_sprite(f"pacman_{i}")
+            if sprite is not None:
+                sprites.append(sprite)
+        return sprites
+
+    def _build_pacman_sprite_array(self) -> jnp.ndarray | None:
+        """Stack Pac-Man animation frames with all rotations.
+        
+        Returns array of shape (4, 4, H, W, 4) where:
+        - First 4: animation frames
+        - Second 4: rotation directions (0=left, 1=down, 2=right, 3=up)
+        
+        Note: The original sprite faces LEFT.
+        """
+        if not self.pac_sprites:
             return None
+        
+        # Build rotated versions for each animation frame
+        # Direction indices: 0=left (original), 1=up, 2=right, 3=down
+        # Note: rot90 with k rotates counter-clockwise
+        all_rotations = []
+        for sprite in self.pac_sprites:
+            rotations = [
+                sprite,                         # 0: Left 
+                jnp.rot90(sprite, k=3),         # 1: Up 
+                jnp.rot90(sprite, k=2),         # 2: Right 
+                jnp.rot90(sprite, k=1),         # 3: Down 
+            ]
+            all_rotations.append(jnp.stack(rotations, axis=0))
+        
+        return jnp.stack(all_rotations, axis=0)
+
+    def _load_ghost_sprites(self) -> list:
+        """Load all ghost sprites in order: Blinky, Pinky, Inky, Sue."""
+        ghost_names = ["ghost_blinky", "ghost_pinky", "ghost_inky", "ghost_sue"]
+        sprites = []
+        for name in ghost_names:
+            sprite = self._load_sprite(name)
+            sprites.append(sprite)
+        return sprites
+
+    def _build_ghost_sprite_array(self) -> jnp.ndarray | None:
+        """Stack ghost sprites into a single array for vectorized rendering."""
+        if not self.ghost_sprites:
+            return None
+        # Only use as many sprites as we have ghosts in the game
+        # Cycle through available sprites if we have more ghosts than sprites
+        sprites_to_stack = []
+        for i in range(self.consts.num_ghosts):
+            sprite_idx = i % len(self.ghost_sprites)
+            sprite = self.ghost_sprites[sprite_idx]
+            if sprite is None:
+                return None  # Can't build array if any sprite is missing
+            sprites_to_stack.append(sprite)
+        return jnp.stack(sprites_to_stack, axis=0)
+
+    def _build_frightened_sprite_array(self) -> jnp.ndarray | None:
+        """Build array of frightened sprites for all ghosts."""
+        if self.ghost_frightened_sprite is None:
+            return None
+        # Repeat the frightened sprite for each ghost
+        return jnp.stack([self.ghost_frightened_sprite] * self.consts.num_ghosts, axis=0)
 
     def _create_base_grid(self) -> jnp.ndarray:
         """Pre-draw the static maze (background + walls) once."""
@@ -563,15 +653,6 @@ class MsPacmanRenderer(JAXGameRenderer):
     def _create_base_canvas(self, grid_pixels: jnp.ndarray) -> jnp.ndarray:
         """Place the pre-drawn maze onto a background-colored canvas."""
         canvas = jnp.ones((self.consts.screen_height, self.consts.screen_width, 3), dtype=jnp.uint8) * self.background_color
-        if self.background_image is not None:
-            bg = self.background_image
-            h = min(bg.shape[0], canvas.shape[0])
-            w = min(bg.shape[1], canvas.shape[1])
-            alpha = bg[:h, :w, 3:4].astype(jnp.uint16)
-            fg_rgb = bg[:h, :w, :3].astype(jnp.uint16)
-            bg_rgb = canvas[:h, :w, :].astype(jnp.uint16)
-            blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
-            canvas = canvas.at[:h, :w, :].set(blended.astype(jnp.uint8))
         return canvas.at[
             self.offset_y:self.offset_y + grid_pixels.shape[0],
             self.offset_x:self.offset_x + grid_pixels.shape[1],
@@ -586,6 +667,19 @@ class MsPacmanRenderer(JAXGameRenderer):
         bg_rgb = region.astype(jnp.uint16)
         blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
         return jax.lax.dynamic_update_slice(canvas, blended.astype(jnp.uint8), (top, left, 0))
+
+    def _alpha_blend_safe(self, canvas: jnp.ndarray, patch: jnp.ndarray, top: int, left: int) -> jnp.ndarray:
+        """Alpha blend with bounds checking for sprites that may extend beyond canvas."""
+        if patch is None:
+            return canvas
+        canvas_h, canvas_w = canvas.shape[:2]
+        patch_h, patch_w = patch.shape[:2]
+        
+        # Clamp to canvas bounds
+        top = max(0, min(top, canvas_h - patch_h))
+        left = max(0, min(left, canvas_w - patch_w))
+        
+        return self._alpha_blend(canvas, patch, top, left)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: MsPacmanState) -> jnp.ndarray:
@@ -644,34 +738,130 @@ class MsPacmanRenderer(JAXGameRenderer):
             self.offset_x:self.offset_x + grid_pixels.shape[1],
         ].set(grid_pixels)
 
+        # Draw Ms. Pac-Man using animated sprite with direction-based rotation
         pac_px = self.offset_x + state.pacman_x * cell
         pac_py = self.offset_y + state.pacman_y * cell
-        if self.pac_sprite is not None:
-            sx = max((cell - self.pac_sprite.shape[1]) // 2, 0)
-            sy = max((cell - self.pac_sprite.shape[0]) // 2, 0)
+        
+        if self._pac_sprite_array is not None:
+            # Select animation frame based on game time
+            # Cycle through frames: 0 -> 1 -> 2 -> 3 -> 2 -> 1 -> 0 ... (for smooth mouth animation)
+            frame_cycle = jnp.array([0, 1, 2, 3, 2, 1], dtype=jnp.int32)
+            cycle_idx = (state.time // 3) % 6  # Change frame every 3 game ticks
+            frame_idx = frame_cycle[cycle_idx]
+            
+            # Determine rotation based on facing_direction (preserves last direction when stopped)
+            # state.facing_direction is [dx, dy] where:
+            #   [1, 0] = right, [0, 1] = down, [-1, 0] = left, [0, -1] = up
+            # Map to rotation indices: 0=left, 1=up, 2=right, 3=down
+            dx, dy = state.facing_direction[0], state.facing_direction[1]
+            
+            # Calculate rotation index from facing direction
+            rot_idx = jnp.where(
+                dx > 0, 2,  # Right
+                jnp.where(
+                    dx < 0, 0,  # Left
+                    jnp.where(
+                        dy > 0, 3,  # Down
+                        jnp.where(dy < 0, 1, 0)  # Up, default to left
+                    )
+                )
+            )
+            
+            # Get the sprite with correct animation frame and rotation
+            # _pac_sprite_array shape is (4 frames, 4 rotations, H, W, 4)
+            pac_sprite = self._pac_sprite_array[frame_idx, rot_idx]
+            sprite_h, sprite_w = pac_sprite.shape[:2]
+            sx = (cell - sprite_w) // 2
+            sy = (cell - sprite_h) // 2
+            
+            # Alpha blend the animated sprite
+            h, w = pac_sprite.shape[:2]
+            region = jax.lax.dynamic_slice(canvas, (pac_py + sy, pac_px + sx, 0), (h, w, 3))
+            alpha = pac_sprite[:, :, 3:4].astype(jnp.uint16)
+            fg_rgb = pac_sprite[:, :, :3].astype(jnp.uint16)
+            bg_rgb = region.astype(jnp.uint16)
+            blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
+            canvas = jax.lax.dynamic_update_slice(canvas, blended.astype(jnp.uint8), (pac_py + sy, pac_px + sx, 0))
+        elif self.pac_sprite is not None:
+            # Fallback to static first frame
+            sprite_h, sprite_w = self.pac_sprite.shape[:2]
+            sx = max((cell - sprite_w) // 2, 0)
+            sy = max((cell - sprite_h) // 2, 0)
             canvas = self._alpha_blend(canvas, self.pac_sprite, pac_py + sy, pac_px + sx)
         else:
+            # Final fallback to solid color block
             pac_block = jnp.ones((cell, cell, 3), dtype=jnp.uint8) * self.pacman_color
             canvas = jax.lax.dynamic_update_slice(canvas, pac_block, (pac_py, pac_px, 0))
 
-        color_indices = jnp.mod(jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), self.ghost_colors.shape[0])
-        ghost_palette = self.ghost_colors[color_indices]
-        ghost_blocks = jnp.ones((self.consts.num_ghosts, cell, cell, 3), dtype=jnp.uint8) * ghost_palette[:, None, None, :]
+        # Draw ghosts using loaded sprites with alpha blending
         ghost_positions = state.ghost_positions
+        frightened = state.power_timer > 0
 
-        def draw_ghost(img, inputs):
-            idx, pos = inputs
-            block = ghost_blocks[idx]
-            gx = self.offset_x + pos[0] * cell
-            gy = self.offset_y + pos[1] * cell
-            img = jax.lax.dynamic_update_slice(img, block, (gy, gx, 0))
-            return img, None
+        # Use authentic ghost sprites if available
+        if self._ghost_sprite_array is not None:
+            # Get sprite dimensions
+            ghost_sprite_h, ghost_sprite_w = self.ghost_sprites[0].shape[:2]
+            
+            # Select between normal and frightened sprites
+            # Use frightened sprite (ghost_blue) when power timer is active
+            sprites_to_use = jax.lax.select(
+                frightened,
+                self._frightened_sprite_array if self._frightened_sprite_array is not None else self._ghost_sprite_array,
+                self._ghost_sprite_array
+            )
+            
+            # Draw each ghost using alpha blending
+            def draw_ghost_sprite(canvas_acc, inputs):
+                idx, pos = inputs
+                sprite = sprites_to_use[idx]
+                gx = self.offset_x + pos[0] * cell
+                gy = self.offset_y + pos[1] * cell
+                # Center sprite in cell
+                sx = (cell - ghost_sprite_w) // 2
+                sy = (cell - ghost_sprite_h) // 2
+                
+                # Alpha blend the sprite
+                h, w = sprite.shape[:2]
+                region = jax.lax.dynamic_slice(canvas_acc, (gy + sy, gx + sx, 0), (h, w, 3))
+                alpha = sprite[:, :, 3:4].astype(jnp.uint16)
+                fg_rgb = sprite[:, :, :3].astype(jnp.uint16)
+                bg_rgb = region.astype(jnp.uint16)
+                blended = ((fg_rgb * alpha) + (bg_rgb * (255 - alpha))) // 255
+                canvas_acc = jax.lax.dynamic_update_slice(canvas_acc, blended.astype(jnp.uint8), (gy + sy, gx + sx, 0))
+                return canvas_acc, None
 
-        canvas, _ = jax.lax.scan(
-            draw_ghost,
-            canvas,
-            (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
-        )
+            canvas, _ = jax.lax.scan(
+                draw_ghost_sprite,
+                canvas,
+                (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
+            )
+        else:
+            # Fallback to colored blocks if sprites not available
+            color_indices = jnp.mod(jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), self.ghost_colors.shape[0])
+            ghost_palette = self.ghost_colors[color_indices]
+            ghost_blocks = jnp.ones((self.consts.num_ghosts, cell, cell, 3), dtype=jnp.uint8) * ghost_palette[:, None, None, :]
+            
+            # If frightened, override with blue color
+            frightened_color = jnp.array([84, 84, 252], dtype=jnp.uint8)
+            ghost_blocks = jnp.where(
+                frightened,
+                jnp.ones((self.consts.num_ghosts, cell, cell, 3), dtype=jnp.uint8) * frightened_color[None, None, None, :],
+                ghost_blocks
+            )
+
+            def draw_ghost_block(img, inputs):
+                idx, pos = inputs
+                block = ghost_blocks[idx]
+                gx = self.offset_x + pos[0] * cell
+                gy = self.offset_y + pos[1] * cell
+                img = jax.lax.dynamic_update_slice(img, block, (gy, gx, 0))
+                return img, None
+
+            canvas, _ = jax.lax.scan(
+                draw_ghost_block,
+                canvas,
+                (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
+            )
 
         return canvas
 
