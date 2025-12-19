@@ -367,402 +367,303 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         state: BeamriderState,
         action: chex.Array,
     ) -> Tuple[BeamriderObservation, BeamriderState, float, bool, BeamriderInfo]:
-        # --- Initialization Phase Check ---
-        # The game logic only starts after the BLUE_LINE_INIT_TABLE is exhausted.
-        is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
-        effective_action = jnp.where(is_init, Action.NOOP, action)
-
-        (
-            player_x,
-            vel_x,
-            player_shot_position,
-            player_shot_velocity,
-            torpedos_left,
-            bullet_type,
-            shooting_cooldown,
-        ) = self._player_step(state, effective_action)
-
-        rngs = jax.random.split(state.rng, 5)
-        next_rng = rngs[0]
-        ufo_keys = rngs[1:4]
-        meteoroid_key = rngs[4]
-
-        # UFOs and other enemies should not move or spawn during init
-        ufo_update = self._advance_white_ufos(state, ufo_keys)
         
-        # Suppress UFO movement during init
-        ufo_init_pos = jnp.array([[77.0, 77.0, 77.0], [43.0, 43.0, 43.0]])
-        ufo_pos_to_use = jnp.where(is_init, ufo_init_pos, ufo_update.pos)
-        ufo_vel_to_use = jnp.where(is_init, 0.0, ufo_update.vel)
-
-        (
-            white_ufo_pos,
-            player_shot_position,
-            white_ufo_pattern_id,
-            white_ufo_pattern_timer,
-            white_ufo_left,
-            score,
-            hit_mask,
-        ) = self._collision_handler(
-            state,
-            ufo_pos_to_use,
-            player_shot_position,
-            bullet_type,
-            ufo_update.pattern_id,
-            ufo_update.pattern_timer,
-        )
-
-        (
-            chasing_meteoroid_pos,
-            chasing_meteoroid_active,
-            chasing_meteoroid_phase,
-            chasing_meteoroid_frame,
-            chasing_meteoroid_lane,
-            chasing_meteoroid_side,
-            chasing_meteoroid_spawn_timer,
-            chasing_meteoroid_remaining,
-            chasing_meteoroid_wave_active,
-        ) = self._chasing_meteoroid_step(state, player_x, vel_x, white_ufo_left, meteoroid_key)
-        
-        # Suppress meteoroids during init
-        chasing_meteoroid_active = jnp.where(is_init, False, chasing_meteoroid_active)
-        chasing_meteoroid_offscreen = jnp.tile(
-            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
-            (1, self.consts.CHASING_METEOROID_MAX),
-        )
-        chasing_meteoroid_pos = jnp.where(is_init, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-
-        pre_collision_meteoroid_pos = chasing_meteoroid_pos
-        (
-            chasing_meteoroid_pos,
-            chasing_meteoroid_active,
-            chasing_meteoroid_phase,
-            chasing_meteoroid_frame,
-            chasing_meteoroid_lane,
-            chasing_meteoroid_side,
-            player_shot_position,
-            chasing_meteoroid_hit_mask,
-        ) = self._chasing_meteoroid_bullet_collision(
-            chasing_meteoroid_pos,
-            chasing_meteoroid_active,
-            chasing_meteoroid_phase,
-            chasing_meteoroid_frame,
-            chasing_meteoroid_lane,
-            chasing_meteoroid_side,
-            player_shot_position,
-            bullet_type,
-        )
-
-        # --- Mothership Collision Check ---
-        ms_stage = state.level.mothership_stage
-        ms_pos = state.level.mothership_position
-        ms_y = self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT
-        
-        # Hitbox is square around sprite. 
-        # Sprite top-left is (ms_pos, ms_y).
-        box_size = self.consts.MOTHERSHIP_HITBOX_SIZE
-        
-        # Center of mothership sprite roughly
-        ms_center_x = ms_pos + 8.0 
-        ms_center_y = ms_y + 3.5 
-        
-        # Check collision with player shot
-        shot_x = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
-        shot_y = player_shot_position[1]
-        
-        # Simple AABB
-        dx = jnp.abs(shot_x - ms_center_x)
-        dy = jnp.abs(shot_y - ms_center_y)
-        
-        shot_active = shot_y < self.consts.BOTTOM_CLIP 
-        is_torpedo = bullet_type == self.consts.TORPEDO_ID
-        ms_vulnerable = ms_stage == 2 # Only vulnerable when moving across top
-        
-        half_size = box_size / 2.0
-        hit_mothership = (dx < half_size) & (dy < half_size) & shot_active & is_torpedo & ms_vulnerable
-        
-        # Update state if hit
-        # Reset shot
-        player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
-        
-        # ----------------------------------
-
-        ufo_explosion_frame, ufo_explosion_pos = self._update_enemy_explosions(
-            state.level.ufo_explosion_frame,
-            state.level.ufo_explosion_pos,
-            hit_mask,
-            ufo_pos_to_use,
-        )
-        chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos = self._update_enemy_explosions(
-            state.level.chasing_meteoroid_explosion_frame,
-            state.level.chasing_meteoroid_explosion_pos,
-            chasing_meteoroid_hit_mask,
-            pre_collision_meteoroid_pos,
-        )
-        enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
-            state,
-            white_ufo_pos,
-            white_ufo_pattern_id,
-            white_ufo_pattern_timer,
-        )
-        
-        # Suppress enemy shots during init
-        enemy_shot_offscreen = jnp.tile(
-            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1),
-            (1, 3),
-        )
-        enemy_shot_pos = jnp.where(is_init, enemy_shot_offscreen, enemy_shot_pos)
-        shot_hit_count = jnp.where(is_init, 0, shot_hit_count)
-
-        # Player-UFO collision check
-        ufo_x = white_ufo_pos[0] + _get_ufo_alignment(white_ufo_pos[1])
-        ufo_y = white_ufo_pos[1]
-        player_left = player_x
-        player_right = player_x + self.consts.PLAYER_WIDTH
-        player_y = float(self.consts.PLAYER_POS_Y)
-
-        ufo_hits = jnp.logical_and.reduce(jnp.array([
-            ufo_y >= player_y - 4.0,
-            ufo_y <= player_y + 10.0,
-            ufo_x >= player_left - 2.0,
-            ufo_x <= player_right + 2.0,
-        ]))
-        ufo_hit_count = jnp.sum(ufo_hits.astype(jnp.int32))
-        chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
-        chasing_meteoroid_left = chasing_meteoroid_x
-        chasing_meteoroid_right = chasing_meteoroid_x + float(self.consts.ENEMY_WIDTH)
-        chasing_meteoroid_top = chasing_meteoroid_pos[1]
-        chasing_meteoroid_bottom = chasing_meteoroid_pos[1] + float(self.consts.ENEMY_HEIGHT)
-        player_bottom = player_y + float(self.consts.PLAYER_HEIGHT)
-        chasing_meteoroid_hits = jnp.logical_and.reduce(jnp.array([
-            chasing_meteoroid_active,
-            chasing_meteoroid_right >= player_left,
-            chasing_meteoroid_left <= player_right,
-            chasing_meteoroid_bottom >= player_y,
-            chasing_meteoroid_top <= player_bottom,
-        ]))
-        chasing_meteoroid_hit_count = jnp.sum(chasing_meteoroid_hits.astype(jnp.int32))
-        
-        # Suppress player collisions during init
-        ufo_hit_count = jnp.where(is_init, 0, ufo_hit_count)
-        chasing_meteoroid_hit_count = jnp.where(is_init, 0, chasing_meteoroid_hit_count)
-
-        chasing_meteoroid_active = jnp.where(chasing_meteoroid_hits, False, chasing_meteoroid_active)
-        chasing_meteoroid_pos = jnp.where(chasing_meteoroid_hits[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-        chasing_meteoroid_phase = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_phase)
-        chasing_meteoroid_frame = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_frame)
-        chasing_meteoroid_lane = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_lane)
-        chasing_meteoroid_side = jnp.where(chasing_meteoroid_hits, 1, chasing_meteoroid_side)
-        reached_player = jnp.logical_and(
-            chasing_meteoroid_active,
-            chasing_meteoroid_pos[1] >= player_y,
-        )
-        chasing_meteoroid_active = jnp.where(reached_player, False, chasing_meteoroid_active)
-        chasing_meteoroid_pos = jnp.where(reached_player[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-        chasing_meteoroid_phase = jnp.where(reached_player, 0, chasing_meteoroid_phase)
-        chasing_meteoroid_frame = jnp.where(reached_player, 0, chasing_meteoroid_frame)
-        chasing_meteoroid_lane = jnp.where(reached_player, 0, chasing_meteoroid_lane)
-        chasing_meteoroid_side = jnp.where(reached_player, 1, chasing_meteoroid_side)
-
-        hit_count = shot_hit_count + ufo_hit_count + chasing_meteoroid_hit_count
-
-        # --- Death Logic ---
-        current_death_timer = state.level.death_timer
-        is_hit = hit_count > 0
-        
-        # Start dying if we got hit and weren't already dying
-        start_dying = jnp.logical_and(is_hit, current_death_timer == 0)
-        
-        # Next timer value
-        next_death_timer = jnp.where(
-            start_dying, 
-            self.consts.DEATH_DURATION, 
-            jnp.maximum(current_death_timer - 1, 0)
-        )
-        
-        is_dying_sequence = next_death_timer > 0
-        
-        # Check if we just finished the death sequence (transition 1 -> 0)
-        just_died = jnp.logical_and(current_death_timer > 0, next_death_timer == 0)
-
+        # --- 1. Advance Blue Lines (Always happens) ---
         line_positions, blue_line_counter = self._line_step(state)
-        mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(
-            state, 
-            white_ufo_left, 
-            ufo_explosion_frame,
-            hit_mothership
-        )
         
-        # Suppress mothership logic during init
-        mothership_position = jnp.where(is_init, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
-        mothership_timer = jnp.where(is_init, 0, mothership_timer)
-        mothership_stage = jnp.where(is_init, 0, mothership_stage)
-        sector_advanced_m = jnp.where(is_init, False, sector_advanced_m)
-
-        # --- Dynamic Scoring for Mothership and HP Bonus ---
-        clamped_sector = jnp.minimum(state.sector, 89)
-        ms_score_val = 300 + 30 * clamped_sector
-        hp_bonus_per_life_val = 100 + 10 * clamped_sector
+        # --- 2. Check for Initialization Phase ---
+        # The game logic only starts after the BLUE_LINE_INIT_TABLE is exhausted.
+        # Windup sequence ends at step 240.
+        is_init = blue_line_counter < len(BLUE_LINE_INIT_TABLE)
         
-        # Add mothership hit score AND HP bonus when hit
-        # HP remaining is the number of reserve lives (state.lives - 1)
-        hp_bonus = jnp.maximum(state.lives - 1, 0) * hp_bonus_per_life_val
-        score = jnp.where(hit_mothership, score + ms_score_val + hp_bonus, score)
-        
-        # Suppress score during init
-        score = jnp.where(is_init, 0, score)
+        def normal_step():
+            (
+                player_x,
+                vel_x,
+                player_shot_position,
+                player_shot_velocity,
+                torpedos_left,
+                bullet_type,
+                shooting_cooldown,
+            ) = self._player_step(state, action)
 
-        # Advance sector if mothership finishes OR player died after clearing UFOs
-        died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
-        sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
-        sector = state.sector + sector_advanced.astype(jnp.int32)
+            rngs = jax.random.split(state.rng, 5)
+            next_rng = rngs[0]
+            ufo_keys = rngs[1:4]
+            meteoroid_key = rngs[4]
 
-        white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
-        torpedos_left = jnp.where(sector_advanced, 3, torpedos_left)
+            ufo_update = self._advance_white_ufos(state, ufo_keys)
+            (
+                white_ufo_pos,
+                player_shot_position,
+                white_ufo_pattern_id,
+                white_ufo_pattern_timer,
+                white_ufo_left,
+                score,
+                hit_mask,
+            ) = self._collision_handler(
+                state,
+                ufo_update.pos,
+                player_shot_position,
+                bullet_type,
+                ufo_update.pattern_id,
+                ufo_update.pattern_timer,
+            )
 
-        # Reset hit UFO movement state so it doesn't immediately chain into attacks on respawn.
-        white_ufo_vel = jnp.where(hit_mask[None, :], 0.0, ufo_vel_to_use)
-        white_ufo_time_on_lane = jnp.where(hit_mask, 0, ufo_update.time_on_lane)
-        white_ufo_attack_time = jnp.where(hit_mask, 0, ufo_update.attack_time)
+            (
+                chasing_meteoroid_pos,
+                chasing_meteoroid_active,
+                chasing_meteoroid_phase,
+                chasing_meteoroid_frame,
+                chasing_meteoroid_lane,
+                chasing_meteoroid_side,
+                chasing_meteoroid_spawn_timer,
+                chasing_meteoroid_remaining,
+                chasing_meteoroid_wave_active,
+            ) = self._chasing_meteoroid_step(state, player_x, vel_x, white_ufo_left, meteoroid_key)
+            pre_collision_meteoroid_pos = chasing_meteoroid_pos
+            (
+                chasing_meteoroid_pos,
+                chasing_meteoroid_active,
+                chasing_meteoroid_phase,
+                chasing_meteoroid_frame,
+                chasing_meteoroid_lane,
+                chasing_meteoroid_side,
+                player_shot_position,
+                chasing_meteoroid_hit_mask,
+            ) = self._chasing_meteoroid_bullet_collision(
+                chasing_meteoroid_pos,
+                chasing_meteoroid_active,
+                chasing_meteoroid_phase,
+                chasing_meteoroid_frame,
+                chasing_meteoroid_lane,
+                chasing_meteoroid_side,
+                player_shot_position,
+                bullet_type,
+            )
 
-        # When the remaining UFO counter drops below 3, only keep that many white UFOs active.
-        # Also suppress during initialization.
-        active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
-        active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
-        effective_active_mask = jnp.logical_and(active_mask, jnp.logical_not(is_init))
-        
-        ufo_offscreen = jnp.tile(
-            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1),
-            (1, 3),
-        )
-        white_ufo_pos = jnp.where(effective_active_mask[None, :], white_ufo_pos, ufo_offscreen)
-        white_ufo_vel = jnp.where(effective_active_mask[None, :], white_ufo_vel, 0.0)
-        white_ufo_time_on_lane = jnp.where(effective_active_mask, white_ufo_time_on_lane, 0)
-        white_ufo_attack_time = jnp.where(effective_active_mask, white_ufo_attack_time, 0)
-        white_ufo_pattern_id = jnp.where(effective_active_mask, white_ufo_pattern_id, int(WhiteUFOPattern.IDLE))
-        white_ufo_pattern_timer = jnp.where(effective_active_mask, white_ufo_pattern_timer, 0)
+            # --- Mothership Collision Check ---
+            ms_stage = state.level.mothership_stage
+            ms_pos = state.level.mothership_position
+            ms_y = self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT
+            
+            box_size = self.consts.MOTHERSHIP_HITBOX_SIZE
+            ms_center_x = ms_pos + 8.0 
+            ms_center_y = ms_y + 3.5 
+            
+            shot_x = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
+            shot_y = player_shot_position[1]
+            
+            dx = jnp.abs(shot_x - ms_center_x)
+            dy = jnp.abs(shot_y - ms_center_y)
+            
+            shot_active = shot_y < self.consts.BOTTOM_CLIP 
+            is_torpedo = bullet_type == self.consts.TORPEDO_ID
+            ms_vulnerable = ms_stage == 2
+            
+            half_size = box_size / 2.0
+            hit_mothership = (dx < half_size) & (dy < half_size) & shot_active & is_torpedo & ms_vulnerable
+            player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+            
+            ufo_explosion_frame, ufo_explosion_pos = self._update_enemy_explosions(
+                state.level.ufo_explosion_frame,
+                state.level.ufo_explosion_pos,
+                hit_mask,
+                ufo_update.pos,
+            )
+            chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos = self._update_enemy_explosions(
+                state.level.chasing_meteoroid_explosion_frame,
+                state.level.chasing_meteoroid_explosion_pos,
+                chasing_meteoroid_hit_mask,
+                pre_collision_meteoroid_pos,
+            )
+            enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
+                state,
+                white_ufo_pos,
+                white_ufo_pattern_id,
+                white_ufo_pattern_timer,
+            )
 
-        enemy_shot_offscreen = jnp.tile(
-            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1),
-            (1, 3),
-        )
-        enemy_shot_pos = jnp.where(effective_active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
-        enemy_shot_timer = jnp.where(effective_active_mask, enemy_shot_timer, 0)
-        enemy_shot_lane = jnp.where(effective_active_mask, enemy_shot_lane, 0)
+            # Player-UFO collision check
+            ufo_x = white_ufo_pos[0] + _get_ufo_alignment(white_ufo_pos[1])
+            ufo_y = white_ufo_pos[1]
+            player_left = player_x
+            player_right = player_x + self.consts.PLAYER_WIDTH
+            player_y = float(self.consts.PLAYER_POS_Y)
 
-        enemy_shot_pos = jnp.where(sector_advanced, enemy_shot_offscreen, enemy_shot_pos)
-        enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
-        enemy_shot_lane = jnp.where(sector_advanced, 0, enemy_shot_lane)
-        chasing_meteoroid_pos = jnp.where(sector_advanced, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-        chasing_meteoroid_active = jnp.where(sector_advanced, False, chasing_meteoroid_active)
-        chasing_meteoroid_phase = jnp.where(sector_advanced, 0, chasing_meteoroid_phase)
-        chasing_meteoroid_frame = jnp.where(sector_advanced, 0, chasing_meteoroid_frame)
-        chasing_meteoroid_lane = jnp.where(sector_advanced, 0, chasing_meteoroid_lane)
-        chasing_meteoroid_side = jnp.where(sector_advanced, 1, chasing_meteoroid_side)
-        chasing_meteoroid_spawn_timer = jnp.where(sector_advanced, 0, chasing_meteoroid_spawn_timer)
-        chasing_meteoroid_remaining = jnp.where(sector_advanced, 0, chasing_meteoroid_remaining)
-        chasing_meteoroid_wave_active = jnp.where(sector_advanced, False, chasing_meteoroid_wave_active)
+            ufo_hits = jnp.logical_and.reduce(jnp.array([
+                ufo_y >= player_y - 4.0,
+                ufo_y <= player_y + 10.0,
+                ufo_x >= player_left - 2.0,
+                ufo_x <= player_right + 2.0,
+            ]))
+            ufo_hit_count = jnp.sum(ufo_hits.astype(jnp.int32))
+            
+            chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
+            chasing_meteoroid_left = chasing_meteoroid_x
+            chasing_meteoroid_right = chasing_meteoroid_x + float(self.consts.ENEMY_WIDTH)
+            chasing_meteoroid_top = chasing_meteoroid_pos[1]
+            chasing_meteoroid_bottom = chasing_meteoroid_pos[1] + float(self.consts.ENEMY_HEIGHT)
+            player_bottom = player_y + float(self.consts.PLAYER_HEIGHT)
+            chasing_meteoroid_hits = jnp.logical_and.reduce(jnp.array([
+                chasing_meteoroid_active,
+                chasing_meteoroid_right >= player_left,
+                chasing_meteoroid_left <= player_right,
+                chasing_meteoroid_bottom >= player_y,
+                chasing_meteoroid_top <= player_bottom,
+            ]))
+            chasing_meteoroid_hit_count = jnp.sum(chasing_meteoroid_hits.astype(jnp.int32))
+            
+            chasing_meteoroid_offscreen = jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
+                (1, self.consts.CHASING_METEOROID_MAX),
+            )
+            chasing_meteoroid_active = jnp.where(chasing_meteoroid_hits, False, chasing_meteoroid_active)
+            chasing_meteoroid_pos = jnp.where(chasing_meteoroid_hits[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_phase = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_phase)
+            chasing_meteoroid_frame = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_frame)
+            chasing_meteoroid_lane = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_lane)
+            chasing_meteoroid_side = jnp.where(chasing_meteoroid_hits, 1, chasing_meteoroid_side)
+            reached_player = jnp.logical_and(
+                chasing_meteoroid_active,
+                chasing_meteoroid_pos[1] >= player_y,
+            )
+            chasing_meteoroid_active = jnp.where(reached_player, False, chasing_meteoroid_active)
+            chasing_meteoroid_pos = jnp.where(reached_player[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_phase = jnp.where(reached_player, 0, chasing_meteoroid_phase)
+            chasing_meteoroid_frame = jnp.where(reached_player, 0, chasing_meteoroid_frame)
+            chasing_meteoroid_lane = jnp.where(reached_player, 0, chasing_meteoroid_lane)
+            chasing_meteoroid_side = jnp.where(reached_player, 1, chasing_meteoroid_side)
 
-        # Apply Death State Overrides (if dying)
-        # - Despawn enemies
-        # - Stop player
-        # - Despawn shots
-        
-        # If dying, force enemies/shots offscreen
-        white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
-        enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
-        chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-        chasing_meteoroid_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_active)
-        chasing_meteoroid_phase = jnp.where(is_dying_sequence, 0, chasing_meteoroid_phase)
-        chasing_meteoroid_frame = jnp.where(is_dying_sequence, 0, chasing_meteoroid_frame)
-        chasing_meteoroid_lane = jnp.where(is_dying_sequence, 0, chasing_meteoroid_lane)
-        chasing_meteoroid_side = jnp.where(is_dying_sequence, 1, chasing_meteoroid_side)
-        chasing_meteoroid_spawn_timer = jnp.where(is_dying_sequence, 0, chasing_meteoroid_spawn_timer)
-        chasing_meteoroid_remaining = jnp.where(is_dying_sequence, 0, chasing_meteoroid_remaining)
-        chasing_meteoroid_wave_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_wave_active)
-        # Reset mothership if dying
-        mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
-        mothership_timer = jnp.where(is_dying_sequence, 0, mothership_timer)
-        mothership_stage = jnp.where(is_dying_sequence, 0, mothership_stage)
-        
-        # If dying, player shouldn't move (though visualization might handle the sprite)
-        # We'll keep the position but zero velocity
-        vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
-        # Also maybe reset player shot?
-        player_shot_position = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+            hit_count = shot_hit_count + ufo_hit_count + chasing_meteoroid_hit_count
 
-        # Construct new state (Pre-Reset Logic)
-        next_step = state.steps + 1
-        new_level_state = LevelState(
-            player_pos=player_x,
-            player_vel=vel_x,
-            white_ufo_left=white_ufo_left,
-            mothership_position=mothership_position,
-            mothership_timer=mothership_timer,
-            mothership_stage=mothership_stage,
-            player_shot_pos=player_shot_position,
-            player_shot_vel=player_shot_velocity,
-            torpedoes_left=torpedos_left,
-            shooting_cooldown=shooting_cooldown,
-            bullet_type=bullet_type,
-            enemy_type=jnp.array([0, 0, 0]),
-            white_ufo_pos=white_ufo_pos,
-            white_ufo_vel=white_ufo_vel,
-            enemy_shot_pos=enemy_shot_pos,
-            enemy_shot_vel=enemy_shot_lane,
-            enemy_shot_timer=enemy_shot_timer,
-            white_ufo_time_on_lane=white_ufo_time_on_lane,
-            white_ufo_attack_time=white_ufo_attack_time,
-            white_ufo_pattern_id=white_ufo_pattern_id,
-            white_ufo_pattern_timer=white_ufo_pattern_timer,
-            ufo_explosion_frame=ufo_explosion_frame,
-            ufo_explosion_pos=ufo_explosion_pos,
-            chasing_meteoroid_explosion_frame=chasing_meteoroid_explosion_frame,
-            chasing_meteoroid_explosion_pos=chasing_meteoroid_explosion_pos,
-            chasing_meteoroid_pos=chasing_meteoroid_pos,
-            chasing_meteoroid_active=chasing_meteoroid_active,
-            chasing_meteoroid_phase=chasing_meteoroid_phase,
-            chasing_meteoroid_frame=chasing_meteoroid_frame,
-            chasing_meteoroid_lane=chasing_meteoroid_lane,
-            chasing_meteoroid_side=chasing_meteoroid_side,
-            chasing_meteoroid_spawn_timer=chasing_meteoroid_spawn_timer,
-            chasing_meteoroid_remaining=chasing_meteoroid_remaining,
-            chasing_meteoroid_wave_active=chasing_meteoroid_wave_active,
-            line_positions=line_positions,
-            blue_line_counter=blue_line_counter,
-            death_timer=next_death_timer,
-        )
+            current_death_timer = state.level.death_timer
+            is_hit = hit_count > 0
+            start_dying = jnp.logical_and(is_hit, current_death_timer == 0)
+            next_death_timer = jnp.where(start_dying, self.consts.DEATH_DURATION, jnp.maximum(current_death_timer - 1, 0))
+            is_dying_sequence = next_death_timer > 0
+            just_died = jnp.logical_and(current_death_timer > 0, next_death_timer == 0)
 
-        # Calculate final state, handling Reset if `just_died` or `sector_advanced`
-        # If just_died, we reset the level state but keep UFOs count
-        reset_level_state = self._create_level_state(white_ufo_left=white_ufo_left)
-        
-        final_level_state = jax.tree_util.tree_map(
-            lambda normal, reset: jnp.where(jnp.logical_or(just_died, sector_advanced), reset, normal),
-            new_level_state,
-            reset_level_state
-        )
-        
-        # Decrement lives if just_died
-        new_lives = jnp.where(just_died, state.lives - 1, state.lives)
-        # Ensure lives don't go below 0 (though game should end)
-        new_lives = jnp.maximum(new_lives, 0)
+            mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(
+                state, white_ufo_left, ufo_explosion_frame, hit_mothership
+            )
 
-        new_state = BeamriderState(
-            level=final_level_state,
-            score=score,
-            sector=sector,
-            level_finished=jnp.array(0),
-            reset_coords=jnp.array(False),
-            lives=new_lives,
-            steps=next_step,
-            rng=next_rng,
-        )
+            clamped_sector = jnp.minimum(state.sector, 89)
+            ms_score_val = 300 + 30 * clamped_sector
+            hp_bonus_per_life_val = 100 + 10 * clamped_sector
+            hp_bonus = jnp.maximum(state.lives - 1, 0) * hp_bonus_per_life_val
+            score = jnp.where(hit_mothership, score + ms_score_val + hp_bonus, score)
+
+            died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
+            sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
+            sector = state.sector + sector_advanced.astype(jnp.int32)
+
+            white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
+            torpedos_left = jnp.where(sector_advanced, 3, torpedos_left)
+
+            white_ufo_vel = jnp.where(hit_mask[None, :], 0.0, ufo_update.vel)
+            white_ufo_time_on_lane = jnp.where(hit_mask, 0, ufo_update.time_on_lane)
+            white_ufo_attack_time = jnp.where(hit_mask, 0, ufo_update.attack_time)
+
+            active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
+            active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
+            ufo_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1), (1, 3))
+            
+            white_ufo_pos = jnp.where(active_mask[None, :], white_ufo_pos, ufo_offscreen)
+            white_ufo_vel = jnp.where(active_mask[None, :], white_ufo_vel, 0.0)
+            white_ufo_time_on_lane = jnp.where(active_mask, white_ufo_time_on_lane, 0)
+            white_ufo_attack_time = jnp.where(active_mask, white_ufo_attack_time, 0)
+            white_ufo_pattern_id = jnp.where(active_mask, white_ufo_pattern_id, int(WhiteUFOPattern.IDLE))
+            white_ufo_pattern_timer = jnp.where(active_mask, white_ufo_pattern_timer, 0)
+
+            enemy_shot_offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1), (1, 3))
+            enemy_shot_pos = jnp.where(active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
+            enemy_shot_timer = jnp.where(active_mask, enemy_shot_timer, 0)
+            enemy_shot_lane = jnp.where(active_mask, enemy_shot_lane, 0)
+
+            enemy_shot_pos = jnp.where(sector_advanced, enemy_shot_offscreen, enemy_shot_pos)
+            enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
+            enemy_shot_lane = jnp.where(sector_advanced, 0, enemy_shot_lane)
+            chasing_meteoroid_pos = jnp.where(sector_advanced, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_active = jnp.where(sector_advanced, False, chasing_meteoroid_active)
+            chasing_meteoroid_phase = jnp.where(sector_advanced, 0, chasing_meteoroid_phase)
+            chasing_meteoroid_frame = jnp.where(sector_advanced, 0, chasing_meteoroid_frame)
+            chasing_meteoroid_lane = jnp.where(sector_advanced, 0, chasing_meteoroid_lane)
+            chasing_meteoroid_side = jnp.where(sector_advanced, 1, chasing_meteoroid_side)
+            chasing_meteoroid_spawn_timer = jnp.where(sector_advanced, 0, chasing_meteoroid_spawn_timer)
+            chasing_meteoroid_remaining = jnp.where(sector_advanced, 0, chasing_meteoroid_remaining)
+            chasing_meteoroid_wave_active = jnp.where(sector_advanced, False, chasing_meteoroid_wave_active)
+
+            white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
+            enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
+            chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_active)
+            chasing_meteoroid_phase = jnp.where(is_dying_sequence, 0, chasing_meteoroid_phase)
+            chasing_meteoroid_frame = jnp.where(is_dying_sequence, 0, chasing_meteoroid_frame)
+            chasing_meteoroid_lane = jnp.where(is_dying_sequence, 0, chasing_meteoroid_lane)
+            chasing_meteoroid_side = jnp.where(is_dying_sequence, 1, chasing_meteoroid_side)
+            chasing_meteoroid_spawn_timer = jnp.where(is_dying_sequence, 0, chasing_meteoroid_spawn_timer)
+            chasing_meteoroid_remaining = jnp.where(is_dying_sequence, 0, chasing_meteoroid_remaining)
+            chasing_meteoroid_wave_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_wave_active)
+            mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
+            mothership_timer = jnp.where(is_dying_sequence, 0, mothership_timer)
+            mothership_stage = jnp.where(is_dying_sequence, 0, mothership_stage)
+            vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
+            player_shot_position = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+
+            next_step = state.steps + 1
+            new_level_state = LevelState(
+                player_pos=player_x, player_vel=vel_x, white_ufo_left=white_ufo_left,
+                mothership_position=mothership_position, mothership_timer=mothership_timer,
+                mothership_stage=mothership_stage, player_shot_pos=player_shot_position,
+                player_shot_vel=player_shot_velocity, torpedoes_left=torpedos_left,
+                shooting_cooldown=shooting_cooldown, bullet_type=bullet_type,
+                enemy_type=jnp.array([0, 0, 0]), white_ufo_pos=white_ufo_pos,
+                white_ufo_vel=white_ufo_vel, enemy_shot_pos=enemy_shot_pos,
+                enemy_shot_vel=enemy_shot_lane, enemy_shot_timer=enemy_shot_timer,
+                white_ufo_time_on_lane=white_ufo_time_on_lane, white_ufo_attack_time=white_ufo_attack_time,
+                white_ufo_pattern_id=white_ufo_pattern_id, white_ufo_pattern_timer=white_ufo_pattern_timer,
+                ufo_explosion_frame=ufo_explosion_frame, ufo_explosion_pos=ufo_explosion_pos,
+                chasing_meteoroid_explosion_frame=chasing_meteoroid_explosion_frame,
+                chasing_meteoroid_explosion_pos=chasing_meteoroid_explosion_pos,
+                chasing_meteoroid_pos=chasing_meteoroid_pos, chasing_meteoroid_active=chasing_meteoroid_active,
+                chasing_meteoroid_phase=chasing_meteoroid_phase, chasing_meteoroid_frame=chasing_meteoroid_frame,
+                chasing_meteoroid_lane=chasing_meteoroid_lane, chasing_meteoroid_side=chasing_meteoroid_side,
+                chasing_meteoroid_spawn_timer=chasing_meteoroid_spawn_timer,
+                chasing_meteoroid_remaining=chasing_meteoroid_remaining,
+                chasing_meteoroid_wave_active=chasing_meteoroid_wave_active,
+                line_positions=line_positions, blue_line_counter=blue_line_counter,
+                death_timer=next_death_timer,
+            )
+
+            reset_level_state = self._create_level_state(white_ufo_left=white_ufo_left)
+            final_level_state = jax.tree_util.tree_map(
+                lambda normal, reset: jnp.where(jnp.logical_or(just_died, sector_advanced), reset, normal),
+                new_level_state, reset_level_state
+            )
+            new_lives = jnp.where(just_died, jnp.maximum(state.lives - 1, 0), state.lives)
+
+            new_state = BeamriderState(
+                level=final_level_state, score=score, sector=sector,
+                level_finished=jnp.array(0), reset_coords=jnp.array(False),
+                lives=new_lives, steps=next_step, rng=next_rng,
+            )
+            return new_state
+
+        def init_step():
+            # During init, we ONLY update the blue line positions and counter.
+            # All other state remains frozen at its current values.
+            new_level = state.level._replace(
+                line_positions=line_positions,
+                blue_line_counter=blue_line_counter
+            )
+            return state._replace(level=new_level, steps=state.steps + 1)
+
+        new_state = jax.lax.cond(is_init, init_step, normal_step)
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
         info = self._get_info(new_state)
-
         observation = self._get_observation(new_state)
         
         return observation, new_state, env_reward, done, info
