@@ -538,6 +538,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         x = state.level.player_pos
         v = state.level.player_vel
 
+        is_dead = state.level.death_timer > 0
+        action = jnp.where(is_dead, Action.NOOP, action)
+        v = jnp.where(is_dead, 0.0, v)
+
         # Get inputs
         press_right = jnp.any(
             jnp.array(
