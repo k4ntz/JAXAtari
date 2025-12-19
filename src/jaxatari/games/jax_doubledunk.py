@@ -50,6 +50,9 @@ class DunkConstants:
     PLAYER_Y_MAX: int = 130
     PLAYER_X_MIN: int  = 0
     PLAYER_X_MAX: int = 145
+    PLAYER_WIDTH: int = 10                         
+    PLAYER_HEIGHT: int = 30
+    PLAYER_BARRIER: int = 10  
     BASKET_POSITION: Tuple[int,int] = (80,10)
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (25, 135, 90) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
@@ -161,14 +164,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         player = EntityPosition(
             x=jnp.array(state.player1_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player1_inside.y, dtype=jnp.int32),
-            width=jnp.array(10, dtype=jnp.int32),  
-            height=jnp.array(30, dtype=jnp.int32), 
+            width=jnp.array(self.constants.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.constants.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
         enemy = EntityPosition(
             x=jnp.array(state.player2_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player2_inside.y, dtype=jnp.int32),
-            width=jnp.array(10, dtype=jnp.int32),  
-            height=jnp.array(30, dtype=jnp.int32), 
+            width=jnp.array(self.constants.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.constants.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
         ball = EntityPosition(
             x=jnp.array(state.ball.x, dtype=jnp.int32),
@@ -459,25 +462,32 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             dx = target_x - current_x
             dy = target_y - current_y
             
-            move_x = jax.lax.select(dx > 2, Action.RIGHT, jax.lax.select(dx < -2, Action.LEFT, Action.NOOP))
-            move_y = jax.lax.select(dy > 2, Action.DOWN, jax.lax.select(dy < -2, Action.UP, Action.NOOP))
+            # 1. Determine direction booleans enforcing the [-2, 2] deadzone
+            # The agent only moves if the distance is STRICTLY greater than 2 or less than -2.
+            # If dx is -2, -1, 0, 1, or 2, both flags will be False.
+            want_right = dx > 10
+            want_left  = dx < -10
+            want_down  = dy > 10
+            want_up    = dy < -10
             
-            return jax.lax.select(
-                (move_x == Action.RIGHT) & (move_y == Action.UP), Action.UPRIGHT,
-                jax.lax.select(
-                    (move_x == Action.RIGHT) & (move_y == Action.DOWN), Action.DOWNRIGHT,
-                    jax.lax.select(
-                        (move_x == Action.LEFT) & (move_y == Action.UP), Action.UPLEFT,
-                        jax.lax.select(
-                            (move_x == Action.LEFT) & (move_y == Action.DOWN), Action.DOWNLEFT,
-                            jax.lax.select(
-                                move_x != Action.NOOP, move_x,
-                                move_y 
-                            )
-                        )
-                    )
-                )
-            )
+            # 2. Start with NOOP (this covers the case where all flags are False)
+            action = Action.NOOP
+            
+            # 3. Apply Cardinals (Single axis movement)
+            # We update 'action' sequentially.
+            action = jax.lax.select(want_up, Action.UP, action)
+            action = jax.lax.select(want_down, Action.DOWN, action)
+            action = jax.lax.select(want_left, Action.LEFT, action)
+            action = jax.lax.select(want_right, Action.RIGHT, action)
+            
+            # 4. Apply Diagonals (Dual axis movement)
+            # These override the cardinals if BOTH flags are true.
+            action = jax.lax.select(want_up & want_left, Action.UPLEFT, action)
+            action = jax.lax.select(want_up & want_right, Action.UPRIGHT, action)
+            action = jax.lax.select(want_down & want_left, Action.DOWNLEFT, action)
+            action = jax.lax.select(want_down & want_right, Action.DOWNRIGHT, action)
+            
+            return action
 
         # --- Human Control ---
         is_p1_inside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_INSIDE)
