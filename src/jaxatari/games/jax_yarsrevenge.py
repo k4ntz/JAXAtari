@@ -149,8 +149,8 @@ class YarsRevengeConstants(NamedTuple):
     ENERGY_MISSILE_SIZE: Tuple[int, int] = (1, 2)
     CANNON_SIZE: Tuple[int, int] = (8, 8)
 
-    QOTILE_MIN_Y: int = 55
-    QOTILE_MAX_Y: int = 155
+    QOTILE_MIN_Y: int = 60
+    QOTILE_MAX_Y: int = 150
     NEUTRAL_ZONE_POSITION: Tuple[int, int] = (50, 0)
 
     SWIRL_PER_STEP: int = 1000
