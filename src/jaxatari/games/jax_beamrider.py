@@ -96,7 +96,7 @@ class BeamriderConstants(NamedTuple):
     # Blue line constants
     BLUE_LINE_OFFSCREEN_Y = 500
 
-    WHITE_UFOS_PER_SECTOR: int = 15
+    WHITE_UFOS_PER_SECTOR: int = 1
     CHASING_METEOROID_MAX: int = 8
     CHASING_METEOROID_WAVE_MIN: int = 2
     CHASING_METEOROID_WAVE_MAX: int = 8
@@ -1801,7 +1801,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return state.score - previous_state.score
 
     def _get_done(self, state: BeamriderState) -> bool:
-        return state.lives <= 0
+        return jnp.logical_or(state.lives <= 0, state.sector > 15)
 
 class BeamriderRenderer(JAXGameRenderer):
     def __init__(self, consts=None):
