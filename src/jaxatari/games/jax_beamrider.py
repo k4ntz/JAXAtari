@@ -347,6 +347,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
     def _get_observation(self, state: BeamriderState) -> BeamriderObservation:
         level = state.level
+        is_init = level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
+        
+        ufo_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=level.white_ufo_pos.dtype).reshape(2, 1),
+            (1, 3),
+        )
+        enemy_shot_offscreen = jnp.tile(
+            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=level.enemy_shot_pos.dtype).reshape(2, 1),
+            (1, 3),
+        )
+        
         return BeamriderObservation(
             pos=level.player_pos,
             shooting_cd=level.shooting_cooldown,
@@ -355,10 +366,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_shots_vel=level.player_shot_vel,
             white_ufo_left=level.white_ufo_left,
             enemy_type=level.enemy_type,
-            white_ufo_pos=level.white_ufo_pos,
-            white_ufo_vel=level.white_ufo_vel,
-            enemy_shot_pos=level.enemy_shot_pos,
-            enemy_shot_vel=level.enemy_shot_vel,
+            white_ufo_pos=jnp.where(is_init, ufo_offscreen, level.white_ufo_pos),
+            white_ufo_vel=jnp.where(is_init, 0.0, level.white_ufo_vel),
+            enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, level.enemy_shot_pos),
+            enemy_shot_vel=jnp.where(is_init, 0, level.enemy_shot_vel),
         )
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
@@ -652,12 +663,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         def init_step():
             # During init, we ONLY update the blue line positions and counter.
-            # All other state remains frozen at its current values.
+            # We ALSO advance the RNG so the game doesn't start identically every time.
+            rngs = jax.random.split(state.rng, 2)
             new_level = state.level._replace(
                 line_positions=line_positions,
                 blue_line_counter=blue_line_counter
             )
-            return state._replace(level=new_level, steps=state.steps + 1)
+            return state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
 
         new_state = jax.lax.cond(is_init, init_step, normal_step)
 
@@ -1749,8 +1761,30 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BeamriderState):
-        # delegate to the renderer
-        return self.renderer.render(state)
+        is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
+        
+        ufo_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, 3),
+        )
+        enemy_shot_offscreen = jnp.tile(
+            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, 3),
+        )
+        chasing_meteoroid_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, self.consts.CHASING_METEOROID_MAX),
+        )
+        
+        # Create a state for rendering where enemies are offscreen if initializing
+        render_level = state.level._replace(
+            white_ufo_pos=jnp.where(is_init, ufo_offscreen, state.level.white_ufo_pos),
+            enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_pos),
+            chasing_meteoroid_pos=jnp.where(is_init, chasing_meteoroid_offscreen, state.level.chasing_meteoroid_pos)
+        )
+        render_state = state._replace(level=render_level)
+        
+        return self.renderer.render(render_state)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
