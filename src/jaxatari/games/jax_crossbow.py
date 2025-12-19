@@ -22,7 +22,10 @@ def _get_default_asset_config() -> tuple:
                 'backgrounds/get_ready.npy',
                 'backgrounds/map_1.npy',
                 'backgrounds/map_2.npy',
-                'backgrounds/map_3.npy'
+                'backgrounds/map_3.npy',
+                'backgrounds/map_4.npy',
+                'backgrounds/map_5.npy',
+                'backgrounds/map_6.npy'
             ]
         },
         {
@@ -48,6 +51,9 @@ class GamePhase:
     MAP_1 = 2
     MAP_2 = 3
     MAP_3 = 4
+    MAP_4 = 5
+    MAP_5 = 6
+    MAP_6 = 7
 
 class EnemyType:
     GENERIC = 0
@@ -353,19 +359,41 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def _update_game_phase(self, state: CrossbowState, action: chex.Array) -> CrossbowState:
         on_start_screen = state.game_phase == GamePhase.START_SCREEN
         on_get_ready = state.game_phase == GamePhase.GET_READY
-        left_half = state.cursor_x < self.consts.WIDTH // 2
-        top_half = state.cursor_y < self.consts.HEIGHT // 2
 
-        select_map_1 = jnp.logical_and(top_half, left_half)
-        select_map_2 = jnp.logical_and(top_half, ~left_half)
-        select_map_3 = jnp.logical_and(~top_half, ~left_half)
+        map1_icon_range_x = jnp.logical_and(state.cursor_x >= 47, state.cursor_x <= 64)
+        map1_icon_range_y = jnp.logical_and(state.cursor_y >= 27, state.cursor_y <= 51)
+        select_map_1 = jnp.logical_and(map1_icon_range_x, map1_icon_range_y)
+
+        map2_icon_range_x = jnp.logical_and(state.cursor_x >= 113, state.cursor_x <= 128)
+        map2_icon_range_y = jnp.logical_and(state.cursor_y >= 38, state.cursor_y <= 52)
+        select_map_2 = jnp.logical_and(map2_icon_range_x, map2_icon_range_y)
+
+        map3_icon_range_x = jnp.logical_and(state.cursor_x >= 117, state.cursor_x <= 132)
+        map3_icon_range_y = jnp.logical_and(state.cursor_y >=  101, state.cursor_y <= 118)
+        select_map_3 = jnp.logical_and(map3_icon_range_x, map3_icon_range_y)
+
+        map4_icon_range_x = jnp.logical_and(state.cursor_x >= 53, state.cursor_x <= 68)
+        map4_icon_range_y = jnp.logical_and(state.cursor_y >= 96, state.cursor_y <= 118)
+        select_map_4 = jnp.logical_and(map4_icon_range_x, map4_icon_range_y)
+
+        map5_icon_range_x = jnp.logical_and(state.cursor_x >= 97, state.cursor_x <= 112)
+        map5_icon_range_y = jnp.logical_and(state.cursor_y >= 130, state.cursor_y <= 151)
+        select_map_5 = jnp.logical_and(map5_icon_range_x, map5_icon_range_y)
+
+        map6_icon_range_x = jnp.logical_and(state.cursor_x >= 33, state.cursor_x <= 48)
+        map6_icon_range_y = jnp.logical_and(state.cursor_y >= 125, state.cursor_y <= 151)
+        select_map_6 = jnp.logical_and(map6_icon_range_x, map6_icon_range_y)
 
         input_trigger = jnp.logical_and(on_start_screen, state.is_firing)
-        target_map = jnp.select([select_map_1, select_map_2, select_map_3], [GamePhase.MAP_1, GamePhase.MAP_2, GamePhase.MAP_3], default=GamePhase.MAP_1)
+        target_map = jnp.select(
+            [select_map_1, select_map_2, select_map_3, select_map_4, select_map_5, select_map_6],
+            [GamePhase.MAP_1, GamePhase.MAP_2, GamePhase.MAP_3, GamePhase.MAP_4, GamePhase.MAP_5, GamePhase.MAP_6],
+            default=GamePhase.START_SCREEN
+        )
 
         get_ready_done = jnp.logical_and(on_get_ready, state.get_ready_timer == 0)
 
-        next_phase = jnp.where(input_trigger, GamePhase.GET_READY, jnp.where(get_ready_done, state.selected_target_map, state.game_phase))
+        next_phase = jnp.where(jnp.logical_and(input_trigger, state.selected_target_map != GamePhase.START_SCREEN), GamePhase.GET_READY, jnp.where(get_ready_done, state.selected_target_map, state.game_phase))
         next_target_map = jnp.where(input_trigger, target_map, state.selected_target_map)
         next_get_ready_timer = jnp.where(input_trigger, self.consts.GET_READY_DURATION, jnp.where(on_get_ready, jnp.maximum(0, state.get_ready_timer - 1), 0))
         next_fade_in_timer = jnp.where(get_ready_done, self.consts.FADE_IN_DURATION, jnp.maximum(0, state.fade_in_timer - 1))
