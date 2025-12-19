@@ -42,15 +42,22 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_blue', 'type': 'single', 'file': 'Player_Blue.npy'},
         {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
         {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
+        #dragons
 
-        {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'}
+        #keys
+        {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'},
+        {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'}
+        #gates
+
+        #items
     )
 
 
 class AdventureConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 250
-    
+    #upper left corner is 0, 0
+
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -76,8 +83,6 @@ class AdventureState(NamedTuple):
     key_yellow_y: chex.Array
     key_black_x: chex.Array
     key_black_y: chex.Array
-    key_white_x: chex.Array
-    key_white_y: chex.Array
     #state of gates (if open or closed)
     gate_yellow: chex.Array
     gate_black: chex.Array
@@ -173,8 +178,6 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             key_yellow_y = state.key_yellow_y ,
             key_black_x = state.key_black_x,
             key_black_y = state.key_black_y,
-            key_white_x = state.key_white_x,
-            key_white_y = state.key_white_y,
             gate_yellow = state.gate_yellow,
             gate_black = state.gate_black,
             gate_white = state.gate_white,
@@ -209,10 +212,8 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             dragon_green = jnp.array(0).astype(jnp.int32), #ToDo
             key_yellow_x = jnp.array(31).astype(jnp.int32),
             key_yellow_y = jnp.array(110).astype(jnp.int32),
-            key_black_x = jnp.array(0).astype(jnp.int32), #ToDo
-            key_black_y = jnp.array(0).astype(jnp.int32), #ToDo
-            key_white_x = jnp.array(0).astype(jnp.int32), #ToDo
-            key_white_y = jnp.array(0).astype(jnp.int32), #ToDo
+            key_black_x = jnp.array(41).astype(jnp.int32), #ToDo
+            key_black_y = jnp.array(120).astype(jnp.int32), #ToDo
             gate_yellow = jnp.array(0).astype(jnp.int32), #ToDo
             gate_black = jnp.array(0).astype(jnp.int32), #ToDo
             gate_white = jnp.array(0).astype(jnp.int32), #ToDo
@@ -248,8 +249,6 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             key_yellow_y = state.key_yellow_y ,
             key_black_x = state.key_black_x,
             key_black_y = state.key_black_y,
-            key_white_x = state.key_white_x,
-            key_white_y = state.key_white_y,
             gate_yellow = state.gate_yellow,
             gate_black = state.gate_black,
             gate_white = state.gate_white,
@@ -377,6 +376,14 @@ class AdventureRenderer(JAXGameRenderer):
         player_mask = self.SHAPE_MASKS["player_magenta"]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
+        #dragons
+
+        #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
         raster = self.jr.render_at(raster, state.key_yellow_x, state.key_yellow_y, key_yellow_mask)
+        key_black_mask = self.SHAPE_MASKS["key_black"]
+        raster = self.jr.render_at(raster, state.key_black_x, state.key_black_y, key_black_mask)
+        #items
+
+
         return self.jr.render_from_palette(raster, self.PALETTE)
