@@ -269,11 +269,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ball_holder_id = state.ball.holder
         p1_outside_oob = updated_p1_outside.is_out_of_bounds & (updated_p1_outside.id == ball_holder_id)
         p1_inside_oob = updated_p1_inside.is_out_of_bounds & (updated_p1_inside.id == ball_holder_id)
-        p2_outside_oob = updated_p2_outside.is_out_of_bounds & (updated_p2_outside.id == ball_holder_id)
-        p2_inside_oob = updated_p2_inside.is_out_of_bounds & (updated_p2_inside.id == ball_holder_id)
-
         p1_oob = p1_inside_oob | p1_outside_oob # if Player 1 triggered out of bounds
-        trigger_oob = p1_outside_oob | p1_inside_oob | p2_outside_oob | p2_inside_oob
 
         # --- Reset Game State ---
         # Give ball to the team that didn't trigger out of bounds
@@ -295,7 +291,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-        new_state = jax.lax.cond(trigger_oob, lambda x: reset_state, lambda x: updated_state, None)
+        new_state = jax.lax.cond(p1_oob, lambda x: reset_state, lambda x: updated_state, None)
 
         return new_state
 
