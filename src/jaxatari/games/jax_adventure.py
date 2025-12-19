@@ -29,7 +29,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'bg_maze_2', 'type': 'background', 'file': 'Room_Maze_2.npy'},
         {'name': 'bg_maze_3', 'type': 'background', 'file': 'Room_Maze_3.npy'},
         {'name': 'bg_maze_4', 'type': 'background', 'file': 'Room_Maze_4.npy'},
-        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_Maze_5.npy'}, # wrong sprite
+        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_Maze_5.npy'},
         {'name': 'bg_black_castle', 'type': 'background', 'file': 'Room_Black_Castle.npy'},
         {'name': 'bg_ping_corridor', 'type': 'background', 'file': 'Room_Pink_Corridor.npy'},
         {'name': 'bg_magenta', 'type': 'background', 'file': 'Room_Magenta.npy'},
@@ -42,7 +42,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_blue', 'type': 'single', 'file': 'Player_Blue.npy'},
         {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
         {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
-        
+
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'}
     )
 
