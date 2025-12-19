@@ -18,8 +18,30 @@ def _get_default_asset_config() -> tuple:
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
     """
     return (
-        {'name': 'background', 'type': 'background', 'file': 'Room_YellowCastle.npy'},
-        {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        #all rooms in order
+        {'name': 'bg_yellow_castle', 'type': 'background', 'file': 'Room_YellowCastle.npy'},
+        {'name': 'bg_yellow', 'type': 'background', 'file': 'Room_Yellow.npy'},
+        {'name': 'bg_green', 'type': 'background', 'file': 'Room_Green.npy'},
+        {'name': 'bg_purple', 'type': 'background', 'file': 'Room_Purple.npy'},
+        {'name': 'bg_pink', 'type': 'background', 'file': 'Room_Pink.npy'},
+        {'name': 'bg_green_yellow', 'type': 'background', 'file': 'Room_Green_Yellow.npy'},
+        {'name': 'bg_maze_1', 'type': 'background', 'file': 'Room_Maze_1.npy'},
+        {'name': 'bg_maze_2', 'type': 'background', 'file': 'Room_Maze_2.npy'},
+        {'name': 'bg_maze_3', 'type': 'background', 'file': 'Room_Maze_3.npy'},
+        {'name': 'bg_maze_4', 'type': 'background', 'file': 'Room_Maze_4.npy'},
+        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_Maze_5.npy'}, # wrong sprite
+        {'name': 'bg_black_castle', 'type': 'background', 'file': 'Room_Black_Castle.npy'},
+        {'name': 'bg_ping_corridor', 'type': 'background', 'file': 'Room_Pink_Corridor.npy'},
+        {'name': 'bg_magenta', 'type': 'background', 'file': 'Room_Magenta.npy'},
+        #all player colors in order
+        {'name': 'player_yellow', 'type': 'single', 'file': 'Player_Yellow.npy'},
+        {'name': 'player_green', 'type': 'single', 'file': 'Player_Green.npy'},
+        {'name': 'player_purple', 'type': 'single', 'file': 'Player_Purple.npy'},
+        {'name': 'player_pink', 'type': 'single', 'file': 'Player_Pink.npy'},
+        {'name': 'player_green_yellow', 'type': 'single', 'file': 'Player_Green_Yellow.npy'},
+        {'name': 'player_blue', 'type': 'single', 'file': 'Player_Blue.npy'},
+        {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
+        {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
     )
 
 
@@ -204,9 +226,11 @@ class AdventureRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
+        #set bg color here
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        player_mask = self.SHAPE_MASKS["player"]
+        #set player color here
+        player_mask = self.SHAPE_MASKS["player_magenta"]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
