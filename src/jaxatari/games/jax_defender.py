@@ -1531,6 +1531,31 @@ class JaxDefender(
         new_enemy_states = enemy_states.at[index].set(new_pod)
         return state._replace(enemy_states=new_enemy_states)
 
+    def _mutant_movement(
+        self, index: int, state: DefenderState
+    ) -> DefenderState:
+        mutant = state.enemy_states[index]
+        mutant_x = mutant[0]
+        mutant_y = mutant[1]
+
+        enemy_states = state.enemy_states
+
+        speed_x, speed_y = jax.lax.cond(
+            state.space_ship_speed > 0,
+            lambda: (-self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+            lambda: (self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+        )
+
+        x, y = self._move_and_wrap(
+            mutant_x,
+            mutant_y,
+            speed_x + state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            speed_y,
+        )
+        new_mutant = [x, y, mutant[2], mutant[3], mutant[4]]
+        new_enemy_states = enemy_states.at[index].set(new_mutant)
+        return state._replace(enemy_states=new_enemy_states)
+
     def _bomber_movement(
         self,
         index: int,
@@ -1916,8 +1941,14 @@ class JaxDefender(
                             enemy_index,
                             state,
                         ),
-                    lambda: state,
-                    lambda: state,
+                    lambda: self._swarmers_movement(
+                        enemy_index,
+                        state,
+                    ),
+                    lambda: self._mutant_movement(
+                        enemy_index
+                        , state,
+                    ),
                     lambda: state,
                     lambda: self._delete_enemy(state, enemy_index),
                 ],
