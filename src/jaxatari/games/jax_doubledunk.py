@@ -200,9 +200,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Creates the very first state of the game."""
         return DunkGameState(
             player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
-            player1_outside=PlayerState(id=2, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player1_outside=PlayerState(id=2, x=75, y=115, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
             player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
-            player2_outside=PlayerState(id=4, x=75, y=95, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player2_outside=PlayerState(id=4, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
             # Start with a jump ball in the center: no holder and ball sits at the start position
             ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_OUTSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0),
             player_score=0,
@@ -323,7 +323,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         travel_triggered = p1_triggered_travel | p2_triggered_travel
 
         key, reset_key = random.split(state.key)
-        new_ball_holder = jax.lax.select(p1_triggered_travel, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+        new_ball_holder = jax.lax.select(p1_triggered_travel, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
         # We recreate the initial state but step counter and give the ball to the other team
         reset_state = self._init_state(reset_key).replace(
             player_score=state.player_score,
@@ -419,7 +419,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_inside = jax.lax.select(
-            (state.player2_inside.z > 0) | (rand_inside < 0.2), 
+            rand_inside < 0.2, 
             Action.FIRE,
             random_inside_move_action  
         )
@@ -435,7 +435,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_outside = jax.lax.select(
-            (state.player2_outside.z > 0) | (rand_outside < 0.2), 
+            rand_outside < 0.2, 
             Action.FIRE,
             random_outside_move_action  
         )
@@ -757,7 +757,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             )
 
             # Give ball to the team that got scored on
-            new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER1_INSIDE)
+            new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
             
             return new_state.replace(ball=new_state.ball.replace(holder=new_ball_holder))
 
