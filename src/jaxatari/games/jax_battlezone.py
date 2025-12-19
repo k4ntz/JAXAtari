@@ -488,7 +488,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             # Random keys
             key, k_dist, k_theta, k_type, k_orient = jax.random.split(key, 5)
             # Enemy position
-            distance = jnp.sqrt(jax.random.uniform(k_dist, minval=0.0, maxval=1.0))*self.consts.RADAR_MAX_SCAN_RADIUS
+            distance = jnp.sqrt(jax.random.uniform(k_dist, minval=.2, maxval=.9))*self.consts.RADAR_MAX_SCAN_RADIUS
             theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
 
             return enemy._replace(x=distance*jnp.cos(theta),
