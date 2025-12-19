@@ -99,16 +99,16 @@ class BeamriderConstants(NamedTuple):
     NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
 
     WHITE_UFOS_PER_SECTOR: int = 1
-    GREEN_BLOCKER_MAX: int = 8
-    GREEN_BLOCKER_WAVE_MIN: int = 2
-    GREEN_BLOCKER_WAVE_MAX: int = 8
-    GREEN_BLOCKER_SPAWN_INTERVAL_MIN: int = 2
-    GREEN_BLOCKER_SPAWN_INTERVAL_MAX: int = 40
-    GREEN_BLOCKER_SPAWN_Y: float = 54.0
-    GREEN_BLOCKER_LANE_SPEED: float = 2.0
-    GREEN_BLOCKER_LANE_ALIGN_THRESHOLD: float = 1.5
-    GREEN_BLOCKER_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
-    GREEN_BLOCKER_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
+    CHASING_METEOROID_MAX: int = 8
+    CHASING_METEOROID_WAVE_MIN: int = 2
+    CHASING_METEOROID_WAVE_MAX: int = 8
+    CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = 2
+    CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = 40
+    CHASING_METEOROID_SPAWN_Y: float = 54.0
+    CHASING_METEOROID_LANE_SPEED: float = 2.0
+    CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = 1.5
+    CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
+    CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
     MOTHERSHIP_OFFSCREEN_POS: int = 500
     MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
     MOTHERSHIP_HEIGHT: int = 7
@@ -182,17 +182,17 @@ class LevelState(NamedTuple):
     white_ufo_pattern_timer: chex.Array
     ufo_explosion_frame: chex.Array
     ufo_explosion_pos: chex.Array
-    blocker_explosion_frame: chex.Array
-    blocker_explosion_pos: chex.Array
-    green_blocker_pos: chex.Array
-    green_blocker_active: chex.Array
-    green_blocker_phase: chex.Array
-    green_blocker_frame: chex.Array
-    green_blocker_lane: chex.Array
-    green_blocker_side: chex.Array
-    green_blocker_spawn_timer: chex.Array
-    green_blocker_remaining: chex.Array
-    green_blocker_wave_active: chex.Array
+    chasing_meteoroid_explosion_frame: chex.Array
+    chasing_meteoroid_explosion_pos: chex.Array
+    chasing_meteoroid_pos: chex.Array
+    chasing_meteoroid_active: chex.Array
+    chasing_meteoroid_phase: chex.Array
+    chasing_meteoroid_frame: chex.Array
+    chasing_meteoroid_lane: chex.Array
+    chasing_meteoroid_side: chex.Array
+    chasing_meteoroid_spawn_timer: chex.Array
+    chasing_meteoroid_remaining: chex.Array
+    chasing_meteoroid_wave_active: chex.Array
 
     line_positions: chex.Array
     line_velocities: chex.Array
@@ -310,23 +310,23 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
                 (1, 3),
             ),
-            blocker_explosion_frame=jnp.zeros((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.int32),
-            blocker_explosion_pos=jnp.tile(
+            chasing_meteoroid_explosion_frame=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
+            chasing_meteoroid_explosion_pos=jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
-                (1, self.consts.GREEN_BLOCKER_MAX),
+                (1, self.consts.CHASING_METEOROID_MAX),
             ),
-            green_blocker_pos=jnp.tile(
+            chasing_meteoroid_pos=jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
-                (1, self.consts.GREEN_BLOCKER_MAX),
+                (1, self.consts.CHASING_METEOROID_MAX),
             ),
-            green_blocker_active=jnp.zeros((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.bool_),
-            green_blocker_phase=jnp.zeros((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.int32),
-            green_blocker_frame=jnp.zeros((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.int32),
-            green_blocker_lane=jnp.zeros((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.int32),
-            green_blocker_side=jnp.ones((self.consts.GREEN_BLOCKER_MAX,), dtype=jnp.int32),
-            green_blocker_spawn_timer=jnp.array(0, dtype=jnp.int32),
-            green_blocker_remaining=jnp.array(0, dtype=jnp.int32),
-            green_blocker_wave_active=jnp.array(False),
+            chasing_meteoroid_active=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.bool_),
+            chasing_meteoroid_phase=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
+            chasing_meteoroid_frame=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
+            chasing_meteoroid_lane=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
+            chasing_meteoroid_side=jnp.ones((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
+            chasing_meteoroid_spawn_timer=jnp.array(0, dtype=jnp.int32),
+            chasing_meteoroid_remaining=jnp.array(0, dtype=jnp.int32),
+            chasing_meteoroid_wave_active=jnp.array(False),
             line_positions=self.consts.INIT_BLUE_LINE_POS,
             line_velocities=self.consts.INIT_BLUE_LINE_VEL,
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -382,7 +382,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rngs = jax.random.split(state.rng, 5)
         next_rng = rngs[0]
         ufo_keys = rngs[1:4]
-        blocker_key = rngs[4]
+        meteoroid_key = rngs[4]
 
         ufo_update = self._advance_white_ufos(state, ufo_keys)
         (
@@ -403,33 +403,33 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         (
-            green_blocker_pos,
-            green_blocker_active,
-            green_blocker_phase,
-            green_blocker_frame,
-            green_blocker_lane,
-            green_blocker_side,
-            green_blocker_spawn_timer,
-            green_blocker_remaining,
-            green_blocker_wave_active,
-        ) = self._green_blocker_step(state, player_x, vel_x, white_ufo_left, blocker_key)
-        pre_collision_blocker_pos = green_blocker_pos
+            chasing_meteoroid_pos,
+            chasing_meteoroid_active,
+            chasing_meteoroid_phase,
+            chasing_meteoroid_frame,
+            chasing_meteoroid_lane,
+            chasing_meteoroid_side,
+            chasing_meteoroid_spawn_timer,
+            chasing_meteoroid_remaining,
+            chasing_meteoroid_wave_active,
+        ) = self._chasing_meteoroid_step(state, player_x, vel_x, white_ufo_left, meteoroid_key)
+        pre_collision_meteoroid_pos = chasing_meteoroid_pos
         (
-            green_blocker_pos,
-            green_blocker_active,
-            green_blocker_phase,
-            green_blocker_frame,
-            green_blocker_lane,
-            green_blocker_side,
+            chasing_meteoroid_pos,
+            chasing_meteoroid_active,
+            chasing_meteoroid_phase,
+            chasing_meteoroid_frame,
+            chasing_meteoroid_lane,
+            chasing_meteoroid_side,
             player_shot_position,
-            blocker_hit_mask,
-        ) = self._green_blocker_bullet_collision(
-            green_blocker_pos,
-            green_blocker_active,
-            green_blocker_phase,
-            green_blocker_frame,
-            green_blocker_lane,
-            green_blocker_side,
+            chasing_meteoroid_hit_mask,
+        ) = self._chasing_meteoroid_bullet_collision(
+            chasing_meteoroid_pos,
+            chasing_meteoroid_active,
+            chasing_meteoroid_phase,
+            chasing_meteoroid_frame,
+            chasing_meteoroid_lane,
+            chasing_meteoroid_side,
             player_shot_position,
             bullet_type,
         )
@@ -474,11 +474,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             hit_mask,
             ufo_update.pos,
         )
-        blocker_explosion_frame, blocker_explosion_pos = self._update_enemy_explosions(
-            state.level.blocker_explosion_frame,
-            state.level.blocker_explosion_pos,
-            blocker_hit_mask,
-            pre_collision_blocker_pos,
+        chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos = self._update_enemy_explosions(
+            state.level.chasing_meteoroid_explosion_frame,
+            state.level.chasing_meteoroid_explosion_pos,
+            chasing_meteoroid_hit_mask,
+            pre_collision_meteoroid_pos,
         )
         enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
             state,
@@ -501,42 +501,42 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ufo_x <= player_right + 2.0,
         ]))
         ufo_hit_count = jnp.sum(ufo_hits.astype(jnp.int32))
-        blocker_x = green_blocker_pos[0] + _get_ufo_alignment(green_blocker_pos[1]).astype(green_blocker_pos.dtype)
-        blocker_left = blocker_x
-        blocker_right = blocker_x + float(self.consts.ENEMY_WIDTH)
-        blocker_top = green_blocker_pos[1]
-        blocker_bottom = green_blocker_pos[1] + float(self.consts.ENEMY_HEIGHT)
+        chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
+        chasing_meteoroid_left = chasing_meteoroid_x
+        chasing_meteoroid_right = chasing_meteoroid_x + float(self.consts.ENEMY_WIDTH)
+        chasing_meteoroid_top = chasing_meteoroid_pos[1]
+        chasing_meteoroid_bottom = chasing_meteoroid_pos[1] + float(self.consts.ENEMY_HEIGHT)
         player_bottom = player_y + float(self.consts.PLAYER_HEIGHT)
-        green_blocker_hits = jnp.logical_and.reduce(jnp.array([
-            green_blocker_active,
-            blocker_right >= player_left,
-            blocker_left <= player_right,
-            blocker_bottom >= player_y,
-            blocker_top <= player_bottom,
+        chasing_meteoroid_hits = jnp.logical_and.reduce(jnp.array([
+            chasing_meteoroid_active,
+            chasing_meteoroid_right >= player_left,
+            chasing_meteoroid_left <= player_right,
+            chasing_meteoroid_bottom >= player_y,
+            chasing_meteoroid_top <= player_bottom,
         ]))
-        green_blocker_hit_count = jnp.sum(green_blocker_hits.astype(jnp.int32))
-        green_blocker_offscreen = jnp.tile(
-            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=green_blocker_pos.dtype).reshape(2, 1),
-            (1, self.consts.GREEN_BLOCKER_MAX),
+        chasing_meteoroid_hit_count = jnp.sum(chasing_meteoroid_hits.astype(jnp.int32))
+        chasing_meteoroid_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
+            (1, self.consts.CHASING_METEOROID_MAX),
         )
-        green_blocker_active = jnp.where(green_blocker_hits, False, green_blocker_active)
-        green_blocker_pos = jnp.where(green_blocker_hits[None, :], green_blocker_offscreen, green_blocker_pos)
-        green_blocker_phase = jnp.where(green_blocker_hits, 0, green_blocker_phase)
-        green_blocker_frame = jnp.where(green_blocker_hits, 0, green_blocker_frame)
-        green_blocker_lane = jnp.where(green_blocker_hits, 0, green_blocker_lane)
-        green_blocker_side = jnp.where(green_blocker_hits, 1, green_blocker_side)
+        chasing_meteoroid_active = jnp.where(chasing_meteoroid_hits, False, chasing_meteoroid_active)
+        chasing_meteoroid_pos = jnp.where(chasing_meteoroid_hits[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+        chasing_meteoroid_phase = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(chasing_meteoroid_hits, 1, chasing_meteoroid_side)
         reached_player = jnp.logical_and(
-            green_blocker_active,
-            green_blocker_pos[1] >= player_y,
+            chasing_meteoroid_active,
+            chasing_meteoroid_pos[1] >= player_y,
         )
-        green_blocker_active = jnp.where(reached_player, False, green_blocker_active)
-        green_blocker_pos = jnp.where(reached_player[None, :], green_blocker_offscreen, green_blocker_pos)
-        green_blocker_phase = jnp.where(reached_player, 0, green_blocker_phase)
-        green_blocker_frame = jnp.where(reached_player, 0, green_blocker_frame)
-        green_blocker_lane = jnp.where(reached_player, 0, green_blocker_lane)
-        green_blocker_side = jnp.where(reached_player, 1, green_blocker_side)
+        chasing_meteoroid_active = jnp.where(reached_player, False, chasing_meteoroid_active)
+        chasing_meteoroid_pos = jnp.where(reached_player[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+        chasing_meteoroid_phase = jnp.where(reached_player, 0, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(reached_player, 0, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(reached_player, 0, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(reached_player, 1, chasing_meteoroid_side)
 
-        hit_count = shot_hit_count + ufo_hit_count + green_blocker_hit_count
+        hit_count = shot_hit_count + ufo_hit_count + chasing_meteoroid_hit_count
 
         # --- Death Logic ---
         current_death_timer = state.level.death_timer
@@ -613,19 +613,19 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         enemy_shot_pos = jnp.where(sector_advanced, enemy_shot_offscreen, enemy_shot_pos)
         enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
         enemy_shot_lane = jnp.where(sector_advanced, 0, enemy_shot_lane)
-        green_blocker_offscreen = jnp.tile(
-            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=green_blocker_pos.dtype).reshape(2, 1),
-            (1, self.consts.GREEN_BLOCKER_MAX),
+        chasing_meteoroid_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
+            (1, self.consts.CHASING_METEOROID_MAX),
         )
-        green_blocker_pos = jnp.where(sector_advanced, green_blocker_offscreen, green_blocker_pos)
-        green_blocker_active = jnp.where(sector_advanced, False, green_blocker_active)
-        green_blocker_phase = jnp.where(sector_advanced, 0, green_blocker_phase)
-        green_blocker_frame = jnp.where(sector_advanced, 0, green_blocker_frame)
-        green_blocker_lane = jnp.where(sector_advanced, 0, green_blocker_lane)
-        green_blocker_side = jnp.where(sector_advanced, 1, green_blocker_side)
-        green_blocker_spawn_timer = jnp.where(sector_advanced, 0, green_blocker_spawn_timer)
-        green_blocker_remaining = jnp.where(sector_advanced, 0, green_blocker_remaining)
-        green_blocker_wave_active = jnp.where(sector_advanced, False, green_blocker_wave_active)
+        chasing_meteoroid_pos = jnp.where(sector_advanced, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+        chasing_meteoroid_active = jnp.where(sector_advanced, False, chasing_meteoroid_active)
+        chasing_meteoroid_phase = jnp.where(sector_advanced, 0, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(sector_advanced, 0, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(sector_advanced, 0, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(sector_advanced, 1, chasing_meteoroid_side)
+        chasing_meteoroid_spawn_timer = jnp.where(sector_advanced, 0, chasing_meteoroid_spawn_timer)
+        chasing_meteoroid_remaining = jnp.where(sector_advanced, 0, chasing_meteoroid_remaining)
+        chasing_meteoroid_wave_active = jnp.where(sector_advanced, False, chasing_meteoroid_wave_active)
 
         # Apply Death State Overrides (if dying)
         # - Despawn enemies
@@ -635,15 +635,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # If dying, force enemies/shots offscreen
         white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
         enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
-        green_blocker_pos = jnp.where(is_dying_sequence, green_blocker_offscreen, green_blocker_pos)
-        green_blocker_active = jnp.where(is_dying_sequence, False, green_blocker_active)
-        green_blocker_phase = jnp.where(is_dying_sequence, 0, green_blocker_phase)
-        green_blocker_frame = jnp.where(is_dying_sequence, 0, green_blocker_frame)
-        green_blocker_lane = jnp.where(is_dying_sequence, 0, green_blocker_lane)
-        green_blocker_side = jnp.where(is_dying_sequence, 1, green_blocker_side)
-        green_blocker_spawn_timer = jnp.where(is_dying_sequence, 0, green_blocker_spawn_timer)
-        green_blocker_remaining = jnp.where(is_dying_sequence, 0, green_blocker_remaining)
-        green_blocker_wave_active = jnp.where(is_dying_sequence, False, green_blocker_wave_active)
+        chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+        chasing_meteoroid_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_active)
+        chasing_meteoroid_phase = jnp.where(is_dying_sequence, 0, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(is_dying_sequence, 0, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(is_dying_sequence, 0, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(is_dying_sequence, 1, chasing_meteoroid_side)
+        chasing_meteoroid_spawn_timer = jnp.where(is_dying_sequence, 0, chasing_meteoroid_spawn_timer)
+        chasing_meteoroid_remaining = jnp.where(is_dying_sequence, 0, chasing_meteoroid_remaining)
+        chasing_meteoroid_wave_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_wave_active)
         # Reset mothership if dying
         mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
         mothership_timer = jnp.where(is_dying_sequence, 0, mothership_timer)
@@ -681,17 +681,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_pattern_timer=white_ufo_pattern_timer,
             ufo_explosion_frame=ufo_explosion_frame,
             ufo_explosion_pos=ufo_explosion_pos,
-            blocker_explosion_frame=blocker_explosion_frame,
-            blocker_explosion_pos=blocker_explosion_pos,
-            green_blocker_pos=green_blocker_pos,
-            green_blocker_active=green_blocker_active,
-            green_blocker_phase=green_blocker_phase,
-            green_blocker_frame=green_blocker_frame,
-            green_blocker_lane=green_blocker_lane,
-            green_blocker_side=green_blocker_side,
-            green_blocker_spawn_timer=green_blocker_spawn_timer,
-            green_blocker_remaining=green_blocker_remaining,
-            green_blocker_wave_active=green_blocker_wave_active,
+            chasing_meteoroid_explosion_frame=chasing_meteoroid_explosion_frame,
+            chasing_meteoroid_explosion_pos=chasing_meteoroid_explosion_pos,
+            chasing_meteoroid_pos=chasing_meteoroid_pos,
+            chasing_meteoroid_active=chasing_meteoroid_active,
+            chasing_meteoroid_phase=chasing_meteoroid_phase,
+            chasing_meteoroid_frame=chasing_meteoroid_frame,
+            chasing_meteoroid_lane=chasing_meteoroid_lane,
+            chasing_meteoroid_side=chasing_meteoroid_side,
+            chasing_meteoroid_spawn_timer=chasing_meteoroid_spawn_timer,
+            chasing_meteoroid_remaining=chasing_meteoroid_remaining,
+            chasing_meteoroid_wave_active=chasing_meteoroid_wave_active,
             line_positions=line_positions,
             line_velocities=line_velocities,
             death_timer=next_death_timer,
@@ -1412,7 +1412,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_timer = jnp.where(hits, 0, shot_timer)
         return shot_pos, shot_lane, shot_timer, hit_count
 
-    def _green_blocker_step(
+    def _chasing_meteoroid_step(
         self,
         state: BeamriderState,
         player_x: chex.Array,
@@ -1420,15 +1420,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         white_ufo_left: chex.Array,
         key: chex.Array,
     ):
-        pos = state.level.green_blocker_pos
-        active = state.level.green_blocker_active
-        phase = state.level.green_blocker_phase
-        frame = state.level.green_blocker_frame
-        lane = state.level.green_blocker_lane
-        side = state.level.green_blocker_side
-        spawn_timer = state.level.green_blocker_spawn_timer
-        remaining = state.level.green_blocker_remaining
-        wave_active = state.level.green_blocker_wave_active
+        pos = state.level.chasing_meteoroid_pos
+        active = state.level.chasing_meteoroid_active
+        phase = state.level.chasing_meteoroid_phase
+        frame = state.level.chasing_meteoroid_frame
+        lane = state.level.chasing_meteoroid_lane
+        side = state.level.chasing_meteoroid_side
+        spawn_timer = state.level.chasing_meteoroid_spawn_timer
+        remaining = state.level.chasing_meteoroid_remaining
+        wave_active = state.level.chasing_meteoroid_wave_active
 
         spawn_window = white_ufo_left == 0
 
@@ -1436,8 +1436,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         wave_count = jax.random.randint(
             key_wave,
             (),
-            self.consts.GREEN_BLOCKER_WAVE_MIN,
-            self.consts.GREEN_BLOCKER_WAVE_MAX + 1,
+            self.consts.CHASING_METEOROID_WAVE_MIN,
+            self.consts.CHASING_METEOROID_WAVE_MAX + 1,
         )
         start_wave = jnp.logical_and.reduce(jnp.array([
             spawn_window,
@@ -1469,8 +1469,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         spawn_interval = jax.random.randint(
             key_interval,
             (),
-            self.consts.GREEN_BLOCKER_SPAWN_INTERVAL_MIN,
-            self.consts.GREEN_BLOCKER_SPAWN_INTERVAL_MAX + 1,
+            self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MIN,
+            self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MAX + 1,
         )
         spawn_side = jnp.where(jax.random.uniform(key_side) < 0.5, 1, -1)
         spawn_x = jnp.where(
@@ -1478,11 +1478,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             float(self.consts.LEFT_CLIP_PLAYER),
             float(self.consts.RIGHT_CLIP_PLAYER),
         )
-        spawn_y = float(self.consts.GREEN_BLOCKER_SPAWN_Y)
+        spawn_y = float(self.consts.CHASING_METEOROID_SPAWN_Y)
 
         inactive_mask = jnp.logical_not(active)
         slot = jnp.argmax(inactive_mask.astype(jnp.int32))
-        one_hot = jax.nn.one_hot(slot, self.consts.GREEN_BLOCKER_MAX, dtype=pos.dtype)
+        one_hot = jax.nn.one_hot(slot, self.consts.CHASING_METEOROID_MAX, dtype=pos.dtype)
         one_hot_bool = one_hot.astype(jnp.bool_)
 
         spawn_pos = jnp.array([spawn_x, spawn_y], dtype=pos.dtype)
@@ -1502,8 +1502,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         remaining = jnp.where(should_spawn, remaining - 1, remaining)
         spawn_timer = jnp.where(should_spawn, spawn_interval, spawn_timer)
 
-        cycle_dx = jnp.array(self.consts.GREEN_BLOCKER_CYCLE_DX, dtype=pos.dtype)
-        cycle_dy = jnp.array(self.consts.GREEN_BLOCKER_CYCLE_DY, dtype=pos.dtype)
+        cycle_dx = jnp.array(self.consts.CHASING_METEOROID_CYCLE_DX, dtype=pos.dtype)
+        cycle_dy = jnp.array(self.consts.CHASING_METEOROID_CYCLE_DY, dtype=pos.dtype)
         dy = jnp.take(cycle_dy, frame)
         new_y_a = pos[1] + dy
 
@@ -1518,7 +1518,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         dx = jnp.take(cycle_dx, frame) * dx_dir
         new_x_a = pos[0] + dx
 
-        new_y_b = pos[1] + float(self.consts.GREEN_BLOCKER_LANE_SPEED)
+        new_y_b = pos[1] + float(self.consts.CHASING_METEOROID_LANE_SPEED)
         lane_x_at_y = lanes_top_x[:, None] + lane_dx_over_dy[:, None] * (
             new_y_b[None, :] - float(self.consts.TOP_CLIP)
         )
@@ -1534,9 +1534,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_right = player_x + float(self.consts.PLAYER_WIDTH)
         align_x = _get_ufo_alignment(new_y_a).astype(new_x_a.dtype)
         aligned_x_a = new_x_a + align_x
-        blocker_left = aligned_x_a
-        blocker_right = aligned_x_a + float(self.consts.ENEMY_WIDTH)
-        hits_x = jnp.logical_and(blocker_right >= player_left, blocker_left <= player_right)
+        chasing_meteoroid_left = aligned_x_a
+        chasing_meteoroid_right = aligned_x_a + float(self.consts.ENEMY_WIDTH)
+        hits_x = jnp.logical_and(chasing_meteoroid_right >= player_left, chasing_meteoroid_left <= player_right)
         player_center = player_x + float(self.consts.PLAYER_WIDTH) / 2.0
         bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=jnp.float32)
         nearest_lane_idx = jnp.argmin(jnp.abs(bottom_lanes - player_center)).astype(jnp.int32)
@@ -1573,7 +1573,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         target_lane_x = jnp.take_along_axis(lane_x_at_current_y, new_lane[None, :], axis=0).squeeze(0)
         dist_to_lane = jnp.abs(target_lane_x - new_x_a)
-        is_on_lane = dist_to_lane <= float(self.consts.GREEN_BLOCKER_LANE_ALIGN_THRESHOLD)
+        is_on_lane = dist_to_lane <= float(self.consts.CHASING_METEOROID_LANE_ALIGN_THRESHOLD)
 
         start_descend = active & (new_phase >= 1) & is_on_lane
         new_phase = jnp.where(start_descend, 2, new_phase)
@@ -1608,14 +1608,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             wave_active,
         )
 
-    def _green_blocker_bullet_collision(
+    def _chasing_meteoroid_bullet_collision(
         self,
-        blocker_pos: chex.Array,
-        blocker_active: chex.Array,
-        blocker_phase: chex.Array,
-        blocker_frame: chex.Array,
-        blocker_lane: chex.Array,
-        blocker_side: chex.Array,
+        chasing_meteoroid_pos: chex.Array,
+        chasing_meteoroid_active: chex.Array,
+        chasing_meteoroid_phase: chex.Array,
+        chasing_meteoroid_frame: chex.Array,
+        chasing_meteoroid_lane: chex.Array,
+        chasing_meteoroid_side: chex.Array,
         player_shot_pos: chex.Array,
         bullet_type: chex.Array,
     ):
@@ -1626,17 +1626,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
 
-        blocker_x = blocker_pos[0] + _get_ufo_alignment(blocker_pos[1]).astype(blocker_pos.dtype)
-        blocker_screen_pos = jnp.stack([blocker_x, blocker_pos[1]]).T
-        distance_to_bullet = jnp.abs(blocker_screen_pos - jnp.array([shot_x, shot_y], dtype=blocker_pos.dtype))
-        bullet_radius = jnp.array(self.consts.TORPEDO_HIT_RADIUS, dtype=blocker_pos.dtype)
-        blocker_radius = jnp.array(
+        chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
+        chasing_meteoroid_screen_pos = jnp.stack([chasing_meteoroid_x, chasing_meteoroid_pos[1]]).T
+        distance_to_bullet = jnp.abs(chasing_meteoroid_screen_pos - jnp.array([shot_x, shot_y], dtype=chasing_meteoroid_pos.dtype))
+        bullet_radius = jnp.array(self.consts.TORPEDO_HIT_RADIUS, dtype=chasing_meteoroid_pos.dtype)
+        chasing_meteoroid_radius = jnp.array(
             [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
-            dtype=blocker_pos.dtype,
+            dtype=chasing_meteoroid_pos.dtype,
         )
-        hit_radius = bullet_radius + blocker_radius
+        hit_radius = bullet_radius + chasing_meteoroid_radius
         hit_mask = (
-            blocker_active
+            chasing_meteoroid_active
             & is_torpedo
             & shot_active
             & (distance_to_bullet[:, 0] <= hit_radius[0])
@@ -1644,23 +1644,23 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         hit_exists = jnp.any(hit_mask)
         hit_index = jnp.argmax(hit_mask)
-        hit_one_hot = jax.nn.one_hot(hit_index, self.consts.GREEN_BLOCKER_MAX, dtype=blocker_pos.dtype)
+        hit_one_hot = jax.nn.one_hot(hit_index, self.consts.CHASING_METEOROID_MAX, dtype=chasing_meteoroid_pos.dtype)
         hit_one_hot_bool = hit_one_hot.astype(jnp.bool_)
 
-        offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=blocker_pos.dtype)
-        pos_after_hit = blocker_pos + (offscreen[:, None] - blocker_pos) * hit_one_hot[None, :]
-        active_after_hit = jnp.where(hit_one_hot_bool, False, blocker_active)
-        phase_after_hit = jnp.where(hit_one_hot_bool, 0, blocker_phase)
-        frame_after_hit = jnp.where(hit_one_hot_bool, 0, blocker_frame)
-        lane_after_hit = jnp.where(hit_one_hot_bool, 0, blocker_lane)
-        side_after_hit = jnp.where(hit_one_hot_bool, 1, blocker_side)
+        offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype)
+        pos_after_hit = chasing_meteoroid_pos + (offscreen[:, None] - chasing_meteoroid_pos) * hit_one_hot[None, :]
+        active_after_hit = jnp.where(hit_one_hot_bool, False, chasing_meteoroid_active)
+        phase_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_phase)
+        frame_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_frame)
+        lane_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_lane)
+        side_after_hit = jnp.where(hit_one_hot_bool, 1, chasing_meteoroid_side)
 
-        blocker_pos = jnp.where(hit_exists, pos_after_hit, blocker_pos)
-        blocker_active = jnp.where(hit_exists, active_after_hit, blocker_active)
-        blocker_phase = jnp.where(hit_exists, phase_after_hit, blocker_phase)
-        blocker_frame = jnp.where(hit_exists, frame_after_hit, blocker_frame)
-        blocker_lane = jnp.where(hit_exists, lane_after_hit, blocker_lane)
-        blocker_side = jnp.where(hit_exists, side_after_hit, blocker_side)
+        chasing_meteoroid_pos = jnp.where(hit_exists, pos_after_hit, chasing_meteoroid_pos)
+        chasing_meteoroid_active = jnp.where(hit_exists, active_after_hit, chasing_meteoroid_active)
+        chasing_meteoroid_phase = jnp.where(hit_exists, phase_after_hit, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(hit_exists, frame_after_hit, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(hit_exists, lane_after_hit, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(hit_exists, side_after_hit, chasing_meteoroid_side)
         player_shot_pos = jnp.where(
             hit_exists,
             jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=player_shot_pos.dtype),
@@ -1668,12 +1668,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         return (
-            blocker_pos,
-            blocker_active,
-            blocker_phase,
-            blocker_frame,
-            blocker_lane,
-            blocker_side,
+            chasing_meteoroid_pos,
+            chasing_meteoroid_active,
+            chasing_meteoroid_phase,
+            chasing_meteoroid_frame,
+            chasing_meteoroid_lane,
+            chasing_meteoroid_side,
             player_shot_pos,
             hit_mask,
         )
@@ -1873,7 +1873,7 @@ class BeamriderRenderer(JAXGameRenderer):
                 'White_Ufo_Explosion/White_Ufo_Explosion_5.npy',
                 'White_Ufo_Explosion/White_Ufo_Explosion_6.npy',
             ]},
-            {'name': 'green_blocker', 'type': 'single', 'file': 'Green_Blocker.npy'},
+            {'name': 'chasing_meteoroid', 'type': 'single', 'file': 'Chasing_Meteoroid.npy'},
             {'name': 'laser_sprite', 'type': 'single', 'file': 'Laser.npy'},
             {'name': 'bullet_sprite', 'type': 'group', 'files': ['Laser.npy', 'Torpedo/Torpedo_3.npy', 'Torpedo/Torpedo_2.npy', 'Torpedo/Torpedo_1.npy']},
             {'name': 'enemy_shot', 'type': 'group', 'files': ['Enemy_Shot/Enemy_Shot_Vertical.npy', 'Enemy_Shot/Enemy_Shot_Horizontal.npy']},
@@ -1897,7 +1897,7 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = self._render_player_and_bullet(raster, state)
         raster = self._render_enemy_shots(raster, state)
         raster = self._render_white_ufos(raster, state)
-        raster = self._render_green_blockers(raster, state)
+        raster = self._render_chasing_meteoroids(raster, state)
         raster = self._render_hud(raster, state)
         raster = self._render_mothership(raster, state)
         return self.jr.render_from_palette(raster, self.PALETTE)
@@ -2072,35 +2072,35 @@ class BeamriderRenderer(JAXGameRenderer):
             )
         return raster
 
-    def _render_green_blockers(self, raster, state):
-        blocker_mask = self.SHAPE_MASKS["green_blocker"]
+    def _render_chasing_meteoroids(self, raster, state):
+        meteoroid_mask = self.SHAPE_MASKS["chasing_meteoroid"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(self.consts.GREEN_BLOCKER_MAX):
-            explosion_frame = state.level.blocker_explosion_frame[idx]
+        for idx in range(self.consts.CHASING_METEOROID_MAX):
+            explosion_frame = state.level.chasing_meteoroid_explosion_frame[idx]
 
             def render_explosion(r_in):
                 sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
                 sprite = explosion_masks[sprite_idx]
-                x_pos = state.level.blocker_explosion_pos[0][idx] + _get_ufo_alignment(
-                    state.level.blocker_explosion_pos[1][idx]
+                x_pos = state.level.chasing_meteoroid_explosion_pos[0][idx] + _get_ufo_alignment(
+                    state.level.chasing_meteoroid_explosion_pos[1][idx]
                 )
-                y_pos = state.level.blocker_explosion_pos[1][idx] + y_offset
+                y_pos = state.level.chasing_meteoroid_explosion_pos[1][idx] + y_offset
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
-            def render_blocker(r_in):
-                is_active = state.level.green_blocker_active[idx]
-                y_pos = jnp.where(is_active, state.level.green_blocker_pos[1][idx], 500)
+            def render_meteoroid(r_in):
+                is_active = state.level.chasing_meteoroid_active[idx]
+                y_pos = jnp.where(is_active, state.level.chasing_meteoroid_pos[1][idx], 500)
                 x_pos = jnp.where(
                     is_active,
-                    state.level.green_blocker_pos[0][idx] + _get_ufo_alignment(y_pos),
+                    state.level.chasing_meteoroid_pos[0][idx] + _get_ufo_alignment(y_pos),
                     500,
                 )
-                return self.jr.render_at_clipped(r_in, x_pos, y_pos, blocker_mask)
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, meteoroid_mask)
 
             raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
-                render_blocker,
+                render_meteoroid,
                 raster,
             )
         return raster
