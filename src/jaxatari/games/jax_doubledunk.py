@@ -106,7 +106,9 @@ class DunkGameState:
     defensive_strategy: chex.Array
     offensive_strategy_step: chex.Array           # Tracks progress in p1 strategy (e.g., 1st, 2nd, 3rd button press)
     controlled_player_id: chex.Array
-    cooldown: chex.Array
+    offensive_action_cooldown: chex.Array
+    enemy_reaction_timer: chex.Array
+    last_enemy_actions: chex.Array
     key: chex.PRNGKey
 
 @chex.dataclass(frozen=True)
@@ -219,7 +221,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             defensive_strategy = DefensiveStrategy.LANE_DEFENSE,
             offensive_strategy_step=0,
             controlled_player_id=PlayerID.PLAYER1_OUTSIDE,
-            cooldown=0,
+            offensive_action_cooldown=0,
+            enemy_reaction_timer=0,
+            last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
             key=key,
         )
 
@@ -374,7 +378,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
         return state.replace(ball=new_ball)
 
-    def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
+    def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey, chex.Array, chex.Array]:
         """Determines the action for each player based on control state and AI."""
         
         def get_move_to_target(current_x, current_y, target_x, target_y):
@@ -477,7 +481,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Constraint check for P1 Inside Offense (Teammate)
         p1_dist_to_basket_x = jnp.abs(state.player1_inside.x - basket_x)
         p1_dist_to_basket_y = jnp.abs(state.player1_inside.y - basket_y)
-        p1_is_far = (p1_dist_to_basket_x > 20) | (p1_dist_to_basket_y > 20) # 40x40 area means radius approx 20
+        p1_is_far = (p1_dist_to_basket_x > 20) | (p1_dist_to_basket_y > 80) # 40x80 area
         p1_return_to_basket_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, basket_x, basket_y)
         
         p1_inside_action = jax.lax.select(
@@ -507,7 +511,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Constraint check for P2 Inside Offense
         p2_dist_to_basket_x = jnp.abs(state.player2_inside.x - basket_x)
         p2_dist_to_basket_y = jnp.abs(state.player2_inside.y - basket_y)
-        p2_is_far = (p2_dist_to_basket_x > 20) | (p2_dist_to_basket_y > 20)
+        p2_is_far = (p2_dist_to_basket_x > 20) | (p2_dist_to_basket_y > 40) # 40x80 area
         p2_return_to_basket_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, basket_x, basket_y)
 
         p2_in_off_action = jax.lax.select(
@@ -532,8 +536,17 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p2_inside_action = jax.lax.select(p1_has_ball, p2_in_def_action, p2_in_off_action)
         p2_outside_action = jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_off_action)
 
-        actions = (p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action)
-        return actions, key
+        # --- Enemy Reaction Time Logic ---
+        use_last_action = state.enemy_reaction_timer > 0
+        
+        final_p2_inside_action = jax.lax.select(use_last_action, state.last_enemy_actions[0], p2_inside_action)
+        final_p2_outside_action = jax.lax.select(use_last_action, state.last_enemy_actions[1], p2_outside_action)
+        
+        new_timer = jax.lax.select(use_last_action, state.enemy_reaction_timer - 1, 6) # Reset to 6 frames (~0.1s)
+        new_last_actions = jax.lax.select(use_last_action, state.last_enemy_actions, jnp.array([p2_inside_action, p2_outside_action]))
+
+        actions = (p1_inside_action, p1_outside_action, final_p2_inside_action, final_p2_outside_action)
+        return actions, key, new_timer, new_last_actions
     
     def _update_player_animation(self, player: PlayerState, has_ball: bool) -> PlayerState:
         """Updates the animation frame for a single player."""
@@ -557,10 +570,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ball_state = state.ball
         is_pass_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.PASS)
 
-        is_p1_inside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p1_outside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_inside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_outside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p1_inside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p1_outside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_inside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_outside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
 
         receiver = jax.lax.select(is_p1_inside_passing, PlayerID.PLAYER1_OUTSIDE,
@@ -609,10 +622,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ball_state = state.ball
         is_shoot_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.JUMPSHOOT)
 
-        is_p1_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p1_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p1_inside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p1_outside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_inside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_outside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
         is_inside_shooting = is_p1_inside_shooting | is_p2_inside_shooting
         is_outside_shooting = is_p1_outside_shooting | is_p2_outside_shooting
@@ -731,7 +744,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
         is_jump_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.JUMPSHOOT) & (player.z == 0)
-        can_jump = (state.cooldown == 0) & is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
+        can_jump = (state.offensive_action_cooldown == 0) & is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
         did_jump = jax.lax.select(can_jump, 1, 0)
@@ -742,12 +755,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Passing
         ball_state_after_pass, pass_inc, did_pass = self._handle_passing(state, actions)
         state = state.replace(ball=ball_state_after_pass)
-        state = state.replace(cooldown=jax.lax.select(did_pass, 6, state.cooldown))
+        state = state.replace(offensive_action_cooldown=jax.lax.select(did_pass, 6, state.offensive_action_cooldown))
 
         # Shooting
         ball_state_after_shot, key, shot_inc, did_shoot = self._handle_shooting(state, actions, key)
         state = state.replace(ball=ball_state_after_shot)
-        state = state.replace(cooldown=jax.lax.select(did_shoot, 6, state.cooldown))
+        state = state.replace(offensive_action_cooldown=jax.lax.select(did_shoot, 6, state.offensive_action_cooldown))
 
         step_increment = pass_inc + shot_inc
         return state, key, step_increment
@@ -775,7 +788,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_inside=updated_p2_inside,
             player2_outside=updated_p2_outside,
         )
-        state = state.replace(cooldown=jax.lax.select(did_jump > 0, 6, state.cooldown))
+        state = state.replace(offensive_action_cooldown=jax.lax.select(did_jump > 0, 6, state.offensive_action_cooldown))
 
         # 2. Handle ball actions
         state, key, offense_increment = self._handle_offense_actions(state, actions, key)
@@ -1015,10 +1028,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         def run_game_step(s):
-            s = s.replace(cooldown=jnp.maximum(0, s.cooldown - 1))
+            s = s.replace(offensive_action_cooldown=jnp.maximum(0, s.offensive_action_cooldown - 1))
 
             # 1. Determine actions for all players
-            actions, key = self._handle_player_actions(s, action, s.key)
+            actions, key, new_timer, new_last_actions = self._handle_player_actions(s, action, s.key)
+            s = s.replace(enemy_reaction_timer=new_timer, last_enemy_actions=new_last_actions)
 
             # 2. Update player XY movement
             s = self._update_players_xy(s, actions)
