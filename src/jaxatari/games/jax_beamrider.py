@@ -105,11 +105,11 @@ class BeamriderConstants(NamedTuple):
     GREEN_BLOCKER_WAVE_MAX: int = 8
     GREEN_BLOCKER_SPAWN_INTERVAL_MIN: int = 2
     GREEN_BLOCKER_SPAWN_INTERVAL_MAX: int = 40
-    GREEN_BLOCKER_SPAWN_Y: float = 50.0
+    GREEN_BLOCKER_SPAWN_Y: float = 54.0
     GREEN_BLOCKER_LANE_SPEED: float = 2.0
     GREEN_BLOCKER_LANE_ALIGN_THRESHOLD: float = 1.0
     GREEN_BLOCKER_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
-    GREEN_BLOCKER_CYCLE_DY: Tuple[int, ...] = (2, 0, 0, 0, 2, 0, 0, 0)
+    GREEN_BLOCKER_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
     MOTHERSHIP_OFFSCREEN_POS: int = 500
     MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
     MOTHERSHIP_HEIGHT: int = 7
