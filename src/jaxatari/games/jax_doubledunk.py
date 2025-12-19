@@ -23,6 +23,7 @@ class GameMode(IntEnum):
     PLAY_SELECTION = 0
     IN_PLAY = 1
     TRAVEL_PENALTY = 2
+    OUT_OF_BOUNDS_PENALTY = 3
 
 class OffensiveAction(IntEnum):
     PASS = 0
@@ -111,6 +112,7 @@ class DunkGameState:
     enemy_reaction_timer: chex.Array
     last_enemy_actions: chex.Array
     travel_timer: chex.Array
+    out_of_bounds_timer: chex.Array
     key: chex.PRNGKey
 
 @chex.dataclass(frozen=True)
@@ -227,6 +229,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             enemy_reaction_timer=0,
             last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
             travel_timer=0,
+            out_of_bounds_timer=0,
             key=key,
         )
 
@@ -274,23 +277,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Check if any of the players reach out of bounds while holding the ball
         ball_holder_id = state.ball.holder
-        p1_outside_oob = updated_p1_outside.is_out_of_bounds & (updated_p1_outside.id == ball_holder_id)
-        p1_inside_oob = updated_p1_inside.is_out_of_bounds & (updated_p1_inside.id == ball_holder_id)
-        p1_oob = p1_inside_oob | p1_outside_oob # if Player 1 triggered out of bounds
+        p1_outside_out_of_bounds = updated_p1_outside.is_out_of_bounds & (updated_p1_outside.id == ball_holder_id)
+        p1_inside_out_of_bounds = updated_p1_inside.is_out_of_bounds & (updated_p1_inside.id == ball_holder_id)
+        p1_out_of_bounds = p1_inside_out_of_bounds | p1_outside_out_of_bounds # if Player 1 triggered out of bounds
 
         # --- Reset Game State ---
         # Give ball to the team that didn't trigger out of bounds
-        new_ball_holder = jax.lax.select(p1_oob, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-        # We recreate the initial state but keep step counter and the scores, and give the ball to the other team
-        reset_state = self._init_state(reset_key).replace(
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            step_counter=state.step_counter,
-            ball=state.ball.replace(holder=new_ball_holder)
-        )
+        new_ball_holder = jax.lax.select(p1_out_of_bounds, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+
         # --- Updated Game State ---
-        # If out of bounds isn't triggered, use the updated state (Note: you could probably put both reset/update-state
-        # creations into a jax.lax.cond so we don't need to create two states)
         updated_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
@@ -298,9 +293,63 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-        new_state = jax.lax.cond(p1_oob, lambda x: reset_state, lambda x: updated_state, None)
+        # Instead of resetting immediately, we switch to OUT_OF_BOUNDS_PENALTY mode
+        # Freeze for ~1 second (60 frames)
+        penalty_state = updated_state.replace(
+            game_mode=GameMode.OUT_OF_BOUNDS_PENALTY,
+            out_of_bounds_timer=60,
+            ball=state.ball.replace(holder=new_ball_holder) # Switch possession immediately or after?
+            # The original logic calculated new_ball_holder and used it in reset_state.
+            # Here we should probably switch possession during or after the freeze.
+            # If we switch it here, the ball might jump to the other player visually during the freeze.
+            # Let's keep the ball where it is during the freeze, and switch possession when resetting.
+            # But wait, p1_out_of_bounds calculation depends on who *currently* holds it.
+            # If I don't store "who caused it" or "who gets it", I might lose that info.
+            # However, `triggered_travel` was stored in PlayerState. `is_out_of_bounds` IS stored in PlayerState!
+            # So I can recalculate it in the handler.
+        )
+
+        new_state = jax.lax.cond(p1_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
 
         return new_state
+
+    def _handle_out_of_bounds_penalty(self, state: DunkGameState) -> DunkGameState:
+        """Handles the out of bounds penalty freeze."""
+        
+        # Decrement timer
+        new_timer = state.out_of_bounds_timer - 1
+        timer_expired = new_timer <= 0
+
+        # If expired, reset game similar to original logic
+        def reset_after_penalty(s):
+            key, reset_key = random.split(s.key)
+            
+            # Check who triggered out of bounds (should be preserved in player states)
+            # We need to know who held the ball to know who triggered it.
+            # But the ball holder hasn't changed yet in 's'.
+            ball_holder_id = s.ball.holder
+            
+            p1_inside_out_of_bounds = s.player1_inside.is_out_of_bounds & (s.player1_inside.id == ball_holder_id)
+            p1_outside_out_of_bounds = s.player1_outside.is_out_of_bounds & (s.player1_outside.id == ball_holder_id)
+            p1_out_of_bounds = p1_inside_out_of_bounds | p1_outside_out_of_bounds
+            
+            new_ball_holder = jax.lax.select(p1_out_of_bounds, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+            
+            return self._init_state(reset_key).replace(
+                player_score=s.player_score,
+                enemy_score=s.enemy_score,
+                step_counter=s.step_counter,
+                ball=s.ball.replace(holder=new_ball_holder)
+            )
+
+        updated_state = state.replace(out_of_bounds_timer=new_timer)
+
+        return jax.lax.cond(
+            timer_expired,
+            reset_after_penalty,
+            lambda s: s,
+            updated_state
+        )
 
     def _update_player_z(self, player: PlayerState, constants: DunkConstants, ball_hold_id: int) -> PlayerState:
         """Applies Z-axis physics (jumping and gravity) to a player."""
@@ -1066,6 +1115,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             state
         )
 
+        # Handle out of bounds penalty mode
+        state = jax.lax.cond(
+            state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
+            lambda s: self._handle_out_of_bounds_penalty(s),
+            lambda s: s,
+            state
+        )
+
         def run_game_step(s):
             s = s.replace(offensive_action_cooldown=jnp.maximum(0, s.offensive_action_cooldown - 1))
 
@@ -1157,6 +1214,7 @@ class DunkRenderer(JAXGameRenderer):
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
             {'name': 'play_selection', 'type': 'single', 'file': 'play_selection.npy'},
             {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
+            {'name': 'out_of_bounds', 'type': 'single', 'file': 'out_of_bounds.npy'},
         ]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
@@ -1356,13 +1414,44 @@ class DunkRenderer(JAXGameRenderer):
 
             # Position the text at the bottom
             text_x = (self.consts.WINDOW_WIDTH - travel_mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - travel_mask.shape[0] - 25 
+            text_y = self.consts.WINDOW_HEIGHT - travel_mask.shape[0] - 25
 
             # Get the slice from the image
             image_slice = jax.lax.dynamic_slice(
                 image,
                 (text_y, text_x, 0),
                 (travel_mask.shape[0], travel_mask.shape[1], 3)
+            )
+
+            # Blend the text onto the slice
+            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
+
+            # Update the image with the blended slice
+            return jax.lax.dynamic_update_slice(
+                image,
+                combined_slice,
+                (text_y, text_x, 0)
+            )
+
+        def apply_out_of_bounds_overlay(image):
+            # Stamp the out_of_bounds text at the bottom
+            out_of_bounds_mask = self.SHAPE_MASKS['out_of_bounds']
+            
+            # Convert text mask to RGB
+            text_sprite_rgb = self.PALETTE[out_of_bounds_mask]
+            
+            # Create alpha mask for the text
+            text_alpha_mask = (out_of_bounds_mask != self.jr.TRANSPARENT_ID)[..., None]
+
+            # Position the text at the bottom
+            text_x = (self.consts.WINDOW_WIDTH - out_of_bounds_mask.shape[1]) // 2
+            text_y = self.consts.WINDOW_HEIGHT - out_of_bounds_mask.shape[0] - 25 
+
+            # Get the slice from the image
+            image_slice = jax.lax.dynamic_slice(
+                image,
+                (text_y, text_x, 0),
+                (out_of_bounds_mask.shape[0], out_of_bounds_mask.shape[1], 3)
             )
 
             # Blend the text onto the slice
@@ -1382,9 +1471,16 @@ class DunkRenderer(JAXGameRenderer):
             final_image
         )
 
-        return jax.lax.cond(
+        final_image = jax.lax.cond(
             state.game_mode == GameMode.TRAVEL_PENALTY,
             apply_travel_overlay,
+            lambda x: x, 
+            final_image
+        )
+
+        return jax.lax.cond(
+            state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
+            apply_out_of_bounds_overlay,
             lambda x: x, 
             final_image
         )
