@@ -134,6 +134,8 @@ class BattlezoneConstants(NamedTuple):
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.24804691667
     PROJECTILE_SPEED:float = 0.5
+    TANK_SPEED: float = 0.3  # todo change
+    SAUCER_SPEED: float = 0.5  # todo change
     ENEMY_POS_Y:int = 85
     FIRE_CD:int = 200 #todo change
     HITBOX_SIZE:float = 6.0
@@ -305,7 +307,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
     def _enemy_step(self, state: BattlezoneState) -> BattlezoneState:
         d_anim_counter = state.enemies.death_anim_counter
         new_death_anim_counter = jnp.where(d_anim_counter > 0, d_anim_counter-1,d_anim_counter)
-        return state._replace(enemies=state.enemies._replace(
+        new_state = state._replace(enemies=jax.vmap(self.enemy_movement, in_axes=(0))(state.enemies))
+        return new_state._replace(enemies=new_state.enemies._replace(
             death_anim_counter=new_death_anim_counter
 
         ))
@@ -481,6 +484,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #Room for distance specific actions
         return distance
 
+    @partial(jax.jit, static_argnums=(0,))
     def spawn_enemy(self, key, enemy:Enemy, score):
         def score_to_spawn_indx(score):
             threshold = jnp.array([1000, 2000, 7000, 12000])
@@ -509,6 +513,66 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return jax.lax.cond(jnp.any(jnp.array([enemy.active, enemy.death_anim_counter>0, (score<1000)])),
                             is_active, not_active,
                             (enemy, key, score))
+
+    # -------------Enemy Movements-----------------
+    @partial(jax.jit, static_argnums=(0,))
+    def enemy_movement(self, enemy):
+        out_angle = 2*jnp.pi - jnp.arctan(enemy.x / enemy.z)
+        speed = self.consts.SAUCER_SPEED
+
+        # ---------Helper Functions---------
+
+        def move_to_player(enemy: Enemy, towards:int = -1) -> Enemy:    # Enemy towoards player with -1 and away with 1
+            k = (enemy.distance + towards * speed) / enemy.distance
+            return enemy._replace(x=enemy.x * k, z=enemy.z * k)
+
+        def enemy_turn(enemy: Enemy) -> Enemy:
+            return enemy._replace(orientation_angle=out_angle)
+
+        # ---------------------------------
+        ## Tank
+        def tank_movement(tank: Enemy) -> Enemy:
+            jax.debug.print("{}",tank.distance)
+            def player_spottet(tank):
+                def in_range(tank):
+                    def towards_player(tank):
+                        jax.debug.print("MOVE TO PLayer{}", tank.orientation_angle)
+                        # ToDO: shoot
+                        return move_to_player(tank)
+
+                    def away_player(tank):
+                        # jax.debug.print("{}", tank.orientation_angle)
+                        # ToDO: shoot
+                        return move_to_player(tank, 1)
+
+                    return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
+                def out_range(tank):
+                    return move_to_player(tank, -1)
+
+                return jax.lax.cond(tank.distance <= 30.0, in_range, out_range, tank)
+            def player_not_spottet(tank):
+
+                return enemy_turn(tank)
+                #return jax.lax.switch(distance_threshold_indx(tank.distance), (), tank)
+
+            return jax.lax.cond(jnp.logical_and(tank.orientation_angle == out_angle, tank.active), player_spottet, player_not_spottet, tank)
+
+
+        def saucer_movement(saucer: Enemy) -> Enemy:
+            phase = 0
+            min_dist = 27.7
+            beta = jnp.arctan(saucer.x / saucer.z)
+            speed = self.consts.SAUCER_SPEED
+
+            def distance_threshold_indx(dist):
+                threshold = jnp.array([1000, 2000, 7000, 12000])
+                return jnp.sum(dist >= threshold)
+
+            return saucer
+
+        return jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement), enemy)
+
+    # ---------------------------------------------
 
 
     def render(self, state: BattlezoneState) -> jnp.ndarray:
