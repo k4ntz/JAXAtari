@@ -42,6 +42,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_blue', 'type': 'single', 'file': 'Player_Blue.npy'},
         {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
         {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
+        
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'}
     )
 
