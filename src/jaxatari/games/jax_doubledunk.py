@@ -22,6 +22,7 @@ class PlayerID(IntEnum):
 class GameMode(IntEnum):
     PLAY_SELECTION = 0
     IN_PLAY = 1
+    TRAVEL_PENALTY = 2
 
 class OffensiveAction(IntEnum):
     PASS = 0
@@ -109,6 +110,7 @@ class DunkGameState:
     offensive_action_cooldown: chex.Array
     enemy_reaction_timer: chex.Array
     last_enemy_actions: chex.Array
+    travel_timer: chex.Array
     key: chex.PRNGKey
 
 @chex.dataclass(frozen=True)
@@ -224,6 +226,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             offensive_action_cooldown=0,
             enemy_reaction_timer=0,
             last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
+            travel_timer=0,
             key=key,
         )
 
@@ -328,18 +331,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p2_triggered_travel = updated_p2_outside.triggered_travel | updated_p2_inside.triggered_travel
         travel_triggered = p1_triggered_travel | p2_triggered_travel
 
-        key, reset_key = random.split(state.key)
-        new_ball_holder = jax.lax.select(p1_triggered_travel, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-        # We recreate the initial state but step counter and give the ball to the other team
-        reset_state = self._init_state(reset_key).replace(
-            player_score=state.player_score,
-            enemy_score=state.enemy_score,
-            step_counter=state.step_counter,
-            ball=state.ball.replace(holder=new_ball_holder)
-        )
         # --- Updated Game State ---
-        # If travel isn't triggered, use the updated state (Note: you could probably put both reset/update-state
-        # creations into a jax.lax.cond so we don't need to create two states)
         updated_state = state.replace(
             player1_inside=updated_p1_inside,
             player1_outside=updated_p1_outside,
@@ -347,7 +339,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-        new_state = jax.lax.cond(travel_triggered, lambda x: reset_state, lambda x: updated_state, None)
+        # Instead of resetting immediately, we switch to TRAVEL_PENALTY mode
+        # Freeze for ~1 second (60 frames)
+        penalty_state = updated_state.replace(
+            game_mode=GameMode.TRAVEL_PENALTY,
+            travel_timer=60
+        )
+
+        new_state = jax.lax.cond(travel_triggered, lambda x: penalty_state, lambda x: updated_state, None)
 
         return new_state
 
@@ -1015,6 +1014,38 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return jax.lax.cond(p1_has_ball, lambda: state_p1_ball, lambda: state_p2_ball)
 
+    def _handle_travel_penalty(self, state: DunkGameState) -> DunkGameState:
+        """Handles the travel penalty freeze."""
+        
+        # Decrement timer
+        new_timer = state.travel_timer - 1
+        timer_expired = new_timer <= 0
+
+        # If expired, reset game similar to original logic
+        def reset_after_penalty(s):
+            key, reset_key = random.split(s.key)
+            
+            # Check who triggered travel (should be preserved in player states)
+            p1_triggered = s.player1_inside.triggered_travel | s.player1_outside.triggered_travel
+            
+            new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+            
+            return self._init_state(reset_key).replace(
+                player_score=s.player_score,
+                enemy_score=s.enemy_score,
+                step_counter=s.step_counter,
+                ball=s.ball.replace(holder=new_ball_holder)
+            )
+
+        updated_state = state.replace(travel_timer=new_timer)
+
+        return jax.lax.cond(
+            timer_expired,
+            reset_after_penalty,
+            lambda s: s,
+            updated_state
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """Takes an action in the game and returns the new game state."""
@@ -1023,6 +1054,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state = jax.lax.cond(
             state.game_mode == GameMode.PLAY_SELECTION,
             lambda s: self._handle_play_selection(s, action),
+            lambda s: s,
+            state
+        )
+
+        # Handle travel penalty mode
+        state = jax.lax.cond(
+            state.game_mode == GameMode.TRAVEL_PENALTY,
+            lambda s: self._handle_travel_penalty(s),
             lambda s: s,
             state
         )
@@ -1117,6 +1156,7 @@ class DunkRenderer(JAXGameRenderer):
             {'name': 'player_arrow', 'type': 'single', 'file': 'player_arrow.npy'},
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
             {'name': 'play_selection', 'type': 'single', 'file': 'play_selection.npy'},
+            {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
         ]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
@@ -1304,9 +1344,47 @@ class DunkRenderer(JAXGameRenderer):
                 (text_y, text_x, 0)
             )
 
-        return jax.lax.cond(
+        def apply_travel_overlay(image):
+            # Stamp the travel text at the bottom
+            travel_mask = self.SHAPE_MASKS['travel']
+            
+            # Convert text mask to RGB
+            text_sprite_rgb = self.PALETTE[travel_mask]
+            
+            # Create alpha mask for the text
+            text_alpha_mask = (travel_mask != self.jr.TRANSPARENT_ID)[..., None]
+
+            # Position the text at the bottom
+            text_x = (self.consts.WINDOW_WIDTH - travel_mask.shape[1]) // 2
+            text_y = self.consts.WINDOW_HEIGHT - travel_mask.shape[0] - 25 
+
+            # Get the slice from the image
+            image_slice = jax.lax.dynamic_slice(
+                image,
+                (text_y, text_x, 0),
+                (travel_mask.shape[0], travel_mask.shape[1], 3)
+            )
+
+            # Blend the text onto the slice
+            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
+
+            # Update the image with the blended slice
+            return jax.lax.dynamic_update_slice(
+                image,
+                combined_slice,
+                (text_y, text_x, 0)
+            )
+
+        final_image = jax.lax.cond(
             state.game_mode == GameMode.PLAY_SELECTION,
             apply_play_selection_overlay,
-            lambda x: x, # If not in play selection, return the original image
+            lambda x: x, 
+            final_image
+        )
+
+        return jax.lax.cond(
+            state.game_mode == GameMode.TRAVEL_PENALTY,
+            apply_travel_overlay,
+            lambda x: x, 
             final_image
         )
