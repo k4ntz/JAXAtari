@@ -161,29 +161,29 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _get_observation(self, state: DunkGameState) -> DunkObservation:
         """Converts the environment state to an observation."""
         player = EntityPosition(
-            x=jnp.array(state.player1_inside.x),
-            y=jnp.array(state.player1_inside.y),
-            width=jnp.array(10),  
-            height=jnp.array(30), 
+            x=jnp.array(state.player1_inside.x, dtype=jnp.int32),
+            y=jnp.array(state.player1_inside.y, dtype=jnp.int32),
+            width=jnp.array(10, dtype=jnp.int32),  
+            height=jnp.array(30, dtype=jnp.int32), 
         )
         enemy = EntityPosition(
-            x=jnp.array(state.player2_inside.x),
-            y=jnp.array(state.player2_inside.y),
-            width=jnp.array(10),  
-            height=jnp.array(30), 
+            x=jnp.array(state.player2_inside.x, dtype=jnp.int32),
+            y=jnp.array(state.player2_inside.y, dtype=jnp.int32),
+            width=jnp.array(10, dtype=jnp.int32),  
+            height=jnp.array(30, dtype=jnp.int32), 
         )
         ball = EntityPosition(
-            x=jnp.array(state.ball.x),
-            y=jnp.array(state.ball.y),
-            width=jnp.array(self.constants.BALL_SIZE[0]),
-            height=jnp.array(self.constants.BALL_SIZE[1]),
+            x=jnp.array(state.ball.x, dtype=jnp.int32),
+            y=jnp.array(state.ball.y, dtype=jnp.int32),
+            width=jnp.array(self.constants.BALL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.constants.BALL_SIZE[1], dtype=jnp.int32),
         )
         return DunkObservation(
             player=player,
             enemy=enemy,
             ball=ball,
-            score_player=state.player_score,
-            score_enemy=state.enemy_score,
+            score_player=state.player_score.astype(jnp.int32),
+            score_enemy=state.enemy_score.astype(jnp.int32),
         )
 
     def action_space(self):
