@@ -49,7 +49,7 @@ class BeamriderConstants(NamedTuple):
     MAX_TORPEDO_Y: int = 35
     BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
 
-    PLAYER_POS_Y: int = 165
+    PLAYER_POS_Y: int = 164
     PLAYER_SPEED: float = 2.5
     PLAYER_LASER_COOLDOWN: int = 23
     PLAYER_TORPEDO_COOLDOWN: int = 31
@@ -98,7 +98,7 @@ class BeamriderConstants(NamedTuple):
     BLUE_LINE_OFFSCREEN_Y = 500
     NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
 
-    WHITE_UFOS_PER_SECTOR: int = 1
+    WHITE_UFOS_PER_SECTOR: int = 15
     CHASING_METEOROID_MAX: int = 8
     CHASING_METEOROID_WAVE_MIN: int = 2
     CHASING_METEOROID_WAVE_MAX: int = 8
