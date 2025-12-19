@@ -419,7 +419,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_inside = jax.lax.select(
-            rand_inside < 0.2, 
+            (state.player2_inside.z > 0) | (rand_inside < 0.2), 
             Action.FIRE,
             random_inside_move_action  
         )
@@ -435,7 +435,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Nested select for the 3 outcomes based on probability
         action_if_ball_outside = jax.lax.select(
-            rand_outside < 0.2, 
+            (state.player2_outside.z > 0) | (rand_outside < 0.2), 
             Action.FIRE,
             random_outside_move_action  
         )
