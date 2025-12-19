@@ -13,7 +13,7 @@ from functools import partial
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.wrappers import JaxatariWrapper
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.modification import JaxAtariModController, JaxAtariModWrapper
+#from jaxatari.modification import JaxAtariModController, JaxAtariModWrapper
 
 def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
     """Updates the Pygame display with the rendered raster.
