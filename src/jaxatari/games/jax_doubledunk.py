@@ -207,6 +207,29 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             "score_enemy": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
     
+    def image_space(self) -> spaces.Box:
+        """Returns the image space of the environment."""
+        return spaces.Box(low=0, high=255, shape=(self.constants.WINDOW_HEIGHT, self.constants.WINDOW_WIDTH, 3), dtype=jnp.uint8)
+
+    def obs_to_flat_array(self, obs: DunkObservation) -> jnp.ndarray:
+        """Converts the observation to a flat array."""
+        return jnp.concatenate([
+            obs.player.x.reshape(-1),
+            obs.player.y.reshape(-1),
+            obs.player.width.reshape(-1),
+            obs.player.height.reshape(-1),
+            obs.enemy.x.reshape(-1),
+            obs.enemy.y.reshape(-1),
+            obs.enemy.width.reshape(-1),
+            obs.enemy.height.reshape(-1),
+            obs.ball.x.reshape(-1),
+            obs.ball.y.reshape(-1),
+            obs.ball.width.reshape(-1),
+            obs.ball.height.reshape(-1),
+            obs.score_player.reshape(-1),
+            obs.score_enemy.reshape(-1),
+        ])
+
     def _init_state(self, key) -> DunkGameState:
         """Creates the very first state of the game."""
         return DunkGameState(
@@ -216,8 +239,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=PlayerState(id=4, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
             # Start with a jump ball in the center: no holder and ball sits at the start position
             ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_OUTSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0),
-            player_score=0,
-            enemy_score=0,
+            player_score=jnp.array(0, dtype=jnp.int32),
+            enemy_score=jnp.array(0, dtype=jnp.int32),
             step_counter=0,
             acceleration_counter=0,
             game_mode=GameMode.PLAY_SELECTION,
@@ -1174,7 +1197,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_max_score_reached = (state.player_score >= self.constants.MAX_SCORE) | (state.enemy_score >= self.constants.MAX_SCORE)
         return is_max_score_reached
 
-    def _get_info(self, state: DunkGameState) -> DunkInfo:
+    def _get_info(self, state: DunkGameState, all_rewards: jnp.array = None) -> DunkInfo:
         """Extracts information from the environment state."""
         # Placeholder: return step count
         return DunkInfo(time=state.step_counter)
