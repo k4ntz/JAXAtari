@@ -22,33 +22,21 @@ from typing import Tuple, Any
 
 
 class DefenderConstants(NamedTuple):
-    # Game screen
+    ## Game settings
+    # Screen settings
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
 
-    # World
+    # Game world
     WORLD_WIDTH: int = 640
     WORLD_HEIGHT: int = 135
 
-    # Game Settings
+    # Playing area
     GAME_AREA_TOP: int = 38
     GAME_AREA_BOTTOM: int = GAME_AREA_TOP + WORLD_HEIGHT
     GAME_STATE_GAMEOVER: int = 0
     GAME_STATE_PLAYING: int = 1
     GAME_STATE_TRANSITION: int = 2
-
-    # Space Ship
-    SPACE_SHIP_WIDTH: int = 13
-    SPACE_SHIP_HEIGHT: int = 5
-    SPACE_SHIP_INIT_GAME_X: int = 100
-    SPACE_SHIP_INIT_GAME_Y: int = 80
-    SPACE_SHIP_INIT_FACE_RIGHT: bool = True
-    SPACE_SHIP_ACCELERATION: float = 0.15
-    SPACE_SHIP_BREAK: float = 0.1
-    SPACE_SHIP_MAX_SPEED: float = 4.0
-    SPACE_SHIP_INIT_LIVES: int = 3
-    SPACE_SHIP_INIT_BOMBS: int = 3
-    SPACE_SHIP_SHOOT_CD: int = 10
 
     # Camera
     CAMERA_SCREEN_X: int = 80
@@ -56,7 +44,14 @@ class DefenderConstants(NamedTuple):
     CAMERA_OFFSET_GAIN: int = 2
     CAMERA_INIT_OFFSET: int = 40
 
-    # UI
+    ## UI
+    # Scanner
+    SCANNER_WIDTH: int = 64
+    SCANNER_HEIGHT: int = 21
+    SCANNER_SCREEN_Y: int = 13
+    SCANNER_SCREEN_X: int = 48
+
+    # Drawables
     CITY_WIDTH: int = 80
     CITY_HEIGHT: int = 13
     SCORE_SCREEN_Y: int = 177
@@ -79,13 +74,36 @@ class DefenderConstants(NamedTuple):
     COLOR_MUTANT_RED: Tuple[int, int, int] = (192, 104, 72)
     PARTICLE_FLICKER_EVERY_N_FRAMES: int = 1
 
+    ## ENTITY
+
+    # Space Ship
+    SPACE_SHIP_WIDTH: int = 13
+    SPACE_SHIP_HEIGHT: int = 5
+    SPACE_SHIP_INIT_GAME_X: int = 100
+    SPACE_SHIP_INIT_GAME_Y: int = 80
+    SPACE_SHIP_INIT_FACE_RIGHT: bool = True
+    SPACE_SHIP_ACCELERATION: float = 0.15
+    SPACE_SHIP_BREAK: float = 0.1
+    SPACE_SHIP_MAX_SPEED: float = 4.0
+    SPACE_SHIP_INIT_LIVES: int = 3
+    SPACE_SHIP_INIT_BOMBS: int = 3
+    SPACE_SHIP_SHOOT_CD: int = 10
+    SCORE_BONUS_THRESHOLD: int = 10000
+
+    SPACE_SHIP_SCANNER_WIDTH: int = 3
+    SPACE_SHIP_SCANNER_HEIGHT: int = 2
+
     # Enemy
     ENEMY_WIDTH: int = 13
     ENEMY_HEIGHT: int = 7
     ENEMY_SPEED: float = 0.24
     SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
+
     ENEMY_MAX_IN_GAME: int = 20
-    ENEMY_MAX_ON_SCREEN: int = 5
+    ENEMY_MAX_ON_SCREEN: int = 10
+
+    ENEMY_SCANNER_WIDTH: int = 2
+    ENEMY_SCANNER_HEIGHT: int = 2
 
     # Enemy types
     INACTIVE: int = 0
@@ -97,55 +115,88 @@ class DefenderConstants(NamedTuple):
     BAITER: int = 6
     DEAD: int = 7  # To keep position to draw animation
 
-    # Dead states, if enemy_type = dead, then arg1 decides color
-    DEAD_YELLOW: int = 0
-    DEAD_BLUE: int = 1
-    DEAD_RED: int = 2
-
-    # Per Level amount of enemy
-    LEVEL_AMOUNT_LANDER: chex.Array = jnp.array([18, 18, 19, 20, 20])
-    LEVEL_AMOUNT_POD: chex.Array = jnp.array([2, 2, 3, 3, 3])
-    LEVEL_AMOUNT_BOMBER: chex.Array = jnp.array([1, 2, 2, 2, 2])
-    LEVEL_AMOUNT_SWARMER: chex.Array = jnp.array([2, 2, 2, 2, 2])
-
-    # Max Amount of enemy type active in game
-    MAX_AMOUNT_LANDER: int = 5
-    MAX_AMOUNT_POD: int = 3
-    MAX_AMOUNT_BOMBER: int = 1
-    MAX_AMOUNT_SWARMER: int = 2
-    MAX_AMOUNT_BAITER: int = 2
-
-    # Bomber
-    BOMBER_Y_SPEED: float = -0.2
-    BOMB_TTL_FRAMES: int = 30
-
     # Lander
     LANDER_Y_SPEED: float = 0.08
     LANDER_PICKUP_X_THRESHOLD: float = 2.0
     LANDER_START_Y: float = 10.0
     LANDER_PICKUP_DURATION_FRAMES: int = 120  # 4 seconds at 30 fps
+
     LANDER_STATE_PATROL: int = 0
     LANDER_STATE_DESCEND: int = 1
     LANDER_STATE_PICKUP: int = 2
     LANDER_STATE_ASCEND: int = 3
 
+    LANDER_DEATH_SCORE: int = 150
+    LANDER_MAX_AMOUNT: int = 5
+    LANDER_LEVEL_AMOUNT: chex.Array = jnp.array([18, 18, 19, 20, 20])
+
     # Pod
     POD_Y_SPEED: float = 0.08
+    POD_DEATH_SCORE: int = 1000
+    POD_MAX_AMOUNT: int = 3
+    POD_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 3, 3, 3])
 
-    # Baiter
-    BAITER_TIME_SEC: int = 20
+    # Bomber
+    BOMBER_Y_SPEED: float = -0.2
+    BOMB_TTL_FRAMES: int = 30
+    BOMBER_DEATH_SCORE: int = 250
+    BOMBER_MAX_AMOUNT: int = 1
+    BOMBER_LEVEL_AMOUNT: chex.Array = jnp.array([1, 2, 2, 2, 2])
+
+    # Swarmers
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
+    SWARMERS_DEATH_SCORE: int = 500
+    SWARMERS_MAX_AMOUNT: int = 2
+    SWARMERS_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 2, 2, 2])
+
+    # Mutant
+    MUTANT_DEATH_SCORE: int = 150
+
+    # Baiter
+    BAITER_MAX_AMOUNT: int = 2
+    BAITER_TIME_SEC: int = 20
+    BAITER_DEATH_SCORE: int = 200
+
+    # Dead states, if enemy_type = dead, then arg1 decides color
+    DEAD_YELLOW: int = 0
+    DEAD_BLUE: int = 1
+    DEAD_RED: int = 2
+
+    # Humans
+    HUMAN_WIDTH: int = 3
+    HUMAN_HEIGHT: int = 3
+    HUMAN_FALLING_SPEED: float = 0.5
+    HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
+    HUMAN_INIT_GAME_Y: int = WORLD_HEIGHT - HUMAN_HEIGHT
+
+    # INACTIVE = 0
+    HUMAN_STATE_IDLE: int = 1
+    HUMAN_STATE_ABDUCTED: int = 2
+    HUMAN_STATE_FALLING: int = 3
+    HUMAN_STATE_FALLING_DEADLY: int = 4
+    HUMAN_STATE_CATCHED: int = 5
+    HUMAN_STATE_RELEASED: int = 6
+
+    HUMAN_SCANNER_HEIGHT: int = 1
+    HUMAN_SCANNER_WIDTH: int = 1
+
+    HUMAN_LIVING_FALL_SCORE: int = 250
+    HUMAN_CAUGHT_BUT_FORGOTTEN_SCORE: int = 500
+    HUMAN_CAUGHT_AND_RETURNED_SCORE: int = 1000
+
+    HUMAN_MAX_AMOUNT: int = 6
+    HUMAN_LEVEL_AMOUNT: chex.Array = jnp.array([5, 5, 6, 6, 6])
+
+    ## BULLET AND LASER
 
     # Enemy bullet
     BULLET_WIDTH: int = 2
     BULLET_HEIGHT: int = 2
     BULLET_SPEED: float = 3.0
     BULLET_MOVE_WITH_SPACE_SHIP: float = 0.9
-    BULLET_STATE_INACTIVE: int = 0
-    BULLET_STATE_ACTIVE: int = 1
-    BULLET_MIN_SPREAD: float = 0.6
-    BULLET_MAX_SPREAD: float = 0.3
+    BULLET_MIN_SPREAD: float = 0.3
+    BULLET_MAX_SPREAD: float = 0.6
 
     # Space ship laser
     # Width and height are for each laser
@@ -156,70 +207,6 @@ class DefenderConstants(NamedTuple):
     LASER_FINAL_WIDTH: int = LASER_WIDTH + LASER_2ND_OFFSET
     LASER_FINAL_HEIGHT: int = LASER_HEIGHT * 2
     LASER_SPEED: int = 20
-    LASER_STATE_INACTIVE: int = 0
-    LASER_STATE_ACTIVE: int = 1
-
-    # Humans
-    # INACTIVE = 0
-    HUMAN_STATE_IDLE: int = 1
-    HUMAN_STATE_ABDUCTED: int = 2
-    HUMAN_STATE_FALLING: int = 3
-    HUMAN_STATE_FALLING_DEADLY: int = 4
-    HUMAN_STATE_CATCHED: int = 5
-    HUMAN_STATE_RELEASED: int = 6
-    HUMAN_AMOUNT: Tuple[int, int, int, int, int] = (5, 5, 6, 6, 6)
-    HUMAN_MAX: int = 6
-    HUMAN_WIDTH: int = 3
-    HUMAN_HEIGHT: int = 3
-    HUMAN_FALLING_SPEED: float = 0.5
-    HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
-    GROUND_Y: int = WORLD_HEIGHT - HUMAN_HEIGHT
-    HUMAN_Y: int = WORLD_HEIGHT - HUMAN_HEIGHT
-    HUMAN_X: Tuple[float, float, float, float, float] = (
-        WORLD_WIDTH / HUMAN_AMOUNT[0],
-        WORLD_WIDTH / HUMAN_AMOUNT[1],
-        WORLD_WIDTH / HUMAN_AMOUNT[2],
-        WORLD_WIDTH / HUMAN_AMOUNT[3],
-        WORLD_WIDTH / HUMAN_AMOUNT[4],
-    )
-
-    INITIAL_HUMAN_STATES: chex.Array = jnp.array(
-        [
-            # x, y, state
-            [10, HUMAN_Y, HUMAN_STATE_IDLE],
-            [HUMAN_X[0], HUMAN_Y, HUMAN_STATE_IDLE],
-            [HUMAN_X[0] * 2, HUMAN_Y, HUMAN_STATE_IDLE],
-            [HUMAN_X[0] * 3, HUMAN_Y, HUMAN_STATE_IDLE],
-            [HUMAN_X[0] * 4, HUMAN_Y, HUMAN_STATE_IDLE],
-        ]
-    )
-
-    # Scanner
-    SCANNER_WIDTH: int = 64
-    SCANNER_HEIGHT: int = 21
-    SCANNER_SCREEN_Y: int = 13
-    SCANNER_SCREEN_X: int = 48
-    ENEMY_SCANNER_WIDTH: int = 2
-    ENEMY_SCANNER_HEIGHT: int = 2
-    SPACE_SHIP_SCANNER_WIDTH: int = 3
-    SPACE_SHIP_SCANNER_HEIGHT: int = 2
-    HUMAN_SCANNER_WIDTH: int = 1
-    HUMAN_SCANNER_HEIGHT: int = 1
-
-    # Score
-    SCORE_LANDER_DEATH: int = 150
-    SCORE_MUTANT_DEATH: int = 150
-    SCORE_BAITER_DEATH: int = 200
-    SCORE_BOMBER_DEATH: int = 250
-    SCORE_SWARMER_DEATH: int = 500
-    SCORE_POD_DEATH: int = 1000
-
-    # HUMAN RESCURE SCORES
-    SCORE_FALL_AND_LIVE: int = 250
-    SCORE_CAUGHT_BUT_FORGOTTEN: int = 500
-    SCORE_CAUGHT_AND_RETURNED: int = 1000
-
-    SCORE_BONUS_THRESHOLD: int = 10000
 
 
 # immutable state container
@@ -237,13 +224,13 @@ class DefenderState(NamedTuple):
     space_ship_facing_right: chex.Array
     space_ship_lives: chex.Array
     # Bullet
-    bullet_state: chex.Array
+    bullet_active: chex.Array
     bullet_x: chex.Array
     bullet_y: chex.Array
     bullet_dir_x: chex.Array
     bullet_dir_y: chex.Array
     # Laser
-    laser_state: chex.Array
+    laser_active: chex.Array
     laser_x: chex.Array
     laser_y: chex.Array
     laser_dir_x: chex.Array
@@ -496,7 +483,7 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
         ]
 
-    def on_scanner_pos(self, state: DefenderState, game_x, game_y):
+    def _on_scanner_pos(self, state: DefenderState, game_x, game_y):
         camera_game_x = state.space_ship_x + state.camera_offset
         left_border = jnp.mod(
             camera_game_x - self.consts.WORLD_WIDTH / 2, self.consts.WORLD_WIDTH
@@ -524,8 +511,9 @@ class DefenderRenderer(JAXGameRenderer):
     def render(self, state: DefenderState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
+        # Util function for all entities
         def render_on_scanner(game_x, game_y, width, height, color_id, r):
-            scanner_x, scanner_y = self.on_scanner_pos(state, game_x, game_y)
+            scanner_x, scanner_y = self._on_scanner_pos(state, game_x, game_y)
 
             # To render all entities inside the scanner
             right_barrier = float(
@@ -618,7 +606,6 @@ class DefenderRenderer(JAXGameRenderer):
                 lambda: r,
             )
 
-        # For each loop renders all enemys on screen and scanner
         raster = jax.lax.fori_loop(
             0, self.consts.ENEMY_MAX_IN_GAME, render_enemy, raster
         )
@@ -665,7 +652,6 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = render_space_ship(raster)
 
-        # Render laser
         def render_laser(r):
             game_x = state.laser_x
             game_y = state.laser_y
@@ -694,7 +680,7 @@ class DefenderRenderer(JAXGameRenderer):
             )
 
         raster = jax.lax.cond(
-            state.laser_state == self.consts.LASER_STATE_ACTIVE,
+            state.laser_active,
             lambda: render_laser(raster),
             lambda: raster,
         )
@@ -792,9 +778,10 @@ class DefenderRenderer(JAXGameRenderer):
             )
 
         # For each loop renders all humans on screen and scanner
-        raster = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, render_human, raster)
+        raster = jax.lax.fori_loop(
+            0, self.consts.HUMAN_MAX_AMOUNT, render_human, raster
+        )
 
-        # Render bullet
         def render_bullet(r):
             game_x = state.bullet_x
             game_y = state.bullet_y
@@ -813,7 +800,7 @@ class DefenderRenderer(JAXGameRenderer):
             )
 
         raster = jax.lax.cond(
-            state.bullet_state == self.consts.BULLET_STATE_ACTIVE,
+            state.bullet_active,
             lambda: render_bullet(raster),
             lambda: raster,
         )
@@ -884,9 +871,17 @@ class JaxDefender(
             Action.DOWNLEFTFIRE,
         ]
 
+    ## -------- SCORE ------------------------------
+
     def _add_score(self, state: DefenderState, score) -> DefenderState:
         score += state.score
         return state._replace(score=score)
+
+    ## -------- ENTITY UTILS ------------------------------
+
+    def _get_enemy(self, state: DefenderState, index):
+        # Returns the enemy list at index
+        return state.enemy_states[index]
 
     def _spawn_enemy(
         self, state: DefenderState, game_x, game_y, e_type, arg1, arg2
@@ -904,6 +899,30 @@ class JaxDefender(
             lambda: state,
         )
         return state
+
+    def _update_enemy(
+        self,
+        state: DefenderState,
+        index,
+        game_x=-1.0,
+        game_y=-1.0,
+        enemy_type=-1.0,
+        arg1=-1.0,
+        arg2=-1.0,
+    ) -> DefenderState:
+        enemy_state = state.enemy_states
+        enemy = state.enemy_states[index]
+        # Handle defaults
+        game_x = jnp.where(game_x == -1.0, enemy[0], game_x)
+        game_y = jnp.where(game_y == -1.0, enemy[1], game_y)
+        enemy_type = jnp.where(enemy_type == -1.0, enemy[2], enemy_type)
+        arg1 = jnp.where(arg1 == -1.0, enemy[3], arg1)
+        arg2 = jnp.where(arg2 == -1.0, enemy[4], arg2)
+
+        enemy_state = enemy_state.at[index].set(
+            [game_x, game_y, enemy_type, arg1, arg2]
+        )
+        return state._replace(enemy_states=enemy_state)
 
     def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
         is_index = jnp.logical_and(index >= 0, index < self.consts.ENEMY_MAX_IN_GAME)
@@ -936,12 +955,12 @@ class JaxDefender(
             enemy_type,
             [
                 lambda: 50,
-                lambda: self.consts.SCORE_LANDER_DEATH,
-                lambda: self.consts.SCORE_POD_DEATH,
-                lambda: self.consts.SCORE_BOMBER_DEATH,
-                lambda: self.consts.SCORE_SWARMER_DEATH,
-                lambda: self.consts.SCORE_MUTANT_DEATH,
-                lambda: self.consts.SCORE_BAITER_DEATH,
+                lambda: self.consts.LANDER_DEATH_SCORE,
+                lambda: self.consts.POD_DEATH_SCORE,
+                lambda: self.consts.BOMBER_DEATH_SCORE,
+                lambda: self.consts.SWARMERS_DEATH_SCORE,
+                lambda: self.consts.MUTANT_DEATH_SCORE,
+                lambda: self.consts.BAITER_DEATH_SCORE,
                 lambda: 100,
             ],
         )
@@ -957,8 +976,8 @@ class JaxDefender(
         state = jax.lax.cond(
             jnp.logical_and(
                 jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
-                self.consts.LEVEL_AMOUNT_LANDER[jnp.remainder(state.level, 5)]
-                - self.consts.MAX_AMOUNT_LANDER
+                self.consts.LANDER_LEVEL_AMOUNT[jnp.remainder(state.level, 5)]
+                - self.consts.LANDER_MAX_AMOUNT
                 > state.killed_landers,
             ),
             lambda: self.spawn_on_random_position_not_on_screen(
@@ -975,19 +994,48 @@ class JaxDefender(
         )
         return state
 
-    def spawn_on_random_position_not_on_screen(
-        self, state: DefenderState, e_type: int
-    ) -> DefenderState:
-        random_x, random_y, new_key = self._get_random_position_not_on_screen(
-            state,
-            self.consts.ENEMY_WIDTH,
-            self.consts.ENEMY_HEIGHT,
-            state.key,
+    def _enemies_on_screen(self, state) -> Tuple:
+        # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
+
+        indices = jnp.full((self.consts.ENEMY_MAX_ON_SCREEN,), -1)
+
+        # Returns data = (enemy_states, indices)
+        def add_indices(i, data):
+            enemy_states = data[0]
+            indices = data[1]
+            enemy_count_in_indices = data[2]
+
+            enemy = enemy_states[i]
+            x = enemy[0]
+            y = enemy[1]
+            is_active = enemy[2] != self.consts.INACTIVE
+            is_onscreen = jax.lax.cond(
+                is_active,
+                lambda: self.dh._is_onscreen_from_game(
+                    state, x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
+                ),
+                lambda: False,
+            )
+
+            # Pass -1 for non on screen enemies, array has to be static size
+            indices = indices.at[enemy_count_in_indices].set(
+                jax.lax.cond(is_onscreen, lambda: i, lambda: -1)
+            )
+            enemy_count_in_indices += is_onscreen
+
+            return (enemy_states, indices, enemy_count_in_indices)
+
+        result = jax.lax.fori_loop(
+            0,
+            self.consts.ENEMY_MAX_IN_GAME,
+            add_indices,
+            (state.enemy_states, indices, 0),
         )
 
-        state = self._spawn_enemy(state, random_x, random_y, e_type, 0, 0)
+        indices = result[1]
+        max_indice = result[2]
 
-        return state._replace(key=new_key)
+        return (indices, max_indice)
 
     def _get_random_position_not_on_screen(
         self, state: DefenderState, width: int, height: int, key: chex.Array
@@ -1022,6 +1070,55 @@ class JaxDefender(
 
         return final_game_x, final_game_y, key
 
+    def spawn_on_random_position_not_on_screen(
+        self, state: DefenderState, e_type: int
+    ) -> DefenderState:
+        random_x, random_y, new_key = self._get_random_position_not_on_screen(
+            state,
+            self.consts.ENEMY_WIDTH,
+            self.consts.ENEMY_HEIGHT,
+            state.key,
+        )
+
+        state = self._spawn_enemy(state, random_x, random_y, e_type, 0, 0)
+
+        return state._replace(key=new_key)
+
+    def _update_human(
+        self, state: DefenderState, index, game_x=-1.0, game_y=-1.0, h_state=-1.0
+    ) -> DefenderState:
+        human_state = state.human_states
+        human = human_state[index]
+        # Handle defaults
+        game_x = jnp.where(game_x == -1.0, human[0], game_x)
+        game_y = jnp.where(game_y == -1.0, human[1], game_y)
+        h_state = jnp.where(h_state == -1.0, human[2], h_state)
+
+        human_state = human_state.at[index].set([game_x, game_y, h_state])
+        return state._replace(human_states=human_state)
+
+    def _spawn_human(self, state: DefenderState, game_x) -> DefenderState:
+        # Get first slot that has inactive human
+        mask = jnp.array(state.human_states[:, 2] == self.consts.INACTIVE)
+        match = mask.argmax()
+
+        # Default values
+        game_y = self.consts.HUMAN_INIT_GAME_Y
+        h_state = self.consts.HUMAN_STATE_IDLE
+
+        # If no open slot availabe, dismiss new human
+        open_slot_available = jnp.logical_or(match != 0, mask[0])
+
+        state = jax.lax.cond(
+            open_slot_available,
+            lambda: self._update_human(state, match, game_x, game_y, h_state),
+            lambda: state,
+        )
+
+        return state
+
+    ## -------- COLLISION ------------------------------
+
     def _is_colliding(
         self, e1_x, e1_y, e1_width, e1_height, e2_x, e2_y, e2_width, e2_height
     ) -> chex.Array:
@@ -1041,8 +1138,10 @@ class JaxDefender(
 
         return jnp.logical_and(check_x, check_y)
 
+    ## -------- MOVEMENT ------------------------------
+
     # Wrap function, returns wrapped position
-    def wrap_pos(self, game_x: float, game_y: float):
+    def _wrap_pos(self, game_x: float, game_y: float):
         return game_x % self.consts.WORLD_WIDTH, game_y % (
             self.consts.WORLD_HEIGHT
             - self.consts.CITY_HEIGHT  # move already when the top of the city == top of entity
@@ -1054,7 +1153,7 @@ class JaxDefender(
         new_game_x = game_x + x_speed
         new_game_y = game_y + y_speed
         # Wrap only around x, y not needed
-        new_game_x, _ = self.wrap_pos(new_game_x, 0)
+        new_game_x, _ = self._wrap_pos(new_game_x, 0)
         return new_game_x, new_game_y.astype(float)
 
     def _move_and_clip(
@@ -1069,7 +1168,22 @@ class JaxDefender(
         self, game_x: float, game_y: float, x_speed: float, y_speed: float
     ) -> Tuple[float, float]:
         new_game_x, new_game_y = self._move(game_x, game_y, x_speed, y_speed)
-        new_game_x, new_game_y = self.wrap_pos(new_game_x, new_game_y)
+        new_game_x, new_game_y = self._wrap_pos(new_game_x, new_game_y)
+        return new_game_x, new_game_y
+
+    def _move_with_space_ship(
+        self,
+        state: DefenderState,
+        game_x,
+        game_y,
+        speed_x,
+        speed_y,
+        space_ship_coefficient,
+    ):
+
+        speed_x += state.space_ship_speed * space_ship_coefficient
+
+        new_game_x, new_game_y = self._move(game_x, game_y, speed_x, speed_y)
         return new_game_x, new_game_y
 
     def _shoot_smart_bomb(self, state: DefenderState) -> DefenderState:
@@ -1106,43 +1220,10 @@ class JaxDefender(
             laser_x=laser_x,
             laser_y=laser_y,
             laser_dir_x=laser_dir_x,
-            laser_state=self.consts.LASER_STATE_ACTIVE,
+            laser_active=True,
             shooting_cooldown=shooting_cooldown,
         )
 
-        return state
-
-    def _check_laser(self, state: DefenderState) -> DefenderState:
-        laser_x = state.laser_x
-        laser_y = state.laser_y
-        laser_width = self.consts.LASER_WIDTH
-        laser_height = self.consts.LASER_HEIGHT
-        is_onscreen = self.dh._is_onscreen_from_game(
-            state, laser_x, laser_y, laser_width, laser_height
-        )
-        laser_state = jax.lax.cond(
-            is_onscreen,
-            lambda: self.consts.LASER_STATE_ACTIVE,
-            lambda: self.consts.LASER_STATE_INACTIVE,
-        )
-
-        return state._replace(laser_state=laser_state)
-
-    def _laser_update(self, state: DefenderState) -> DefenderState:
-        laser_x = state.laser_x
-        laser_y = state.laser_y
-        laser_speed_x = state.laser_dir_x * self.consts.LASER_SPEED
-        laser_x, laser_y = self._move_and_wrap(laser_x, laser_y, laser_speed_x, 0.0)
-        return state._replace(laser_x=laser_x, laser_y=laser_y)
-
-    def _laser_step(self, state: DefenderState) -> DefenderState:
-        laser_active = state.laser_state == self.consts.LASER_STATE_ACTIVE
-        state = jax.lax.cond(
-            laser_active, lambda: self._laser_update(state), lambda: state
-        )
-        state = jax.lax.cond(
-            laser_active, lambda: self._check_laser(state), lambda: state
-        )
         return state
 
     def _space_ship_step(
@@ -1300,6 +1381,22 @@ class JaxDefender(
             shoot_smart_bomb, lambda: self._shoot_smart_bomb(state), lambda: state
         )
         return state
+
+    ## -------- CAMERA STEP ------------------------------
+
+    def _camera_step(self, state: DefenderState) -> DefenderState:
+        # Returns: camera_offset
+        offset_gain = self.consts.CAMERA_OFFSET_GAIN
+        camera_offset = state.camera_offset
+        camera_offset += jnp.where(state.space_ship_facing_right, 1, -1) * offset_gain
+
+        camera_offset = jnp.clip(
+            camera_offset, -self.consts.CAMERA_OFFSET_MAX, self.consts.CAMERA_OFFSET_MAX
+        )
+
+        return state._replace(camera_offset=camera_offset)
+
+    ## -------- ENEMY STEP ------------------------------
 
     def _lander_movement(
         self,
@@ -1644,45 +1741,6 @@ class JaxDefender(
         new_enemy_states = enemy_states.at[index].set(new_swarmer)
         return state._replace(enemy_states=new_enemy_states)
 
-    def _move_with_space_ship(
-        self,
-        state: DefenderState,
-        game_x,
-        game_y,
-        speed_x,
-        speed_y,
-        space_ship_coefficient,
-    ):
-
-        speed_x += state.space_ship_speed * space_ship_coefficient
-
-        new_game_x, new_game_y = self._move(game_x, game_y, speed_x, speed_y)
-        return new_game_x, new_game_y
-
-    def _update_enemy(
-        self,
-        state: DefenderState,
-        index,
-        game_x=-1.0,
-        game_y=-1.0,
-        enemy_type=-1.0,
-        arg1=-1.0,
-        arg2=-1.0,
-    ) -> DefenderState:
-        enemy_state = state.enemy_states
-        enemy = state.enemy_states[index]
-        # Handle defaults
-        game_x = jnp.where(game_x == -1.0, enemy[0], game_x)
-        game_y = jnp.where(game_y == -1.0, enemy[1], game_y)
-        enemy_type = jnp.where(enemy_type == -1.0, enemy[2], enemy_type)
-        arg1 = jnp.where(arg1 == -1.0, enemy[3], arg1)
-        arg2 = jnp.where(arg2 == -1.0, enemy[4], arg2)
-
-        enemy_state = enemy_state.at[index].set(
-            [game_x, game_y, enemy_type, arg1, arg2]
-        )
-        return state._replace(enemy_states=enemy_state)
-
     def _set_human_from_lander_falling(
         self,
         state: DefenderState,
@@ -1719,52 +1777,125 @@ class JaxDefender(
         )
         return state._replace(human_states=new_human_states)
 
-    def _get_enemy(self, state: DefenderState, index):
-        # Returns the enemy list at index
-        return state.enemy_states[index]
-
-    def _enemies_on_screen(self, state) -> Tuple:
-        # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
-
-        indices = jnp.full((self.consts.ENEMY_MAX_ON_SCREEN,), -1)
-
-        # Returns data = (enemy_states, indices)
-        def add_indices(i, data):
-            enemy_states = data[0]
-            indices = data[1]
-            enemy_count_in_indices = data[2]
-
-            enemy = enemy_states[i]
-            x = enemy[0]
-            y = enemy[1]
-            is_active = enemy[2] != self.consts.INACTIVE
-            is_onscreen = jax.lax.cond(
-                is_active,
-                lambda: self.dh._is_onscreen_from_game(
-                    state, x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
-                ),
-                lambda: False,
+    def _enemy_step(self, state: DefenderState) -> DefenderState:
+        def _enemy_move_switch(enemy_index: int, state: DefenderState) -> DefenderState:
+            enemy_type = state.enemy_states[enemy_index][2]
+            state = jax.lax.switch(
+                jnp.array(enemy_type, int),
+                [
+                    lambda: state,
+                    lambda: self._lander_movement(
+                        enemy_index,
+                        state,
+                    ),
+                    lambda: self._pod_movement(enemy_index, state),
+                    lambda: self._bomber_movement(
+                        enemy_index,
+                        state,
+                    ),
+                    lambda: self._swarmers_movement(
+                        enemy_index,
+                        state,
+                    ),
+                    lambda: self._mutant_movement(
+                        enemy_index,
+                        state,
+                    ),
+                    lambda: state,
+                    lambda: self._delete_enemy(state, enemy_index),
+                ],
             )
 
-            # Pass -1 for non on screen enemies, array has to be static size
-            indices = indices.at[enemy_count_in_indices].set(
-                jax.lax.cond(is_onscreen, lambda: i, lambda: -1)
-            )
-            enemy_count_in_indices += is_onscreen
+            return state
 
-            return (enemy_states, indices, enemy_count_in_indices)
-
-        result = jax.lax.fori_loop(
-            0,
-            self.consts.ENEMY_MAX_IN_GAME,
-            add_indices,
-            (state.enemy_states, indices, 0),
+        state = jax.lax.fori_loop(
+            0, self.consts.ENEMY_MAX_IN_GAME, _enemy_move_switch, state
         )
 
-        indices = result[1]
-        max_indice = result[2]
+        return state
 
-        return (indices, max_indice)
+    ## -------- HUMAN STEP ------------------------------
+
+    def _human_step(self, state: DefenderState) -> DefenderState:
+        human_states = state.human_states
+
+        def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
+            human = human_states[index]
+            human_y = human[1]
+            human_y += self.consts.HUMAN_FALLING_SPEED
+            # Check if human reached ground
+            human_states = jax.lax.cond(
+                human_y >= self.consts.HUMAN_INIT_GAME_Y,
+                lambda: jax.lax.cond(
+                    not deadly,
+                    lambda: human_states.at[index].set(
+                        [
+                            human[0],
+                            self.consts.HUMAN_INIT_GAME_Y,
+                            self.consts.HUMAN_STATE_IDLE,
+                        ]
+                    ),
+                    lambda: human_states.at[index].set(
+                        [
+                            human[0],
+                            self.consts.HUMAN_INIT_GAME_Y,
+                            self.consts.INACTIVE,
+                        ]
+                    ),
+                ),
+                lambda: human_states.at[index].set([human[0], human_y, human[2]]),
+            )
+
+            return human_states
+
+        def _human_catched(human_states: chex.Array, index: int) -> chex.Array:
+            human = human_states[index]
+
+            # Move human with spaceship
+
+            # Update human position
+
+            human_states = jax.lax.cond(
+                human[1]
+                >= self.consts.WORLD_HEIGHT
+                - self.consts.CITY_HEIGHT
+                - self.consts.HUMAN_HEIGHT,
+                lambda: human_states.at[index].set(
+                    [human[0], human[1], self.consts.HUMAN_STATE_RELEASED]
+                ),
+                lambda: human_states.at[index].set(
+                    [state.space_ship_x + 5, state.space_ship_y + 4, human[2]]
+                ),
+            )
+
+            return human_states
+
+        def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
+            human_states = jax.lax.switch(
+                jnp.array(human_states[index][2], int),
+                [
+                    lambda: human_states,  # Inactive
+                    lambda: human_states,  # Idle
+                    lambda: human_states,  # Abducted
+                    lambda: _human_falling(human_states, index, False),  # Falling
+                    lambda: _human_falling(human_states, index, True),  # Falling Deadly
+                    lambda: _human_catched(human_states, index),  # Catched
+                    lambda: _human_falling(human_states, index, False),  # Released
+                ],
+            )
+
+            return human_states
+
+        human_states = jax.lax.fori_loop(
+            0,
+            self.consts.HUMAN_MAX_AMOUNT,
+            _human_move_switch,
+            human_states,
+        )
+
+        return state._replace(human_states=human_states)
+
+    ## -------- BULLET STEP ------------------------------
 
     def _bullet_spawn(self, state: DefenderState) -> DefenderState:
         # Spawns a bullet, call only if bullet is inactive
@@ -1818,7 +1949,7 @@ class JaxDefender(
             return s_state._replace(
                 bullet_x=bullet_x,
                 bullet_y=bullet_y,
-                bullet_state=self.consts.BULLET_STATE_ACTIVE,
+                bullet_active=True,
             )
 
         # Shoot the bullet if an enemy is onscreen
@@ -1847,7 +1978,7 @@ class JaxDefender(
                 state.enemy_states[:, 3] > 0.0
             )
             match = jnp.nonzero(
-                mask, size=self.consts.MAX_AMOUNT_BOMBER, fill_value=-1
+                mask, size=self.consts.BOMBER_MAX_AMOUNT, fill_value=-1
             )[0]
             enemy = state.enemy_states[match[0]]
             new_ttl = enemy[3] - 1
@@ -1872,7 +2003,7 @@ class JaxDefender(
                 state.enemy_states[:, 3] > 0.0
             )
             matches = jnp.nonzero(
-                mask, size=self.consts.MAX_AMOUNT_BOMBER, fill_value=-1
+                mask, size=self.consts.BOMBER_MAX_AMOUNT, fill_value=-1
             )[0]
             return matches[0] == -1
 
@@ -1898,224 +2029,87 @@ class JaxDefender(
                 )
 
             matches = jnp.nonzero(
-                mask, size=self.consts.MAX_AMOUNT_BOMBER, fill_value=-1
+                mask, size=self.consts.BOMBER_MAX_AMOUNT, fill_value=-1
             )[0]
             return jax.lax.scan(_update_bombers, state, matches)[0]
 
         state = jax.lax.cond(
             jnp.logical_or(is_ttl_death, is_offscreen),
-            lambda: _reset_ttl()._replace(
-                bullet_state=self.consts.BULLET_STATE_INACTIVE
-            ),
+            lambda: _reset_ttl()._replace(bullet_active=False),
             lambda: state,
         )
 
         return state
 
     def _bullet_step(self, state: DefenderState) -> DefenderState:
-        bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
         state = jax.lax.cond(
-            bullet_is_active, lambda: state, lambda: self._bullet_spawn(state)
+            state.bullet_active, lambda: state, lambda: self._bullet_spawn(state)
         )
         # Update bullet is active
-        bullet_is_active = state.bullet_state == self.consts.BULLET_STATE_ACTIVE
         state = jax.lax.cond(
-            bullet_is_active, lambda: self._bullet_update(state), lambda: state
+            state.bullet_active, lambda: self._bullet_update(state), lambda: state
         )
 
         # Check for destruction
         state = jax.lax.cond(
-            bullet_is_active, lambda: self._bullet_check(state), lambda: state
+            state.bullet_active, lambda: self._bullet_check(state), lambda: state
         )
 
         return state
 
-    def _enemy_step(self, state: DefenderState) -> DefenderState:
-        def _enemy_move_switch(enemy_index: int, state: DefenderState) -> DefenderState:
-            enemy_type = state.enemy_states[enemy_index][2]
-            state = jax.lax.switch(
-                jnp.array(enemy_type, int),
-                [
-                    lambda: state,
-                    lambda: self._lander_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._pod_movement(enemy_index, state),
-                    lambda: self._bomber_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._swarmers_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._mutant_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: state,
-                    lambda: self._delete_enemy(state, enemy_index),
-                ],
-            )
+    ## -------- LASER STEP ------------------------------
 
-            return state
-
-        state = jax.lax.fori_loop(
-            0, self.consts.ENEMY_MAX_IN_GAME, _enemy_move_switch, state
+    def _check_laser(self, state: DefenderState) -> DefenderState:
+        laser_x = state.laser_x
+        laser_y = state.laser_y
+        laser_width = self.consts.LASER_WIDTH
+        laser_height = self.consts.LASER_HEIGHT
+        laser_active = self.dh._is_onscreen_from_game(
+            state, laser_x, laser_y, laser_width, laser_height
         )
 
+        return state._replace(laser_active=laser_active)
+
+    def _laser_update(self, state: DefenderState) -> DefenderState:
+        laser_x = state.laser_x
+        laser_y = state.laser_y
+        laser_speed_x = state.laser_dir_x * self.consts.LASER_SPEED
+        laser_x, laser_y = self._move_and_wrap(laser_x, laser_y, laser_speed_x, 0.0)
+        return state._replace(laser_x=laser_x, laser_y=laser_y)
+
+    def _laser_step(self, state: DefenderState) -> DefenderState:
+        state = jax.lax.cond(
+            state.laser_active, lambda: self._laser_update(state), lambda: state
+        )
+        state = jax.lax.cond(
+            state.laser_active, lambda: self._check_laser(state), lambda: state
+        )
         return state
 
-    def _human_step(self, state: DefenderState) -> DefenderState:
-        human_states = state.human_states
+    ## -------- COLLISION STEP ------------------------------
 
-        def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
-            human = human_states[index]
-            human_y = human[1]
-            human_y += self.consts.HUMAN_FALLING_SPEED
-            # Check if human reached ground
-            human_states = jax.lax.cond(
-                human_y >= self.consts.GROUND_Y,
-                lambda: jax.lax.cond(
-                    not deadly,
-                    lambda: human_states.at[index].set(
-                        [
-                            human[0],
-                            self.consts.GROUND_Y,
-                            self.consts.HUMAN_STATE_IDLE,
-                        ]
-                    ),
-                    lambda: human_states.at[index].set(
-                        [
-                            human[0],
-                            self.consts.GROUND_Y,
-                            self.consts.INACTIVE,
-                        ]
-                    ),
-                ),
-                lambda: human_states.at[index].set([human[0], human_y, human[2]]),
-            )
+    def _is_colliding(
+        self, e1_x, e1_y, e1_width, e1_height, e2_x, e2_y, e2_width, e2_height
+    ) -> chex.Array:
+        e1max_x = e1_x + e1_width
+        e2max_x = e2_x + e2_width
+        e1max_y = e1_y + e1_height
+        e2max_y = e2_y + e2_height
 
-            return human_states
+        check_1 = e1_x <= e2max_x
+        check_2 = e1max_x >= e2_x
 
-        def _human_catched(human_states: chex.Array, index: int) -> chex.Array:
-            human = human_states[index]
+        check_3 = e1_y <= e2max_y
+        check_4 = e1max_y >= e2_y
 
-            # Move human with spaceship
+        check_x = jnp.logical_and(check_1, check_2)
+        check_y = jnp.logical_and(check_3, check_4)
 
-            # Update human position
-
-            human_states = jax.lax.cond(
-                human[1]
-                >= self.consts.WORLD_HEIGHT
-                - self.consts.CITY_HEIGHT
-                - self.consts.HUMAN_HEIGHT,
-                lambda: human_states.at[index].set(
-                    [human[0], human[1], self.consts.HUMAN_STATE_RELEASED]
-                ),
-                lambda: human_states.at[index].set(
-                    [state.space_ship_x + 5, state.space_ship_y + 4, human[2]]
-                ),
-            )
-
-            return human_states
-
-        def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
-            human_states = jax.lax.switch(
-                jnp.array(human_states[index][2], int),
-                [
-                    lambda: human_states,  # Inactive
-                    lambda: human_states,  # Idle
-                    lambda: human_states,  # Abducted
-                    lambda: _human_falling(human_states, index, False),  # Falling
-                    lambda: _human_falling(human_states, index, True),  # Falling Deadly
-                    lambda: _human_catched(human_states, index),  # Catched
-                    lambda: _human_falling(human_states, index, False),  # Released
-                ],
-            )
-
-            return human_states
-
-        human_states = jax.lax.fori_loop(
-            0,
-            self.consts.HUMAN_MAX,
-            _human_move_switch,
-            human_states,
-        )
-
-        return state._replace(human_states=human_states)
-
-    def _camera_step(self, state: DefenderState) -> DefenderState:
-        # Returns: camera_offset
-        offset_gain = self.consts.CAMERA_OFFSET_GAIN
-        camera_offset = state.camera_offset
-        camera_offset += jnp.where(state.space_ship_facing_right, 1, -1) * offset_gain
-
-        camera_offset = jnp.clip(
-            camera_offset, -self.consts.CAMERA_OFFSET_MAX, self.consts.CAMERA_OFFSET_MAX
-        )
-
-        return state._replace(camera_offset=camera_offset)
-
-    def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
-        initial_state = DefenderState(
-            # Game
-            step_counter=jnp.array(0).astype(jnp.int32),
-            level=jnp.array(1).astype(jnp.int32),
-            score=jnp.array(0).astype(jnp.int32),
-            # Camera
-            camera_offset=jnp.array(self.consts.CAMERA_INIT_OFFSET).astype(jnp.int32),
-            # Space Ship
-            space_ship_speed=jnp.array(0).astype(jnp.float32),
-            space_ship_x=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_X).astype(
-                jnp.float32
-            ),
-            space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(
-                jnp.float32
-            ),
-            space_ship_facing_right=jnp.array(
-                self.consts.SPACE_SHIP_INIT_FACE_RIGHT, dtype=jnp.bool
-            ),
-            space_ship_lives=jnp.array(self.consts.SPACE_SHIP_INIT_LIVES).astype(
-                jnp.int32
-            ),
-            # Laser
-            laser_state=jnp.array(0).astype(jnp.int32),
-            laser_x=jnp.array(0).astype(jnp.float32),
-            laser_y=jnp.array(0).astype(jnp.float32),
-            laser_dir_x=jnp.array(0).astype(jnp.float32),
-            # Smart Bomb
-            smart_bomb_amount=jnp.array(self.consts.SPACE_SHIP_INIT_BOMBS).astype(
-                jnp.int32
-            ),
-            # Bullet
-            bullet_state=jnp.array(0).astype(jnp.int32),
-            bullet_x=jnp.array(0).astype(jnp.float32),
-            bullet_y=jnp.array(0).astype(jnp.float32),
-            bullet_dir_x=jnp.array(0).astype(jnp.float32),
-            bullet_dir_y=jnp.array(0).astype(jnp.float32),
-            # Enemies: x,y,type,arg1,arg2
-            enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)).astype(
-                jnp.float32
-            ),
-            killed_landers=jnp.array(0).astype(jnp.int32),
-            # Humans
-            human_states=jnp.array(self.consts.INITIAL_HUMAN_STATES).astype(
-                jnp.float32
-            ),
-            # Cooldowns
-            shooting_cooldown=jnp.array(0).astype(jnp.int32),
-            # Randomness
-            key=jnp.array(jax.random.PRNGKey(0)),
-        )
-        observation = self._get_observation(initial_state)
-        initial_state = self._start_level(initial_state, 0)
-        return observation, initial_state
+        return jnp.logical_and(check_x, check_y)
 
     def _check_space_ship_collision(self, state: DefenderState) -> DefenderState:
         is_colliding = jax.lax.cond(
-            state.bullet_state == self.consts.BULLET_STATE_ACTIVE,
+            state.bullet_active,
             lambda: self._is_colliding(
                 state.space_ship_x,
                 state.space_ship_y,
@@ -2177,7 +2171,9 @@ class JaxDefender(
             )
             return state
 
-        state = jax.lax.fori_loop(0, self.consts.HUMAN_MAX, check_for_falling, state)
+        state = jax.lax.fori_loop(
+            0, self.consts.HUMAN_MAX_AMOUNT, check_for_falling, state
+        )
         return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
@@ -2187,7 +2183,7 @@ class JaxDefender(
             e_y = e[1]
             # First check laser
             laser_is_colliding = jax.lax.cond(
-                state.laser_state == self.consts.LASER_STATE_ACTIVE,
+                state.laser_active,
                 lambda: self._is_colliding(
                     e_x,
                     e_y,
@@ -2220,7 +2216,7 @@ class JaxDefender(
             )
             state = jax.lax.cond(
                 laser_is_colliding,
-                lambda: state._replace(laser_state=self.consts.LASER_STATE_INACTIVE),
+                lambda: state._replace(laser_active=False),
                 lambda: state,
             )
             return state
@@ -2252,11 +2248,15 @@ class JaxDefender(
         state = self._space_ship_catching_human(state)
         return state
 
+    ## -------- GAME STATE CHANGERS ------------------------------
+
     def _start_level(self, state: DefenderState, level: int) -> DefenderState:
         # Spawn Lander
         state = jax.lax.fori_loop(
             0,
-            self.consts.LEVEL_AMOUNT_LANDER[level],
+            jnp.minimum(
+                self.consts.LANDER_LEVEL_AMOUNT[level], self.consts.LANDER_MAX_AMOUNT
+            ),
             lambda _, state: self.spawn_on_random_position_not_on_screen(
                 state, self.consts.LANDER
             ),
@@ -2266,7 +2266,9 @@ class JaxDefender(
         # Spawn Bomber
         state = jax.lax.fori_loop(
             0,
-            self.consts.LEVEL_AMOUNT_BOMBER[level],
+            jnp.minimum(
+                self.consts.BOMBER_LEVEL_AMOUNT[level], self.consts.BOMBER_MAX_AMOUNT
+            ),
             lambda _, state: self.spawn_on_random_position_not_on_screen(
                 state, self.consts.BOMBER
             ),
@@ -2276,7 +2278,9 @@ class JaxDefender(
         # Spawn Pod
         state = jax.lax.fori_loop(
             0,
-            self.consts.LEVEL_AMOUNT_POD[level],
+            jnp.minimum(
+                self.consts.POD_LEVEL_AMOUNT[level], self.consts.POD_MAX_AMOUNT
+            ),
             lambda _, state: self.spawn_on_random_position_not_on_screen(
                 state, self.consts.POD
             ),
@@ -2286,9 +2290,27 @@ class JaxDefender(
         # Spawn Swarmer
         state = jax.lax.fori_loop(
             0,
-            self.consts.LEVEL_AMOUNT_SWARMER[level],
+            jnp.minimum(
+                self.consts.SWARMERS_LEVEL_AMOUNT[level],
+                self.consts.SWARMERS_MAX_AMOUNT,
+            ),
             lambda _, state: self.spawn_on_random_position_not_on_screen(
                 state, self.consts.SWARMERS
+            ),
+            state,
+        )
+
+        # Spawn Humans
+        state = jax.lax.fori_loop(
+            0,
+            self.consts.HUMAN_LEVEL_AMOUNT[level],
+            lambda index, state: self._spawn_human(
+                state,
+                (
+                    10
+                    + index
+                    * (self.consts.WORLD_WIDTH / self.consts.HUMAN_LEVEL_AMOUNT[level])
+                ),
             ),
             state,
         )
@@ -2296,17 +2318,15 @@ class JaxDefender(
 
     def _end_level(self, state: DefenderState) -> DefenderState:
         state = state._replace(
-            camera_offset=jnp.array(self.consts.INITIAL_CAMERA_OFFSET),
+            camera_offset=jnp.array(self.consts.CAMERA_INIT_OFFSET),
             space_ship_speed=jnp.array(0),
-            space_ship_x=jnp.array(self.consts.INITIAL_SPACE_SHIP_X),
-            space_ship_y=jnp.array(self.consts.INITIAL_SPACE_SHIP_Y),
-            space_ship_facing_right=jnp.array(
-                self.consts.INITIAL_SPACE_SHIP_FACING_RIGHT
-            ),
-            laser_state=jnp.array(0),
-            bullet_state=jnp.array(0),
+            space_ship_x=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_X),
+            space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y),
+            space_ship_facing_right=jnp.array(self.consts.SPACE_SHIP_INIT_FACE_RIGHT),
+            laser_active=jnp.array(0),
+            bullet_active=jnp.array(0),
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)),
-            human_states=jnp.zeros((self.consts.HUMAN_MAX, 5)),
+            human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 5)),
             shooting_cooldown=jnp.array(0),
         )
         return state
@@ -2315,6 +2335,8 @@ class JaxDefender(
         # Shows game over animation, goes to end_level
 
         return state
+
+    ## -------- GAME STEP AND RESET ------------------------------
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
@@ -2344,6 +2366,61 @@ class JaxDefender(
         # Swap key to parent key
         state = state._replace(key=key)
         return observation, state, env_reward, done, info
+
+    def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
+        initial_state = DefenderState(
+            # Game
+            step_counter=jnp.array(0).astype(jnp.int32),
+            level=jnp.array(1).astype(jnp.int32),
+            score=jnp.array(0).astype(jnp.int32),
+            # Camera
+            camera_offset=jnp.array(self.consts.CAMERA_INIT_OFFSET).astype(jnp.int32),
+            # Space Ship
+            space_ship_speed=jnp.array(0).astype(jnp.float32),
+            space_ship_x=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_X).astype(
+                jnp.float32
+            ),
+            space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(
+                jnp.float32
+            ),
+            space_ship_facing_right=jnp.array(
+                self.consts.SPACE_SHIP_INIT_FACE_RIGHT
+            ).astype(jnp.bool),
+            space_ship_lives=jnp.array(self.consts.SPACE_SHIP_INIT_LIVES).astype(
+                jnp.int32
+            ),
+            # Laser
+            laser_active=jnp.array(False).astype(jnp.bool),
+            laser_x=jnp.array(0).astype(jnp.float32),
+            laser_y=jnp.array(0).astype(jnp.float32),
+            laser_dir_x=jnp.array(0).astype(jnp.float32),
+            # Smart Bomb
+            smart_bomb_amount=jnp.array(self.consts.SPACE_SHIP_INIT_BOMBS).astype(
+                jnp.int32
+            ),
+            # Bullet
+            bullet_active=jnp.array(False).astype(jnp.bool),
+            bullet_x=jnp.array(0).astype(jnp.float32),
+            bullet_y=jnp.array(0).astype(jnp.float32),
+            bullet_dir_x=jnp.array(0).astype(jnp.float32),
+            bullet_dir_y=jnp.array(0).astype(jnp.float32),
+            # Enemies: x,y,type,arg1,arg2
+            enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)).astype(
+                jnp.float32
+            ),
+            killed_landers=jnp.array(0).astype(jnp.int32),
+            # Humans
+            human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 3)).astype(
+                jnp.float32
+            ),
+            # Cooldowns
+            shooting_cooldown=jnp.array(0).astype(jnp.int32),
+            # Randomness
+            key=jnp.array(jax.random.PRNGKey(0)),
+        )
+        observation = self._get_observation(initial_state)
+        initial_state = self._start_level(initial_state, 0)
+        return observation, initial_state
 
     def render(self, state: DefenderState) -> jnp.ndarray:
         return self.renderer.render(state)
