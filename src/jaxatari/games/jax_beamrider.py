@@ -289,8 +289,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             mothership_position=jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS, dtype=jnp.float32),
             mothership_timer=jnp.array(0, dtype=jnp.int32),
             mothership_stage=jnp.array(0, dtype=jnp.int32),
-            player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS),
-            player_shot_vel=jnp.array([0, 0]),
+            player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32),
+            player_shot_vel=jnp.zeros((2,), dtype=jnp.float32),
             torpedoes_left=jnp.array(3),
             shooting_cooldown=jnp.array(0),
             bullet_type=jnp.array(self.consts.LASER_ID),
@@ -764,7 +764,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         new_bullet = jnp.logical_or(new_torpedo, new_laser)
 
         lanes = jnp.array(self.consts.BOTTOM_OF_LANES)
-        lane_velocities = jnp.array(self.consts.BOTTOM_TO_TOP_LANE_VECTORS)
+        lane_velocities = jnp.array(self.consts.BOTTOM_TO_TOP_LANE_VECTORS, dtype=jnp.float32)
         lane_index = jnp.argmax(x_before_change == lanes) 
         lane_velocity = lane_velocities[lane_index]
 
