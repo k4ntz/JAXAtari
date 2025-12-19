@@ -649,9 +649,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Collision should match what the player sees on screen:
         # - white UFO x-pos is shifted based on its y-pos (_get_ufo_alignment)
         # - player bullet x-pos is shifted based on its y-pos and type (_get_bullet_alignment)
-        ufo_pos_screen = new_white_ufo_pos.at[0, :].add(self._get_ufo_alignment(new_white_ufo_pos[1, :]))
+        ufo_pos_screen = new_white_ufo_pos.at[0, :].add(
+            self.renderer._get_ufo_alignment(new_white_ufo_pos[1, :])
+        )
         shot_pos_screen = new_shot_pos.at[0].add(
-            self._get_bullet_alignment(new_shot_pos[1], new_bullet_type)
+            self.renderer._get_bullet_alignment(new_shot_pos[1], new_bullet_type)
         )
 
         distance_to_bullet = jnp.abs(ufo_pos_screen.T - shot_pos_screen)
