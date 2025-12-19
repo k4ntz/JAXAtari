@@ -379,7 +379,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ms_center_y = ms_y + 3.5 
         
         # Check collision with player shot
-        shot_x = player_shot_position[0]
+        shot_x = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
         shot_y = player_shot_position[1]
         
         # Simple AABB
@@ -413,7 +413,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         # Player-UFO collision check
-        ufo_x = white_ufo_pos[0]
+        ufo_x = white_ufo_pos[0] + _get_ufo_alignment(white_ufo_pos[1])
         ufo_y = white_ufo_pos[1]
         player_left = player_x
         player_right = player_x + self.consts.PLAYER_WIDTH
@@ -1237,7 +1237,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_right = player_left + float(self.consts.PLAYER_WIDTH)
         player_y = float(self.consts.PLAYER_POS_Y)
 
-        shot_x = shot_pos[0]
+        shot_x = shot_pos[0] + _get_ufo_alignment(shot_pos[1])
         shot_y = shot_pos[1]
 
         hits = jnp.logical_and.reduce(jnp.array([
@@ -1610,7 +1610,7 @@ class BeamriderRenderer(JAXGameRenderer):
                 500,
             )
             raster = self.jr.render_at_clipped(
-                raster, state.level.enemy_shot_pos[0][idx], y_pos, enemy_shot_masks[sprite_idx]
+                raster, state.level.enemy_shot_pos[0][idx] + _get_ufo_alignment(y_pos), y_pos, enemy_shot_masks[sprite_idx]
             )
         return raster
 
