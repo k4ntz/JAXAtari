@@ -411,7 +411,7 @@ class BasicMathRenderer(JAXGameRenderer):
             is_active = num != -1
             
             return jax.lax.cond(is_active, 
-                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, state.arrPos, num, spacing=0), 
+                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
         raster = jax.lax.fori_loop(0, 6, render_nums, raster)
