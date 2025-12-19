@@ -99,7 +99,6 @@ class BeamriderConstants(NamedTuple):
 
     WHITE_UFOS_PER_SECTOR: int = 15
     SCORE_PER_WHITE_UFO: int = 48
-    MOTHERSHIP_VELOCITY: int = 1
     MOTHERSHIP_OFFSCREEN_POS: int = 500
     MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
     MOTHERSHIP_HEIGHT: int = 7
@@ -111,9 +110,7 @@ class LevelState(NamedTuple):
     player_pos: chex.Array
     player_vel: chex.Array
     white_ufo_left: chex.Array
-    comet_positions: chex.Array
     mothership_position: chex.Array
-    mothership_velocity: chex.Array
     mothership_timer: chex.Array
     mothership_stage: chex.Array
     player_shot_pos: chex.Array
@@ -131,7 +128,6 @@ class LevelState(NamedTuple):
     enemy_shot_timer: chex.Array
     white_ufo_time_on_lane: chex.Array
     white_ufo_attack_time: chex.Array
-    white_ufo_time_allowed: chex.Array
     white_ufo_pattern_id: chex.Array
     white_ufo_pattern_timer: chex.Array
     white_ufo_explosion_frame: chex.Array
@@ -230,9 +226,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_pos=jnp.array(77.0),
             player_vel=jnp.array(0.0),
             white_ufo_left=white_ufo_left,
-            comet_positions=jnp.array(0),
             mothership_position=jnp.array(self.consts.MOTHERSHIP_OFFSCREEN_POS, dtype=jnp.float32),
-            mothership_velocity=jnp.array(0, dtype=jnp.float32),
             mothership_timer=jnp.array(0, dtype=jnp.int32),
             mothership_stage=jnp.array(0, dtype=jnp.int32),
             player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS),
@@ -248,7 +242,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_timer=jnp.zeros((3,), dtype=jnp.int32),
             white_ufo_time_on_lane=jnp.array([0, 0, 0]),
             white_ufo_attack_time=jnp.zeros((3,), dtype=jnp.int32),
-            white_ufo_time_allowed=jnp.array([400, 600, 800]),
             white_ufo_pattern_id=jnp.zeros(3, dtype=jnp.int32),
             white_ufo_pattern_timer=jnp.zeros(3, dtype=jnp.int32),
             white_ufo_explosion_frame=jnp.zeros((3,), dtype=jnp.int32),
@@ -465,9 +458,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             player_pos=player_x,
             player_vel=vel_x,
             white_ufo_left=white_ufo_left,
-            comet_positions=jnp.array(0),
             mothership_position=mothership_position,
-            mothership_velocity=jnp.array(0, dtype=jnp.float32), # No longer used for velocity
             mothership_timer=mothership_timer,
             mothership_stage=mothership_stage,
             player_shot_pos=player_shot_position,
@@ -483,7 +474,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_timer=enemy_shot_timer,
             white_ufo_time_on_lane=white_ufo_time_on_lane,
             white_ufo_attack_time=white_ufo_attack_time,
-            white_ufo_time_allowed=state.level.white_ufo_time_allowed,
             white_ufo_pattern_id=white_ufo_pattern_id,
             white_ufo_pattern_timer=white_ufo_pattern_timer,
             white_ufo_explosion_frame=white_ufo_explosion_frame,
@@ -913,16 +903,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         return pattern_id, pattern_timer, time_on_lane, attack_time
-
-    def _white_ufo_closest_lane_id(self, position: chex.Array) -> chex.Array:
-        lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS, dtype=jnp.float32)
-        lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=jnp.float32)
-        lane_dx_over_dy = lane_vectors[:, 0] / lane_vectors[:, 1]
-
-        ufo_x = position[0].astype(jnp.float32)
-        ufo_y = position[1].astype(jnp.float32)
-        lane_x_at_ufo_y = lanes_top_x + lane_dx_over_dy * (ufo_y - float(self.consts.TOP_CLIP))
-        return jnp.argmin(jnp.abs(lane_x_at_ufo_y - ufo_x)).astype(jnp.int32)
 
     def _white_ufo_retreat_prob(self, attack_time: chex.Array) -> chex.Array:
         t = attack_time.astype(jnp.float32)
