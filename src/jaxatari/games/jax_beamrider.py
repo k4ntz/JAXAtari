@@ -67,7 +67,7 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_RETREAT_DURATION: int = 28
     ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK 
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, int, int, int, int, int, int] = (0,          42,            42,         42,         28,     0,      42) 
-    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] = (0.3, 0.2, 0.2, 0.2, 0.1)
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, float, float, float, float] =     (            0.3,           0.2,        0.2,                0.2,    0.1)
     WHITE_UFO_SPEED_FACTOR: float = 0.1
     WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
     WHITE_UFO_RETREAT_P_MIN: float = 0.005
@@ -363,12 +363,28 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             hit_mask,
             ufo_update.pos,
         )
-        enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, hit_count = self._enemy_shot_step(
+        enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
             state,
             white_ufo_pos,
             white_ufo_pattern_id,
             white_ufo_pattern_timer,
         )
+
+        # Player-UFO collision check
+        ufo_x = white_ufo_pos[0]
+        ufo_y = white_ufo_pos[1]
+        player_left = player_x
+        player_right = player_x + self.consts.PLAYER_WIDTH
+        player_y = float(self.consts.PLAYER_POS_Y)
+
+        ufo_hits = jnp.logical_and.reduce(jnp.array([
+            ufo_y >= player_y - 4.0,
+            ufo_y <= player_y + 10.0,
+            ufo_x >= player_left - 2.0,
+            ufo_x <= player_right + 2.0,
+        ]))
+        ufo_hit_count = jnp.sum(ufo_hits.astype(jnp.int32))
+        hit_count = shot_hit_count + ufo_hit_count
 
         line_positions, line_velocities = self._line_step(state)
         mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(
