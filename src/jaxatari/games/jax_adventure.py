@@ -43,13 +43,24 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
         {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
         #dragons
+        {'name': 'dragon_yellow_neutral', 'type': 'single', 'file': 'Dragon_yellow_neutral.npy'},
+        {'name': 'dragon_green-neutral', 'type': 'single', 'file': 'Dragon_green_neutral.npy'},
+        #ToDo remaining dragon animations
 
         #keys
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'},
-        {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'}
+        {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'},
         #gates
+        
+        #ToDo gates animation
 
         #items
+        {'name': 'sword', 'type': 'single', 'file': 'Sword.npy'},
+        {'name': 'bridge', 'type': 'single', 'file': 'Bridge.npy'},
+        {'name': 'magnet', 'type': 'single', 'file': 'Magnet.npy'},
+        #Chalice
+        {'name': 'chalice', 'type': 'single', 'file': 'Trophy_Pink.npy'}
+        #ToDo remaining chalice colors for blinking
     )
 
 
@@ -204,27 +215,27 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             player_x = jnp.array(78).astype(jnp.int32),
             player_y = jnp.array(174).astype(jnp.int32),
             step_counter = jnp.array(0).astype(jnp.int32),
-            dragon_yellow_x = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_yellow_y = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_green_x = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_green_y = jnp.array(0).astype(jnp.int32), #ToDo
+            dragon_yellow_x = jnp.array(120).astype(jnp.int32), #ToDo
+            dragon_yellow_y = jnp.array(50).astype(jnp.int32), #ToDo
+            dragon_green_x = jnp.array(120).astype(jnp.int32), #ToDo
+            dragon_green_y = jnp.array(70).astype(jnp.int32), #ToDo
             dragon_yellow = jnp.array(0).astype(jnp.int32), #ToDo
             dragon_green = jnp.array(0).astype(jnp.int32), #ToDo
             key_yellow_x = jnp.array(31).astype(jnp.int32),
             key_yellow_y = jnp.array(110).astype(jnp.int32),
-            key_black_x = jnp.array(41).astype(jnp.int32), #ToDo
-            key_black_y = jnp.array(120).astype(jnp.int32), #ToDo
+            key_black_x = jnp.array(120).astype(jnp.int32), #ToDo
+            key_black_y = jnp.array(90).astype(jnp.int32), #ToDo
             gate_yellow = jnp.array(0).astype(jnp.int32), #ToDo
             gate_black = jnp.array(0).astype(jnp.int32), #ToDo
             gate_white = jnp.array(0).astype(jnp.int32), #ToDo
-            sword_x = jnp.array(0).astype(jnp.int32), #ToDo
-            sword_y = jnp.array(0).astype(jnp.int32), #ToDo
-            bridge_x = jnp.array(0).astype(jnp.int32), #ToDo
-            bridge_y = jnp.array(0).astype(jnp.int32), #ToDo
-            magnet_x = jnp.array(0).astype(jnp.int32), #ToDo
-            magnet_y = jnp.array(0).astype(jnp.int32), #ToDo
-            chalice_x = jnp.array(0).astype(jnp.int32), #ToDo
-            chalice_y = jnp.array(0).astype(jnp.int32) #ToDo
+            sword_x = jnp.array(120).astype(jnp.int32), #ToDo
+            sword_y = jnp.array(110).astype(jnp.int32), #ToDo
+            bridge_x = jnp.array(120).astype(jnp.int32), #ToDo
+            bridge_y = jnp.array(130).astype(jnp.int32), #ToDo
+            magnet_x = jnp.array(120).astype(jnp.int32), #ToDo
+            magnet_y = jnp.array(150).astype(jnp.int32), #ToDo
+            chalice_x = jnp.array(120).astype(jnp.int32), #ToDo
+            chalice_y = jnp.array(170).astype(jnp.int32) #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -289,9 +300,12 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
             height=4
         )
 
+        #ToDo for the rest of the dragons, items etc.....
+
         return AdventureObservation(
             player=player,
             key_yellow=key_yellow
+            #ToDo for the rest of the dragons, items etc.....
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -321,6 +335,8 @@ class JaxPong(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
             }),
+
+            #ToDo for the rest of the dragons, items etc.....
         })
 
     def image_space(self) -> spaces.Box:
@@ -350,7 +366,7 @@ class AdventureRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(250, 160),
             channels=3,
-            #downscale=(84, 84)
+            #downscale=(200, 128)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
@@ -377,13 +393,24 @@ class AdventureRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         #dragons
-
+        dragon_yellow_mask = self.SHAPE_MASKS["dragon_yellow_neutral"]
+        raster = self.jr.render_at(raster, state.dragon_yellow_x, state.dragon_yellow_y, dragon_yellow_mask)
+        dragon_green_mask = self.SHAPE_MASKS["dragon_green-neutral"]
+        raster = self.jr.render_at(raster, state.dragon_green_x, state.dragon_green_y, dragon_green_mask)
         #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
         raster = self.jr.render_at(raster, state.key_yellow_x, state.key_yellow_y, key_yellow_mask)
         key_black_mask = self.SHAPE_MASKS["key_black"]
         raster = self.jr.render_at(raster, state.key_black_x, state.key_black_y, key_black_mask)
         #items
-
+        sword_mask = self.SHAPE_MASKS["sword"]
+        raster = self.jr.render_at(raster, state.sword_x, state.sword_y, sword_mask)
+        bridge_mask = self.SHAPE_MASKS["bridge"]
+        raster = self.jr.render_at(raster, state.bridge_x, state.bridge_y, bridge_mask)
+        magnet_mask = self.SHAPE_MASKS["magnet"]
+        raster = self.jr.render_at(raster, state.magnet_x, state.magnet_y, magnet_mask)
+        #chalice
+        chalice_mask = self.SHAPE_MASKS["chalice"]
+        raster = self.jr.render_at(raster, state.chalice_x, state.chalice_y, chalice_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
