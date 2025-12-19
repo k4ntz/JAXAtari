@@ -3,7 +3,6 @@ import os
 from enum import IntEnum
 from functools import partial
 from typing import NamedTuple, Optional, Tuple
-#sometimes the player laser shot doesnt hit the white ufo's, when player is in following lanes: far left low, far right middle, far right high.....what i found in 2 mins
 import chex
 import jax
 import jax.lax
