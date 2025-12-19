@@ -1,0 +1,37 @@
+
+import ale_py
+import gymnasium as gym
+import numpy as np
+
+env = gym.make("ALE/BeamRider-v5", render_mode="rgb_array", frameskip=1)
+env.reset(seed=42)
+
+def get_lines(frame):
+    blue_mask = (frame[:, :, 2] > 150) & (frame[:, :, 0] < 100)
+    row_counts = np.sum(blue_mask, axis=1)
+    line_rows = np.where(row_counts > 100)[0]
+    line_rows = line_rows[line_rows < 170]
+    if len(line_rows) == 0: return []
+    lines = []
+    current_line = [line_rows[0]]
+    for i in range(1, len(line_rows)):
+        if line_rows[i] == line_rows[i-1] + 1:
+            current_line.append(line_rows[i])
+        else:
+            lines.append(int(np.mean(current_line)))
+            current_line = [line_rows[i]]
+    lines.append(int(np.mean(current_line)))
+    return lines
+
+prev_lines = None
+for f in range(300):
+    env.step(0)
+    lines = get_lines(env.render())
+    if prev_lines:
+        # Compare first line that exists in both
+        if len(lines) > 0 and len(prev_lines) > 0:
+            diff = lines[0] - prev_lines[0]
+            if diff != 0:
+                print(f"Frame {f}: diff {diff}, lines {lines}")
+    prev_lines = lines
+env.close()
