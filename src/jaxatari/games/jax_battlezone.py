@@ -428,17 +428,19 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         alpha = self.consts.PLAYER_ROTATION_SPEED
         speed = self.consts.PLAYER_SPEED
         ###
+        sin_alpha = jnp.sin(alpha)
+        cos_alpha = jnp.cos(alpha)
         # Changing position bsed on player movement
         offset_xz = jnp.array([
             [0, 0],     # Noop
             [0, -speed],  # Up
-            [(prev_x*jnp.cos(alpha)-prev_z*jnp.sin(alpha))-prev_x, (prev_x*jnp.sin(alpha)+prev_z*jnp.cos(alpha))-prev_z],  # Right
+            [(prev_x*cos_alpha-prev_z*sin_alpha)-prev_x, (prev_x*sin_alpha+prev_z*cos_alpha)-prev_z],  # Right
             [(prev_x*jnp.cos(-alpha)-prev_z*jnp.sin(-alpha))-prev_x, (prev_x*jnp.sin(-alpha)+prev_z*jnp.cos(-alpha))-prev_z],  # Left
             [0, speed],  # Down
-            [(prev_x * jnp.cos(alpha) - (prev_z - speed) * jnp.sin(alpha)) - prev_x, (prev_x * jnp.sin(alpha) + (prev_z - speed) * jnp.cos(alpha)) - prev_z], # UpRight
-            [(prev_x * jnp.cos(alpha) + (prev_z - speed) * jnp.sin(alpha)) - prev_x, (-prev_x * jnp.sin(alpha) + (prev_z - speed) * jnp.cos(alpha)) - prev_z],  # UpLeft
-            [(prev_x * jnp.cos(alpha) + (prev_z + speed) * jnp.sin(alpha)) - prev_x, (-prev_x * jnp.sin(alpha) + (prev_z + speed) * jnp.cos(alpha)) - prev_z],  # DownRight
-            [(prev_x * jnp.cos(alpha) - (prev_z + speed) * jnp.sin(alpha)) - prev_x, (prev_x * jnp.sin(alpha) + (prev_z + speed) * jnp.cos(alpha)) - prev_z]  # DownLeft
+            [(prev_x * cos_alpha - (prev_z - speed) * sin_alpha) - prev_x, (prev_x * sin_alpha + (prev_z - speed) * cos_alpha) - prev_z], # UpRight
+            [(prev_x * cos_alpha + (prev_z - speed) * sin_alpha) - prev_x, (-prev_x * sin_alpha + (prev_z - speed) * cos_alpha) - prev_z],  # UpLeft
+            [(prev_x * cos_alpha + (prev_z + speed) * sin_alpha) - prev_x, (-prev_x * sin_alpha + (prev_z + speed) * cos_alpha) - prev_z],  # DownRight
+            [(prev_x * cos_alpha - (prev_z + speed) * sin_alpha) - prev_x, (prev_x * sin_alpha + (prev_z + speed) * cos_alpha) - prev_z]  # DownLeft
         ])
         #jax.debug.print("{}",jnp.argmax(direction)
         idx = jnp.argmax(player_direction)
