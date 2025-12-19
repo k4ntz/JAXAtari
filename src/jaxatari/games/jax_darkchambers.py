@@ -1325,9 +1325,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             0.08,  # silver chalice (has actually color, just a little bit smaller)
             0.06,  # amulet
             0.06,  # gold chalice
-            0.07,  # shield
-            0.06,  # gun
-            0.04,  # bomb
+            0.04,  # shield (rarer – single-pickup buff)
+            0.035, # gun (rarer – single-pickup buff)
+            0.08,  # bomb (grenade) – more common
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
         # Spawn regular items (leave first 3 for key, exit, ladder_down)
@@ -2296,7 +2296,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     ITEM_SILVER_CHALICE, ITEM_AMULET, ITEM_GOLD_CHALICE,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
-                spawn_probs = jnp.array([0.18, 0.08, 0.16, 0.11, 0.10, 0.08, 0.08, 0.09, 0.07, 0.05], dtype=jnp.float32)
+                spawn_probs = jnp.array([0.18, 0.08, 0.16, 0.11, 0.10, 0.08, 0.08, 0.06, 0.05, 0.10], dtype=jnp.float32)
                 regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
                 new_types = jnp.concatenate([jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN]), regular_items])
                 new_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
