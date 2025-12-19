@@ -524,6 +524,25 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         hit_count = shot_hit_count + ufo_hit_count + green_blocker_hit_count
 
+        # --- Death Logic ---
+        current_death_timer = state.level.death_timer
+        is_hit = hit_count > 0
+        
+        # Start dying if we got hit and weren't already dying
+        start_dying = jnp.logical_and(is_hit, current_death_timer == 0)
+        
+        # Next timer value
+        next_death_timer = jnp.where(
+            start_dying, 
+            self.consts.DEATH_DURATION, 
+            jnp.maximum(current_death_timer - 1, 0)
+        )
+        
+        is_dying_sequence = next_death_timer > 0
+        
+        # Check if we just finished the death sequence (transition 1 -> 0)
+        just_died = jnp.logical_and(current_death_timer > 0, next_death_timer == 0)
+
         line_positions, line_velocities = self._line_step(state)
         mothership_position, mothership_timer, mothership_stage, sector_advanced_m = self._mothership_step(
             state, 
@@ -531,7 +550,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_explosion_frame,
             hit_mothership
         )
-        sector_advanced = jnp.logical_or(False, sector_advanced_m)
+        # Advance sector if mothership finishes OR player died after clearing UFOs
+        died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
+        sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
         sector = state.sector + sector_advanced.astype(jnp.int32)
 
         white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
@@ -576,25 +597,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         green_blocker_spawn_timer = jnp.where(sector_advanced, 0, green_blocker_spawn_timer)
         green_blocker_remaining = jnp.where(sector_advanced, 0, green_blocker_remaining)
         green_blocker_wave_active = jnp.where(sector_advanced, False, green_blocker_wave_active)
-
-        # --- Death Logic ---
-        current_death_timer = state.level.death_timer
-        is_hit = hit_count > 0
-        
-        # Start dying if we got hit and weren't already dying
-        start_dying = jnp.logical_and(is_hit, current_death_timer == 0)
-        
-        # Next timer value
-        next_death_timer = jnp.where(
-            start_dying, 
-            self.consts.DEATH_DURATION, 
-            jnp.maximum(current_death_timer - 1, 0)
-        )
-        
-        is_dying_sequence = next_death_timer > 0
-        
-        # Check if we just finished the death sequence (transition 1 -> 0)
-        just_died = jnp.logical_and(current_death_timer > 0, next_death_timer == 0)
 
         # Apply Death State Overrides (if dying)
         # - Despawn enemies
