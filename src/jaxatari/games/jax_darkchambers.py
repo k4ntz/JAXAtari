@@ -55,7 +55,7 @@ ITEM_HEART = 1          # +health, no points
 ITEM_POISON = 2         # -4 health, no points
 ITEM_TRAP = 3           # -6 health, no points
 ITEM_STRONGBOX = 4      # +100 points
-ITEM_SILVER_CHALICE = 5 # +500 points
+ITEM_AMBER_CHALICE = 5 # +500 points
 ITEM_AMULET = 6         # +1000 points
 ITEM_GOLD_CHALICE = 7   # +3000 points
 ITEM_SHIELD = 8         # Damage reduction
@@ -90,11 +90,12 @@ BULLET_SPEED = 3             # Slightly faster than player speed (2)
 BULLET_SPEED_WITH_GUN = 6    # Much faster when gun is active
 
 # Wizard projectile configuration
-ENEMY_MAX_BULLETS = 8
+ENEMY_MAX_BULLETS = 100
 ENEMY_BULLET_WIDTH = 3
 ENEMY_BULLET_HEIGHT = 3
 ENEMY_BULLET_SPEED = 2
-WIZARD_SHOOT_INTERVAL = 40  # steps between shots (gate) - increased from 20 to slow down shooting
+WIZARD_SHOOT_INTERVAL = 20  # base steps between shots for each wizard
+WIZARD_SHOOT_OFFSET_MAX = 20  # random offset added to shooting interval (0-20)
 
 # Lives configuration
 MAX_LIVES = 5  # Number of lives player starts with
@@ -201,6 +202,7 @@ class DarkChambersState(NamedTuple):
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
     enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
     enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
+    wizard_shoot_timers: chex.Array  # shape: (NUM_ENEMIES,) - countdown to next shot for wizards
     
     spawner_positions: chex.Array  # shape: (NUM_SPAWNERS, 2)
     spawner_health: chex.Array     # shape: (NUM_SPAWNERS,) - health remaining
@@ -545,7 +547,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [6, 6],                 # 2 POISON
             [6, 6],                 # 3 TRAP
             [7, 7],                 # 4 STRONGBOX (small)
-            [9, 9],                 # 5 SILVER CHALICE (medium)
+            [9, 9],                 # 5 AMBER CHALICE (medium)
             [11, 11],               # 6 AMULET (large)
             [13, 13],               # 7 GOLD CHALICE (largest)
             [6, 6],                 # 8 SHIELD
@@ -563,7 +565,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             9,   # POISON (green)
             13,  # TRAP (brown)
             12,  # STRONGBOX (yellow)
-            12,  # SILVER CHALICE (yellow)
+            12,  # AMBER CHALICE (yellow)
             12,  # AMULET (yellow)
             12,  # GOLD CHALICE (yellow)
             15,  # SHIELD (blue)
@@ -579,7 +581,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.POISON_ID,        # 2: ITEM_POISON
             self.TRAP_ID,          # 3: ITEM_TRAP
             self.TREASURE_ID,      # 4: ITEM_STRONGBOX
-            self.TREASURE_ID,      # 5: ITEM_SILVER_CHALICE
+            self.TREASURE_ID,      # 5: ITEM_AMBER_CHALICE
             self.TREASURE_ID,      # 6: ITEM_AMULET
             self.TREASURE_ID,      # 7: ITEM_GOLD_CHALICE
             self.SHIELD_ID,        # 8: ITEM_SHIELD
@@ -1206,6 +1208,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )  # Random types from 2 (Wraith) to 5 (Grim Reaper)
         enemy_active = jnp.ones(NUM_ENEMIES, dtype=jnp.int32)
         
+        # Initialize wizard shooting timers with random offsets (base interval + 0-20 random offset)
+        key, subkey = jax.random.split(key)
+        wizard_shoot_timers = jax.random.randint(
+            subkey, (NUM_ENEMIES,), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32
+        )
+        
         # Spawn spawners (retry until not on wall)
         def spawn_spawner(carry, i):
             positions, key = carry
@@ -1309,7 +1317,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_POISON,         # -4 health
             ITEM_TRAP,           # -6 health (increase frequency)
             ITEM_STRONGBOX,      # 100 pts
-            ITEM_SILVER_CHALICE, # 500 pts
+            ITEM_AMBER_CHALICE,  # 500 pts
             ITEM_AMULET,         # 1000 pts
             ITEM_GOLD_CHALICE,   # 3000 pts
             ITEM_SHIELD,         # damage reduction
@@ -1322,7 +1330,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             0.06,  # poison
             0.14,  # trap
             0.08,  # strongbox
-            0.08,  # silver chalice (has actually color, just a little bit smaller)
+            0.08,  # amber chalice (yellow mid-tier)
             0.06,  # amulet
             0.06,  # gold chalice
             0.04,  # shield (rarer – single-pickup buff)
@@ -1346,6 +1354,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_positions=enemy_positions,
             enemy_types=enemy_types,
             enemy_active=enemy_active,
+                wizard_shoot_timers=wizard_shoot_timers,
             spawner_positions=spawner_positions,
             spawner_health=spawner_health,
             spawner_active=spawner_active,
@@ -1567,37 +1576,69 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 1,
                 updated_bullet_active
             )
+            # Wizard shooting: all wizards shoot independently based on their timers
+            # Decrement all wizard timers
+            new_wizard_timers = state.wizard_shoot_timers - 1
 
-            # Wizard shooting: sporadically fire towards player
-            can_enemy_spawn_gate = (state.step_counter % WIZARD_SHOOT_INTERVAL) == 0
+            # Check which wizards should shoot (timer <= 0, wizard type, active)
             wizard_mask = (state.enemy_active == 1) & (state.enemy_types == ENEMY_WIZARD)
-            has_wizard = jnp.any(wizard_mask)
-            first_wizard_idx = jnp.argmax(wizard_mask.astype(jnp.int32))
-            enemy_can_spawn = can_enemy_spawn_gate & has_wizard
-            # Use current enemy positions for shooting; movement updates happen later
-            wiz_pos = state.enemy_positions[first_wizard_idx]
-            wiz_cx = wiz_pos[0] + self.consts.ENEMY_WIDTH // 2
-            wiz_cy = wiz_pos[1] + self.consts.ENEMY_HEIGHT // 2
-            p_cx = new_x + self.consts.PLAYER_WIDTH // 2
-            p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
-            dir_x_e = jnp.sign(p_cx - wiz_cx) * ENEMY_BULLET_SPEED
-            dir_y_e = jnp.sign(p_cy - wiz_cy) * ENEMY_BULLET_SPEED
-            enemy_bullet_spawn = jnp.array([wiz_cx, wiz_cy, dir_x_e, dir_y_e], dtype=jnp.int32)
-            e_first_inactive = jnp.argmax(state.enemy_bullet_active == 0)
-            e_can_spawn = jnp.any(state.enemy_bullet_active == 0) & enemy_can_spawn
-            new_enemy_bullet_positions = jnp.where(
-                (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == e_first_inactive) & e_can_spawn,
-                enemy_bullet_spawn,
-                state.enemy_bullet_positions
+            should_shoot = wizard_mask & (new_wizard_timers <= 0)
+
+            # Reset timers for wizards that shoot (base interval + random offset)
+            rng, subkey = jax.random.split(state.key)
+            new_offsets = jax.random.randint(
+                subkey, (NUM_ENEMIES,), 0, WIZARD_SHOOT_OFFSET_MAX + 1, dtype=jnp.int32
             )
-            new_enemy_bullet_active = jnp.where(
-                (jnp.arange(ENEMY_MAX_BULLETS) == e_first_inactive) & e_can_spawn,
-                1,
-                state.enemy_bullet_active
+            reset_timers = WIZARD_SHOOT_INTERVAL + new_offsets
+            new_wizard_timers = jnp.where(should_shoot, reset_timers, new_wizard_timers)
+
+            # Spawn bullets for all shooting wizards
+            # Process each wizard that should shoot
+            def spawn_wizard_bullet(carry, wizard_idx):
+                bullet_positions, bullet_active, key_in = carry
+
+                # Check if this wizard should shoot
+                shoots = should_shoot[wizard_idx]
+
+                # Find first inactive bullet slot
+                first_inactive_idx = jnp.argmax(bullet_active == 0)
+                can_spawn_bullet = jnp.any(bullet_active == 0) & shoots
+
+                # Calculate bullet trajectory towards player
+                wiz_pos = state.enemy_positions[wizard_idx]
+                wiz_cx = wiz_pos[0] + self.consts.ENEMY_WIDTH // 2
+                wiz_cy = wiz_pos[1] + self.consts.ENEMY_HEIGHT // 2
+                p_cx = new_x + self.consts.PLAYER_WIDTH // 2
+                p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
+                dir_x_e = jnp.sign(p_cx - wiz_cx) * ENEMY_BULLET_SPEED
+                dir_y_e = jnp.sign(p_cy - wiz_cy) * ENEMY_BULLET_SPEED
+
+                bullet_spawn = jnp.array([wiz_cx, wiz_cy, dir_x_e, dir_y_e], dtype=jnp.int32)
+
+                # Update bullet arrays if this wizard can spawn
+                new_positions = jnp.where(
+                    (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == first_inactive_idx) & can_spawn_bullet,
+                    bullet_spawn,
+                    bullet_positions
+                )
+                new_active = jnp.where(
+                    (jnp.arange(ENEMY_MAX_BULLETS) == first_inactive_idx) & can_spawn_bullet,
+                    1,
+                    bullet_active
+                )
+
+                return (new_positions, new_active, key_in), None
+
+            # Process all wizards sequentially to spawn bullets
+            (new_enemy_bullet_positions, new_enemy_bullet_active, rng), _ = jax.lax.scan(
+                spawn_wizard_bullet,
+                (state.enemy_bullet_positions, state.enemy_bullet_active, rng),
+                jnp.arange(NUM_ENEMIES)
             )
+
             # Move enemy bullets
-            moved_enemy_bullets = state.enemy_bullet_positions + jnp.concatenate([
-                state.enemy_bullet_positions[:, 2:], jnp.zeros((ENEMY_MAX_BULLETS, 2), dtype=jnp.int32)
+            moved_enemy_bullets = new_enemy_bullet_positions + jnp.concatenate([
+                new_enemy_bullet_positions[:, 2:], jnp.zeros((ENEMY_MAX_BULLETS, 2), dtype=jnp.int32)
             ], axis=1)
             e_in_bounds = (
                 (moved_enemy_bullets[:, 0] >= 0)
@@ -1612,26 +1653,22 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 return jnp.any(b_overlap_x & b_overlap_y)
             enemy_bullet_wall_collisions = jax.vmap(check_enemy_bullet_wall_collision)(moved_enemy_bullets[:, :2])
             updated_enemy_bullet_positions = jnp.where(
-                state.enemy_bullet_active[:, None] == 1,
+                new_enemy_bullet_active[:, None] == 1,
                 moved_enemy_bullets,
-                state.enemy_bullet_positions
+                new_enemy_bullet_positions
             )
-            updated_enemy_bullet_active = state.enemy_bullet_active & e_in_bounds.astype(jnp.int32) & (~enemy_bullet_wall_collisions).astype(jnp.int32)
-            final_enemy_bullet_positions = jnp.where(
-                (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == e_first_inactive) & e_can_spawn,
-                enemy_bullet_spawn,
-                updated_enemy_bullet_positions
-            )
-            final_enemy_bullet_active = jnp.where(
-                (jnp.arange(ENEMY_MAX_BULLETS) == e_first_inactive) & e_can_spawn,
-                1,
-                updated_enemy_bullet_active
-            )
+            updated_enemy_bullet_active = new_enemy_bullet_active & e_in_bounds.astype(jnp.int32) & (~enemy_bullet_wall_collisions).astype(jnp.int32)
+            
+            # Final enemy bullet state
+            final_enemy_bullet_positions = updated_enemy_bullet_positions
+            final_enemy_bullet_active = updated_enemy_bullet_active
             
             # Enemy random walk
-            rng, subkey = jax.random.split(state.key)
             enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
             enemy_alive = state.enemy_active == 1
+            
+            p_cx = new_x + self.consts.PLAYER_WIDTH // 2
+            p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
             
             player_center = jnp.array(
                 [new_x + self.consts.PLAYER_WIDTH // 2,
@@ -1938,7 +1975,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 0,                    # 2 POISON
                 0,                    # 3 TRAP
                 100,                  # 4 STRONGBOX
-                500,                  # 5 SILVER CHALICE
+                500,                  # 5 AMBER CHALICE
                 1000,                 # 6 AMULET
                 3000,                 # 7 GOLD CHALICE
                 0,                    # 8 SHIELD
@@ -2071,7 +2108,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 
                 # Random item type (heart or treasures)
                 key, subkey = jax.random.split(key)
-                drop_types = jnp.array([ITEM_HEART, ITEM_STRONGBOX, ITEM_SILVER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
+                drop_types = jnp.array([ITEM_HEART, ITEM_STRONGBOX, ITEM_AMBER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
                 drop_type = jax.random.choice(subkey, drop_types)
                 
                 # Use spawner position (already placed off walls during reset)
@@ -2154,7 +2191,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # spawn each enemy exactly in the middle of the spawner
             def try_spawn_from_spawner(carry, spawner_idx):
-                enemy_pos, enemy_types_arr, enemy_active_arr, key = carry
+                enemy_pos, enemy_types_arr, enemy_active_arr, timers_arr, key = carry
                 should_spawn = should_spawn_enemy[spawner_idx]
                 
                 # Find first inactive enemy slot
@@ -2164,6 +2201,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 # Random enemy type
                 key, subkey = jax.random.split(key)
                 spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32)
+                
+                # Random wizard timer for new enemy (in case it's a wizard)
+                key, subkey = jax.random.split(key)
+                new_timer = jax.random.randint(subkey, (), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32)
                 
                 spawner_pos = state.spawner_positions[spawner_idx]
                 
@@ -2188,12 +2229,17 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     1,
                     enemy_active_arr
                 )
+                new_timers = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    new_timer,
+                    timers_arr
+                )
                 
-                return (new_pos, new_types, new_active, key), None
-            
-            (spawned_enemy_positions, spawned_enemy_types, spawned_enemy_active, rng), _ = jax.lax.scan(
+                return (new_pos, new_types, new_active, new_timers, key), None
+
+            (enemy_positions_after_spawner, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng), _ = jax.lax.scan(
                 try_spawn_from_spawner,
-                (final_enemy_positions, new_enemy_types, new_enemy_active, rng),
+                (final_enemy_positions, new_enemy_types, new_enemy_active, new_wizard_timers, rng),
                 jnp.arange(NUM_SPAWNERS)
             )
             
@@ -2293,7 +2339,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 key, subkey = jax.random.split(key)
                 all_item_types = jnp.array([
                     ITEM_HEART, ITEM_POISON, ITEM_TRAP, ITEM_STRONGBOX,
-                    ITEM_SILVER_CHALICE, ITEM_AMULET, ITEM_GOLD_CHALICE,
+                    ITEM_AMBER_CHALICE, ITEM_AMULET, ITEM_GOLD_CHALICE,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
                 spawn_probs = jnp.array([0.18, 0.08, 0.16, 0.11, 0.10, 0.08, 0.08, 0.06, 0.05, 0.10], dtype=jnp.float32)
@@ -2324,8 +2370,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             def relocate_enemy(carry, i):
                 positions_arr, key_in = carry
-                cur = spawned_enemy_positions[i]
-                is_active = spawned_enemy_active[i] == 1
+                cur = enemy_positions_after_spawner[i]
+                is_active = enemy_active_after_spawner[i] == 1
             
                 def try_once(_, inner):
                     pos, key_loc, found = inner
@@ -2347,20 +2393,24 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 return (positions_arr, key_out), None
             
             rng, sk = jax.random.split(rng)
-            init_epos = spawned_enemy_positions
+            init_epos = enemy_positions_after_spawner
             (relocated_enemy_positions, rng), _ = jax.lax.scan(relocate_enemy, (init_epos, sk), jnp.arange(NUM_ENEMIES))
             
             # On level change going UP, spawn additional zombies
-            def spawn_level_enemies(key_in, positions_in, types_in, active_in):
+            def spawn_level_enemies(key_in, positions_in, types_in, active_in, timers_in):
                 """Spawn 3-5 zombies when entering a new higher level."""
                 rng_local, subkey = jax.random.split(key_in)
                 num_to_spawn = 4  # Spawn 4 zombies per new level
                 
                 def spawn_one_zombie(carry, spawn_idx):
-                    pos_arr, typ_arr, act_arr, key_loc = carry
+                    pos_arr, typ_arr, act_arr, tim_arr, key_loc = carry
                     # Find first inactive enemy slot
                     first_inactive_idx = jnp.argmax(act_arr == 0)
                     slot_available = jnp.any(act_arr == 0)
+                    
+                    # Random timer for new zombie (zombies don't shoot but keep consistent state)
+                    key_loc, sk = jax.random.split(key_loc)
+                    new_timer = jax.random.randint(sk, (), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32)
                     
                     # Random position avoiding walls
                     def try_pos(_, inner):
@@ -2393,26 +2443,32 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         1,
                         act_arr
                     )
-                    return (pos_arr, typ_arr, act_arr, key_loc), None
+                    tim_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
+                        new_timer,
+                        tim_arr
+                    )
+                    return (pos_arr, typ_arr, act_arr, tim_arr, key_loc), None
                 
-                (new_pos, new_typ, new_act, rng_local), _ = jax.lax.scan(
+                (new_pos, new_typ, new_act, new_tim, rng_local), _ = jax.lax.scan(
                     spawn_one_zombie,
-                    (positions_in, types_in, active_in, subkey),
+                    (positions_in, types_in, active_in, timers_in, subkey),
                     jnp.arange(num_to_spawn)
                 )
-                return new_pos, new_typ, new_act, rng_local
+                return new_pos, new_typ, new_act, new_tim, rng_local
             
             # Apply enemy spawning only if going up to a new level
-            spawned_pos, spawned_typ, spawned_act, rng = jax.lax.cond(
+            spawned_pos, spawned_typ, spawned_act, spawned_tim, rng = jax.lax.cond(
                 level_changed & going_up,
-                lambda _: spawn_level_enemies(rng, relocated_enemy_positions, spawned_enemy_types, spawned_enemy_active),
-                lambda _: (relocated_enemy_positions, spawned_enemy_types, spawned_enemy_active, rng),
+                lambda _: spawn_level_enemies(rng, relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner),
+                lambda _: (relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng),
                 operand=None
             )
             
             final_enemy_positions_after_level = spawned_pos
             final_enemy_types_after_level = spawned_typ
             final_enemy_active_after_level = spawned_act
+            final_wizard_timers_after_level = spawned_tim
             
             # On level change, respawn spawners avoiding new level walls
             def respawn_spawners_for_level(key):
@@ -2480,6 +2536,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 enemy_positions=final_enemy_positions_after_level,
                 enemy_types=final_enemy_types_after_level,
                 enemy_active=final_enemy_active_after_level,
+                    wizard_shoot_timers=final_wizard_timers_after_level,
                 spawner_positions=use_sp_positions,
                 spawner_health=use_sp_health,
                 spawner_active=use_sp_active,
