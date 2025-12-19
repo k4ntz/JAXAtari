@@ -626,22 +626,29 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         white_ufo_attack_time = jnp.where(hit_mask, 0, ufo_update.attack_time)
 
         # When the remaining UFO counter drops below 3, only keep that many white UFOs active.
+        # Also suppress during initialization.
         active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
         active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
+        effective_active_mask = jnp.logical_and(active_mask, jnp.logical_not(is_init))
+        
         ufo_offscreen = jnp.tile(
             jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1),
             (1, 3),
         )
-        white_ufo_pos = jnp.where(active_mask[None, :], white_ufo_pos, ufo_offscreen)
-        white_ufo_vel = jnp.where(active_mask[None, :], white_ufo_vel, 0.0)
-        white_ufo_time_on_lane = jnp.where(active_mask, white_ufo_time_on_lane, 0)
-        white_ufo_attack_time = jnp.where(active_mask, white_ufo_attack_time, 0)
-        white_ufo_pattern_id = jnp.where(active_mask, white_ufo_pattern_id, int(WhiteUFOPattern.IDLE))
-        white_ufo_pattern_timer = jnp.where(active_mask, white_ufo_pattern_timer, 0)
+        white_ufo_pos = jnp.where(effective_active_mask[None, :], white_ufo_pos, ufo_offscreen)
+        white_ufo_vel = jnp.where(effective_active_mask[None, :], white_ufo_vel, 0.0)
+        white_ufo_time_on_lane = jnp.where(effective_active_mask, white_ufo_time_on_lane, 0)
+        white_ufo_attack_time = jnp.where(effective_active_mask, white_ufo_attack_time, 0)
+        white_ufo_pattern_id = jnp.where(effective_active_mask, white_ufo_pattern_id, int(WhiteUFOPattern.IDLE))
+        white_ufo_pattern_timer = jnp.where(effective_active_mask, white_ufo_pattern_timer, 0)
 
-        enemy_shot_pos = jnp.where(active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
-        enemy_shot_timer = jnp.where(active_mask, enemy_shot_timer, 0)
-        enemy_shot_lane = jnp.where(active_mask, enemy_shot_lane, 0)
+        enemy_shot_offscreen = jnp.tile(
+            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1),
+            (1, 3),
+        )
+        enemy_shot_pos = jnp.where(effective_active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
+        enemy_shot_timer = jnp.where(effective_active_mask, enemy_shot_timer, 0)
+        enemy_shot_lane = jnp.where(effective_active_mask, enemy_shot_lane, 0)
 
         enemy_shot_pos = jnp.where(sector_advanced, enemy_shot_offscreen, enemy_shot_pos)
         enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
