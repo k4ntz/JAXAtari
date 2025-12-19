@@ -46,7 +46,6 @@ class DunkConstants:
     BASKET_POSITION: Tuple[int,int] = (80,10)
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (25, 135, 90) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
-    MATCH_STEPS: int = 1200  # number of steps per match (tunable)
     MAX_SCORE: int = 10
     DUNK_RADIUS: int = 18
     INSIDE_RADIUS: int = 50
@@ -946,9 +945,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_done(self, state: DunkGameState) -> bool:
         """Determines if the environment state is a terminal state"""
-        is_max_steps_reached = state.step_counter >= self.constants.MATCH_STEPS
         is_max_score_reached = (state.player_score >= self.constants.MAX_SCORE) | (state.enemy_score >= self.constants.MAX_SCORE)
-        return is_max_steps_reached | is_max_score_reached
+        return is_max_score_reached
 
     def _get_info(self, state: DunkGameState) -> DunkInfo:
         """Extracts information from the environment state."""
