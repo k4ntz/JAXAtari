@@ -99,7 +99,6 @@ class BeamriderConstants(NamedTuple):
     NEW_LINE_THRESHHOLD_BOTTOM_LINE = 54.0
 
     WHITE_UFOS_PER_SECTOR: int = 1
-    SCORE_PER_WHITE_UFO: int = 48
     GREEN_BLOCKER_MAX: int = 8
     GREEN_BLOCKER_WAVE_MIN: int = 2
     GREEN_BLOCKER_WAVE_MAX: int = 8
@@ -565,6 +564,18 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ufo_explosion_frame,
             hit_mothership
         )
+
+        # --- Dynamic Scoring for Mothership and HP Bonus ---
+        clamped_sector = jnp.minimum(state.sector, 89)
+        ms_score_val = 300 + 30 * clamped_sector
+        hp_bonus_per_life = 100 + 10 * clamped_sector
+        
+        # Add mothership hit score
+        score = jnp.where(hit_mothership, score + ms_score_val, score)
+        
+        # Add HP bonus when sector is completed via mothership
+        score = jnp.where(sector_advanced_m, score + (hp_bonus_per_life * state.lives), score)
+
         # Advance sector if mothership finishes OR player died after clearing UFOs
         died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
         sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
@@ -868,7 +879,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             jnp.maximum(state.level.white_ufo_left - 1, 0),
             state.level.white_ufo_left,
         )
-        score = jnp.where(hit_exists, state.score + self.consts.SCORE_PER_WHITE_UFO, state.score)
+        clamped_sector = jnp.minimum(state.sector, 89)
+        ufo_score = 40 + 4 * clamped_sector
+        score = jnp.where(hit_exists, state.score + ufo_score, state.score)
         return (enemy_pos, player_shot_pos, new_patterns, new_timers, white_ufo_left, score, hit_mask)
     
     def _update_enemy_explosions(
