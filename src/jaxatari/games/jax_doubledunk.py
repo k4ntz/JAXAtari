@@ -640,37 +640,30 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_passing(self, state: DunkGameState, actions: Tuple[int, ...]) -> Tuple[BallState, chex.Array, chex.Array]:
         """Handles the logic for passing the ball."""
-        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
         is_pass_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.PASS)
+        
+        player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        actions_stacked = jnp.stack(actions)
 
-        is_p1_inside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p1_outside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_inside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_outside_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
+        def check_passing(pid, p_action):
+            is_passing = (state.offensive_action_cooldown == 0) & is_pass_step & (ball_state.holder == pid) & jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_PASS_ACTIONS)))
+            return is_passing
 
-        receiver = jax.lax.select(is_p1_inside_passing, PlayerID.PLAYER1_OUTSIDE,
-                      jax.lax.select(is_p1_outside_passing, PlayerID.PLAYER1_INSIDE,
-                      jax.lax.select(is_p2_inside_passing, PlayerID.PLAYER2_OUTSIDE,
-                      jax.lax.select(is_p2_outside_passing, PlayerID.PLAYER2_INSIDE, PlayerID.NONE))))
+        passing_flags = jax.vmap(check_passing)(player_ids, actions_stacked)
+        is_passing = jnp.any(passing_flags)
+        passer_idx = jnp.argmax(passing_flags)
+        
+        # Receivers: 1->0, 0->1, 3->2, 2->3 (indices in player_ids)
+        receiver_indices = jnp.array([1, 0, 3, 2])
+        receiver_idx = receiver_indices[passer_idx]
+        receiver = player_ids[receiver_idx]
 
-        passer_x = jax.lax.select(is_p1_inside_passing, state.player1_inside.x,
-                   jax.lax.select(is_p1_outside_passing, state.player1_outside.x,
-                   jax.lax.select(is_p2_inside_passing, state.player2_inside.x,
-                   jax.lax.select(is_p2_outside_passing, state.player2_outside.x, 0))))
-        passer_y = jax.lax.select(is_p1_inside_passing, state.player1_inside.y,
-                   jax.lax.select(is_p1_outside_passing, state.player1_outside.y,
-                   jax.lax.select(is_p2_inside_passing, state.player2_inside.y,
-                   jax.lax.select(is_p2_outside_passing, state.player2_outside.y, 0))))
-        receiver_x = jax.lax.select(is_p1_inside_passing, state.player1_outside.x,
-                     jax.lax.select(is_p1_outside_passing, state.player1_inside.x,
-                     jax.lax.select(is_p2_inside_passing, state.player2_outside.x,
-                     jax.lax.select(is_p2_outside_passing, state.player2_inside.x, 0))))
-        receiver_y = jax.lax.select(is_p1_inside_passing, state.player1_outside.y,
-                     jax.lax.select(is_p1_outside_passing, state.player1_inside.y,
-                     jax.lax.select(is_p2_inside_passing, state.player2_outside.y,
-                     jax.lax.select(is_p2_outside_passing, state.player2_inside.y, 0))))
+        passer_x = players.x[passer_idx]
+        passer_y = players.y[passer_idx]
+        receiver_x = players.x[receiver_idx]
+        receiver_y = players.y[receiver_idx]
 
         passer_pos = jnp.array([passer_x, passer_y], dtype=jnp.float32)
         receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
@@ -692,31 +685,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_shooting(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[BallState, chex.PRNGKey, chex.Array, chex.Array]:
         """Handles the logic for shooting the ball."""
-        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
         is_shoot_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.JUMPSHOOT)
+        
+        player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        actions_stacked = jnp.stack(actions)
 
-        is_p1_inside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p1_outside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_inside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_outside_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
-        is_inside_shooting = is_p1_inside_shooting | is_p2_inside_shooting
-        is_outside_shooting = is_p1_outside_shooting | is_p2_outside_shooting
+        def check_shooting(pid, p_z, p_action):
+            is_shooting = (state.offensive_action_cooldown == 0) & is_shoot_step & (p_z != 0) & (ball_state.holder == pid) & jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+            return is_shooting
 
+        shooting_flags = jax.vmap(check_shooting)(player_ids, players.z, actions_stacked)
+        is_shooting = jnp.any(shooting_flags)
+        shooter_idx = jnp.argmax(shooting_flags)
+        shooter = player_ids[shooter_idx]
+        shooter_x = players.x[shooter_idx]
+        shooter_y = players.y[shooter_idx]
+        shooter_z = players.z[shooter_idx]
 
-        shooter = jax.lax.select(is_p1_inside_shooting, PlayerID.PLAYER1_INSIDE,
-                     jax.lax.select(is_p1_outside_shooting, PlayerID.PLAYER1_OUTSIDE,
-                     jax.lax.select(is_p2_inside_shooting, PlayerID.PLAYER2_INSIDE,
-                     jax.lax.select(is_p2_outside_shooting, PlayerID.PLAYER2_OUTSIDE, PlayerID.NONE))))
-        shooter_x = jax.lax.select(is_p1_inside_shooting, state.player1_inside.x,
-                    jax.lax.select(is_p1_outside_shooting, state.player1_outside.x,
-                    jax.lax.select(is_p2_inside_shooting, state.player2_inside.x,
-                    jax.lax.select(is_p2_outside_shooting, state.player2_outside.x, 0))))
-        shooter_y = jax.lax.select(is_p1_inside_shooting, state.player1_inside.y,
-                    jax.lax.select(is_p1_outside_shooting, state.player1_outside.y,
-                    jax.lax.select(is_p2_inside_shooting, state.player2_inside.y,
-                    jax.lax.select(is_p2_outside_shooting, state.player2_outside.y, 0))))
+        is_inside_shooting = (shooter == PlayerID.PLAYER1_INSIDE) | (shooter == PlayerID.PLAYER2_INSIDE)
+        is_outside_shooting = (shooter == PlayerID.PLAYER1_OUTSIDE) | (shooter == PlayerID.PLAYER2_OUTSIDE)
 
         key, offset_key_x = random.split(key)
 
@@ -729,46 +718,49 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         offset_x = random.uniform(offset_key_x, shape=(), minval=-10 + shot_bonus, maxval=10 - shot_bonus)
         is_goal = (offset_x >= -5) & (offset_x <= 5)
 
-
         target_pos = basket_pos + jnp.array([offset_x, 0.0])
 
-        # shooter z (height) for dunk/block checks
-        shooter_z = jax.lax.select(is_p1_inside_shooting, state.player1_inside.z,
-                  jax.lax.select(is_p1_outside_shooting, state.player1_outside.z,
-                  jax.lax.select(is_p2_inside_shooting, state.player2_inside.z,
-                  jax.lax.select(is_p2_outside_shooting, state.player2_outside.z, 0))))
         shoot_direction = target_pos - shooter_pos
         shoot_norm = jnp.sqrt(jnp.sum(shoot_direction**2))
         shoot_safe_norm = jnp.where(shoot_norm == 0, 1.0, shoot_norm)
         shoot_speed = 8.0
         shoot_vel = (shoot_direction / shoot_safe_norm) * shoot_speed
 
-        # Basic blocking: if an opponent jumps near the shooter during the shot, they can block it
-        # Check opponents (for P1 shots, opponents are P2 players; vice-versa)
+        # Basic blocking
         def check_blocking():
-            # opponent positions and heights
-            opp1_x = state.player2_inside.x
-            opp1_y = state.player2_inside.y
-            opp1_z = state.player2_inside.z
-            opp2_x = state.player2_outside.x
-            opp2_y = state.player2_outside.y
-            opp2_z = state.player2_outside.z
+            # opponents (if shooter is P1, opponents are P2; if shooter is P2, opponents are P1)
+            is_shooter_p1 = (shooter == PlayerID.PLAYER1_INSIDE) | (shooter == PlayerID.PLAYER1_OUTSIDE)
+            
+            opp_indices = jax.lax.select(is_shooter_p1, jnp.array([2, 3]), jnp.array([0, 1]))
+            opp_xs = players.x[opp_indices]
+            opp_ys = players.y[opp_indices]
+            opp_zs = players.z[opp_indices]
+            opp_ids = player_ids[opp_indices]
 
-            d1 = jnp.sqrt((opp1_x - shooter_x)**2 + (opp1_y - shooter_y)**2)
-            d2 = jnp.sqrt((opp2_x - shooter_x)**2 + (opp2_y - shooter_y)**2)
-
-            can_block1 = (opp1_z > 0) & (d1 < self.constants.BLOCK_RADIUS)
-            can_block2 = (opp2_z > 0) & (d2 < self.constants.BLOCK_RADIUS)
-
-            blocked_by = jax.lax.select(can_block1, PlayerID.PLAYER2_INSIDE, PlayerID.NONE)
-            blocked_by = jax.lax.select(can_block2, PlayerID.PLAYER2_OUTSIDE, blocked_by)
+            dists = jnp.sqrt((opp_xs - shooter_x)**2 + (opp_ys - shooter_y)**2)
+            can_blocks = (opp_zs > 0) & (dists < self.constants.BLOCK_RADIUS)
+            
+            blocked_by = jax.lax.select(can_blocks[0], opp_ids[0], jax.lax.select(can_blocks[1], opp_ids[1], PlayerID.NONE))
             return blocked_by
 
-        blocked_by = jax.lax.cond(
-            is_shooting & ((shooter == PlayerID.PLAYER1_INSIDE) | (shooter == PlayerID.PLAYER1_OUTSIDE)),
-            lambda: check_blocking(),
-            lambda: PlayerID.NONE
+        blocked_by = jax.lax.cond(is_shooting, check_blocking, lambda: PlayerID.NONE)
+
+        is_dunk = (dist_to_basket < self.constants.DUNK_RADIUS) & (shooter_z > 0)
+
+        def make_shot(b):
+            b = b.replace(x=shooter_x.astype(jnp.float32), y=shooter_y.astype(jnp.float32), vel_x=shoot_vel[0], vel_y=shoot_vel[1], holder=PlayerID.NONE, target_x=target_pos[0], target_y=target_pos[1], is_goal=is_goal, shooter=shooter, receiver=PlayerID.NONE, shooter_pos_x=shooter_x.astype(jnp.int32), shooter_pos_y=shooter_y.astype(jnp.int32))
+            b = jax.lax.cond(blocked_by != PlayerID.NONE, lambda bb: bb.replace(holder=blocked_by, vel_x=0.0, vel_y=0.0, is_goal=False, shooter=PlayerID.NONE), lambda bb: bb, b)
+            b = jax.lax.cond(is_dunk, lambda bb: bb.replace(is_goal=True, target_x=basket_pos[0], target_y=basket_pos[1]), lambda bb: bb, b)
+            return b
+
+        new_ball_state = jax.lax.cond(
+            is_shooting,
+            make_shot,
+            lambda b: b,
+            ball_state
         )
+        step_increment = jax.lax.select(is_shooting, 1, 0)
+        return new_ball_state, key, step_increment, is_shooting
 
         # Determine whether this shot should be a dunk (inside player jumping near basket)
 
