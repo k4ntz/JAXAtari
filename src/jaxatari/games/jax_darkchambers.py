@@ -128,7 +128,7 @@ ORBIT_DIRS = jnp.array([
 
 
 class DarkChambersConstants(NamedTuple):
-    """Game constants and configuration."""
+    """Constants that define gameplay, visuals, and world layout."""
     # Dimensions
     WIDTH: int = GAME_W
     HEIGHT: int = GAME_H
@@ -194,7 +194,7 @@ class DarkChambersConstants(NamedTuple):
 
 
 class DarkChambersState(NamedTuple):
-    """Game state."""
+    """Immutable snapshot of the current game state."""
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
@@ -237,7 +237,7 @@ class DarkChambersState(NamedTuple):
 
 
 class EntityPosition(NamedTuple):
-    """Entity position and dimensions."""
+    """Axis-aligned rectangle: top-left position and size."""
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -245,7 +245,7 @@ class EntityPosition(NamedTuple):
 
 
 class DarkChambersObservation(NamedTuple):
-    """Observation space."""
+    """Compact observation used by agents and the UI."""
     player: EntityPosition
     enemies: jnp.ndarray  # (NUM_ENEMIES, 5): x, y, width, height, active
     health: jnp.ndarray
@@ -254,11 +254,11 @@ class DarkChambersObservation(NamedTuple):
 
 
 class DarkChambersInfo(NamedTuple):
-    """Extra info."""
+    """Auxiliary info not intended for learning signals."""
     time: jnp.ndarray
 
 class DarkChambersRenderer(JAXGameRenderer):
-    """Handles rendering."""
+    """Software renderer for Dark Chambers."""
     
     def __init__(self, consts: DarkChambersConstants = None):
         super().__init__(consts)
@@ -274,7 +274,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Create procedural sprites for colors not in the main sprites (enemies, items, UI, etc.)
         def create_color_sprite(color):
-            """Create a 1x1 pixel sprite for a color to ensure it's in the palette."""
+            """Make a 1×1 sprite for the given color (ensures it’s in the palette)."""
             rgba = (*color, 255)
             return jnp.array([[rgba]], dtype=jnp.uint8)
         
@@ -593,7 +593,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
-        """Render current game state."""
+        """Return an RGB image for the current state (H×W×3, uint8)."""
         # Start with background sprite
         object_raster = self.jr.create_object_raster(self.BACKGROUND)
         
@@ -1054,14 +1054,14 @@ class DarkChambersRenderer(JAXGameRenderer):
 
 
 class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation, DarkChambersInfo, DarkChambersConstants]):
-    """Main environment."""
+    """JAX environment for the game Dark Chambers."""
     
     def __init__(self, consts: DarkChambersConstants = None):
         super().__init__(consts=consts or DarkChambersConstants())
         self.renderer = DarkChambersRenderer(self.consts)
 
     def _pos_to_cell(self, x, y):
-        """Convert pixel coords (x,y) to nav-grid indices (cy,cx)."""
+        """Convert pixel coordinates to grid-cell indices (cy, cx)."""
         cy = (y // CELL_SIZE).astype(jnp.int32)
         cx = (x // CELL_SIZE).astype(jnp.int32)
         cy = jnp.clip(cy, 0, GRID_H - 1)
@@ -1076,11 +1076,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         enemy_positions: chex.Array,
         enemy_active: chex.Array,
     ):
-        """
-        BFS / Dijkstra distance from each nav cell to the player.
-        Returns (GRID_H, GRID_W) int32 array of distances.
+        """Compute 4-neighbor grid distances to the player.
 
-        Now treats alive enemies as additional obstacles on the nav grid.
+        Alive enemies are treated as obstacles. Returns an int32 array
+        of shape (GRID_H, GRID_W) with distances in cells.
         """
         # Base wall grid from the level
         wall_grid = self.renderer.LEVEL_WALL_GRID[level]  # (GRID_H, GRID_W) bool
@@ -1145,7 +1144,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[DarkChambersObservation, DarkChambersState]:
-        """Reset game."""
+        """Reset the environment and return the initial observation and state."""
         
         # Use level 0 walls for initial spawn
         WALLS = self.renderer.LEVEL_WALLS[0]
@@ -1387,7 +1386,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DarkChambersState, action: int) -> Tuple[DarkChambersObservation, DarkChambersState, float, bool, DarkChambersInfo]:
-        """Step forward."""
+        """Apply an action and return (obs, state, reward, done, info)."""
         a = jnp.asarray(action)
 
         # If we're in a death freeze, either decrement or respawn now
@@ -2663,18 +2662,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def _get_info(self, state: DarkChambersState, all_rewards: jnp.array = None) -> DarkChambersInfo:
         return DarkChambersInfo(time=state.step_counter)
     
-
-    """
-    TODO reward for RE Agent later
-    """
+    # TODO: introduce shaped rewards later if needed
     def _get_reward(self, previous_state: DarkChambersState, state: DarkChambersState) -> float:
         return 0.1
     
-
-
-    """
-    Game is over when player has no lives left and health is 0
-    """
+    # Episode ends when the player has no lives left and health reaches zero.
     def _get_done(self, state: DarkChambersState) -> bool:
         return (state.lives <= 0) & (state.health <= 0)
     
