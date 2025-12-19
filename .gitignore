@@ -8,6 +8,5 @@ env
 results/
 .DS_Store
 docs/build/
-.vs/
-
+.python-version
 
