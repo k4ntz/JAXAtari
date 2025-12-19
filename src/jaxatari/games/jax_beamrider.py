@@ -107,7 +107,7 @@ class BeamriderConstants(NamedTuple):
     GREEN_BLOCKER_SPAWN_INTERVAL_MAX: int = 40
     GREEN_BLOCKER_SPAWN_Y: float = 54.0
     GREEN_BLOCKER_LANE_SPEED: float = 2.0
-    GREEN_BLOCKER_LANE_ALIGN_THRESHOLD: float = 1.0
+    GREEN_BLOCKER_LANE_ALIGN_THRESHOLD: float = 1.5
     GREEN_BLOCKER_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
     GREEN_BLOCKER_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
     MOTHERSHIP_OFFSCREEN_POS: int = 500
@@ -406,7 +406,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             green_blocker_spawn_timer,
             green_blocker_remaining,
             green_blocker_wave_active,
-        ) = self._green_blocker_step(state, player_x, white_ufo_left, blocker_key)
+        ) = self._green_blocker_step(state, player_x, vel_x, white_ufo_left, blocker_key)
         (
             green_blocker_pos,
             green_blocker_active,
@@ -1381,6 +1381,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         self,
         state: BeamriderState,
         player_x: chex.Array,
+        player_vel: chex.Array,
         white_ufo_left: chex.Array,
         key: chex.Array,
     ):
@@ -1478,9 +1479,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         lane_x_at_current_y = lanes_top_x[:, None] + lane_dx_over_dy[:, None] * (
             new_y_a[None, :] - float(self.consts.TOP_CLIP)
         )
-        lane_x_at_lane = jnp.take_along_axis(lane_x_at_current_y, lane[None, :], axis=0).squeeze(0)
-        seek_dir = jnp.sign(lane_x_at_lane - pos[0])
-        dx_dir = jnp.where(phase == 0, side.astype(pos.dtype), seek_dir)
+        dx_dir = side.astype(pos.dtype)
         dx = jnp.take(cycle_dx, frame) * dx_dir
         new_x_a = pos[0] + dx
 
@@ -1505,8 +1504,34 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         hits_x = jnp.logical_and(blocker_right >= player_left, blocker_left <= player_right)
         player_center = player_x + float(self.consts.PLAYER_WIDTH) / 2.0
         bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=jnp.float32)
-        player_lane_idx = jnp.argmin(jnp.abs(bottom_lanes - player_center)).astype(jnp.int32)
-        target_lane = player_lane_idx + 1
+        nearest_lane_idx = jnp.argmin(jnp.abs(bottom_lanes - player_center)).astype(jnp.int32)
+        move_dir = jnp.sign(player_vel).astype(jnp.int32)
+        target_lane_idx = jnp.clip(
+            nearest_lane_idx + move_dir,
+            0,
+            bottom_lanes.shape[0] - 1,
+        )
+        preferred_lane_idx = target_lane_idx + 1
+        preferred_lane_x = lane_x_at_current_y[preferred_lane_idx]
+        preferred_ahead = jnp.where(
+            side > 0,
+            preferred_lane_x >= new_x_a,
+            preferred_lane_x <= new_x_a,
+        )
+        ahead_mask = jnp.where(
+            side[None, :] > 0,
+            lane_x_at_current_y >= new_x_a[None, :],
+            lane_x_at_current_y <= new_x_a[None, :],
+        )
+        lane_dist = jnp.abs(lane_x_at_current_y - player_center)
+        masked_dist = jnp.where(ahead_mask, lane_dist, jnp.inf)
+        ahead_lane_idx = jnp.argmin(masked_dist, axis=0).astype(jnp.int32)
+        any_ahead = jnp.any(ahead_mask, axis=0)
+        target_lane = jnp.where(
+            preferred_ahead,
+            preferred_lane_idx,
+            jnp.where(any_ahead, ahead_lane_idx, preferred_lane_idx),
+        )
         arm_now = active & (phase == 0) & hits_x
         new_phase = jnp.where(arm_now, 1, phase)
         new_lane = jnp.where(arm_now, target_lane, lane)
@@ -1570,12 +1595,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         blocker_screen_pos = jnp.stack([blocker_x, blocker_pos[1]]).T
         distance_to_bullet = jnp.abs(blocker_screen_pos - jnp.array([shot_x, shot_y], dtype=blocker_pos.dtype))
         bullet_radius = jnp.array(self.consts.TORPEDO_HIT_RADIUS, dtype=blocker_pos.dtype)
+        blocker_radius = jnp.array(
+            [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
+            dtype=blocker_pos.dtype,
+        )
+        hit_radius = bullet_radius + blocker_radius
         hit_mask = (
             blocker_active
             & is_torpedo
             & shot_active
-            & (distance_to_bullet[:, 0] <= bullet_radius[0])
-            & (distance_to_bullet[:, 1] <= bullet_radius[1])
+            & (distance_to_bullet[:, 0] <= hit_radius[0])
+            & (distance_to_bullet[:, 1] <= hit_radius[1])
         )
         hit_exists = jnp.any(hit_mask)
         hit_index = jnp.argmax(hit_mask)
