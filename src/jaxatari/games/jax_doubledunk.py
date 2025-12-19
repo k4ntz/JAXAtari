@@ -1,4 +1,5 @@
 from jax import numpy as jnp
+import jax
 from typing import Tuple, NamedTuple
 import jax.lax
 import jax.debug
@@ -287,13 +288,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _update_players_xy(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
         """Updates the XY positions for all players."""
-        key, reset_key = random.split(state.key)
-        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        actions_stacked = jnp.stack(actions)
 
-        updated_p1_inside = self._update_player_xy(state.player1_inside, p1_inside_action, self.constants)
-        updated_p1_outside = self._update_player_xy(state.player1_outside, p1_outside_action, self.constants)
-        updated_p2_inside = self._update_player_xy(state.player2_inside, p2_inside_action, self.constants)
-        updated_p2_outside = self._update_player_xy(state.player2_outside, p2_outside_action, self.constants)
+        updated_players = jax.vmap(self._update_player_xy, in_axes=(0, 0, None))(players, actions_stacked, self.constants)
+        
+        updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
         # Check if any of the players reach out of bounds while holding the ball
         ball_holder_id = state.ball.holder
@@ -390,10 +390,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _update_players_z(self, state: DunkGameState) -> DunkGameState:
         """Applies Z-axis physics for all players."""
         ball_holder_id = state.ball.holder
-        updated_p1_inside = self._update_player_z(state.player1_inside, self.constants, ball_holder_id)
-        updated_p1_outside = self._update_player_z(state.player1_outside, self.constants, ball_holder_id)
-        updated_p2_inside = self._update_player_z(state.player2_inside, self.constants, ball_holder_id)
-        updated_p2_outside = self._update_player_z(state.player2_outside, self.constants, ball_holder_id)
+        
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        
+        updated_players = jax.vmap(self._update_player_z, in_axes=(0, None, None))(players, self.constants, ball_holder_id)
+        
+        updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
         # check if any players triggered the travel rule
         p1_triggered_travel = updated_p1_outside.triggered_travel | updated_p1_inside.triggered_travel
@@ -421,10 +423,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _update_players_animations(self, state: DunkGameState) -> DunkGameState:
         """Updates animations for all players."""
-        updated_p1_inside = self._update_player_animation(state.player1_inside, (state.ball.holder == PlayerID.PLAYER1_INSIDE))
-        updated_p1_outside = self._update_player_animation(state.player1_outside, (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
-        updated_p2_inside = self._update_player_animation(state.player2_inside, (state.ball.holder == PlayerID.PLAYER2_INSIDE))
-        updated_p2_outside = self._update_player_animation(state.player2_outside, (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
+        player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
+        has_ball_arr = (state.ball.holder == player_ids)
+        
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        
+        updated_players = jax.vmap(self._update_player_animation, in_axes=(0, 0))(players, has_ball_arr)
+        
+        updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
         return state.replace(
             player1_inside=updated_p1_inside,
@@ -841,14 +847,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_interactions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey]:
         """Handles all player interactions: jump, pass, shoot, steal."""
-        p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        actions_stacked = jnp.stack(actions)
 
-        updated_p1_inside, p1_in_jumped = self._handle_jump(state, state.player1_inside, p1_inside_action, self.constants)
-        updated_p1_outside, p1_out_jumped = self._handle_jump(state, state.player1_outside, p1_outside_action, self.constants)
-        updated_p2_inside, p2_in_jumped = self._handle_jump(state, state.player2_inside, p2_inside_action, self.constants)
-        updated_p2_outside, p2_out_jumped = self._handle_jump(state, state.player2_outside, p2_outside_action, self.constants)
+        updated_players, jumped_flags = jax.vmap(self._handle_jump, in_axes=(None, 0, 0, None))(state, players, actions_stacked, self.constants)
+        
+        updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
-        did_jump = p1_in_jumped | p1_out_jumped | p2_in_jumped | p2_out_jumped
+        did_jump = jnp.max(jumped_flags)
 
         state = state.replace(
             player1_inside=updated_p1_inside,
