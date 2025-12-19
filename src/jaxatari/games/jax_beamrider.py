@@ -697,12 +697,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             death_timer=next_death_timer,
         )
 
-        # Calculate final state, handling Reset if `just_died`
+        # Calculate final state, handling Reset if `just_died` or `sector_advanced`
         # If just_died, we reset the level state but keep UFOs count
         reset_level_state = self._create_level_state(white_ufo_left=white_ufo_left)
         
         final_level_state = jax.tree_util.tree_map(
-            lambda normal, reset: jnp.where(just_died, reset, normal),
+            lambda normal, reset: jnp.where(jnp.logical_or(just_died, sector_advanced), reset, normal),
             new_level_state,
             reset_level_state
         )
