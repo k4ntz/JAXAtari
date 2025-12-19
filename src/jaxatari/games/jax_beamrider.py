@@ -1801,7 +1801,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return state.score - previous_state.score
 
     def _get_done(self, state: BeamriderState) -> bool:
-        return jnp.logical_or(state.lives <= 0, state.sector > 15)
+        return jnp.logical_or(state.lives <= 0, state.sector > 14)
 
 class BeamriderRenderer(JAXGameRenderer):
     def __init__(self, consts=None):
