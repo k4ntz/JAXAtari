@@ -1,5 +1,5 @@
 from jax import numpy as jnp
-from typing import Tuple
+from typing import Tuple, NamedTuple
 import jax.lax
 import jax.debug
 import jax.random as random
@@ -115,23 +115,20 @@ class DunkGameState:
     out_of_bounds_timer: chex.Array
     key: chex.PRNGKey
 
-@chex.dataclass(frozen=True)
-class EntityPosition:
+class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-@chex.dataclass(frozen=True)
-class DunkObservation:
+class DunkObservation(NamedTuple):
     player: EntityPosition
     enemy: EntityPosition
     ball: EntityPosition
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
 
-@chex.dataclass(frozen=True)
-class DunkInfo:
+class DunkInfo(NamedTuple):
     time: jnp.ndarray
 
 # Define action sets
