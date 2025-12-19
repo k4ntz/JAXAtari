@@ -937,28 +937,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
 
+            players_stacked = jax.tree_util.tree_map(lambda *args: jnp.stack(args), s.player1_inside, s.player1_outside, s.player2_inside, s.player2_outside)
+            player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
+
             # --- New logic for passing ---
             is_passing = b_state.receiver != PlayerID.NONE
 
             def update_pass_trajectory(b):
-                receiver_x = jax.lax.switch(
-                    b.receiver - 1,
-                    [
-                        lambda: s.player1_inside.x,
-                        lambda: s.player1_outside.x,
-                        lambda: s.player2_inside.x,
-                        lambda: s.player2_outside.x,
-                    ],
-                )
-                receiver_y = jax.lax.switch(
-                    b.receiver - 1,
-                    [
-                        lambda: s.player1_inside.y,
-                        lambda: s.player1_outside.y,
-                        lambda: s.player2_inside.y,
-                        lambda: s.player2_outside.y,
-                    ],
-                )
+                receiver_x = players_stacked.x[b.receiver - 1]
+                receiver_y = players_stacked.y[b.receiver - 1]
 
                 passer_pos = jnp.array([b.x, b.y], dtype=jnp.float32)
                 receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
@@ -986,29 +973,33 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             )
 
             # Handle interceptions and catches
-            players = [s.player1_inside, s.player1_outside, s.player2_inside, s.player2_outside]
-            player_ids = [PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE]
-            
             catch_radius_sq = 49.0 # optimal value: tried different values
             ball_in_flight_after_physics = (b_state.holder == PlayerID.NONE)
 
-            def check_catch(p, pid, current_ball_state):
-                dist_sq = (current_ball_state.x - p.x)**2 + (current_ball_state.y - p.y)**2
-                is_caught = ball_in_flight_after_physics & (dist_sq < catch_radius_sq)
-                return jax.lax.cond(is_caught, lambda b: b.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE), lambda b: b, current_ball_state)
+            def check_catch_flag(px, py):
+                dist_sq = (b_state.x - px)**2 + (b_state.y - py)**2
+                return ball_in_flight_after_physics & (dist_sq < catch_radius_sq)
 
-            # This loop is symbolic; JAX will unroll it.
-            for p, pid in zip(players, player_ids):
-                 b_state = check_catch(p, pid, b_state)
+            catch_flags = jax.vmap(check_catch_flag)(players_stacked.x, players_stacked.y)
+            any_caught = jnp.any(catch_flags)
+            # To match the original sequential loop where the LAST player wins:
+            # We use argmax on reversed flags
+            reversed_catcher_idx = jnp.argmax(catch_flags[::-1])
+            catcher_idx = 3 - reversed_catcher_idx
+
+            def apply_catch(b):
+                pid = player_ids[catcher_idx]
+                return b.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE)
+
+            b_state = jax.lax.cond(any_caught, apply_catch, lambda b: b, b_state)
 
             # Update ball position if held
-            def update_ball_pos_if_held(b, p, pid):
-                return jax.lax.cond(b.holder == pid, lambda: b.replace(x=p.x.astype(jnp.float32), y=p.y.astype(jnp.float32)), lambda: b)
+            is_held = (b_state.holder >= PlayerID.PLAYER1_INSIDE) & (b_state.holder <= PlayerID.PLAYER2_OUTSIDE)
+            def update_held_pos(b):
+                idx = b.holder - 1
+                return b.replace(x=players_stacked.x[idx].astype(jnp.float32), y=players_stacked.y[idx].astype(jnp.float32))
             
-            b_state = update_ball_pos_if_held(b_state, s.player1_inside, PlayerID.PLAYER1_INSIDE)
-            b_state = update_ball_pos_if_held(b_state, s.player1_outside, PlayerID.PLAYER1_OUTSIDE)
-            b_state = update_ball_pos_if_held(b_state, s.player2_inside, PlayerID.PLAYER2_INSIDE)
-            b_state = update_ball_pos_if_held(b_state, s.player2_outside, PlayerID.PLAYER2_OUTSIDE)
+            b_state = jax.lax.cond(is_held, update_held_pos, lambda b: b, b_state)
 
             # Update controlled player
             is_p1_team_holder = (b_state.holder == PlayerID.PLAYER1_INSIDE) | (b_state.holder == PlayerID.PLAYER1_OUTSIDE)
