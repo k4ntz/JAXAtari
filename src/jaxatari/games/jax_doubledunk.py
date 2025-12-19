@@ -99,8 +99,7 @@ class DunkGameState:
     acceleration_counter: chex.Array
     game_mode: chex.Array           # Current mode (PLAY_SELECTION or IN_PLAY)
     strategy: Strategy
-    p1_strategy_step: chex.Array           # Tracks progress in p1 strategy (e.g., 1st, 2nd, 3rd button press)
-    p2_strategy_step: chex.Array           # Tracks progress in p2 strategy (e.g., 1st, 2nd, 3rd button press)
+    offensive_strategy_step: chex.Array           # Tracks progress in p1 strategy (e.g., 1st, 2nd, 3rd button press)
     controlled_player_id: chex.Array
     cooldown: chex.Array
     key: chex.PRNGKey
@@ -212,8 +211,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             acceleration_counter=0,
             game_mode=GameMode.PLAY_SELECTION,
             strategy = GIVE_AND_GO,
-            p1_strategy_step=0,
-            p2_strategy_step=0,
+            offensive_strategy_step=0,
             controlled_player_id=PlayerID.PLAYER1_OUTSIDE,
             cooldown=0,
             key=key,
@@ -466,12 +464,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles the logic for passing the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_pass_step = (state.strategy[state.p1_strategy_step] == Strategy.PASS)
+        is_pass_step = (state.strategy[state.offensive_strategy_step] == Strategy.PASS)
 
         is_p1_inside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_p1_outside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_inside_passing = (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
-        is_p2_outside_passing =  (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_inside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        is_p2_outside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_passing = is_p1_inside_passing | is_p1_outside_passing | is_p2_inside_passing | is_p2_outside_passing
 
         receiver = jax.lax.select(is_p1_inside_passing, PlayerID.PLAYER1_OUTSIDE,
@@ -511,20 +509,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             ball_state
         )
 
-        is_p1_passing = is_p1_inside_passing | is_p1_outside_passing
-        step_increment = jax.lax.select(is_p1_passing, 1, 0)
+        step_increment = jax.lax.select(is_passing, 1, 0)
         return new_ball_state, step_increment, is_passing
 
     def _handle_shooting(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[BallState, chex.PRNGKey, chex.Array, chex.Array]:
         """Handles the logic for shooting the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_shoot_step = (state.strategy[state.p1_strategy_step] == Strategy.JUMPSHOOT)
+        is_shoot_step = (state.strategy[state.offensive_strategy_step] == Strategy.JUMPSHOOT)
 
         is_p1_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p1_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_inside_shooting = (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
-        is_p2_outside_shooting = (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player2_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_INSIDE) & jnp.any(jnp.asarray(p2_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+        is_p2_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player2_outside.z != 0) & (ball_state.holder == PlayerID.PLAYER2_OUTSIDE) & jnp.any(jnp.asarray(p2_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_shooting = is_p1_inside_shooting | is_p1_outside_shooting | is_p2_inside_shooting | is_p2_outside_shooting
         is_inside_shooting = is_p1_inside_shooting | is_p2_inside_shooting
         is_outside_shooting = is_p1_outside_shooting | is_p2_outside_shooting
@@ -613,8 +610,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             lambda b: b,
             ball_state
         )
-        is_p1_shooting = is_p1_inside_shooting | is_p1_outside_shooting
-        step_increment = jax.lax.select(is_p1_shooting, 1, 0)
+        step_increment = jax.lax.select(is_shooting, 1, 0)
         return new_ball_state, key, step_increment, is_shooting
 
     def _handle_stealing(self, state: DunkGameState, actions: Tuple[int, ...]) -> BallState:
@@ -643,7 +639,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
-        is_jump_step = (state.strategy[state.p1_strategy_step] == Strategy.JUMPSHOOT) & (player.z == 0)
+        is_jump_step = (state.strategy[state.offensive_strategy_step] == Strategy.JUMPSHOOT) & (player.z == 0)
         can_jump = (state.cooldown == 0) & is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
@@ -694,8 +690,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state, key, offense_increment = self._handle_offense_actions(state, actions, key)
         state = self._handle_defense_actions(state, actions)
 
-        # 3. Update p1_strategy_step
-        new_p1_strategy_step = jnp.minimum(state.p1_strategy_step + offense_increment, len(state.strategy)-1)
+        # 3. Update offensive_strategy_step
+        new_offensive_strategy_step = jnp.minimum(state.offensive_strategy_step + offense_increment, len(state.strategy)-1)
         
         # 4. Print if changed
         # We use jax.lax.cond to ensure we only print when an action actually occurred
@@ -703,10 +699,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             offense_increment > 0,
             lambda x: jax.debug.print("Play Step: {}", x),
             lambda x: None,
-            new_p1_strategy_step
+            new_offensive_strategy_step
         )
 
-        return state.replace(p1_strategy_step=new_p1_strategy_step), key
+        return state.replace(offensive_strategy_step=new_offensive_strategy_step), key
 
     def _update_ball(self, state: DunkGameState) -> DunkGameState:
         """Handles ball movement, goals, misses, catches, and possession changes."""
