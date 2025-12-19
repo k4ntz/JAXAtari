@@ -23,13 +23,17 @@ class GameMode(IntEnum):
     PLAY_SELECTION = 0
     IN_PLAY = 1
 
-class Strategy(IntEnum):
+class OffensiveAction(IntEnum):
     PASS = 0
     JUMPSHOOT = 1
 
-PICK_AND_ROLL = jnp.array([Strategy.PASS, Strategy.JUMPSHOOT, Strategy.JUMPSHOOT, Strategy.JUMPSHOOT])
-GIVE_AND_GO = jnp.array([Strategy.PASS, Strategy.PASS, Strategy.JUMPSHOOT, Strategy.JUMPSHOOT])
-MR_OUTSIDE_SHOOTS = jnp.array([Strategy.JUMPSHOOT, Strategy.JUMPSHOOT, Strategy.JUMPSHOOT, Strategy.JUMPSHOOT])
+class DefensiveStrategy(IntEnum):
+    LANE_DEFENSE = 0
+    TIGHT_DEFENSE = 1
+
+PICK_AND_ROLL = jnp.array([OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
+GIVE_AND_GO = jnp.array([OffensiveAction.PASS, OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
+MR_OUTSIDE_SHOOTS = jnp.array([OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
 
 @chex.dataclass(frozen=True)
 class DunkConstants:
@@ -98,7 +102,8 @@ class DunkGameState:
     step_counter: chex.Array
     acceleration_counter: chex.Array
     game_mode: chex.Array           # Current mode (PLAY_SELECTION or IN_PLAY)
-    strategy: Strategy
+    strategy: OffensiveAction
+    defensive_strategy: chex.Array
     offensive_strategy_step: chex.Array           # Tracks progress in p1 strategy (e.g., 1st, 2nd, 3rd button press)
     controlled_player_id: chex.Array
     cooldown: chex.Array
@@ -211,6 +216,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             acceleration_counter=0,
             game_mode=GameMode.PLAY_SELECTION,
             strategy = GIVE_AND_GO,
+            defensive_strategy = DefensiveStrategy.LANE_DEFENSE,
             offensive_strategy_step=0,
             controlled_player_id=PlayerID.PLAYER1_OUTSIDE,
             cooldown=0,
@@ -374,12 +380,38 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey]:
         """Determines the action for each player based on control state and AI."""
+        
+        def get_move_to_target(current_x, current_y, target_x, target_y):
+            dx = target_x - current_x
+            dy = target_y - current_y
+            
+            move_x = jax.lax.select(dx > 2, Action.RIGHT, jax.lax.select(dx < -2, Action.LEFT, Action.NOOP))
+            move_y = jax.lax.select(dy > 2, Action.DOWN, jax.lax.select(dy < -2, Action.UP, Action.NOOP))
+            
+            return jax.lax.select(
+                (move_x == Action.RIGHT) & (move_y == Action.UP), Action.UPRIGHT,
+                jax.lax.select(
+                    (move_x == Action.RIGHT) & (move_y == Action.DOWN), Action.DOWNRIGHT,
+                    jax.lax.select(
+                        (move_x == Action.LEFT) & (move_y == Action.UP), Action.UPLEFT,
+                        jax.lax.select(
+                            (move_x == Action.LEFT) & (move_y == Action.DOWN), Action.DOWNLEFT,
+                            jax.lax.select(
+                                move_x != Action.NOOP, move_x,
+                                move_y 
+                            )
+                        )
+                    )
+                )
+            )
+
+        # --- Human Control ---
         is_p1_inside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_INSIDE)
         is_p1_outside_controlled = (state.controlled_player_id == PlayerID.PLAYER1_OUTSIDE)
         p1_inside_action = jax.lax.select(is_p1_inside_controlled, action, Action.NOOP)
         p1_outside_action = jax.lax.select(is_p1_outside_controlled, action, Action.NOOP)
 
-        # --- AI Logic ---
+        # --- AI Logic Setup ---
         key, p2_action_key, teammate_action_key = random.split(key, 3)
         # We need 4 keys for enemies: 2 for probability checks and 2 for random move selection
         p2_inside_prob_key, p2_outside_prob_key, p2_inside_move_key, p2_outside_move_key = random.split(p2_action_key, 4)
@@ -388,62 +420,125 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT
         ])
 
-        # --- Teammate AI ---
-        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
-        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
-        is_p1_inside_teammate_no_ball = ~is_p1_inside_controlled & ~p1_inside_has_ball
-        is_p1_outside_teammate_no_ball = ~is_p1_outside_controlled & ~p1_outside_has_ball
+        # --- Strategy & Possession ---
+        p1_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE) | (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        p2_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE) | (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
+        
+        defensive_strat = state.defensive_strategy
+        basket_x, basket_y = self.constants.BASKET_POSITION
 
+        # --- Defensive Logic (Target Calculation) ---
+        
+        # P1 Defensive Targets (if P1 is defending)
+        p1_in_target_lane_x = (state.player2_inside.x + state.player2_outside.x) // 2
+        p1_in_target_lane_y = (state.player2_inside.y + state.player2_outside.y) // 2
+        p1_out_target_lane_x = state.player2_outside.x
+        p1_out_target_lane_y = state.player2_outside.y
+        
+        p1_in_target_tight_x = state.player2_inside.x
+        p1_in_target_tight_y = state.player2_inside.y
+        p1_out_target_tight_x = state.player2_outside.x
+        p1_out_target_tight_y = state.player2_outside.y
+        
+        p1_in_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_in_target_lane_x, p1_in_target_tight_x)
+        p1_in_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_in_target_lane_y, p1_in_target_tight_y)
+        p1_out_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_out_target_lane_x, p1_out_target_tight_x)
+        p1_out_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_out_target_lane_y, p1_out_target_tight_y)
+        
+        p1_in_def_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, p1_in_def_x, p1_in_def_y)
+        p1_out_def_action = get_move_to_target(state.player1_outside.x, state.player1_outside.y, p1_out_def_x, p1_out_def_y)
+
+        # P2 Defensive Targets (if P2 is defending)
+        p2_in_target_lane_x = (state.player1_inside.x + state.player1_outside.x) // 2
+        p2_in_target_lane_y = (state.player1_inside.y + state.player1_outside.y) // 2
+        p2_out_target_lane_x = state.player1_outside.x
+        p2_out_target_lane_y = state.player1_outside.y
+
+        p2_in_target_tight_x = state.player1_inside.x
+        p2_in_target_tight_y = state.player1_inside.y
+        p2_out_target_tight_x = state.player1_outside.x
+        p2_out_target_tight_y = state.player1_outside.y
+
+        p2_in_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_in_target_lane_x, p2_in_target_tight_x)
+        p2_in_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_in_target_lane_y, p2_in_target_tight_y)
+        p2_out_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_out_target_lane_x, p2_out_target_tight_x)
+        p2_out_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_out_target_lane_y, p2_out_target_tight_y)
+
+        p2_in_def_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, p2_in_def_x, p2_in_def_y)
+        p2_out_def_action = get_move_to_target(state.player2_outside.x, state.player2_outside.y, p2_out_def_x, p2_out_def_y)
+
+        # --- Teammate AI (Offensive/Random vs Defensive) ---
+        is_p1_inside_teammate_ai = ~is_p1_inside_controlled
+        is_p1_outside_teammate_ai = ~is_p1_outside_controlled
+
+        # Random/Heuristic Offensive Moves (Existing logic)
         random_teammate_move_idx = random.randint(teammate_action_key, shape=(), minval=0, maxval=8)
         random_teammate_move_action = movement_actions[random_teammate_move_idx]
         rand_teammate = random.uniform(teammate_action_key)
+        
+        p1_off_action = jax.lax.select(rand_teammate < 0.5, Action.NOOP, random_teammate_move_action)
 
+        # Constraint check for P1 Inside Offense (Teammate)
+        p1_dist_to_basket_x = jnp.abs(state.player1_inside.x - basket_x)
+        p1_dist_to_basket_y = jnp.abs(state.player1_inside.y - basket_y)
+        p1_is_far = (p1_dist_to_basket_x > 20) | (p1_dist_to_basket_y > 20) # 40x40 area means radius approx 20
+        p1_return_to_basket_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, basket_x, basket_y)
+        
         p1_inside_action = jax.lax.select(
-            is_p1_inside_teammate_no_ball,
-            jax.lax.select(rand_teammate < 0.5, Action.NOOP, random_teammate_move_action),
+            is_p1_inside_teammate_ai,
+            jax.lax.select(
+                p2_has_ball, 
+                p1_in_def_action, 
+                jax.lax.select(p1_is_far, p1_return_to_basket_action, p1_off_action)
+            ),
             p1_inside_action
         )
         p1_outside_action = jax.lax.select(
-            is_p1_outside_teammate_no_ball,
-            jax.lax.select(rand_teammate < 0.5, Action.NOOP, random_teammate_move_action),
+            is_p1_outside_teammate_ai,
+            jax.lax.select(p2_has_ball, p1_out_def_action, p1_off_action),
             p1_outside_action
         )
 
-        # --- P2 Inside Logic ---
+        # --- P2 AI (Offensive/Heuristic vs Defensive) ---
+        
+        # P2 Inside Offense
         p2_inside_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE)
         rand_inside = random.uniform(p2_inside_prob_key)
-
-        # Select a random movement action
         random_inside_move_idx = random.randint(p2_inside_move_key, shape=(), minval=0, maxval=8)
         random_inside_move_action = movement_actions[random_inside_move_idx]
+        action_if_ball_inside = jax.lax.select(rand_inside < 0.2, Action.FIRE, random_inside_move_action)
+        
+        # Constraint check for P2 Inside Offense
+        p2_dist_to_basket_x = jnp.abs(state.player2_inside.x - basket_x)
+        p2_dist_to_basket_y = jnp.abs(state.player2_inside.y - basket_y)
+        p2_is_far = (p2_dist_to_basket_x > 20) | (p2_dist_to_basket_y > 20)
+        p2_return_to_basket_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, basket_x, basket_y)
 
-        # Nested select for the 3 outcomes based on probability
-        action_if_ball_inside = jax.lax.select(
-            rand_inside < 0.2, 
-            Action.FIRE,
-            random_inside_move_action  
+        p2_in_off_action = jax.lax.select(
+            p2_inside_has_ball, 
+            action_if_ball_inside, 
+            jax.lax.select(
+                p2_is_far, 
+                p2_return_to_basket_action, 
+                jax.lax.select(rand_inside < 0.5, Action.NOOP, random_inside_move_action)
+            )
         )
-        p2_inside_action = jax.lax.select(p2_inside_has_ball, action_if_ball_inside, jax.lax.select(rand_inside < 0.5, Action.NOOP, random_inside_move_action))
 
-        # --- P2 Outside Logic ---
+        # P2 Outside Offense
         p2_outside_has_ball = (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
         rand_outside = random.uniform(p2_outside_prob_key)
-
-        # Select a random movement action
         random_outside_move_idx = random.randint(p2_outside_move_key, shape=(), minval=0, maxval=8)
         random_outside_move_action = movement_actions[random_outside_move_idx]
+        action_if_ball_outside = jax.lax.select(rand_outside < 0.2, Action.FIRE, random_outside_move_action)
+        p2_out_off_action = jax.lax.select(p2_outside_has_ball, action_if_ball_outside, jax.lax.select(rand_outside < 0.5, Action.NOOP, random_outside_move_action))
 
-        # Nested select for the 3 outcomes based on probability
-        action_if_ball_outside = jax.lax.select(
-            rand_outside < 0.2, 
-            Action.FIRE,
-            random_outside_move_action  
-        )
-        p2_outside_action = jax.lax.select(p2_outside_has_ball, action_if_ball_outside, jax.lax.select(rand_outside < 0.5, Action.NOOP, random_outside_move_action))
-        
+        # Final P2 Actions (Defensive if P1 has ball, Offensive otherwise)
+        p2_inside_action = jax.lax.select(p1_has_ball, p2_in_def_action, p2_in_off_action)
+        p2_outside_action = jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_off_action)
+
         actions = (p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action)
         return actions, key
-
+    
     def _update_player_animation(self, player: PlayerState, has_ball: bool) -> PlayerState:
         """Updates the animation frame for a single player."""
         anim_frame = player.animation_frame
@@ -464,7 +559,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles the logic for passing the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_pass_step = (state.strategy[state.offensive_strategy_step] == Strategy.PASS)
+        is_pass_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.PASS)
 
         is_p1_inside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_PASS_ACTIONS)))
         is_p1_outside_passing = (state.cooldown == 0) & is_pass_step & (ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_PASS_ACTIONS)))
@@ -516,7 +611,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles the logic for shooting the ball."""
         p1_inside_action, p1_outside_action, p2_inside_action, p2_outside_action = actions
         ball_state = state.ball
-        is_shoot_step = (state.strategy[state.offensive_strategy_step] == Strategy.JUMPSHOOT)
+        is_shoot_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.JUMPSHOOT)
 
         is_p1_inside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_inside.z != 0) & (ball_state.holder == PlayerID.PLAYER1_INSIDE) & jnp.any(jnp.asarray(p1_inside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
         is_p1_outside_shooting = (state.cooldown == 0) & is_shoot_step & (state.player1_outside.z != 0) &(ball_state.holder == PlayerID.PLAYER1_OUTSIDE) & jnp.any(jnp.asarray(p1_outside_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
@@ -639,7 +734,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
-        is_jump_step = (state.strategy[state.offensive_strategy_step] == Strategy.JUMPSHOOT) & (player.z == 0)
+        is_jump_step = (state.strategy[state.offensive_strategy_step] == OffensiveAction.JUMPSHOOT) & (player.z == 0)
         can_jump = (state.cooldown == 0) & is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
@@ -851,36 +946,65 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_play_selection(self, state: DunkGameState, action: int) -> DunkGameState:
         """Handles the play selection mode."""
+        p1_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE) | (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        
+        key, strat_key = random.split(state.key)
 
-        def select_strategy(state, strategy):
+        # Enemy choices
+        random_offensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=3) # 0, 1, 2
+        enemy_offensive_strategy = jax.lax.switch(random_offensive_idx, [lambda: PICK_AND_ROLL, lambda: GIVE_AND_GO, lambda: MR_OUTSIDE_SHOOTS])
+        
+        random_defensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=2) # 0, 1
+        enemy_defensive_strategy = random_defensive_idx
+
+        def start_game(s, selected_off, selected_def):
             # When a strategy is selected, we reset the game to its initial state
             # but keep the selected strategy and switch to IN_PLAY mode.
             # We also keep the current key.
-            return state.replace(
-                strategy=strategy,
+            return s.replace(
+                strategy=selected_off,
+                defensive_strategy=selected_def,
                 game_mode=GameMode.IN_PLAY,
+                key=key
             )
 
-        # Check for each strategy selection action
-        state = jax.lax.cond(
-            action == Action.UPFIRE,
-            lambda s: select_strategy(s, PICK_AND_ROLL),
+        is_up = (action == Action.UPFIRE)
+        is_down = (action == Action.DOWNFIRE)
+        is_right = (action == Action.RIGHTFIRE)
+
+        # Case 1: P1 Has Ball (User chooses Offense, Enemy chooses Defense)
+        # User choices: UP=PICK_AND_ROLL, DOWN=GIVE_AND_GO, RIGHT=MR_OUTSIDE_SHOOTS
+        off_p1 = jax.lax.select(is_up, PICK_AND_ROLL, 
+                   jax.lax.select(is_down, GIVE_AND_GO, 
+                     jax.lax.select(is_right, MR_OUTSIDE_SHOOTS, state.strategy)))
+        
+        valid_input_p1_off = is_up | is_down | is_right
+        
+        state_p1_ball = jax.lax.cond(
+            valid_input_p1_off,
+            lambda s: start_game(s, off_p1, enemy_defensive_strategy),
             lambda s: s,
             state
         )
-        state = jax.lax.cond(
-            action == Action.DOWNFIRE,
-            lambda s: select_strategy(s, GIVE_AND_GO),
-            lambda s: s,
-            state
+
+        # Case 2: P2 Has Ball (Enemy chooses Offense, User chooses Defense)
+        # User choices: UP=LANE_DEFENSE, DOWN=TIGHT_DEFENSE, RIGHT=LANE_DEFENSE (Default)
+        def_p1 = jax.lax.select(is_up, DefensiveStrategy.LANE_DEFENSE,
+                   jax.lax.select(is_down, DefensiveStrategy.TIGHT_DEFENSE, 
+                     jax.lax.select(is_right, DefensiveStrategy.LANE_DEFENSE, state.defensive_strategy)))
+        
+        valid_input_p1_def = is_up | is_down # Right maps to something or ignored? Let's include Right as default/LANE for now or strict?
+        # Prompt says: "whoever has the ball (User or enemy) must choose an offensive strategy and the other team chooses a defensive strategy"
+        # I'll stick to Up/Down for defense as I only have 2 defensive strategies.
+
+        state_p2_ball = jax.lax.cond(
+             valid_input_p1_def,
+             lambda s: start_game(s, enemy_offensive_strategy, def_p1),
+             lambda s: s,
+             state
         )
-        state = jax.lax.cond(
-            action == Action.RIGHTFIRE,
-            lambda s: select_strategy(s, MR_OUTSIDE_SHOOTS),
-            lambda s: s,
-            state
-        )
-        return state
+
+        return jax.lax.cond(p1_has_ball, lambda: state_p1_ball, lambda: state_p2_ball)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
