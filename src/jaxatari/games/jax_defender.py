@@ -73,6 +73,7 @@ class DefenderConstants(NamedTuple):
     COLOR_BOMBER_BLUE: Tuple[int, int, int] = (104, 116, 208)
     COLOR_LANDER_YELLOW: Tuple[int, int, int] = (252, 224, 140)
     COLOR_MUTANT_RED: Tuple[int, int, int] = (192, 104, 72)
+    COLOR_PINK: Tuple[int, int, int] = (235, 176, 224)
     PARTICLE_FLICKER_EVERY_N_FRAMES: int = 1
 
     ## ENTITY
@@ -92,6 +93,13 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_INIT_BOMBS: int = 3
     SPACE_SHIP_SHOOT_CD: int = 10
     SCORE_BONUS_THRESHOLD: int = 10000
+    SPACE_SHIP_DEATH_LOOP_FRAMES: int = 3
+    SPACE_SHIP_DEATH_LOOP_AMOUNT: int = 12
+    SPACE_SHIP_DEATH_EXPLOSION_AMOUNT: int = 8
+    SPACE_SHIP_DEATH_ANIM_FRAME_AMOUNT: int = (
+        SPACE_SHIP_DEATH_LOOP_AMOUNT * SPACE_SHIP_DEATH_LOOP_FRAMES
+        + SPACE_SHIP_DEATH_EXPLOSION_AMOUNT
+    )
 
     SPACE_SHIP_SCANNER_WIDTH: int = 3
     SPACE_SHIP_SCANNER_HEIGHT: int = 2
@@ -219,6 +227,7 @@ class DefenderState(NamedTuple):
     step_counter: chex.Array
     level: chex.Array
     score: chex.Array
+    game_state: chex.Array
     # Camera
     camera_offset: chex.Array
     # Space Ship
@@ -448,6 +457,7 @@ class DefenderRenderer(JAXGameRenderer):
         color_b_blue = self.COLOR_TO_ID.get(self.consts.COLOR_BOMBER_BLUE, 0)
         color_m_red = self.COLOR_TO_ID.get(self.consts.COLOR_MUTANT_RED, 0)
         color_l_yellow = self.COLOR_TO_ID.get(self.consts.COLOR_LANDER_YELLOW, 0)
+        color_pink = self.COLOR_TO_ID.get(self.consts.COLOR_PINK, 0)
 
         self.ENEMY_COLOR_IDS = jnp.array(
             [
@@ -462,13 +472,32 @@ class DefenderRenderer(JAXGameRenderer):
             ]
         )
 
-        self.PARTICLE_COLOR_IDS = jnp.array([color_s_blue, color_m_red, color_l_yellow])
+        self.PARTICLE_COLOR_IDS = jnp.array(
+            [color_s_blue, color_pink, color_b_blue, color_m_red, color_l_yellow]
+        )
 
     def _get_asset_config(self) -> list:
         # Returns the declarative manifest of all assets for the game, including both wall sprites
         return [
             {"name": "background", "type": "background", "file": "background.npy"},
             {"name": "space_ship", "type": "single", "file": "space_ship.npy"},
+            {
+                "name": "space_ship_death",
+                "type": "group",
+                "files": [
+                    "space_ship_death_0.npy",
+                    "space_ship_death_1.npy",
+                    "space_ship_death_2.npy",
+                    "space_ship_death_3.npy",
+                    "space_ship_death_4.npy",
+                    "space_ship_death_5.npy",
+                    "space_ship_death_6.npy",
+                    "space_ship_death_7.npy",
+                    "space_ship_death_8.npy",
+                    "space_ship_death_9.npy",
+                    "space_ship_death_10.npy",
+                ],
+            },
             {"name": "exhaust", "type": "single", "file": "exhaust.npy"},
             {"name": "baiter", "type": "single", "file": "baiter.npy"},
             {"name": "bomber", "type": "single", "file": "bomber.npy"},
@@ -642,7 +671,6 @@ class DefenderRenderer(JAXGameRenderer):
         ]
 
         def render_space_ship(r):
-            mask = self.SHAPE_MASKS["space_ship"]
             game_x = state.space_ship_x
             game_y = state.space_ship_y
             flip_horizontal = jnp.logical_not(state.space_ship_facing_right)
@@ -659,42 +687,73 @@ class DefenderRenderer(JAXGameRenderer):
                 game_x, game_y, scanner_width, scanner_height, color_id, r
             )
 
-            # Render exhaust
-            draw_exhaust = (
-                jnp.mod(
-                    state.step_counter, self.consts.SPACE_SHIP_EXHAUST_FLICKER_N_FRAMES
+            def render_normal(r):
+                # Render exhaust
+                draw_exhaust = (
+                    jnp.mod(
+                        state.step_counter,
+                        self.consts.SPACE_SHIP_EXHAUST_FLICKER_N_FRAMES,
+                    )
+                    == 0
                 )
-                == 0
-            )
-            exhaust_game_x = screen_x + jnp.where(
-                flip_horizontal,
-                self.consts.SPACE_SHIP_WIDTH,
-                -self.consts.SPACE_SHIP_EXHAUST_WIDTH,
-            )
-            exhaust_game_y = screen_y
-            r = jax.lax.cond(
-                draw_exhaust,
-                lambda: self.jr.render_at(
-                    r,
-                    exhaust_game_x,
-                    exhaust_game_y,
-                    self.SHAPE_MASKS["exhaust"],
-                    flip_horizontal=flip_horizontal,
-                ),
-                lambda: r,
-            )
+                exhaust_game_x = screen_x + jnp.where(
+                    flip_horizontal,
+                    self.consts.SPACE_SHIP_WIDTH,
+                    -self.consts.SPACE_SHIP_EXHAUST_WIDTH,
+                )
+                exhaust_game_y = screen_y
+                r = jax.lax.cond(
+                    draw_exhaust,
+                    lambda: self.jr.render_at(
+                        r,
+                        exhaust_game_x,
+                        exhaust_game_y,
+                        self.SHAPE_MASKS["exhaust"],
+                        flip_horizontal=flip_horizontal,
+                    ),
+                    lambda: r,
+                )
 
-            # Render on screen
+                # Render on screen
+                mask = self.SHAPE_MASKS["space_ship"]
+                r = jax.lax.cond(
+                    screen_y
+                    > (self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT),
+                    lambda: self.jr.render_at(
+                        r,
+                        screen_x,
+                        screen_y,
+                        mask,
+                        flip_horizontal=flip_horizontal,
+                    ),
+                    lambda: r,
+                )
+                return r
+
+            def render_death(r):
+                # Go through animation, loop 3 times in first 3 frames then let the rest go on
+                current_frame = state.shooting_cooldown
+                beginning_loop = self.consts.SPACE_SHIP_DEATH_LOOP_AMOUNT
+                beginning_frames = self.consts.SPACE_SHIP_DEATH_LOOP_FRAMES
+                in_beginning = current_frame < (beginning_loop * beginning_frames)
+                current_frame = jax.lax.cond(
+                    in_beginning,
+                    lambda: jnp.mod(current_frame, beginning_frames),
+                    lambda: current_frame - (beginning_loop - 1) * beginning_frames,
+                )
+                mask = self.SHAPE_MASKS["space_ship_death"][current_frame]
+
+                new_x = screen_x - 5
+                new_y = screen_y - 5
+                r = self.jr.render_at(
+                    r, new_x, new_y, mask, flip_horizontal=flip_horizontal
+                )
+                return r
+
             r = jax.lax.cond(
-                screen_y > (self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT),
-                lambda: self.jr.render_at(
-                    r,
-                    screen_x,
-                    screen_y,
-                    mask,
-                    flip_horizontal=flip_horizontal,
-                ),
-                lambda: r,
+                state.game_state == self.consts.GAME_STATE_PLAYING,
+                lambda: render_normal(r),
+                lambda: render_death(r),
             )
 
             return r
@@ -1127,10 +1186,6 @@ class JaxDefender(
 
         left_border_sector = self.dh._which_sector(camera_left_border)
         right_border_sector = self.dh._which_sector(camera_right_border)
-
-        self.dh._print_array("CHECK")
-        self.dh._print_array(left_border_sector)
-        self.dh._print_array(right_border_sector)
 
         # Max out both sectors
         sector_amounts = sector_amounts.at[left_border_sector].set(
@@ -2196,8 +2251,9 @@ class JaxDefender(
             ),
             lambda: False,
         )
-        # TODO implement game over here
-        state = jax.lax.cond(is_colliding, lambda: state, lambda: state)
+        state = jax.lax.cond(
+            is_colliding, lambda: self._game_over(state), lambda: state
+        )
 
         return state
 
@@ -2283,7 +2339,10 @@ class JaxDefender(
                 self.consts.SPACE_SHIP_HEIGHT,
             )
 
-            # TODO implement game over here, if space ship is colliding
+            state = jax.lax.cond(
+                space_ship_is_colliding, lambda: self._game_over(state), lambda: state
+            )
+
             is_dead = jnp.logical_or(laser_is_colliding, space_ship_is_colliding)
             state = jax.lax.cond(
                 is_dead, lambda: self._delete_enemy(state, index), lambda: state
@@ -2399,8 +2458,15 @@ class JaxDefender(
 
     def _game_over(self, state: DefenderState) -> DefenderState:
         # Shows game over animation, goes to end_level
-
-        return state
+        game_state = self.consts.GAME_STATE_GAMEOVER
+        # As game is over, use shooting_cooldown for animation index, to not waste state space
+        shooting_cooldown = 0
+        return state._replace(
+            game_state=game_state,
+            shooting_cooldown=shooting_cooldown,
+            bullet_active=False,
+            laser_active=False,
+        )
 
     ## -------- GAME STEP AND RESET ------------------------------
 
@@ -2415,15 +2481,35 @@ class JaxDefender(
         key, subkey = jax.random.split(state.key)
         state = state._replace(key=subkey)
 
-        state = self._space_ship_step(state, action)
-        state = self._camera_step(state)
-        state = self._enemy_step(state)
-        state = self._human_step(state)
-        state = self._bullet_step(state)
-        state = self._laser_step(state)
-        state = self._collision_step(state)
-        state = state._replace(step_counter=(state.step_counter + 1))
+        def state_playing(state) -> DefenderState:
+            state = self._space_ship_step(state, action)
+            state = self._camera_step(state)
+            state = self._enemy_step(state)
+            state = self._human_step(state)
+            state = self._bullet_step(state)
+            state = self._laser_step(state)
+            state = self._collision_step(state)
+            return state
 
+        state = jax.lax.cond(
+            state.game_state == self.consts.GAME_STATE_PLAYING,
+            lambda: state_playing(state),
+            lambda: state,
+        )
+
+        def state_game_over(state) -> DefenderState:
+            # For animation
+            current_frame = state.shooting_cooldown + 1
+            state = state._replace(shooting_cooldown=current_frame)
+            return state
+
+        state = jax.lax.cond(
+            state.game_state == self.consts.GAME_STATE_GAMEOVER,
+            lambda: state_game_over(state),
+            lambda: state,
+        )
+
+        state = state._replace(step_counter=(state.step_counter + 1))
         observation = self._get_observation(state)
         env_reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
@@ -2439,6 +2525,7 @@ class JaxDefender(
             step_counter=jnp.array(0).astype(jnp.int32),
             level=jnp.array(1).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
+            game_state=jnp.array(self.consts.GAME_STATE_PLAYING).astype(jnp.int32),
             # Camera
             camera_offset=jnp.array(self.consts.CAMERA_INIT_OFFSET).astype(jnp.int32),
             # Space Ship
@@ -2523,4 +2610,8 @@ class JaxDefender(
         return 0.0
 
     def _get_done(self, state: DefenderState) -> bool:
-        return False
+        is_done = jnp.logical_and(
+            state.game_state == self.consts.GAME_STATE_GAMEOVER,
+            state.shooting_cooldown == self.consts.SPACE_SHIP_DEATH_ANIM_FRAME_AMOUNT,
+        )
+        return is_done
