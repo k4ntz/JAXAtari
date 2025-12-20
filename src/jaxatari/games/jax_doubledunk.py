@@ -867,19 +867,32 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_stealing(self, state: DunkGameState, actions: Tuple[int, ...]) -> BallState:
         """Handles the logic for stealing the ball."""
-        human_action = actions[0] # The primary action from the user
         ball_state = state.ball
+        
+        players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
+        actions_stacked = jnp.stack(actions)
+        player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
 
-        steal_radius = 49.0
-        stealer_id = state.controlled_player_id
-        stealer_x = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, state.player1_inside.x, state.player1_outside.x)
-        stealer_y = jax.lax.select(stealer_id == PlayerID.PLAYER1_INSIDE, state.player1_inside.y, state.player1_outside.y)
+        def check_steal(player, action, pid):
+            is_trying_to_steal = jnp.any(jnp.asarray(action) == jnp.asarray(list(STEAL_ACTIONS)))
+            dist_sq = (player.x - ball_state.x)**2 + (player.y - ball_state.y)**2
+            is_close_to_ball = dist_sq < 2401.0 # 49^2
+            
+            # Can only steal if opponent has ball
+            # Team 1: IDs 1, 2. Team 2: IDs 3, 4.
+            is_p1_team = (pid <= 2)
+            holder_is_p1_team = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
+            holder_is_p2_team = (ball_state.holder == PlayerID.PLAYER2_INSIDE) | (ball_state.holder == PlayerID.PLAYER2_OUTSIDE)
+            
+            can_steal = (is_p1_team & holder_is_p2_team) | (~is_p1_team & holder_is_p1_team)
+            
+            return is_trying_to_steal & is_close_to_ball & can_steal
 
-        is_trying_to_steal = jnp.any(jnp.asarray(human_action) == jnp.asarray(list(STEAL_ACTIONS)))
-        is_close_to_ball = jnp.sqrt((stealer_x - ball_state.x)**2 + (stealer_y - ball_state.y)**2) < steal_radius
-        is_p1_team_holder = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
-        can_steal_from_holder = ~is_p1_team_holder
-        is_stealing = is_trying_to_steal & is_close_to_ball & can_steal_from_holder
+        steal_flags = jax.vmap(check_steal)(players, actions_stacked, player_ids)
+        
+        is_stealing = jnp.any(steal_flags)
+        stealer_idx = jnp.argmax(steal_flags)
+        stealer_id = player_ids[stealer_idx]
 
         new_ball_state = jax.lax.cond(
             is_stealing,
@@ -1088,18 +1101,18 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 # Update ball
                 new_ball = curr_ball.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE, shooter=PlayerID.NONE, missed_shot=False)
                 
-                # Update player state (set clearance_needed if defensive rebound)
-                p1_in = curr_state.player1_inside
-                p1_out = curr_state.player1_outside
-                p2_in = curr_state.player2_inside
-                p2_out = curr_state.player2_outside
+                # Update player state using vmap
+                players_stacked_catch = jax.tree_util.tree_map(lambda *args: jnp.stack(args), curr_state.player1_inside, curr_state.player1_outside, curr_state.player2_inside, curr_state.player2_outside)
                 
-                p1_in = jax.lax.cond((pid == PlayerID.PLAYER1_INSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p1_in)
-                p1_out = jax.lax.cond((pid == PlayerID.PLAYER1_OUTSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p1_out)
-                p2_in = jax.lax.cond((pid == PlayerID.PLAYER2_INSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p2_in)
-                p2_out = jax.lax.cond((pid == PlayerID.PLAYER2_OUTSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p2_out)
+                def update_clearance(player, p_id):
+                    should_set = (p_id == pid) & is_defensive_rebound
+                    return jax.lax.cond(should_set, lambda p: p.replace(clearance_needed=True), lambda p: p, player)
 
-                return curr_state.replace(ball=new_ball, player1_inside=p1_in, player1_outside=p1_out, player2_inside=p2_in, player2_outside=p2_out)
+                updated_players = jax.vmap(update_clearance)(players_stacked_catch, player_ids)
+                
+                u_p1_in, u_p1_out, u_p2_in, u_p2_out = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
+
+                return curr_state.replace(ball=new_ball, player1_inside=u_p1_in, player1_outside=u_p1_out, player2_inside=u_p2_in, player2_outside=u_p2_out)
 
             # We need to update state, not just ball
             s = jax.lax.cond(any_caught, lambda s_: handle_catch(s_, b_state), lambda s_: s_.replace(ball=b_state), s)
