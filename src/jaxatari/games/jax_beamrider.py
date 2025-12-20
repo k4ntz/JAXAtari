@@ -1991,14 +1991,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             dtype=chasing_meteoroid_pos.dtype,
         )
         hit_radius = bullet_radius + chasing_meteoroid_radius
-        hit_mask = (
+        
+        # Check for any collision (laser or torpedo)
+        collision_mask = (
             chasing_meteoroid_active
-            & is_torpedo
             & shot_active
             & (distance_to_bullet[:, 0] <= hit_radius[0])
             & (distance_to_bullet[:, 1] <= hit_radius[1])
         )
+        
+        # Meteoroid is only destroyed if it's hit by a torpedo
+        hit_mask = collision_mask & is_torpedo
+        
         hit_exists = jnp.any(hit_mask)
+        collision_exists = jnp.any(collision_mask)
+        
         hit_index = jnp.argmax(hit_mask)
         hit_one_hot = jax.nn.one_hot(hit_index, self.consts.CHASING_METEOROID_MAX, dtype=chasing_meteoroid_pos.dtype)
         hit_one_hot_bool = hit_one_hot.astype(jnp.bool_)
@@ -2019,8 +2026,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chasing_meteoroid_frame = jnp.where(hit_exists, frame_after_hit, chasing_meteoroid_frame)
         chasing_meteoroid_lane = jnp.where(hit_exists, lane_after_hit, chasing_meteoroid_lane)
         chasing_meteoroid_side = jnp.where(hit_exists, side_after_hit, chasing_meteoroid_side)
+        
+        # Shot is removed if it hits a meteoroid (blocking behavior)
         player_shot_pos = jnp.where(
-            hit_exists,
+            collision_exists,
             jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=player_shot_pos.dtype),
             player_shot_pos,
         )
