@@ -59,7 +59,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'bridge', 'type': 'single', 'file': 'Bridge.npy'},
         {'name': 'magnet', 'type': 'single', 'file': 'Magnet.npy'},
         #Chalice
-        {'name': 'chalice', 'type': 'single', 'file': 'Trophy_Pink.npy'}
+        {'name': 'chalice', 'type': 'single', 'file': 'Chalice_Pink.npy'}
         #ToDo remaining chalice colors for blinking
     )
 
