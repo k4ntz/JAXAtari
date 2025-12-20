@@ -431,55 +431,103 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         up_no_wall =  jnp.logical_and(up,self._check_for_wall(state, 2))
         down_no_wall =  jnp.logical_and(down,self._check_for_wall(state, 3))
 
-        new_player_x = state.player[0]
-        new_player_x = jax.lax.cond(
-            left_no_wall,
-            lambda x: x-4,
-            lambda x: x,
-            operand = new_player_x,
+        #chek for item
+        #has_item = jax.lax.cond(
+        #    pred=state.player[3]==self.consts.EMPTY_HAND_ID,
+        #    true_fun=False,
+        #    false_fun=True
+        #)
+        
+        new_item_x = jax.lax.switch(
+            state.player[3],
+            [lambda:0,
+             lambda:state.key_yellow[0],
+             lambda:state.key_black[0],
+             lambda:state.sword[0],
+             lambda:state.bridge[0],
+             lambda:state.magnet[0],
+             lambda:state.chalice[0]
+             ]
         )
-        new_player_x = jax.lax.cond(
+
+        new_player_x = state.player[0]
+        new_player_x, new_item_x = jax.lax.cond(
+            left_no_wall,
+            lambda y: (y[0]-4,y[1]-4),
+            lambda y: y,
+            operand = (new_player_x,new_item_x),
+        )
+        new_player_x, new_item_x = jax.lax.cond(
             right_no_wall,
-            lambda x: x+4,
-            lambda x: x,
-            operand = new_player_x,
+            lambda y: (y[0]+4,y[1]+4),
+            lambda y: y,
+            operand = (new_player_x,new_item_x),
+        )
+
+
+        new_item_y = jax.lax.switch(
+            state.player[3],
+            [lambda:0,
+             lambda:state.key_yellow[1],
+             lambda:state.key_black[1],
+             lambda:state.sword[1],
+             lambda:state.bridge[1],
+             lambda:state.magnet[1],
+             lambda:state.chalice[1]
+             ]
         )
 
         new_player_y = state.player[1]
-        new_player_y = jax.lax.cond(
+        new_player_y, new_item_y = jax.lax.cond(
             down_no_wall,
-            lambda y: y+8,
+            lambda y: (y[0]+8,y[1]+8),
             lambda y: y,
-            operand = new_player_y,
+            operand = (new_player_y,new_item_y)
         )
-        new_player_y = jax.lax.cond(
+        new_player_y, new_item_y = jax.lax.cond(
             up_no_wall,
-            lambda y: y-8,
+            lambda y: (y[0]-8,y[1]-8),
             lambda y: y,
-            operand = new_player_y,
+            operand = (new_player_y,new_item_y)
         )
         new_player_tile = state.player[2]
         new_player_y, new_player_tile = jax.lax.cond(
             new_player_y > 212,
-            lambda _: (27, jax.lax.switch( new_player_tile, [lambda:2,lambda:0,lambda:0, lambda:4, lambda:0, lambda:0, lambda:5, lambda:8, lambda:0, lambda: 6, lambda:7, lambda:10, lambda:11, lambda:12])),
+            lambda _: (27, jax.lax.switch( new_player_tile, [lambda:2,lambda:0,lambda:0, 
+                                                             lambda:4, lambda:0, lambda:0, 
+                                                             lambda:5, lambda:8, lambda:0, 
+                                                             lambda: 6, lambda:7, lambda:10, 
+                                                             lambda:11, lambda:12])),
             lambda _: (new_player_y, new_player_tile),
             operand = None,
         )
         new_player_y, new_player_tile = jax.lax.cond(
             new_player_y < 27,
-            lambda _: (212, jax.lax.switch( new_player_tile, [lambda:1,lambda:0,lambda:0, lambda:0, lambda:3, lambda:6, lambda:9, lambda:10, lambda:7, lambda: 0, lambda:11, lambda:12, lambda:13, lambda:0])),
+            lambda _: (212, jax.lax.switch( new_player_tile, [lambda:1,lambda:0,lambda:0, 
+                                                              lambda:0, lambda:3, lambda:6, 
+                                                              lambda:9, lambda:10, lambda:7, 
+                                                              lambda: 0, lambda:11, lambda:12, 
+                                                              lambda:13, lambda:0])),
             lambda _: (new_player_y, new_player_tile),
             operand = None,
         )
         new_player_x, new_player_tile = jax.lax.cond(
             new_player_x > 160,
-            lambda _: (0, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:3, lambda:0, lambda:0, lambda:2, lambda:7, lambda:6, lambda:10, lambda: 8, lambda:9, lambda:0, lambda:0, lambda:0])),
+            lambda _: (0, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:3, 
+                                                            lambda:0, lambda:0, lambda:2, 
+                                                            lambda:7, lambda:6, lambda:10, 
+                                                            lambda: 8, lambda:9, lambda:0, 
+                                                            lambda:0, lambda:0])),
             lambda _: (new_player_x, new_player_tile),
             operand = None,
         )
         new_player_x, new_player_tile = jax.lax.cond(
             new_player_x < 0,
-            lambda _: (160, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:5, lambda:2, lambda:0, lambda:0, lambda:7, lambda:6, lambda:9, lambda: 10, lambda:8, lambda:0, lambda:0, lambda:0])),
+            lambda _: (160, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:5, 
+                                                              lambda:2, lambda:0, lambda:0, 
+                                                              lambda:7, lambda:6, lambda:9, 
+                                                              lambda: 10, lambda:8, lambda:0, 
+                                                              lambda:0, lambda:0])),
             lambda _: (new_player_x, new_player_tile),
             operand = None,
         )
@@ -489,6 +537,58 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
+            key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
+                                      lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                      lambda op: op[3],
+                                      operand=(new_item_x,new_item_y,state.key_yellow[2],state.key_yellow),
+                                      ),
+            key_black= jax.lax.cond(state.player[3]==self.consts.KEY_BLACK_ID,
+                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: op[3],
+                                    operand=(new_item_x,new_item_y,state.key_black[2],state.key_black)
+                                    ),
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword= jax.lax.cond(state.player[3]==self.consts.SWORD_ID,
+                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: op[3],
+                                operand=(new_item_x,new_item_y,state.sword[2],state.sword)
+                                ),
+            bridge= jax.lax.cond(state.player[3]==self.consts.BRIDGE_ID,
+                                 lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: op[3],
+                                operand=(new_item_x,new_item_y,state.bridge[2],state.bridge)
+                                ),
+            magnet= jax.lax.cond(state.player[3]==self.consts.MAGNET_ID,
+                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: op[3],
+                                operand=(new_item_x,new_item_y,state.magnet[2],state.magnet)
+                                ),
+            chalice= jax.lax.cond(state.player[3]==self.consts.CHALICE_ID,
+                                  lambda op: jnp.array([op[0],op[1],op[2],op[3]]).astype(jnp.int32),
+                                  lambda op: op[4],
+                                  operand=(new_item_x,new_item_y,state.chalice[2],state.chalice[3],state.chalice)
+                                  )
+        )
+    """
+    def _item_pickup(self, state: AdventureState) -> AdventureState:
+        
+        #ToDo if the player holds an item skip
+        new_player_inventory = jax.lax.cond(
+            state.player[3] != self.consts.EMPTY_HAND_ID,
+            lambda op: op[3], 
+            lambda _: None,
+            operand=(state.player[0],state.player[1],state.player[2],state.player[3])
+        )
+        #ToDo check around the player, if there is an item
+
+        #if yes pick it up
+
+        return AdventureState(
+            step_counter=state.step_counter,
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32),
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
             key_yellow=state.key_yellow,
             key_black=state.key_black,
             gate_yellow=state.gate_yellow,
@@ -498,8 +598,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
-
-    
+    """
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
         previous_state = state
@@ -510,10 +609,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
-            #Player Spawn: x, y, tile, color, inventory
+            #Player Spawn: x, y, tile, inventory
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
-                                self.consts.PLAYER_SPAWN[2],0,
+                                self.consts.PLAYER_SPAWN[2],
                                 self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
