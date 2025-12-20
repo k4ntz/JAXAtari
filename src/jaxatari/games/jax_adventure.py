@@ -83,7 +83,20 @@ class AdventureConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 250
     #upper left corner is 0, 0
-
+    PLAYER_SIZE: Tuple[int, int] = (4, 8)
+    KEY_SIZE: Tuple[int, int] = (8, 6)
+    DRAGON_SIZE: Tuple[int, int] = (8, 44)
+    GATE_SIZE: Tuple[int, int] = (7, 32)
+    SWORD_SIZE: Tuple[int, int] = (8, 10)
+    BRIDGE_SIZE: Tuple[int, int] = (32, 48)
+    MAGNET_SIZE: Tuple[int, int] = (8, 16)
+    CHALICE_SIZE: Tuple[int, int] = (8, 18)
+    KEY_YELLOW_ID: int = 0
+    KEY_BLACK_ID: int = 1
+    SWORD_ID: int = 2
+    BRIDGE_ID: int = 3
+    MAGNET_ID: int = 4
+    CHALICE_ID: int = 5
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -359,88 +372,88 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             x=state.player[0],
             y=state.player[1],
             tile=state.player[2],
-            width=4, 
-            height=8, 
+            width=self.consts.PLAYER_SIZE[0], 
+            height=self.consts.PLAYER_SIZE[1], 
             state=1 #ToDO
         )
         dragon_yellow = EntityPosition(
             x=state.dragon_yellow[0],
             y=state.dragon_yellow[1],
             tile=state.dragon_yellow[2],
-            width=8, 
-            height=44, 
+            width=self.consts.DRAGON_SIZE[0], 
+            height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_yellow[3] #ToDO
         )
         dragon_green = EntityPosition(
             x=state.dragon_green[0],
             y=state.dragon_green[1],
             tile=state.dragon_green[2],
-            width=8, 
-            height=44, 
+            width=self.consts.DRAGON_SIZE[0], 
+            height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_green[3] #ToDO
         )
         key_yellow = EntityPosition(
             x=state.key_yellow[0],
             y=state.key_yellow[1],
             tile=state.key_yellow[2],
-            width=8, 
-            height=6,
+            width=self.consts.KEY_SIZE[0], 
+            height=self.consts.KEY_SIZE[1],
             state=1 #ToDO
         )
         key_black = EntityPosition(
             x=state.key_black[0],
             y=state.key_black[1],
             tile=state.key_black[2],
-            width=8, 
-            height=6,
+            width=self.consts.KEY_SIZE[0], 
+            height=self.consts.KEY_SIZE[1],
             state=1 #ToDO
         )
         gate_yellow = EntityPosition(
             x=80, #ToDO
             y=80, #ToDO
             tile=1, #ToDO
-            width=7, 
-            height=32, 
+            width=self.consts.GATE_SIZE[0], 
+            height=self.consts.GATE_SIZE[1], 
             state=state.gate_yellow[0] #ToDO
         )
         gate_black = EntityPosition(
             x=100, #ToDO
             y=100, #ToDO
             tile=1, #ToDO
-            width=7, 
-            height=32, 
+            width=self.consts.GATE_SIZE[0], 
+            height=self.consts.GATE_SIZE[1], 
             state=state.gate_black[0] #ToDO
         )
         sword = EntityPosition(
             x=state.sword[0],
             y=state.sword[1],
             tile=state.sword[2],
-            width=8, 
-            height=10, 
+            width=self.consts.SWORD_SIZE[0], 
+            height=self.consts.SWORD_SIZE[1], 
             state=1 #ToDO
         )
         bridge = EntityPosition(
             x=state.bridge[0],
             y=state.bridge[1],
             tile=state.bridge[2],
-            width=32, 
-            height=48, 
+            width=self.consts.BRIDGE_SIZE[0], 
+            height=self.consts.BRIDGE_SIZE[1], 
             state=1 #ToDO
         )
         magnet = EntityPosition(
             x=state.magnet[0],
             y=state.magnet[1],
             tile=state.magnet[2],
-            width=8, 
-            height=16,
+            width=self.consts.MAGNET_SIZE[0], 
+            height=self.consts.MAGNET_SIZE[1],
             state=1 #ToDO
         )
         chalice = EntityPosition(
             x=state.chalice[0],
             y=state.chalice[1],
             tile=state.chalice[2],
-            width=8, 
-            height=18,
+            width=self.consts.CHALICE_SIZE[0], 
+            height=self.consts.CHALICE_SIZE[1],
             state=1 #ToDO
         )
 
