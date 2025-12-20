@@ -530,7 +530,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
 
-     def _dragon_step(self, state: AdventureState) -> AdventureState:
+    def _dragon_step(self, state: AdventureState) -> AdventureState:
         direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
         direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
         dragon_yellow_x = state.dragon_yellow[0]
