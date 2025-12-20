@@ -628,9 +628,43 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         action_if_ball_outside = jax.lax.select(rand_outside < 0.2, Action.FIRE, random_outside_move_action)
         p2_out_off_action = jax.lax.select(p2_outside_has_ball, action_if_ball_outside, jax.lax.select(rand_outside < 0.5, Action.NOOP, random_outside_move_action))
 
+        # P2 Clearance Override (Smart Target)
+        def get_clearance_target(px, py):
+            px_f = px.astype(jnp.float32)
+            py_f = py.astype(jnp.float32)
+            
+            # 1. Distances to sides
+            dist_left = px_f - 25.0
+            dist_right = 135.0 - px_f
+            
+            # 2. Distance to ellipse bottom
+            dx = px_f - 80.0
+            term = 1.0 - (dx / 55.0)**2
+            valid_term = jnp.maximum(0.0, term)
+            boundary_y = 80.0 + 45.0 * jnp.sqrt(valid_term)
+            dist_down = boundary_y - py_f
+            
+            # 3. Determine closest escape
+            go_left = (dist_left < dist_right) & (dist_left < dist_down)
+            go_right = (dist_right <= dist_left) & (dist_right < dist_down)
+            # go_down is implicit else
+            
+            tx = jax.lax.select(go_left, 20.0, jax.lax.select(go_right, 140.0, px_f))
+            ty = jax.lax.select(go_left | go_right, py_f, boundary_y + 10.0)
+            
+            return tx.astype(jnp.int32), ty.astype(jnp.int32)
+
+        p2_in_tx, p2_in_ty = get_clearance_target(state.player2_inside.x, state.player2_inside.y)
+        p2_in_clearance_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, p2_in_tx, p2_in_ty)
+        p2_in_final_off = jax.lax.select(state.player2_inside.clearance_needed, p2_in_clearance_action, p2_in_off_action)
+
+        p2_out_tx, p2_out_ty = get_clearance_target(state.player2_outside.x, state.player2_outside.y)
+        p2_out_clearance_action = get_move_to_target(state.player2_outside.x, state.player2_outside.y, p2_out_tx, p2_out_ty)
+        p2_out_final_off = jax.lax.select(state.player2_outside.clearance_needed, p2_out_clearance_action, p2_out_off_action)
+
         # Final P2 Actions (Defensive if P1 has ball, Offensive otherwise)
-        p2_inside_action = jax.lax.select(p1_has_ball, p2_in_def_action, p2_in_off_action)
-        p2_outside_action = jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_off_action)
+        p2_inside_action = jax.lax.select(p1_has_ball, p2_in_def_action, p2_in_final_off)
+        p2_outside_action = jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_final_off)
 
         # --- Enemy Reaction Time Logic ---
         use_last_action = state.enemy_reaction_timer > 0
