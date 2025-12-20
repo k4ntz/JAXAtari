@@ -18,6 +18,19 @@ BLUE_LINE_INIT_TABLE = jnp.array([[45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78
 BLUE_LINE_LOOP_TABLE = jnp.array([[44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1]])
 
 
+PROJECTILE_STEP_FRAMES = 2
+PROJECTILE_Y_TABLE_LASER = jnp.array(
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 800],
+    dtype=jnp.float32,
+)
+PROJECTILE_Y_TABLE_TORPEDO = jnp.array(
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 61, 58, 56, 53, 800, 49, 800],
+    dtype=jnp.float32,
+)
+LASER_PROJECTILE_FRAMES = PROJECTILE_Y_TABLE_LASER.shape[0] * PROJECTILE_STEP_FRAMES
+TORPEDO_PROJECTILE_FRAMES = PROJECTILE_Y_TABLE_TORPEDO.shape[0] * PROJECTILE_STEP_FRAMES
+
+
 class WhiteUFOPattern(IntEnum):
     """Behavioral patterns used by the white UFO enemies."""
 
@@ -37,6 +50,13 @@ class BouncerState(IntEnum):
     UP = 2
 
 
+class LaneBlockerState(IntEnum):
+    DESCEND = 0
+    HOLD = 1
+    SINK = 2
+    RETREAT = 3
+
+
 class BeamriderConstants(NamedTuple):
 
     WHITE_UFOS_PER_SECTOR: int = 3
@@ -53,8 +73,8 @@ class BeamriderConstants(NamedTuple):
     TOP_TO_BOTTOM_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-2,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(2,4))
 
 
-    MAX_LASER_Y: int = 67
-    MIN_BULLET_Y:int =156
+    MAX_LASER_Y: int = 64
+    MIN_BULLET_Y:int =155
     MAX_TORPEDO_Y: int = 49
     MAX_TORPEDO_Y_MOTHERSHIP_SCENE: int = 45
     BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
@@ -126,6 +146,9 @@ class BeamriderConstants(NamedTuple):
     FALLING_ROCK_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
         (3, 4), (4, 5), (5, 6), (6, 8)
     )
+    LANE_BLOCKER_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (3, 3), (4, 5), (7, 8), (7, 8)
+    )
     MOTHERSHIP_SPRITE_SIZE: Tuple[int, int] = (7, 16)
 
     # Blue line constants
@@ -159,6 +182,19 @@ class BeamriderConstants(NamedTuple):
     FALLING_ROCK_BOTTOM_CLIP: float = 164.0
     FALLING_ROCK_INIT_VEL: float = 0.07
     FALLING_ROCK_ACCEL: float = 0.02
+
+    # Lane blocker constants
+    LANE_BLOCKER_MAX: int = 3
+    LANE_BLOCKER_START_LEVEL: int = 10
+    LANE_BLOCKER_SPAWN_PROB: float = 1 / 1800
+    LANE_BLOCKER_SPAWN_Y: float = 43.0
+    LANE_BLOCKER_BOTTOM_Y: float = 155.0
+    LANE_BLOCKER_HOLD_FRAMES: int = 122
+    LANE_BLOCKER_INIT_VEL: float = 0.02
+    LANE_BLOCKER_SINK_INTERVAL: int = 2
+    LANE_BLOCKER_WIDTH: int = 8
+    LANE_BLOCKER_HEIGHT: int = 7
+    LANE_BLOCKER_RETREAT_SPEED_MULT: float = 2.5
 
     # Coin constants
     COIN_MAX: int = 3
@@ -200,6 +236,14 @@ def _get_index_falling_rock(pos: chex.Array) -> chex.Array:
     return stage_1 + stage_2 + stage_3 + stage_4
 
 
+def _get_index_lane_blocker(pos: chex.Array) -> chex.Array:
+    stage_1 = (pos >= 43).astype(jnp.int32)
+    stage_2 = (pos >= 64).astype(jnp.int32)
+    stage_3 = (pos >= 84).astype(jnp.int32)
+    stage_4 = (pos >= 111).astype(jnp.int32)
+    return stage_1 + stage_2 + stage_3 + stage_4
+
+
 def _get_ufo_alignment(pos: chex.Array) -> chex.Array:
     stage_1 = (pos >= 0).astype(jnp.int32)
     stage_2 = (pos >= 48).astype(jnp.int32)
@@ -212,21 +256,19 @@ def _get_ufo_alignment(pos: chex.Array) -> chex.Array:
 
 
 def _get_index_bullet(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
-    stage_1 = (pos >= 100).astype(jnp.int32)
-    stage_2 = (pos >= 80).astype(jnp.int32)
-    stage_3 = (pos >= 0).astype(jnp.int32)
-    result = jnp.where(bullet_type == laser_id, 0, stage_1 + stage_2 + stage_3)
-    return result
+    is_laser = bullet_type == laser_id
+    large = (pos >= 79).astype(jnp.int32)
+    medium = (pos >= 56).astype(jnp.int32)
+    torpedo_idx = jnp.where(large, 3, jnp.where(medium, 2, 1))
+    return jnp.where(is_laser, 0, torpedo_idx)
 
 
 def _get_bullet_alignment(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
-    stage_1 = (pos >= 100).astype(jnp.int32)
-    stage_2 = (pos >= 80).astype(jnp.int32)
-    stage_3 = (pos >= 0).astype(jnp.int32)
-    # default alignment if smallest torpedo is +3
-    # if bullet is laser, no offset
-    result = jnp.where(bullet_type == laser_id, 0, 4 - (stage_1 + stage_2 + stage_3))
-    return result
+    is_laser = bullet_type == laser_id
+    large = (pos >= 79).astype(jnp.int32)
+    medium = (pos >= 56).astype(jnp.int32)
+    torpedo_offset = jnp.where(large, 2, jnp.where(medium, 3, 4))
+    return jnp.where(is_laser, 0, torpedo_offset)
 
 
 class LevelState(NamedTuple):
@@ -238,6 +280,7 @@ class LevelState(NamedTuple):
     mothership_stage: chex.Array
     player_shot_pos: chex.Array
     player_shot_vel: chex.Array
+    player_shot_frame: chex.Array
     torpedoes_left: chex.Array
     shooting_cooldown: chex.Array
     shooting_delay: chex.Array
@@ -284,6 +327,15 @@ class LevelState(NamedTuple):
     falling_rock_lane: chex.Array
     falling_rock_explosion_frame: chex.Array
     falling_rock_explosion_pos: chex.Array
+
+    lane_blocker_pos: chex.Array
+    lane_blocker_active: chex.Array
+    lane_blocker_vel_y: chex.Array
+    lane_blocker_lane: chex.Array
+    lane_blocker_phase: chex.Array
+    lane_blocker_timer: chex.Array
+    lane_blocker_explosion_frame: chex.Array
+    lane_blocker_explosion_pos: chex.Array
 
     line_positions: chex.Array
     blue_line_counter: chex.Array
@@ -415,6 +467,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             mothership_stage=jnp.array(0, dtype=jnp.int32),
             player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32),
             player_shot_vel=jnp.zeros((2,), dtype=jnp.float32),
+            player_shot_frame=jnp.array(-1, dtype=jnp.int32),
             torpedoes_left=torpedoes_left,
             shooting_cooldown=shooting_cooldown,
             shooting_delay=shooting_delay,
@@ -474,6 +527,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             falling_rock_explosion_pos=jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
                 (1, self.consts.FALLING_ROCK_MAX),
+            ),
+            lane_blocker_pos=jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+                (1, self.consts.LANE_BLOCKER_MAX),
+            ),
+            lane_blocker_active=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.bool_),
+            lane_blocker_vel_y=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.float32),
+            lane_blocker_lane=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.int32),
+            lane_blocker_phase=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.int32),
+            lane_blocker_timer=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.int32),
+            lane_blocker_explosion_frame=jnp.zeros((self.consts.LANE_BLOCKER_MAX,), dtype=jnp.int32),
+            lane_blocker_explosion_pos=jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+                (1, self.consts.LANE_BLOCKER_MAX),
             ),
             line_positions=BLUE_LINE_INIT_TABLE[0],
             blue_line_counter=jnp.array(0, dtype=jnp.int32),
@@ -567,6 +634,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 vel_x,
                 player_shot_position,
                 player_shot_velocity,
+                player_shot_frame,
                 torpedos_left,
                 bullet_type,
                 shooting_cooldown,
@@ -574,13 +642,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 shot_type_pending,
             ) = self._player_step(state, action)
 
-            rngs = jax.random.split(state.rng, 10)
+            rngs = jax.random.split(state.rng, 9)
             next_rng = rngs[0]
             ufo_keys = rngs[1:4]
             meteoroid_key = rngs[4]
             rejuvenator_key = rngs[5]
             falling_rock_key = rngs[6]
-            bouncer_key = rngs[7]
+            lane_blocker_key = rngs[7]
+            bouncer_key = rngs[8]
             coin_key = rngs[8]
 
             ufo_update = self._advance_white_ufos(state, ufo_keys)
@@ -709,6 +778,35 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 bullet_type,
                 white_ufo_left,
             )
+
+            (
+                lane_blocker_pos,
+                lane_blocker_active,
+                lane_blocker_lane,
+                lane_blocker_vel_y,
+                lane_blocker_phase,
+                lane_blocker_timer,
+            ) = self._lane_blocker_step(state, lane_blocker_key)
+            pre_collision_lane_blocker_pos = lane_blocker_pos
+            (
+                lane_blocker_pos,
+                lane_blocker_active,
+                lane_blocker_phase,
+                lane_blocker_timer,
+                lane_blocker_vel_y,
+                player_shot_position,
+                lane_blocker_hit_mask,
+                hit_exists_lane_blocker,
+            ) = self._lane_blocker_bullet_collision(
+                lane_blocker_pos,
+                lane_blocker_active,
+                lane_blocker_phase,
+                lane_blocker_timer,
+                lane_blocker_vel_y,
+                player_shot_position,
+                bullet_type,
+                white_ufo_left,
+            )
             
             (
                 coin_pos,
@@ -819,9 +917,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             projectile_at_horizon = self._projectile_resolved(state)
             
             # Any collision that destroys the bullet
-            bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | rejuv_hit_by_shot | hit_mothership | hit_exists_shot | hit_exists_coin
+            bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | hit_exists_lane_blocker | rejuv_hit_by_shot | hit_mothership | hit_exists_shot | hit_exists_coin
             
             projectile_resolved_now = projectile_at_horizon | bullet_hit_any
+
+            player_shot_frame = jnp.where(
+                projectile_resolved_now,
+                jnp.array(-1, dtype=player_shot_frame.dtype),
+                player_shot_frame,
+            )
             
             # If resolved, trigger recovery window
             shooting_cooldown = jnp.where(
@@ -847,6 +951,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 state.level.falling_rock_explosion_pos,
                 falling_rock_hit_mask,
                 pre_collision_rock_pos,
+            )
+            lane_blocker_explosion_frame, lane_blocker_explosion_pos = self._update_enemy_explosions(
+                state.level.lane_blocker_explosion_frame,
+                state.level.lane_blocker_explosion_pos,
+                lane_blocker_hit_mask,
+                pre_collision_lane_blocker_pos,
             )
             enemy_shot_explosion_frame, enemy_shot_explosion_pos = self._update_enemy_explosions(
                 state.level.enemy_shot_explosion_frame,
@@ -930,6 +1040,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             rock_hit_count = jnp.sum(rock_hits.astype(jnp.int32))
 
+            bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=player_x_topleft.dtype)
+            safe_lane_idx = jnp.clip(lane_blocker_lane, 1, 5) - 1
+            lane_blocker_lane_x = bottom_lanes[safe_lane_idx]
+            lane_blocker_on_bottom = lane_blocker_active & (lane_blocker_pos[1] >= self.consts.LANE_BLOCKER_BOTTOM_Y)
+            lane_blocker_on_bottom = lane_blocker_on_bottom & (lane_blocker_phase != int(LaneBlockerState.RETREAT))
+            lane_blocker_hits = lane_blocker_on_bottom & (player_x_topleft == lane_blocker_lane_x)
+            lane_blocker_hit_count = jnp.sum(lane_blocker_hits.astype(jnp.int32))
+
             chasing_meteoroid_offscreen = jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
                 (1, self.consts.CHASING_METEOROID_MAX),
@@ -960,6 +1078,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 + bouncer_hit_count
                 + lose_life_rejuv.astype(jnp.int32)
                 + rock_hit_count
+                + lane_blocker_hit_count
             )
 
             current_death_timer = state.level.death_timer
@@ -1025,6 +1144,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             falling_rock_lane = jnp.where(sector_advanced, 0, falling_rock_lane)
             falling_rock_vel_y = jnp.where(sector_advanced, 0.0, falling_rock_vel_y)
 
+            lane_blocker_offscreen = jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=lane_blocker_pos.dtype).reshape(2, 1),
+                (1, self.consts.LANE_BLOCKER_MAX),
+            )
+            lane_blocker_pos = jnp.where(sector_advanced, lane_blocker_offscreen, lane_blocker_pos)
+            lane_blocker_active = jnp.where(sector_advanced, False, lane_blocker_active)
+            lane_blocker_lane = jnp.where(sector_advanced, 0, lane_blocker_lane)
+            lane_blocker_vel_y = jnp.where(sector_advanced, 0.0, lane_blocker_vel_y)
+            lane_blocker_phase = jnp.where(sector_advanced, 0, lane_blocker_phase)
+            lane_blocker_timer = jnp.where(sector_advanced, 0, lane_blocker_timer)
+
             coin_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=coin_pos.dtype).reshape(2, 1), (1, self.consts.COIN_MAX))
             coin_pos = jnp.where(sector_advanced, coin_offscreen, coin_pos)
             coin_active = jnp.where(sector_advanced, False, coin_active)
@@ -1059,6 +1189,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             falling_rock_lane = jnp.where(is_dying_sequence, 0, falling_rock_lane)
             falling_rock_vel_y = jnp.where(is_dying_sequence, 0.0, falling_rock_vel_y)
 
+            lane_blocker_pos = jnp.where(is_dying_sequence, lane_blocker_offscreen, lane_blocker_pos)
+            lane_blocker_active = jnp.where(is_dying_sequence, False, lane_blocker_active)
+            lane_blocker_lane = jnp.where(is_dying_sequence, 0, lane_blocker_lane)
+            lane_blocker_vel_y = jnp.where(is_dying_sequence, 0.0, lane_blocker_vel_y)
+            lane_blocker_phase = jnp.where(is_dying_sequence, 0, lane_blocker_phase)
+            lane_blocker_timer = jnp.where(is_dying_sequence, 0, lane_blocker_timer)
+
             coin_pos = jnp.where(is_dying_sequence, coin_offscreen, coin_pos)
             coin_active = jnp.where(is_dying_sequence, False, coin_active)
             coin_timer = jnp.where(is_dying_sequence, 0, coin_timer)
@@ -1072,6 +1209,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             mothership_stage = jnp.where(is_dying_sequence, 0, mothership_stage)
             vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
             player_shot_position = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+            player_shot_frame = jnp.where(
+                is_dying_sequence,
+                jnp.array(-1, dtype=player_shot_frame.dtype),
+                player_shot_frame,
+            )
             bouncer_pos = jnp.where(
                 is_dying_sequence,
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=bouncer_pos.dtype),
@@ -1084,7 +1226,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 player_pos=player_x, player_vel=vel_x, white_ufo_left=white_ufo_left,
                 mothership_position=mothership_position, mothership_timer=mothership_timer,
                 mothership_stage=mothership_stage, player_shot_pos=player_shot_position,
-                player_shot_vel=player_shot_velocity, torpedoes_left=torpedos_left,
+                player_shot_vel=player_shot_velocity, player_shot_frame=player_shot_frame,
+                torpedoes_left=torpedos_left,
                 shooting_cooldown=shooting_cooldown, bullet_type=bullet_type,
                 enemy_type=jnp.array([0, 0, 0]), white_ufo_pos=white_ufo_pos,
                 white_ufo_vel=white_ufo_vel, enemy_shot_pos=enemy_shot_pos,
@@ -1111,6 +1254,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 falling_rock_lane=falling_rock_lane,
                 falling_rock_explosion_frame=falling_rock_explosion_frame,
                 falling_rock_explosion_pos=falling_rock_explosion_pos,
+                lane_blocker_pos=lane_blocker_pos,
+                lane_blocker_active=lane_blocker_active,
+                lane_blocker_vel_y=lane_blocker_vel_y,
+                lane_blocker_lane=lane_blocker_lane,
+                lane_blocker_phase=lane_blocker_phase,
+                lane_blocker_timer=lane_blocker_timer,
+                lane_blocker_explosion_frame=lane_blocker_explosion_frame,
+                lane_blocker_explosion_pos=lane_blocker_explosion_pos,
                 line_positions=line_positions, blue_line_counter=blue_line_counter,
                 death_timer=next_death_timer,
                 shooting_delay=shooting_delay,
@@ -1289,21 +1440,43 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             state.level.player_shot_vel,
         )
 
-        pos_if_no_new = jnp.where(bullet_exists, (state.level.player_shot_pos - shot_velocity), jnp.array(self.consts.BULLET_OFFSCREEN_POS))
-        shot_position = jnp.where(
+        bullet_type = jnp.where(spawn_bullet, shot_type_pending, state.level.bullet_type)
+        shot_frame = state.level.player_shot_frame
+        reset_frame = jnp.full_like(shot_frame, -1)
+        shot_frame = jnp.where(
             spawn_bullet,
-            jnp.array([state.level.player_pos + 3, self.consts.MIN_BULLET_Y]),
-            pos_if_no_new,
+            jnp.zeros_like(shot_frame),
+            jnp.where(bullet_exists, shot_frame + 1, reset_frame),
         )
+
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        active = (shot_frame >= 0) & (shot_frame < max_frames)
+        step_idx = jnp.floor_divide(jnp.maximum(shot_frame, 0), PROJECTILE_STEP_FRAMES).astype(jnp.int32)
+        laser_y = jnp.take(PROJECTILE_Y_TABLE_LASER, step_idx, mode="clip")
+        torpedo_y = jnp.take(PROJECTILE_Y_TABLE_TORPEDO, step_idx, mode="clip")
+        shot_y = jnp.where(is_laser, laser_y, torpedo_y)
+        shot_y = jnp.where(active, shot_y, self.consts.BULLET_OFFSCREEN_POS[1])
+
+        lane_dy = jnp.where(shot_velocity[1] == 0, 1.0, shot_velocity[1])
+        lane_slope = shot_velocity[0] / lane_dy
+        delta_y = shot_y - state.level.player_shot_pos[1]
+        shot_x = state.level.player_shot_pos[0] + lane_slope * delta_y
+        shot_x = jnp.where(spawn_bullet, state.level.player_pos + 3, shot_x)
+        shot_x = jnp.where(active, shot_x, self.consts.BULLET_OFFSCREEN_POS[0])
+        shot_position = jnp.array([shot_x, shot_y])
+
+        shot_frame = jnp.where(active, shot_frame, reset_frame)
 
         # Torpedo consumed ONLY when actually spawned
         new_torpedo_spawned = spawn_bullet & (shot_type_pending == self.consts.TORPEDO_ID)
         torpedos_left = state.level.torpedoes_left - new_torpedo_spawned.astype(jnp.int32)
-        
-        bullet_type = jnp.where(spawn_bullet, shot_type_pending, state.level.bullet_type)
 
         #####
-        return(x, v, shot_position, shot_velocity, torpedos_left, bullet_type, shooting_cooldown, shooting_delay, shot_type_pending)
+        return(
+            x, v, shot_position, shot_velocity, shot_frame, torpedos_left, bullet_type,
+            shooting_cooldown, shooting_delay, shot_type_pending
+        )
 
     def _collision_handler(
         self,
@@ -2543,6 +2716,184 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         return pos, active, player_shot_pos, rock_should_die, hit_exists_rock
 
+    def _lane_blocker_step(self, state: BeamriderState, key: chex.Array):
+        pos = state.level.lane_blocker_pos
+        active = state.level.lane_blocker_active
+        lane = state.level.lane_blocker_lane
+        vel_y = state.level.lane_blocker_vel_y
+        phase = state.level.lane_blocker_phase
+        hold_timer = state.level.lane_blocker_timer
+
+        key_spawn, key_lane = jax.random.split(key)
+
+        # Spawning logic: Level 10 onwards
+        is_level_10_plus = state.sector >= self.consts.LANE_BLOCKER_START_LEVEL
+        spawn_roll = jax.random.uniform(key_spawn)
+        can_spawn = jnp.logical_and.reduce(jnp.array([
+            is_level_10_plus,
+            jnp.sum(active.astype(jnp.int32)) < self.consts.LANE_BLOCKER_MAX,
+            state.level.white_ufo_left > 0
+        ]))
+        should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.LANE_BLOCKER_SPAWN_PROB)
+
+        # Random lane from 1 to 5 (inner lanes)
+        spawn_lane = jax.random.randint(key_lane, (), 1, 6)
+
+        # Find first inactive slot
+        inactive_mask = jnp.logical_not(active)
+        slot = jnp.argmax(inactive_mask.astype(jnp.int32))
+        one_hot = jax.nn.one_hot(slot, self.consts.LANE_BLOCKER_MAX, dtype=pos.dtype)
+        one_hot_bool = one_hot.astype(jnp.bool_)
+
+        lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=jnp.float32)
+        spawn_x = lanes_top_x[spawn_lane]
+        spawn_y = float(self.consts.LANE_BLOCKER_SPAWN_Y)
+        spawn_pos = jnp.array([spawn_x, spawn_y], dtype=pos.dtype)
+
+        pos = jnp.where(should_spawn, pos + (spawn_pos[:, None] - pos) * one_hot[None, :], pos)
+        active = jnp.where(should_spawn, jnp.where(one_hot_bool, True, active), active)
+        lane = jnp.where(should_spawn, jnp.where(one_hot_bool, spawn_lane, lane), lane)
+        vel_y = jnp.where(should_spawn, jnp.where(one_hot_bool, self.consts.LANE_BLOCKER_INIT_VEL, vel_y), vel_y)
+        phase = jnp.where(should_spawn, jnp.where(one_hot_bool, int(LaneBlockerState.DESCEND), phase), phase)
+        hold_timer = jnp.where(should_spawn, jnp.where(one_hot_bool, 0, hold_timer), hold_timer)
+
+        y = pos[1]
+        bottom_y = float(self.consts.LANE_BLOCKER_BOTTOM_Y)
+
+        descend = active & (phase == int(LaneBlockerState.DESCEND))
+        hold = active & (phase == int(LaneBlockerState.HOLD))
+        sink = active & (phase == int(LaneBlockerState.SINK))
+        retreat = active & (phase == int(LaneBlockerState.RETREAT))
+
+        accel = jnp.where(y < 64, 0.004,
+                jnp.where(y < 85, 0.008,
+                self.consts.FALLING_ROCK_ACCEL))
+        new_vel_y = vel_y + accel
+        new_y_descend = y + new_vel_y
+        reached_bottom = new_y_descend >= bottom_y
+        y_descend = jnp.where(reached_bottom, bottom_y, new_y_descend)
+        vel_descend = jnp.where(reached_bottom, 0.0, new_vel_y)
+        phase_descend = jnp.where(reached_bottom, int(LaneBlockerState.HOLD), int(LaneBlockerState.DESCEND))
+        hold_timer_descend = jnp.where(reached_bottom, self.consts.LANE_BLOCKER_HOLD_FRAMES, hold_timer)
+
+        hold_timer_next = jnp.maximum(hold_timer - 1, 0)
+        start_sink = hold_timer_next == 0
+        phase_hold = jnp.where(start_sink, int(LaneBlockerState.SINK), int(LaneBlockerState.HOLD))
+
+        sink_step = (state.steps % self.consts.LANE_BLOCKER_SINK_INTERVAL) == 0
+        sink_dy = jnp.where(sink_step, 1.0, 0.0)
+        y_sink = y + sink_dy
+
+        lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS, dtype=jnp.float32)
+        retreat_speed = lane_vectors[:, 1] * self.consts.WHITE_UFO_SPEED_FACTOR * self.consts.WHITE_UFO_RETREAT_SPEED_MULT
+        retreat_speed = retreat_speed * self.consts.LANE_BLOCKER_RETREAT_SPEED_MULT
+        lane_retreat_speed = jnp.take(retreat_speed, lane)
+        y_retreat = y - lane_retreat_speed
+
+        new_y = jnp.where(descend, y_descend, y)
+        new_y = jnp.where(hold, bottom_y, new_y)
+        new_y = jnp.where(sink, y_sink, new_y)
+        new_y = jnp.where(retreat, y_retreat, new_y)
+
+        new_vel_y = vel_y
+        new_vel_y = jnp.where(descend, vel_descend, new_vel_y)
+        new_vel_y = jnp.where(hold | sink | retreat, 0.0, new_vel_y)
+
+        new_phase = phase
+        new_phase = jnp.where(descend, phase_descend, new_phase)
+        new_phase = jnp.where(hold, phase_hold, new_phase)
+        new_phase = jnp.where(sink, int(LaneBlockerState.SINK), new_phase)
+        new_phase = jnp.where(retreat, int(LaneBlockerState.RETREAT), new_phase)
+
+        new_timer = hold_timer
+        new_timer = jnp.where(descend, hold_timer_descend, new_timer)
+        new_timer = jnp.where(hold, hold_timer_next, new_timer)
+        new_timer = jnp.where(sink | retreat, 0, new_timer)
+
+        lane_dx_over_dy = lane_vectors[:, 0] / lane_vectors[:, 1]
+        target_lane_dx_over_dy = jnp.take(lane_dx_over_dy, lane)
+        target_lanes_top_x = jnp.take(lanes_top_x, lane)
+        new_x = target_lanes_top_x + target_lane_dx_over_dy * (new_y - float(self.consts.TOP_CLIP))
+
+        offscreen_pos = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, self.consts.LANE_BLOCKER_MAX),
+        )
+        retreat_done = retreat & (new_y <= float(self.consts.LANE_BLOCKER_SPAWN_Y))
+        sink_done = sink & ((new_y - bottom_y) >= float(self.consts.LANE_BLOCKER_HEIGHT))
+        done = retreat_done | sink_done
+
+        active = jnp.where(done, False, active)
+        new_phase = jnp.where(done, int(LaneBlockerState.DESCEND), new_phase)
+        new_timer = jnp.where(done, 0, new_timer)
+        new_vel_y = jnp.where(done, 0.0, new_vel_y)
+
+        pos = jnp.where(active[None, :], jnp.stack([new_x, new_y]), offscreen_pos)
+        new_vel_y = jnp.where(active, new_vel_y, 0.0)
+
+        return pos, active, lane, new_vel_y, new_phase, new_timer
+
+    def _lane_blocker_bullet_collision(
+        self,
+        lane_blocker_pos: chex.Array,
+        lane_blocker_active: chex.Array,
+        lane_blocker_phase: chex.Array,
+        lane_blocker_timer: chex.Array,
+        lane_blocker_vel_y: chex.Array,
+        player_shot_pos: chex.Array,
+        bullet_type: chex.Array,
+        white_ufo_left: chex.Array,
+    ):
+        is_torpedo = bullet_type == self.consts.TORPEDO_ID
+        shot_x = player_shot_pos[0] + _get_bullet_alignment(
+            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        )
+        shot_y = player_shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+
+        blocker_x = lane_blocker_pos[0] + _get_ufo_alignment(lane_blocker_pos[1]).astype(lane_blocker_pos.dtype)
+        blocker_y = lane_blocker_pos[1]
+
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+
+        blocker_indices = jnp.clip(_get_index_lane_blocker(blocker_y) - 1, 0, len(self.consts.LANE_BLOCKER_SPRITE_SIZES) - 1)
+        blocker_indices = jnp.where(blocker_indices == 2, 3, blocker_indices)
+        blocker_sizes = jnp.take(jnp.array(self.consts.LANE_BLOCKER_SPRITE_SIZES), blocker_indices, axis=0)
+
+        hit_mask = (
+            lane_blocker_active
+            & shot_active
+            & (blocker_x < shot_x + bullet_size[1]) & (shot_x < blocker_x + blocker_sizes[:, 1])
+            & (blocker_y < shot_y + bullet_size[0]) & (shot_y < blocker_y + blocker_sizes[:, 0])
+        )
+        hit_exists = jnp.any(hit_mask)
+
+        blocker_destroyed = hit_mask & is_torpedo
+        blocker_retreat = hit_mask & jnp.logical_not(is_torpedo)
+
+        offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=lane_blocker_pos.dtype).reshape(2, 1),
+            (1, self.consts.LANE_BLOCKER_MAX),
+        )
+        pos = jnp.where(blocker_destroyed[None, :], offscreen, lane_blocker_pos)
+        active = jnp.where(blocker_destroyed, False, lane_blocker_active)
+
+        phase = jnp.where(blocker_retreat, int(LaneBlockerState.RETREAT), lane_blocker_phase)
+        phase = jnp.where(blocker_destroyed, int(LaneBlockerState.DESCEND), phase)
+        timer = jnp.where(blocker_retreat, 0, lane_blocker_timer)
+        timer = jnp.where(blocker_destroyed, 0, timer)
+        vel_y = jnp.where(blocker_retreat, 0.0, lane_blocker_vel_y)
+        vel_y = jnp.where(blocker_destroyed, 0.0, vel_y)
+
+        player_shot_pos = jnp.where(
+            hit_exists,
+            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=player_shot_pos.dtype),
+            player_shot_pos,
+        )
+
+        return pos, active, phase, timer, vel_y, player_shot_pos, blocker_destroyed, hit_exists
+
     def _enemy_shot_bullet_collision(
         self,
         enemy_shot_pos: chex.Array,
@@ -2686,43 +3037,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return positions, counter
 
     def _bullet_infos(self, state: BeamriderState):
-        shot_y = state.level.player_shot_pos[1]
+        shot_frame = state.level.player_shot_frame
         bullet_type = state.level.bullet_type
 
-        # Projectile exists if it's within standard range
-        # Note: ALE projectiles disappear at ~49.
-        is_laser = (bullet_type == self.consts.LASER_ID)
-        is_torpedo = (bullet_type == self.consts.TORPEDO_ID)
-        
-        laser_active = is_laser & (shot_y >= self.consts.MAX_LASER_Y) & (shot_y <= self.consts.MIN_BULLET_Y)
-        
-        max_torpedo_y = jnp.where(
-            state.level.white_ufo_left > 0,
-            self.consts.MAX_TORPEDO_Y,
-            self.consts.MAX_TORPEDO_Y_MOTHERSHIP_SCENE,
-        )
-        torpedo_active = is_torpedo & (shot_y >= max_torpedo_y) & (shot_y <= self.consts.MIN_BULLET_Y)
-        
-        return laser_active | torpedo_active
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        return (shot_frame >= 0) & (shot_frame < max_frames)
 
     def _projectile_resolved(self, state: BeamriderState):
         """Check if the active projectile just finished its lifecycle (horizon)."""
-        shot_y = state.level.player_shot_pos[1]
+        shot_frame = state.level.player_shot_frame
         bullet_type = state.level.bullet_type
-        
-        is_laser = (bullet_type == self.consts.LASER_ID)
-        is_torpedo = (bullet_type == self.consts.TORPEDO_ID)
-        
-        max_torpedo_y = jnp.where(
-            state.level.white_ufo_left > 0,
-            self.consts.MAX_TORPEDO_Y,
-            self.consts.MAX_TORPEDO_Y_MOTHERSHIP_SCENE,
-        )
-        
-        laser_at_horizon = is_laser & (shot_y < self.consts.MAX_LASER_Y) & (shot_y < self.consts.BOTTOM_CLIP)
-        torpedo_at_horizon = is_torpedo & (shot_y < max_torpedo_y) & (shot_y < self.consts.BOTTOM_CLIP)
-        
-        return laser_at_horizon | torpedo_at_horizon
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        return (shot_frame >= 0) & (shot_frame >= (max_frames - 1))
 
     def _bouncer_dedicated_step(self, state: BeamriderState, key: chex.Array):
         level = state.level
@@ -2808,7 +3136,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             new_pos = pos + jnp.array([final_dx, final_dy])
 
             should_deactivate = jnp.logical_or(
-                new_pos[1] > float(self.consts.BOTTOM_CLIP),
+                new_pos[1] > float(self.consts.BOTTOM_CLIP) + 5.0,
                 jnp.logical_or(new_pos[0] < 0, new_pos[0] > float(self.consts.SCREEN_WIDTH))
             )
 
@@ -2866,6 +3194,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
             (1, self.consts.FALLING_ROCK_MAX),
         )
+        lane_blocker_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, self.consts.LANE_BLOCKER_MAX),
+        )
         coin_offscreen = jnp.tile(
             jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
             (1, self.consts.COIN_MAX),
@@ -2881,6 +3213,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuvenator_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_pos),
             falling_rock_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_pos),
             falling_rock_explosion_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_explosion_pos),
+            lane_blocker_pos=jnp.where(is_init, lane_blocker_offscreen, state.level.lane_blocker_pos),
+            lane_blocker_explosion_pos=jnp.where(is_init, lane_blocker_offscreen, state.level.lane_blocker_explosion_pos),
+            lane_blocker_active=jnp.where(is_init, False, state.level.lane_blocker_active),
             coin_pos=jnp.where(is_init, coin_offscreen, state.level.coin_pos),
             coin_explosion_pos=jnp.where(is_init, coin_offscreen, state.level.coin_explosion_pos),
             bouncer_pos=jnp.where(is_init, jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32), state.level.bouncer_pos),
@@ -2973,6 +3308,12 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'enemy_shot', 'type': 'group', 'files': ['Enemy_Shot/Enemy_Shot_Vertical.npy', 'Enemy_Shot/Enemy_Shot_Horizontal.npy']},
             {'name': 'rejuvenator', 'type': 'group', 'files': [f'Rejuvenator/Rejuvenator_{i}.npy' for i in range(1, 5)] + ['Rejuvenator/Rejuvenator_Dead.npy']},
             {'name': 'falling_rocks', 'type': 'group', 'files': ['Falling Rocks/Rock_1.npy', 'Falling Rocks/Rock_2.npy', 'Falling Rocks/Rock_3.npy', 'Falling Rocks/Rock_4.npy']},
+            {'name': 'lane_blocker', 'type': 'group', 'files': [
+                'AlienBlocker/AlienBlocker_1.npy',
+                'AlienBlocker/AlienBlocker_2.npy',
+                'AlienBlocker/AlienBlocker_3.npy',
+                'AlienBlocker/AlienBlocker_4.npy',
+            ]},
             {'name': 'blue_line', 'type': 'single', 'file': 'blue_line.npy'},
             {'name': 'torpedos_left', 'type': 'single', 'file': 'torpedos_left.npy'},
             {'name': 'green_numbers', 'type': 'digits', 'pattern': 'green_nums/green_{}.npy'},
@@ -2996,6 +3337,7 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = self._render_bouncer(raster, state)
         raster = self._render_chasing_meteoroids(raster, state)
         raster = self._render_falling_rocks(raster, state)
+        raster = self._render_lane_blockers(raster, state)
         raster = self._render_coins(raster, state)
         raster = self._render_rejuvenator(raster, state)
         raster = self._render_hud(raster, state)
@@ -3067,6 +3409,56 @@ class BeamriderRenderer(JAXGameRenderer):
                 explosion_frame > 0,
                 render_explosion,
                 render_rock,
+                raster,
+            )
+        return raster
+
+    def _render_lane_blockers(self, raster, state):
+        lane_blocker_masks = self.SHAPE_MASKS["lane_blocker"]
+        explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+        for idx in range(self.consts.LANE_BLOCKER_MAX):
+            explosion_frame = state.level.lane_blocker_explosion_frame[idx]
+
+            def render_explosion(r_in):
+                sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
+                sprite = explosion_masks[sprite_idx]
+                x_pos = state.level.lane_blocker_explosion_pos[0][idx] + _get_ufo_alignment(
+                    state.level.lane_blocker_explosion_pos[1][idx]
+                )
+                y_pos = state.level.lane_blocker_explosion_pos[1][idx] + y_offset
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+            def render_blocker(r_in):
+                sprite_idx = _get_index_lane_blocker(state.level.lane_blocker_pos[1][idx]) - 1
+                sprite_idx = jnp.clip(sprite_idx, 0, lane_blocker_masks.shape[0] - 1)
+                # Asset 3 is oversized; reuse stage 4 visuals for mid-height range.
+                sprite_idx = jnp.where(sprite_idx == 2, 3, sprite_idx)
+                sprite = lane_blocker_masks[sprite_idx]
+                x_pos = state.level.lane_blocker_pos[0][idx] + _get_ufo_alignment(
+                    state.level.lane_blocker_pos[1][idx]
+                )
+                y_pos = state.level.lane_blocker_pos[1][idx]
+
+                clip_rows = jnp.maximum(
+                    0, jnp.round(y_pos - self.consts.LANE_BLOCKER_BOTTOM_Y).astype(jnp.int32)
+                )
+                is_sinking = state.level.lane_blocker_phase[idx] == int(LaneBlockerState.SINK)
+
+                def clip_mask(mask):
+                    height = mask.shape[0]
+                    visible_rows = jnp.maximum(0, height - clip_rows)
+                    row_idx = jnp.arange(height)
+                    row_mask = row_idx < visible_rows
+                    transparent = jnp.array(self.jr.TRANSPARENT_ID, dtype=mask.dtype)
+                    return jnp.where(row_mask[:, None], mask, transparent)
+
+                sprite = jax.lax.cond(is_sinking, clip_mask, lambda m: m, sprite)
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+            raster = jax.lax.cond(
+                explosion_frame > 0,
+                render_explosion,
+                render_blocker,
                 raster,
             )
         return raster
