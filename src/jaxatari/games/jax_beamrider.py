@@ -196,6 +196,14 @@ class BeamriderConstants(NamedTuple):
     LANE_BLOCKER_HEIGHT: int = 7
     LANE_BLOCKER_RETREAT_SPEED_MULT: float = 2.5
 
+    # Kamikaze constants
+    KAMIKAZE_MAX: int = 1
+    KAMIKAZE_SPAWN_INTERVAL: int = 250
+    KAMIKAZE_START_SECTOR: int = 12
+    KAMIKAZE_START_Y: float = 43.0
+    KAMIKAZE_TRACK_Y: float = 60.0
+    KAMIKAZE_SPRITE_Y_THRESHOLDS: Tuple[float, float, float, float] = (43.0, 65.0, 72.0, 95.0)
+
     # Coin constants
     COIN_MAX: int = 3
     COIN_SPAWN_PROB: float = 1/300
@@ -241,6 +249,14 @@ def _get_index_lane_blocker(pos: chex.Array) -> chex.Array:
     stage_2 = (pos >= 64).astype(jnp.int32)
     stage_3 = (pos >= 84).astype(jnp.int32)
     stage_4 = (pos >= 111).astype(jnp.int32)
+    return stage_1 + stage_2 + stage_3 + stage_4
+
+
+def _get_index_kamikaze(pos: chex.Array) -> chex.Array:
+    stage_1 = (pos >= 43).astype(jnp.int32)
+    stage_2 = (pos >= 65).astype(jnp.int32)
+    stage_3 = (pos >= 72).astype(jnp.int32)
+    stage_4 = (pos >= 95).astype(jnp.int32)
     return stage_1 + stage_2 + stage_3 + stage_4
 
 
@@ -378,6 +394,15 @@ class LevelState(NamedTuple):
     coin_explosion_pos: chex.Array
     coin_spawn_count: chex.Array
 
+    kamikaze_pos: chex.Array
+    kamikaze_active: chex.Array
+    kamikaze_lane: chex.Array
+    kamikaze_vel_y: chex.Array
+    kamikaze_tracking: chex.Array
+    kamikaze_spawn_timer: chex.Array
+    kamikaze_explosion_frame: chex.Array
+    kamikaze_explosion_pos: chex.Array
+
 
 class BeamriderState(NamedTuple):
     level: LevelState
@@ -450,7 +475,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[BeamriderObservation, BeamriderState]:
-        state = self.reset_level(4)
+        state = self.reset_level(12)
         observation = self._get_observation(state)
         return observation, state
 
@@ -584,6 +609,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 (1, self.consts.COIN_MAX),
             ),
             coin_spawn_count=coin_spawn_count,
+            kamikaze_pos=jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            kamikaze_active=jnp.array([False]),
+            kamikaze_lane=jnp.array([0], dtype=jnp.int32),
+            kamikaze_vel_y=jnp.array([0.0], dtype=jnp.float32),
+            kamikaze_tracking=jnp.array([False]),
+            kamikaze_spawn_timer=jnp.array([0], dtype=jnp.int32),
+            kamikaze_explosion_frame=jnp.array([0], dtype=jnp.int32),
+            kamikaze_explosion_pos=jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
         )
 
     def reset_level(self, next_level=1) -> BeamriderState:
@@ -659,7 +692,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 shot_type_pending,
             ) = self._player_step(state, action)
 
-            rngs = jax.random.split(state.rng, 9)
+            rngs = jax.random.split(state.rng, 10)
             next_rng = rngs[0]
             ufo_keys = rngs[1:4]
             meteoroid_key = rngs[4]
@@ -668,6 +701,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lane_blocker_key = rngs[7]
             bouncer_key = rngs[8]
             coin_key = rngs[8]
+            kamikaze_key = rngs[9]
 
             ufo_update = self._advance_white_ufos(state, ufo_keys)
             (
@@ -830,6 +864,29 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 player_shot_velocity,
                 bullet_type,
                 white_ufo_left,
+            )
+
+            (
+                kamikaze_pos,
+                kamikaze_active,
+                kamikaze_lane,
+                kamikaze_vel_y,
+                kamikaze_tracking,
+                kamikaze_spawn_timer,
+            ) = self._kamikaze_step(state, kamikaze_key)
+            pre_collision_kamikaze_pos = kamikaze_pos
+            (
+                kamikaze_pos,
+                kamikaze_active,
+                player_shot_position,
+                kamikaze_destroyed,
+                hit_exists_kamikaze,
+            ) = self._kamikaze_bullet_collision(
+                kamikaze_pos,
+                kamikaze_active,
+                player_shot_position,
+                player_shot_velocity,
+                bullet_type,
             )
             
             (
@@ -1004,11 +1061,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 hit_mask_coin,
                 pre_collision_coin_pos,
             )
-            coin_explosion_frame, coin_explosion_pos = self._update_enemy_explosions(
-                state.level.coin_explosion_frame,
-                state.level.coin_explosion_pos,
-                hit_mask_coin,
-                pre_collision_coin_pos,
+            kamikaze_explosion_frame, kamikaze_explosion_pos = self._update_enemy_explosions(
+                state.level.kamikaze_explosion_frame,
+                state.level.kamikaze_explosion_pos,
+                kamikaze_destroyed,
+                pre_collision_kamikaze_pos,
             )
 
             # Player-UFO collision check
@@ -1082,6 +1139,25 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lane_blocker_hits = lane_blocker_on_bottom & (player_x_topleft == lane_blocker_lane_x)
             lane_blocker_hit_count = jnp.sum(lane_blocker_hits.astype(jnp.int32))
 
+            # Player-Kamikaze collision check
+            kamikaze_x_col = kamikaze_pos[0, 0] + _get_ufo_alignment(kamikaze_pos[1, 0])
+            kamikaze_y_col = kamikaze_pos[1, 0]
+            
+            kamikaze_indices_col = jnp.clip(_get_index_kamikaze(kamikaze_y_col) - 1, 0, 3)
+            kamikaze_sizes_col = jnp.take(jnp.array(self.consts.LANE_BLOCKER_SPRITE_SIZES), kamikaze_indices_col, axis=0)
+            
+            kamikaze_hits_player = kamikaze_active[0] & \
+                            (kamikaze_x_col < player_x_topleft + player_size[1]) & (player_x_topleft < kamikaze_x_col + kamikaze_sizes_col[1]) & \
+                            (kamikaze_y_col < player_y_topleft + player_size[0]) & (player_y_topleft < kamikaze_y_col + kamikaze_sizes_col[0])
+            
+            kamikaze_hit_count = kamikaze_hits_player.astype(jnp.int32)
+            kamikaze_active = jnp.where(kamikaze_hits_player, jnp.array([False]), kamikaze_active)
+            kamikaze_pos = jnp.where(
+                kamikaze_hits_player,
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1),
+                kamikaze_pos,
+            )
+
             chasing_meteoroid_offscreen = jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
                 (1, self.consts.CHASING_METEOROID_MAX),
@@ -1113,6 +1189,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 + lose_life_rejuv.astype(jnp.int32)
                 + rock_hit_count
                 + lane_blocker_hit_count
+                + kamikaze_hit_count
             )
 
             current_death_timer = state.level.death_timer
@@ -1189,6 +1266,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lane_blocker_phase = jnp.where(sector_advanced, 0, lane_blocker_phase)
             lane_blocker_timer = jnp.where(sector_advanced, 0, lane_blocker_timer)
 
+            kamikaze_pos = jnp.where(sector_advanced, jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1), kamikaze_pos)
+            kamikaze_active = jnp.where(sector_advanced, jnp.array([False]), kamikaze_active)
+            kamikaze_lane = jnp.where(sector_advanced, 0, kamikaze_lane)
+            kamikaze_vel_y = jnp.where(sector_advanced, 0.0, kamikaze_vel_y)
+            kamikaze_tracking = jnp.where(sector_advanced, jnp.array([False]), kamikaze_tracking)
+            kamikaze_spawn_timer = jnp.where(sector_advanced, 0, kamikaze_spawn_timer)
+
             coin_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=coin_pos.dtype).reshape(2, 1), (1, self.consts.COIN_MAX))
             coin_pos = jnp.where(sector_advanced, coin_offscreen, coin_pos)
             coin_active = jnp.where(sector_advanced, False, coin_active)
@@ -1230,6 +1314,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lane_blocker_phase = jnp.where(is_dying_sequence, 0, lane_blocker_phase)
             lane_blocker_timer = jnp.where(is_dying_sequence, 0, lane_blocker_timer)
 
+            kamikaze_pos = jnp.where(is_dying_sequence, jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1), kamikaze_pos)
+            kamikaze_active = jnp.where(is_dying_sequence, jnp.array([False]), kamikaze_active)
+            kamikaze_lane = jnp.where(is_dying_sequence, 0, kamikaze_lane)
+            kamikaze_vel_y = jnp.where(is_dying_sequence, 0.0, kamikaze_vel_y)
+            kamikaze_tracking = jnp.where(is_dying_sequence, jnp.array([False]), kamikaze_tracking)
+            kamikaze_spawn_timer = jnp.where(is_dying_sequence, 0, kamikaze_spawn_timer)
+
             coin_pos = jnp.where(is_dying_sequence, coin_offscreen, coin_pos)
             coin_active = jnp.where(is_dying_sequence, False, coin_active)
             coin_timer = jnp.where(is_dying_sequence, 0, coin_timer)
@@ -1257,33 +1348,53 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             next_step = state.steps + 1
             new_level_state = LevelState(
-                player_pos=player_x, player_vel=vel_x, white_ufo_left=white_ufo_left,
-                mothership_position=mothership_position, mothership_timer=mothership_timer,
-                mothership_stage=mothership_stage, player_shot_pos=player_shot_position,
-                player_shot_vel=player_shot_velocity, player_shot_frame=player_shot_frame,
+                player_pos=player_x,
+                player_vel=vel_x,
+                white_ufo_left=white_ufo_left,
+                mothership_position=mothership_position,
+                mothership_timer=mothership_timer,
+                mothership_stage=mothership_stage,
+                player_shot_pos=player_shot_position,
+                player_shot_vel=player_shot_velocity,
+                player_shot_frame=player_shot_frame,
                 torpedoes_left=torpedos_left,
-                shooting_cooldown=shooting_cooldown, bullet_type=bullet_type,
-                enemy_type=jnp.array([0, 0, 0]), white_ufo_pos=white_ufo_pos,
-                white_ufo_vel=white_ufo_vel, enemy_shot_pos=enemy_shot_pos,
-                enemy_shot_vel=enemy_shot_lane, enemy_shot_timer=enemy_shot_timer,
+                shooting_cooldown=shooting_cooldown,
+                shooting_delay=shooting_delay,
+                bullet_type=bullet_type,
+                shot_type_pending=shot_type_pending,
+                enemy_type=jnp.array([0, 0, 0]),
+                white_ufo_pos=white_ufo_pos,
+                white_ufo_vel=white_ufo_vel,
+                enemy_shot_pos=enemy_shot_pos,
+                enemy_shot_vel=enemy_shot_lane,
+                enemy_shot_timer=enemy_shot_timer,
                 enemy_shot_explosion_frame=enemy_shot_explosion_frame,
                 enemy_shot_explosion_pos=enemy_shot_explosion_pos,
-                white_ufo_time_on_lane=white_ufo_time_on_lane, white_ufo_attack_time=white_ufo_attack_time,
-                white_ufo_pattern_id=white_ufo_pattern_id, white_ufo_pattern_timer=white_ufo_pattern_timer,
-                ufo_explosion_frame=ufo_explosion_frame, ufo_explosion_pos=ufo_explosion_pos,
+                white_ufo_time_on_lane=white_ufo_time_on_lane,
+                white_ufo_attack_time=white_ufo_attack_time,
+                white_ufo_pattern_id=white_ufo_pattern_id,
+                white_ufo_pattern_timer=white_ufo_pattern_timer,
+                ufo_explosion_frame=ufo_explosion_frame,
+                ufo_explosion_pos=ufo_explosion_pos,
                 chasing_meteoroid_explosion_frame=chasing_meteoroid_explosion_frame,
                 chasing_meteoroid_explosion_pos=chasing_meteoroid_explosion_pos,
-                chasing_meteoroid_pos=chasing_meteoroid_pos, chasing_meteoroid_active=chasing_meteoroid_active,
+                chasing_meteoroid_pos=chasing_meteoroid_pos,
+                chasing_meteoroid_active=chasing_meteoroid_active,
                 chasing_meteoroid_vel_y=chasing_meteoroid_vel_y,
-                chasing_meteoroid_phase=chasing_meteoroid_phase, chasing_meteoroid_frame=chasing_meteoroid_frame,
-                chasing_meteoroid_lane=chasing_meteoroid_lane, chasing_meteoroid_side=chasing_meteoroid_side,
+                chasing_meteoroid_phase=chasing_meteoroid_phase,
+                chasing_meteoroid_frame=chasing_meteoroid_frame,
+                chasing_meteoroid_lane=chasing_meteoroid_lane,
+                chasing_meteoroid_side=chasing_meteoroid_side,
                 chasing_meteoroid_spawn_timer=chasing_meteoroid_spawn_timer,
                 chasing_meteoroid_remaining=chasing_meteoroid_remaining,
                 chasing_meteoroid_wave_active=chasing_meteoroid_wave_active,
-                rejuvenator_pos=rejuv_pos, rejuvenator_active=rejuv_active,
-                rejuvenator_dead=rejuv_dead, rejuvenator_frame=rejuv_frame,
+                rejuvenator_pos=rejuv_pos,
+                rejuvenator_active=rejuv_active,
+                rejuvenator_dead=rejuv_dead,
+                rejuvenator_frame=rejuv_frame,
                 rejuvenator_lane=rejuv_lane,
-                falling_rock_pos=falling_rock_pos, falling_rock_active=falling_rock_active,
+                falling_rock_pos=falling_rock_pos,
+                falling_rock_active=falling_rock_active,
                 falling_rock_vel_y=falling_rock_vel_y,
                 falling_rock_lane=falling_rock_lane,
                 falling_rock_explosion_frame=falling_rock_explosion_frame,
@@ -1296,10 +1407,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 lane_blocker_timer=lane_blocker_timer,
                 lane_blocker_explosion_frame=lane_blocker_explosion_frame,
                 lane_blocker_explosion_pos=lane_blocker_explosion_pos,
-                line_positions=line_positions, blue_line_counter=blue_line_counter,
+                line_positions=line_positions,
+                blue_line_counter=blue_line_counter,
                 death_timer=next_death_timer,
-                shooting_delay=shooting_delay,
-                shot_type_pending=shot_type_pending,
                 bouncer_pos=bouncer_pos,
                 bouncer_vel=bouncer_vel,
                 bouncer_state=bouncer_state,
@@ -1316,6 +1426,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 coin_explosion_frame=coin_explosion_frame,
                 coin_explosion_pos=coin_explosion_pos,
                 coin_spawn_count=coin_spawn_count,
+                kamikaze_pos=kamikaze_pos,
+                kamikaze_active=kamikaze_active,
+                kamikaze_lane=kamikaze_lane,
+                kamikaze_vel_y=kamikaze_vel_y,
+                kamikaze_tracking=kamikaze_tracking,
+                kamikaze_spawn_timer=kamikaze_spawn_timer,
+                kamikaze_explosion_frame=kamikaze_explosion_frame,
+                kamikaze_explosion_pos=kamikaze_explosion_pos,
             )
 
             reset_level_state = self._create_level_state(
@@ -3298,6 +3416,138 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def _get_done(self, state: BeamriderState) -> bool:
         return jnp.logical_or(state.lives <= 0, state.sector > 14)
 
+    def _kamikaze_step(self, state: BeamriderState, key: chex.Array):
+        pos = state.level.kamikaze_pos
+        active = state.level.kamikaze_active[0]
+        lane = state.level.kamikaze_lane[0]
+        vel_y = state.level.kamikaze_vel_y[0]
+        tracking = state.level.kamikaze_tracking[0]
+        spawn_timer = state.level.kamikaze_spawn_timer[0]
+
+        # Spawning logic: Sector 12 onwards, every 250 frames
+        is_level_12_plus = state.sector >= self.consts.KAMIKAZE_START_SECTOR
+        
+        # Advance timer if in sector 12+ and not currently active
+        spawn_timer = jnp.where(is_level_12_plus & jnp.logical_not(active), 
+                                spawn_timer + 1, 
+                                0)
+        
+        should_spawn = is_level_12_plus & jnp.logical_not(active) & (spawn_timer >= self.consts.KAMIKAZE_SPAWN_INTERVAL)
+        
+        spawn_lane = jax.random.randint(key, (), 1, 6) # Inner lanes 1-5
+        lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=jnp.float32)
+        spawn_x = lanes_top_x[spawn_lane]
+        spawn_y = float(self.consts.KAMIKAZE_START_Y)
+        
+        pos = jnp.where(should_spawn, jnp.array([[spawn_x], [spawn_y]]), pos)
+        active = jnp.where(should_spawn, True, active)
+        lane = jnp.where(should_spawn, spawn_lane, lane)
+        vel_y = jnp.where(should_spawn, self.consts.LANE_BLOCKER_INIT_VEL, vel_y)
+        tracking = jnp.where(should_spawn, True, tracking)
+        spawn_timer = jnp.where(should_spawn, 0, spawn_timer)
+
+        y = pos[1, 0]
+        
+        # Acceleration like Alien Blocker
+        accel = jnp.where(y < 64, 0.004,
+                jnp.where(y < 85, 0.008,
+                self.consts.FALLING_ROCK_ACCEL))
+        
+        new_vel_y = vel_y + accel
+        dy = new_vel_y
+        new_y = y + dy
+
+        # Tracking logic: starts at 60y
+        player_x = state.level.player_pos
+        bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=jnp.float32)
+        player_lane = jnp.argmin(jnp.abs(bottom_lanes - player_x)) + 1 # 1-5
+        
+        should_track = active & (new_y >= self.consts.KAMIKAZE_TRACK_Y) & tracking
+        
+        lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS, dtype=jnp.float32)
+        lane_dx_over_dy = lane_vectors[:, 0] / lane_vectors[:, 1]
+        
+        # Current lane position
+        current_lane_x = lanes_top_x[lane] + lane_dx_over_dy[lane] * (new_y - float(self.consts.TOP_CLIP))
+        
+        # Target lane position
+        target_lane_x = lanes_top_x[player_lane] + lane_dx_over_dy[player_lane] * (new_y - float(self.consts.TOP_CLIP))
+        
+        lateral_dist = target_lane_x - pos[0, 0]
+        dx_dir = jnp.sign(lateral_dist)
+        dx_lateral = 2.0 * dy * dx_dir
+        
+        # If we are close enough to the target lane, snap to it and stop tracking
+        reached_lane = jnp.abs(lateral_dist) <= jnp.abs(dx_lateral)
+        
+        new_x = jnp.where(should_track, 
+                          jnp.where(reached_lane, target_lane_x, pos[0, 0] + dx_lateral),
+                          current_lane_x)
+        
+        # Update lane index if reached
+        lane = jnp.where(should_track & reached_lane, player_lane, lane)
+        tracking = jnp.where(should_track & reached_lane, False, tracking)
+        
+        # Deactivate if off-screen
+        off_screen = new_y > self.consts.PLAYER_POS_Y + 5.0
+        active = jnp.where(off_screen, False, active)
+        
+        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1)
+        final_pos = jnp.where(active, jnp.array([[new_x], [new_y]]), offscreen_pos)
+        
+        return final_pos, jnp.array([active]), jnp.array([lane]), jnp.array([new_vel_y]), jnp.array([tracking]), jnp.array([spawn_timer])
+
+    def _kamikaze_bullet_collision(
+        self,
+        kamikaze_pos: chex.Array,
+        kamikaze_active: chex.Array,
+        player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
+        bullet_type: chex.Array,
+    ):
+        is_torpedo = bullet_type == self.consts.TORPEDO_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
+        )
+        shot_y = player_shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+
+        kamikaze_x = kamikaze_pos[0, 0] + _get_ufo_alignment(kamikaze_pos[1, 0]).astype(kamikaze_pos.dtype)
+        kamikaze_y = kamikaze_pos[1, 0]
+
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        kamikaze_indices = jnp.clip(_get_index_kamikaze(kamikaze_y) - 1, 0, 3)
+        kamikaze_sizes = jnp.take(jnp.array(self.consts.LANE_BLOCKER_SPRITE_SIZES), kamikaze_indices, axis=0)
+        
+        # AABB collision check
+        hit_mask = (
+            kamikaze_active[0]
+            & shot_active
+            & (kamikaze_x < shot_x + bullet_size[1]) & (shot_x < kamikaze_x + kamikaze_sizes[1])
+            & (kamikaze_y < shot_y + bullet_size[0]) & (shot_y < kamikaze_y + kamikaze_sizes[0])
+        )
+        
+        # Kamikaze is destroyed only by torpedo
+        destroyed = hit_mask & is_torpedo
+        
+        offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1)
+        new_pos = jnp.where(destroyed, offscreen, kamikaze_pos)
+        new_active = jnp.where(destroyed, False, kamikaze_active[0])
+        
+        # Shot is always removed if it hits (blocking behavior)
+        new_player_shot_pos = jnp.where(
+            hit_mask,
+            jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=player_shot_pos.dtype),
+            player_shot_pos,
+        )
+
+        return new_pos, jnp.array([new_active]), new_player_shot_pos, jnp.array([destroyed]), jnp.array([hit_mask])
+
 class BeamriderRenderer(JAXGameRenderer):
     def __init__(self, consts=None):
         super().__init__()
@@ -3370,6 +3620,12 @@ class BeamriderRenderer(JAXGameRenderer):
                 'AlienBlocker/AlienBlocker_3.npy',
                 'AlienBlocker/AlienBlocker_4.npy',
             ]},
+            {'name': 'kamikaze', 'type': 'group', 'files': [
+                'Kamikaze/Kamikaze_1.npy',
+                'Kamikaze/Kamikaze_2.npy',
+                'Kamikaze/Kamikaze_3.npy',
+                'Kamikaze/Kamikaze_4.npy',
+            ]},
             {'name': 'blue_line', 'type': 'single', 'file': 'blue_line.npy'},
             {'name': 'torpedos_left', 'type': 'single', 'file': 'torpedos_left.npy'},
             {'name': 'green_numbers', 'type': 'digits', 'pattern': 'green_nums/green_{}.npy'},
@@ -3394,11 +3650,49 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = self._render_chasing_meteoroids(raster, state)
         raster = self._render_falling_rocks(raster, state)
         raster = self._render_lane_blockers(raster, state)
+        raster = self._render_kamikaze(raster, state)
         raster = self._render_coins(raster, state)
         raster = self._render_rejuvenator(raster, state)
         raster = self._render_hud(raster, state)
         raster = self._render_mothership(raster, state)
         return self.jr.render_from_palette(raster, self.PALETTE)
+
+    def _render_kamikaze(self, raster, state):
+        kamikaze_masks = self.SHAPE_MASKS["kamikaze"]
+        explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+        
+        explosion_frame = state.level.kamikaze_explosion_frame[0]
+        active = state.level.kamikaze_active[0]
+
+        def render_explosion(r_in):
+            sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
+            sprite = explosion_masks[sprite_idx]
+            x_pos = state.level.kamikaze_explosion_pos[0][0] + _get_ufo_alignment(
+                state.level.kamikaze_explosion_pos[1][0]
+            )
+            y_pos = state.level.kamikaze_explosion_pos[1][0] + y_offset
+            return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+        def render_kamikaze(r_in):
+            def render_active(r_inner):
+                sprite_idx = _get_index_kamikaze(state.level.kamikaze_pos[1][0]) - 1
+                sprite_idx = jnp.clip(sprite_idx, 0, 3)
+                sprite = kamikaze_masks[sprite_idx]
+                x_pos = state.level.kamikaze_pos[0][0] + _get_ufo_alignment(
+                    state.level.kamikaze_pos[1][0]
+                )
+                y_pos = state.level.kamikaze_pos[1][0]
+                return self.jr.render_at_clipped(r_inner, x_pos, y_pos, sprite)
+            
+            return jax.lax.cond(active, render_active, lambda r: r, r_in)
+
+        raster = jax.lax.cond(
+            explosion_frame > 0,
+            render_explosion,
+            render_kamikaze,
+            raster,
+        )
+        return raster
 
     def _render_coins(self, raster, state):
         coin_masks = self.SHAPE_MASKS["coin"]
