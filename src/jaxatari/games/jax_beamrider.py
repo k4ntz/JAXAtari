@@ -39,7 +39,7 @@ class BouncerState(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    WHITE_UFOS_PER_SECTOR: int = 15
+    WHITE_UFOS_PER_SECTOR: int = 3
 
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
@@ -340,7 +340,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[BeamriderObservation, BeamriderState]:
-        state = self.reset_level(1)
+        state = self.reset_level(5)
         observation = self._get_observation(state)
         return observation, state
 
@@ -1733,26 +1733,53 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         remaining = state.level.chasing_meteoroid_remaining
         wave_active = state.level.chasing_meteoroid_wave_active
 
-        spawn_window = white_ufo_left == 0
+        is_sector_6_plus = state.sector >= 6
+        key_start, key_wave, key_interval, key_side = jax.random.split(key, 4)
 
-        key_wave, key_interval, key_side = jax.random.split(key, 3)
+        ms_stage = state.level.mothership_stage
+        # Stop spawning if mothership is descending (3) or exploding (5)
+        # This ensures they finish their tracing before the mothership disappears.
+        can_spawn_in_ms = (white_ufo_left == 0) & (ms_stage < 3)
+
+        # Trigger waves of chasing meteoroids:
+        # 1. Periodically when all UFOs are cleared (all sectors)
+        # 2. Periodically during normal play (Sector 6+)
+        # Frequency for normal gameplay: 0.0021 probability per frame (~once per 8 seconds).
+        # Clear-UFO waves are more frequent: 0.05 probability per frame.
+        start_chance = jnp.where(can_spawn_in_ms, 0.05, jnp.where(is_sector_6_plus & (white_ufo_left > 0), 0.0021, 0.0))
+        
+        start_wave = jnp.logical_and(
+            jax.random.uniform(key_start) < start_chance,
+            jnp.logical_not(wave_active)
+        )
+        
+        wave_active = jnp.where(start_wave, True, wave_active)
+        
+        # Chunk size: max 3 during normal play, full range during Mothership phase
+        min_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MIN, 1)
+        max_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MAX, 3)
+        
         wave_count = jax.random.randint(
             key_wave,
             (),
-            self.consts.CHASING_METEOROID_WAVE_MIN,
-            self.consts.CHASING_METEOROID_WAVE_MAX + 1,
+            min_w,
+            max_w + 1,
         )
-        start_wave = jnp.logical_and(
-            spawn_window,
-            jnp.logical_not(wave_active),
-        )
-        wave_active = jnp.where(start_wave, True, wave_active)
         remaining = jnp.where(start_wave, wave_count, remaining)
         spawn_timer = jnp.where(start_wave, 0, spawn_timer)
 
-        wave_active = jnp.where(spawn_window, wave_active, False)
-        remaining = jnp.where(spawn_window, remaining, 0)
-        spawn_timer = jnp.where(spawn_window, spawn_timer, 0)
+        # Reset wave state when moving to a sector where they shouldn't appear normally,
+        # and UFOs are present.
+        should_cancel = jnp.logical_and(jnp.logical_not(is_sector_6_plus), white_ufo_left > 0)
+        # Also stop spawning waves if it's too late in the Mothership phase
+        should_cancel = jnp.logical_or(should_cancel, (white_ufo_left == 0) & (ms_stage >= 3))
+        
+        # Also reset wave_active when finished so it can repeat.
+        wave_finished = wave_active & (remaining == 0) & jnp.all(jnp.logical_not(active))
+        
+        wave_active = jnp.where(should_cancel | wave_finished, False, wave_active)
+        remaining = jnp.where(should_cancel, 0, remaining)
+        spawn_timer = jnp.where(should_cancel, 0, spawn_timer)
 
         spawn_timer = jnp.where(
             jnp.logical_and(wave_active, remaining > 0),
