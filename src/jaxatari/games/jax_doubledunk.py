@@ -348,6 +348,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return new_state
 
+    def _resolve_penalty_and_reset(self, state: DunkGameState, p1_at_fault: bool) -> DunkGameState:
+        """Shared logic to reset the game after a penalty and switch possession."""
+        key, reset_key = random.split(state.key)
+        new_ball_holder = jax.lax.select(p1_at_fault, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+        
+        # Create a fresh state but preserve scores and step counter
+        fresh_state = self._init_state(reset_key)
+        
+        return fresh_state.replace(
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            # Use the fresh ball but override the holder to the team that gets possession
+            ball=fresh_state.ball.replace(holder=new_ball_holder)
+        )
+
     def _handle_out_of_bounds_penalty(self, state: DunkGameState) -> DunkGameState:
         """Handles the out of bounds penalty freeze."""
         
@@ -355,35 +371,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.out_of_bounds_timer - 1
         timer_expired = new_timer <= 0
 
-        # If expired, reset game similar to original logic
-        def reset_after_penalty(s):
-            key, reset_key = random.split(s.key)
-            
-            # Check who triggered out of bounds (should be preserved in player states)
-            # We need to know who held the ball to know who triggered it.
-            # But the ball holder hasn't changed yet in 's'.
-            ball_holder_id = s.ball.holder
-            
-            p1_inside_out_of_bounds = s.player1_inside.is_out_of_bounds & (s.player1_inside.id == ball_holder_id)
-            p1_outside_out_of_bounds = s.player1_outside.is_out_of_bounds & (s.player1_outside.id == ball_holder_id)
-            p1_out_of_bounds = p1_inside_out_of_bounds | p1_outside_out_of_bounds
-            
-            new_ball_holder = jax.lax.select(p1_out_of_bounds, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-            
-            return self._init_state(reset_key).replace(
-                player_score=s.player_score,
-                enemy_score=s.enemy_score,
-                step_counter=s.step_counter,
-                ball=s.ball.replace(holder=new_ball_holder)
-            )
-
-        updated_state = state.replace(out_of_bounds_timer=new_timer)
+        # We need to know who held the ball to know who triggered it.
+        # But the ball holder hasn't changed yet in 'state'.
+        ball_holder_id = state.ball.holder
+        
+        p1_inside_out_of_bounds = state.player1_inside.is_out_of_bounds & (state.player1_inside.id == ball_holder_id)
+        p1_outside_out_of_bounds = state.player1_outside.is_out_of_bounds & (state.player1_outside.id == ball_holder_id)
+        p1_at_fault = p1_inside_out_of_bounds | p1_outside_out_of_bounds
 
         return jax.lax.cond(
             timer_expired,
-            reset_after_penalty,
-            lambda s: s,
-            updated_state
+            lambda s: self._resolve_penalty_and_reset(s, p1_at_fault),
+            lambda s: s.replace(out_of_bounds_timer=new_timer),
+            state
         )
 
     def _update_player_z(self, player: PlayerState, constants: DunkConstants, ball_hold_id: int) -> PlayerState:
@@ -1134,29 +1134,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.travel_timer - 1
         timer_expired = new_timer <= 0
 
-        # If expired, reset game similar to original logic
-        def reset_after_penalty(s):
-            key, reset_key = random.split(s.key)
-            
-            # Check who triggered travel (should be preserved in player states)
-            p1_triggered = s.player1_inside.triggered_travel | s.player1_outside.triggered_travel
-            
-            new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-            
-            return self._init_state(reset_key).replace(
-                player_score=s.player_score,
-                enemy_score=s.enemy_score,
-                step_counter=s.step_counter,
-                ball=s.ball.replace(holder=new_ball_holder)
-            )
-
-        updated_state = state.replace(travel_timer=new_timer)
+        p1_triggered = state.player1_inside.triggered_travel | state.player1_outside.triggered_travel
 
         return jax.lax.cond(
             timer_expired,
-            reset_after_penalty,
-            lambda s: s,
-            updated_state
+            lambda s: self._resolve_penalty_and_reset(s, p1_triggered),
+            lambda s: s.replace(travel_timer=new_timer),
+            state
         )
 
     def _handle_clearance_penalty(self, state: DunkGameState) -> DunkGameState:
@@ -1166,29 +1150,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.clearance_timer - 1
         timer_expired = new_timer <= 0
 
-        # If expired, reset game similar to original logic (change possession)
-        def reset_after_penalty(s):
-            key, reset_key = random.split(s.key)
-            
-            # Check who triggered clearance (should be preserved in player states)
-            p1_triggered = s.player1_inside.triggered_clearance | s.player1_outside.triggered_clearance
-            
-            new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-            
-            return self._init_state(reset_key).replace(
-                player_score=s.player_score,
-                enemy_score=s.enemy_score,
-                step_counter=s.step_counter,
-                ball=s.ball.replace(holder=new_ball_holder)
-            )
-
-        updated_state = state.replace(clearance_timer=new_timer)
+        p1_triggered = state.player1_inside.triggered_clearance | state.player1_outside.triggered_clearance
 
         return jax.lax.cond(
             timer_expired,
-            reset_after_penalty,
-            lambda s: s,
-            updated_state
+            lambda s: self._resolve_penalty_and_reset(s, p1_triggered),
+            lambda s: s.replace(clearance_timer=new_timer),
+            state
         )
 
     @partial(jax.jit, static_argnums=(0,))
