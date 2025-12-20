@@ -77,7 +77,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SIZE: Tuple[int, int] = (15, 15)
     TRUCK_COLLISION_OFFSET: int = TRUCK_SIZE[1] // 2  # Bottom half of truck height
     TRUCK_COLOR: Tuple[int, int, int] = (255, 0, 0)
-    TRUCK_SPEED: int = 5
+    TRUCK_SPEED: int = 3
     TRUCK_SPAWN_MIN_INTERVAL: int = 30
     TRUCK_SPAWN_MAX_INTERVAL: int = 80
     LEVEL_TRANSITION_DURATION: int = 30
