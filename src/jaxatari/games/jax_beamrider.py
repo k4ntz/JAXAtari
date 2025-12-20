@@ -53,7 +53,8 @@ class BeamriderConstants(NamedTuple):
 
     MAX_LASER_Y: int = 67
     MIN_BULLET_Y:int =156
-    MAX_TORPEDO_Y: int = 35
+    MAX_TORPEDO_Y: int = 49
+    MAX_TORPEDO_Y_MOTHERSHIP_SCENE: int = 45
     BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
 
     PLAYER_POS_Y: int = 164
@@ -63,8 +64,9 @@ class BeamriderConstants(NamedTuple):
 
     BOTTOM_CLIP:int = 175
     TOP_CLIP:int=43
-    LASER_HIT_RADIUS: Tuple[int, int] = (7, 2)
+    LASER_HIT_RADIUS: Tuple[int, int] = (7, 5)
     TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 2)
+    TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE: Tuple[int, int] = (4, 4)
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
     BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
@@ -512,6 +514,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 chasing_meteoroid_side,
                 player_shot_position,
                 bullet_type,
+                white_ufo_left,
             )
             
             (
@@ -531,6 +534,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 falling_rock_active,
                 player_shot_position,
                 bullet_type,
+                white_ufo_left,
             )
             
             (
@@ -551,7 +555,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuv_shot_dist_y = jnp.abs(rejuv_y - shot_y)
             
             is_laser = bullet_type == self.consts.LASER_ID
-            bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), jnp.array(self.consts.TORPEDO_HIT_RADIUS))
+            torpedo_radius = jnp.where(
+                white_ufo_left > 0,
+                jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+                jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
+            )
+            bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), torpedo_radius)
             
             rejuv_hit_by_shot = jnp.logical_and.reduce(jnp.array([
                 rejuv_active,
@@ -587,8 +596,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             is_torpedo = bullet_type == self.consts.TORPEDO_ID
             ms_vulnerable = ms_stage == 2
             
+            torpedo_radius = jnp.where(
+                white_ufo_left > 0,
+                jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+                jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
+            )
+            
             half_size = box_size / 2.0
-            hit_mothership = (dx < half_size) & (dy < half_size) & shot_active & is_torpedo & ms_vulnerable
+            hit_mothership = (dx < half_size + torpedo_radius[0]) & (dy < half_size + torpedo_radius[1]) & shot_active & is_torpedo & ms_vulnerable
             player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
             
             ufo_explosion_frame, ufo_explosion_pos = self._update_enemy_explosions(
@@ -995,10 +1010,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         distance_to_bullet = jnp.abs(ufo_pos_screen.T - shot_pos_screen)
         bullet_type_is_laser = new_bullet_type == self.consts.LASER_ID
+        torpedo_radius = jnp.where(
+            state.level.white_ufo_left > 0,
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
+        )
         bullet_radius = jnp.where(
             bullet_type_is_laser,
             jnp.array(self.consts.LASER_HIT_RADIUS),
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+            torpedo_radius,
         )
         distance_bullet_radius = distance_to_bullet - bullet_radius
         hit_mask = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
@@ -1758,6 +1778,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chasing_meteoroid_side: chex.Array,
         player_shot_pos: chex.Array,
         bullet_type: chex.Array,
+        white_ufo_left: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
         shot_x = player_shot_pos[0] + _get_bullet_alignment(
@@ -1769,7 +1790,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
         chasing_meteoroid_screen_pos = jnp.stack([chasing_meteoroid_x, chasing_meteoroid_pos[1]]).T
         distance_to_bullet = jnp.abs(chasing_meteoroid_screen_pos - jnp.array([shot_x, shot_y], dtype=chasing_meteoroid_pos.dtype))
-        bullet_radius = jnp.array(self.consts.TORPEDO_HIT_RADIUS, dtype=chasing_meteoroid_pos.dtype)
+        torpedo_radius = jnp.where(
+            white_ufo_left > 0,
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
+        )
+        bullet_radius = torpedo_radius.astype(chasing_meteoroid_pos.dtype)
         chasing_meteoroid_radius = jnp.array(
             [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
             dtype=chasing_meteoroid_pos.dtype,
@@ -1972,6 +1998,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         falling_rock_active: chex.Array,
         player_shot_pos: chex.Array,
         bullet_type: chex.Array,
+        white_ufo_left: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
         shot_x = player_shot_pos[0] + _get_bullet_alignment(
@@ -1985,7 +2012,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         distance_to_bullet = jnp.abs(rock_screen_pos - jnp.array([shot_x, shot_y], dtype=falling_rock_pos.dtype))
         
         is_laser = bullet_type == self.consts.LASER_ID
-        bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), jnp.array(self.consts.TORPEDO_HIT_RADIUS))
+        torpedo_radius = jnp.where(
+            white_ufo_left > 0,
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
+            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
+        )
+        bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), torpedo_radius)
         
         rock_radius = jnp.array(
             [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
@@ -2126,7 +2158,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         laser_exists = jnp.all(jnp.array([shot_y >= self.consts.MAX_LASER_Y, 
                                           shot_y <= self.consts.MIN_BULLET_Y,
                                           bullet_type == self.consts.LASER_ID]))
-        torpedo_exists = jnp.all(jnp.array([shot_y >= self.consts.MAX_TORPEDO_Y,
+        
+        max_torpedo_y = jnp.where(
+            state.level.white_ufo_left > 0,
+            self.consts.MAX_TORPEDO_Y,
+            self.consts.MAX_TORPEDO_Y_MOTHERSHIP_SCENE,
+        )
+        torpedo_exists = jnp.all(jnp.array([shot_y >= max_torpedo_y,
                                            shot_y <= self.consts.MIN_BULLET_Y,
                                            bullet_type == self.consts.TORPEDO_ID]))
         bullet_exists = jnp.logical_or(torpedo_exists, laser_exists)
