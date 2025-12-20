@@ -119,17 +119,17 @@ class AdventureConstants(NamedTuple):
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
-    YELLOW_GATE_POS: Tuple[int, int, int] = (77, 140, 0)
-    BLACK_GATE_POS: Tuple[int, int, int] = (77, 140, 11)
-    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #ToDO
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (120, 50, 5, 0) #ToDO
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (120, 80, 4, 0) #ToDO
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 80, 0) #ToDO
-    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 80, 4) #ToDO
-    SWORD_SPAWN: Tuple[int, int, int] = (120,120,1) #ToDO
-    BRIDGE_SPAWN: Tuple[int, int, int] = (120,120,10) #ToDO
-    MAGNET_SPAWN: Tuple[int, int, int] = (120,120,12) #ToDO
-    CHALICE_SPAWN: Tuple[int, int, int] = (120,120,13) #ToDO
+    YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
+    BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
+    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0)
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
+    SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
+    BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
+    MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
+    CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
