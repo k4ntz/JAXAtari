@@ -259,6 +259,23 @@ def _get_bullet_alignment(pos: chex.Array, bullet_type: chex.Array, laser_id: in
     return jnp.where(is_laser, 0, torpedo_offset)
 
 
+def _get_player_shot_screen_x(
+    player_shot_pos: chex.Array,
+    player_shot_vel: chex.Array,
+    bullet_type: chex.Array,
+    laser_id: int,
+) -> chex.Array:
+    # Match ALE lane rounding: left lanes (vx < 0) ceil, right lanes (vx > 0) floor.
+    shot_dir = jnp.sign(player_shot_vel[0])
+    shot_x_base = player_shot_pos[0]
+    shot_x_rounded = jnp.where(
+        shot_dir < 0,
+        jnp.ceil(shot_x_base),
+        jnp.where(shot_dir > 0, jnp.floor(shot_x_base), jnp.round(shot_x_base)),
+    )
+    return shot_x_rounded + _get_bullet_alignment(player_shot_pos[1], bullet_type, laser_id)
+
+
 class LevelState(NamedTuple):
     player_pos: chex.Array
     player_vel: chex.Array
@@ -631,6 +648,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 state,
                 ufo_update.pos,
                 player_shot_position,
+                player_shot_velocity,
                 bullet_type,
                 ufo_update.pattern_id,
                 ufo_update.pattern_timer,
@@ -648,8 +666,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             # Bouncer collision check (Shot)
             # Torpedoes only
             bouncer_pos_screen = bouncer_pos[0] + _get_ufo_alignment(bouncer_pos[1])
-            shot_x = player_shot_position[0] + _get_bullet_alignment(
-                player_shot_position[1], bullet_type, self.consts.LASER_ID
+            shot_x = _get_player_shot_screen_x(
+                player_shot_position,
+                player_shot_velocity,
+                bullet_type,
+                self.consts.LASER_ID,
             )
             shot_y = player_shot_position[1]
 
@@ -719,6 +740,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 chasing_meteoroid_lane,
                 chasing_meteoroid_side,
                 player_shot_position,
+                player_shot_velocity,
                 bullet_type,
                 white_ufo_left,
             )
@@ -740,6 +762,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 falling_rock_pos,
                 falling_rock_active,
                 player_shot_position,
+                player_shot_velocity,
                 bullet_type,
                 white_ufo_left,
             )
@@ -769,6 +792,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 lane_blocker_timer,
                 lane_blocker_vel_y,
                 player_shot_position,
+                player_shot_velocity,
                 bullet_type,
                 white_ufo_left,
             )
@@ -784,7 +808,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             # Rejuvenator-Shot collision
             rejuv_x_screen = rejuv_pos[0] + _get_ufo_alignment(rejuv_pos[1])
             rejuv_y = rejuv_pos[1]
-            shot_x_screen = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
+            shot_x_screen = _get_player_shot_screen_x(
+                player_shot_position,
+                player_shot_velocity,
+                bullet_type,
+                self.consts.LASER_ID,
+            )
             shot_y = player_shot_position[1]
             
             bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
@@ -815,7 +844,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             
             ms_size = jnp.array(self.consts.MOTHERSHIP_SPRITE_SIZE)
             
-            shot_x = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
+            shot_x = _get_player_shot_screen_x(
+                player_shot_position,
+                player_shot_velocity,
+                bullet_type,
+                self.consts.LASER_ID,
+            )
             shot_y = player_shot_position[1]
             
             bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
@@ -840,7 +874,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             # --- Enemy Shot Collision Check (Torpedoes only) ---
             hit_mask_shot, hit_exists_shot = self._enemy_shot_bullet_collision(
-                enemy_shot_pos, enemy_shot_timer, player_shot_position, bullet_type
+                enemy_shot_pos, enemy_shot_timer, player_shot_position, player_shot_velocity, bullet_type
             )
             enemy_shot_pos_pre_collision = enemy_shot_pos
             enemy_shot_offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1), (1, 3))
@@ -1381,6 +1415,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         state: BeamriderState,
         new_white_ufo_pos: chex.Array,
         new_shot_pos: chex.Array,
+        new_shot_vel: chex.Array,
         new_bullet_type: chex.Array,
         current_patterns: chex.Array,
         current_timers: chex.Array,
@@ -1389,7 +1424,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         # Collision should match what the player sees on screen:
         # - white UFO x-pos is shifted based on its y-pos (_get_ufo_alignment)
-        # - player bullet x-pos is shifted based on its y-pos and type (_get_bullet_alignment)
+        # - player bullet x-pos is shifted based on its y-pos, type, and lane rounding (_get_player_shot_screen_x)
         ufo_x = new_white_ufo_pos[0, :] + _get_ufo_alignment(new_white_ufo_pos[1, :])
         ufo_y = new_white_ufo_pos[1, :]
         
@@ -1397,7 +1432,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ufo_sizes = jnp.take(jnp.array(self.consts.UFO_SPRITE_SIZES), ufo_indices, axis=0)
         # ufo_sizes is (3, 2) -> [H, W]
         
-        shot_x = new_shot_pos[0] + _get_bullet_alignment(new_shot_pos[1], new_bullet_type, self.consts.LASER_ID)
+        shot_x = _get_player_shot_screen_x(
+            new_shot_pos,
+            new_shot_vel,
+            new_bullet_type,
+            self.consts.LASER_ID,
+        )
         shot_y = new_shot_pos[1]
         
         bullet_idx = _get_index_bullet(shot_y, new_bullet_type, self.consts.LASER_ID)
@@ -2254,12 +2294,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         chasing_meteoroid_lane: chex.Array,
         chasing_meteoroid_side: chex.Array,
         player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
         bullet_type: chex.Array,
         white_ufo_left: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
-        shot_x = player_shot_pos[0] + _get_bullet_alignment(
-            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
         )
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
@@ -2481,12 +2525,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         falling_rock_pos: chex.Array,
         falling_rock_active: chex.Array,
         player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
         bullet_type: chex.Array,
         white_ufo_left: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
-        shot_x = player_shot_pos[0] + _get_bullet_alignment(
-            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
         )
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
@@ -2649,12 +2697,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         lane_blocker_timer: chex.Array,
         lane_blocker_vel_y: chex.Array,
         player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
         bullet_type: chex.Array,
         white_ufo_left: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
-        shot_x = player_shot_pos[0] + _get_bullet_alignment(
-            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
         )
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
@@ -2707,11 +2759,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         enemy_shot_pos: chex.Array,
         enemy_shot_timer: chex.Array,
         player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
         bullet_type: chex.Array,
     ):
         is_torpedo = bullet_type == self.consts.TORPEDO_ID
-        shot_x = player_shot_pos[0] + _get_bullet_alignment(
-            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
         )
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
@@ -3364,9 +3420,15 @@ class BeamriderRenderer(JAXGameRenderer):
         bullet_mask = self.SHAPE_MASKS["bullet_sprite"][
             _get_index_bullet(state.level.player_shot_pos[1], state.level.bullet_type, self.consts.LASER_ID)
         ]
+        shot_x_screen = _get_player_shot_screen_x(
+            state.level.player_shot_pos,
+            state.level.player_shot_vel,
+            state.level.bullet_type,
+            self.consts.LASER_ID,
+        )
         raster = self.jr.render_at_clipped(
             raster,
-            state.level.player_shot_pos[0] + _get_bullet_alignment(state.level.player_shot_pos[1], state.level.bullet_type, self.consts.LASER_ID),
+            shot_x_screen,
             state.level.player_shot_pos[1],
             bullet_mask,
         )
