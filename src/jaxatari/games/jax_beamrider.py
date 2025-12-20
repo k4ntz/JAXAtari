@@ -384,10 +384,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         
         # --- 2. Check for Initialization Phase ---
         # The game logic only starts after the BLUE_LINE_INIT_TABLE is exhausted.
-        # Windup sequence ends at step 240.
         is_init = blue_line_counter < len(BLUE_LINE_INIT_TABLE)
         
-        def normal_step():
+        def handle_normal(_):
             (
                 player_x,
                 vel_x,
@@ -659,9 +658,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 level_finished=jnp.array(0), reset_coords=jnp.array(False),
                 lives=new_lives, steps=next_step, rng=next_rng,
             )
-            return new_state
+            
+            done = jnp.array(self._get_done(new_state), dtype=jnp.bool_)
+            env_reward = jnp.array(self._get_reward(state, new_state), dtype=jnp.float32)
+            info = self._get_info(new_state)
+            observation = self._get_observation(new_state)
+            return observation, new_state, env_reward, done, info
 
-        def init_step():
+        def handle_init(_):
             # During init, we ONLY update the blue line positions and counter.
             # We ALSO advance the RNG so the game doesn't start identically every time.
             rngs = jax.random.split(state.rng, 2)
@@ -669,16 +673,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 line_positions=line_positions,
                 blue_line_counter=blue_line_counter
             )
-            return state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
+            new_state = state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
+            
+            done = jnp.array(False, dtype=jnp.bool_)
+            env_reward = jnp.array(0.0, dtype=jnp.float32)
+            info = self._get_info(new_state)
+            observation = self._get_observation(new_state)
+            return observation, new_state, env_reward, done, info
 
-        new_state = jax.lax.cond(is_init, init_step, normal_step)
+        return jax.lax.cond(is_init, handle_init, handle_normal, operand=None)
 
-        done = self._get_done(new_state)
-        env_reward = self._get_reward(state, new_state)
-        info = self._get_info(new_state)
-        observation = self._get_observation(new_state)
-        
-        return observation, new_state, env_reward, done, info
 
     def _player_step(self, state: BeamriderState, action: chex.Array):
         #level_constants = self._get_level_constants(state.sector)
@@ -1729,20 +1733,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             
         positions = jax.lax.cond(is_init, get_init_pos, get_loop_pos, counter)
         
-        return positions, counter
-        counter = (state.level.blue_line_counter + 1) % 256
-        # Determine current table and index
-        # Transition from INIT to LOOP
-        is_init = counter < len(BLUE_LINE_INIT_TABLE)
-        
-        def get_init_pos():
-            return BLUE_LINE_INIT_TABLE[counter]
-            
-        def get_loop_pos():
-            loop_idx = (counter - len(BLUE_LINE_INIT_TABLE)) % len(BLUE_LINE_LOOP_TABLE)
-            return BLUE_LINE_LOOP_TABLE[loop_idx]
-            
-        positions = jax.lax.cond(is_init, get_init_pos, get_loop_pos)
         return positions, counter
 
     def _bullet_infos(self, state: BeamriderState):
