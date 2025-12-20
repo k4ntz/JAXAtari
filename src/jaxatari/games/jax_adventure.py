@@ -18,7 +18,7 @@ def _get_default_asset_config() -> tuple:
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
     """
     return (
-        #all rooms in order
+        #all rooms in order ToDo pt overview map into the readme?
         {'name': 'room_number', 'type': 'group', 'files': ['Room_1.npy', 
                                                            'Room_2.npy', 
                                                            'Room_3.npy', 
@@ -34,8 +34,7 @@ def _get_default_asset_config() -> tuple:
                                                            'Room_13.npy', 
                                                            'Room_14.npy']},
         {'name': 'bg', 'type': 'background', 'file': 'Room_1.npy'},
-
-        #all player colors in order
+        #Player in all the different colors
         {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy", 
                                                              "Player_Green.npy", 
                                                              "Player_Purple.npy", 
@@ -44,16 +43,17 @@ def _get_default_asset_config() -> tuple:
                                                              "Player_Blue.npy", 
                                                              "Player_Black.npy", 
                                                              "Player_Magenta.npy"]},
-
-        #dragons
-        {'name': 'dragon_yellow_neutral', 'type': 'single', 'file': 'Dragon_yellow_neutral.npy'},
-        {'name': 'dragon_green-neutral', 'type': 'single', 'file': 'Dragon_green_neutral.npy'},
-        #ToDo remaining dragon animations
-
-        #keys
+        #Dragons and their animations
+        {'name': 'dragon_yellow', 'type': 'group', 'files': ['Dragon_yellow_neutral.npy',
+                                                             'Dragon_yellow_attack.npy',
+                                                             'Dragon_yellow_dead.npy']},
+        {'name': 'dragon_green', 'type': 'group', 'files': ['Dragon_green_neutral.npy',
+                                                             'Dragon_green_attack.npy',
+                                                             'Dragon_green_dead.npy']},                                                     
+        #Keys
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'},
         {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'},
-        #gates
+        #Gate and its animation
         {'name': 'gate_state', 'type': 'group', 'files': ['Gate_closed.npy',
                                                           'Gate_opening_0.npy',
                                                           'Gate_opening_1.npy',
@@ -61,15 +61,21 @@ def _get_default_asset_config() -> tuple:
                                                           'Gate_opening_3.npy',
                                                           'Gate_opening_4.npy',
                                                           'Gate_open.npy']},
-        #ToDo gates animation
-
-        #items
+        #Items
         {'name': 'sword', 'type': 'single', 'file': 'Sword.npy'},
         {'name': 'bridge', 'type': 'single', 'file': 'Bridge.npy'},
         {'name': 'magnet', 'type': 'single', 'file': 'Magnet.npy'},
         #Chalice
-        {'name': 'chalice', 'type': 'single', 'file': 'Chalice_Pink.npy'}
-        #ToDo remaining chalice colors for blinking
+        {'name': 'chalice', 'type': 'group', 'files': ['Chalice_Black.npy',
+                                                       'Chalice_DarkBlue.npy',
+                                                       'Chalice_Gray.npy',
+                                                       'Chalice_Green.npy',
+                                                       'Chalice_LightBlue.npy',
+                                                       'Chalice_Pink.npy',
+                                                       'Chalice_Purple.npy',
+                                                       'Chalice_Red.npy',
+                                                       'Chalice_Turquoise.npy',
+                                                       'Chalice_Yellow.npy']},
     )
 
 
@@ -104,7 +110,7 @@ class AdventureState(NamedTuple):
     bridge: chex.Array
     #position magnet: x, y, tile
     magnet: chex.Array
-    #position chalice: x, y, tile
+    #position chalice: x, y, tile, color
     chalice: chex.Array
 
 
@@ -184,7 +190,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return AdventureState(
             step_counter = state.step_counter,
-            player = jnp.array([new_player_x,new_player_y,state.player[3],state.player[4]]).astype(jnp.int32), #SEEMS NOT GOOD
+            player = jnp.array([new_player_x,new_player_y,state.player[2],state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
             key_yellow=state.key_yellow,
@@ -212,7 +218,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             player = jnp.array([78,174,0,0]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
             dragon_yellow = jnp.array([120,50,0,0]).astype(jnp.int32), #ToDo
-            dragon_green = jnp.array([120,80,0,0]).astype(jnp.int32), #ToDo
+            dragon_green = jnp.array([120,80,0,2]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([31,110,0]).astype(jnp.int32),
             key_black = jnp.array([31,80,0]).astype(jnp.int32),
@@ -223,7 +229,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword = jnp.array([120,120,0]).astype(jnp.int32), #ToDo
             bridge= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
             magnet= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
-            chalice= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
+            #Chalice: x, y, tile, color
+            chalice= jnp.array([120,120,0,0]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -276,7 +283,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.dragon_yellow[2],
             width=8, 
             height=44, 
-            state=1 #ToDO
+            state=state.dragon_yellow[3] #ToDO
         )
         dragon_green = EntityPosition(
             x=state.dragon_green[0],
@@ -284,7 +291,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.dragon_green[2],
             width=8, 
             height=44, 
-            state=1 #ToDO
+            state=state.dragon_green[3] #ToDO
         )
         key_yellow = EntityPosition(
             x=state.key_yellow[0],
@@ -452,9 +459,9 @@ class AdventureRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, state.player[0], state.player[1], player_mask)
 
         #dragons
-        dragon_yellow_mask = self.SHAPE_MASKS["dragon_yellow_neutral"]
+        dragon_yellow_mask = self.SHAPE_MASKS["dragon_yellow"][state.dragon_yellow[3]]
         raster = self.jr.render_at(raster, state.dragon_yellow[0], state.dragon_yellow[1], dragon_yellow_mask)
-        dragon_green_mask = self.SHAPE_MASKS["dragon_green-neutral"]
+        dragon_green_mask = self.SHAPE_MASKS["dragon_green"][state.dragon_green[3]]
         raster = self.jr.render_at(raster, state.dragon_green[0], state.dragon_green[1], dragon_green_mask)
         #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
@@ -475,7 +482,7 @@ class AdventureRenderer(JAXGameRenderer):
         magnet_mask = self.SHAPE_MASKS["magnet"]
         raster = self.jr.render_at(raster, state.magnet[0], state.magnet[1], magnet_mask)
         #chalice
-        chalice_mask = self.SHAPE_MASKS["chalice"]
+        chalice_mask = self.SHAPE_MASKS["chalice"][state.chalice[3]]
         raster = self.jr.render_at(raster, state.chalice[0], state.chalice[1], chalice_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
