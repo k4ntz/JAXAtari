@@ -44,13 +44,9 @@ class BeamriderConstants(NamedTuple):
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
-    PLAYER_WIDTH: int = 10
-    PLAYER_HEIGHT: int = 10
-    ENEMY_WIDTH: int = 4
-    ENEMY_HEIGHT: int = 4
     PLAYER_COLOR: Tuple[int, int, int] = (223, 183, 85)
     LEFT_CLIP_PLAYER: int = 27
-    RIGHT_CLIP_PLAYER: int = 137
+    RIGHT_CLIP_PLAYER: int = 142
     BOTTOM_OF_LANES: Tuple[int, int, int, int, int] = (27,52,77,102,127)
     TOP_OF_LANES: Tuple[int, int, int, int, int] = (38,61,71,81,91,102,123)  #lane 0,6 are connected to points in middle of the map, not to bottom lane points
     
@@ -73,9 +69,6 @@ class BeamriderConstants(NamedTuple):
 
     BOTTOM_CLIP:int = 175
     TOP_CLIP:int=43
-    LASER_HIT_RADIUS: Tuple[int, int] = (7, 5)
-    TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 3)
-    TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE: Tuple[int, int] = (4, 4)
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
     BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
@@ -113,6 +106,27 @@ class BeamriderConstants(NamedTuple):
     MOTHERSHIP_EXPLOSION_SEQUENCE: Tuple[int, ...] = (0, 1, 0, 1, 2, 1, 2, 1, 2)
     MOTHERSHIP_EXPLOSION_STEP_DURATION: int = 8
     MOTHERSHIP_HITBOX_SIZE: int = 16
+
+    # Sprite sizes (H, W)
+    PLAYER_SPRITE_SIZE: Tuple[int, int] = (16, 15)
+    UFO_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (1, 1), (2, 3), (2, 4), (2, 4), (4, 6), (4, 7), (6, 8)
+    )
+    BOUNCER_SPRITE_SIZE: Tuple[int, int] = (7, 8)
+    METEOROID_SPRITE_SIZE: Tuple[int, int] = (7, 7)
+    BULLET_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (5, 8), (1, 1), (3, 3), (5, 5) # Laser, Torpedo 3, 2, 1
+    )
+    ENEMY_SHOT_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (6, 2), (2, 4) # Vertical, Horizontal
+    )
+    REJUVENATOR_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (2, 3), (4, 3), (5, 4), (7, 5), (7, 7) # Stage 1-4, Dead
+    )
+    FALLING_ROCK_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
+        (3, 4), (4, 5), (5, 6), (6, 8)
+    )
+    MOTHERSHIP_SPRITE_SIZE: Tuple[int, int] = (7, 16)
 
     # Blue line constants
     BLUE_LINE_OFFSCREEN_Y = 500
@@ -563,24 +577,16 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             )
             shot_y = player_shot_position[1]
 
-            dx_b = jnp.abs(bouncer_pos_screen - shot_x)
-            dy_b = jnp.abs(bouncer_pos[1] - shot_y)
+            bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+            bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+            bouncer_size = jnp.array(self.consts.BOUNCER_SPRITE_SIZE)
 
-            bullet_type_is_laser = bullet_type == self.consts.LASER_ID
-            torpedo_radius = jnp.where(
-                white_ufo_left > 0,
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-            )
-            bullet_radius = jnp.where(
-                bullet_type_is_laser,
-                jnp.array(self.consts.LASER_HIT_RADIUS),
-                torpedo_radius,
-            )
-
-            bouncer_hit = bouncer_active & (dx_b <= bullet_radius[0]) & (dy_b <= bullet_radius[1])
+            bouncer_hit = bouncer_active & \
+                          (bouncer_pos_screen < shot_x + bullet_size[1]) & (shot_x < bouncer_pos_screen + bouncer_size[1]) & \
+                          (bouncer_pos[1] < shot_y + bullet_size[0]) & (shot_y < bouncer_pos[1] + bouncer_size[0])
 
             # Destroy bouncer only if torpedo
+            bullet_type_is_laser = bullet_type == self.consts.LASER_ID
             bouncer_destroyed = bouncer_hit & jnp.logical_not(bullet_type_is_laser)
 
             pre_collision_bouncer_pos = bouncer_pos
@@ -676,22 +682,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             shot_x_screen = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
             shot_y = player_shot_position[1]
             
-            rejuv_shot_dist_x = jnp.abs(rejuv_x_screen - shot_x_screen)
-            rejuv_shot_dist_y = jnp.abs(rejuv_y - shot_y)
-            
-            is_laser = bullet_type == self.consts.LASER_ID
-            torpedo_radius = jnp.where(
-                white_ufo_left > 0,
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-            )
-            bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), torpedo_radius)
-            
+            bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+            bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+
+            rejuv_indices = jnp.where(rejuv_dead, 4, jnp.clip(_get_index_rejuvenator(rejuv_y) - 1, 0, 3))
+            rejuv_sizes = jnp.take(jnp.array(self.consts.REJUVENATOR_SPRITE_SIZES), rejuv_indices, axis=0)
+
             rejuv_hit_by_shot = jnp.logical_and.reduce(jnp.array([
                 rejuv_active,
                 jnp.logical_not(rejuv_dead),
-                rejuv_shot_dist_x <= bullet_radius[0] + 2.0,
-                rejuv_shot_dist_y <= bullet_radius[1] + 2.0,
+                (rejuv_x_screen < shot_x_screen + bullet_size[1]) & (shot_x_screen < rejuv_x_screen + rejuv_sizes[1]),
+                (rejuv_y < shot_y + bullet_size[0]) & (shot_y < rejuv_y + rejuv_sizes[0]),
                 shot_y < self.consts.BOTTOM_CLIP
             ]))
             
@@ -707,28 +708,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ms_pos = state.level.mothership_position
             ms_y = self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT
             
-            box_size = self.consts.MOTHERSHIP_HITBOX_SIZE
-            ms_center_x = ms_pos + 8.0 
-            ms_center_y = ms_y + 3.5 
+            ms_size = jnp.array(self.consts.MOTHERSHIP_SPRITE_SIZE)
             
             shot_x = player_shot_position[0] + _get_bullet_alignment(player_shot_position[1], bullet_type, self.consts.LASER_ID)
             shot_y = player_shot_position[1]
             
-            dx = jnp.abs(shot_x - ms_center_x)
-            dy = jnp.abs(shot_y - ms_center_y)
-            
+            bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+            bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+
             shot_active = shot_y < self.consts.BOTTOM_CLIP 
             is_torpedo = bullet_type == self.consts.TORPEDO_ID
             ms_vulnerable = ms_stage == 2
             
-            torpedo_radius = jnp.where(
-                white_ufo_left > 0,
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-                jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-            )
-            
-            half_size = box_size / 2.0
-            hit_mothership = (dx < half_size + torpedo_radius[0]) & (dy < half_size + torpedo_radius[1]) & shot_active & is_torpedo & ms_vulnerable
+            hit_mothership = (ms_pos < shot_x + bullet_size[1]) & (shot_x < ms_pos + ms_size[1]) & \
+                             (ms_y < shot_y + bullet_size[0]) & (shot_y < ms_y + ms_size[0]) & \
+                             shot_active & is_torpedo & ms_vulnerable
             player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
             
             # Check if projectile was resolved this frame
@@ -774,25 +768,24 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             # Player-UFO collision check
             ufo_x = white_ufo_pos[0] + _get_ufo_alignment(white_ufo_pos[1])
             ufo_y = white_ufo_pos[1]
-            player_left = player_x
-            player_right = player_x + self.consts.PLAYER_WIDTH
-            player_y = float(self.consts.PLAYER_POS_Y)
+            player_x_topleft = player_x
+            player_y_topleft = float(self.consts.PLAYER_POS_Y)
+            player_size = jnp.array(self.consts.PLAYER_SPRITE_SIZE)
 
-            ufo_hits = jnp.logical_and.reduce(jnp.array([
-                ufo_y >= player_y - 4.0,
-                ufo_y <= player_y + 10.0,
-                ufo_x >= player_left - 2.0,
-                ufo_x <= player_right + 2.0,
-            ]))
+            ufo_indices = jnp.clip(_get_index_ufo(ufo_y) - 1, 0, len(self.consts.UFO_SPRITE_SIZES) - 1)
+            ufo_sizes = jnp.take(jnp.array(self.consts.UFO_SPRITE_SIZES), ufo_indices, axis=0)
+
+            ufo_hits = (ufo_x < player_x_topleft + player_size[1]) & (player_x_topleft < ufo_x + ufo_sizes[:, 1]) & \
+                       (ufo_y < player_y_topleft + player_size[0]) & (player_y_topleft < ufo_y + ufo_sizes[:, 0])
+
             ufo_hit_count = jnp.sum(ufo_hits.astype(jnp.int32))
             
             # Player-Bouncer collision check
-            bouncer_hits = bouncer_active & jnp.logical_and.reduce(jnp.array([
-                bouncer_pos[1] >= player_y - 4.0,
-                bouncer_pos[1] <= player_y + 10.0,
-                bouncer_pos_screen >= player_left - 2.0,
-                bouncer_pos_screen <= player_right + 2.0,
-            ]))
+            bouncer_size = jnp.array(self.consts.BOUNCER_SPRITE_SIZE)
+            bouncer_hits = bouncer_active & \
+                           (bouncer_pos_screen < player_x_topleft + player_size[1]) & (player_x_topleft < bouncer_pos_screen + bouncer_size[1]) & \
+                           (bouncer_pos[1] < player_y_topleft + player_size[0]) & (player_y_topleft < bouncer_pos[1] + bouncer_size[0])
+
             bouncer_hit_count = jnp.sum(bouncer_hits.astype(jnp.int32))
             bouncer_active = jnp.where(bouncer_hits, False, bouncer_active)
             bouncer_pos = jnp.where(
@@ -802,27 +795,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             )
 
             chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
-            chasing_meteoroid_left = chasing_meteoroid_x
-            chasing_meteoroid_right = chasing_meteoroid_x + float(self.consts.ENEMY_WIDTH)
-            chasing_meteoroid_top = chasing_meteoroid_pos[1]
-            chasing_meteoroid_bottom = chasing_meteoroid_pos[1] + float(self.consts.ENEMY_HEIGHT)
-            player_bottom = player_y + float(self.consts.PLAYER_HEIGHT)
-            chasing_meteoroid_hits = jnp.logical_and.reduce(jnp.array([
-                chasing_meteoroid_active,
-                chasing_meteoroid_right >= player_left,
-                chasing_meteoroid_left <= player_right,
-                chasing_meteoroid_bottom >= player_y,
-                chasing_meteoroid_top <= player_bottom,
-            ]))
+            chasing_meteoroid_y = chasing_meteoroid_pos[1]
+            meteoroid_size = jnp.array(self.consts.METEOROID_SPRITE_SIZE)
+
+            chasing_meteoroid_hits = chasing_meteoroid_active & \
+                                     (chasing_meteoroid_x < player_x_topleft + player_size[1]) & (player_x_topleft < chasing_meteoroid_x + meteoroid_size[1]) & \
+                                     (chasing_meteoroid_y < player_y_topleft + player_size[0]) & (player_y_topleft < chasing_meteoroid_y + meteoroid_size[0])
+
             chasing_meteoroid_hit_count = jnp.sum(chasing_meteoroid_hits.astype(jnp.int32))
             
-            rejuv_hit_player = jnp.logical_and.reduce(jnp.array([
-                rejuv_active,
-                rejuv_y >= player_y - 4.0,
-                rejuv_y <= player_y + 10.0,
-                rejuv_x_screen >= player_left - 2.0,
-                rejuv_x_screen <= player_right + 2.0,
-            ]))
+            rejuv_indices = jnp.where(rejuv_dead, 4, jnp.clip(_get_index_rejuvenator(rejuv_y) - 1, 0, 3))
+            rejuv_sizes = jnp.take(jnp.array(self.consts.REJUVENATOR_SPRITE_SIZES), rejuv_indices, axis=0)
+
+            rejuv_hit_player = rejuv_active & \
+                               (rejuv_x_screen < player_x_topleft + player_size[1]) & (player_x_topleft < rejuv_x_screen + rejuv_sizes[1]) & \
+                               (rejuv_y < player_y_topleft + player_size[0]) & (player_y_topleft < rejuv_y + rejuv_sizes[0])
             
             gain_life = jnp.logical_and(rejuv_hit_player, jnp.logical_not(rejuv_dead))
             lose_life_rejuv = jnp.logical_and(rejuv_hit_player, rejuv_dead)
@@ -831,18 +818,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuv_pos = jnp.where(rejuv_hit_player, jnp.array(self.consts.ENEMY_OFFSCREEN_POS), rejuv_pos)
 
             rock_x = falling_rock_pos[0] + _get_ufo_alignment(falling_rock_pos[1]).astype(falling_rock_pos.dtype)
-            rock_left = rock_x
-            rock_right = rock_x + float(self.consts.ENEMY_WIDTH)
-            rock_top = falling_rock_pos[1]
-            rock_bottom = falling_rock_pos[1] + float(self.consts.ENEMY_HEIGHT)
+            rock_y = falling_rock_pos[1]
+            rock_indices = jnp.clip(_get_index_falling_rock(rock_y) - 1, 0, len(self.consts.FALLING_ROCK_SPRITE_SIZES) - 1)
+            rock_sizes = jnp.take(jnp.array(self.consts.FALLING_ROCK_SPRITE_SIZES), rock_indices, axis=0)
             
-            rock_hits = jnp.logical_and.reduce(jnp.array([
-                falling_rock_active,
-                rock_right >= player_left,
-                rock_left <= player_right,
-                rock_bottom >= player_y,
-                rock_top <= player_bottom,
-            ]))
+            rock_hits = falling_rock_active & \
+                        (rock_x < player_x_topleft + player_size[1]) & (player_x_topleft < rock_x + rock_sizes[:, 1]) & \
+                        (rock_y < player_y_topleft + player_size[0]) & (player_y_topleft < rock_y + rock_sizes[:, 0])
+
             rock_hit_count = jnp.sum(rock_hits.astype(jnp.int32))
 
             chasing_meteoroid_offscreen = jnp.tile(
@@ -858,7 +841,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             chasing_meteoroid_side = jnp.where(chasing_meteoroid_hits, 1, chasing_meteoroid_side)
             reached_player = jnp.logical_and(
                 chasing_meteoroid_active,
-                chasing_meteoroid_pos[1] >= player_y,
+                chasing_meteoroid_pos[1] >= player_y_topleft,
             )
             chasing_meteoroid_active = jnp.where(reached_player, False, chasing_meteoroid_active)
             chasing_meteoroid_pos = jnp.where(reached_player[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
@@ -1118,7 +1101,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             v,
         )
         x_before_change = x
-        x = jnp.clip(x + v, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER - self.consts.PLAYER_WIDTH)
+        x = jnp.clip(x + v, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER - self.consts.PLAYER_SPRITE_SIZE[1])
 
         ####### Corrected Shot Logic
         bullet_exists = self._bullet_infos(state)
@@ -1197,27 +1180,28 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Collision should match what the player sees on screen:
         # - white UFO x-pos is shifted based on its y-pos (_get_ufo_alignment)
         # - player bullet x-pos is shifted based on its y-pos and type (_get_bullet_alignment)
-        ufo_pos_screen = new_white_ufo_pos.at[0, :].add(
-            _get_ufo_alignment(new_white_ufo_pos[1, :])
-        )
-        shot_pos_screen = new_shot_pos.at[0].add(
-            _get_bullet_alignment(new_shot_pos[1], new_bullet_type, self.consts.LASER_ID)
-        )
+        ufo_x = new_white_ufo_pos[0, :] + _get_ufo_alignment(new_white_ufo_pos[1, :])
+        ufo_y = new_white_ufo_pos[1, :]
+        
+        ufo_indices = jnp.clip(_get_index_ufo(ufo_y) - 1, 0, len(self.consts.UFO_SPRITE_SIZES) - 1)
+        ufo_sizes = jnp.take(jnp.array(self.consts.UFO_SPRITE_SIZES), ufo_indices, axis=0)
+        # ufo_sizes is (3, 2) -> [H, W]
+        
+        shot_x = new_shot_pos[0] + _get_bullet_alignment(new_shot_pos[1], new_bullet_type, self.consts.LASER_ID)
+        shot_y = new_shot_pos[1]
+        
+        bullet_idx = _get_index_bullet(shot_y, new_bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        # bullet_size is (2,) -> [H, W]
 
-        distance_to_bullet = jnp.abs(ufo_pos_screen.T - shot_pos_screen)
-        bullet_type_is_laser = new_bullet_type == self.consts.LASER_ID
-        torpedo_radius = jnp.where(
-            state.level.white_ufo_left > 0,
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-        )
-        bullet_radius = jnp.where(
-            bullet_type_is_laser,
-            jnp.array(self.consts.LASER_HIT_RADIUS),
-            torpedo_radius,
-        )
-        distance_bullet_radius = distance_to_bullet - bullet_radius
-        hit_mask_ufo = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
+        # AABB collision check
+        # x-overlap: (ufo_x < shot_x + bullet_w) & (shot_x < ufo_x + ufo_w)
+        # y-overlap: (ufo_y < shot_y + bullet_h) & (shot_y < ufo_y + ufo_h)
+        hit_mask_ufo = (ufo_x < shot_x + bullet_size[1]) & (shot_x < ufo_x + ufo_sizes[:, 1]) & \
+                       (ufo_y < shot_y + bullet_size[0]) & (shot_y < ufo_y + ufo_sizes[:, 0])
+        
+        hit_index = jnp.argmax(hit_mask_ufo)
+        hit_exists_ufo = jnp.any(hit_mask_ufo)
         hit_index = jnp.argmax(hit_mask_ufo)
         hit_exists_ufo = jnp.any(hit_mask_ufo)
 
@@ -1760,19 +1744,19 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_active = jnp.logical_and(shot_active, jnp.logical_not(moved_offscreen))
 
         player_left = state.level.player_pos.astype(jnp.float32)
-        player_right = player_left + float(self.consts.PLAYER_WIDTH)
         player_y = float(self.consts.PLAYER_POS_Y)
+        player_size = jnp.array(self.consts.PLAYER_SPRITE_SIZE)
 
         shot_x = shot_pos[0] + _get_ufo_alignment(shot_pos[1])
         shot_y = shot_pos[1]
+        
+        timer = state.level.enemy_shot_timer.astype(jnp.int32)
+        sprite_idx = (jnp.floor_divide(timer, 4) % 2).astype(jnp.int32)
+        shot_sizes = jnp.take(jnp.array(self.consts.ENEMY_SHOT_SPRITE_SIZES), sprite_idx, axis=0)
 
-        hits = jnp.logical_and.reduce(jnp.array([
-            shot_active,
-            shot_y >= player_y - 7.0,
-            shot_x >= player_left,
-            shot_x <= player_right,
-        ]))
-
+        hits = (shot_active) & \
+               (shot_x < player_left + player_size[1]) & (player_left < shot_x + shot_sizes[:, 1]) & \
+               (shot_y < player_y + player_size[0]) & (player_y < shot_y + shot_sizes[:, 0])
 
         hit_count = jnp.sum(hits.astype(jnp.int32))
         
@@ -1929,13 +1913,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         new_y = jnp.where(phase_descend, new_y_b, new_y_a)
 
         player_left = player_x
-        player_right = player_x + float(self.consts.PLAYER_WIDTH)
+        player_right = player_x + float(self.consts.PLAYER_SPRITE_SIZE[1])
         align_x = _get_ufo_alignment(new_y_a).astype(new_x_a.dtype)
         aligned_x_a = new_x_a + align_x
         chasing_meteoroid_left = aligned_x_a
-        chasing_meteoroid_right = aligned_x_a + float(self.consts.ENEMY_WIDTH)
+        chasing_meteoroid_right = aligned_x_a + float(self.consts.METEOROID_SPRITE_SIZE[1])
         hits_x = jnp.logical_and(chasing_meteoroid_right >= player_left, chasing_meteoroid_left <= player_right)
-        player_center = player_x + float(self.consts.PLAYER_WIDTH) / 2.0
+        player_center = player_x + float(self.consts.PLAYER_SPRITE_SIZE[1]) / 2.0
         bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=jnp.float32)
         nearest_lane_idx = jnp.argmin(jnp.abs(bottom_lanes - player_center)).astype(jnp.int32)
         
@@ -2071,26 +2055,19 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
 
         chasing_meteoroid_x = chasing_meteoroid_pos[0] + _get_ufo_alignment(chasing_meteoroid_pos[1]).astype(chasing_meteoroid_pos.dtype)
-        chasing_meteoroid_screen_pos = jnp.stack([chasing_meteoroid_x, chasing_meteoroid_pos[1]]).T
-        distance_to_bullet = jnp.abs(chasing_meteoroid_screen_pos - jnp.array([shot_x, shot_y], dtype=chasing_meteoroid_pos.dtype))
-        torpedo_radius = jnp.where(
-            white_ufo_left > 0,
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-        )
-        bullet_radius = torpedo_radius.astype(chasing_meteoroid_pos.dtype)
-        chasing_meteoroid_radius = jnp.array(
-            [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
-            dtype=chasing_meteoroid_pos.dtype,
-        )
-        hit_radius = bullet_radius + chasing_meteoroid_radius
+        chasing_meteoroid_y = chasing_meteoroid_pos[1]
+
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
         
-        # Check for any collision (laser or torpedo)
+        meteoroid_size = jnp.array(self.consts.METEOROID_SPRITE_SIZE)
+        
+        # AABB collision check
         collision_mask = (
             chasing_meteoroid_active
             & shot_active
-            & (distance_to_bullet[:, 0] <= hit_radius[0])
-            & (distance_to_bullet[:, 1] <= hit_radius[1])
+            & (chasing_meteoroid_x < shot_x + bullet_size[1]) & (shot_x < chasing_meteoroid_x + meteoroid_size[1])
+            & (chasing_meteoroid_y < shot_y + bullet_size[0]) & (shot_y < chasing_meteoroid_y + meteoroid_size[0])
         )
         
         # Meteoroid is only destroyed if it's hit by a torpedo
@@ -2305,28 +2282,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
 
         rock_x = falling_rock_pos[0] + _get_ufo_alignment(falling_rock_pos[1]).astype(falling_rock_pos.dtype)
-        rock_screen_pos = jnp.stack([rock_x, falling_rock_pos[1]]).T
-        distance_to_bullet = jnp.abs(rock_screen_pos - jnp.array([shot_x, shot_y], dtype=falling_rock_pos.dtype))
+        rock_y = falling_rock_pos[1]
+
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
         
-        is_laser = bullet_type == self.consts.LASER_ID
-        torpedo_radius = jnp.where(
-            white_ufo_left > 0,
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS),
-            jnp.array(self.consts.TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE),
-        )
-        bullet_radius = jnp.where(is_laser, jnp.array(self.consts.LASER_HIT_RADIUS), torpedo_radius)
+        rock_indices = jnp.clip(_get_index_falling_rock(rock_y) - 1, 0, len(self.consts.FALLING_ROCK_SPRITE_SIZES) - 1)
+        rock_sizes = jnp.take(jnp.array(self.consts.FALLING_ROCK_SPRITE_SIZES), rock_indices, axis=0)
         
-        rock_radius = jnp.array(
-            [self.consts.ENEMY_WIDTH / 2.0, self.consts.ENEMY_HEIGHT / 2.0],
-            dtype=falling_rock_pos.dtype,
-        )
-        hit_radius = bullet_radius + rock_radius
-        
+        # AABB collision check
         hit_mask = (
             falling_rock_active
             & shot_active
-            & (distance_to_bullet[:, 0] <= hit_radius[0])
-            & (distance_to_bullet[:, 1] <= hit_radius[1])
+            & (rock_x < shot_x + bullet_size[1]) & (shot_x < rock_x + rock_sizes[:, 1])
+            & (rock_y < shot_y + bullet_size[0]) & (shot_y < rock_y + rock_sizes[:, 0])
         )
         hit_exists_rock = jnp.any(hit_mask)
         
@@ -2702,7 +2671,7 @@ class BeamriderRenderer(JAXGameRenderer):
     # def _create_player_sprite(self) -> jnp.ndarray:
     #     """Procedurally creates an RGBA sprite for the background"""
     #     player_color_rgba = (214, 239, 30, 0.7) # e.g., (236, 236, 236, 255)
-    #     player_dimensions = (self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH, 4)
+    #     player_dimensions = (self.consts.PLAYER_SPRITE_SIZE[0], self.consts.PLAYER_SPRITE_SIZE[1], 4)
     #     player_sprite = jnp.tile(jnp.array(player_color_rgba, dtype=jnp.uint8), (*player_dimensions[:2], 1))
     #     return player_sprite
     
