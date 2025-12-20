@@ -155,20 +155,81 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             Action.DOWN,
         ]
 
+    def _check_for_wall(self, state: AdventureState, direction: int) -> bool:
+        room = state.player[2]
+
+        # direction 0: left, 1: right, 2: up, 3: down
+        player_x = state.player[0]
+        player_x = jax.lax.cond(
+            direction == 0,
+            lambda x: x-4,
+            lambda x: x,
+            operand = player_x,
+        )
+        player_x = jax.lax.cond(
+            direction == 1,
+            lambda x: x+4,
+            lambda x: x,
+            operand = player_x,
+        )
+
+        player_y = state.player[1]
+        player_y = jax.lax.cond(
+            direction == 2,
+            lambda y: y-8,
+            lambda y: y,
+            operand = player_y,
+        )
+        player_y = jax.lax.cond(
+            direction == 3,
+            lambda y: y+8,
+            lambda y: y,
+            operand = player_y,
+        )
+
+        room_1_clear = jnp.logical_or(
+                jnp.logical_not(room == 0), #either it is not room 1 or
+                jnp.logical_and(
+                player_x >= 8,              #left wall
+                player_x <= 148             #right wall
+                )
+        )
+
+        room_2_clear = jnp.logical_or(
+                jnp.logical_not(room == 1), #either it is not room 2 or
+                jnp.logical_and(
+                player_x >= 8,              #left wall
+                player_x <= 148             #right wall
+                )
+        )
+
+        return_bool = jnp.logical_and(room_1_clear, room_2_clear)
+        
+        return return_bool
+
     def _player_step(self, state: AdventureState, action: chex.Array) -> AdventureState:
         left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
         right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+
+      
+
+        #check for no wall before walking
+        left_no_wall = jnp.logical_and(left,self._check_for_wall(state, 0))
+        right_no_wall = jnp.logical_and(right,self._check_for_wall(state, 1))
+        up_no_wall =  jnp.logical_and(up,self._check_for_wall(state, 2))
+        down_no_wall =  jnp.logical_and(down,self._check_for_wall(state, 3))
+
         new_player_x = state.player[0]
         new_player_x = jax.lax.cond(
-            left,
+            left_no_wall,
             lambda x: x-4,
             lambda x: x,
             operand = new_player_x,
         )
         new_player_x = jax.lax.cond(
-            right,
+            right_no_wall,
             lambda x: x+4,
             lambda x: x,
             operand = new_player_x,
