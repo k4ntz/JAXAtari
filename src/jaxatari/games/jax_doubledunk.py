@@ -342,15 +342,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         penalty_state = updated_state.replace(
             game_mode=GameMode.OUT_OF_BOUNDS_PENALTY,
             out_of_bounds_timer=60,
-            ball=state.ball.replace(holder=new_ball_holder) # Switch possession immediately or after?
-            # The original logic calculated new_ball_holder and used it in reset_state.
-            # Here we should probably switch possession during or after the freeze.
-            # If we switch it here, the ball might jump to the other player visually during the freeze.
-            # Let's keep the ball where it is during the freeze, and switch possession when resetting.
-            # But wait, p1_out_of_bounds calculation depends on who *currently* holds it.
-            # If I don't store "who caused it" or "who gets it", I might lose that info.
-            # However, `triggered_travel` was stored in PlayerState. `is_out_of_bounds` IS stored in PlayerState!
-            # So I can recalculate it in the handler.
         )
 
         new_state = jax.lax.cond(p1_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
@@ -1528,87 +1519,25 @@ class DunkRenderer(JAXGameRenderer):
                 (text_y, text_x, 0)
             )
 
-        def apply_travel_overlay(image):
-            # Stamp the travel text at the bottom
-            travel_mask = self.SHAPE_MASKS['travel']
+        def apply_penalty_overlay(image, mask_name):
+            # Stamp the penalty text at the bottom
+            mask = self.SHAPE_MASKS[mask_name]
             
             # Convert text mask to RGB
-            text_sprite_rgb = self.PALETTE[travel_mask]
+            text_sprite_rgb = self.PALETTE[mask]
             
             # Create alpha mask for the text
-            text_alpha_mask = (travel_mask != self.jr.TRANSPARENT_ID)[..., None]
+            text_alpha_mask = (mask != self.jr.TRANSPARENT_ID)[..., None]
 
             # Position the text at the bottom
-            text_x = (self.consts.WINDOW_WIDTH - travel_mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - travel_mask.shape[0] - 25
+            text_x = (self.consts.WINDOW_WIDTH - mask.shape[1]) // 2
+            text_y = self.consts.WINDOW_HEIGHT - mask.shape[0] - 25
 
             # Get the slice from the image
             image_slice = jax.lax.dynamic_slice(
                 image,
                 (text_y, text_x, 0),
-                (travel_mask.shape[0], travel_mask.shape[1], 3)
-            )
-
-            # Blend the text onto the slice
-            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
-
-            # Update the image with the blended slice
-            return jax.lax.dynamic_update_slice(
-                image,
-                combined_slice,
-                (text_y, text_x, 0)
-            )
-
-        def apply_out_of_bounds_overlay(image):
-            # Stamp the out_of_bounds text at the bottom
-            out_of_bounds_mask = self.SHAPE_MASKS['out_of_bounds']
-            
-            # Convert text mask to RGB
-            text_sprite_rgb = self.PALETTE[out_of_bounds_mask]
-            
-            # Create alpha mask for the text
-            text_alpha_mask = (out_of_bounds_mask != self.jr.TRANSPARENT_ID)[..., None]
-
-            # Position the text at the bottom
-            text_x = (self.consts.WINDOW_WIDTH - out_of_bounds_mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - out_of_bounds_mask.shape[0] - 25 
-
-            # Get the slice from the image
-            image_slice = jax.lax.dynamic_slice(
-                image,
-                (text_y, text_x, 0),
-                (out_of_bounds_mask.shape[0], out_of_bounds_mask.shape[1], 3)
-            )
-
-            # Blend the text onto the slice
-            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
-
-            # Update the image with the blended slice
-            return jax.lax.dynamic_update_slice(
-                image,
-                combined_slice,
-                (text_y, text_x, 0)
-            )
-
-        def apply_clearance_overlay(image):
-            # Stamp the clearance text at the bottom
-            clearance_mask = self.SHAPE_MASKS['clearance']
-            
-            # Convert text mask to RGB
-            text_sprite_rgb = self.PALETTE[clearance_mask]
-            
-            # Create alpha mask for the text
-            text_alpha_mask = (clearance_mask != self.jr.TRANSPARENT_ID)[..., None]
-
-            # Position the text at the bottom
-            text_x = (self.consts.WINDOW_WIDTH - clearance_mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - clearance_mask.shape[0] - 25 
-
-            # Get the slice from the image
-            image_slice = jax.lax.dynamic_slice(
-                image,
-                (text_y, text_x, 0),
-                (clearance_mask.shape[0], clearance_mask.shape[1], 3)
+                (mask.shape[0], mask.shape[1], 3)
             )
 
             # Blend the text onto the slice
@@ -1630,21 +1559,21 @@ class DunkRenderer(JAXGameRenderer):
 
         final_image = jax.lax.cond(
             state.game_mode == GameMode.TRAVEL_PENALTY,
-            apply_travel_overlay,
+            lambda x: apply_penalty_overlay(x, 'travel'),
             lambda x: x, 
             final_image
         )
 
         final_image = jax.lax.cond(
             state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
-            apply_out_of_bounds_overlay,
+            lambda x: apply_penalty_overlay(x, 'out_of_bounds'),
             lambda x: x, 
             final_image
         )
 
         return jax.lax.cond(
             state.game_mode == GameMode.CLEARANCE_PENALTY,
-            apply_clearance_overlay,
+            lambda x: apply_penalty_overlay(x, 'clearance'),
             lambda x: x, 
             final_image
         )
