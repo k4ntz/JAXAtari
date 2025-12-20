@@ -76,13 +76,17 @@ class DefenderConstants(NamedTuple):
     COLOR_PINK: Tuple[int, int, int] = (235, 176, 224)
     PARTICLE_FLICKER_EVERY_N_FRAMES: int = 1
 
+    # Level change animation
+    LEVEL_DIGIT_SCREEN_X: int = 80
+    LEVEL_DIGIT_SCREEN_Y: int = 60
+
     ## ENTITY
 
     # Space Ship
     SPACE_SHIP_WIDTH: int = 13
     SPACE_SHIP_HEIGHT: int = 5
-    SPACE_SHIP_INIT_GAME_X: int = 200
-    SPACE_SHIP_INIT_GAME_Y: int = 80
+    SPACE_SHIP_INIT_GAME_X: float = 200
+    SPACE_SHIP_INIT_GAME_Y: float = 80
     SPACE_SHIP_INIT_FACE_RIGHT: bool = True
     SPACE_SHIP_ACCELERATION: float = 0.15
     SPACE_SHIP_BREAK: float = 0.1
@@ -99,6 +103,7 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_DEATH_ANIM_FRAME_AMOUNT: int = (
         SPACE_SHIP_DEATH_LOOP_AMOUNT * SPACE_SHIP_DEATH_LOOP_FRAMES
         + SPACE_SHIP_DEATH_EXPLOSION_AMOUNT
+        + 40  # After explosion empty frames
     )
 
     SPACE_SHIP_SCANNER_WIDTH: int = 3
@@ -496,6 +501,7 @@ class DefenderRenderer(JAXGameRenderer):
                     "space_ship_death_8.npy",
                     "space_ship_death_9.npy",
                     "space_ship_death_10.npy",
+                    "space_ship_death_11.npy",
                 ],
             },
             {"name": "exhaust", "type": "single", "file": "exhaust.npy"},
@@ -2443,30 +2449,47 @@ class JaxDefender(
 
     def _end_level(self, state: DefenderState) -> DefenderState:
         state = state._replace(
-            camera_offset=jnp.array(self.consts.CAMERA_INIT_OFFSET),
-            space_ship_speed=jnp.array(0),
-            space_ship_x=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_X),
-            space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y),
-            space_ship_facing_right=jnp.array(self.consts.SPACE_SHIP_INIT_FACE_RIGHT),
-            laser_active=jnp.array(0),
-            bullet_active=jnp.array(0),
+            game_state=self.consts.GAME_STATE_TRANSITION,
+            camera_offset=self.consts.CAMERA_INIT_OFFSET,
+            space_ship_speed=0.0,
+            space_ship_x=self.consts.SPACE_SHIP_INIT_GAME_X,
+            space_ship_y=self.consts.SPACE_SHIP_INIT_GAME_Y,
+            space_ship_facing_right=self.consts.SPACE_SHIP_INIT_FACE_RIGHT,
+            laser_active=False,
+            bullet_active=False,
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)),
             human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 5)),
-            shooting_cooldown=jnp.array(0),
+            shooting_cooldown=0,
         )
         return state
 
     def _game_over(self, state: DefenderState) -> DefenderState:
-        # Shows game over animation, goes to end_level
-        game_state = self.consts.GAME_STATE_GAMEOVER
+        # Shows game over animation, subtracts a live
         # As game is over, use shooting_cooldown for animation index, to not waste state space
-        shooting_cooldown = 0
-        return state._replace(
-            game_state=game_state,
-            shooting_cooldown=shooting_cooldown,
+        state = state._replace(
+            game_state=self.consts.GAME_STATE_GAMEOVER,
+            space_ship_lives=state.space_ship_lives - 1,
+            shooting_cooldown=0,
             bullet_active=False,
             laser_active=False,
         )
+        return state
+
+    def _reset_player(self, state: DefenderState) -> DefenderState:
+        state = state._replace(
+            game_state=self.consts.GAME_STATE_PLAYING,
+            camera_offset=self.consts.CAMERA_INIT_OFFSET,
+            space_ship_speed=0.0,
+            space_ship_x=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_X).astype(
+                jnp.float32
+            ),
+            space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(
+                jnp.float32
+            ),
+            space_ship_facing_right=self.consts.SPACE_SHIP_INIT_FACE_RIGHT,
+            shooting_cooldown=0,
+        )
+        return state
 
     ## -------- GAME STEP AND RESET ------------------------------
 
@@ -2501,6 +2524,13 @@ class JaxDefender(
             # For animation
             current_frame = state.shooting_cooldown + 1
             state = state._replace(shooting_cooldown=current_frame)
+            # Check if game_over animation is done and space ship still has lives
+            game_resume = jnp.logical_and(
+                state.space_ship_lives > 0, self._get_done(state)
+            )
+            state = jax.lax.cond(
+                game_resume, lambda: self._reset_player(state), lambda: state
+            )
             return state
 
         state = jax.lax.cond(
