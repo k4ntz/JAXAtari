@@ -25,7 +25,7 @@ class GameMode(IntEnum):
     IN_PLAY = 1
     TRAVEL_PENALTY = 2
     OUT_OF_BOUNDS_PENALTY = 3
-    FOUL_PENALTY = 4
+    CLEARANCE_PENALTY = 4
 
 class OffensiveAction(IntEnum):
     PASS = 0
@@ -80,6 +80,8 @@ class PlayerState:
     is_out_of_bounds: chex.Array # Is the character out of bounds
     jumped_with_ball: chex.Array # Did the character jump while having the ball, jumped_with_ball=False
     triggered_travel: chex.Array # Check if Player broke the "travel rule": jumped and landed while having the ball, triggered_travel=False
+    clearance_needed: chex.Array # Does the player need to clear the ball?
+    triggered_clearance: chex.Array # Did the player trigger the clearance penalty?
 
 @chex.dataclass(frozen=True)
 class BallState:
@@ -96,6 +98,7 @@ class BallState:
     receiver: chex.Array
     shooter_pos_x: chex.Array
     shooter_pos_y: chex.Array
+    missed_shot: chex.Array # boolean, true if ball hit rim and missed
 
 @chex.dataclass(frozen=True)
 class DunkGameState:
@@ -118,9 +121,7 @@ class DunkGameState:
     last_enemy_actions: chex.Array
     travel_timer: chex.Array
     out_of_bounds_timer: chex.Array
-    foul_timer: chex.Array
-    foul_type: chex.Array
-    foul_committer: chex.Array
+    clearance_timer: chex.Array
     key: chex.PRNGKey
 
 class EntityPosition(NamedTuple):
@@ -238,12 +239,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _init_state(self, key) -> DunkGameState:
         """Creates the very first state of the game."""
         return DunkGameState(
-            player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
-            player1_outside=PlayerState(id=2, x=75, y=115, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
-            player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
-            player2_outside=PlayerState(id=4, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False),
+            player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player1_outside=PlayerState(id=2, x=75, y=115, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player2_outside=PlayerState(id=4, x=75, y=105, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
             # Start with a jump ball in the center: no holder and ball sits at the start position
-            ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_OUTSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0),
+            ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=PlayerID.PLAYER1_OUTSIDE, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0, missed_shot=False),
             player_score=jnp.array(0, dtype=jnp.int32),
             enemy_score=jnp.array(0, dtype=jnp.int32),
             step_counter=0,
@@ -258,6 +259,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
             travel_timer=0,
             out_of_bounds_timer=0,
+            clearance_timer=0,
             key=key,
         )
 
@@ -291,7 +293,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         touched_bound = (updated_x <= constants.PLAYER_X_MIN) | (updated_x >= constants.PLAYER_X_MAX) | \
                         (updated_y <= constants.PLAYER_Y_MIN) | (updated_y >= constants.PLAYER_Y_MAX)
 
-        return player.replace(x=new_x, y=new_y, vel_x=vel_x, vel_y=vel_y, is_out_of_bounds=touched_bound)
+        # Clearance Check: Check if player is "inside". If not, they have cleared the ball.
+        # Inside Zone definition based on scoring logic:
+        # 1. Rectangular Zone: x=[25, 135], y <= 90
+        in_rect_zone = (new_x >= 25) & (new_x <= 135) & (new_y <= 90)
+        # 2. Elliptical Zone: Center(80, 80), Rx=55, Ry=45
+        dx = new_x - 80.0
+        dy = new_y - 80.0
+        ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
+        in_ellipse_zone = (ellipse_val <= 1.0) & (new_y >= 80)
+        
+        is_inside = in_rect_zone | in_ellipse_zone
+        is_outside = ~is_inside
+        
+        new_clearance_needed = jax.lax.select(is_outside, False, player.clearance_needed)
+
+        return player.replace(x=new_x, y=new_y, vel_x=vel_x, vel_y=vel_y, is_out_of_bounds=touched_bound, clearance_needed=new_clearance_needed)
 
     def _update_players_xy(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
         """Updates the XY positions for all players."""
@@ -320,15 +337,20 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-        # Instead of resetting immediately, we switch to FOUL_PENALTY mode
-        # Freeze for ~1 second (60 frames) and mark as out-of-bounds foul
+        # Instead of resetting immediately, we switch to OUT_OF_BOUNDS_PENALTY mode
+        # Freeze for ~1 second (60 frames)
         penalty_state = updated_state.replace(
-            game_mode=GameMode.FOUL_PENALTY,
-            foul_timer=60,
-            foul_type=3,  # 3 == out of bounds
-            foul_committer=jax.lax.select(p1_out_of_bounds, state.ball.holder, PlayerID.NONE),
-            # Keep ball as-is until reset; possession will be assigned on reset
-            ball=state.ball,
+            game_mode=GameMode.OUT_OF_BOUNDS_PENALTY,
+            out_of_bounds_timer=60,
+            ball=state.ball.replace(holder=new_ball_holder) # Switch possession immediately or after?
+            # The original logic calculated new_ball_holder and used it in reset_state.
+            # Here we should probably switch possession during or after the freeze.
+            # If we switch it here, the ball might jump to the other player visually during the freeze.
+            # Let's keep the ball where it is during the freeze, and switch possession when resetting.
+            # But wait, p1_out_of_bounds calculation depends on who *currently* holds it.
+            # If I don't store "who caused it" or "who gets it", I might lose that info.
+            # However, `triggered_travel` was stored in PlayerState. `is_out_of_bounds` IS stored in PlayerState!
+            # So I can recalculate it in the handler.
         )
 
         new_state = jax.lax.cond(p1_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
@@ -413,13 +435,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # Instead of resetting immediately, we switch to TRAVEL_PENALTY mode
-        # Instead of resetting immediately, we switch to FOUL_PENALTY mode
-        # Freeze for ~1 second (60 frames) and mark as travel foul
+        # Freeze for ~1 second (60 frames)
         penalty_state = updated_state.replace(
-            game_mode=GameMode.FOUL_PENALTY,
-            foul_timer=60,
-            foul_type=1,  # 1 == travel
-            foul_committer=PlayerID.NONE,
+            game_mode=GameMode.TRAVEL_PENALTY,
+            travel_timer=60
         )
 
         new_state = jax.lax.cond(travel_triggered, lambda x: penalty_state, lambda x: updated_state, None)
@@ -452,8 +471,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             vel_x=0.0, 
             vel_y=2.0,  # Positive y is downwards
             landing_y=float(self.constants.PLAYER_Y_MIN+20), # Ground level
-            shooter=PlayerID.NONE, # Reset shooter
-            receiver=PlayerID.NONE # Reset receiver
+            receiver=PlayerID.NONE, # Reset receiver
+            missed_shot=True
         )
         return state.replace(ball=new_ball)
 
@@ -608,9 +627,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 p2_return_to_basket_action, 
                 jax.lax.select(rand_inside < 0.5, Action.NOOP, random_inside_move_action)
             )
-                foul_timer=0,
-                foul_type=0,
-                foul_committer=PlayerID.NONE,
         )
 
         # P2 Outside Offense
@@ -829,7 +845,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
         did_jump = jax.lax.select(can_jump, 1, 0)
-        return player.replace(vel_z=new_vel_z), did_jump
+
+        # Clearance Penalty Check
+        has_ball = (state.ball.holder == player.id)
+        triggered_clearance = can_jump & has_ball & player.clearance_needed
+
+        return player.replace(vel_z=new_vel_z, triggered_clearance=triggered_clearance), did_jump
 
     def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey, chex.Array]:
         """Handles offensive actions: passing and shooting."""
@@ -949,7 +970,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         def continue_play(s):
             # Handle miss
             is_miss = reached_target & ~s.ball.is_goal
-            orig_shooter = s.ball.shooter
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
 
@@ -1003,34 +1023,45 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             reversed_catcher_idx = jnp.argmax(catch_flags[::-1])
             catcher_idx = 3 - reversed_catcher_idx
 
-            def apply_catch(b):
+            def handle_catch(curr_state, curr_ball):
                 pid = player_ids[catcher_idx]
-                return b.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE)
+                
+                # Check for clearance logic (Rebound)
+                shooter_id = curr_ball.shooter
+                is_rebound = (shooter_id != PlayerID.NONE) & curr_ball.missed_shot
+                
+                shooter_team_p1 = (shooter_id == PlayerID.PLAYER1_INSIDE) | (shooter_id == PlayerID.PLAYER1_OUTSIDE)
+                catcher_team_p1 = (pid == PlayerID.PLAYER1_INSIDE) | (pid == PlayerID.PLAYER1_OUTSIDE)
+                is_defensive_rebound = is_rebound & (shooter_team_p1 != catcher_team_p1)
+                
+                # Update ball
+                new_ball = curr_ball.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE, shooter=PlayerID.NONE, missed_shot=False)
+                
+                # Update player state (set clearance_needed if defensive rebound)
+                p1_in = curr_state.player1_inside
+                p1_out = curr_state.player1_outside
+                p2_in = curr_state.player2_inside
+                p2_out = curr_state.player2_outside
+                
+                p1_in = jax.lax.cond((pid == PlayerID.PLAYER1_INSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p1_in)
+                p1_out = jax.lax.cond((pid == PlayerID.PLAYER1_OUTSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p1_out)
+                p2_in = jax.lax.cond((pid == PlayerID.PLAYER2_INSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p2_in)
+                p2_out = jax.lax.cond((pid == PlayerID.PLAYER2_OUTSIDE) & is_defensive_rebound, lambda p: p.replace(clearance_needed=True), lambda p: p, p2_out)
 
-            b_state = jax.lax.cond(any_caught, apply_catch, lambda b: b, b_state)
+                return curr_state.replace(ball=new_ball, player1_inside=p1_in, player1_outside=p1_out, player2_inside=p2_in, player2_outside=p2_out)
 
-            # Detect "clearing" foul: miss -> rebound -> opposing team catches immediately
-            catcher_pid = player_ids[catcher_idx]
-
-            orig_team_is_p1 = (orig_shooter <= PlayerID.PLAYER1_OUTSIDE)
-            catcher_team_is_p1 = (catcher_pid <= PlayerID.PLAYER1_OUTSIDE)
-            different_team = jnp.logical_xor(orig_team_is_p1, catcher_team_is_p1)
-
-            clearing_foul = any_caught & is_miss & (orig_shooter != PlayerID.NONE) & different_team
-
-            def apply_clearing(state_and_ball):
-                s_in, b_in = state_and_ball
-                s_out = s_in.replace(game_mode=GameMode.FOUL_PENALTY, foul_timer=60, foul_type=2, foul_committer=catcher_pid)
-                b_out = b_in.replace(holder=PlayerID.NONE, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE)
-                return (s_out, b_out)
-
-            s, b_state = jax.lax.cond(clearing_foul, apply_clearing, lambda x: x, (s, b_state))
+            # We need to update state, not just ball
+            s = jax.lax.cond(any_caught, lambda s_: handle_catch(s_, b_state), lambda s_: s_.replace(ball=b_state), s)
+            
+            # Refresh ball state from potentially updated s
+            b_state = s.ball
 
             # Update ball position if held
+            players_stacked_new = jax.tree_util.tree_map(lambda *args: jnp.stack(args), s.player1_inside, s.player1_outside, s.player2_inside, s.player2_outside)
             is_held = (b_state.holder >= PlayerID.PLAYER1_INSIDE) & (b_state.holder <= PlayerID.PLAYER2_OUTSIDE)
             def update_held_pos(b):
                 idx = b.holder - 1
-                return b.replace(x=players_stacked.x[idx].astype(jnp.float32), y=players_stacked.y[idx].astype(jnp.float32))
+                return b.replace(x=players_stacked_new.x[idx].astype(jnp.float32), y=players_stacked_new.y[idx].astype(jnp.float32))
             
             b_state = jax.lax.cond(is_held, update_held_pos, lambda b: b, b_state)
 
@@ -1137,29 +1168,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             updated_state
         )
 
-    def _handle_foul_penalty(self, state: DunkGameState) -> DunkGameState:
-        """Handles a generic foul penalty (shows foul overlay for a short time then resets possession)."""
-        new_timer = state.foul_timer - 1
+    def _handle_clearance_penalty(self, state: DunkGameState) -> DunkGameState:
+        """Handles the clearance penalty freeze."""
+        
+        # Decrement timer
+        new_timer = state.clearance_timer - 1
         timer_expired = new_timer <= 0
 
+        # If expired, reset game similar to original logic (change possession)
         def reset_after_penalty(s):
             key, reset_key = random.split(s.key)
-
-            # Default: if travel foul, detect via triggered_travel flags
-            def travel_reset(s2):
-                p1_triggered = s2.player1_inside.triggered_travel | s2.player1_outside.triggered_travel
-                new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-                return new_ball_holder
-
-            # For clearing or out_of_bounds fouls, use foul_committer to determine who committed
-            def committer_reset(s2):
-                committer = s2.foul_committer
-                p1_committed = (committer == PlayerID.PLAYER1_INSIDE) | (committer == PlayerID.PLAYER1_OUTSIDE)
-                new_ball_holder = jax.lax.select(p1_committed, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-                return new_ball_holder
-
-            new_ball_holder = jax.lax.cond(s.foul_type == 1, travel_reset, committer_reset, s)
-
+            
+            # Check who triggered clearance (should be preserved in player states)
+            p1_triggered = s.player1_inside.triggered_clearance | s.player1_outside.triggered_clearance
+            
+            new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+            
             return self._init_state(reset_key).replace(
                 player_score=s.player_score,
                 enemy_score=s.enemy_score,
@@ -1167,7 +1191,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 ball=s.ball.replace(holder=new_ball_holder)
             )
 
-        updated_state = state.replace(foul_timer=new_timer)
+        updated_state = state.replace(clearance_timer=new_timer)
 
         return jax.lax.cond(
             timer_expired,
@@ -1204,10 +1228,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             state
         )
 
-        # Handle generic foul penalty mode (covers travel, clearing, out-of-bounds fouls)
+        # Handle clearance penalty mode
         state = jax.lax.cond(
-            state.game_mode == GameMode.FOUL_PENALTY,
-            lambda s: self._handle_foul_penalty(s),
+            state.game_mode == GameMode.CLEARANCE_PENALTY,
+            lambda s: self._handle_clearance_penalty(s),
             lambda s: s,
             state
         )
@@ -1225,6 +1249,18 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             # 3. Handle interactions (jump, pass, shoot, steal)
             s, key = self._handle_interactions(s, actions, key)
             
+            # Check for Clearance Penalty Trigger (after jump)
+            p1_clearance = s.player1_inside.triggered_clearance | s.player1_outside.triggered_clearance
+            p2_clearance = s.player2_inside.triggered_clearance | s.player2_outside.triggered_clearance
+            clearance_triggered = p1_clearance | p2_clearance
+            
+            s = jax.lax.cond(
+                clearance_triggered,
+                lambda s_: s_.replace(game_mode=GameMode.CLEARANCE_PENALTY, clearance_timer=60),
+                lambda s_: s_,
+                s
+            )
+
             # 4. Update player Z physics (gravity, etc.)
             s = self._update_players_z(s)
 
@@ -1304,6 +1340,7 @@ class DunkRenderer(JAXGameRenderer):
             {'name': 'play_selection', 'type': 'single', 'file': 'play_selection.npy'},
             {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
             {'name': 'out_of_bounds', 'type': 'single', 'file': 'out_of_bounds.npy'},
+            {'name': 'clearance', 'type': 'single', 'file': 'clearance.npy'},
         ]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
@@ -1553,26 +1590,31 @@ class DunkRenderer(JAXGameRenderer):
                 (text_y, text_x, 0)
             )
 
-        def apply_foul_overlay(image):
-            # Choose a mask based on foul type: travel/clearing/out_of_bounds
-            foul_type = state.foul_type
-            # Use travel mask for travel/clearing (types 1 and 2), out_of_bounds mask for type 3
-            mask = jax.lax.select((foul_type == 3), self.SHAPE_MASKS['out_of_bounds'], self.SHAPE_MASKS['travel'])
+        def apply_clearance_overlay(image):
+            # Stamp the clearance text at the bottom
+            clearance_mask = self.SHAPE_MASKS['clearance']
+            
+            # Convert text mask to RGB
+            text_sprite_rgb = self.PALETTE[clearance_mask]
+            
+            # Create alpha mask for the text
+            text_alpha_mask = (clearance_mask != self.jr.TRANSPARENT_ID)[..., None]
 
-            text_sprite_rgb = self.PALETTE[mask]
-            text_alpha_mask = (mask != self.jr.TRANSPARENT_ID)[..., None]
+            # Position the text at the bottom
+            text_x = (self.consts.WINDOW_WIDTH - clearance_mask.shape[1]) // 2
+            text_y = self.consts.WINDOW_HEIGHT - clearance_mask.shape[0] - 25 
 
-            text_x = (self.consts.WINDOW_WIDTH - mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - mask.shape[0] - 25
-
+            # Get the slice from the image
             image_slice = jax.lax.dynamic_slice(
                 image,
                 (text_y, text_x, 0),
-                (mask.shape[0], mask.shape[1], 3)
+                (clearance_mask.shape[0], clearance_mask.shape[1], 3)
             )
 
+            # Blend the text onto the slice
             combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
 
+            # Update the image with the blended slice
             return jax.lax.dynamic_update_slice(
                 image,
                 combined_slice,
@@ -1600,11 +1642,9 @@ class DunkRenderer(JAXGameRenderer):
             final_image
         )
 
-        final_image = jax.lax.cond(
-            state.game_mode == GameMode.FOUL_PENALTY,
-            apply_foul_overlay,
-            lambda x: x,
+        return jax.lax.cond(
+            state.game_mode == GameMode.CLEARANCE_PENALTY,
+            apply_clearance_overlay,
+            lambda x: x, 
             final_image
         )
-
-        return final_image
