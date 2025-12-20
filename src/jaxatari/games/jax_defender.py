@@ -1,4 +1,5 @@
 from jax import random as jrandom
+from jax._src.lax.slicing import _clamp_scatter_indices
 from jax._src.pjit import JitWrapped
 import os
 from functools import partial
@@ -79,7 +80,7 @@ class DefenderConstants(NamedTuple):
     # Space Ship
     SPACE_SHIP_WIDTH: int = 13
     SPACE_SHIP_HEIGHT: int = 5
-    SPACE_SHIP_INIT_GAME_X: int = 100
+    SPACE_SHIP_INIT_GAME_X: int = 200
     SPACE_SHIP_INIT_GAME_Y: int = 80
     SPACE_SHIP_INIT_FACE_RIGHT: bool = True
     SPACE_SHIP_ACCELERATION: float = 0.15
@@ -101,6 +102,7 @@ class DefenderConstants(NamedTuple):
 
     ENEMY_MAX_IN_GAME: int = 20
     ENEMY_MAX_ON_SCREEN: int = 10
+    ENEMY_SECTORS: int = 4
 
     ENEMY_SCANNER_WIDTH: int = 2
     ENEMY_SCANNER_HEIGHT: int = 2
@@ -330,6 +332,22 @@ class DefenderHelper:
             screen_y < self.consts.GAME_AREA_BOTTOM,
         )
         return jnp.logical_and(x_onscreen, y_onscreen)
+
+    def _current_sector(self, state: DefenderState):
+        sector_width = self.consts.WORLD_WIDTH / self.consts.ENEMY_SECTORS
+        camera_game_x = state.camera_offset + state.space_ship_x
+        return jnp.floor_divide(camera_game_x, sector_width).astype(jnp.int32)
+
+    def _sector_bounds(self, sector):
+        sector_width = self.consts.WORLD_WIDTH / self.consts.ENEMY_SECTORS
+        return (sector_width * sector).astype(jnp.int32), (
+            sector_width * (sector + 1)
+        ).astype(jnp.int32)
+
+    def _which_sector(self, game_x):
+        sector_width = self.consts.WORLD_WIDTH / self.consts.ENEMY_SECTORS
+        sector = jnp.floor_divide(game_x, sector_width)
+        return sector.astype(jnp.int32)
 
     def _print_array(self, data):
         jax.debug.print("Array: \n{}", data)
@@ -980,9 +998,9 @@ class JaxDefender(
                 - self.consts.LANDER_MAX_AMOUNT
                 > state.killed_landers,
             ),
-            lambda: self.spawn_on_random_position_not_on_screen(
-                state, self.consts.LANDER
-            )._replace(killed_landers=state.killed_landers + 1),
+            lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER)._replace(
+                killed_landers=state.killed_landers + 1
+            ),
             lambda: state,
         )
 
@@ -1037,52 +1055,79 @@ class JaxDefender(
 
         return (indices, max_indice)
 
-    def _get_random_position_not_on_screen(
-        self, state: DefenderState, width: int, height: int, key: chex.Array
-    ) -> Tuple[float, float, chex.Array]:
-        def body_fn(carry):
-            key, game_x, game_y = carry
-            key, subkey_x = jax.random.split(key)
-            key, subkey_y = jax.random.split(key)
-
-            game_x = jax.random.uniform(
-                subkey_x, minval=0, maxval=self.consts.WORLD_WIDTH - width
-            )
-            game_y = jax.random.uniform(
-                subkey_y, minval=0, maxval=self.consts.WORLD_HEIGHT - height
-            )
-            return key, game_x, game_y
-
-        def cond_fn(carry):
-            key, game_x, game_y = carry
-            is_onscreen = self.dh._is_onscreen_from_game(
-                state, game_x, game_y, width, height
-            )
-            return is_onscreen
-
-        # Initial random position
-        key, init_game_x, init_game_y = body_fn((key, 0.0, 0.0))
-
-        # Loop until we find a position that is not on screen
-        key, final_game_x, final_game_y = jax.lax.while_loop(
-            cond_fn, body_fn, (key, init_game_x, init_game_y)
-        )
-
-        return final_game_x, final_game_y, key
-
-    def spawn_on_random_position_not_on_screen(
+    def _spawn_enemy_random_pos(
         self, state: DefenderState, e_type: int
     ) -> DefenderState:
-        random_x, random_y, new_key = self._get_random_position_not_on_screen(
-            state,
-            self.consts.ENEMY_WIDTH,
-            self.consts.ENEMY_HEIGHT,
-            state.key,
+
+        def fill_sector(index, sector_amounts):
+            game_x, _, e_type, _, _ = self._get_enemy(state, index)
+            sector = self.dh._which_sector(game_x)
+
+            is_alive = jnp.logical_and(
+                e_type != self.consts.INACTIVE, e_type != self.consts.DEAD
+            )
+
+            sector_current = sector_amounts[sector] + jnp.where(is_alive, 1, 0)
+            sector_amounts = sector_amounts.at[sector].set(sector_current)
+            return sector_amounts
+
+        sector_amounts = jnp.zeros(self.consts.ENEMY_SECTORS)
+        sector_amounts = jax.lax.fori_loop(
+            0, self.consts.ENEMY_MAX_IN_GAME, fill_sector, sector_amounts
         )
 
-        state = self._spawn_enemy(state, random_x, random_y, e_type, 0, 0)
+        # Determine at max 2 sectors, 1 is current one and other is left or right overlapping
+        overlap_ease = 1  # Allow left and right border to be inside same sector
 
-        return state._replace(key=new_key)
+        camera_left_border = jnp.mod(
+            state.camera_offset
+            + state.space_ship_x
+            - self.consts.SCREEN_WIDTH / 2
+            + overlap_ease,
+            self.consts.WORLD_WIDTH,
+        )
+        camera_right_border = jnp.mod(
+            state.camera_offset
+            + state.space_ship_x
+            + self.consts.SCREEN_WIDTH / 2
+            - overlap_ease,
+            self.consts.WORLD_WIDTH,
+        )
+
+        left_border_sector = self.dh._which_sector(camera_left_border)
+        right_border_sector = self.dh._which_sector(camera_right_border)
+
+        self.dh._print_array("CHECK")
+        self.dh._print_array(left_border_sector)
+        self.dh._print_array(right_border_sector)
+
+        # Max out both sectors
+        sector_amounts = sector_amounts.at[left_border_sector].set(
+            self.consts.ENEMY_MAX_IN_GAME
+        )
+
+        sector_amounts = sector_amounts.at[right_border_sector].set(
+            self.consts.ENEMY_MAX_IN_GAME
+        )
+
+        smallest_sector = jnp.argmin(sector_amounts)
+        left_bound, right_bound = self.dh._sector_bounds(smallest_sector)
+
+        # Spawn randomly inside sector
+        key = state.key
+        key, subkey_x = jax.random.split(key)
+        key, subkey_y = jax.random.split(key)
+
+        game_x = jax.random.uniform(
+            subkey_x, minval=left_bound, maxval=right_bound - self.consts.ENEMY_WIDTH
+        )
+        game_y = jax.random.uniform(
+            subkey_y, minval=0, maxval=self.consts.WORLD_HEIGHT - 40
+        )
+
+        state = self._spawn_enemy(state, game_x, game_y, e_type, 0.0, 0.0)
+
+        return state._replace(key=key)
 
     def _update_human(
         self, state: DefenderState, index, game_x=-1.0, game_y=-1.0, h_state=-1.0
@@ -1539,9 +1584,7 @@ class JaxDefender(
                 state = state._replace(
                     human_states=new_human_states, enemy_states=new_enemy_states
                 )
-                return self.spawn_on_random_position_not_on_screen(
-                    state, self.consts.MUTANT
-                )
+                return self._spawn_enemy_random_pos(state, self.consts.MUTANT)
 
             def lander_ascend_continue(
                 human_index: int,
@@ -2257,9 +2300,7 @@ class JaxDefender(
             jnp.minimum(
                 self.consts.LANDER_LEVEL_AMOUNT[level], self.consts.LANDER_MAX_AMOUNT
             ),
-            lambda _, state: self.spawn_on_random_position_not_on_screen(
-                state, self.consts.LANDER
-            ),
+            lambda _, state: self._spawn_enemy_random_pos(state, self.consts.LANDER),
             state,
         )
 
@@ -2269,9 +2310,7 @@ class JaxDefender(
             jnp.minimum(
                 self.consts.BOMBER_LEVEL_AMOUNT[level], self.consts.BOMBER_MAX_AMOUNT
             ),
-            lambda _, state: self.spawn_on_random_position_not_on_screen(
-                state, self.consts.BOMBER
-            ),
+            lambda _, state: self._spawn_enemy_random_pos(state, self.consts.BOMBER),
             state,
         )
 
@@ -2281,9 +2320,7 @@ class JaxDefender(
             jnp.minimum(
                 self.consts.POD_LEVEL_AMOUNT[level], self.consts.POD_MAX_AMOUNT
             ),
-            lambda _, state: self.spawn_on_random_position_not_on_screen(
-                state, self.consts.POD
-            ),
+            lambda _, state: self._spawn_enemy_random_pos(state, self.consts.POD),
             state,
         )
 
@@ -2294,9 +2331,7 @@ class JaxDefender(
                 self.consts.SWARMERS_LEVEL_AMOUNT[level],
                 self.consts.SWARMERS_MAX_AMOUNT,
             ),
-            lambda _, state: self.spawn_on_random_position_not_on_screen(
-                state, self.consts.SWARMERS
-            ),
+            lambda _, state: self._spawn_enemy_random_pos(state, self.consts.SWARMERS),
             state,
         )
 
