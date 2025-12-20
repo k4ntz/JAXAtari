@@ -57,8 +57,6 @@ class JourneyEscapeConstants(NamedTuple):
 
     hit_cooldown_frames: int = 8
 
-    immun_frames: int = 100  # frames of immunity after hitting a robot
-
     # player position rules
     min_player_position_y: int = top_border + (screen_height // 4)
 
@@ -130,7 +128,6 @@ class JourneyEscapeState(NamedTuple):
 
     player_y: chex.Array
     player_x: chex.Array
-    player_is_immun: chex.Array # bool -> 0:visible, 1: invisible
     score: chex.Array
     time: chex.Array
     walking_frames: chex.Array
@@ -144,7 +141,6 @@ class JourneyEscapeState(NamedTuple):
     rng_key: chex.Array  # PRNGKey
 
     hit_cooldown: chex.Array  # int32
-    immun_frame_count: chex.Array
 
     countdown: chex.Array
 
@@ -191,7 +187,6 @@ class JaxJourneyEscape(
         state = JourneyEscapeState(
             player_y=jnp.array(player_y, dtype=jnp.int32),
             player_x=jnp.array(player_x, dtype=jnp.int32),
-            player_is_immun=jnp.array(False, dtype=jnp.bool_),
             score=jnp.array(self.consts.starting_score, dtype=jnp.int32),
             time=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
@@ -203,7 +198,6 @@ class JaxJourneyEscape(
             spawn_count=spawn_count,
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
-            immun_frame_count=jnp.array(0, dtype=jnp.int32),
             countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32)
         )
 
@@ -390,53 +384,7 @@ class JaxJourneyEscape(
 
         # We treat any obstacle with h > 0 as active.
         # boxes has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
-        # TODO
-        def aabb_overlap(ch_x0, ch_y0, ch_x1, ch_y1, 
-                         ob_x0, ob_y0, ob_x1, ob_y1):
-            overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
-            overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
-            hit = jnp.logical_and(overlap_x, overlap_y)
-            return hit
 
-        def player_overlaps_box(box):
-             # box: [x, y, w, h, type_idx]
-            box_x = box[0]
-            box_y = box[1]
-            box_w = box[2]
-            box_h = box[3]
-
-            # Ignore inactive entries (h == 0)
-            active = box_h > 0
-
-            # --- Player AABB  --- [axis-aligned bounding box]
-
-            ch_x0 = pre_x
-            ch_x1 = pre_x + self.consts.player_width
-            ch_y0 = pre_y - self.consts.player_height
-            ch_y1 = pre_y
-
-            # --- Obstacle AABB ---
-            ob_x0 = box_x
-            ob_x1 = box_x + box_w
-            ob_y0 = box_y
-            ob_y1 = box_y - box_h
-
-            overlap = aabb_overlap(ch_x0, ch_y0, ch_x1, ch_y1,
-                                   ob_x0, ob_y0, ob_x1, ob_y1)
-
-            return jnp.logical_and(active, overlap)
-
-        def check_collision(box):
-            box_type = box[4]
-
-            is_lightbulb = (box_type == 4) | (box_type == 7)
-            # Phase 1 = Invisible/Non-collidable
-            phase = (state.time // self.consts.lightbulb_blink_period) % 2
-            is_ghost = is_lightbulb & (phase == 1)
-
-            return player_overlaps_box(box) & jnp.logical_not(is_ghost)
-
-        """
         def check_collision(box):
             # box: [x, y, w, h, type_idx]
             box_x = box[0]
@@ -476,44 +424,10 @@ class JaxJourneyEscape(
 
             # Only count if this obstacle is active
             return jnp.logical_and(is_dangerous, hit)
-            
-            return is_collision(box)
-        """
 
-        def check_robot_collision(box):
-            box_type = box[4]
-            is_robot = jnp.logical_or(box_type == 1, box_type == 5)
-            return is_robot & check_collision(box)
-
-        # function to vectorize over all entries in the obstacle pool
-        def compute_collision(boxes):
-            collisions = jax.vmap(check_collision)(boxes)
-            any_collision = jnp.any(collisions)
-            return any_collision
-
-        # Check if player is in invisible state
-        """any_collision = jax.lax.cond(
-            state.player_is_invisible,
-            lambda _: jnp.array(False, dtype=jnp.bool_),
-            lambda _: compute_collision(boxes), 
-            state)"""
-        
         # Vectorized over all entries in the obstacle pool
         collisions = jax.vmap(check_collision)(boxes)
         any_collision = jnp.any(collisions)
-
-        # TODO: Check for robot collision. If collided with robot, player becomes immun
-        robot_collision = jnp.any(jax.vmap(check_robot_collision)(boxes))
-        new_player_is_immun = jax.lax.cond(
-            robot_collision, lambda _: jnp.array(True, dtype=jnp.bool_), lambda _: state.player_is_immun, operand=None
-        )
-        end_immunity = state.immun_frame_count >= self.consts.immun_frames
-        new_immun_frame_count = jax.lax.cond(
-            end_immunity,
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            lambda _: state.immun_frame_count + 1,
-            operand=None
-        )
 
         # --- SCORE + COOLDOWN ---
         # - collision detected every frame (any_collision)
@@ -527,10 +441,7 @@ class JaxJourneyEscape(
         cd_after_tick = jnp.maximum(prev_cd - 1, 0)
 
         # Apply hit only if we're currently NOT cooling down
-        apply_hit = jnp.logical_and(
-            jnp.logical_and(any_collision, jnp.logical_not(robot_collision)), 
-            jnp.logical_not(cooling_down)
-        )
+        apply_hit = jnp.logical_and(any_collision, jnp.logical_not(cooling_down))
         hit_penalty = jnp.where(apply_hit, 1, 0).astype(jnp.int32)
         new_score = (state.score - hit_penalty).astype(jnp.int32)
         new_score = jnp.maximum(new_score, 0)  # don't go below 0
@@ -656,7 +567,6 @@ class JaxJourneyEscape(
         new_state = JourneyEscapeState(
             player_y=new_y,
             player_x=new_x,
-            player_is_immun=new_player_is_immun,
             score=new_score,
             time=new_time,
             walking_frames=new_walking_frames.astype(jnp.int32),
@@ -668,7 +578,6 @@ class JaxJourneyEscape(
             spawn_count=new_spawn_count,
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
-            immun_frame_count=new_immun_frame_count.astype(jnp.int32),
             countdown=new_countdown.astype(jnp.int32)
         )
         done = self._get_done(new_state)
@@ -845,7 +754,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         def scale_sprite(mask):
             """Scales a sprite 2x using nearest neighbor (repeat)"""
             return mask.repeat(2, axis=0).repeat(2, axis=1)
-        
+
         """ not needed as big versions are preloaded
         new_masks = {}
 
@@ -992,7 +901,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             # Map global ID (5,6,7,8) to local table index (0,1,2,3)
             mask = jax.lax.switch(type_idx - 5, BIG_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
-        
+
         def draw_fire_face(r, x, y, frame_idx):
             mask = FIRE_FACE_MASK(frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
