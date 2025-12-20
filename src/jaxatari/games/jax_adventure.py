@@ -35,13 +35,19 @@ def _get_default_asset_config() -> tuple:
                                                            'Room_14.npy']},
         {'name': 'bg', 'type': 'background', 'file': 'Room_1.npy'},
         #Player in all the different colors
-        {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy", 
-                                                             "Player_Green.npy", 
-                                                             "Player_Purple.npy", 
-                                                             "Player_Pink.npy", 
-                                                             "Player_Green_yellow.npy", 
-                                                             "Player_Blue.npy", 
-                                                             "Player_Black.npy", 
+        {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy",
+                                                             "Player_Yellow.npy", 
+                                                             "Player_Green.npy",
+                                                             "Player_Purple.npy",
+                                                             "Player_Pink.npy",
+                                                             "Player_Green_yellow.npy",
+                                                             "Player_Blue.npy",
+                                                             "Player_Blue.npy",
+                                                             "Player_Blue.npy",
+                                                             "Player_Blue.npy",
+                                                             "Player_Blue.npy",
+                                                             "Player_Black.npy",
+                                                             "Player_Pink.npy",
                                                              "Player_Magenta.npy"]},
         #Dragons and their animations
         {'name': 'dragon_yellow', 'type': 'group', 'files': ['Dragon_yellow_neutral.npy',
@@ -557,7 +563,7 @@ class AdventureRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, 0, 0, room_mask)
 
         #set player color here
-        player_mask = self.SHAPE_MASKS["player_colors"][state.player[3]]
+        player_mask = self.SHAPE_MASKS["player_colors"][state.player[2]]
         raster = self.jr.render_at(raster, state.player[0], state.player[1], player_mask)
 
         #dragons
