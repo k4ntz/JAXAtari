@@ -115,7 +115,7 @@ class AdventureConstants(NamedTuple):
     SWORD_SPAWN: Tuple[int, int, int] = (120,120,1) #ToDO
     BRIDGE_SPAWN: Tuple[int, int, int] = (120,120,10) #ToDO
     MAGNET_SPAWN: Tuple[int, int, int] = (120,120,12) #ToDO
-    CHALICE_SPAWN: Tuple[int, int, int] = (120,120,14) #ToDO
+    CHALICE_SPAWN: Tuple[int, int, int] = (120,120,13) #ToDO
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
