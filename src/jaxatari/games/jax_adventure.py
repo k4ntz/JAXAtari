@@ -102,6 +102,14 @@ class AdventureConstants(NamedTuple):
     # Path East and West, Y-Coordinates that offer hole in the wall
     PATH_HORIZONTAL_UP: int = 40
     PATH_HORIZONTAL_DOWN: int = 200
+    # Castle Edges
+    CASTLE_TOWER_LEFT_X: int = 35
+    CASTLE_TOWER_RIGHT_X: int = 120
+    CASTLE_BASE_LEFT_X: int = 45
+    CASTLE_BASE_RIGHT_X: int = 113
+    CASTLE_TOWER_CORNER_Y: int = 105
+    CASTLE_BASE_CORNER_Y: int = 170
+
     #upper left corner is 0, 0
     PLAYER_SIZE: Tuple[int, int] = (4, 8)
     KEY_SIZE: Tuple[int, int] = (8, 6)
@@ -397,6 +405,29 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 )
         )
 
+        #Castle Collisions
+        castle_tower_left = self.consts.CASTLE_TOWER_LEFT_X
+        castle_tower_right = self.consts.CASTLE_TOWER_RIGHT_X
+        castle_tower_height = self.consts.CASTLE_TOWER_CORNER_Y
+        castle_base_left = self.consts.CASTLE_BASE_LEFT_X
+        castle_base_right = self.consts.CASTLE_BASE_RIGHT_X
+        castle_base_height = self.consts.CASTLE_BASE_CORNER_Y
+
+        castle_towers_out = jnp.logical_or(player_x<=castle_tower_left, player_x>=castle_tower_right)
+        castle_towers_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_towers = jnp.logical_or(player_y >= castle_tower_height, jnp.logical_or(castle_towers_in, castle_towers_out))
+
+        castle_base_out = jnp.logical_or(player_x<=castle_base_left, player_x>=castle_base_right)
+        castle_base_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_base = jnp.logical_or(player_y >= castle_base_height, jnp.logical_or(castle_base_in, castle_base_out))
+        #castle_towers = player_y >= castle_tower_height
+        #castle_towers = player_y >= castle_tower_height
+
+        castle_collision = jnp.logical_or(
+            jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
+            jnp.logical_and(castle_towers, castle_base)
+        )
+
         room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
         room_3_and_4 = jnp.logical_and(room_3_clear, room_4_clear)
         room_1_to_4 = jnp.logical_and(room_1_and_2, room_3_and_4)
@@ -413,7 +444,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
 
-        return_bool = base_rooms # todo
+        return_bool = jnp.logical_and(base_rooms, castle_collision )# todo
         
         return return_bool
 
