@@ -1139,7 +1139,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         new_bullet = (shooting_delay == 1)
         
         # Update timers
-        shooting_delay = jnp.where(initiate_launch, self.consts.PLAYER_SHOT_LAUNCH_DELAY, jnp.maximum(shooting_delay - 1, 0))
+        delay_hold = new_bullet & jnp.logical_not(is_in_lane)
+        shooting_delay = jnp.where(
+            initiate_launch,
+            self.consts.PLAYER_SHOT_LAUNCH_DELAY,
+            jnp.where(delay_hold, shooting_delay, jnp.maximum(shooting_delay - 1, 0)),
+        )
         shot_type_pending = jnp.where(initiate_launch, 
                                       jnp.where(want_torpedo, self.consts.TORPEDO_ID, self.consts.LASER_ID),
                                       shot_type_pending)
@@ -1149,20 +1154,25 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         lane_index = jnp.argmax(x_before_change == lanes) 
         lane_velocity = lane_velocities[lane_index]
 
+        spawn_bullet = new_bullet & is_in_lane
         shot_velocity = jnp.where(
-            new_bullet,
+            spawn_bullet,
             lane_velocity,
             state.level.player_shot_vel,
         )
 
         pos_if_no_new = jnp.where(bullet_exists, (state.level.player_shot_pos - shot_velocity), jnp.array(self.consts.BULLET_OFFSCREEN_POS))
-        shot_position = jnp.where(new_bullet, jnp.array([state.level.player_pos + 3 , self.consts.MIN_BULLET_Y]), pos_if_no_new)
+        shot_position = jnp.where(
+            spawn_bullet,
+            jnp.array([state.level.player_pos + 3, self.consts.MIN_BULLET_Y]),
+            pos_if_no_new,
+        )
 
         # Torpedo consumed ONLY when actually spawned
-        new_torpedo_spawned = new_bullet & (shot_type_pending == self.consts.TORPEDO_ID)
+        new_torpedo_spawned = spawn_bullet & (shot_type_pending == self.consts.TORPEDO_ID)
         torpedos_left = state.level.torpedoes_left - new_torpedo_spawned.astype(jnp.int32)
         
-        bullet_type = jnp.where(new_bullet, shot_type_pending, state.level.bullet_type)
+        bullet_type = jnp.where(spawn_bullet, shot_type_pending, state.level.bullet_type)
 
         #####
         return(x, v, shot_position, shot_velocity, torpedos_left, bullet_type, shooting_cooldown, shooting_delay, shot_type_pending)
