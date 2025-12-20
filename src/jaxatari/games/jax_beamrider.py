@@ -743,7 +743,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 new_level_state, reset_level_state
             )
             
-            lives_after_gain = state.lives + gain_life.astype(jnp.int32)
+            lives_after_gain = jnp.minimum(state.lives + gain_life.astype(jnp.int32), 14)
             new_lives = jnp.where(just_died, jnp.maximum(lives_after_gain - 1, 0), lives_after_gain)
 
             new_state = BeamriderState(
@@ -2150,16 +2150,13 @@ class BeamriderRenderer(JAXGameRenderer):
         # Flashing logic: 8 frames on, 8 frames off.
         flash_visible = (death_timer // 8) % 2 == 0
         
-        for idx in range(3):
+        # Supporting up to 14 lives means up to 13 icons (lives-1)
+        for idx in range(13):
             # Normal logic: render if idx < state.lives - 1 (Bonus HP display)
-            # If lives=3, we render indices 0, 1 (2 icons).
-            # If lives=1, we render nothing.
             
             # Flashing logic: if is_dead, we are about to lose a life.
             # We want to flash the icon that represents the life we are losing.
-            # If we have 3 lives (2 icons), we lose one -> 2 lives (1 icon).
-            # The icon disappearing is at index 1.
-            # So we flash if idx == state.lives - 2.
+            # The icon disappearing is at index state.lives - 2.
             
             is_last_life = (idx == state.lives - 2)
             should_flash = jnp.logical_and(is_dead, is_last_life)
@@ -2175,7 +2172,8 @@ class BeamriderRenderer(JAXGameRenderer):
                 visible_normally
             )
             
-            pos_x = jnp.where(is_visible, 32 + (idx * 9), 500)
+            # Icons start at x=32, spaced by 9 pixels
+            pos_x = jnp.where(is_visible, 32 + (idx * 9), -100)
             raster = self.jr.render_at_clipped(raster, pos_x, 183, hp_mask)
         return raster
 
