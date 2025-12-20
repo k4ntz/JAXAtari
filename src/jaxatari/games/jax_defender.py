@@ -79,6 +79,7 @@ class DefenderConstants(NamedTuple):
     # Level change animation
     LEVEL_DIGIT_SCREEN_X: int = 80
     LEVEL_DIGIT_SCREEN_Y: int = 60
+    LEVEL_TRANSITION_DURATION: int = 60
 
     ## ENTITY
 
@@ -115,7 +116,7 @@ class DefenderConstants(NamedTuple):
     ENEMY_SPEED: float = 0.24
     SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
 
-    ENEMY_MAX_IN_GAME: int = 20
+    ENEMY_MAX_IN_GAME: int = 30
     ENEMY_MAX_ON_SCREEN: int = 10
     ENEMY_SECTORS: int = 4
 
@@ -145,7 +146,7 @@ class DefenderConstants(NamedTuple):
 
     LANDER_DEATH_SCORE: int = 150
     LANDER_MAX_AMOUNT: int = 5
-    LANDER_LEVEL_AMOUNT: chex.Array = jnp.array([18, 18, 19, 20, 20])
+    LANDER_LEVEL_AMOUNT: chex.Array = jnp.array([16, 18, 19, 20, 20])
 
     # Pod
     POD_Y_SPEED: float = 0.08
@@ -687,8 +688,12 @@ class DefenderRenderer(JAXGameRenderer):
             color_id = self.ENEMY_COLOR_IDS[0]
 
             # Render on scanner
-            r = render_on_scanner(
-                game_x, game_y, scanner_width, scanner_height, color_id, r
+            r = jax.lax.cond(
+                state.game_state != self.consts.GAME_STATE_TRANSITION,
+                lambda: render_on_scanner(
+                    game_x, game_y, scanner_width, scanner_height, color_id, r
+                ),
+                lambda: r,
             )
 
             def render_normal(r):
@@ -757,7 +762,12 @@ class DefenderRenderer(JAXGameRenderer):
             r = jax.lax.cond(
                 state.game_state == self.consts.GAME_STATE_PLAYING,
                 lambda: render_normal(r),
+                lambda: r,
+            )
+            r = jax.lax.cond(
+                state.game_state == self.consts.GAME_STATE_GAMEOVER,
                 lambda: render_death(r),
+                lambda: r,
             )
 
             return r
@@ -953,7 +963,6 @@ class DefenderRenderer(JAXGameRenderer):
             level = jnp.asarray([state.level])
             screen_x = self.consts.LEVEL_DIGIT_SCREEN_X
             screen_y = self.consts.LEVEL_DIGIT_SCREEN_Y
-            self.dh._print_array(level)
             r = self.jr.render_label(
                 r,
                 screen_x,
@@ -1116,7 +1125,7 @@ class JaxDefender(
             return state
 
         state = jax.lax.cond(
-            enemy_type <= self.consts.SWARMERS,
+            enemy_type < self.consts.SWARMERS,
             lambda: add_killed_enemy(state, enemy_type),
             lambda: state,
         )
@@ -1270,7 +1279,9 @@ class JaxDefender(
             subkey_x, minval=left_bound, maxval=right_bound - self.consts.ENEMY_WIDTH
         )
         game_y = jax.random.uniform(
-            subkey_y, minval=0, maxval=self.consts.WORLD_HEIGHT - 40
+            subkey_y,
+            minval=0,
+            maxval=self.consts.WORLD_HEIGHT - self.consts.CITY_HEIGHT,
         )
 
         state = self._spawn_enemy(state, game_x, game_y, e_type, 0.0, 0.0)
@@ -2497,14 +2508,19 @@ class JaxDefender(
             game_state=self.consts.GAME_STATE_TRANSITION,
             camera_offset=self.consts.CAMERA_INIT_OFFSET,
             space_ship_speed=0.0,
-            space_ship_x=self.consts.SPACE_SHIP_INIT_GAME_X,
-            space_ship_y=self.consts.SPACE_SHIP_INIT_GAME_Y,
+            space_ship_x=jnp.asarray(self.consts.SPACE_SHIP_INIT_GAME_X).astype(
+                jnp.float32
+            ),
+            space_ship_y=jnp.asarray(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(
+                jnp.float32
+            ),
             space_ship_facing_right=self.consts.SPACE_SHIP_INIT_FACE_RIGHT,
             laser_active=False,
             bullet_active=False,
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)),
-            human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 5)),
+            human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 3)),
             shooting_cooldown=0,
+            level=state.level + 1,
         )
         return state
 
@@ -2518,6 +2534,19 @@ class JaxDefender(
             bullet_active=False,
             laser_active=False,
         )
+        return state
+
+    def _check_level_done(self, state: DefenderState) -> DefenderState:
+        enemy_killed = state.enemy_killed
+        needed_kills = jnp.asarray(
+            [
+                self.consts.LANDER_LEVEL_AMOUNT[state.level],
+                self.consts.POD_LEVEL_AMOUNT[state.level],
+                self.consts.BOMBER_LEVEL_AMOUNT[state.level],
+            ]
+        )
+        is_done = jnp.array_equal(enemy_killed, needed_kills)
+        state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
         return state
 
     def _reset_player(self, state: DefenderState) -> DefenderState:
@@ -2584,6 +2613,29 @@ class JaxDefender(
             lambda: state,
         )
 
+        state = jax.lax.cond(
+            state.game_state == self.consts.GAME_STATE_PLAYING,
+            lambda: self._check_level_done(state),
+            lambda: state,
+        )
+
+        def state_transition(state) -> DefenderState:
+            # For duration
+            current_frame = state.shooting_cooldown + 1
+            game_resume = current_frame >= self.consts.LEVEL_TRANSITION_DURATION
+            state = jax.lax.cond(
+                game_resume,
+                lambda: self._start_level(self._reset_player(state), state.level),
+                lambda: state._replace(shooting_cooldown=current_frame),
+            )
+            return state
+
+        state = jax.lax.cond(
+            state.game_state == self.consts.GAME_STATE_TRANSITION,
+            lambda: state_transition(state),
+            lambda: state,
+        )
+
         state = state._replace(step_counter=(state.step_counter + 1))
         observation = self._get_observation(state)
         env_reward = self._get_reward(previous_state, state)
@@ -2595,10 +2647,11 @@ class JaxDefender(
         return observation, state, env_reward, done, info
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
+        key = jax.lax.cond(key == None, lambda: jax.random.PRNGKey(0), lambda: key)
         initial_state = DefenderState(
             # Game
             step_counter=jnp.array(0).astype(jnp.int32),
-            level=jnp.array(1).astype(jnp.int32),
+            level=jnp.array(0).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             game_state=jnp.array(self.consts.GAME_STATE_PLAYING).astype(jnp.int32),
             # Camera
@@ -2636,7 +2689,7 @@ class JaxDefender(
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)).astype(
                 jnp.float32
             ),
-            enemy_killed=jnp.zeros(4).astype(jnp.int32),
+            enemy_killed=jnp.zeros(3).astype(jnp.int32),
             # Humans
             human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 3)).astype(
                 jnp.float32
@@ -2644,7 +2697,7 @@ class JaxDefender(
             # Cooldowns
             shooting_cooldown=jnp.array(0).astype(jnp.int32),
             # Randomness
-            key=jnp.array(jax.random.PRNGKey(0)),
+            key=key,
         )
         observation = self._get_observation(initial_state)
         initial_state = self._start_level(initial_state, 0)
