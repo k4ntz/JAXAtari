@@ -33,7 +33,7 @@ class WhiteUFOPattern(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    WHITE_UFOS_PER_SECTOR: int = 15
+    WHITE_UFOS_PER_SECTOR: int = 1
 
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
@@ -1580,11 +1580,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             self.consts.CHASING_METEOROID_WAVE_MIN,
             self.consts.CHASING_METEOROID_WAVE_MAX + 1,
         )
-        start_wave = jnp.logical_and.reduce(jnp.array([
+        start_wave = jnp.logical_and(
             spawn_window,
             jnp.logical_not(wave_active),
-            state.level.mothership_stage == 0,
-        ]))
+        )
         wave_active = jnp.where(start_wave, True, wave_active)
         remaining = jnp.where(start_wave, wave_count, remaining)
         spawn_timer = jnp.where(start_wave, 0, spawn_timer)
@@ -1830,7 +1829,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         
         # Spawning logic: only spawn if not already active
         spawn_roll = jax.random.uniform(key_spawn)
-        should_spawn = jnp.logical_and(jnp.logical_not(active), spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB)
+        should_spawn = jnp.logical_and.reduce(jnp.array([
+            jnp.logical_not(active),
+            spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB,
+            state.level.white_ufo_left > 0
+        ]))
         
         # Lanes 1 to 5
         spawn_lane = jax.random.randint(key_lane, (), 1, 6)
@@ -1907,7 +1910,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Spawning logic: Level 2 onwards
         is_level_2_plus = state.sector >= 2
         spawn_roll = jax.random.uniform(key_spawn)
-        can_spawn = jnp.logical_and(is_level_2_plus, jnp.sum(active.astype(jnp.int32)) < self.consts.FALLING_ROCK_MAX)
+        can_spawn = jnp.logical_and.reduce(jnp.array([
+            is_level_2_plus,
+            jnp.sum(active.astype(jnp.int32)) < self.consts.FALLING_ROCK_MAX,
+            state.level.white_ufo_left > 0
+        ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.FALLING_ROCK_SPAWN_PROB)
 
         # Random lane from 1 to 5 (inner lanes)
