@@ -131,7 +131,7 @@ class BattlezoneConstants(NamedTuple):
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
-    PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
+    PLAYER_ROTATION_SPEED:float = 2*jnp.pi/536
     PLAYER_SPEED:float = 0.24804691667
     PROJECTILE_SPEED:float = 0.5
     ENEMY_POS_Y:int = 85
@@ -170,6 +170,7 @@ class Enemy(NamedTuple):
     active: chex.Array
     death_anim_counter: chex.Array
     shoot_cd:chex.Array
+    phase: chex.Array
 
 
 # immutable state container
@@ -376,6 +377,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=jnp.array([True, False], dtype=jnp.bool),
                 death_anim_counter=jnp.array([0,0], dtype=jnp.int32),
                 shoot_cd=jnp.array([0, 0], dtype=jnp.int32),
+                phase=jnp.array([0, 0], dtype=jnp.int32),
             ),
             player_projectile=Projectile(
                 x=jnp.array(0, dtype=jnp.float32),
@@ -546,6 +548,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                   orientation_angle=jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi),
                                   active=True,
                                   shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
+                                  phase=0
                                   )
 
         cond = jnp.logical_or(enemy.active, enemy.death_anim_counter>0)
@@ -598,7 +601,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                         # jax.debug.print("{}", tank.orientation_angle)
                         return move_to_player(tank, -1)
 
-                    return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
+                    return jax.lax.cond(tank.distance <= 5.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
                 def out_range(tank):
                     return move_to_player(tank, -1)
 
