@@ -88,6 +88,20 @@ def _get_default_asset_config() -> tuple:
 class AdventureConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 250
+    # Wall coordinates the player cannot pass through
+    LEFT_WALL_X: int = 8
+    RIGHT_WALL_X: int = 148
+    UPPER_WALL_Y: int = 43
+    LOWER_WALL_Y: int = 199
+    #special black borders to the left and right
+    SPECIAL_WALL_LEFT: int = 12
+    SPECIAL_WALL_RIGHT: int = 145
+    # Path South and North to another Room, X-Coordinates that offer hole in the wall
+    PATH_VERTICAL_LEFT: int = 60
+    PATH_VERTICAL_RIGHT: int = 95
+    # Path East and West, Y-Coordinates that offer hole in the wall
+    PATH_HORIZONTAL_UP: int = 40
+    PATH_HORIZONTAL_DOWN: int = 200
     #upper left corner is 0, 0
     PLAYER_SIZE: Tuple[int, int] = (4, 8)
     KEY_SIZE: Tuple[int, int] = (8, 6)
@@ -219,23 +233,187 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = player_y,
         )
 
+        ### Left Wall with and without Path
+        left_wall = self.consts.LEFT_WALL_X
+        upper_edge = self.consts.PATH_HORIZONTAL_UP
+        lower_edge = self.consts.PATH_HORIZONTAL_DOWN
+        collision_left_wall = player_x >= left_wall
+        collision_left_wall_path = jnp.logical_or(collision_left_wall, jnp.logical_and(player_y>=upper_edge, player_y<=lower_edge))
+        collision_left_special = player_x >= self.consts.SPECIAL_WALL_LEFT
+
+        ### Right Wall with and without Path
+        right_wall = self.consts.RIGHT_WALL_X
+        upper_edge = self.consts.PATH_HORIZONTAL_UP
+        lower_edge = self.consts.PATH_HORIZONTAL_DOWN
+        collision_right_wall = player_x <= right_wall
+        collision_right_wall_path = jnp.logical_or(collision_right_wall, jnp.logical_and(player_y>=upper_edge, player_y<=lower_edge))
+        collision_right_special = player_x <= self.consts.SPECIAL_WALL_RIGHT
+
+        ### Upper Wall with and without Path
+        upper_wall = self.consts.UPPER_WALL_Y
+        edge_left = self.consts.PATH_VERTICAL_LEFT
+        edge_right = self.consts.PATH_VERTICAL_RIGHT
+        collision_upper_wall = player_y >= upper_wall
+        collision_upper_wall_path = jnp.logical_or(collision_upper_wall, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
+
+        ### Lower Wall with and without Path
+        lower_wall = self.consts.LOWER_WALL_Y
+        edge_left = self.consts.PATH_VERTICAL_LEFT
+        edge_right = self.consts.PATH_VERTICAL_RIGHT
+        collision_lower_wall = player_y <= lower_wall
+        collision_lower_wall_path = jnp.logical_or(collision_lower_wall, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
+
+
+        ## Rooms:
         room_1_clear = jnp.logical_or(
                 jnp.logical_not(room == 0), #either it is not room 1 or
-                jnp.logical_and(
-                player_x >= 8,              #left wall
-                player_x <= 148             #right wall
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall_path   
+                    )
                 )
         )
 
         room_2_clear = jnp.logical_or(
-                jnp.logical_not(room == 1), #either it is not room 2 or
-                jnp.logical_and(
-                player_x >= 8,              #left wall
-                player_x <= 148             #right wall
+                jnp.logical_not(room == 1), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall,  
+                    collision_lower_wall_path   
+                    )
                 )
         )
 
-        return_bool = jnp.logical_and(room_1_clear, room_2_clear)
+        room_3_clear = jnp.logical_or(
+                jnp.logical_not(room == 2), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall_path,        
+                    collision_right_wall_path        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall   
+                    )
+                )
+        )
+
+        room_4_clear = jnp.logical_or(
+                jnp.logical_not(room == 3), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall_path,        
+                    collision_right_special        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall,  
+                    collision_lower_wall_path   
+                    )
+                )
+        )
+
+        room_5_clear = jnp.logical_or(
+                jnp.logical_not(room == 4), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall   
+                    )
+                )
+        )
+
+        room_6_clear = jnp.logical_or(
+                jnp.logical_not(room == 5), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_special,        
+                    collision_right_wall_path        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall  
+                    )
+                )
+        )
+
+        room_7_clear = True
+        room_8_clear = True
+        room_9_clear = True
+        room_10_clear = True
+        room_11_clear = True
+
+        room_12_clear = jnp.logical_or(
+                jnp.logical_not(room == 11), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall_path 
+                    )
+                )
+        )
+
+        room_13_clear = jnp.logical_or(
+                jnp.logical_not(room == 12), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall_path,  
+                    collision_lower_wall_path  
+                    )
+                )
+        )
+
+        room_14_clear = jnp.logical_or(
+                jnp.logical_not(room == 13), #either it is not room 1 or
+                jnp.logical_and(            #walls of the room are not being crossed
+                    jnp.logical_and(
+                    collision_left_wall,        
+                    collision_right_wall        
+                    ),
+                    jnp.logical_and(
+                    collision_upper_wall,  
+                    collision_lower_wall_path  
+                    )
+                )
+        )
+
+        room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
+        room_3_and_4 = jnp.logical_and(room_3_clear, room_4_clear)
+        room_1_to_4 = jnp.logical_and(room_1_and_2, room_3_and_4)
+        room_5_and_6 = jnp.logical_and(room_5_clear, room_6_clear)
+        room_7_and_8 = jnp.logical_and(room_7_clear, room_8_clear)
+        room_5_to_8 = jnp.logical_and(room_5_and_6, room_7_and_8)
+        room_9_and_10 = jnp.logical_and(room_9_clear, room_10_clear)
+        room_11_and_12= jnp.logical_and(room_11_clear, room_12_clear)
+        room_9_to_12 = jnp.logical_and(room_9_and_10, room_11_and_12)
+        room_13_and_14 = jnp.logical_and(room_13_clear, room_14_clear)
+
+        room_1_to_8 = jnp.logical_and(room_1_to_4,room_5_to_8)
+        room_9_to_14 = jnp.logical_and(room_9_to_12, room_13_and_14)
+
+        base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
+
+        return_bool = base_rooms # todo
         
         return return_bool
 
@@ -269,13 +447,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         new_player_y = state.player[1]
         new_player_y = jax.lax.cond(
-            down,
+            down_no_wall,
             lambda y: y+8,
             lambda y: y,
             operand = new_player_y,
         )
         new_player_y = jax.lax.cond(
-            up,
+            up_no_wall,
             lambda y: y-8,
             lambda y: y,
             operand = new_player_y,
