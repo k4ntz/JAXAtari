@@ -19,7 +19,6 @@ class UpNDownConstants(NamedTuple):
     ACTION_REPEAT_PROBS: float = 0.25
     MAX_SPEED: int = 6
     INITIAL_LIVES: int = 5
-    RESPAWN_HIDE_FRAMES: int = 8
     JUMP_ARC_HEIGHT: float = 18.0
     # Enemy spawning and movement
     MAX_ENEMY_CARS: int = 8
@@ -71,6 +70,10 @@ class UpNDownConstants(NamedTuple):
     FLAG_TOP_Y: int = 20
     FLAG_BLACKOUT_SIZE: Tuple[int, int] = (14, 14)  # Size of blackout square
     FLAG_COLLECTION_SCORE: int = 75  # Points awarded for collecting a flag
+    # Life display constants - positions of life cars at the bottom
+    LIFE_BOTTOM_X_POSITIONS: chex.Array = jnp.array([13, 18, 25, 33, 33])  # X positions for 5 life cars
+    LIFE_BOTTOM_Y: int = 195
+    LIFE_BLACKOUT_SIZE: Tuple[int, int] = (14, 14)  # Size of blackout square for lives
     PICKUP_SCORE: int = 100  # Points awarded for jumping on a pickup truck
     FLAG_CARRIER_SCORE: int = 125  # Points awarded for jumping on a flag carrier
     CAMARO_SCORE: int = 150  # Points awarded for jumping on a camaro
@@ -147,7 +150,6 @@ class EnemyCars(NamedTuple):
 class UpNDownState(NamedTuple):
     score: chex.Array
     lives: chex.Array
-    respawn_cooldown: chex.Array
     difficulty: chex.Array
     jump_cooldown: chex.Array
     post_jump_cooldown: chex.Array
@@ -976,13 +978,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         is_on_road = ~is_jumping
         is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
 
-        respawn_cooldown = jax.lax.cond(
-            state.respawn_cooldown > 0,
-            lambda _: state.respawn_cooldown - 1,
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            operand=None,
-        )
-
         updated_player_car = self._advance_player_car(
             position_x=state.player_car.position.x,
             position_y=state.player_car.position.y,
@@ -1006,7 +1001,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         round_started_now = jnp.logical_or(state.round_started, speed_action_taken)
 
         next_state = state._replace(
-            respawn_cooldown=respawn_cooldown,
             jump_cooldown=jump_cooldown,
             post_jump_cooldown=post_jump_cooldown,
             is_jumping=is_jumping,
@@ -1301,7 +1295,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return UpNDownState(
             score=state.score,
             lives=new_lives,
-            respawn_cooldown=jnp.array(self.consts.RESPAWN_HIDE_FRAMES, dtype=jnp.int32),
             difficulty=state.difficulty,
             jump_cooldown=jnp.array(0, dtype=jnp.int32),
             post_jump_cooldown=jnp.array(0, dtype=jnp.int32),
@@ -1459,7 +1452,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = UpNDownState(
             score=0,
             lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
-            respawn_cooldown=jnp.array(0, dtype=jnp.int32),
             difficulty=self.consts.DIFFICULTIES[0],
             jump_cooldown=0,
             post_jump_cooldown=0,
@@ -1813,214 +1805,209 @@ class UpNDownRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, total_segments, combine, raster)
 
-        hide_world = state.respawn_cooldown > 0
+        def select_enemy_mask(enemy_type: chex.Array, going_left: chex.Array):
+            left_mask = self.enemy_left_masks[enemy_type]
+            right_mask = self.enemy_right_masks[enemy_type]
+            return jax.lax.cond(going_left, lambda _: left_mask, lambda _: right_mask, operand=None)
 
-        # During respawn hide, only show the road/background to emulate an initial road state.
-        def render_roads_only():
-            return raster
+        def render_enemy(carry, enemy_idx):
+            raster = carry
+            enemy_active = state.enemy_cars.active[enemy_idx]
+            enemy_x = state.enemy_cars.position.x[enemy_idx]
+            enemy_y = state.enemy_cars.position.y[enemy_idx]
+            enemy_type = state.enemy_cars.type[enemy_idx]
+            direction_x = state.enemy_cars.direction_x[enemy_idx]
+            screen_y = 105 + (enemy_y - state.player_car.position.y)
+            is_visible = jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195))
+            enemy_mask = select_enemy_mask(enemy_type, direction_x < 0)
+
+            raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(r, enemy_x.astype(jnp.int32), screen_y.astype(jnp.int32), enemy_mask),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
+
+        raster_enemies, _ = jax.lax.scan(render_enemy, raster, jnp.arange(self.consts.MAX_ENEMY_CARS))
+
+        jump_offset = jax.lax.cond(
+            state.is_jumping,
+            lambda _: self._jump_arc_offset(state.jump_cooldown),
+            lambda _: jnp.array(0.0, dtype=jnp.float32),
+            operand=None,
+        )
+
+        player_screen_y = jnp.int32(105 - jump_offset)
+        player_mask = self.SHAPE_MASKS["player"]
+        raster_player = self.jr.render_at(raster_enemies, state.player_car.position.x, player_screen_y, player_mask)
+
+        wall_top_mask = self.SHAPE_MASKS["wall_top"]
+        raster_wall_top = self.jr.render_at(raster_player, 0, 0, wall_top_mask)
+
+        wall_bottom_mask = self.SHAPE_MASKS["wall_bottom"]
+        raster_wall_bottom = self.jr.render_at(raster_wall_top, 0, 210 - wall_bottom_mask.shape[0], wall_bottom_mask)
+
+        all_flags_top_mask = self.SHAPE_MASKS["all_flags_top"]
+        raster_flags_top = self.jr.render_at(raster_wall_bottom, 10, 20, all_flags_top_mask)
+
+        # Render score centered at the top using dedicated score digit sprites
+        score_digits = self.jr.int_to_digits(state.score, max_digits=self.score_max_digits)
+        non_zero_mask = score_digits != 0
+        has_non_zero = jnp.any(non_zero_mask)
+        first_non_zero = jnp.argmax(non_zero_mask)
+        start_index = jax.lax.select(has_non_zero, first_non_zero, self.score_max_digits - 1)
+        num_to_render = jax.lax.select(has_non_zero, self.score_max_digits - start_index, 1)
+
+        total_width = num_to_render * self.score_digit_spacing
+        score_x = self.score_center_x - (total_width // 2)
+
+        raster_score = self.jr.render_label_selective(
+            raster_flags_top,
+            jnp.int32(score_x),
+            self.score_render_y,
+            score_digits,
+            self.score_digit_masks,
+            start_index,
+            num_to_render,
+            spacing=self.score_digit_spacing,
+            max_digits_to_render=self.score_max_digits,
+        )
+
+        # Render flags on the road
+        flag_pole_mask = self.SHAPE_MASKS["flag_pole"]
         
-        def render_full_scene():
-            def select_enemy_mask(enemy_type: chex.Array, going_left: chex.Array):
-                left_mask = self.enemy_left_masks[enemy_type]
-                right_mask = self.enemy_right_masks[enemy_type]
-                return jax.lax.cond(going_left, lambda _: left_mask, lambda _: right_mask, operand=None)
-
-            def render_enemy(carry, enemy_idx):
-                raster = carry
-                enemy_active = state.enemy_cars.active[enemy_idx]
-                enemy_x = state.enemy_cars.position.x[enemy_idx]
-                enemy_y = state.enemy_cars.position.y[enemy_idx]
-                enemy_type = state.enemy_cars.type[enemy_idx]
-                direction_x = state.enemy_cars.direction_x[enemy_idx]
-                screen_y = 105 + (enemy_y - state.player_car.position.y)
-                is_visible = jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195))
-                enemy_mask = select_enemy_mask(enemy_type, direction_x < 0)
-
-                raster = jax.lax.cond(
-                    is_visible,
-                    lambda r: self.jr.render_at(r, enemy_x.astype(jnp.int32), screen_y.astype(jnp.int32), enemy_mask),
-                    lambda r: r,
-                    operand=raster,
-                )
-                return raster, None
-
-            raster_enemies, _ = jax.lax.scan(render_enemy, raster, jnp.arange(self.consts.MAX_ENEMY_CARS))
-
-            jump_offset = jax.lax.cond(
-                state.is_jumping,
-                lambda _: self._jump_arc_offset(state.jump_cooldown),
-                lambda _: jnp.array(0.0, dtype=jnp.float32),
+        def render_flag(carry, flag_idx):
+            raster = carry
+            flag_y = state.flags.y[flag_idx]
+            flag_road = state.flags.road[flag_idx]
+            flag_segment = state.flags.road_segment[flag_idx]
+            flag_collected = state.flags.collected[flag_idx]
+            flag_color_idx = state.flags.color_idx[flag_idx]
+            
+            flag_x = jax.lax.cond(
+                flag_road == 0,
+                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.FIRST_TRACK_CORNERS_X),
+                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.SECOND_TRACK_CORNERS_X),
                 operand=None,
             )
+            screen_y = 105 + (flag_y - state.player_car.position.y)
+            is_visible = jnp.logical_and(
+                jnp.logical_and(screen_y > 25, screen_y < 195),
+                ~flag_collected
+            )
+            color_id = self.flag_palette_ids[flag_color_idx]
+            colored_flag_mask = jnp.where(
+                self.flag_solid_mask,
+                color_id,
+                self.flag_base_mask,
+            )
+            raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(
+                    self.jr.render_at(r, flag_x.astype(jnp.int32), screen_y.astype(jnp.int32), colored_flag_mask),
+                    (flag_x + 5).astype(jnp.int32), screen_y.astype(jnp.int32), flag_pole_mask
+                ),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
+        
+        raster_flags, _ = jax.lax.scan(render_flag, raster_score, jnp.arange(self.consts.NUM_FLAGS))
+        
+        blackout_mask = self.SHAPE_MASKS["blackout_square"]
+        
+        def render_blackout(carry, flag_idx):
+            raster = carry
+            flag_collected = state.flags_collected_mask[flag_idx]
+            blackout_x = self.consts.FLAG_TOP_X_POSITIONS[flag_idx]
+            blackout_y = self.consts.FLAG_TOP_Y
+            raster = jax.lax.cond(
+                flag_collected,
+                lambda r: self.jr.render_at(r, blackout_x, blackout_y, blackout_mask),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
+        
+        raster_blackout, _ = jax.lax.scan(render_blackout, raster_flags, jnp.arange(self.consts.NUM_FLAGS))
 
-            player_screen_y = jnp.int32(105 - jump_offset)
-            player_mask = self.SHAPE_MASKS["player"]
-            raster_player = self.jr.render_at(raster_enemies, state.player_car.position.x, player_screen_y, player_mask)
-
-            wall_top_mask = self.SHAPE_MASKS["wall_top"]
-            raster_wall_top = self.jr.render_at(raster_player, 0, 0, wall_top_mask)
-
-            wall_bottom_mask = self.SHAPE_MASKS["wall_bottom"]
-            raster_wall_bottom = self.jr.render_at(raster_wall_top, 0, 210 - wall_bottom_mask.shape[0], wall_bottom_mask)
-
-            all_flags_top_mask = self.SHAPE_MASKS["all_flags_top"]
-            raster_flags_top = self.jr.render_at(raster_wall_bottom, 10, 20, all_flags_top_mask)
-
-            return raster_flags_top
-
-
-        def render_rest(raster_input):
-            # Render score centered at the top using dedicated score digit sprites
-            score_digits = self.jr.int_to_digits(state.score, max_digits=self.score_max_digits)
-            non_zero_mask = score_digits != 0
-            has_non_zero = jnp.any(non_zero_mask)
-            first_non_zero = jnp.argmax(non_zero_mask)
-            start_index = jax.lax.select(has_non_zero, first_non_zero, self.score_max_digits - 1)
-            num_to_render = jax.lax.select(has_non_zero, self.score_max_digits - start_index, 1)
-
-            total_width = num_to_render * self.score_digit_spacing
-            score_x = self.score_center_x - (total_width // 2)
-
-            raster_score = self.jr.render_label_selective(
-                raster_input,
-                jnp.int32(score_x),
-                self.score_render_y,
-                score_digits,
-                self.score_digit_masks,
-                start_index,
-                num_to_render,
-                spacing=self.score_digit_spacing,
-                max_digits_to_render=self.score_max_digits,
+        def render_collectible(carry, collectible_idx):
+            raster = carry
+            collectible_y = state.collectibles.y[collectible_idx]
+            collectible_x = state.collectibles.x[collectible_idx]
+            collectible_active = state.collectibles.active[collectible_idx]
+            collectible_color_idx = state.collectibles.color_idx[collectible_idx]
+            collectible_type_id = state.collectibles.type_id[collectible_idx]
+            screen_y = 105 + (collectible_y - state.player_car.position.y)
+            is_visible = jnp.logical_and(
+                jnp.logical_and(screen_y > 25, screen_y < 195),
+                collectible_active
             )
 
-            # Render flags on the road
-            flag_pole_mask = self.SHAPE_MASKS["flag_pole"]
-            
-            def render_flag(carry, flag_idx):
-                raster = carry
-                flag_y = state.flags.y[flag_idx]
-                flag_road = state.flags.road[flag_idx]
-                flag_segment = state.flags.road_segment[flag_idx]
-                flag_collected = state.flags.collected[flag_idx]
-                flag_color_idx = state.flags.color_idx[flag_idx]
-                
-                flag_x = jax.lax.cond(
-                    flag_road == 0,
-                    lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.FIRST_TRACK_CORNERS_X),
-                    lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.SECOND_TRACK_CORNERS_X),
-                    operand=None,
-                )
-                screen_y = 105 + (flag_y - state.player_car.position.y)
-                is_visible = jnp.logical_and(
-                    jnp.logical_and(screen_y > 25, screen_y < 195),
-                    ~flag_collected
-                )
-                color_id = self.flag_palette_ids[flag_color_idx]
-                colored_flag_mask = jnp.where(
-                    self.flag_solid_mask,
-                    color_id,
-                    self.flag_base_mask,
-                )
-                raster = jax.lax.cond(
-                    is_visible,
-                    lambda r: self.jr.render_at(
-                        self.jr.render_at(r, flag_x.astype(jnp.int32), screen_y.astype(jnp.int32), colored_flag_mask),
-                        (flag_x + 5).astype(jnp.int32), screen_y.astype(jnp.int32), flag_pole_mask
-                    ),
-                    lambda r: r,
-                    operand=raster,
-                )
-                return raster, None
-            
-            raster_flags, _ = jax.lax.scan(render_flag, raster_score, jnp.arange(self.consts.NUM_FLAGS))
-            
-            blackout_mask = self.SHAPE_MASKS["blackout_square"]
-            
-            def render_blackout(carry, flag_idx):
-                raster = carry
-                flag_collected = state.flags_collected_mask[flag_idx]
-                blackout_x = self.consts.FLAG_TOP_X_POSITIONS[flag_idx]
-                blackout_y = self.consts.FLAG_TOP_Y
-                raster = jax.lax.cond(
-                    flag_collected,
-                    lambda r: self.jr.render_at(r, blackout_x, blackout_y, blackout_mask),
-                    lambda r: r,
-                    operand=raster,
-                )
-                return raster, None
-            
-            raster_blackout, _ = jax.lax.scan(render_blackout, raster_flags, jnp.arange(self.consts.NUM_FLAGS))
-
-            def render_collectible(carry, collectible_idx):
-                raster = carry
-                collectible_y = state.collectibles.y[collectible_idx]
-                collectible_x = state.collectibles.x[collectible_idx]
-                collectible_active = state.collectibles.active[collectible_idx]
-                collectible_color_idx = state.collectibles.color_idx[collectible_idx]
-                collectible_type_id = state.collectibles.type_id[collectible_idx]
-                screen_y = 105 + (collectible_y - state.player_car.position.y)
-                is_visible = jnp.logical_and(
-                    jnp.logical_and(screen_y > 25, screen_y < 195),
-                    collectible_active
-                )
-
-                def get_sprite_and_mask(type_id):
-                    cherry_result = (self.cherry_base_mask, self.cherry_solid_mask, self.cherry_palette_ids)
-                    balloon_result = (self.balloon_base_mask, self.balloon_solid_mask, self.balloon_palette_ids)
-                    lollypop_result = (self.lollypop_base_mask, self.lollypop_solid_mask, self.lollypop_palette_ids)
-                    ice_cream_result = (self.ice_cream_base_mask, self.ice_cream_solid_mask, self.ice_cream_palette_ids)
-                    return jax.lax.cond(
-                        type_id == self.consts.COLLECTIBLE_TYPE_CHERRY,
-                        lambda _: cherry_result,
+            def get_sprite_and_mask(type_id):
+                cherry_result = (self.cherry_base_mask, self.cherry_solid_mask, self.cherry_palette_ids)
+                balloon_result = (self.balloon_base_mask, self.balloon_solid_mask, self.balloon_palette_ids)
+                lollypop_result = (self.lollypop_base_mask, self.lollypop_solid_mask, self.lollypop_palette_ids)
+                ice_cream_result = (self.ice_cream_base_mask, self.ice_cream_solid_mask, self.ice_cream_palette_ids)
+                return jax.lax.cond(
+                    type_id == self.consts.COLLECTIBLE_TYPE_CHERRY,
+                    lambda _: cherry_result,
+                    lambda _: jax.lax.cond(
+                        type_id == self.consts.COLLECTIBLE_TYPE_BALLOON,
+                        lambda _: balloon_result,
                         lambda _: jax.lax.cond(
-                            type_id == self.consts.COLLECTIBLE_TYPE_BALLOON,
-                            lambda _: balloon_result,
-                            lambda _: jax.lax.cond(
-                                type_id == self.consts.COLLECTIBLE_TYPE_LOLLYPOP,
-                                lambda _: lollypop_result,
-                                lambda _: ice_cream_result,
-                                operand=None,
-                            ),
+                            type_id == self.consts.COLLECTIBLE_TYPE_LOLLYPOP,
+                            lambda _: lollypop_result,
+                            lambda _: ice_cream_result,
                             operand=None,
                         ),
                         operand=None,
-                    )
-
-                base_mask, solid_mask, palette_ids = get_sprite_and_mask(collectible_type_id)
-                color_id = palette_ids[collectible_color_idx]
-                colored_mask = jnp.where(
-                    (base_mask != self.jr.TRANSPARENT_ID) & (base_mask != 0),
-                    color_id,
-                    base_mask,
+                    ),
+                    operand=None,
                 )
-                raster = jax.lax.cond(
-                    is_visible,
-                    lambda r: self.jr.render_at(r, collectible_x.astype(jnp.int32), screen_y.astype(jnp.int32), colored_mask),
-                    lambda r: r,
-                    operand=raster,
-                )
-                return raster, None
 
-            raster_collectibles, _ = jax.lax.scan(render_collectible, raster_blackout, jnp.arange(self.consts.MAX_COLLECTIBLES))
+            base_mask, solid_mask, palette_ids = get_sprite_and_mask(collectible_type_id)
+            color_id = palette_ids[collectible_color_idx]
+            colored_mask = jnp.where(
+                (base_mask != self.jr.TRANSPARENT_ID) & (base_mask != 0),
+                color_id,
+                base_mask,
+            )
+            raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(r, collectible_x.astype(jnp.int32), screen_y.astype(jnp.int32), colored_mask),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
 
-            all_lives_bottom_mask = self.SHAPE_MASKS["all_lives_bottom"]
-            raster_lives = self.jr.render_at(raster_collectibles, 10, 195, all_lives_bottom_mask)
+        raster_collectibles, _ = jax.lax.scan(render_collectible, raster_blackout, jnp.arange(self.consts.MAX_COLLECTIBLES))
 
-            wall_bottom_mask = self.SHAPE_MASKS["tempPointer"]
-            raster_pointer = self.jr.render_at(raster_lives, 140, 25, wall_bottom_mask)
+        all_lives_bottom_mask = self.SHAPE_MASKS["all_lives_bottom"]
+        raster_lives = self.jr.render_at(raster_collectibles, 10, 195, all_lives_bottom_mask)
 
-            return self.jr.render_from_palette(raster_pointer, self.PALETTE)
+        # Black out lost lives (similar to flag blackout)
+        blackout_mask = self.SHAPE_MASKS["blackout_square"]
+        lives_lost = self.consts.INITIAL_LIVES - state.lives
+        
+        def render_life_blackout(carry, life_idx):
+            raster = carry
+            # Black out this life if it has been lost (life_idx < lives_lost)
+            should_blackout = life_idx < lives_lost
+            blackout_x = self.consts.LIFE_BOTTOM_X_POSITIONS[life_idx]
+            blackout_y = self.consts.LIFE_BOTTOM_Y
+            raster = jax.lax.cond(
+                should_blackout,
+                lambda r: self.jr.render_at(r, blackout_x, blackout_y, blackout_mask),
+                lambda r: r,
+                operand=raster,
+            )
+            return raster, None
+        
+        raster_lives_blackout, _ = jax.lax.scan(render_life_blackout, raster_lives, jnp.arange(self.consts.INITIAL_LIVES))
 
-        base_scene = jax.lax.cond(
-            hide_world,
-            lambda _: render_roads_only(),
-            lambda _: render_full_scene(),
-            operand=None,
-        )
+        wall_bottom_mask = self.SHAPE_MASKS["tempPointer"]
+        raster_pointer = self.jr.render_at(raster_lives_blackout, 140, 25, wall_bottom_mask)
 
-        return jax.lax.cond(
-            hide_world,
-            lambda _: self.jr.render_from_palette(base_scene, self.PALETTE),
-            lambda _: render_rest(base_scene),
-            operand=None,
-        )
+        return self.jr.render_from_palette(raster_pointer, self.PALETTE)
