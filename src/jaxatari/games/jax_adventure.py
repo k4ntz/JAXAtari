@@ -91,12 +91,15 @@ class AdventureConstants(NamedTuple):
     BRIDGE_SIZE: Tuple[int, int] = (32, 48)
     MAGNET_SIZE: Tuple[int, int] = (8, 16)
     CHALICE_SIZE: Tuple[int, int] = (8, 18)
-    KEY_YELLOW_ID: int = 0
-    KEY_BLACK_ID: int = 1
-    SWORD_ID: int = 2
-    BRIDGE_ID: int = 3
-    MAGNET_ID: int = 4
-    CHALICE_ID: int = 5
+    EMPTY_HAND_ID: int = 0
+    KEY_YELLOW_ID: int = 1
+    KEY_BLACK_ID: int = 2
+    SWORD_ID: int = 3
+    BRIDGE_ID: int = 4
+    MAGNET_ID: int = 5
+    CHALICE_ID: int = 6
+    YELLOW_GATE_POS: Tuple[int, int, int] = (77, 140, 0)
+    BLACK_GATE_POS: Tuple[int, int, int] = (77, 140, 11)
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -106,7 +109,7 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
-    #position player: x ,y ,tile , color
+    #position player: x ,y ,tile , color, inventory
     player: chex.Array
     #positions dragons: x, y ,tile ,state
     dragon_yellow: chex.Array
@@ -313,8 +316,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
-            #Player Spawn: x, y, tile, color
-            player = jnp.array([78,174,0,0]).astype(jnp.int32),
+            #Player Spawn: x, y, tile, color, inventory
+            player = jnp.array([78,174,0,0,self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
             dragon_yellow = jnp.array([120,50,5,0]).astype(jnp.int32), #ToDo
             dragon_green = jnp.array([120,80,4,2]).astype(jnp.int32), #ToDo
@@ -329,7 +332,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             bridge= jnp.array([120,120,10]).astype(jnp.int32), #ToDo
             magnet= jnp.array([120,120,12]).astype(jnp.int32), #ToDo
             #Chalice: x, y, tile, color
-            chalice= jnp.array([120,120,13,0]).astype(jnp.int32), #ToDo
+            chalice= jnp.array([120,120,15,7]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -374,7 +377,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.player[2],
             width=self.consts.PLAYER_SIZE[0], 
             height=self.consts.PLAYER_SIZE[1], 
-            state=1 #ToDO
+            state=state.player[4]
         )
         dragon_yellow = EntityPosition(
             x=state.dragon_yellow[0],
@@ -382,7 +385,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.dragon_yellow[2],
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
-            state=state.dragon_yellow[3] #ToDO
+            state=state.dragon_yellow[3]
         )
         dragon_green = EntityPosition(
             x=state.dragon_green[0],
@@ -390,7 +393,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.dragon_green[2],
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
-            state=state.dragon_green[3] #ToDO
+            state=state.dragon_green[3]
         )
         key_yellow = EntityPosition(
             x=state.key_yellow[0],
@@ -398,7 +401,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.key_yellow[2],
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1],
-            state=1 #ToDO
+            state=0 #Key has no relevant state
         )
         key_black = EntityPosition(
             x=state.key_black[0],
@@ -406,23 +409,23 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.key_black[2],
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1],
-            state=1 #ToDO
+            state=0 #Key has no relevant state
         )
         gate_yellow = EntityPosition(
-            x=80, #ToDO
-            y=80, #ToDO
-            tile=1, #ToDO
+            x=self.consts.YELLOW_GATE_POS[0],
+            y=self.consts.YELLOW_GATE_POS[1],
+            tile=self.consts.YELLOW_GATE_POS[2],
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
-            state=state.gate_yellow[0] #ToDO
+            state=state.gate_yellow[0]
         )
         gate_black = EntityPosition(
-            x=100, #ToDO
-            y=100, #ToDO
-            tile=1, #ToDO
+            x=self.consts.BLACK_GATE_POS[0],
+            y=self.consts.BLACK_GATE_POS[1],
+            tile=self.consts.BLACK_GATE_POS[2],
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
-            state=state.gate_black[0] #ToDO
+            state=state.gate_black[0]
         )
         sword = EntityPosition(
             x=state.sword[0],
@@ -430,7 +433,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.sword[2],
             width=self.consts.SWORD_SIZE[0], 
             height=self.consts.SWORD_SIZE[1], 
-            state=1 #ToDO
+            state=0 #Sword has no relevant state
         )
         bridge = EntityPosition(
             x=state.bridge[0],
@@ -438,7 +441,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.bridge[2],
             width=self.consts.BRIDGE_SIZE[0], 
             height=self.consts.BRIDGE_SIZE[1], 
-            state=1 #ToDO
+            state=0 #Bridge has no relevant state
         )
         magnet = EntityPosition(
             x=state.magnet[0],
@@ -446,7 +449,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.magnet[2],
             width=self.consts.MAGNET_SIZE[0], 
             height=self.consts.MAGNET_SIZE[1],
-            state=1 #ToDO
+            state=0 #Magnet has no relevant state
         )
         chalice = EntityPosition(
             x=state.chalice[0],
@@ -454,7 +457,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=state.chalice[2],
             width=self.consts.CHALICE_SIZE[0], 
             height=self.consts.CHALICE_SIZE[1],
-            state=1 #ToDO
+            state=0 #Chalice has no relevant state
         )
 
         return AdventureObservation(
@@ -593,15 +596,15 @@ class AdventureRenderer(JAXGameRenderer):
         gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow[0]]
         
         raster = jax.lax.cond(
-            0==state.player[2],
-            lambda r : self.jr.render_at(raster, 77, 140, gate_yellow_mask),
+            self.consts.YELLOW_GATE_POS[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, self.consts.YELLOW_GATE_POS[0], self.consts.YELLOW_GATE_POS[1], gate_yellow_mask),
             lambda r : r,
             operand = raster,
         )
         gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black[0]]
         raster = jax.lax.cond(
-            11==state.player[2],
-            lambda r : self.jr.render_at(raster, 30, 30, gate_black_mask),#ToDO
+            self.consts.BLACK_GATE_POS[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, self.consts.BLACK_GATE_POS[0], self.consts.BLACK_GATE_POS[1], gate_black_mask),#ToDO
             lambda r : r,
             operand = raster,
         )
