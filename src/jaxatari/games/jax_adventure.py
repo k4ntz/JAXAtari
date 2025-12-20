@@ -90,8 +90,8 @@ class AdventureState(NamedTuple):
     dragon_green_y: chex.Array
     dragon_green_tile: chex.Array
     #state dragons (alive, dead, attacking)
-    dragon_yellow: chex.Array
-    dragon_green: chex.Array
+    dragon_yellow_state: chex.Array
+    dragon_green_state: chex.Array
     #positions keys
     key_yellow_x: chex.Array
     key_yellow_y: chex.Array
@@ -100,9 +100,8 @@ class AdventureState(NamedTuple):
     key_black_y: chex.Array
     key_black_tile: chex.Array
     #state of gates (if open or closed)
-    gate_yellow: chex.Array
-    gate_black: chex.Array
-    gate_white: chex.Array
+    gate_yellow_state: chex.Array
+    gate_black_state: chex.Array
     #position sword
     sword_x: chex.Array
     sword_y: chex.Array
@@ -127,11 +126,21 @@ class EntityPosition(NamedTuple):
     tile: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    state: jnp.ndarray
 
 
 class AdventureObservation(NamedTuple):
     player: EntityPosition
+    dragon_yellow: EntityPosition
+    dragon_green: EntityPosition
     key_yellow: EntityPosition
+    key_black: EntityPosition
+    gate_yellow: EntityPosition
+    gate_black: EntityPosition
+    sword: EntityPosition
+    bridge: EntityPosition
+    magnet: EntityPosition
+    chalice: EntityPosition
 
 
 class AdventureInfo(NamedTuple):
@@ -196,17 +205,16 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             dragon_green_x = state.dragon_green_x,
             dragon_green_y = state.dragon_green_y,
             dragon_green_tile=state.dragon_green_tile,
-            dragon_yellow = state.dragon_yellow,
-            dragon_green = state.dragon_green,
+            dragon_yellow_state = state.dragon_yellow_state,
+            dragon_green_state = state.dragon_green_state,
             key_yellow_x = state.key_yellow_x,
             key_yellow_y = state.key_yellow_y,
             key_yellow_tile=state.key_yellow_tile,
             key_black_x = state.key_black_x,
             key_black_y = state.key_black_y,
             key_black_tile=state.key_black_tile,
-            gate_yellow = state.gate_yellow,
-            gate_black = state.gate_black,
-            gate_white = state.gate_white,
+            gate_yellow_state = state.gate_yellow_state,
+            gate_black_state = state.gate_black_state,
             sword_x = state.sword_x,
             sword_y = state.sword_y,
             sword_tile=state.sword_tile,
@@ -243,17 +251,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             dragon_green_x = jnp.array(120).astype(jnp.int32), #ToDo
             dragon_green_y = jnp.array(70).astype(jnp.int32), #ToDo
             dragon_green_tile = jnp.array(70).astype(jnp.int32), #ToDo
-            dragon_yellow = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_green = jnp.array(0).astype(jnp.int32), #ToDo
+            dragon_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
+            dragon_green_state = jnp.array(0).astype(jnp.int32), #ToDo
+            #Keys
             key_yellow_x = jnp.array(31).astype(jnp.int32),
             key_yellow_y = jnp.array(110).astype(jnp.int32),
             key_yellow_tile = jnp.array(1).astype(jnp.int32),
             key_black_x = jnp.array(120).astype(jnp.int32), #ToDo
             key_black_y = jnp.array(90).astype(jnp.int32), #ToDo
             key_black_tile = jnp.array(1).astype(jnp.int32), #ToDo
-            gate_yellow = jnp.array(0).astype(jnp.int32), #ToDo
-            gate_black = jnp.array(0).astype(jnp.int32), #ToDo
-            gate_white = jnp.array(0).astype(jnp.int32), #ToDo
+            gate_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
+            gate_black_state = jnp.array(0).astype(jnp.int32), #ToDo
+            #Items
             sword_x = jnp.array(120).astype(jnp.int32), #ToDo
             sword_y = jnp.array(110).astype(jnp.int32), #ToDo
             sword_tile = jnp.array(1).astype(jnp.int32), #ToDo
@@ -280,24 +289,23 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             step_counter = state.step_counter,
             player_x = state.player_x,
             player_y=state.player_y,
-             player_tile = state.player_tile,
+            player_tile = state.player_tile,
             dragon_yellow_x = state.dragon_yellow_x,
             dragon_yellow_y = state.dragon_yellow_y,
             dragon_yellow_tile = state.dragon_yellow_tile,
             dragon_green_x = state.dragon_green_x,
             dragon_green_y = state.dragon_green_y,
             dragon_green_tile=state.dragon_green_tile,
-            dragon_yellow = state.dragon_yellow,
-            dragon_green = state.dragon_green,
+            dragon_yellow_state = state.dragon_yellow_state,
+            dragon_green_state = state.dragon_green_state,
             key_yellow_x = state.key_yellow_x,
             key_yellow_y = state.key_yellow_y,
             key_yellow_tile=state.key_yellow_tile,
             key_black_x = state.key_black_x,
             key_black_y = state.key_black_y,
             key_black_tile=state.key_black_tile,
-            gate_yellow = state.gate_yellow,
-            gate_black = state.gate_black,
-            gate_white = state.gate_white,
+            gate_yellow_state = state.gate_yellow_state,
+            gate_black_state = state.gate_black_state,
             sword_x = state.sword_x,
             sword_y = state.sword_y,
             sword_tile=state.sword_tile,
@@ -329,24 +337,104 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         player = EntityPosition(
             x=state.player_x,
             y=state.player_y,
-            tile=1, #ToDO
-            width=4,
-            height=8
+            tile=state.player_tile,
+            width=4, #ToDO
+            height=8, #ToDO
+            state=1 #ToDO
+        )
+        dragon_yellow = EntityPosition(
+            x=state.dragon_yellow_x,
+            y=state.dragon_yellow_y,
+            tile=state.dragon_yellow_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
+        dragon_green = EntityPosition(
+            x=state.dragon_green_x,
+            y=state.dragon_green_y,
+            tile=state.dragon_green_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
         )
         key_yellow = EntityPosition(
             x=state.key_yellow_x,
             y=state.key_yellow_y,
-            tile=1, #ToDO
-            width=10,
-            height=4
+            tile=state.key_yellow_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
         )
-
-        #ToDo for the rest of the dragons, items etc.....
+        key_black = EntityPosition(
+            x=state.key_black_x,
+            y=state.key_black_y,
+            tile=state.key_black_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
+        gate_yellow = EntityPosition(
+            x=80, #ToDO
+            y=80, #ToDO
+            tile=1, #ToDO
+            width=10, #ToDO
+            height=4, #ToDO
+            state=state.gate_yellow_state #ToDO
+        )
+        gate_black = EntityPosition(
+            x=100, #ToDO
+            y=100, #ToDO
+            tile=1, #ToDO
+            width=10, #ToDO
+            height=4, #ToDO
+            state=state.gate_black_state #ToDO
+        )
+        sword = EntityPosition(
+            x=state.sword_x,
+            y=state.sword_y,
+            tile=state.sword_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
+        bridge = EntityPosition(
+            x=state.bridge_x,
+            y=state.bridge_y,
+            tile=state.bridge_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
+        magnet = EntityPosition(
+            x=state.magnet_x,
+            y=state.magnet_y,
+            tile=state.magnet_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
+        chalice = EntityPosition(
+            x=state.chalice_x,
+            y=state.chalice_y,
+            tile=state.chalice_tile,
+            width=10, #ToDO
+            height=4, #ToDO
+            state=1 #ToDO
+        )
 
         return AdventureObservation(
             player=player,
-            key_yellow=key_yellow
-            #ToDo for the rest of the dragons, items etc.....
+            dragon_yellow=dragon_yellow,
+            dragon_green=dragon_green,
+            key_yellow=key_yellow,
+            key_black=key_black,
+            gate_yellow=gate_yellow,
+            gate_black=gate_black,
+            sword=sword,
+            bridge=bridge,
+            magnet=magnet,
+            chalice=chalice
         )
 
     @partial(jax.jit, static_argnums=(0,))
