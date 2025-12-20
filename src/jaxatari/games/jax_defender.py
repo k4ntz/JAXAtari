@@ -164,8 +164,6 @@ class DefenderConstants(NamedTuple):
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
-    SWARMERS_MAX_AMOUNT: int = 2
-    SWARMERS_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 2, 2, 2])
 
     # Mutant
     MUTANT_DEATH_SCORE: int = 150
@@ -256,7 +254,7 @@ class DefenderState(NamedTuple):
     smart_bomb_amount: chex.Array
     # Enemies
     enemy_states: chex.Array
-    killed_landers: chex.Array
+    enemy_killed: chex.Array
     # Human
     human_states: chex.Array
     # Cooldowns
@@ -951,6 +949,28 @@ class DefenderRenderer(JAXGameRenderer):
 
         raster = render_score(raster)
 
+        def render_transition(r):
+            level = jnp.asarray([state.level])
+            screen_x = self.consts.LEVEL_DIGIT_SCREEN_X
+            screen_y = self.consts.LEVEL_DIGIT_SCREEN_Y
+            self.dh._print_array(level)
+            r = self.jr.render_label(
+                r,
+                screen_x,
+                screen_y,
+                level,
+                self.SHAPE_MASKS["score_digits"],
+                0,
+                1,
+            )
+            return r
+
+        raster = jax.lax.cond(
+            state.game_state == self.consts.GAME_STATE_TRANSITION,
+            lambda: render_transition(raster),
+            lambda: raster,
+        )
+
         return self.jr.render_from_palette(raster, self.PALETTE)
 
 
@@ -1087,17 +1107,53 @@ class JaxDefender(
             lambda: state,
         )
 
+        def add_killed_enemy(state: DefenderState, e_type) -> DefenderState:
+            enemy_killed = state.enemy_killed
+            e_index = e_type - 1
+            new_amount = enemy_killed[e_index] + 1
+            enemy_killed = enemy_killed.at[e_index].set(new_amount)
+            state = state._replace(enemy_killed=enemy_killed)
+            return state
+
         state = jax.lax.cond(
-            jnp.logical_and(
-                jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
-                self.consts.LANDER_LEVEL_AMOUNT[jnp.remainder(state.level, 5)]
-                - self.consts.LANDER_MAX_AMOUNT
-                > state.killed_landers,
-            ),
-            lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER)._replace(
-                killed_landers=state.killed_landers + 1
-            ),
+            enemy_type <= self.consts.SWARMERS,
+            lambda: add_killed_enemy(state, enemy_type),
             lambda: state,
+        )
+
+        def lander_death(state: DefenderState) -> DefenderState:
+            current_killed = state.enemy_killed[self.consts.LANDER - 1]
+            spawn_more = jnp.less(
+                current_killed, self.consts.LANDER_LEVEL_AMOUNT[state.level]
+            )
+            state = jax.lax.cond(
+                spawn_more,
+                lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER),
+                lambda: state,
+            )
+            return state
+
+        state = jax.lax.cond(
+            enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state
+        )
+
+        def pod_death(state: DefenderState) -> DefenderState:
+            key, subkey = jax.random.split(state.key)
+            spawn_amount = jnp.round(
+                jax.random.uniform(subkey, minval=1, maxval=2)
+            ).astype(jnp.int32)
+            state = jax.lax.fori_loop(
+                0,
+                spawn_amount,
+                lambda _, state: self._spawn_enemy_random_pos(
+                    state, self.consts.SWARMERS
+                ),
+                state,
+            )
+            return state._replace(key=key)
+
+        state = jax.lax.cond(
+            enemy_type == self.consts.POD, lambda: pod_death(state), lambda: state
         )
 
         state = self._update_enemy(
@@ -2420,17 +2476,6 @@ class JaxDefender(
             state,
         )
 
-        # Spawn Swarmer
-        state = jax.lax.fori_loop(
-            0,
-            jnp.minimum(
-                self.consts.SWARMERS_LEVEL_AMOUNT[level],
-                self.consts.SWARMERS_MAX_AMOUNT,
-            ),
-            lambda _, state: self._spawn_enemy_random_pos(state, self.consts.SWARMERS),
-            state,
-        )
-
         # Spawn Humans
         state = jax.lax.fori_loop(
             0,
@@ -2591,7 +2636,7 @@ class JaxDefender(
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)).astype(
                 jnp.float32
             ),
-            killed_landers=jnp.array(0).astype(jnp.int32),
+            enemy_killed=jnp.zeros(4).astype(jnp.int32),
             # Humans
             human_states=jnp.zeros((self.consts.HUMAN_MAX_AMOUNT, 3)).astype(
                 jnp.float32
