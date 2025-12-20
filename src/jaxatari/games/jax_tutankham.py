@@ -24,12 +24,13 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: Tuple[int, int] = (1, 2)
     BULLET_SPEED: int = 8
-    AMMO_SUPPLY: int = 300 # frames until ammo runs out
+    AMMO_SUPPLY: int = 900 # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
     LASER_FLASH_COOLDOWN: int = 60  # frames
 
-    # Creature constants
+    # Creature constants -------------------------------------
+    CREATURE_SIZE: Tuple[int, int] = (10, 10)
 
     INACTIVE: int = 0
     ACTIVE: int = 1
@@ -53,6 +54,22 @@ class TutankhamConstants(NamedTuple):
 
     MAX_CREATURES: int = 3 # max number of creatures on screen at once
 
+    # Item constants
+    ITEM_SIZE: Tuple[int, int] = (5, 5)
+
+    # Item Types
+    KEY: int = 0
+    CROWN_01: int = 1
+    RING: int = 2
+    RUBY: int = 3
+    CHALICE: int = 4
+    CROWN_02: int = 5
+
+    #KEY_
+    ITEM_POINTS: chex.Array = np.array([50, 100, 75, 150])  # points for each item type
+
+    RESPAWN_CHECKPOINT_UPDATE_INTERVAL: int = 180  # frames between respawn checkpoint updates
+
 
 # ---------------------------------------------------------------------
 # Game State
@@ -62,13 +79,20 @@ class TutankhamState(NamedTuple):
     player_y: int
     player_lives: int
 
+    checkpoint_x: int # respawn checkpoint x
+    checkpoint_y: int  # respawn checkpoint y
+
     bullet_state: chex.Array #(, 4) array with (x, y, bullet_rotation, bullet_active)
     laser_flash_count: int # number of laser flashes that can be fired
     laser_flash_cooldown: int # cooldown timer for next laser flash
     amonition_timer: int # if timer runs out, player can not fire again
 
     creature_states: chex.Array # (3, 5) array with (x, y, creature_type, active) for each creature
-    last_creature_spawn: int = 0  # time since last creature spawn
+    last_creature_spawn: int # time since last creature spawn
+
+    #item_states: chex.Array = None  # (N, 4) array with (x, y, item_type, collected) for each item (optional)
+
+    respawn_step_counter: int  # counts the number of steps taken in the game
 
 
 
@@ -101,14 +125,36 @@ class TutankhamRenderer(JAXGameRenderer):
             #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
             frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
 
-        # -------------------------
-        # Draw creatures (1×1 pixels)
+        # # -------------------------
+        # # Draw creatures (1×1 pixels)
+        # for i in range(self.consts.MAX_CREATURES):
+        #     cx, cy, creature_type, active = state.creature_states[i]
+        #     if active == self.consts.ACTIVE:
+        #         # Clip
+        #         if 0 <= cx < self.consts.WIDTH and 0 <= cy < self.consts.HEIGHT:
+        #             frame[int(cy), int(cx)] = self.consts.PIXEL_COLOR
+
+        cw, ch = self.consts.CREATURE_SIZE
+
         for i in range(self.consts.MAX_CREATURES):
             cx, cy, creature_type, active = state.creature_states[i]
+
             if active == self.consts.ACTIVE:
-                # Clip
-                if 0 <= cx < self.consts.WIDTH and 0 <= cy < self.consts.HEIGHT:
-                    frame[int(cy), int(cx)] = self.consts.PIXEL_COLOR
+                # Rectangle bounds
+                x0 = int(cx)
+                y0 = int(cy)
+                x1 = x0 + cw
+                y1 = y0 + ch
+
+                # Clip to screen
+                x0 = max(0, x0)
+                y0 = max(0, y0)
+                x1 = min(self.consts.WIDTH, x1)
+                y1 = min(self.consts.HEIGHT, y1)
+
+                # Draw rectangle
+                frame[y0:y1, x0:x1] = self.consts.PIXEL_COLOR
+
 
         return frame
 
@@ -141,6 +187,8 @@ class JaxTutankham(JaxEnvironment):
     def reset(self, key=None):
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
+        checkpoint_x = start_x
+        checkpoint_y = start_y
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = np.array([0, 0, 0, False])
@@ -148,17 +196,21 @@ class JaxTutankham(JaxEnvironment):
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
+        respawn_step_counter = 0
         
 
         state = TutankhamState(player_x=start_x, 
                                 player_y=start_y,
+                                checkpoint_x=checkpoint_x,
+                                checkpoint_y=checkpoint_y,
                                 player_lives=player_lives,
                                 bullet_state=bullet_state, 
                                 amonition_timer=amonition_timer,
                                 creature_states=creature_states,
                                 last_creature_spawn=last_creature_spawn,
                                 laser_flash_count=laser_flash_count,
-                                laser_flash_cooldown=laser_flash_cooldown
+                                laser_flash_cooldown=laser_flash_cooldown,
+                                respawn_step_counter=respawn_step_counter
                                )
         return state, state #TODO: (EnvObs, EnvState)
 
@@ -187,7 +239,7 @@ class JaxTutankham(JaxEnvironment):
     
     
     #Bullet Step
-    def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
+    def bullet_step(self, bullet_state, creature_states, player_x, player_y, amonition_timer, action):
 
         def get_rotation(action):
             if action == Action.RIGHTFIRE: return 1
@@ -222,8 +274,9 @@ class JaxTutankham(JaxEnvironment):
 
 
         amonition_timer -= 1 # TODO: adjust amonition timer
+
         
-        return new_bullet, amonition_timer
+        return new_bullet, creature_states, amonition_timer
     
 
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, action):
@@ -321,48 +374,162 @@ class JaxTutankham(JaxEnvironment):
         gained_points = jnp.sum(creature_points[creature_types] * deaths)
         return score + gained_points
 
+    def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
+        """Check collision between two single entities"""
+        # Calculate edges for rectangle 1
+        rect1_left = x1
+        rect1_right = x1 + size1[0]
+        rect1_top = y1
+        rect1_bottom = y1 + size1[1]
 
+        # Calculate edges for rectangle 2
+        rect2_left = x2
+        rect2_right = x2 + size2[0]
+        rect2_top = y2
+        rect2_bottom = y2 + size2[1]
+    
+        # Check overlap
+        horizontal_overlap = (
+            rect1_left < rect2_right and
+            rect1_right > rect2_left
+        )
 
+        vertical_overlap = (
+            rect1_top < rect2_bottom and
+            rect1_bottom > rect2_top
+        )
 
+        return horizontal_overlap and vertical_overlap
+    
+    def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
+        
+        # check bullet/creature collision
+        if bullet_state[3]: #bullet is active
 
+            for idx, creature in enumerate(creature_states):
+                creature_x, creature_y, creature_type, active = creature
+
+                if active == self.consts.ACTIVE:
+                    collision = self.check_entity_collision(
+                        bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
+                        creature_x, creature_y, self.consts.CREATURE_SIZE
+                    )
+
+                    if collision:
+                        # Deactivate bullet and creature
+                        bullet_state = np.array([0, 0, 0, False])
+                        #TODO: kill creature logic (score etc)
+                        creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE])
+                        break  # Bullet can only hit one creature
+
+        
+        # check player/creature collision
+        for idx, creature in enumerate(creature_states):
+            creature_x, creature_y, creature_type, active = creature
+
+            if active == self.consts.ACTIVE:
+                collision = self.check_entity_collision(
+                    player_x, player_y, self.consts.PLAYER_SIZE,
+                    creature_x, creature_y, self.consts.CREATURE_SIZE
+                )
+
+                if collision:
+                    player_lives -= 1
+                    # TODO: respawn player logic
+                    creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE]) # Deactivate creature
+                    # Optionally, reset player position or apply other penalties
+                    break  # Handle one collision at a time
+
+        return bullet_state, creature_states, player_lives
+    
+
+    def respawn_player(self, player_x, player_y, checkpoint_x, checkpoint_y, prev_player_lives, current_player_lives, creature_states, bullet_state, last_creature_spawn, respawn_step_counter):
+        ## schreibe update player respawn point logic
+        #in step function tutankham_step wird hochgezählt jeden step
+        # alle 15 Steps oderso soll respawn point geupdated werden (gamestate respawn position)
+        # respawn_player logic setzt player auf diese position + setzt Monster states alle auf 0
+        #  tutankham step counter etc sollen gleich bleiben und nicht resettet werden
+
+        if current_player_lives < prev_player_lives:
+            # Respawn player at checkpoint
+            player_x = checkpoint_x
+            player_y = checkpoint_y
+
+            # Reset creature states
+            creature_states = np.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+
+            # Reset bullet state
+            bullet_state = np.array([0, 0, 0, False])
+            
+            # reset spawn timer
+            last_creature_spawn = 0
+
+            # reset respawn step counter
+            respawn_step_counter = 0
+        
+        elif respawn_step_counter == self.consts.RESPAWN_CHECKPOINT_UPDATE_INTERVAL:
+                checkpoint_x = player_x
+                checkpoint_y = player_y
+                respawn_step_counter = 0
+        else:
+            respawn_step_counter += 1
+
+        return player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn
+    
     # -----------------------------
     # Step logic (pure Python)
     # -----------------------------
     def step(self, state: TutankhamState, action: int):
 
-        player_x, player_y = state.player_x, state.player_y
+        player_x = state.player_x
+        player_y = state.player_y
+        checkpoint_x = state.checkpoint_x
+        checkpoint_y = state.checkpoint_y
         bullet_state = state.bullet_state
         creature_states = state.creature_states
         laser_flash_count = state.laser_flash_count
         last_creature_spawn = state.last_creature_spawn
         laser_flash_cooldown = state.laser_flash_cooldown
         amonition_timer = state.amonition_timer
+        player_lives = state.player_lives
+        respawn_step_counter = state.respawn_step_counter
 
         player_x, player_y = self.player_step(player_x, player_y, action)
 
-        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
+        bullet_state, creature_states, amonition_timer =self.bullet_step(bullet_state, creature_states, player_x, player_y, amonition_timer, action)
 
         creature_states, laser_flash_cooldown, laser_flash_count = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, action)
 
         creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)
-        
-        player_lives = state.player_lives # TODO: implement player lives logic
 
+        bullet_state, creature_states, current_player_lives = self.resolve_collisions(player_x, player_y, creature_states, bullet_state, player_lives)
+
+        player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn = self.respawn_player(
+            player_x, player_y, 
+            checkpoint_x, checkpoint_y, 
+            state.player_lives, current_player_lives,
+            creature_states, 
+            bullet_state, 
+            last_creature_spawn, 
+            respawn_step_counter
+        )
+        
         state = TutankhamState(player_x=player_x, 
                                player_y=player_y,
-                               player_lives=player_lives,
+                               checkpoint_x=checkpoint_x,
+                               checkpoint_y=checkpoint_y,
+                               player_lives=current_player_lives,
                                bullet_state=bullet_state, 
                                amonition_timer=amonition_timer, 
                                creature_states=creature_states,
                                last_creature_spawn=last_creature_spawn,
                                laser_flash_count=laser_flash_count,
-                               laser_flash_cooldown=laser_flash_cooldown
+                               laser_flash_cooldown=laser_flash_cooldown,
+                               respawn_step_counter=respawn_step_counter
                                )
 
         reward = 0.0
-        
-        #done = self._get_done(state) #TODO: uncomment later
-        done = False
+        done = self._get_done(state) 
         info = None
 
         return state, state, reward, done, info
@@ -389,7 +556,7 @@ class JaxTutankham(JaxEnvironment):
     
     def _get_done(self, state: TutankhamState) -> bool:
         if state.player_lives <= 0: # Game Over
-            return False
+            return True
         # TODO: beat final level condition
 
-        return True
+        return False
