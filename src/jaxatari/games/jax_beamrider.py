@@ -33,7 +33,7 @@ class WhiteUFOPattern(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    WHITE_UFOS_PER_SECTOR: int = 5
+    WHITE_UFOS_PER_SECTOR: int = 15
 
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
@@ -108,7 +108,7 @@ class BeamriderConstants(NamedTuple):
     CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = 40
     CHASING_METEOROID_SPAWN_Y: float = 54.0
     CHASING_METEOROID_LANE_SPEED: float = 0.9
-    CHASING_METEOROID_ACCEL: float = 0.05
+    CHASING_METEOROID_ACCEL: float = 0.045
     CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = 1.5
     CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
     CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
@@ -761,9 +761,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_pattern_timer = jnp.where(active_mask, white_ufo_pattern_timer, 0)
 
             enemy_shot_offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1), (1, 3))
-            enemy_shot_pos = jnp.where(active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
-            enemy_shot_timer = jnp.where(active_mask, enemy_shot_timer, 0)
-            enemy_shot_lane = jnp.where(active_mask, enemy_shot_lane, 0)
+            # Removing masking of enemy shots by active_mask to allow shots to persist after UFO death
+            # enemy_shot_pos = jnp.where(active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
+            # enemy_shot_timer = jnp.where(active_mask, enemy_shot_timer, 0)
+            # enemy_shot_lane = jnp.where(active_mask, enemy_shot_lane, 0)
 
             enemy_shot_pos = jnp.where(sector_advanced, enemy_shot_offscreen, enemy_shot_pos)
             enemy_shot_timer = jnp.where(sector_advanced, 0, enemy_shot_timer)
