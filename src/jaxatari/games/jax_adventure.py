@@ -19,11 +19,31 @@ def _get_default_asset_config() -> tuple:
     """
     return (
         #all rooms in order
-        {'name': 'room_number', 'type': 'group', 'files': ['Room_1.npy', 'Room_2.npy', 'Room_3.npy', 'Room_4.npy', 'Room_5.npy', 'Room_6.npy', 'Room_7.npy', 'Room_8.npy', 'Room_9.npy', 'Room_10.npy', 'Room_11.npy', 'Room_12.npy', 'Room_13.npy', 'Room_14.npy']},
+        {'name': 'room_number', 'type': 'group', 'files': ['Room_1.npy', 
+                                                           'Room_2.npy', 
+                                                           'Room_3.npy', 
+                                                           'Room_4.npy', 
+                                                           'Room_5.npy', 
+                                                           'Room_6.npy', 
+                                                           'Room_7.npy', 
+                                                           'Room_8.npy', 
+                                                           'Room_9.npy', 
+                                                           'Room_10.npy', 
+                                                           'Room_11.npy', 
+                                                           'Room_12.npy', 
+                                                           'Room_13.npy', 
+                                                           'Room_14.npy']},
         {'name': 'bg', 'type': 'background', 'file': 'Room_1.npy'},
 
         #all player colors in order
-        {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy", "Player_Green.npy", "Player_Purple.npy", "Player_Pink.npy", "Player_Green_yellow.npy", "Player_Blue.npy", "Player_Black.npy", "Player_Magenta.npy"]},
+        {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy", 
+                                                             "Player_Green.npy", 
+                                                             "Player_Purple.npy", 
+                                                             "Player_Pink.npy", 
+                                                             "Player_Green_yellow.npy", 
+                                                             "Player_Blue.npy", 
+                                                             "Player_Black.npy", 
+                                                             "Player_Magenta.npy"]},
 
         #dragons
         {'name': 'dragon_yellow_neutral', 'type': 'single', 'file': 'Dragon_yellow_neutral.npy'},
@@ -34,7 +54,13 @@ def _get_default_asset_config() -> tuple:
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'},
         {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'},
         #gates
-        
+        {'name': 'gate_state', 'type': 'group', 'files': ['Gate_closed.npy',
+                                                          'Gate_opening_0.npy',
+                                                          'Gate_opening_1.npy',
+                                                          'Gate_opening_2.npy',
+                                                          'Gate_opening_3.npy',
+                                                          'Gate_opening_4.npy',
+                                                          'Gate_open.npy']},
         #ToDo gates animation
 
         #items
@@ -247,7 +273,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             key_black_y = jnp.array(90).astype(jnp.int32), #ToDo
             key_black_tile = jnp.array(0).astype(jnp.int32), #ToDo
             gate_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
-            gate_black_state = jnp.array(0).astype(jnp.int32), #ToDo
+            gate_black_state = jnp.array(3).astype(jnp.int32), #ToDo
             #Items
             sword_x = jnp.array(120).astype(jnp.int32), #ToDo
             sword_y = jnp.array(110).astype(jnp.int32), #ToDo
@@ -452,7 +478,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 "height": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
             }),
 
-            #ToDo for the rest of the dragons, items etc.....
+            #ToDo for the rest of the dragons, items etc..... ?
         })
 
     def image_space(self) -> spaces.Box:
@@ -520,6 +546,12 @@ class AdventureRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, state.key_yellow_x, state.key_yellow_y, key_yellow_mask)
         key_black_mask = self.SHAPE_MASKS["key_black"]
         raster = self.jr.render_at(raster, state.key_black_x, state.key_black_y, key_black_mask)
+        #Gates
+        gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow_state]
+        raster = self.jr.render_at(raster, 77, 140, gate_yellow_mask)
+        gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black_state]
+        raster = self.jr.render_at(raster, 30, 30, gate_black_mask)#ToDO
+
         #items
         sword_mask = self.SHAPE_MASKS["sword"]
         raster = self.jr.render_at(raster, state.sword_x, state.sword_y, sword_mask)
