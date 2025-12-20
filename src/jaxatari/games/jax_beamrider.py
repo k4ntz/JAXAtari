@@ -114,6 +114,7 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_ATTACK_ALPHA: float = 0.0002
     ENEMY_EXPLOSION_FRAMES: int = 21
     KAMIKAZE_Y_THRESHOLD: float = 86.0
+    ENEMY_HITBOX_TOP_EXTENSION: int = 5
 
     # Bouncer constants
     BOUNCER_SPAWN_HEIGHT: float = 75.0
@@ -717,7 +718,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             bouncer_hit = bouncer_active & \
                           (bouncer_pos_screen < shot_x + bullet_size[1]) & (shot_x < bouncer_pos_screen + bouncer_size[1]) & \
-                          (bouncer_pos[1] < shot_y + bullet_size[0]) & (shot_y < bouncer_pos[1] + bouncer_size[0])
+                          (bouncer_pos[1] - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < bouncer_pos[1] + bouncer_size[0])
 
             # Destroy bouncer only if torpedo
             bullet_type_is_laser = bullet_type == self.consts.LASER_ID
@@ -850,6 +851,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 coin_pos,
                 coin_active,
                 player_shot_position,
+                player_shot_velocity,
                 bullet_type,
             )
             
@@ -893,7 +895,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 rejuv_active,
                 jnp.logical_not(rejuv_dead),
                 (rejuv_x_screen < shot_x_screen + bullet_size[1]) & (shot_x_screen < rejuv_x_screen + rejuv_sizes[1]),
-                (rejuv_y < shot_y + bullet_size[0]) & (shot_y < rejuv_y + rejuv_sizes[0]),
+                (rejuv_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < rejuv_y + rejuv_sizes[0]),
                 shot_y < self.consts.BOTTOM_CLIP
             ]))
             
@@ -928,7 +930,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             
             ms_square = jnp.max(ms_size)
             hit_mothership = (ms_pos < shot_x + bullet_size[1]) & (shot_x < ms_pos + ms_square) & \
-                             (ms_y < shot_y + bullet_size[0]) & (shot_y < ms_y + ms_square + 3) & \
+                             (ms_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < ms_y + ms_square + 3) & \
                              shot_active & is_torpedo & ms_vulnerable
             player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
             
@@ -1549,13 +1551,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # bullet_size is (2,) -> [H, W]
 
         # AABB collision check
+        # Extend enemy hitbox to the top to avoid skipping over them 
+        # due to large jumps in the projectile Y table (up to 14px).
         # x-overlap: (ufo_x < shot_x + bullet_w) & (shot_x < ufo_x + ufo_w)
         # y-overlap: (ufo_y < shot_y + bullet_h) & (shot_y < ufo_y + ufo_h)
         hit_mask_ufo = (ufo_x < shot_x + bullet_size[1]) & (shot_x < ufo_x + ufo_sizes[:, 1]) & \
-                       (ufo_y < shot_y + bullet_size[0]) & (shot_y < ufo_y + ufo_sizes[:, 0])
+                       (ufo_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < ufo_y + ufo_sizes[:, 0])
         
-        hit_index = jnp.argmax(hit_mask_ufo)
-        hit_exists_ufo = jnp.any(hit_mask_ufo)
         hit_index = jnp.argmax(hit_mask_ufo)
         hit_exists_ufo = jnp.any(hit_mask_ufo)
 
@@ -2545,7 +2547,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             chasing_meteoroid_active
             & shot_active
             & (chasing_meteoroid_x < shot_x + bullet_size[1]) & (shot_x < chasing_meteoroid_x + meteoroid_size[1])
-            & (chasing_meteoroid_y < shot_y + bullet_size[0]) & (shot_y < chasing_meteoroid_y + meteoroid_size[0])
+            & (chasing_meteoroid_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < chasing_meteoroid_y + meteoroid_size[0])
         )
         
         # Meteoroid is only destroyed if it's hit by a torpedo
@@ -2807,10 +2809,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         coin_pos: chex.Array,
         coin_active: chex.Array,
         player_shot_pos: chex.Array,
+        player_shot_vel: chex.Array,
         bullet_type: chex.Array,
     ):
-        shot_x = player_shot_pos[0] + _get_bullet_alignment(
-            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        shot_x = _get_player_shot_screen_x(
+            player_shot_pos,
+            player_shot_vel,
+            bullet_type,
+            self.consts.LASER_ID,
         )
         shot_y = player_shot_pos[1]
         shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
@@ -2828,7 +2834,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             coin_active
             & shot_active
             & (coin_x_screen < shot_x + bullet_size[1]) & (shot_x < coin_x_screen + coin_size[1])
-            & (coin_y < shot_y + bullet_size[0]) & (shot_y < coin_y + coin_size[0])
+            & (coin_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < coin_y + coin_size[0])
         )
         hit_exists = jnp.any(hit_mask)
         
@@ -2867,7 +2873,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             falling_rock_active
             & shot_active
             & (rock_x < shot_x + bullet_size[1]) & (shot_x < rock_x + rock_sizes[:, 1])
-            & (rock_y < shot_y + bullet_size[0]) & (shot_y < rock_y + rock_sizes[:, 0])
+            & (rock_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < rock_y + rock_sizes[:, 0])
         )
         hit_exists_rock = jnp.any(hit_mask)
         
@@ -3039,7 +3045,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lane_blocker_active
             & shot_active
             & (blocker_x < shot_x + bullet_size[1]) & (shot_x < blocker_x + blocker_sizes[:, 1])
-            & (blocker_y < shot_y + bullet_size[0]) & (shot_y < blocker_y + blocker_sizes[:, 0])
+            & (blocker_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < blocker_y + blocker_sizes[:, 0])
         )
         hit_exists = jnp.any(hit_mask)
 
@@ -3102,7 +3108,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             shot_on_screen
             & shot_active
             & (enemy_shot_x < shot_x + bullet_size[1]) & (shot_x < enemy_shot_x + enemy_shot_sizes[:, 1])
-            & (enemy_shot_y < shot_y + bullet_size[0]) & (shot_y < enemy_shot_y + enemy_shot_sizes[:, 0])
+            & (enemy_shot_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < enemy_shot_y + enemy_shot_sizes[:, 0])
         )
         
         # Only destroyed by torpedo
