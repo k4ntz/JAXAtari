@@ -452,7 +452,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[BeamriderObservation, BeamriderState]:
-        state = self.reset_level(7)
+        state = self.reset_level(10)
         observation = self._get_observation(state)
         return observation, state
 
@@ -1823,6 +1823,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         triple_finished = is_triple & ((pattern_timer & 7) == 0) & jnp.logical_not((pattern_timer >> 7) & 1) & is_on_lane
 
+        # Stuck check: if target lane is same as current lane due to clipping in stage 6/7, finish triple shot.
+        lane_offset = jnp.where(pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT), 1, 0)
+        lane_offset = jnp.where(pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT), -1, lane_offset)
+        in_restricted_stage = position[1] >= 86.0
+        min_lane = jnp.where(in_restricted_stage, 1, 0)
+        max_lane = jnp.where(in_restricted_stage, 5, 6)
+        target_lane_id = jnp.clip(closest_lane_id + lane_offset, min_lane, max_lane)
+        
+        triple_stuck = is_triple & is_on_lane & (shots_left > 0) & (target_lane_id == closest_lane_id) & (closest_lane_id == last_lane)
+        triple_finished = triple_finished | triple_stuck
+
         pattern_finished_off_top = jnp.logical_and.reduce(jnp.array([
             jnp.logical_not(on_top_lane),
             is_engagement_pattern,
@@ -1968,6 +1979,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         can_triple = sector >= 7
         can_triple = can_triple & (stage >= 4) & (stage <= 6) & is_on_lane
 
+        # Further restriction for Stage 6: restricted to lanes 1-5.
+        # If in Stage 6, TRIPLE_SHOT_RIGHT (ends at lane+2) must have lane+2 <= 5 => lane <= 3.
+        # TRIPLE_SHOT_LEFT (ends at lane-2) must have lane-2 >= 1 => lane >= 3.
+        # This matches the requested lanes (1,2,3 for right; 5,4,3 for left).
         
         can_triple_right = can_triple & (lane >= 1) & (lane <= 3)
         can_triple_left = can_triple & (lane >= 3) & (lane <= 5)
