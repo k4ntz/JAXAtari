@@ -189,9 +189,27 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         new_player_tile = state.player[2]
         new_player_y, new_player_tile = jax.lax.cond(
-            jnp.logical_and(new_player_y >=212, new_player_tile == 0),
-            lambda _: (27, 2),
+            new_player_y > 212,
+            lambda _: (27, jax.lax.switch( new_player_tile, [lambda:2,lambda:0,lambda:0, lambda:4, lambda:0, lambda:0, lambda:5, lambda:8, lambda:0, lambda: 6, lambda:7, lambda:10, lambda:11, lambda:12])),
             lambda _: (new_player_y, new_player_tile),
+            operand = None,
+        )
+        new_player_y, new_player_tile = jax.lax.cond(
+            new_player_y < 27,
+            lambda _: (212, jax.lax.switch( new_player_tile, [lambda:1,lambda:0,lambda:0, lambda:0, lambda:3, lambda:6, lambda:9, lambda:10, lambda:7, lambda: 0, lambda:11, lambda:12, lambda:14, lambda:0])),
+            lambda _: (new_player_y, new_player_tile),
+            operand = None,
+        )
+        new_player_x, new_player_tile = jax.lax.cond(
+            new_player_x > 160,
+            lambda _: (0, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:3, lambda:0, lambda:0, lambda:2, lambda:7, lambda:6, lambda:10, lambda: 8, lambda:9, lambda:0, lambda:0, lambda:0])),
+            lambda _: (new_player_x, new_player_tile),
+            operand = None,
+        )
+        new_player_x, new_player_tile = jax.lax.cond(
+            new_player_x < 0,
+            lambda _: (160, jax.lax.switch( new_player_tile, [lambda:0,lambda:0,lambda:5, lambda:2, lambda:0, lambda:0, lambda:7, lambda:6, lambda:9, lambda: 10, lambda:8, lambda:0, lambda:0, lambda:0])),
+            lambda _: (new_player_x, new_player_tile),
             operand = None,
         )
 
@@ -224,20 +242,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #Player Spawn: x, y, tile, color
             player = jnp.array([78,174,0,0]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
-            dragon_yellow = jnp.array([120,50,2,0]).astype(jnp.int32), #ToDo
-            dragon_green = jnp.array([120,80,2,2]).astype(jnp.int32), #ToDo
+            dragon_yellow = jnp.array([120,50,5,0]).astype(jnp.int32), #ToDo
+            dragon_green = jnp.array([120,80,4,2]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([31,110,0]).astype(jnp.int32),
-            key_black = jnp.array([31,80,2]).astype(jnp.int32),
+            key_black = jnp.array([31,80,4]).astype(jnp.int32),
             #Gate: state
             gate_yellow=jnp.array([0]).astype(jnp.int32),
             gate_black=jnp.array([0]).astype(jnp.int32),
             #Items: x, y, tile
-            sword = jnp.array([120,120,2]).astype(jnp.int32), #ToDo
-            bridge= jnp.array([120,120,2]).astype(jnp.int32), #ToDo
-            magnet= jnp.array([120,120,2]).astype(jnp.int32), #ToDo
+            sword = jnp.array([120,120,1]).astype(jnp.int32), #ToDo
+            bridge= jnp.array([120,120,10]).astype(jnp.int32), #ToDo
+            magnet= jnp.array([120,120,12]).astype(jnp.int32), #ToDo
             #Chalice: x, y, tile, color
-            chalice= jnp.array([120,120,2,0]).astype(jnp.int32), #ToDo
+            chalice= jnp.array([120,120,13,0]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -499,6 +517,7 @@ class AdventureRenderer(JAXGameRenderer):
 
         #Gates
         gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow[0]]
+        
         raster = jax.lax.cond(
             0==state.player[2],
             lambda r : self.jr.render_at(raster, 77, 140, gate_yellow_mask),
@@ -507,7 +526,7 @@ class AdventureRenderer(JAXGameRenderer):
         )
         gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black[0]]
         raster = jax.lax.cond(
-            10==state.player[2],
+            11==state.player[2],
             lambda r : self.jr.render_at(raster, 30, 30, gate_black_mask),#ToDO
             lambda r : r,
             operand = raster,
