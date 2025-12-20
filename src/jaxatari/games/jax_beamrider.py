@@ -87,9 +87,9 @@ class BeamriderConstants(NamedTuple):
     WHITE_UFO_RETREAT_SPEED_MULT: float = 2.5
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
     WHITE_UFO_TOP_LANE_TURN_SPEED: float = 0.5
-    WHITE_UFO_ATTACK_P_MIN: float = 0.0002
+    WHITE_UFO_ATTACK_P_MIN: float = 0.0004
     WHITE_UFO_ATTACK_P_MAX: float = 0.8
-    WHITE_UFO_ATTACK_ALPHA: float = 0.0001
+    WHITE_UFO_ATTACK_ALPHA: float = 0.0002
     ENEMY_EXPLOSION_FRAMES: int = 21
     KAMIKAZE_Y_THRESHOLD: float = 86.0
 
