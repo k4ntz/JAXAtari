@@ -720,8 +720,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             is_torpedo = bullet_type == self.consts.TORPEDO_ID
             ms_vulnerable = ms_stage == 2
             
-            hit_mothership = (ms_pos < shot_x + bullet_size[1]) & (shot_x < ms_pos + ms_size[1]) & \
-                             (ms_y < shot_y + bullet_size[0]) & (shot_y < ms_y + ms_size[0]) & \
+            ms_square = jnp.max(ms_size)
+            hit_mothership = (ms_pos < shot_x + bullet_size[1]) & (shot_x < ms_pos + ms_square) & \
+                             (ms_y < shot_y + bullet_size[0]) & (shot_y < ms_y + ms_square + 3) & \
                              shot_active & is_torpedo & ms_vulnerable
             player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
             
