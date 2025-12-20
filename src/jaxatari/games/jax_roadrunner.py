@@ -92,6 +92,17 @@ class RoadRunnerConstants(NamedTuple):
     LANDMINE_SPAWN_MIN_INTERVAL: int = 120
     LANDMINE_SPAWN_MAX_INTERVAL: int = 240
     DEATH_ANIMATION_DURATION: int = 60  # 1 second at 60 FPS
+    # Enemy speed variation - speeds as offsets from PLAYER_MOVE_SPEED
+    ENEMY_SLOW_SPEED_OFFSET: int = -1        # Speed = PLAYER_MOVE_SPEED - 1 = 2
+    ENEMY_FAST_SPEED_OFFSET: int = 1         # Speed = PLAYER_MOVE_SPEED + 1 = 4
+    ENEMY_SAME_SPEED_OFFSET: int = 0         # Speed = PLAYER_MOVE_SPEED = 3
+    # Enemy speed cycle durations (in scroll distance units)
+    ENEMY_SLOW_DURATION: int = 60            # Default slow phase duration
+    ENEMY_FAST_DURATION: int = 60            # ~1 second at 60 FPS  
+    ENEMY_SAME_DURATION: int = 300           # ~5 seconds at 60 FPS
+    # Enemy approach slowdown/reversal multiplier (when player moves right)
+    # Positive values slow down (0.5 = half speed), negative values reverse direction (-0.5 = move away at half speed)
+    ENEMY_APPROACH_SLOWDOWN: float = -0.5     # Moves backwards at half speed when player approaches
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -416,6 +427,7 @@ class RoadRunnerState(NamedTuple):
     next_landmine_spawn_step: chex.Array
     death_timer: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
+    enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -661,6 +673,46 @@ class JaxRoadRunner(
             )
 
         def normal_logic(st: RoadRunnerState) -> RoadRunnerState:
+            # Calculate current speed phase based on scroll distance
+            total_cycle = (self.consts.ENEMY_SLOW_DURATION + 
+                           self.consts.ENEMY_FAST_DURATION + 
+                           self.consts.ENEMY_SAME_DURATION)
+            
+            cycle_progress = (st.scrolling_step_counter - st.enemy_speed_phase_start) % total_cycle
+            
+            # Determine current phase speed offset
+            in_slow = cycle_progress < self.consts.ENEMY_SLOW_DURATION
+            in_fast = (cycle_progress >= self.consts.ENEMY_SLOW_DURATION) & \
+                      (cycle_progress < self.consts.ENEMY_SLOW_DURATION + self.consts.ENEMY_FAST_DURATION)
+            
+            speed_offset = jnp.where(
+                in_slow,
+                self.consts.ENEMY_SLOW_SPEED_OFFSET,
+                jnp.where(
+                    in_fast,
+                    self.consts.ENEMY_FAST_SPEED_OFFSET,
+                    self.consts.ENEMY_SAME_SPEED_OFFSET
+                )
+            )
+            
+            base_speed = self.consts.PLAYER_MOVE_SPEED + speed_offset
+            
+            # Check if player is moving right (approaching enemy)
+            # Player velocity is the difference between current position and previous position
+            player_vel_x = st.player_x - st.player_x_history[0]
+            is_approaching = player_vel_x > 0
+            
+            slowdown = jnp.where(
+                is_approaching,
+                self.consts.ENEMY_APPROACH_SLOWDOWN,
+                1.0
+            )
+            
+            # Calculate final speed (absolute value for clipping bounds)
+            # Negative slowdown will reverse direction via the multiplier on delta
+            final_speed = (base_speed * jnp.abs(slowdown)).astype(jnp.int32)
+            final_speed = jnp.maximum(final_speed, 1)
+
             # Get the distance to the player, with a configurable frame delay.
             delayed_player_x = st.player_x_history[
                 self.consts.ENEMY_REACTION_DELAY - 1
@@ -670,25 +722,30 @@ class JaxRoadRunner(
             ]
             delta_x = delayed_player_x - st.enemy_x
             delta_y = delayed_player_y - st.enemy_y
+            
+            # Apply direction modifier (negative slowdown reverses direction)
+            direction_modifier = jnp.where(slowdown < 0, -1.0, 1.0)
+            modified_delta_x = delta_x * direction_modifier
+            modified_delta_y = delta_y * direction_modifier
 
             # Determine enemy movement and orientation
             enemy_is_moving = (delta_x != 0) | (delta_y != 0)
-            enemy_looks_right = _update_orientation(delta_x, st.enemy_looks_right)
+            enemy_looks_right = _update_orientation(modified_delta_x, st.enemy_looks_right)
 
-            # Update enemy position, clipping movement to ENEMY_MOVE_SPEED to prevent jittering
+            # Update enemy position, clipping movement to final_speed to prevent jittering
             new_enemy_x = st.enemy_x + jnp.clip(
-                delta_x, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED
+                modified_delta_x, -final_speed, final_speed
             )
             new_enemy_y = st.enemy_y + jnp.clip(
-                delta_y, -self.consts.ENEMY_MOVE_SPEED, self.consts.ENEMY_MOVE_SPEED
+                modified_delta_y, -final_speed, final_speed
             )
 
             new_enemy_x = self._handle_scrolling(st, new_enemy_x)
 
             new_enemy_x, new_enemy_y = self._check_enemy_bounds(st, new_enemy_x, new_enemy_y)
             return st._replace(
-                enemy_x=new_enemy_x,
-                enemy_y=new_enemy_y,
+                enemy_x=new_enemy_x.astype(jnp.int32),
+                enemy_y=new_enemy_y.astype(jnp.int32),
                 enemy_is_moving=enemy_is_moving,
                 enemy_looks_right=enemy_looks_right,
             )
@@ -1310,6 +1367,7 @@ class JaxRoadRunner(
             landmine_y=jnp.array(-1, dtype=jnp.int32),
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -1434,6 +1492,7 @@ class JaxRoadRunner(
             landmine_y=jnp.array(-1, dtype=jnp.int32),
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
         )
         level_idx = self._get_level_index(reset_state)
         return self._initialize_spawn_timers(reset_state, level_idx)
@@ -1535,6 +1594,7 @@ class JaxRoadRunner(
             ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             instant_death=jnp.array(False, dtype=jnp.bool_),
+            enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
         )
 
     def _get_level_index(self, state: RoadRunnerState) -> jnp.ndarray:
