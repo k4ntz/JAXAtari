@@ -2919,7 +2919,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             new_pos = pos + jnp.array([final_dx, final_dy])
 
             should_deactivate = jnp.logical_or(
-                new_pos[1] > float(self.consts.BOTTOM_CLIP),
+                new_pos[1] > float(self.consts.BOTTOM_CLIP) + 5.0,
                 jnp.logical_or(new_pos[0] < 0, new_pos[0] > float(self.consts.SCREEN_WIDTH))
             )
 
