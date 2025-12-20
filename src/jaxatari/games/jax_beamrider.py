@@ -239,6 +239,8 @@ class LevelState(NamedTuple):
     enemy_shot_pos: chex.Array
     enemy_shot_vel: chex.Array
     enemy_shot_timer: chex.Array
+    enemy_shot_explosion_frame: chex.Array
+    enemy_shot_explosion_pos: chex.Array
     white_ufo_time_on_lane: chex.Array
     white_ufo_attack_time: chex.Array
     white_ufo_pattern_id: chex.Array
@@ -403,6 +405,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_pos=enemy_shot_offscreen,
             enemy_shot_vel=jnp.zeros((3,), dtype=jnp.int32),
             enemy_shot_timer=jnp.zeros((3,), dtype=jnp.int32),
+            enemy_shot_explosion_frame=jnp.zeros((3,), dtype=jnp.int32),
+            enemy_shot_explosion_pos=jnp.tile(
+                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+                (1, 3),
+            ),
             white_ufo_time_on_lane=jnp.array([0, 0, 0]),
             white_ufo_attack_time=jnp.zeros((3,), dtype=jnp.int32),
             white_ufo_pattern_id=jnp.zeros(3, dtype=jnp.int32),
@@ -726,11 +733,28 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                              shot_active & is_torpedo & ms_vulnerable
             player_shot_position = jnp.where(hit_mothership, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
             
+            enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
+                state,
+                white_ufo_pos,
+                white_ufo_pattern_id,
+                white_ufo_pattern_timer,
+            )
+
+            # --- Enemy Shot Collision Check (Torpedoes only) ---
+            hit_mask_shot, hit_exists_shot = self._enemy_shot_bullet_collision(
+                enemy_shot_pos, enemy_shot_timer, player_shot_position, bullet_type
+            )
+            enemy_shot_pos_pre_collision = enemy_shot_pos
+            enemy_shot_offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1), (1, 3))
+            enemy_shot_pos = jnp.where(hit_mask_shot[None, :], enemy_shot_offscreen, enemy_shot_pos)
+            enemy_shot_timer = jnp.where(hit_mask_shot, 0, enemy_shot_timer)
+            player_shot_position = jnp.where(hit_exists_shot, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+
             # Check if projectile was resolved this frame
             projectile_at_horizon = self._projectile_resolved(state)
             
             # Any collision that destroys the bullet
-            bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | rejuv_hit_by_shot | hit_mothership
+            bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | rejuv_hit_by_shot | hit_mothership | hit_exists_shot
             
             projectile_resolved_now = projectile_at_horizon | bullet_hit_any
             
@@ -759,11 +783,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 falling_rock_hit_mask,
                 pre_collision_rock_pos,
             )
-            enemy_shot_pos, enemy_shot_lane, enemy_shot_timer, shot_hit_count = self._enemy_shot_step(
-                state,
-                white_ufo_pos,
-                white_ufo_pattern_id,
-                white_ufo_pattern_timer,
+            enemy_shot_explosion_frame, enemy_shot_explosion_pos = self._update_enemy_explosions(
+                state.level.enemy_shot_explosion_frame,
+                state.level.enemy_shot_explosion_pos,
+                hit_mask_shot,
+                enemy_shot_pos_pre_collision,
             )
 
             # Player-UFO collision check
@@ -971,6 +995,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 enemy_type=jnp.array([0, 0, 0]), white_ufo_pos=white_ufo_pos,
                 white_ufo_vel=white_ufo_vel, enemy_shot_pos=enemy_shot_pos,
                 enemy_shot_vel=enemy_shot_lane, enemy_shot_timer=enemy_shot_timer,
+                enemy_shot_explosion_frame=enemy_shot_explosion_frame,
+                enemy_shot_explosion_pos=enemy_shot_explosion_pos,
                 white_ufo_time_on_lane=white_ufo_time_on_lane, white_ufo_attack_time=white_ufo_attack_time,
                 white_ufo_pattern_id=white_ufo_pattern_id, white_ufo_pattern_timer=white_ufo_pattern_timer,
                 ufo_explosion_frame=ufo_explosion_frame, ufo_explosion_pos=ufo_explosion_pos,
@@ -2325,6 +2351,45 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         return pos, active, player_shot_pos, rock_should_die, hit_exists_rock
 
+    def _enemy_shot_bullet_collision(
+        self,
+        enemy_shot_pos: chex.Array,
+        enemy_shot_timer: chex.Array,
+        player_shot_pos: chex.Array,
+        bullet_type: chex.Array,
+    ):
+        is_torpedo = bullet_type == self.consts.TORPEDO_ID
+        shot_x = player_shot_pos[0] + _get_bullet_alignment(
+            player_shot_pos[1], bullet_type, self.consts.LASER_ID
+        )
+        shot_y = player_shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+
+        enemy_shot_x = enemy_shot_pos[0, :] + _get_ufo_alignment(enemy_shot_pos[1, :])
+        enemy_shot_y = enemy_shot_pos[1, :]
+        
+        sprite_idx = (jnp.floor_divide(enemy_shot_timer, 4) % 2).astype(jnp.int32)
+        enemy_shot_sizes = jnp.take(jnp.array(self.consts.ENEMY_SHOT_SPRITE_SIZES), sprite_idx, axis=0)
+
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        # AABB collision check
+        shot_on_screen = enemy_shot_y <= float(self.consts.BOTTOM_CLIP)
+        
+        hit_mask = (
+            shot_on_screen
+            & shot_active
+            & (enemy_shot_x < shot_x + bullet_size[1]) & (shot_x < enemy_shot_x + enemy_shot_sizes[:, 1])
+            & (enemy_shot_y < shot_y + bullet_size[0]) & (shot_y < enemy_shot_y + enemy_shot_sizes[:, 0])
+        )
+        
+        # Only destroyed by torpedo
+        hit_mask_torpedo = hit_mask & is_torpedo
+        hit_exists = jnp.any(hit_mask_torpedo)
+        
+        return hit_mask_torpedo, hit_exists
+
     def _mothership_step(self, state: BeamriderState, white_ufo_left: chex.Array, enemy_explosion_frame: chex.Array, is_hit: chex.Array):
         """Spawn and move the mothership once all white UFOs are cleared."""
         stage = state.level.mothership_stage
@@ -2615,6 +2680,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         render_level = state.level._replace(
             white_ufo_pos=jnp.where(is_init, ufo_offscreen, state.level.white_ufo_pos),
             enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_pos),
+            enemy_shot_explosion_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_explosion_pos),
             chasing_meteoroid_pos=jnp.where(is_init, chasing_meteoroid_offscreen, state.level.chasing_meteoroid_pos),
             rejuvenator_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_pos),
             falling_rock_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_pos),
@@ -2916,16 +2982,36 @@ class BeamriderRenderer(JAXGameRenderer):
 
     def _render_enemy_shots(self, raster, state):
         enemy_shot_masks = self.SHAPE_MASKS["enemy_shot"]
+        explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
         for idx in range(3):
-            timer = state.level.enemy_shot_timer[idx]
-            sprite_idx = (jnp.floor_divide(timer, 4) % 2).astype(jnp.int32)
-            y_pos = jnp.where(
-                state.level.enemy_shot_pos[1][idx] <= self.consts.BOTTOM_CLIP,
-                state.level.enemy_shot_pos[1][idx],
-                500,
-            )
-            raster = self.jr.render_at_clipped(
-                raster, state.level.enemy_shot_pos[0][idx] + _get_ufo_alignment(y_pos), y_pos, enemy_shot_masks[sprite_idx]
+            explosion_frame = state.level.enemy_shot_explosion_frame[idx]
+
+            def render_explosion(r_in):
+                sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
+                sprite = explosion_masks[sprite_idx]
+                x_pos = state.level.enemy_shot_explosion_pos[0][idx] + _get_ufo_alignment(
+                    state.level.enemy_shot_explosion_pos[1][idx]
+                )
+                y_pos = state.level.enemy_shot_explosion_pos[1][idx] + y_offset
+                return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+            def render_shot(r_in):
+                timer = state.level.enemy_shot_timer[idx]
+                sprite_idx = (jnp.floor_divide(timer, 4) % 2).astype(jnp.int32)
+                y_pos = jnp.where(
+                    state.level.enemy_shot_pos[1][idx] <= self.consts.BOTTOM_CLIP,
+                    state.level.enemy_shot_pos[1][idx],
+                    500,
+                )
+                return self.jr.render_at_clipped(
+                    r_in, state.level.enemy_shot_pos[0][idx] + _get_ufo_alignment(y_pos), y_pos, enemy_shot_masks[sprite_idx]
+                )
+
+            raster = jax.lax.cond(
+                explosion_frame > 0,
+                render_explosion,
+                render_shot,
+                raster,
             )
         return raster
 
