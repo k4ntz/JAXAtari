@@ -33,7 +33,7 @@ class WhiteUFOPattern(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    WHITE_UFOS_PER_SECTOR: int = 1
+    WHITE_UFOS_PER_SECTOR: int = 0
 
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
@@ -65,7 +65,7 @@ class BeamriderConstants(NamedTuple):
     BOTTOM_CLIP:int = 175
     TOP_CLIP:int=43
     LASER_HIT_RADIUS: Tuple[int, int] = (7, 5)
-    TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 2)
+    TORPEDO_HIT_RADIUS: Tuple[int, int] = (4, 3)
     TORPEDO_HIT_RADIUS_MOTHERSHIP_SCENE: Tuple[int, int] = (4, 4)
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
@@ -107,7 +107,8 @@ class BeamriderConstants(NamedTuple):
     CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = 2
     CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = 40
     CHASING_METEOROID_SPAWN_Y: float = 54.0
-    CHASING_METEOROID_LANE_SPEED: float = 2.0
+    CHASING_METEOROID_LANE_SPEED: float = 0.9
+    CHASING_METEOROID_ACCEL: float = 0.05
     CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = 1.5
     CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
     CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
@@ -216,6 +217,7 @@ class LevelState(NamedTuple):
     chasing_meteoroid_explosion_pos: chex.Array
     chasing_meteoroid_pos: chex.Array
     chasing_meteoroid_active: chex.Array
+    chasing_meteoroid_vel_y: chex.Array
     chasing_meteoroid_phase: chex.Array
     chasing_meteoroid_frame: chex.Array
     chasing_meteoroid_lane: chex.Array
@@ -363,6 +365,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 (1, self.consts.CHASING_METEOROID_MAX),
             ),
             chasing_meteoroid_active=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.bool_),
+            chasing_meteoroid_vel_y=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.float32),
             chasing_meteoroid_phase=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
             chasing_meteoroid_frame=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
             chasing_meteoroid_lane=jnp.zeros((self.consts.CHASING_METEOROID_MAX,), dtype=jnp.int32),
@@ -487,6 +490,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             (
                 chasing_meteoroid_pos,
                 chasing_meteoroid_active,
+                chasing_meteoroid_vel_y,
                 chasing_meteoroid_phase,
                 chasing_meteoroid_frame,
                 chasing_meteoroid_lane,
@@ -499,6 +503,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             (
                 chasing_meteoroid_pos,
                 chasing_meteoroid_active,
+                chasing_meteoroid_vel_y,
                 chasing_meteoroid_phase,
                 chasing_meteoroid_frame,
                 chasing_meteoroid_lane,
@@ -508,6 +513,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ) = self._chasing_meteoroid_bullet_collision(
                 chasing_meteoroid_pos,
                 chasing_meteoroid_active,
+                chasing_meteoroid_vel_y,
                 chasing_meteoroid_phase,
                 chasing_meteoroid_frame,
                 chasing_meteoroid_lane,
@@ -696,6 +702,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             )
             chasing_meteoroid_active = jnp.where(chasing_meteoroid_hits, False, chasing_meteoroid_active)
             chasing_meteoroid_pos = jnp.where(chasing_meteoroid_hits[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_vel_y = jnp.where(chasing_meteoroid_hits, 0.0, chasing_meteoroid_vel_y)
             chasing_meteoroid_phase = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_phase)
             chasing_meteoroid_frame = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_frame)
             chasing_meteoroid_lane = jnp.where(chasing_meteoroid_hits, 0, chasing_meteoroid_lane)
@@ -706,6 +713,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             )
             chasing_meteoroid_active = jnp.where(reached_player, False, chasing_meteoroid_active)
             chasing_meteoroid_pos = jnp.where(reached_player[None, :], chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+            chasing_meteoroid_vel_y = jnp.where(reached_player, 0.0, chasing_meteoroid_vel_y)
             chasing_meteoroid_phase = jnp.where(reached_player, 0, chasing_meteoroid_phase)
             chasing_meteoroid_frame = jnp.where(reached_player, 0, chasing_meteoroid_frame)
             chasing_meteoroid_lane = jnp.where(reached_player, 0, chasing_meteoroid_lane)
@@ -762,6 +770,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_lane = jnp.where(sector_advanced, 0, enemy_shot_lane)
             chasing_meteoroid_pos = jnp.where(sector_advanced, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
             chasing_meteoroid_active = jnp.where(sector_advanced, False, chasing_meteoroid_active)
+            chasing_meteoroid_vel_y = jnp.where(sector_advanced, 0.0, chasing_meteoroid_vel_y)
             chasing_meteoroid_phase = jnp.where(sector_advanced, 0, chasing_meteoroid_phase)
             chasing_meteoroid_frame = jnp.where(sector_advanced, 0, chasing_meteoroid_frame)
             chasing_meteoroid_lane = jnp.where(sector_advanced, 0, chasing_meteoroid_lane)
@@ -789,6 +798,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
             chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
             chasing_meteoroid_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_active)
+            chasing_meteoroid_vel_y = jnp.where(is_dying_sequence, 0.0, chasing_meteoroid_vel_y)
             chasing_meteoroid_phase = jnp.where(is_dying_sequence, 0, chasing_meteoroid_phase)
             chasing_meteoroid_frame = jnp.where(is_dying_sequence, 0, chasing_meteoroid_frame)
             chasing_meteoroid_lane = jnp.where(is_dying_sequence, 0, chasing_meteoroid_lane)
@@ -830,6 +840,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 chasing_meteoroid_explosion_frame=chasing_meteoroid_explosion_frame,
                 chasing_meteoroid_explosion_pos=chasing_meteoroid_explosion_pos,
                 chasing_meteoroid_pos=chasing_meteoroid_pos, chasing_meteoroid_active=chasing_meteoroid_active,
+                chasing_meteoroid_vel_y=chasing_meteoroid_vel_y,
                 chasing_meteoroid_phase=chasing_meteoroid_phase, chasing_meteoroid_frame=chasing_meteoroid_frame,
                 chasing_meteoroid_lane=chasing_meteoroid_lane, chasing_meteoroid_side=chasing_meteoroid_side,
                 chasing_meteoroid_spawn_timer=chasing_meteoroid_spawn_timer,
@@ -1583,6 +1594,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     ):
         pos = state.level.chasing_meteoroid_pos
         active = state.level.chasing_meteoroid_active
+        vel_y = state.level.chasing_meteoroid_vel_y
         phase = state.level.chasing_meteoroid_phase
         frame = state.level.chasing_meteoroid_frame
         lane = state.level.chasing_meteoroid_lane
@@ -1648,6 +1660,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         spawn_pos = jnp.array([spawn_x, spawn_y], dtype=pos.dtype)
         pos_spawned = pos + (spawn_pos[:, None] - pos) * one_hot[None, :]
         active_spawned = jnp.where(one_hot_bool, True, active)
+        vel_y_spawned = jnp.where(one_hot_bool, 0.0, vel_y)
         phase_spawned = jnp.where(one_hot_bool, 0, phase)
         frame_spawned = jnp.where(one_hot_bool, 0, frame)
         lane_spawned = jnp.where(one_hot_bool, 0, lane)
@@ -1655,6 +1668,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         pos = jnp.where(should_spawn, pos_spawned, pos)
         active = jnp.where(should_spawn, active_spawned, active)
+        vel_y = jnp.where(should_spawn, vel_y_spawned, vel_y)
         phase = jnp.where(should_spawn, phase_spawned, phase)
         frame = jnp.where(should_spawn, frame_spawned, frame)
         lane = jnp.where(should_spawn, lane_spawned, lane)
@@ -1664,8 +1678,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         cycle_dx = jnp.array(self.consts.CHASING_METEOROID_CYCLE_DX, dtype=pos.dtype)
         cycle_dy = jnp.array(self.consts.CHASING_METEOROID_CYCLE_DY, dtype=pos.dtype)
-        dy = jnp.take(cycle_dy, frame)
-        new_y_a = pos[1] + dy
+        dy_a = jnp.take(cycle_dy, frame)
+        new_y_a = pos[1] + dy_a
 
         lane_vectors = jnp.array(self.consts.TOP_TO_BOTTOM_LANE_VECTORS, dtype=pos.dtype)
         lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=pos.dtype)
@@ -1678,7 +1692,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         dx = jnp.take(cycle_dx, frame) * dx_dir
         new_x_a = pos[0] + dx
 
-        new_y_b = pos[1] + float(self.consts.CHASING_METEOROID_LANE_SPEED)
+        new_vel_y = vel_y + self.consts.CHASING_METEOROID_ACCEL
+        new_y_b = pos[1] + new_vel_y
         lane_x_at_y = lanes_top_x[:, None] + lane_dx_over_dy[:, None] * (
             new_y_b[None, :] - float(self.consts.TOP_CLIP)
         )
@@ -1700,43 +1715,85 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_center = player_x + float(self.consts.PLAYER_WIDTH) / 2.0
         bottom_lanes = jnp.array(self.consts.BOTTOM_OF_LANES, dtype=jnp.float32)
         nearest_lane_idx = jnp.argmin(jnp.abs(bottom_lanes - player_center)).astype(jnp.int32)
-        move_dir = jnp.sign(player_vel).astype(jnp.int32)
-        target_lane_idx = jnp.clip(
-            nearest_lane_idx + move_dir,
-            0,
-            bottom_lanes.shape[0] - 1,
-        )
-        preferred_lane_idx = target_lane_idx + 1
-        preferred_lane_x = lane_x_at_current_y[preferred_lane_idx]
-        preferred_ahead = jnp.where(
-            side > 0,
-            preferred_lane_x >= new_x_a,
-            preferred_lane_x <= new_x_a,
-        )
-        ahead_mask = jnp.where(
-            side[None, :] > 0,
-            lane_x_at_current_y >= new_x_a[None, :],
-            lane_x_at_current_y <= new_x_a[None, :],
-        )
-        lane_dist = jnp.abs(lane_x_at_current_y - player_center)
-        masked_dist = jnp.where(ahead_mask, lane_dist, jnp.inf)
-        ahead_lane_idx = jnp.argmin(masked_dist, axis=0).astype(jnp.int32)
-        any_ahead = jnp.any(ahead_mask, axis=0)
-        target_lane = jnp.where(
-            preferred_ahead,
-            preferred_lane_idx,
-            jnp.where(any_ahead, ahead_lane_idx, preferred_lane_idx),
-        )
-        arm_now = active & (phase == 0) & hits_x
-        new_phase = jnp.where(arm_now, 1, phase)
-        new_lane = jnp.where(arm_now, target_lane, lane)
+        
+        # Consider only inner 5 lanes (indices 1-5 in TOP_OF_LANES)
+        # playable_lanes_x shape: (5, N)
+        playable_lanes_x = lane_x_at_current_y[1:6]
+        
+        # Alignment check for all 5 inner lanes
+        # dist_to_lanes shape: (5, N)
+        dist_to_lanes = jnp.abs(playable_lanes_x - new_x_a[None, :])
+        is_aligned = dist_to_lanes <= float(self.consts.CHASING_METEOROID_LANE_ALIGN_THRESHOLD)
+        
+        # Valid drop logic:
+        # Lane index i (0..4) corresponds to Lanes 1..5
+        # Drop if:
+        #   Moving Right (side > 0) AND (Lane >= PlayerLane OR Lane == 4 (Last))
+        #   Moving Left  (side < 0) AND (Lane <= PlayerLane OR Lane == 0 (Last))
+        # Note: PlayerLane is 0..4 relative to inner lanes.
+        # "Lane >= PlayerLane" covers "Lane == 4" if PlayerLane <= 4 (always true).
+        
+        lane_indices = jnp.arange(5)[:, None] # (5, 1)
+        
+        # Broadcase side and player_lane
+        # side: (N,), nearest_lane_idx: scalar
+        side_broad = side[None, :]
+        player_idx_broad = nearest_lane_idx
+        
+        should_drop_right = (side_broad > 0) & (lane_indices >= player_idx_broad)
+        should_drop_left = (side_broad < 0) & (lane_indices <= player_idx_broad)
+        
+        # Force drop at boundaries if somehow passed? 
+        # Actually, "latest at lane 5" means if we are AT lane 5 (index 4) and moving right, we MUST drop.
+        # indices >= player_idx includes 4 (since player_idx <= 4).
+        # So checking >= player is sufficient to cover "next lane" and "last lane".
+        
+        is_valid_drop_lane = should_drop_right | should_drop_left
+        
+        # Valid trigger mask: (5, N)
+        trigger_mask = is_aligned & is_valid_drop_lane
+        
+        # Check if ANY lane triggers for each meteoroid
+        should_descend = jnp.any(trigger_mask, axis=0)
+        
+        # Identify WHICH lane to drop on.
+        # If multiple align (unlikely), pick the one that triggered.
+        # We can use argmax to get the index. 
+        # If none, argmax returns 0, but should_descend will be False so it doesn't matter.
+        target_lane_idx_0_4 = jnp.argmax(trigger_mask, axis=0).astype(jnp.int32)
+        
+        # Map back to 1-5
+        chosen_lane = target_lane_idx_0_4 + 1
+        
+        # State transition
+        # If active & phase==0 & should_descend -> Start Phase 2 directly?
+        # Or Phase 1 then 2? 
+        # Original code: Phase 0 -> Phase 1 (Arm) -> Phase 2 (Descend if on lane).
+        # Since we confirmed "is_aligned" above, we are "on lane". We can descend immediately.
+        
+        start_descend_now = active & (phase == 0) & should_descend
+        
+        new_phase = jnp.where(start_descend_now, 2, phase)
+        new_lane = jnp.where(start_descend_now, chosen_lane, lane)
+        
+        # Update target X to lock onto the chosen lane center perfectly (optional but cleaner)
+        # target_lane_x_final = jnp.take_along_axis(lane_x_at_current_y, new_lane[None, :], axis=0).squeeze(0)
+        # new_x = jnp.where(start_descend_now, target_lane_x_final, new_x) 
+        # (For now keeping original movement logic to preserve momentum/physics unless requested otherwise)
 
-        target_lane_x = jnp.take_along_axis(lane_x_at_current_y, new_lane[None, :], axis=0).squeeze(0)
-        dist_to_lane = jnp.abs(target_lane_x - new_x_a)
-        is_on_lane = dist_to_lane <= float(self.consts.CHASING_METEOROID_LANE_ALIGN_THRESHOLD)
+        # Legacy compatibility: if phase was 1, check if aligned with *current* lane
+        # lane is 1-5. Index is lane-1.
+        current_lane_idx = jnp.clip(lane - 1, 0, 4)
+        current_lane_x = playable_lanes_x[current_lane_idx, jnp.arange(self.consts.CHASING_METEOROID_MAX)]
+        is_on_current_lane = jnp.abs(current_lane_x - new_x_a) <= float(self.consts.CHASING_METEOROID_LANE_ALIGN_THRESHOLD)
 
-        start_descend = active & (new_phase >= 1) & is_on_lane
+        start_descend = start_descend_now | ((phase == 1) & is_on_current_lane) 
         new_phase = jnp.where(start_descend, 2, new_phase)
+        
+        # When starting descend, initialize velocity
+        new_vel_y = jnp.where(start_descend, float(self.consts.CHASING_METEOROID_LANE_SPEED), vel_y)
+        # Apply acceleration if already descending
+        new_vel_y = jnp.where(phase_descend, vel_y + self.consts.CHASING_METEOROID_ACCEL, new_vel_y)
 
         new_frame = jnp.where(phase_horizontal, (frame + 1) % 8, frame)
         new_frame = jnp.where(start_descend, 0, new_frame)
@@ -1751,6 +1808,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         new_active = jnp.where(out_of_bounds, False, active)
         new_pos = jnp.where(new_active[None, :], new_pos, offscreen[:, None])
+        new_vel_y = jnp.where(new_active, new_vel_y, 0.0)
         new_phase = jnp.where(new_active, new_phase, 0)
         new_frame = jnp.where(new_active, new_frame, 0)
         new_lane = jnp.where(new_active, new_lane, 0)
@@ -1759,6 +1817,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return (
             new_pos,
             new_active,
+            new_vel_y,
             new_phase,
             new_frame,
             new_lane,
@@ -1772,6 +1831,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         self,
         chasing_meteoroid_pos: chex.Array,
         chasing_meteoroid_active: chex.Array,
+        chasing_meteoroid_vel_y: chex.Array,
         chasing_meteoroid_phase: chex.Array,
         chasing_meteoroid_frame: chex.Array,
         chasing_meteoroid_lane: chex.Array,
@@ -1816,6 +1876,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype)
         pos_after_hit = chasing_meteoroid_pos + (offscreen[:, None] - chasing_meteoroid_pos) * hit_one_hot[None, :]
         active_after_hit = jnp.where(hit_one_hot_bool, False, chasing_meteoroid_active)
+        vel_y_after_hit = jnp.where(hit_one_hot_bool, 0.0, chasing_meteoroid_vel_y)
         phase_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_phase)
         frame_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_frame)
         lane_after_hit = jnp.where(hit_one_hot_bool, 0, chasing_meteoroid_lane)
@@ -1823,6 +1884,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         chasing_meteoroid_pos = jnp.where(hit_exists, pos_after_hit, chasing_meteoroid_pos)
         chasing_meteoroid_active = jnp.where(hit_exists, active_after_hit, chasing_meteoroid_active)
+        chasing_meteoroid_vel_y = jnp.where(hit_exists, vel_y_after_hit, chasing_meteoroid_vel_y)
         chasing_meteoroid_phase = jnp.where(hit_exists, phase_after_hit, chasing_meteoroid_phase)
         chasing_meteoroid_frame = jnp.where(hit_exists, frame_after_hit, chasing_meteoroid_frame)
         chasing_meteoroid_lane = jnp.where(hit_exists, lane_after_hit, chasing_meteoroid_lane)
@@ -1836,6 +1898,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return (
             chasing_meteoroid_pos,
             chasing_meteoroid_active,
+            chasing_meteoroid_vel_y,
             chasing_meteoroid_phase,
             chasing_meteoroid_frame,
             chasing_meteoroid_lane,
