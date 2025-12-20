@@ -87,47 +87,25 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
-    #position player
-    player_x: chex.Array
-    player_y: chex.Array
-    player_color:chex.Array
-    player_tile: chex.Array
-    #positions dragons
-    dragon_yellow_x: chex.Array
-    dragon_yellow_y: chex.Array
-    dragon_yellow_tile: chex.Array
-    dragon_green_x: chex.Array
-    dragon_green_y: chex.Array
-    dragon_green_tile: chex.Array
-    #state dragons (alive, dead, attacking)
-    dragon_yellow_state: chex.Array
-    dragon_green_state: chex.Array
-    #positions keys
-    key_yellow_x: chex.Array
-    key_yellow_y: chex.Array
-    key_yellow_tile: chex.Array
-    key_black_x: chex.Array
-    key_black_y: chex.Array
-    key_black_tile: chex.Array
-    #state of gates (if open or closed)
-    gate_yellow_state: chex.Array
-    gate_black_state: chex.Array
-    #position sword
-    sword_x: chex.Array
-    sword_y: chex.Array
-    sword_tile: chex.Array
-    #position bridge
-    bridge_x: chex.Array
-    bridge_y: chex.Array
-    bridge_tile: chex.Array
-    #position magnet
-    magnet_x: chex.Array
-    magnet_y: chex.Array
-    magnet_tile: chex.Array
-    #position chalice
-    chalice_x: chex.Array
-    chalice_y: chex.Array
-    chalice_tile: chex.Array
+    #position player: x ,y ,tile , color
+    player: chex.Array
+    #positions dragons: x, y ,tile ,state
+    dragon_yellow: chex.Array
+    dragon_green: chex.Array
+    #positions keys: x, y, tile
+    key_yellow: chex.Array
+    key_black: chex.Array
+    #gates: state
+    gate_yellow: chex.Array
+    gate_black: chex.Array
+    #position sword: x, y, tile
+    sword: chex.Array
+    #position bridge: x, y, tile
+    bridge: chex.Array
+    #position magnet: x, y, tile
+    magnet: chex.Array
+    #position chalice: x, y, tile
+    chalice: chex.Array
 
 
 class EntityPosition(NamedTuple):
@@ -176,7 +154,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
-        new_player_x = state.player_x
+        new_player_x = state.player[0]
         new_player_x = jax.lax.cond(
             left,
             lambda x: x-1,
@@ -190,7 +168,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = new_player_x,
         )
 
-        new_player_y = state.player_y
+        new_player_y = state.player[1]
         new_player_y = jax.lax.cond(
             down,
             lambda y: y+1,
@@ -206,38 +184,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return AdventureState(
             step_counter = state.step_counter,
-            player_x = new_player_x,
-            player_y = new_player_y,
-            player_color= state.player_color,
-            player_tile = state.player_tile,
-            dragon_yellow_x = state.dragon_yellow_x,
-            dragon_yellow_y = state.dragon_yellow_y,
-            dragon_yellow_tile = state.dragon_yellow_tile,
-            dragon_green_x = state.dragon_green_x,
-            dragon_green_y = state.dragon_green_y,
-            dragon_green_tile=state.dragon_green_tile,
-            dragon_yellow_state = state.dragon_yellow_state,
-            dragon_green_state = state.dragon_green_state,
-            key_yellow_x = state.key_yellow_x,
-            key_yellow_y = state.key_yellow_y,
-            key_yellow_tile=state.key_yellow_tile,
-            key_black_x = state.key_black_x,
-            key_black_y = state.key_black_y,
-            key_black_tile=state.key_black_tile,
-            gate_yellow_state = state.gate_yellow_state,
-            gate_black_state = state.gate_black_state,
-            sword_x = state.sword_x,
-            sword_y = state.sword_y,
-            sword_tile=state.sword_tile,
-            bridge_x = state.bridge_x,
-            bridge_y = state.bridge_y,
-            bridge_tile=state.bridge_tile,
-            magnet_x = state.magnet_x,
-            magnet_y = state.magnet_y,
-            magnet_tile=state.magnet_tile,
-            chalice_x = state.chalice_x,
-            chalice_y = state.chalice_y,
-            chalice_tile=state.chalice_tile
+            player = jnp.array([new_player_x,new_player_y,state.player[3],state.player[4]]).astype(jnp.int32), #SEEMS NOT GOOD
+            dragon_yellow = state.dragon_yellow,
+            dragon_green = state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
         )
 
     
@@ -251,42 +208,22 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
-            #player
-            player_x = jnp.array(78).astype(jnp.int32),     #spawn X 
-            player_y = jnp.array(174).astype(jnp.int32),    #spawn Y
-            player_tile = jnp.array(0).astype(jnp.int32),   #Spawn Tile
-            player_color= jnp.array(0).astype(jnp.int32),   #Spawn Color
-            #Dragons
-            dragon_yellow_x = jnp.array(120).astype(jnp.int32), #ToDo
-            dragon_yellow_y = jnp.array(50).astype(jnp.int32), #ToDo
-            dragon_yellow_tile = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_green_x = jnp.array(120).astype(jnp.int32), #ToDo
-            dragon_green_y = jnp.array(70).astype(jnp.int32), #ToDo
-            dragon_green_tile = jnp.array(70).astype(jnp.int32), #ToDo
-            dragon_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
-            dragon_green_state = jnp.array(0).astype(jnp.int32), #ToDo
-            #Keys
-            key_yellow_x = jnp.array(31).astype(jnp.int32),
-            key_yellow_y = jnp.array(110).astype(jnp.int32),
-            key_yellow_tile = jnp.array(0).astype(jnp.int32),
-            key_black_x = jnp.array(120).astype(jnp.int32), #ToDo
-            key_black_y = jnp.array(90).astype(jnp.int32), #ToDo
-            key_black_tile = jnp.array(0).astype(jnp.int32), #ToDo
-            gate_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
-            gate_black_state = jnp.array(3).astype(jnp.int32), #ToDo
-            #Items
-            sword_x = jnp.array(120).astype(jnp.int32), #ToDo
-            sword_y = jnp.array(110).astype(jnp.int32), #ToDo
-            sword_tile = jnp.array(0).astype(jnp.int32), #ToDo
-            bridge_x = jnp.array(120).astype(jnp.int32), #ToDo
-            bridge_y = jnp.array(130).astype(jnp.int32), #ToDo
-            bridge_tile = jnp.array(0).astype(jnp.int32), #ToDo
-            magnet_x = jnp.array(120).astype(jnp.int32), #ToDo
-            magnet_y = jnp.array(150).astype(jnp.int32), #ToDo
-            magnet_tile = jnp.array(0).astype(jnp.int32), #ToDo
-            chalice_x = jnp.array(120).astype(jnp.int32), #ToDo
-            chalice_y = jnp.array(170).astype(jnp.int32), #ToDo
-            chalice_tile = jnp.array(170).astype(jnp.int32) #ToDo
+            #Player Spawn: x, y, tile, color
+            player = jnp.array([78,174,0,0]).astype(jnp.int32),
+            #Dragons: x, y ,tile ,state
+            dragon_yellow = jnp.array([120,50,0,0]).astype(jnp.int32), #ToDo
+            dragon_green = jnp.array([120,80,0,0]).astype(jnp.int32), #ToDo
+            #Keys: x ,y, tile
+            key_yellow = jnp.array([31,110,0]).astype(jnp.int32),
+            key_black = jnp.array([31,80,0]).astype(jnp.int32),
+            #Gate: state
+            gate_yellow=jnp.array([0]).astype(jnp.int32),
+            gate_black=jnp.array([0]).astype(jnp.int32),
+            #Items: x, y, tile
+            sword = jnp.array([120,120,0]).astype(jnp.int32), #ToDo
+            bridge= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
+            magnet= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
+            chalice= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -298,42 +235,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         previous_state = state
         # Make per-step key available to helpers that may read state.key
         state = AdventureState(
-            step_counter = state.step_counter,
-            player_x = state.player_x,
-            player_y=state.player_y,
-            player_color= state.player_color,
-            player_tile = state.player_tile,
-            dragon_yellow_x = state.dragon_yellow_x,
-            dragon_yellow_y = state.dragon_yellow_y,
-            dragon_yellow_tile = state.dragon_yellow_tile,
-            dragon_green_x = state.dragon_green_x,
-            dragon_green_y = state.dragon_green_y,
-            dragon_green_tile=state.dragon_green_tile,
-            dragon_yellow_state = state.dragon_yellow_state,
-            dragon_green_state = state.dragon_green_state,
-            key_yellow_x = state.key_yellow_x,
-            key_yellow_y = state.key_yellow_y,
-            key_yellow_tile=state.key_yellow_tile,
-            key_black_x = state.key_black_x,
-            key_black_y = state.key_black_y,
-            key_black_tile=state.key_black_tile,
-            gate_yellow_state = state.gate_yellow_state,
-            gate_black_state = state.gate_black_state,
-            sword_x = state.sword_x,
-            sword_y = state.sword_y,
-            sword_tile=state.sword_tile,
-            bridge_x = state.bridge_x,
-            bridge_y = state.bridge_y,
-            bridge_tile=state.bridge_tile,
-            magnet_x = state.magnet_x,
-            magnet_y = state.magnet_y,
-            magnet_tile=state.magnet_tile,
-            chalice_x = state.chalice_x,
-            chalice_y = state.chalice_y,
-            chalice_tile=state.chalice_tile
+            step_counter=state.step_counter,
+            player=state.player,
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
         )
         state = self._player_step(state, action)
-
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -348,41 +263,41 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     def _get_observation(self, state: AdventureState):
         player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
-            tile=state.player_tile,
+            x=state.player[0],
+            y=state.player[1],
+            tile=state.player[2],
             width=4, 
             height=8, 
             state=1 #ToDO
         )
         dragon_yellow = EntityPosition(
-            x=state.dragon_yellow_x,
-            y=state.dragon_yellow_y,
-            tile=state.dragon_yellow_tile,
+            x=state.dragon_yellow[0],
+            y=state.dragon_yellow[1],
+            tile=state.dragon_yellow[2],
             width=8, 
             height=44, 
             state=1 #ToDO
         )
         dragon_green = EntityPosition(
-            x=state.dragon_green_x,
-            y=state.dragon_green_y,
-            tile=state.dragon_green_tile,
+            x=state.dragon_green[0],
+            y=state.dragon_green[1],
+            tile=state.dragon_green[2],
             width=8, 
             height=44, 
             state=1 #ToDO
         )
         key_yellow = EntityPosition(
-            x=state.key_yellow_x,
-            y=state.key_yellow_y,
-            tile=state.key_yellow_tile,
+            x=state.key_yellow[0],
+            y=state.key_yellow[1],
+            tile=state.key_yellow[2],
             width=8, 
             height=6,
             state=1 #ToDO
         )
         key_black = EntityPosition(
-            x=state.key_black_x,
-            y=state.key_black_y,
-            tile=state.key_black_tile,
+            x=state.key_black[0],
+            y=state.key_black[1],
+            tile=state.key_black[2],
             width=8, 
             height=6,
             state=1 #ToDO
@@ -393,7 +308,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=1, #ToDO
             width=7, 
             height=32, 
-            state=state.gate_yellow_state #ToDO
+            state=state.gate_yellow[0] #ToDO
         )
         gate_black = EntityPosition(
             x=100, #ToDO
@@ -401,36 +316,36 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             tile=1, #ToDO
             width=7, 
             height=32, 
-            state=state.gate_black_state #ToDO
+            state=state.gate_black[0] #ToDO
         )
         sword = EntityPosition(
-            x=state.sword_x,
-            y=state.sword_y,
-            tile=state.sword_tile,
+            x=state.sword[0],
+            y=state.sword[1],
+            tile=state.sword[2],
             width=8, 
             height=10, 
             state=1 #ToDO
         )
         bridge = EntityPosition(
-            x=state.bridge_x,
-            y=state.bridge_y,
-            tile=state.bridge_tile,
+            x=state.bridge[0],
+            y=state.bridge[1],
+            tile=state.bridge[2],
             width=32, 
             height=48, 
             state=1 #ToDO
         )
         magnet = EntityPosition(
-            x=state.magnet_x,
-            y=state.magnet_y,
-            tile=state.magnet_tile,
+            x=state.magnet[0],
+            y=state.magnet[1],
+            tile=state.magnet[2],
             width=8, 
             height=16,
             state=1 #ToDO
         )
         chalice = EntityPosition(
-            x=state.chalice_x,
-            y=state.chalice_y,
-            tile=state.chalice_tile,
+            x=state.chalice[0],
+            y=state.chalice[1],
+            tile=state.chalice[2],
             width=8, 
             height=18,
             state=1 #ToDO
@@ -529,38 +444,38 @@ class AdventureRenderer(JAXGameRenderer):
     def render(self, state):
         #set bg color here
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        room_mask =self.SHAPE_MASKS["room_number"][state.player_tile]
+        room_mask =self.SHAPE_MASKS["room_number"][state.player[2]]
         raster = self.jr.render_at(raster, 0, 0, room_mask)
 
         #set player color here
-        player_mask = self.SHAPE_MASKS["player_colors"][state.player_color]
-        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
+        player_mask = self.SHAPE_MASKS["player_colors"][state.player[3]]
+        raster = self.jr.render_at(raster, state.player[0], state.player[1], player_mask)
 
         #dragons
         dragon_yellow_mask = self.SHAPE_MASKS["dragon_yellow_neutral"]
-        raster = self.jr.render_at(raster, state.dragon_yellow_x, state.dragon_yellow_y, dragon_yellow_mask)
+        raster = self.jr.render_at(raster, state.dragon_yellow[0], state.dragon_yellow[1], dragon_yellow_mask)
         dragon_green_mask = self.SHAPE_MASKS["dragon_green-neutral"]
-        raster = self.jr.render_at(raster, state.dragon_green_x, state.dragon_green_y, dragon_green_mask)
+        raster = self.jr.render_at(raster, state.dragon_green[0], state.dragon_green[1], dragon_green_mask)
         #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
-        raster = self.jr.render_at(raster, state.key_yellow_x, state.key_yellow_y, key_yellow_mask)
+        raster = self.jr.render_at(raster, state.key_yellow[0], state.key_yellow[1], key_yellow_mask)
         key_black_mask = self.SHAPE_MASKS["key_black"]
-        raster = self.jr.render_at(raster, state.key_black_x, state.key_black_y, key_black_mask)
+        raster = self.jr.render_at(raster, state.key_black[0], state.key_black[1], key_black_mask)
         #Gates
-        gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow_state]
+        gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow[0]]
         raster = self.jr.render_at(raster, 77, 140, gate_yellow_mask)
-        gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black_state]
+        gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black[0]]
         raster = self.jr.render_at(raster, 30, 30, gate_black_mask)#ToDO
 
         #items
         sword_mask = self.SHAPE_MASKS["sword"]
-        raster = self.jr.render_at(raster, state.sword_x, state.sword_y, sword_mask)
+        raster = self.jr.render_at(raster, state.sword[0], state.sword[1], sword_mask)
         bridge_mask = self.SHAPE_MASKS["bridge"]
-        raster = self.jr.render_at(raster, state.bridge_x, state.bridge_y, bridge_mask)
+        raster = self.jr.render_at(raster, state.bridge[0], state.bridge[1], bridge_mask)
         magnet_mask = self.SHAPE_MASKS["magnet"]
-        raster = self.jr.render_at(raster, state.magnet_x, state.magnet_y, magnet_mask)
+        raster = self.jr.render_at(raster, state.magnet[0], state.magnet[1], magnet_mask)
         #chalice
         chalice_mask = self.SHAPE_MASKS["chalice"]
-        raster = self.jr.render_at(raster, state.chalice_x, state.chalice_y, chalice_mask)
+        raster = self.jr.render_at(raster, state.chalice[0], state.chalice[1], chalice_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
