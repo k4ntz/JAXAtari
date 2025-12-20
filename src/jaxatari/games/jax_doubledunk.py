@@ -25,6 +25,7 @@ class GameMode(IntEnum):
     IN_PLAY = 1
     TRAVEL_PENALTY = 2
     OUT_OF_BOUNDS_PENALTY = 3
+    FOUL_PENALTY = 4
 
 class OffensiveAction(IntEnum):
     PASS = 0
@@ -117,6 +118,9 @@ class DunkGameState:
     last_enemy_actions: chex.Array
     travel_timer: chex.Array
     out_of_bounds_timer: chex.Array
+    foul_timer: chex.Array
+    foul_type: chex.Array
+    foul_committer: chex.Array
     key: chex.PRNGKey
 
 class EntityPosition(NamedTuple):
@@ -316,20 +320,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             player2_outside=updated_p2_outside,
         )
 
-        # Instead of resetting immediately, we switch to OUT_OF_BOUNDS_PENALTY mode
-        # Freeze for ~1 second (60 frames)
+        # Instead of resetting immediately, we switch to FOUL_PENALTY mode
+        # Freeze for ~1 second (60 frames) and mark as out-of-bounds foul
         penalty_state = updated_state.replace(
-            game_mode=GameMode.OUT_OF_BOUNDS_PENALTY,
-            out_of_bounds_timer=60,
-            ball=state.ball.replace(holder=new_ball_holder) # Switch possession immediately or after?
-            # The original logic calculated new_ball_holder and used it in reset_state.
-            # Here we should probably switch possession during or after the freeze.
-            # If we switch it here, the ball might jump to the other player visually during the freeze.
-            # Let's keep the ball where it is during the freeze, and switch possession when resetting.
-            # But wait, p1_out_of_bounds calculation depends on who *currently* holds it.
-            # If I don't store "who caused it" or "who gets it", I might lose that info.
-            # However, `triggered_travel` was stored in PlayerState. `is_out_of_bounds` IS stored in PlayerState!
-            # So I can recalculate it in the handler.
+            game_mode=GameMode.FOUL_PENALTY,
+            foul_timer=60,
+            foul_type=3,  # 3 == out of bounds
+            foul_committer=jax.lax.select(p1_out_of_bounds, state.ball.holder, PlayerID.NONE),
+            # Keep ball as-is until reset; possession will be assigned on reset
+            ball=state.ball,
         )
 
         new_state = jax.lax.cond(p1_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
@@ -414,10 +413,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # Instead of resetting immediately, we switch to TRAVEL_PENALTY mode
-        # Freeze for ~1 second (60 frames)
+        # Instead of resetting immediately, we switch to FOUL_PENALTY mode
+        # Freeze for ~1 second (60 frames) and mark as travel foul
         penalty_state = updated_state.replace(
-            game_mode=GameMode.TRAVEL_PENALTY,
-            travel_timer=60
+            game_mode=GameMode.FOUL_PENALTY,
+            foul_timer=60,
+            foul_type=1,  # 1 == travel
+            foul_committer=PlayerID.NONE,
         )
 
         new_state = jax.lax.cond(travel_triggered, lambda x: penalty_state, lambda x: updated_state, None)
@@ -606,6 +608,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 p2_return_to_basket_action, 
                 jax.lax.select(rand_inside < 0.5, Action.NOOP, random_inside_move_action)
             )
+                foul_timer=0,
+                foul_type=0,
+                foul_committer=PlayerID.NONE,
         )
 
         # P2 Outside Offense
@@ -944,6 +949,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         def continue_play(s):
             # Handle miss
             is_miss = reached_target & ~s.ball.is_goal
+            orig_shooter = s.ball.shooter
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
 
@@ -1002,6 +1008,23 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 return b.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE)
 
             b_state = jax.lax.cond(any_caught, apply_catch, lambda b: b, b_state)
+
+            # Detect "clearing" foul: miss -> rebound -> opposing team catches immediately
+            catcher_pid = player_ids[catcher_idx]
+
+            orig_team_is_p1 = (orig_shooter <= PlayerID.PLAYER1_OUTSIDE)
+            catcher_team_is_p1 = (catcher_pid <= PlayerID.PLAYER1_OUTSIDE)
+            different_team = jnp.logical_xor(orig_team_is_p1, catcher_team_is_p1)
+
+            clearing_foul = any_caught & is_miss & (orig_shooter != PlayerID.NONE) & different_team
+
+            def apply_clearing(state_and_ball):
+                s_in, b_in = state_and_ball
+                s_out = s_in.replace(game_mode=GameMode.FOUL_PENALTY, foul_timer=60, foul_type=2, foul_committer=catcher_pid)
+                b_out = b_in.replace(holder=PlayerID.NONE, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE)
+                return (s_out, b_out)
+
+            s, b_state = jax.lax.cond(clearing_foul, apply_clearing, lambda x: x, (s, b_state))
 
             # Update ball position if held
             is_held = (b_state.holder >= PlayerID.PLAYER1_INSIDE) & (b_state.holder <= PlayerID.PLAYER2_OUTSIDE)
@@ -1114,6 +1137,45 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             updated_state
         )
 
+    def _handle_foul_penalty(self, state: DunkGameState) -> DunkGameState:
+        """Handles a generic foul penalty (shows foul overlay for a short time then resets possession)."""
+        new_timer = state.foul_timer - 1
+        timer_expired = new_timer <= 0
+
+        def reset_after_penalty(s):
+            key, reset_key = random.split(s.key)
+
+            # Default: if travel foul, detect via triggered_travel flags
+            def travel_reset(s2):
+                p1_triggered = s2.player1_inside.triggered_travel | s2.player1_outside.triggered_travel
+                new_ball_holder = jax.lax.select(p1_triggered, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+                return new_ball_holder
+
+            # For clearing or out_of_bounds fouls, use foul_committer to determine who committed
+            def committer_reset(s2):
+                committer = s2.foul_committer
+                p1_committed = (committer == PlayerID.PLAYER1_INSIDE) | (committer == PlayerID.PLAYER1_OUTSIDE)
+                new_ball_holder = jax.lax.select(p1_committed, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
+                return new_ball_holder
+
+            new_ball_holder = jax.lax.cond(s.foul_type == 1, travel_reset, committer_reset, s)
+
+            return self._init_state(reset_key).replace(
+                player_score=s.player_score,
+                enemy_score=s.enemy_score,
+                step_counter=s.step_counter,
+                ball=s.ball.replace(holder=new_ball_holder)
+            )
+
+        updated_state = state.replace(foul_timer=new_timer)
+
+        return jax.lax.cond(
+            timer_expired,
+            reset_after_penalty,
+            lambda s: s,
+            updated_state
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DunkGameState, action: int) -> Tuple[DunkObservation, DunkGameState, float, bool, DunkInfo]:
         """Takes an action in the game and returns the new game state."""
@@ -1138,6 +1200,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state = jax.lax.cond(
             state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
             lambda s: self._handle_out_of_bounds_penalty(s),
+            lambda s: s,
+            state
+        )
+
+        # Handle generic foul penalty mode (covers travel, clearing, out-of-bounds fouls)
+        state = jax.lax.cond(
+            state.game_mode == GameMode.FOUL_PENALTY,
+            lambda s: self._handle_foul_penalty(s),
             lambda s: s,
             state
         )
@@ -1483,6 +1553,32 @@ class DunkRenderer(JAXGameRenderer):
                 (text_y, text_x, 0)
             )
 
+        def apply_foul_overlay(image):
+            # Choose a mask based on foul type: travel/clearing/out_of_bounds
+            foul_type = state.foul_type
+            # Use travel mask for travel/clearing (types 1 and 2), out_of_bounds mask for type 3
+            mask = jax.lax.select((foul_type == 3), self.SHAPE_MASKS['out_of_bounds'], self.SHAPE_MASKS['travel'])
+
+            text_sprite_rgb = self.PALETTE[mask]
+            text_alpha_mask = (mask != self.jr.TRANSPARENT_ID)[..., None]
+
+            text_x = (self.consts.WINDOW_WIDTH - mask.shape[1]) // 2
+            text_y = self.consts.WINDOW_HEIGHT - mask.shape[0] - 25
+
+            image_slice = jax.lax.dynamic_slice(
+                image,
+                (text_y, text_x, 0),
+                (mask.shape[0], mask.shape[1], 3)
+            )
+
+            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
+
+            return jax.lax.dynamic_update_slice(
+                image,
+                combined_slice,
+                (text_y, text_x, 0)
+            )
+
         final_image = jax.lax.cond(
             state.game_mode == GameMode.PLAY_SELECTION,
             apply_play_selection_overlay,
@@ -1497,9 +1593,18 @@ class DunkRenderer(JAXGameRenderer):
             final_image
         )
 
-        return jax.lax.cond(
+        final_image = jax.lax.cond(
             state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
             apply_out_of_bounds_overlay,
             lambda x: x, 
             final_image
         )
+
+        final_image = jax.lax.cond(
+            state.game_mode == GameMode.FOUL_PENALTY,
+            apply_foul_overlay,
+            lambda x: x,
+            final_image
+        )
+
+        return final_image
