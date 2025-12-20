@@ -758,7 +758,9 @@ class JaxYarsRevenge(
 
         # Gained score for devouring an energy cell
         score_gained = jnp.where(
-            jnp.sum(yar_shield_collusion & devour_reset), self.consts.SHIELD_CELL_DEVOUR_POINTS, 0
+            jnp.sum(yar_shield_collusion & devour_reset),
+            self.consts.SHIELD_CELL_DEVOUR_POINTS,
+            0,
         )
 
         return (
@@ -840,6 +842,7 @@ class JaxYarsRevenge(
         self,
         state: YarsRevengeState,
         fire: jnp.ndarray,
+        yar_neutral: jnp.ndarray,
         new_energy_shield: jnp.ndarray,
         devour_reset: jnp.ndarray,
     ):
@@ -903,7 +906,7 @@ class JaxYarsRevenge(
 
         new_cannon_fired = jnp.logical_or(
             jnp.logical_and(cannon_exists, cannon_fired),
-            jnp.logical_and(cannon_exists, fire),
+            jnp.logical_and(cannon_exists, jnp.logical_and(fire, ~yar_neutral)),
         )
 
         return (
@@ -1275,7 +1278,7 @@ class JaxYarsRevenge(
 
         # Cannon
         cannon_updates, cannon_exists, cannon_fired, cannon_score = self._cannon_step(
-            state, fire, new_state.energy_shield_state, devour_reset
+            state, fire, yar_neutral, new_state.energy_shield_state, devour_reset
         )
         new_state = new_state._replace(**cannon_updates)
 
@@ -1585,13 +1588,13 @@ class JaxYarsRevenge(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state, state):
-        """Reward is simply the score delta - never negative in this game."""
+        """Reward is simply the score delta."""
         return state.score - previous_state.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state):
-        """The original code never terminates - always False."""
-        return False
+        """Returns if the game has finished, also when lives are ran out, or less than zero."""
+        return state.lives <= 0
 
 
 class YarsRevengeRenderer(JAXGameRenderer):
