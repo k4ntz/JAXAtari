@@ -188,6 +188,7 @@ class BattlezoneState(NamedTuple):
     player_projectile: Projectile #player can only fire 1 projectile
     enemy_projectiles: Projectile #per enemy 1 projectile
     random_key: chex.PRNGKey
+    shot_spawn: chex.Array
 
 
 class BattlezoneObservation(NamedTuple):
@@ -390,7 +391,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=jnp.array([False, False], dtype=jnp.bool),
                 distance=jnp.array([0, 0], dtype=jnp.float32)
             ),
-            random_key=key
+            random_key=key,
+            shot_spawn=jnp.array([False], dtype=jnp.bool)
         )
         initial_obs = self._get_observation(state)
 
@@ -421,8 +423,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             #-------------------spawn-------------------
             split_key, key = jax.random.split(new_state.random_key, 2)
             new_state = new_state._replace(random_key=key)
-            new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))
-                (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score))
+            new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None, None))
+                (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score, new_state))
             #-------------------------------------------
 
             new_state = self._player_step(new_state, action)
@@ -518,13 +520,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return distance
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_enemy(self, key, enemy:Enemy, score):
+    def spawn_enemy(self, key, enemy:Enemy, score, state):
         def score_to_spawn_indx(score):
             threshold = jnp.array([1000, 2000, 7000, 12000])
             return jnp.sum(score >= threshold)
-        def is_active(_):
+        def no_spawn(args):
+            enemy, key, score = args
             return enemy
-        def not_active(args):
+        def do_spawn(args):
             enemy, key, score = args
             # Enemy spawnprobs
             spawn_probs_index = score_to_spawn_indx(score)
@@ -545,9 +548,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                   shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
                                   )
 
-        return jax.lax.cond(jnp.any(jnp.array([enemy.active, enemy.death_anim_counter>0, (score<1000)])),
-                            is_active, not_active,
-                            (enemy, key, score))
+        cond = jnp.logical_or(enemy.active, enemy.death_anim_counter>0)
+        cond = jnp.logical_or(cond, jnp.logical_and(score<1000, state.shot_spawn==False))
+        cond = jnp.any(cond)
+
+        return jax.lax.cond(cond, no_spawn, do_spawn, (enemy, key, score))
 
     # -------------Enemy Movements-----------------
     #@partial(jax.jit, static_argnums=(0,))
@@ -640,10 +645,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         # Set enemies to inactive
         inactive_enemies = state.enemies._replace(active=jnp.zeros_like(state.enemies.active))
         new_state = state._replace(enemies = inactive_enemies)
-        new_state = state._replace(
+        new_state = new_state._replace(shot_spawn=jnp.ones_like(new_state.shot_spawn))
+        new_state = new_state._replace(
             life=new_state.life-1,
-            enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None))
-                (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score),
+            enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None, None))
+                (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score, new_state),
             player_projectile=Projectile(
                 x=jnp.array(0, dtype=jnp.float32),
                 z=jnp.array(0, dtype=jnp.float32),
@@ -659,7 +665,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 distance=jnp.array([0, 0], dtype=jnp.float32)
             ),
             random_key=key)
-        new_state = new_state._replace()
 
         return new_state
 
