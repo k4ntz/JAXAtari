@@ -224,6 +224,13 @@ class YarsRevengeConstants(NamedTuple):
     CANNON_MOVEMENT_FRAME = 8  # Animation change interval for cannon
     SWIRL_MOVEMENT_FRAME = 2  # Swirl sprite cycle
 
+    # Points
+    SHIELD_CELL_DESTROY_POINTS = 69  # Destroying a cell with energy missile or cannon
+    SHIELD_CELL_DEVOUR_POINTS = 169  # Destroying the cell by devouring
+    DESTROY_QOTILE_POINTS = 1000  # Destroying qotile with cannon
+    DESTROY_CHARGING_SWIRL_POINTS = 2000  # Destroying a charging swirl (not fired)
+    DESTROY_SWIRL_POINTS = 6000  # Destoring a fired swirl mid-air
+
     # Colour palette (RGB)
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
     NEUTRAL_ZONE_COLOR: Tuple[int, int, int] = (20, 20, 20)
@@ -354,7 +361,7 @@ class JaxYarsRevenge(
         self.renderer = YarsRevengeRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
-    def construct_initial_state(self, stage):
+    def _construct_initial_state(self, stage):
         """
         Build the initial game state for a given *stage* (0 or 1).
         The returned state is an immutable `YarsRevengeState`.
@@ -437,7 +444,7 @@ class JaxYarsRevenge(
         """
         Return the initial observation and state.
         """
-        state = self.construct_initial_state(0)
+        state = self._construct_initial_state(0)
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -749,6 +756,11 @@ class JaxYarsRevenge(
         # Neutral zone detection
         yar_neutral = self._check_entity_collusion(state.yar, state.neutral_zone)
 
+        # Gained score for devouring an energy cell
+        score_gained = jnp.where(
+            jnp.sum(yar_shield_collusion & devour_reset), self.consts.SHIELD_CELL_DEVOUR_POINTS, 0
+        )
+
         return (
             dict(
                 yar=new_yar_entity,
@@ -758,6 +770,7 @@ class JaxYarsRevenge(
             ),
             yar_neutral,
             devour_reset,
+            score_gained,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -843,14 +856,14 @@ class JaxYarsRevenge(
         cannon_hit_boundary = self._check_entity_boundary(state.cannon)
 
         # Collision with shield, removing the cell from the shield
-        cannon_shield = self._check_energy_shield_collusion(
+        cannon_shield = cannon_exists & self._check_energy_shield_collusion(
             state.cannon, state.energy_shield, state.energy_shield_state
         )
         cannon_hit_shield = jnp.any(cannon_shield)
 
-        new_energy_shield_state = jnp.where(
-            cannon_exists & cannon_shield, False, new_energy_shield
-        )
+        new_energy_shield_state = jnp.where(cannon_shield, False, new_energy_shield)
+        destroyed_cell_amount = jnp.sum(cannon_shield)
+        score_gained = destroyed_cell_amount * self.consts.SHIELD_CELL_DESTROY_POINTS
 
         # Cannon should exist if it was not there before and we just performed a devour reset
         #  or it already exists and has not hit the shield/boundary
@@ -902,6 +915,7 @@ class JaxYarsRevenge(
             ),
             cannon_exists,
             cannon_fired,
+            score_gained,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -933,16 +947,16 @@ class JaxYarsRevenge(
 
         # A 3x3 convolution is used to detect neighbouring cells that
         # should be destroyed when a missile passes over them.
-        missile_adj_mask = (
+        # Only present when energy missile is present.
+        missile_adj_mask = em_exists & (
             jax.scipy.signal.convolve(
                 missile_shield, self.consts.MISSILE_HIT_KERNEL, mode="same"
             )
             > 0
         )
-
-        new_energy_shield_state = jnp.where(
-            em_exists & missile_adj_mask, False, new_energy_shield
-        )
+        new_energy_shield_state = jnp.where(missile_adj_mask, False, new_energy_shield)
+        destroyed_cell_amount = jnp.sum(missile_adj_mask)
+        score_gained = destroyed_cell_amount * self.consts.SHIELD_CELL_DESTROY_POINTS
 
         # Missile existence logic, a missile appears if the player fires
         # and has not entered neutral zone; it also continues until it hits
@@ -994,14 +1008,17 @@ class JaxYarsRevenge(
             self.consts.HEIGHT,
         )
 
-        return dict(
-            energy_missile_exist=new_em_exists.astype(jnp.int32),
-            energy_missile=state.energy_missile._replace(
-                x=new_energy_missile_x,
-                y=new_energy_missile_y,
-                direction=new_energy_missile_direction,
+        return (
+            dict(
+                energy_missile_exist=new_em_exists.astype(jnp.int32),
+                energy_missile=state.energy_missile._replace(
+                    x=new_energy_missile_x,
+                    y=new_energy_missile_y,
+                    direction=new_energy_missile_direction,
+                ),
+                energy_shield_state=new_energy_shield_state,
             ),
-            energy_shield_state=new_energy_shield_state,
+            score_gained,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1116,7 +1133,7 @@ class JaxYarsRevenge(
         """
         Evaluate the end-of-step conditions:
 
-            * Whether a life is lost
+            * Whether a life is lost or gained
             * Whether the stage should advance (qotile hits cannon)
             * Update lives accordingly
 
@@ -1127,10 +1144,22 @@ class JaxYarsRevenge(
         yar_destroyer = self._check_entity_collusion(state.yar, state.destroyer)
         yar_destroyer_hits = jnp.logical_and(yar_destroyer, ~yar_neutral)
 
-        # Collision of Qotile with cannon (stage progression)
+        # Collision of cannon with Qotile/Swirl (stage progression) or Yar
         qotile_cannon = jnp.logical_and(
             cannon_exists, cannon_fired
         ) & self._check_entity_collusion(state.qotile, state.cannon)
+
+        swirl_fired = jnp.logical_and(state.swirl_dx != 0, state.swirl_dy != 0)
+        # Advances the game, and gains an additional life
+        swirl_cannon = (
+            jnp.logical_and(cannon_exists, cannon_fired)
+            & jnp.logical_and(
+                state.swirl_exist,
+                swirl_fired,
+            )
+            & self._check_entity_collusion(state.swirl, state.cannon)
+        )
+
         yar_cannon = jnp.logical_and(
             cannon_exists, cannon_fired
         ) & self._check_entity_collusion(state.yar, state.cannon)
@@ -1140,12 +1169,37 @@ class JaxYarsRevenge(
         yar_swirl_hits = jnp.logical_and(yar_swirl, state.swirl_exist)
 
         life_lost = yar_destroyer_hits | yar_cannon | yar_swirl_hits
-        new_lives = jnp.where(life_lost, state.lives - 1, state.lives)
+        new_lives = jnp.where(
+            life_lost,
+            state.lives - 1,
+            jnp.where(swirl_cannon, state.lives + 1, state.lives),
+        )
 
-        # Stage advancement occurs only when the qotile hits the cannon
-        game_advance = qotile_cannon
+        # Stage advancement occurs only when the qotile (or swirl) hits the fired cannon
+        game_advance = qotile_cannon | swirl_cannon
 
-        return dict(lives=new_lives), life_lost, game_advance
+        # Score is gained by destroying qotile, destroying a charging swirl and destroying mid-air swirl
+        # None can happen at the same time, therefore use switch
+        branch = jnp.where(
+            qotile_cannon & ~state.swirl_exist,
+            0,
+            jnp.where(
+                qotile_cannon & state.swirl_exist,
+                1,
+                jnp.where(swirl_cannon & swirl_fired, 2, 3),
+            ),
+        )
+        score_gained = jax.lax.switch(
+            branch,
+            [
+                lambda: self.consts.DESTROY_QOTILE_POINTS,
+                lambda: self.consts.DESTROY_CHARGING_SWIRL_POINTS,
+                lambda: self.consts.DESTROY_SWIRL_POINTS,
+                lambda: 0,
+            ],
+        )
+
+        return (dict(lives=new_lives), life_lost, game_advance, score_gained)
 
     @partial(jax.jit, static_argnums=(0,))
     def _finalize_next_state(
@@ -1179,10 +1233,10 @@ class JaxYarsRevenge(
             branch,
             [
                 lambda: (
-                    self.construct_initial_state((new_state.stage + 1) % 2)
+                    self._construct_initial_state((new_state.stage + 1) % 2)
                 ),  # Advance to the next stage
-                lambda: self.construct_initial_state(0),  # No lives left, reset
-                lambda: self.construct_initial_state(new_state.stage)._replace(
+                lambda: self._construct_initial_state(0),  # No lives left, reset
+                lambda: self._construct_initial_state(new_state.stage)._replace(
                     score=new_state.score,
                     lives=new_state.lives,
                     energy_shield_state=new_state.energy_shield_state,
@@ -1206,7 +1260,9 @@ class JaxYarsRevenge(
         direction_flags, fire = self._parse_action_flags(action)
 
         # Player
-        yar_updates, yar_neutral, devour_reset = self._yar_step(state, direction_flags)
+        yar_updates, yar_neutral, devour_reset, yar_score = self._yar_step(
+            state, direction_flags
+        )
         new_state = new_state._replace(**yar_updates)
 
         # Qotile
@@ -1218,13 +1274,13 @@ class JaxYarsRevenge(
         new_state = new_state._replace(**destroyer_updates)
 
         # Cannon
-        cannon_updates, cannon_exists, cannon_fired = self._cannon_step(
+        cannon_updates, cannon_exists, cannon_fired, cannon_score = self._cannon_step(
             state, fire, new_state.energy_shield_state, devour_reset
         )
         new_state = new_state._replace(**cannon_updates)
 
         # Energy missile
-        em_updates = self._energy_missile_step(
+        em_updates, em_score = self._energy_missile_step(
             state,
             fire,
             new_state.energy_shield_state,
@@ -1245,16 +1301,21 @@ class JaxYarsRevenge(
         new_state = new_state._replace(**stage_specific_updates)
 
         # Game ending (lives and advancement)
-        life_updates, life_lost, game_advance = self._game_ending_calculation(
-            state, yar_neutral, cannon_exists, cannon_fired
+        life_updates, life_lost, game_advance, ending_score = (
+            self._game_ending_calculation(
+                state, yar_neutral, cannon_exists, cannon_fired
+            )
         )
         new_state = new_state._replace(**life_updates)
 
         # Finalise next state
         new_state = self._finalize_next_state(new_state, life_lost, game_advance)
 
-        # Increment step counter
-        new_state = new_state._replace(step_counter=state.step_counter + 1)
+        # Increment step counter and score
+        total_score_gained = yar_score + cannon_score + em_score + ending_score
+        new_state = new_state._replace(
+            step_counter=state.step_counter + 1, score=state.score + total_score_gained
+        )
 
         # Observation / reward / done flag
         observation = self._get_observation(new_state)
