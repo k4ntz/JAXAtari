@@ -1735,14 +1735,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         
         # Spawning logic: only spawn if not already active
         spawn_roll = jax.random.uniform(key_spawn)
-        
-        # FOR TESTING ONLY: spawn immediately after init
-        TEST_SPAWN = True
-        if TEST_SPAWN:
-            is_first_frame_after_init = state.level.blue_line_counter == len(BLUE_LINE_INIT_TABLE)
-            should_spawn = jnp.logical_and(jnp.logical_not(active), jnp.logical_or(spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB, is_first_frame_after_init))
-        else:
-            should_spawn = jnp.logical_and(jnp.logical_not(active), spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB)
+        should_spawn = jnp.logical_and(jnp.logical_not(active), spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB)
         
         # Lanes 1 to 5
         spawn_lane = jax.random.randint(key_lane, (), 1, 6)
