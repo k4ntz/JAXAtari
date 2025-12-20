@@ -86,6 +86,8 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_ACCELERATION: float = 0.15
     SPACE_SHIP_BREAK: float = 0.1
     SPACE_SHIP_MAX_SPEED: float = 4.0
+    SPACE_SHIP_EXHAUST_WIDTH: int = 12
+    SPACE_SHIP_EXHAUST_FLICKER_N_FRAMES: int = 5
     SPACE_SHIP_INIT_LIVES: int = 3
     SPACE_SHIP_INIT_BOMBS: int = 3
     SPACE_SHIP_SHOOT_CD: int = 10
@@ -467,6 +469,7 @@ class DefenderRenderer(JAXGameRenderer):
         return [
             {"name": "background", "type": "background", "file": "background.npy"},
             {"name": "space_ship", "type": "single", "file": "space_ship.npy"},
+            {"name": "exhaust", "type": "single", "file": "exhaust.npy"},
             {"name": "baiter", "type": "single", "file": "baiter.npy"},
             {"name": "bomber", "type": "single", "file": "bomber.npy"},
             {"name": "lander", "type": "single", "file": "lander.npy"},
@@ -642,10 +645,9 @@ class DefenderRenderer(JAXGameRenderer):
             mask = self.SHAPE_MASKS["space_ship"]
             game_x = state.space_ship_x
             game_y = state.space_ship_y
+            flip_horizontal = jnp.logical_not(state.space_ship_facing_right)
 
             screen_x, screen_y = self.dh._onscreen_pos(state, game_x, game_y)
-
-            facing_right = jnp.where(state.space_ship_facing_right, False, True)
 
             scanner_width = self.consts.SPACE_SHIP_SCANNER_WIDTH
             scanner_height = self.consts.SPACE_SHIP_SCANNER_HEIGHT
@@ -657,11 +659,40 @@ class DefenderRenderer(JAXGameRenderer):
                 game_x, game_y, scanner_width, scanner_height, color_id, r
             )
 
+            # Render exhaust
+            draw_exhaust = (
+                jnp.mod(
+                    state.step_counter, self.consts.SPACE_SHIP_EXHAUST_FLICKER_N_FRAMES
+                )
+                == 0
+            )
+            exhaust_game_x = screen_x + jnp.where(
+                flip_horizontal,
+                self.consts.SPACE_SHIP_WIDTH,
+                -self.consts.SPACE_SHIP_EXHAUST_WIDTH,
+            )
+            exhaust_game_y = screen_y
+            r = jax.lax.cond(
+                draw_exhaust,
+                lambda: self.jr.render_at(
+                    r,
+                    exhaust_game_x,
+                    exhaust_game_y,
+                    self.SHAPE_MASKS["exhaust"],
+                    flip_horizontal=flip_horizontal,
+                ),
+                lambda: r,
+            )
+
             # Render on screen
             r = jax.lax.cond(
                 screen_y > (self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT),
                 lambda: self.jr.render_at(
-                    r, screen_x, screen_y, mask, flip_horizontal=facing_right
+                    r,
+                    screen_x,
+                    screen_y,
+                    mask,
+                    flip_horizontal=flip_horizontal,
                 ),
                 lambda: r,
             )
