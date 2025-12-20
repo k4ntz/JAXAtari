@@ -16,10 +16,10 @@ class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
     player_width: int = 8
-    player_height: int = 25
+    player_height: int = 28
     start_player_x: int = 44  # Fixed x position
     start_player_y: int = 162  # Fixed y position
-    player_speed: int = 2  # constant downward speed
+    player_speed: int = 2 # ToDo: calibrate
 
     # frame countdown for timer
     countdown_frame: int = 50 # countdown decreases by one second every 50 frames
@@ -43,7 +43,7 @@ class JourneyEscapeConstants(NamedTuple):
 
     lightbulb_blink_period: int = 15
 
-    obstacle_speed_px_per_frame: int = 2  # constant downward speed
+    obstacle_speed_px_per_frame: int = 1  # ToDo: calibrate
     row_spawn_period_frames: int = 25  # spawn every N frames (tweakable)
 
     # border of the valid game space
@@ -418,8 +418,8 @@ class JaxJourneyEscape(
             # --- Obstacle AABB ---
             ob_x0 = box_x
             ob_x1 = box_x + box_w
-            ob_y0 = box_y - box_h
-            ob_y1 = box_y
+            ob_y0 = box_y
+            ob_y1 = box_y - box_h
 
             overlap = aabb_overlap(ch_x0, ch_y0, ch_x1, ch_y1,
                                    ob_x0, ob_y0, ob_x1, ob_y1)
@@ -607,8 +607,8 @@ class JaxJourneyEscape(
 
                 ob_x0 = box_x
                 ob_x1 = box_x + box_w
-                ob_y0 = box_y - box_h
-                ob_y1 = box_y
+                ob_y0 = box_y
+                ob_y1 = box_y - box_h
 
                 overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
                 overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
