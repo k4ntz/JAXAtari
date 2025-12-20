@@ -14,6 +14,13 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+type DirectionFlags = Tuple[
+    bool | jnp.ndarray,
+    bool | jnp.ndarray,
+    bool | jnp.ndarray,
+    bool | jnp.ndarray,
+]
+
 
 class Direction(IntEnum):
     _CENTER = -1
@@ -28,7 +35,8 @@ class Direction(IntEnum):
 
     @staticmethod
     @jax.jit
-    def from_flags(up, down, left, right):
+    def from_flags(flags: DirectionFlags):
+        up, down, left, right = flags
         return jnp.select(
             [
                 ~right & ~up & ~down & ~left,
@@ -95,12 +103,7 @@ class Direction(IntEnum):
     @staticmethod
     @jax.jit
     def to_delta(
-        flags: Tuple[
-            bool | jnp.ndarray,
-            bool | jnp.ndarray,
-            bool | jnp.ndarray,
-            bool | jnp.ndarray,
-        ],
+        flags: DirectionFlags,
         speed: float | jnp.ndarray,
     ):
         up, down, left, right = flags
@@ -127,9 +130,6 @@ class DirectionEntity(NamedTuple):
     w: jnp.ndarray
     h: jnp.ndarray
     direction: jnp.ndarray
-
-
-# Yars Revenge, Neutral Zone: https://www.youtube.com/watch?v=5HSjJU562e8
 
 
 class YarsRevengeConstants(NamedTuple):
@@ -367,115 +367,14 @@ class JaxYarsRevenge(
 
         return initial_obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: YarsRevengeState, action: chex.Array):
+    # ----------------------------------------------------
+    # Helper functions for step processing
+    # ----------------------------------------------------
 
-        @jax.jit
-        def get_entity_position(entity: Entity | DirectionEntity, direction: Direction):
-            up, down, left, right = Direction.to_flags(direction)
-
-            w_half = entity.w // 2
-            h_half = entity.h // 2
-
-            x_offset = jnp.where(left, 0, jnp.where(right, entity.w, w_half))
-            y_offset = jnp.where(up, 0, jnp.where(down, entity.h, h_half))
-
-            return entity.x + x_offset, entity.y + y_offset
-
-        @jax.jit
-        def move_entity(
-            entity: Entity | DirectionEntity,
-            delta_x: jnp.ndarray,
-            delta_y: jnp.ndarray,
-            min_x: int = 0,
-            min_y: int = 0,
-            max_x: int = self.consts.WIDTH,
-            max_y: int = self.consts.HEIGHT,
-            wrap_y: bool = False,
-        ):
-            new_x = jnp.clip(entity.x + delta_x, min_x, max_x - entity.w)
-            new_y = entity.y + delta_y
-            new_y = jax.lax.cond(
-                wrap_y,
-                lambda: jnp.mod(new_y, jnp.asarray(max_y - entity.h)),
-                lambda: jnp.clip(new_y, min_y, max_y - entity.h),
-            )
-            return new_x, new_y
-
-        @jax.jit
-        def check_entity_boundary(
-            entity: Entity | DirectionEntity,
-            max_x: int = self.consts.WIDTH,
-            max_y: int = self.consts.HEIGHT,
-            min_x: int = 0,
-            min_y: int = 0,
-        ):
-            right = entity.x + entity.w >= max_x
-            bottom = entity.y + entity.h >= max_y
-            left = entity.x <= min_x
-            top = entity.y <= min_y
-            return jnp.logical_or(
-                jnp.logical_or(right, bottom), jnp.logical_or(left, top)
-            )
-
-        @jax.jit
-        def check_entity_collusion(
-            a: Entity | DirectionEntity, b: Entity | DirectionEntity
-        ):
-            a_up, a_left = get_entity_position(a, Direction.UPLEFT)
-            a_down, a_right = get_entity_position(a, Direction.DOWNRIGHT)
-            b_up, b_left = get_entity_position(b, Direction.UPLEFT)
-            b_down, b_right = get_entity_position(b, Direction.DOWNRIGHT)
-
-            horizontal_overlap = jnp.logical_and(a_left < b_right, a_right > b_left)
-            vertical_overlap = jnp.logical_and(a_up < b_down, a_down > b_up)
-
-            return horizontal_overlap & vertical_overlap
-
-        @jax.jit
-        def check_energy_shield_collusion(
-            entity: Entity | DirectionEntity,
-            energy_shield: Entity,
-            shield_state: jnp.ndarray,
-            cell_height=self.consts.ENERGY_CELL_HEIGHT,
-            cell_width=self.consts.ENERGY_CELL_WIDTH,
-        ):
-            rows, cols = shield_state.shape
-
-            e_left, e_up = get_entity_position(entity, Direction.UPLEFT)
-            e_right, e_down = get_entity_position(entity, Direction.DOWNRIGHT)
-
-            col_x = jnp.arange(cols) * cell_width
-            row_y = jnp.arange(rows) * cell_height
-
-            cell_left = energy_shield.x + col_x[None, :]
-            cell_top = energy_shield.y + row_y[:, None]
-            cell_right = cell_left + cell_width
-            cell_bottom = cell_top + cell_height
-
-            horiz_overlap = (e_left < cell_right) & (e_right > cell_left)
-            vert_overlap = (e_up < cell_bottom) & (e_down > cell_top)
-
-            collision_mask = horiz_overlap & vert_overlap
-
-            active_hits = collision_mask & shield_state
-            return active_hits
-
-        @jax.jit
-        def snake_shift(shield: jnp.ndarray):
-            n_rows, n_cols = shield.shape
-            r = jnp.arange(n_rows).reshape(-1, 1)
-            c = jnp.arange(n_cols).reshape(1, -1)
-            idx_normal = r * n_cols + c
-            idx_reversed = r * n_cols + (n_cols - 1 - c)
-            snake_idx = jnp.where(r % 2 == 0, idx_normal, idx_reversed)
-
-            s_flat_snake = shield.reshape(-1)[snake_idx.ravel()]
-            shifted = jnp.roll(s_flat_snake, 1)
-            new_snake = shifted.reshape(n_rows, n_cols)
-            return jnp.where(r % 2 == 0, new_snake, new_snake[:, ::-1])
-
-        # Extract the direction flags from the actions
+    @staticmethod
+    @jax.jit
+    def _parse_action_flags(action: chex.Array) -> Tuple[DirectionFlags, jnp.ndarray]:
+        """Return up/down/left/right and fire flags from an action."""
         up = (
             (action == Action.UP)
             | (action == Action.UPFIRE)
@@ -508,47 +407,185 @@ class JaxYarsRevenge(
             | (action == Action.DOWNRIGHT)
             | (action == Action.DOWNRIGHTFIRE)
         )
-
-        yar_moving = up | down | left | right
-        yar_diagonal = (up | down) & (left | right)
-
-        # Calculate the moving direction
-        new_yar_direction = jax.lax.select(
-            yar_moving, Direction.from_flags(up, down, left, right), state.yar.direction
+        fire = (
+            (action == Action.FIRE)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.UPFIRE)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+            | (action == Action.DOWNFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
         )
+        return (up, down, left, right), fire
+
+    @staticmethod
+    @jax.jit
+    def _get_entity_position(
+        entity: Entity | DirectionEntity,
+        direction: Direction,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Return the absolute (x, y) of an entity given a direction."""
+        up, down, left, right = Direction.to_flags(direction)
+        w_half = entity.w // 2
+        h_half = entity.h // 2
+
+        x_offset = jnp.where(left, 0, jnp.where(right, entity.w, w_half))
+        y_offset = jnp.where(up, 0, jnp.where(down, entity.h, h_half))
+
+        return entity.x + x_offset, entity.y + y_offset
+
+    @staticmethod
+    @jax.jit
+    def _move_entity(
+        entity: Entity | DirectionEntity,
+        delta_x: jnp.ndarray,
+        delta_y: jnp.ndarray,
+        min_x: int = 0,
+        min_y: int = 0,
+        max_x: int = 160,  # default WIDTH
+        max_y: int = 210,  # default HEIGHT
+        wrap_y: bool = False,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Move an entity and clip it inside the screen bounds."""
+        new_x = jnp.clip(entity.x + delta_x, min_x, max_x - entity.w)
+        new_y = entity.y + delta_y
+        new_y = jax.lax.cond(
+            wrap_y,
+            lambda: jnp.mod(new_y, jnp.asarray(max_y - entity.h)),
+            lambda: jnp.clip(new_y, min_y, max_y - entity.h),
+        )
+        return new_x, new_y
+
+    @staticmethod
+    @jax.jit
+    def _check_entity_boundary(
+        entity: Entity | DirectionEntity,
+        max_x: int = 160,
+        max_y: int = 210,
+        min_x: int = 0,
+        min_y: int = 0,
+    ) -> jnp.ndarray:
+        """Return True if the entity touches a screen border."""
+        right = entity.x + entity.w >= max_x
+        bottom = entity.y + entity.h >= max_y
+        left = entity.x <= min_x
+        top = entity.y <= min_y
+        return jnp.logical_or(jnp.logical_or(right, bottom), jnp.logical_or(left, top))
+
+    @staticmethod
+    @jax.jit
+    def _check_entity_collusion(
+        a: Entity | DirectionEntity, b: Entity | DirectionEntity
+    ) -> jnp.ndarray:
+        """Return True if two entities overlap."""
+        a_up, a_left = JaxYarsRevenge._get_entity_position(a, Direction.UPLEFT)
+        a_down, a_right = JaxYarsRevenge._get_entity_position(a, Direction.DOWNRIGHT)
+        b_up, b_left = JaxYarsRevenge._get_entity_position(b, Direction.UPLEFT)
+        b_down, b_right = JaxYarsRevenge._get_entity_position(b, Direction.DOWNRIGHT)
+
+        horizontal_overlap = jnp.logical_and(a_left < b_right, a_right > b_left)
+        vertical_overlap = jnp.logical_and(a_up < b_down, a_down > b_up)
+        return horizontal_overlap & vertical_overlap
+
+    @staticmethod
+    @jax.jit
+    def _check_energy_shield_collusion(
+        entity: Entity | DirectionEntity,
+        energy_shield: Entity,
+        shield_state: jnp.ndarray,
+        cell_height: int = 8,
+        cell_width: int = 4,
+    ) -> jnp.ndarray:
+        """Return a boolean mask of cells in the shield that collide with an
+        entity.  The returned array has the same shape as *shield_state*.
+        """
+        rows, cols = shield_state.shape
+
+        e_left, e_up = JaxYarsRevenge._get_entity_position(entity, Direction.UPLEFT)
+        e_right, e_down = JaxYarsRevenge._get_entity_position(
+            entity, Direction.DOWNRIGHT
+        )
+
+        col_x = jnp.arange(cols) * cell_width
+        row_y = jnp.arange(rows) * cell_height
+
+        cell_left = energy_shield.x + col_x[None, :]
+        cell_top = energy_shield.y + row_y[:, None]
+        cell_right = cell_left + cell_width
+        cell_bottom = cell_top + cell_height
+
+        horiz_overlap = (e_left < cell_right) & (e_right > cell_left)
+        vert_overlap = (e_up < cell_bottom) & (e_down > cell_top)
+
+        collision_mask = horiz_overlap & vert_overlap
+        active_hits = collision_mask & shield_state
+        return active_hits
+
+    @staticmethod
+    @jax.jit
+    def _snake_shift(shield: jnp.ndarray) -> jnp.ndarray:
+        """Shift the shield in a snake-like pattern."""
+        n_rows, n_cols = shield.shape
+        r = jnp.arange(n_rows).reshape(-1, 1)
+        c = jnp.arange(n_cols).reshape(1, -1)
+        idx_normal = r * n_cols + c
+        idx_reversed = r * n_cols + (n_cols - 1 - c)
+        snake_idx = jnp.where(r % 2 == 0, idx_normal, idx_reversed)
+
+        s_flat_snake = shield.reshape(-1)[snake_idx.ravel()]
+        shifted = jnp.roll(s_flat_snake, 1)
+        new_snake = shifted.reshape(n_rows, n_cols)
+        return jnp.where(r % 2 == 0, new_snake, new_snake[:, ::-1])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _yar_step(self, state: YarsRevengeState, direction_flags: DirectionFlags):
+        # Calculate the moving direction
+        direction = Direction.from_flags(direction_flags)
+        yar_moving = direction != Direction._CENTER
+        new_yar_direction = jax.lax.select(yar_moving, direction, state.yar.direction)
         new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
+
+        yar_diagonal = (direction_flags[0] | direction_flags[1]) & (
+            direction_flags[2] | direction_flags[3]
+        )
 
         # Calculate the position difference compared to the previous state
         yar_speed = jax.lax.select(
             yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
         )
-        delta_yar_x, delta_yar_y = Direction.to_delta(
-            (up, down, left, right), yar_speed
-        )
+        delta_yar_x, delta_yar_y = Direction.to_delta(direction_flags, yar_speed)
 
         # New position calculation with boundary check (y-axis wraps)
-        new_yar_x, new_yar_y = move_entity(
+        new_yar_x, new_yar_y = self._move_entity(
             state.yar,
             delta_yar_x,
             delta_yar_y,
             wrap_y=True,
         )
 
-        new_yar_entity = state.yar._replace(x=new_yar_x, y=new_yar_y)
-        yar_shield_collusion = check_energy_shield_collusion(
+        new_yar_entity = state.yar._replace(
+            x=new_yar_x, y=new_yar_y, direction=new_yar_direction
+        )
+
+        yar_shield_collusion = self._check_energy_shield_collusion(
             new_yar_entity, state.energy_shield, state.energy_shield_state
         )
         yar_hit_shield = jnp.any(yar_shield_collusion)
 
-        yar_qotile_collusion = check_entity_collusion(new_yar_entity, state.qotile)
-
-        # Shift yar to left if it hits shield or qotile
+        # Shift yar to left if it hits shield
         new_yar_x = jnp.where(
             yar_hit_shield,
             new_yar_x - self.consts.ENERGY_CELL_WIDTH,
             new_yar_x,
         )
 
+        new_yar_entity = new_yar_entity._replace(x=new_yar_x)
+
+        yar_qotile_collusion = self._check_entity_collusion(
+            new_yar_entity, state.qotile
+        )
         new_yar_devour_count = jnp.where(
             yar_hit_shield & yar_moving | yar_qotile_collusion,
             state.yar_devour_count + 1,
@@ -557,7 +594,6 @@ class JaxYarsRevenge(
 
         # Devour Check
         def energy_shield_devour():
-            rows, _ = yar_shield_collusion.shape
             row_has_true = jnp.any(yar_shield_collusion, axis=1)
             n_rows = jnp.sum(row_has_true)
             k = n_rows // 2 + 1
@@ -580,10 +616,23 @@ class JaxYarsRevenge(
             new_yar_devour_count,
         )
 
-        yar_neutral = check_entity_collusion(state.yar, state.neutral_zone)
+        yar_neutral = self._check_entity_collusion(state.yar, state.neutral_zone)
 
+        return (
+            dict(
+                yar=new_yar_entity,
+                yar_state=new_yar_state,
+                yar_devour_count=new_yar_devour_count,
+                energy_shield_state=new_energy_shield_state,
+            ),
+            yar_neutral,
+            devour_reset,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _qotile_step(self, state: YarsRevengeState):
         # Qotile Movement
-        qotile_hit_boundary = check_entity_boundary(
+        qotile_hit_boundary = self._check_entity_boundary(
             state.qotile,
             self.consts.WIDTH,
             max_y=self.consts.QOTILE_MAX_Y,
@@ -600,7 +649,7 @@ class JaxYarsRevenge(
             Direction.to_flags(new_qotile_direction), self.consts.QOTILE_SPEED
         )
 
-        _, new_qotile_y = move_entity(
+        _, new_qotile_y = self._move_entity(
             state.qotile,
             _,
             delta_qotile_y,
@@ -608,35 +657,122 @@ class JaxYarsRevenge(
             max_y=self.consts.QOTILE_MAX_Y,
         )
 
-        # Destroyer Movement
-        yar_center_x, yar_center_y = get_entity_position(state.yar, Direction._CENTER)
-        destroyer_dx = jnp.sign(yar_center_x - state.destroyer.x)
-        destroyer_dy = jnp.sign(yar_center_y - state.destroyer.y)
-
-        new_destroyer_x = state.destroyer.x + self.consts.DESTROYER_SPEED * destroyer_dx
-        new_destroyer_y = state.destroyer.y + self.consts.DESTROYER_SPEED * destroyer_dy
-
-        fire = (
-            (action == Action.FIRE)
-            | (action == Action.RIGHTFIRE)
-            | (action == Action.UPRIGHTFIRE)
-            | (action == Action.UPFIRE)
-            | (action == Action.UPLEFTFIRE)
-            | (action == Action.LEFTFIRE)
-            | (action == Action.DOWNLEFTFIRE)
-            | (action == Action.DOWNFIRE)
-            | (action == Action.DOWNRIGHTFIRE)
+        # Energy Shield Y calculation
+        new_energy_shield_y = (
+            self._get_entity_position(state.qotile, Direction._CENTER)[1]
+            - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
         )
 
+        return dict(
+            qotile=state.qotile._replace(
+                y=new_qotile_y, direction=new_qotile_direction
+            ),
+            energy_shield=state.energy_shield._replace(y=new_energy_shield_y),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _destroyer_step(self, state: YarsRevengeState):
+        yar_center_x, yar_center_y = self._get_entity_position(
+            state.yar, Direction._CENTER
+        )
+        dx = jnp.sign(yar_center_x - state.destroyer.x)
+        dy = jnp.sign(yar_center_y - state.destroyer.y)
+
+        x = state.destroyer.x + self.consts.DESTROYER_SPEED * dx
+        y = state.destroyer.y + self.consts.DESTROYER_SPEED * dy
+
+        return dict(destroyer=state.destroyer._replace(x=x, y=y))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _cannon_step(
+        self,
+        state: YarsRevengeState,
+        fire: jnp.ndarray,
+        new_energy_shield: jnp.ndarray,
+        devour_reset: jnp.ndarray,
+    ):
         cannon_exists = state.cannon_exist == 1
         cannon_fired = state.cannon_fired == 1
+
+        # Cannon Calculations
+        cannon_hit_boundary = self._check_entity_boundary(state.cannon)
+
+        cannon_shield = self._check_energy_shield_collusion(
+            state.cannon, state.energy_shield, state.energy_shield_state
+        )
+        cannon_hit_shield = jnp.any(cannon_shield)
+
+        new_energy_shield_state = jnp.where(
+            cannon_exists & cannon_shield, False, new_energy_shield
+        )
+
+        new_cannon_exists = jnp.logical_or(
+            jnp.logical_and(~cannon_exists, devour_reset),
+            jnp.logical_and(
+                cannon_exists,
+                jnp.logical_and(~cannon_hit_boundary, ~cannon_hit_shield),
+            ),
+        )
+
+        cannon_dx, _ = Direction.to_delta(
+            Direction.to_flags(state.cannon.direction),
+            self.consts.CANNON_SPEED,
+        )
+
+        x = jnp.clip(
+            jnp.where(
+                cannon_fired,
+                state.cannon.x + cannon_dx,
+                jnp.array(1).astype(jnp.float32),
+            ),
+            0,
+            self.consts.WIDTH,
+        )
+
+        y = jnp.clip(
+            jnp.where(
+                cannon_fired,
+                state.cannon.y,
+                self._get_entity_position(state.yar, Direction._CENTER)[1]
+                - (state.cannon.h // 2),
+            ),
+            0,
+            self.consts.HEIGHT,
+        )
+
+        new_cannon_fired = jnp.logical_or(
+            jnp.logical_and(cannon_exists, cannon_fired),
+            jnp.logical_and(cannon_exists, fire),
+        )
+
+        return (
+            dict(
+                cannon_exist=new_cannon_exists.astype(jnp.int32),
+                cannon_fired=new_cannon_fired.astype(jnp.int32),
+                cannon=state.cannon._replace(x=x, y=y),
+                energy_shield_state=new_energy_shield_state,
+            ),
+            cannon_exists,
+            cannon_fired,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _energy_missile_step(
+        self,
+        state: YarsRevengeState,
+        fire: jnp.ndarray,
+        new_energy_shield: jnp.ndarray,
+        yar_neutral: jnp.ndarray,
+        cannon_exists: jnp.ndarray,
+        cannon_fired: jnp.ndarray,
+    ):
         em_exists = state.energy_missile_exist == 1
 
         # Energy Missile
-        energy_missile_hit_boundary = check_entity_boundary(state.energy_missile)
+        energy_missile_hit_boundary = self._check_entity_boundary(state.energy_missile)
 
         # Energy Missile Collusion
-        missile_shield = check_energy_shield_collusion(
+        missile_shield = self._check_energy_shield_collusion(
             state.energy_missile, state.energy_shield, state.energy_shield_state
         )
         missile_hit_shield = jnp.any(missile_shield)
@@ -649,7 +785,7 @@ class JaxYarsRevenge(
         )
 
         new_energy_shield_state = jnp.where(
-            em_exists & missile_adj_mask, False, new_energy_shield_state
+            em_exists & missile_adj_mask, False, new_energy_shield
         )
 
         new_em_exists = jnp.logical_or(
@@ -681,7 +817,7 @@ class JaxYarsRevenge(
             jnp.where(
                 em_exists,
                 state.energy_missile.x + energy_missile_dx,
-                get_entity_position(state.yar, Direction._CENTER)[0],
+                self._get_entity_position(state.yar, Direction._CENTER)[0],
             ),
             0,
             self.consts.WIDTH,
@@ -691,79 +827,30 @@ class JaxYarsRevenge(
             jnp.where(
                 em_exists,
                 state.energy_missile.y + energy_missile_dy,
-                get_entity_position(state.yar, Direction._CENTER)[1],
+                self._get_entity_position(state.yar, Direction._CENTER)[1],
             ),
             0,
             self.consts.HEIGHT,
         )
 
-        # Cannon Calculations
-        cannon_hit_boundary = check_entity_boundary(state.cannon)
-
-        cannon_shield = check_energy_shield_collusion(
-            state.cannon, state.energy_shield, state.energy_shield_state
-        )
-        cannon_hit_shield = jnp.any(cannon_shield)
-
-        cannon_adj_mask = (
-            jax.scipy.signal.convolve(cannon_shield, jnp.array([[1]]), mode="same") > 0
-        )
-
-        new_energy_shield_state = jnp.where(
-            cannon_exists & cannon_adj_mask, False, new_energy_shield_state
-        )
-
-        new_cannon_exists = jnp.logical_or(
-            jnp.logical_and(~cannon_exists, devour_reset),
-            jnp.logical_and(
-                cannon_exists,
-                jnp.logical_and(~cannon_hit_boundary, ~cannon_hit_shield),
+        return dict(
+            energy_missile_exist=new_em_exists.astype(jnp.int32),
+            energy_missile=state.energy_missile._replace(
+                x=new_energy_missile_x,
+                y=new_energy_missile_y,
+                direction=new_energy_missile_direction,
             ),
+            energy_shield_state=new_energy_shield_state,
         )
 
-        cannon_dx, _ = Direction.to_delta(
-            Direction.to_flags(state.cannon.direction),
-            self.consts.CANNON_SPEED,
-        )
-
-        new_cannon_x = jnp.clip(
-            jnp.where(
-                cannon_fired,
-                state.cannon.x + cannon_dx,
-                jnp.array(1).astype(jnp.float32),
-            ),
-            0,
-            self.consts.WIDTH,
-        )
-
-        new_cannon_y = jnp.clip(
-            jnp.where(
-                cannon_fired,
-                state.cannon.y,
-                get_entity_position(state.yar, Direction._CENTER)[1]
-                - (state.cannon.h // 2),
-            ),
-            0,
-            self.consts.HEIGHT,
-        )
-
-        new_cannon_fired = jnp.logical_or(
-            jnp.logical_and(cannon_exists, cannon_fired),
-            jnp.logical_and(cannon_exists, fire),
-        )
-
-        # Energy Shield Y calculation
-        new_energy_shield_y = (
-            get_entity_position(state.qotile, Direction._CENTER)[1]
-            - state.energy_shield_state.shape[0] * self.consts.ENERGY_CELL_HEIGHT / 2
-        )
-
+    @partial(jax.jit, static_argnums=(0,))
+    def _swirl_step(self, state: YarsRevengeState):
         # Swirl Calculation
         swirl_exists = state.swirl_exist == 1
         swirl_fired = jnp.logical_or(state.swirl_dx != 0, state.swirl_dy != 0)
 
         should_spawn_swirl = state.step_counter % self.consts.SWIRL_PER_STEP == 0
-        swirl_hit_boundary = check_entity_boundary(state.swirl)
+        swirl_hit_boundary = self._check_entity_boundary(state.swirl)
 
         new_swirl_exists = jnp.logical_or(
             jnp.logical_and(swirl_exists, ~swirl_hit_boundary),
@@ -824,29 +911,47 @@ class JaxYarsRevenge(
             self.consts.HEIGHT,
         )
 
-        # Stage Specific
+        return dict(
+            swirl_exist=new_swirl_exists.astype(jnp.int32),
+            swirl=state.swirl._replace(x=new_swirl_x, y=new_swirl_y),
+            swirl_dx=new_swirl_dx,
+            swirl_dy=new_swirl_dy,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _stage_specific_step(
+        self, state: YarsRevengeState, energy_shield_state: jnp.ndarray
+    ):
         shield_snake_apply = jnp.logical_and(
             state.stage == 1, (state.step_counter % self.consts.SNAKE_FRAME == 0)
         )
 
         new_energy_shield_state = jnp.where(
             shield_snake_apply,
-            snake_shift(new_energy_shield_state),
-            new_energy_shield_state,
+            self._snake_shift(energy_shield_state),
+            energy_shield_state,
         )
+        return dict(energy_shield_state=new_energy_shield_state)
 
-        # Game ending calculations
-        yar_destroyer = check_entity_collusion(state.yar, state.destroyer)
+    @partial(jax.jit, static_argnums=(0,))
+    def _game_ending_calculation(
+        self,
+        state: YarsRevengeState,
+        yar_neutral: jnp.ndarray,
+        cannon_exists: jnp.ndarray,
+        cannon_fired: jnp.ndarray,
+    ):
+        yar_destroyer = self._check_entity_collusion(state.yar, state.destroyer)
         yar_destroyer_hits = jnp.logical_and(yar_destroyer, ~yar_neutral)
 
         qotile_cannon = jnp.logical_and(
             cannon_exists, cannon_fired
-        ) & check_entity_collusion(state.qotile, state.cannon)
+        ) & self._check_entity_collusion(state.qotile, state.cannon)
         yar_cannon = jnp.logical_and(
             cannon_exists, cannon_fired
-        ) & check_entity_collusion(state.yar, state.cannon)
+        ) & self._check_entity_collusion(state.yar, state.cannon)
 
-        yar_swirl = check_entity_collusion(state.yar, state.swirl)
+        yar_swirl = self._check_entity_collusion(state.yar, state.swirl)
         yar_swirl_hits = jnp.logical_and(yar_swirl, state.swirl_exist)
 
         life_lost = yar_destroyer_hits | yar_cannon | yar_swirl_hits
@@ -854,68 +959,90 @@ class JaxYarsRevenge(
 
         game_advance = qotile_cannon
 
-        new_state = jax.lax.cond(
+        return dict(lives=new_lives), life_lost, game_advance
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _finalize_next_state(
+        self,
+        new_state: YarsRevengeState,
+        life_lost: jnp.ndarray,
+        game_advance: jnp.ndarray,
+    ):
+        branch = jnp.where(
             game_advance,
-            lambda: self.construct_initial_state((state.stage + 1) % 2)._replace(
-                step_counter=state.step_counter + 1,
-                lives=new_lives,
-                level=state.level + 1,
-            ),
-            lambda: jax.lax.cond(
-                life_lost,
-                lambda: jax.lax.cond(
-                    new_lives == 0,
-                    lambda: self.construct_initial_state(0),
-                    lambda: self.construct_initial_state(state.stage)._replace(
-                        step_counter=state.step_counter + 1,
-                        lives=new_lives,
-                        energy_shield_state=new_energy_shield_state,
-                    ),
-                ),
-                lambda: state._replace(
-                    step_counter=state.step_counter + 1,
-                    lives=new_lives.astype(jnp.int32),
-                    yar=state.yar._replace(
-                        x=new_yar_x.astype(jnp.float32),
-                        y=new_yar_y.astype(jnp.float32),
-                        direction=new_yar_direction.astype(jnp.int32),
-                    ),
-                    yar_state=new_yar_state.astype(jnp.int32),
-                    yar_devour_count=new_yar_devour_count.astype(jnp.int32),
-                    qotile=state.qotile._replace(
-                        y=new_qotile_y.astype(jnp.float32),
-                        direction=new_qotile_direction,
-                    ),
-                    destroyer=state.destroyer._replace(
-                        x=new_destroyer_x.astype(jnp.float32),
-                        y=new_destroyer_y.astype(jnp.float32),
-                    ),
-                    swirl_exist=new_swirl_exists.astype(jnp.int32),
-                    swirl=state.swirl._replace(
-                        x=new_swirl_x.astype(jnp.float32),
-                        y=new_swirl_y.astype(jnp.float32),
-                    ),
-                    swirl_dx=new_swirl_dx.astype(jnp.float32),
-                    swirl_dy=new_swirl_dy.astype(jnp.float32),
-                    energy_missile_exist=new_em_exists.astype(jnp.int32),
-                    energy_missile=state.energy_missile._replace(
-                        x=new_energy_missile_x.astype(jnp.float32),
-                        y=new_energy_missile_y.astype(jnp.float32),
-                        direction=new_energy_missile_direction.astype(jnp.int32),
-                    ),
-                    cannon_exist=new_cannon_exists.astype(jnp.int32),
-                    cannon_fired=new_cannon_fired.astype(jnp.int32),
-                    cannon=state.cannon._replace(
-                        x=new_cannon_x.astype(jnp.float32),
-                        y=new_cannon_y.astype(jnp.float32),
-                    ),
-                    energy_shield=state.energy_shield._replace(
-                        y=new_energy_shield_y.astype(jnp.float32),
-                    ),
-                    energy_shield_state=new_energy_shield_state.astype(jnp.int32),
-                ),
+            0,
+            jnp.where(
+                life_lost & (new_state.lives == 0),
+                1,
+                jnp.where(life_lost, 2, 3),
             ),
         )
+
+        return jax.lax.switch(
+            branch,
+            [
+                lambda: (
+                    self.construct_initial_state((new_state.stage + 1) % 2)._replace(
+                        level=new_state.level + 1
+                    )
+                ),  # Advance to the next stage
+                lambda: self.construct_initial_state(0),  # No lives left, reset
+                lambda: self.construct_initial_state(new_state.stage)._replace(
+                    level=new_state.level,
+                    score=new_state.score,
+                    lives=new_state.lives,
+                    energy_shield_state=new_state.energy_shield_state,
+                ),  # One life lost, continue with the same stage and shield
+                lambda: new_state,  # Game continues
+            ],
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: YarsRevengeState, action: chex.Array):
+        new_state = state
+
+        direction_flags, fire = self._parse_action_flags(action)
+
+        yar_updates, yar_neutral, devour_reset = self._yar_step(state, direction_flags)
+        new_state = new_state._replace(**yar_updates)
+
+        qotile_updates = self._qotile_step(state)
+        new_state = new_state._replace(**qotile_updates)
+
+        destroyer_updates = self._destroyer_step(state)
+        new_state = new_state._replace(**destroyer_updates)
+
+        cannon_updates, cannon_exists, cannon_fired = self._cannon_step(
+            state, fire, new_state.energy_shield_state, devour_reset
+        )
+        new_state = new_state._replace(**cannon_updates)
+
+        em_updates = self._energy_missile_step(
+            state,
+            fire,
+            new_state.energy_shield_state,
+            yar_neutral,
+            cannon_exists,
+            cannon_fired,
+        )
+        new_state = new_state._replace(**em_updates)
+
+        swirl_updates = self._swirl_step(state)
+        new_state = new_state._replace(**swirl_updates)
+
+        stage_specific_updates = self._stage_specific_step(
+            state, new_state.energy_shield_state
+        )
+        new_state = new_state._replace(**stage_specific_updates)
+
+        life_updates, life_lost, game_advance = self._game_ending_calculation(
+            state, yar_neutral, cannon_exists, cannon_fired
+        )
+        new_state = new_state._replace(**life_updates)
+
+        new_state = self._finalize_next_state(new_state, life_lost, game_advance)
+
+        new_state = new_state._replace(step_counter=state.step_counter + 1)
 
         observation = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
@@ -934,8 +1061,12 @@ class JaxYarsRevenge(
             {
                 "yar": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
@@ -945,8 +1076,12 @@ class JaxYarsRevenge(
                 ),
                 "qotile": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
@@ -956,8 +1091,12 @@ class JaxYarsRevenge(
                 ),
                 "destroyer": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
@@ -965,8 +1104,12 @@ class JaxYarsRevenge(
                 "swirl_exist": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
                 "swirl": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
@@ -978,8 +1121,12 @@ class JaxYarsRevenge(
                 ),
                 "energy_missile": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
@@ -991,8 +1138,12 @@ class JaxYarsRevenge(
                 "cannon_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
                 "cannon": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "direction": spaces.Box(
@@ -1002,8 +1153,12 @@ class JaxYarsRevenge(
                 ),
                 "energy_shield": spaces.Dict(
                     {
-                        "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+                        "x": spaces.Box(
+                            low=0.0, high=160.0, shape=(), dtype=jnp.float32
+                        ),
+                        "y": spaces.Box(
+                            low=0.0, high=210.0, shape=(), dtype=jnp.float32
+                        ),
                         "w": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
                         "h": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                     }
@@ -1179,7 +1334,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
         duration: int,
         group_item_count: int,
     ):
-        return group * 2 + (jnp.floor(step / duration).astype(jnp.int32) % group_item_count)
+        return group * 2 + (
+            jnp.floor(step / duration).astype(jnp.int32) % group_item_count
+        )
 
     def render(self, state: YarsRevengeState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
