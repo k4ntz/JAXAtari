@@ -19,29 +19,12 @@ def _get_default_asset_config() -> tuple:
     """
     return (
         #all rooms in order
-        {'name': 'bg_yellow_castle', 'type': 'background', 'file': 'Room_1.npy'},
-        {'name': 'bg_yellow', 'type': 'background', 'file': 'Room_2.npy'},
-        {'name': 'bg_green', 'type': 'background', 'file': 'Room_3.npy'},
-        {'name': 'bg_purple', 'type': 'background', 'file': 'Room_4.npy'},
-        {'name': 'bg_pink', 'type': 'background', 'file': 'Room_5.npy'},
-        {'name': 'bg_green_yellow', 'type': 'background', 'file': 'Room_6.npy'},
-        {'name': 'bg_maze_1', 'type': 'background', 'file': 'Room_7.npy'},
-        {'name': 'bg_maze_2', 'type': 'background', 'file': 'Room_8.npy'},
-        {'name': 'bg_maze_3', 'type': 'background', 'file': 'Room_9.npy'},
-        {'name': 'bg_maze_4', 'type': 'background', 'file': 'Room_10.npy'},
-        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_11.npy'},
-        {'name': 'bg_black_castle', 'type': 'background', 'file': 'Room_12.npy'},
-        {'name': 'bg_ping_corridor', 'type': 'background', 'file': 'Room_13.npy'},
-        {'name': 'bg_magenta', 'type': 'background', 'file': 'Room_14.npy'},
+        {'name': 'room_number', 'type': 'group', 'files': ['Room_1.npy', 'Room_2.npy', 'Room_3.npy', 'Room_4.npy', 'Room_5.npy', 'Room_6.npy', 'Room_7.npy', 'Room_8.npy', 'Room_9.npy', 'Room_10.npy', 'Room_11.npy', 'Room_12.npy', 'Room_13.npy', 'Room_14.npy']},
+        {'name': 'bg', 'type': 'background', 'file': 'Room_1.npy'},
+
         #all player colors in order
-        {'name': 'player_yellow', 'type': 'single', 'file': 'Player_Yellow.npy'},
-        {'name': 'player_green', 'type': 'single', 'file': 'Player_Green.npy'},
-        {'name': 'player_purple', 'type': 'single', 'file': 'Player_Purple.npy'},
-        {'name': 'player_pink', 'type': 'single', 'file': 'Player_Pink.npy'},
-        {'name': 'player_green_yellow', 'type': 'single', 'file': 'Player_Green_Yellow.npy'},
-        {'name': 'player_blue', 'type': 'single', 'file': 'Player_Blue.npy'},
-        {'name': 'player_black', 'type': 'single', 'file': 'Player_Black.npy'},
-        {'name': 'player_magenta', 'type': 'single', 'file': 'Player_Magenta.npy'},
+        {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy", "Player_Green.npy", "Player_Purple.npy", "Player_Pink.npy", "Player_Green_yellow.npy", "Player_Blue.npy", "Player_Black.npy", "Player_Magenta.npy"]},
+
         #dragons
         {'name': 'dragon_yellow_neutral', 'type': 'single', 'file': 'Dragon_yellow_neutral.npy'},
         {'name': 'dragon_green-neutral', 'type': 'single', 'file': 'Dragon_green_neutral.npy'},
@@ -81,6 +64,7 @@ class AdventureState(NamedTuple):
     #position player
     player_x: chex.Array
     player_y: chex.Array
+    player_color:chex.Array
     player_tile: chex.Array
     #positions dragons
     dragon_yellow_x: chex.Array
@@ -198,6 +182,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             step_counter = state.step_counter,
             player_x = new_player_x,
             player_y = new_player_y,
+            player_color= state.player_color,
             player_tile = state.player_tile,
             dragon_yellow_x = state.dragon_yellow_x,
             dragon_yellow_y = state.dragon_yellow_y,
@@ -243,11 +228,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #player
             player_x = jnp.array(78).astype(jnp.int32),     #spawn X 
             player_y = jnp.array(174).astype(jnp.int32),    #spawn Y
-            player_tile = jnp.array(1).astype(jnp.int32),   #Spawn Tile
+            player_tile = jnp.array(0).astype(jnp.int32),   #Spawn Tile
+            player_color= jnp.array(0).astype(jnp.int32),   #Spawn Color
             #Dragons
             dragon_yellow_x = jnp.array(120).astype(jnp.int32), #ToDo
             dragon_yellow_y = jnp.array(50).astype(jnp.int32), #ToDo
-            dragon_yellow_tile = jnp.array(1).astype(jnp.int32), #ToDo
+            dragon_yellow_tile = jnp.array(0).astype(jnp.int32), #ToDo
             dragon_green_x = jnp.array(120).astype(jnp.int32), #ToDo
             dragon_green_y = jnp.array(70).astype(jnp.int32), #ToDo
             dragon_green_tile = jnp.array(70).astype(jnp.int32), #ToDo
@@ -256,22 +242,22 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #Keys
             key_yellow_x = jnp.array(31).astype(jnp.int32),
             key_yellow_y = jnp.array(110).astype(jnp.int32),
-            key_yellow_tile = jnp.array(1).astype(jnp.int32),
+            key_yellow_tile = jnp.array(0).astype(jnp.int32),
             key_black_x = jnp.array(120).astype(jnp.int32), #ToDo
             key_black_y = jnp.array(90).astype(jnp.int32), #ToDo
-            key_black_tile = jnp.array(1).astype(jnp.int32), #ToDo
+            key_black_tile = jnp.array(0).astype(jnp.int32), #ToDo
             gate_yellow_state = jnp.array(0).astype(jnp.int32), #ToDo
             gate_black_state = jnp.array(0).astype(jnp.int32), #ToDo
             #Items
             sword_x = jnp.array(120).astype(jnp.int32), #ToDo
             sword_y = jnp.array(110).astype(jnp.int32), #ToDo
-            sword_tile = jnp.array(1).astype(jnp.int32), #ToDo
+            sword_tile = jnp.array(0).astype(jnp.int32), #ToDo
             bridge_x = jnp.array(120).astype(jnp.int32), #ToDo
             bridge_y = jnp.array(130).astype(jnp.int32), #ToDo
-            bridge_tile = jnp.array(1).astype(jnp.int32), #ToDo
+            bridge_tile = jnp.array(0).astype(jnp.int32), #ToDo
             magnet_x = jnp.array(120).astype(jnp.int32), #ToDo
             magnet_y = jnp.array(150).astype(jnp.int32), #ToDo
-            magnet_tile = jnp.array(1).astype(jnp.int32), #ToDo
+            magnet_tile = jnp.array(0).astype(jnp.int32), #ToDo
             chalice_x = jnp.array(120).astype(jnp.int32), #ToDo
             chalice_y = jnp.array(170).astype(jnp.int32), #ToDo
             chalice_tile = jnp.array(170).astype(jnp.int32) #ToDo
@@ -289,6 +275,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             step_counter = state.step_counter,
             player_x = state.player_x,
             player_y=state.player_y,
+            player_color= state.player_color,
             player_tile = state.player_tile,
             dragon_yellow_x = state.dragon_yellow_x,
             dragon_yellow_y = state.dragon_yellow_y,
@@ -516,9 +503,11 @@ class AdventureRenderer(JAXGameRenderer):
     def render(self, state):
         #set bg color here
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        room_mask =self.SHAPE_MASKS["room_number"][state.player_tile]
+        raster = self.jr.render_at(raster, 0, 0, room_mask)
 
         #set player color here
-        player_mask = self.SHAPE_MASKS["player_magenta"]
+        player_mask = self.SHAPE_MASKS["player_colors"][state.player_color]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         #dragons
