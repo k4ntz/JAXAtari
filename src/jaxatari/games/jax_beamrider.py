@@ -2589,10 +2589,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         # Spawning logic: Sector 4 onwards
         is_sector_4_plus = state.sector >= 4
-        spawn_roll = jax.random.uniform(key_spawn)
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_sector_4_plus,
             jnp.sum(active.astype(jnp.int32)) < self.consts.COIN_MAX,
+            state.level.white_ufo_left > 0,
         ]))
         should_spawn = jnp.logical_and(can_spawn, jax.random.uniform(key_spawn) < self.consts.COIN_SPAWN_PROB)
 
