@@ -13,13 +13,6 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
-type DirectionFlags = Tuple[
-    bool | jnp.ndarray,  # up flag
-    bool | jnp.ndarray,  # down flag
-    bool | jnp.ndarray,  # left flag
-    bool | jnp.ndarray,  # right flag
-]
-
 
 class Direction(IntEnum):
     """
@@ -40,7 +33,14 @@ class Direction(IntEnum):
 
     @staticmethod
     @jax.jit
-    def from_flags(flags: DirectionFlags):
+    def from_flags(
+        flags: Tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
+    ):
         """
         Convert a set of boolean flags (up, down, left, right) into a single `Direction` enum value.
         """
@@ -120,7 +120,12 @@ class Direction(IntEnum):
     @staticmethod
     @jax.jit
     def to_delta(
-        flags: DirectionFlags,
+        flags: Tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
         speed: float | jnp.ndarray,
     ):
         """
@@ -439,7 +444,15 @@ class JaxYarsRevenge(
 
     @staticmethod
     @jax.jit
-    def _parse_action_flags(action: jnp.ndarray) -> Tuple[DirectionFlags, jnp.ndarray]:
+    def _parse_action_flags(action: jnp.ndarray) -> Tuple[
+        Tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
+        jnp.ndarray,
+    ]:
         """
         Convert the discrete action index into four movement flags and a fire flag.
         """
@@ -635,7 +648,16 @@ class JaxYarsRevenge(
         return jnp.where(r % 2 == 0, new_snake, new_snake[:, ::-1])
 
     @partial(jax.jit, static_argnums=(0,))
-    def _yar_step(self, state: YarsRevengeState, direction_flags: DirectionFlags):
+    def _yar_step(
+        self,
+        state: YarsRevengeState,
+        direction_flags: Tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
+    ):
         """
         Handle the player movement and all related effects:
 
