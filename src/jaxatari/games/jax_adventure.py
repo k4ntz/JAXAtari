@@ -325,88 +325,88 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             x=state.player_x,
             y=state.player_y,
             tile=state.player_tile,
-            width=4, #ToDO
-            height=8, #ToDO
+            width=4, 
+            height=8, 
             state=1 #ToDO
         )
         dragon_yellow = EntityPosition(
             x=state.dragon_yellow_x,
             y=state.dragon_yellow_y,
             tile=state.dragon_yellow_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=44, 
             state=1 #ToDO
         )
         dragon_green = EntityPosition(
             x=state.dragon_green_x,
             y=state.dragon_green_y,
             tile=state.dragon_green_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=44, 
             state=1 #ToDO
         )
         key_yellow = EntityPosition(
             x=state.key_yellow_x,
             y=state.key_yellow_y,
             tile=state.key_yellow_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=6,
             state=1 #ToDO
         )
         key_black = EntityPosition(
             x=state.key_black_x,
             y=state.key_black_y,
             tile=state.key_black_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=6,
             state=1 #ToDO
         )
         gate_yellow = EntityPosition(
             x=80, #ToDO
             y=80, #ToDO
             tile=1, #ToDO
-            width=10, #ToDO
-            height=4, #ToDO
+            width=7, 
+            height=32, 
             state=state.gate_yellow_state #ToDO
         )
         gate_black = EntityPosition(
             x=100, #ToDO
             y=100, #ToDO
             tile=1, #ToDO
-            width=10, #ToDO
-            height=4, #ToDO
+            width=7, 
+            height=32, 
             state=state.gate_black_state #ToDO
         )
         sword = EntityPosition(
             x=state.sword_x,
             y=state.sword_y,
             tile=state.sword_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=10, 
             state=1 #ToDO
         )
         bridge = EntityPosition(
             x=state.bridge_x,
             y=state.bridge_y,
             tile=state.bridge_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=32, 
+            height=48, 
             state=1 #ToDO
         )
         magnet = EntityPosition(
             x=state.magnet_x,
             y=state.magnet_y,
             tile=state.magnet_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=16,
             state=1 #ToDO
         )
         chalice = EntityPosition(
             x=state.chalice_x,
             y=state.chalice_y,
             tile=state.chalice_tile,
-            width=10, #ToDO
-            height=4, #ToDO
+            width=8, 
+            height=18,
             state=1 #ToDO
         )
 
