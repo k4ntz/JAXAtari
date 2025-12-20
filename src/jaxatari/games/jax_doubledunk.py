@@ -67,7 +67,6 @@ class DunkConstants:
 @chex.dataclass(frozen=True)
 class PlayerState:
     id: chex.Array # ID of the Player (see PlayerID) Practically a constant and is primarily used to check if the player is holding a ball for later purposes.
-    #Position/Speed of Character
     x: chex.Array
     y: chex.Array
     vel_x: chex.Array
@@ -172,6 +171,41 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def reset(self, key) -> Tuple[DunkObservation, DunkGameState]:
         """Resets the environment to the initial state."""
+        
+        jax.debug.print("--- DOUBLE DUNK GAME MECHANICS & RULES ---")
+        jax.debug.print("Objective: Score points by getting the ball into the opponent's basket.")
+        jax.debug.print("Controls: Movement (Up/Down/Left/Right/Diagonals), Action (Fire).")
+        jax.debug.print("Teams: Player (Blue/Black) vs Enemy (Red/White).")
+        jax.debug.print("Scoring: 2 points for close shots, 3 points for shots from outside the key.")
+        
+        jax.debug.print("\n--- PLAY SELECTION (Hold direction + Fire at start) ---")
+        jax.debug.print("When you have the ball, pick an OFFENSIVE strategy:")
+        jax.debug.print("  UP + FIRE    : PICK AND ROLL")
+        jax.debug.print("  DOWN + FIRE  : GIVE AND GO")
+        jax.debug.print("  RIGHT + FIRE : MR. OUTSIDE")
+        
+        jax.debug.print("When opponent has the ball, pick a DEFENSIVE strategy:")
+        jax.debug.print("  UP + FIRE    : LANE DEFENSE")
+        jax.debug.print("  DOWN + FIRE  : TIGHT DEFENSE")
+
+        jax.debug.print("\n--- OFFENSIVE PATTERNS ---")
+        jax.debug.print("Strategies are sequences of actions. 'Jump & Shoot' means press Fire to jump, then Fire again in mid-air to shoot.")
+        jax.debug.print("The last action in the sequence repeats until possession changes.")
+        jax.debug.print("1. PICK AND ROLL: Pass -> Jump & Shoot (repeats)")
+        jax.debug.print("2. GIVE AND GO: Pass -> Pass -> Jump & Shoot (repeats)")
+        jax.debug.print("3. MR. OUTSIDE: Jump & Shoot (repeats)")
+        
+        jax.debug.print("\n--- DEFENSIVE PATTERNS ---")
+        jax.debug.print("1. LANE DEFENSE: Inside defender stays between the ball and the basket.")
+        jax.debug.print("2. TIGHT DEFENSE: Both defenders follow their respective opponents closely.")
+        
+        jax.debug.print("\n--- PENALTIES ---")
+        jax.debug.print("1. TRAVELING: Jumping and landing with the ball without shooting or passing.")
+        jax.debug.print("2. OUT OF BOUNDS: Touching the screen edges with the ball.")
+        jax.debug.print("3. CLEARANCE: After a defensive rebound, the ball must be cleared (taken outside the key) before shooting.")
+        
+        jax.debug.print("\n--- GAME START ---")
+
         state = self._init_state(key)
         obs = self._get_observation(state)
         return obs, state
