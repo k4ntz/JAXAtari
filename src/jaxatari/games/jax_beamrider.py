@@ -1994,9 +1994,10 @@ class BeamriderRenderer(JAXGameRenderer):
         
         # Determine which mask to use
         is_dead = state.level.death_timer > 0
+        is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
         
         def render_alive(r):
-            sprite_idx = (state.steps // 2) % 16
+            sprite_idx = jnp.where(is_init, 9, ((state.steps // 2) + 1) % 16)
             mask = player_masks[sprite_idx]
             return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, mask)
 
