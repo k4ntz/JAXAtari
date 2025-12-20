@@ -102,6 +102,14 @@ class AdventureConstants(NamedTuple):
     # Path East and West, Y-Coordinates that offer hole in the wall
     PATH_HORIZONTAL_UP: int = 40
     PATH_HORIZONTAL_DOWN: int = 200
+    # Castle Edges
+    CASTLE_TOWER_LEFT_X: int = 35
+    CASTLE_TOWER_RIGHT_X: int = 120
+    CASTLE_BASE_LEFT_X: int = 45
+    CASTLE_BASE_RIGHT_X: int = 113
+    CASTLE_TOWER_CORNER_Y: int = 105
+    CASTLE_BASE_CORNER_Y: int = 170
+
     #upper left corner is 0, 0
     PLAYER_SIZE: Tuple[int, int] = (4, 8)
     KEY_SIZE: Tuple[int, int] = (8, 6)
@@ -119,17 +127,17 @@ class AdventureConstants(NamedTuple):
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
-    YELLOW_GATE_POS: Tuple[int, int, int] = (77, 140, 0)
-    BLACK_GATE_POS: Tuple[int, int, int] = (77, 140, 11)
-    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #ToDO
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (120, 50, 5, 0) #ToDO
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (120, 80, 4, 0) #ToDO
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 80, 0) #ToDO
-    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 80, 4) #ToDO
-    SWORD_SPAWN: Tuple[int, int, int] = (120,120,1) #ToDO
-    BRIDGE_SPAWN: Tuple[int, int, int] = (120,120,10) #ToDO
-    MAGNET_SPAWN: Tuple[int, int, int] = (120,120,12) #ToDO
-    CHALICE_SPAWN: Tuple[int, int, int] = (120,120,13) #ToDO
+    YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
+    BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
+    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0)
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
+    SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
+    BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
+    MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
+    CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -397,6 +405,29 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 )
         )
 
+        #Castle Collisions
+        castle_tower_left = self.consts.CASTLE_TOWER_LEFT_X
+        castle_tower_right = self.consts.CASTLE_TOWER_RIGHT_X
+        castle_tower_height = self.consts.CASTLE_TOWER_CORNER_Y
+        castle_base_left = self.consts.CASTLE_BASE_LEFT_X
+        castle_base_right = self.consts.CASTLE_BASE_RIGHT_X
+        castle_base_height = self.consts.CASTLE_BASE_CORNER_Y
+
+        castle_towers_out = jnp.logical_or(player_x<=castle_tower_left, player_x>=castle_tower_right)
+        castle_towers_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_towers = jnp.logical_or(player_y >= castle_tower_height, jnp.logical_or(castle_towers_in, castle_towers_out))
+
+        castle_base_out = jnp.logical_or(player_x<=castle_base_left, player_x>=castle_base_right)
+        castle_base_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_base = jnp.logical_or(player_y >= castle_base_height, jnp.logical_or(castle_base_in, castle_base_out))
+        #castle_towers = player_y >= castle_tower_height
+        #castle_towers = player_y >= castle_tower_height
+
+        castle_collision = jnp.logical_or(
+            jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
+            jnp.logical_and(castle_towers, castle_base)
+        )
+
         room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
         room_3_and_4 = jnp.logical_and(room_3_clear, room_4_clear)
         room_1_to_4 = jnp.logical_and(room_1_and_2, room_3_and_4)
@@ -413,7 +444,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
 
-        return_bool = base_rooms # todo
+        return_bool = jnp.logical_and(base_rooms, castle_collision )# todo
         
         return return_bool
 
@@ -598,7 +629,46 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
-    """
+        """
+
+    def _dragon_step(self, state: AdventureState) -> AdventureState:
+        direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
+        direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
+        dragon_yellow_x = state.dragon_yellow[0]
+        dragon_yellow_y = state.dragon_yellow[1]
+        dragon_yellow_x, dragon_yellow_y = jax.lax.cond(
+            state.player[2]==state.dragon_yellow[2],
+            lambda _: ((dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2)),
+            lambda _: (dragon_yellow_x, dragon_yellow_y),
+            operand  = None
+        )
+        direction_x = jnp.sign(state.player[0] - state.dragon_green[0])
+        direction_y = jnp.sign(state.player[1]- state.dragon_green[1])
+        dragon_green_x = state.dragon_green[0]
+        dragon_green_y = state.dragon_green[1]
+        dragon_green_x, dragon_green_y = jax.lax.cond(
+            state.player[2]==state.dragon_green[2],
+            lambda _: ((dragon_green_x + direction_x*2, dragon_green_y + direction_y*2)),
+            lambda _: (dragon_green_x, dragon_green_y),
+            operand  = None
+        )
+
+
+        return AdventureState(
+            step_counter = state.step_counter,
+            player = state.player,
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2]]).astype(jnp.int32),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2]]).astype(jnp.int32),
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
+        )
+    
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
         previous_state = state
@@ -672,6 +742,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
         state = self._player_step(state, action)
+        state = self._dragon_step(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
