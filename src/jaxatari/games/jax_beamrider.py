@@ -18,6 +18,19 @@ BLUE_LINE_INIT_TABLE = jnp.array([[45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78
 BLUE_LINE_LOOP_TABLE = jnp.array([[44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 58, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 60, 74, 92, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 96, 130, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 56, 66, 82, 104, 144, -1], [45, 56, 66, 82, 104, 144, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 108, 152], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 114, 162], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 118, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 90, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 72, 92, 120, -1], [44, 50, 60, 74, 92, 122, -1], [44, 50, 60, 74, 92, 122, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 124, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 74, 94, 126, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 94, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 96, 128, -1], [44, 52, 62, 76, 98, 132, -1], [44, 52, 62, 76, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 132, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 98, 134, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 136, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 78, 100, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 64, 80, 102, 138, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 102, 140, -1], [45, 54, 66, 80, 104, 142, -1], [45, 54, 66, 80, 104, 142, -1], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 146], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 66, 82, 106, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 82, 108, 148], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 108, 150], [44, 48, 56, 68, 84, 110, 154], [44, 48, 56, 68, 84, 110, 154], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 68, 86, 110, 156], [44, 48, 58, 70, 86, 112, 158], [44, 48, 58, 70, 86, 112, 158], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 86, 114, 160], [44, 50, 58, 70, 88, 116, -1], [44, 50, 58, 70, 88, 116, -1]])
 
 
+PROJECTILE_STEP_FRAMES = 2
+PROJECTILE_Y_TABLE_LASER = jnp.array(
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 800],
+    dtype=jnp.float32,
+)
+PROJECTILE_Y_TABLE_TORPEDO = jnp.array(
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 61, 58, 56, 53, 800, 49, 800],
+    dtype=jnp.float32,
+)
+LASER_PROJECTILE_FRAMES = PROJECTILE_Y_TABLE_LASER.shape[0] * PROJECTILE_STEP_FRAMES
+TORPEDO_PROJECTILE_FRAMES = PROJECTILE_Y_TABLE_TORPEDO.shape[0] * PROJECTILE_STEP_FRAMES
+
+
 class WhiteUFOPattern(IntEnum):
     """Behavioral patterns used by the white UFO enemies."""
 
@@ -60,8 +73,8 @@ class BeamriderConstants(NamedTuple):
     TOP_TO_BOTTOM_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-2,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(2,4))
 
 
-    MAX_LASER_Y: int = 67
-    MIN_BULLET_Y:int =156
+    MAX_LASER_Y: int = 64
+    MIN_BULLET_Y:int =155
     MAX_TORPEDO_Y: int = 49
     MAX_TORPEDO_Y_MOTHERSHIP_SCENE: int = 45
     BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
@@ -231,21 +244,19 @@ def _get_ufo_alignment(pos: chex.Array) -> chex.Array:
 
 
 def _get_index_bullet(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
-    stage_1 = (pos >= 100).astype(jnp.int32)
-    stage_2 = (pos >= 80).astype(jnp.int32)
-    stage_3 = (pos >= 0).astype(jnp.int32)
-    result = jnp.where(bullet_type == laser_id, 0, stage_1 + stage_2 + stage_3)
-    return result
+    is_laser = bullet_type == laser_id
+    large = (pos >= 79).astype(jnp.int32)
+    medium = (pos >= 56).astype(jnp.int32)
+    torpedo_idx = jnp.where(large, 3, jnp.where(medium, 2, 1))
+    return jnp.where(is_laser, 0, torpedo_idx)
 
 
 def _get_bullet_alignment(pos: chex.Array, bullet_type: chex.Array, laser_id: int) -> chex.Array:
-    stage_1 = (pos >= 100).astype(jnp.int32)
-    stage_2 = (pos >= 80).astype(jnp.int32)
-    stage_3 = (pos >= 0).astype(jnp.int32)
-    # default alignment if smallest torpedo is +3
-    # if bullet is laser, no offset
-    result = jnp.where(bullet_type == laser_id, 0, 4 - (stage_1 + stage_2 + stage_3))
-    return result
+    is_laser = bullet_type == laser_id
+    large = (pos >= 79).astype(jnp.int32)
+    medium = (pos >= 56).astype(jnp.int32)
+    torpedo_offset = jnp.where(large, 2, jnp.where(medium, 3, 4))
+    return jnp.where(is_laser, 0, torpedo_offset)
 
 
 class LevelState(NamedTuple):
@@ -257,6 +268,7 @@ class LevelState(NamedTuple):
     mothership_stage: chex.Array
     player_shot_pos: chex.Array
     player_shot_vel: chex.Array
+    player_shot_frame: chex.Array
     torpedoes_left: chex.Array
     shooting_cooldown: chex.Array
     shooting_delay: chex.Array
@@ -434,6 +446,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             mothership_stage=jnp.array(0, dtype=jnp.int32),
             player_shot_pos=jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32),
             player_shot_vel=jnp.zeros((2,), dtype=jnp.float32),
+            player_shot_frame=jnp.array(-1, dtype=jnp.int32),
             torpedoes_left=torpedoes_left,
             shooting_cooldown=shooting_cooldown,
             shooting_delay=shooting_delay,
@@ -587,6 +600,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 vel_x,
                 player_shot_position,
                 player_shot_velocity,
+                player_shot_frame,
                 torpedos_left,
                 bullet_type,
                 shooting_cooldown,
@@ -841,6 +855,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | hit_exists_lane_blocker | rejuv_hit_by_shot | hit_mothership | hit_exists_shot
             
             projectile_resolved_now = projectile_at_horizon | bullet_hit_any
+
+            player_shot_frame = jnp.where(
+                projectile_resolved_now,
+                jnp.array(-1, dtype=player_shot_frame.dtype),
+                player_shot_frame,
+            )
             
             # If resolved, trigger recovery window
             shooting_cooldown = jnp.where(
@@ -1095,6 +1115,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             mothership_stage = jnp.where(is_dying_sequence, 0, mothership_stage)
             vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
             player_shot_position = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
+            player_shot_frame = jnp.where(
+                is_dying_sequence,
+                jnp.array(-1, dtype=player_shot_frame.dtype),
+                player_shot_frame,
+            )
             bouncer_pos = jnp.where(
                 is_dying_sequence,
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=bouncer_pos.dtype),
@@ -1107,7 +1132,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 player_pos=player_x, player_vel=vel_x, white_ufo_left=white_ufo_left,
                 mothership_position=mothership_position, mothership_timer=mothership_timer,
                 mothership_stage=mothership_stage, player_shot_pos=player_shot_position,
-                player_shot_vel=player_shot_velocity, torpedoes_left=torpedos_left,
+                player_shot_vel=player_shot_velocity, player_shot_frame=player_shot_frame,
+                torpedoes_left=torpedos_left,
                 shooting_cooldown=shooting_cooldown, bullet_type=bullet_type,
                 enemy_type=jnp.array([0, 0, 0]), white_ufo_pos=white_ufo_pos,
                 white_ufo_vel=white_ufo_vel, enemy_shot_pos=enemy_shot_pos,
@@ -1312,21 +1338,43 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             state.level.player_shot_vel,
         )
 
-        pos_if_no_new = jnp.where(bullet_exists, (state.level.player_shot_pos - shot_velocity), jnp.array(self.consts.BULLET_OFFSCREEN_POS))
-        shot_position = jnp.where(
+        bullet_type = jnp.where(spawn_bullet, shot_type_pending, state.level.bullet_type)
+        shot_frame = state.level.player_shot_frame
+        reset_frame = jnp.full_like(shot_frame, -1)
+        shot_frame = jnp.where(
             spawn_bullet,
-            jnp.array([state.level.player_pos + 3, self.consts.MIN_BULLET_Y]),
-            pos_if_no_new,
+            jnp.zeros_like(shot_frame),
+            jnp.where(bullet_exists, shot_frame + 1, reset_frame),
         )
+
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        active = (shot_frame >= 0) & (shot_frame < max_frames)
+        step_idx = jnp.floor_divide(jnp.maximum(shot_frame, 0), PROJECTILE_STEP_FRAMES).astype(jnp.int32)
+        laser_y = jnp.take(PROJECTILE_Y_TABLE_LASER, step_idx, mode="clip")
+        torpedo_y = jnp.take(PROJECTILE_Y_TABLE_TORPEDO, step_idx, mode="clip")
+        shot_y = jnp.where(is_laser, laser_y, torpedo_y)
+        shot_y = jnp.where(active, shot_y, self.consts.BULLET_OFFSCREEN_POS[1])
+
+        lane_dy = jnp.where(shot_velocity[1] == 0, 1.0, shot_velocity[1])
+        lane_slope = shot_velocity[0] / lane_dy
+        delta_y = shot_y - state.level.player_shot_pos[1]
+        shot_x = state.level.player_shot_pos[0] + lane_slope * delta_y
+        shot_x = jnp.where(spawn_bullet, state.level.player_pos + 3, shot_x)
+        shot_x = jnp.where(active, shot_x, self.consts.BULLET_OFFSCREEN_POS[0])
+        shot_position = jnp.array([shot_x, shot_y])
+
+        shot_frame = jnp.where(active, shot_frame, reset_frame)
 
         # Torpedo consumed ONLY when actually spawned
         new_torpedo_spawned = spawn_bullet & (shot_type_pending == self.consts.TORPEDO_ID)
         torpedos_left = state.level.torpedoes_left - new_torpedo_spawned.astype(jnp.int32)
-        
-        bullet_type = jnp.where(spawn_bullet, shot_type_pending, state.level.bullet_type)
 
         #####
-        return(x, v, shot_position, shot_velocity, torpedos_left, bullet_type, shooting_cooldown, shooting_delay, shot_type_pending)
+        return(
+            x, v, shot_position, shot_velocity, shot_frame, torpedos_left, bullet_type,
+            shooting_cooldown, shooting_delay, shot_type_pending
+        )
 
     def _collision_handler(
         self,
@@ -2797,43 +2845,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         return positions, counter
 
     def _bullet_infos(self, state: BeamriderState):
-        shot_y = state.level.player_shot_pos[1]
+        shot_frame = state.level.player_shot_frame
         bullet_type = state.level.bullet_type
 
-        # Projectile exists if it's within standard range
-        # Note: ALE projectiles disappear at ~49.
-        is_laser = (bullet_type == self.consts.LASER_ID)
-        is_torpedo = (bullet_type == self.consts.TORPEDO_ID)
-        
-        laser_active = is_laser & (shot_y >= self.consts.MAX_LASER_Y) & (shot_y <= self.consts.MIN_BULLET_Y)
-        
-        max_torpedo_y = jnp.where(
-            state.level.white_ufo_left > 0,
-            self.consts.MAX_TORPEDO_Y,
-            self.consts.MAX_TORPEDO_Y_MOTHERSHIP_SCENE,
-        )
-        torpedo_active = is_torpedo & (shot_y >= max_torpedo_y) & (shot_y <= self.consts.MIN_BULLET_Y)
-        
-        return laser_active | torpedo_active
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        return (shot_frame >= 0) & (shot_frame < max_frames)
 
     def _projectile_resolved(self, state: BeamriderState):
         """Check if the active projectile just finished its lifecycle (horizon)."""
-        shot_y = state.level.player_shot_pos[1]
+        shot_frame = state.level.player_shot_frame
         bullet_type = state.level.bullet_type
-        
-        is_laser = (bullet_type == self.consts.LASER_ID)
-        is_torpedo = (bullet_type == self.consts.TORPEDO_ID)
-        
-        max_torpedo_y = jnp.where(
-            state.level.white_ufo_left > 0,
-            self.consts.MAX_TORPEDO_Y,
-            self.consts.MAX_TORPEDO_Y_MOTHERSHIP_SCENE,
-        )
-        
-        laser_at_horizon = is_laser & (shot_y < self.consts.MAX_LASER_Y) & (shot_y < self.consts.BOTTOM_CLIP)
-        torpedo_at_horizon = is_torpedo & (shot_y < max_torpedo_y) & (shot_y < self.consts.BOTTOM_CLIP)
-        
-        return laser_at_horizon | torpedo_at_horizon
+        is_laser = bullet_type == self.consts.LASER_ID
+        max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
+        return (shot_frame >= 0) & (shot_frame >= (max_frames - 1))
 
     def _bouncer_dedicated_step(self, state: BeamriderState, key: chex.Array):
         level = state.level
