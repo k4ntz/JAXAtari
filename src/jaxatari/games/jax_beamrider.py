@@ -32,6 +32,9 @@ class WhiteUFOPattern(IntEnum):
 
 
 class BeamriderConstants(NamedTuple):
+
+    WHITE_UFOS_PER_SECTOR: int = 1
+
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
@@ -65,7 +68,7 @@ class BeamriderConstants(NamedTuple):
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
     BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
-    ENEMY_OFFSCREEN_POS: Tuple[int,int] = (2000,2000)
+    ENEMY_OFFSCREEN_POS: Tuple[int,int] = (-100, -100)
     MIN_BLUE_LINE_POS: int = 46
     MAX_BLUE_LINE_POS: int = 160
     WHITE_UFO_RETREAT_DURATION: int = 28
@@ -96,7 +99,6 @@ class BeamriderConstants(NamedTuple):
     # Blue line constants
     BLUE_LINE_OFFSCREEN_Y = 500
 
-    WHITE_UFOS_PER_SECTOR: int = 1
     CHASING_METEOROID_MAX: int = 8
     CHASING_METEOROID_WAVE_MIN: int = 2
     CHASING_METEOROID_WAVE_MAX: int = 8
@@ -112,9 +114,9 @@ class BeamriderConstants(NamedTuple):
     MOTHERSHIP_HEIGHT: int = 7
     MOTHERSHIP_EMERGE_Y: int = 44
     REJUVENATOR_SPAWN_PROB: float = 1/1500
-    REJUVENATOR_STAGE_2_Y: float = 57.0
-    REJUVENATOR_STAGE_3_Y: float = 69.0
-    REJUVENATOR_STAGE_4_Y: float = 86.0
+    REJUVENATOR_STAGE_2_Y: float = 62.0
+    REJUVENATOR_STAGE_3_Y: float = 93.0
+    REJUVENATOR_STAGE_4_Y: float = 112.0
     DEATH_DURATION: int = 120
 
 
@@ -131,9 +133,9 @@ def _get_index_ufo(pos: chex.Array) -> chex.Array:
 
 def _get_index_rejuvenator(pos: chex.Array) -> chex.Array:
     stage_1 = (pos >= 0).astype(jnp.int32)
-    stage_2 = (pos >= 57).astype(jnp.int32)
-    stage_3 = (pos >= 69).astype(jnp.int32)
-    stage_4 = (pos >= 86).astype(jnp.int32)
+    stage_2 = (pos >= 62).astype(jnp.int32)
+    stage_3 = (pos >= 93).astype(jnp.int32)
+    stage_4 = (pos >= 112).astype(jnp.int32)
     return stage_1 + stage_2 + stage_3 + stage_4
 
 
@@ -505,6 +507,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ]))
             
             rejuv_dead = jnp.logical_or(rejuv_dead, rejuv_hit_by_shot)
+            # If the rejuvenator was just killed by a shot, we don't reset its position yet,
+            # because it should drop down as a "Dead" sprite.
+            # But if it hit the player, it's already reset in the later collision logic.
+            
             player_shot_position = jnp.where(rejuv_hit_by_shot, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_position)
 
             # --- Mothership Collision Check ---
@@ -591,7 +597,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             lose_life_rejuv = jnp.logical_and(rejuv_hit_player, rejuv_dead)
             
             rejuv_active = jnp.where(rejuv_hit_player, False, rejuv_active)
-            rejuv_pos = jnp.where(rejuv_hit_player[None], jnp.array(self.consts.ENEMY_OFFSCREEN_POS), rejuv_pos)
+            rejuv_pos = jnp.where(rejuv_hit_player, jnp.array(self.consts.ENEMY_OFFSCREEN_POS), rejuv_pos)
 
             chasing_meteoroid_offscreen = jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=chasing_meteoroid_pos.dtype).reshape(2, 1),
@@ -1751,15 +1757,37 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         dead = jnp.where(should_spawn, False, dead)
         frame = jnp.where(should_spawn, 0, frame)
 
-        # Movement logic: move every 2 frames
-        should_move = jnp.logical_and(active, (state.steps % 2) == 0)
-        
+        # Movement logic: 
+        # Phase 1: pixel moves alternate 2 and 4 frames (dy=1)
+        # Phase 2: moves every 2 frames (dy=1)
+        # Phase 3: moves every 2 frames, cyclic dy [1, 1, 2]
+        # Phase 4: moves every 2 frames, cyclic dy [2, 3]
+        # Dead: always every frame (dy based on current stage or 1.0)
         y = pos[1]
-        is_stage_1_2 = y < self.consts.REJUVENATOR_STAGE_3_Y
+        stage = _get_index_rejuvenator(y)
         
-        # Alternating dy for stage 3 and 4
-        dy_alt = jnp.where((frame % 2) == 0, 1.0, 2.0)
-        dy = jnp.where(is_stage_1_2, 1.0, dy_alt)
+        should_move_normal = jax.lax.switch(
+            jnp.clip(stage - 1, 0, 3),
+            [
+                lambda: (state.steps % 6 == 0) | (state.steps % 6 == 2), # Phase 1
+                lambda: (state.steps % 2) == 0,                         # Phase 2
+                lambda: (state.steps % 2) == 0,                         # Phase 3
+                lambda: (state.steps % 2) == 0,                         # Phase 4
+            ]
+        )
+        
+        should_move = jnp.logical_and(active, jnp.where(dead, True, should_move_normal))
+        
+        # dy logic:
+        dy = jax.lax.switch(
+            jnp.clip(stage - 1, 0, 3),
+            [
+                lambda: 1.0,                                       # Phase 1
+                lambda: 1.0,                                       # Phase 2
+                lambda: jnp.take(jnp.array([1.0, 1.0, 2.0]), frame % 3), # Phase 3: 1, 1, 2
+                lambda: jnp.take(jnp.array([2.0, 3.0]), frame % 2),     # Phase 4: 2, 3
+            ]
+        )
         
         new_y = y + jnp.where(should_move, dy, 0.0)
         
@@ -1775,7 +1803,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Deactivate if off-screen
         off_screen = new_y > self.consts.PLAYER_POS_Y + 1.0
         active = jnp.where(off_screen, False, active)
-        pos = jnp.where(jnp.logical_not(active), jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32), pos)
+        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32)
+        pos = jnp.where(active, jnp.array([new_x, new_y]), offscreen_pos)
         
         return pos, active, dead, frame, lane
 
@@ -2046,10 +2075,11 @@ class BeamriderRenderer(JAXGameRenderer):
         
         mask = rejuv_masks[sprite_idx]
         
-        # Handle offscreen for rendering
-        final_y = jnp.where(active, rejuv_pos[1], 500.0)
+        # Handle offscreen for rendering: ensure they are definitely outside [0, 160/210]
+        final_y = jnp.where(active, rejuv_pos[1], -50.0)
+        final_x = jnp.where(active, rejuv_pos[0], -50.0)
         
-        return self.jr.render_at(raster, rejuv_pos[0], final_y, mask)
+        return self.jr.render_at_clipped(raster, final_x, final_y, mask)
 
     def _render_blue_lines(self, raster, state):
         """Draw the scrolling foreground lines."""
