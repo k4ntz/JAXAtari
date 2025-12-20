@@ -134,8 +134,6 @@ class BattlezoneConstants(NamedTuple):
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/270
     PLAYER_SPEED:float = 0.24804691667
     PROJECTILE_SPEED:float = 0.5
-    TANK_SPEED: float = 0.3  # todo change
-    SAUCER_SPEED: float = 0.5  # todo change
     ENEMY_POS_Y:int = 85
     FIRE_CD:int = 200 #todo change
     HITBOX_SIZE:float = 6.0
@@ -149,6 +147,8 @@ class BattlezoneConstants(NamedTuple):
         [0.5, 0.4],# 0.1, 0.0],   #7_000
         [0.4, 0.3]#, 0.2, 0.1]    #12_000
         ])
+    ENEMY_SPEED: jnp.array = jnp.array([0.3, 0.5, 1.0, 1.0]) #todo change
+    ENEMY_ROT_SPEED: jnp.array = jnp.array([0.005, 0.01, 0.01, 0.01]) #todo change
 
 
 class Projectile(NamedTuple):
@@ -516,34 +516,38 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     # -------------Enemy Movements-----------------
     @partial(jax.jit, static_argnums=(0,))
-    def enemy_movement(self, enemy):
-        out_angle = 2*jnp.pi - jnp.arctan(enemy.x / enemy.z)
-        speed = self.consts.SAUCER_SPEED
+    def enemy_movement(self, enemy:Enemy):
+        perfect_angle = 2*jnp.pi - jnp.arctan2(enemy.x , enemy.z)
+        angle_diff = (perfect_angle-enemy.orientation_angle+jnp.pi)%(2*jnp.pi)-jnp.pi
+        speed = self.consts.ENEMY_SPEED[enemy.enemy_type]
+        rot_speed = self.consts.ENEMY_ROT_SPEED[enemy.enemy_type]
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards:int = -1) -> Enemy:    # Enemy towoards player with -1 and away with 1
+        def move_to_player(enemy: Enemy, towards:int = 1) -> Enemy:    # Enemy towoards player with 1 and away with -1
             k = (enemy.distance + towards * speed) / enemy.distance
-            return enemy._replace(x=enemy.x * k, z=enemy.z * k)
+            direction_x = -jnp.sin(perfect_angle)
+            direction_z = jnp.cos(perfect_angle)
+            return enemy._replace(x=enemy.x  +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
 
         def enemy_turn(enemy: Enemy) -> Enemy:
-            return enemy._replace(orientation_angle=out_angle)
+            return enemy._replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
 
         # ---------------------------------
         ## Tank
         def tank_movement(tank: Enemy) -> Enemy:
-            jax.debug.print("{}",tank.distance)
+            #jax.debug.print("{}",tank.distance)
             def player_spottet(tank):
                 def in_range(tank):
                     def towards_player(tank):
-                        jax.debug.print("MOVE TO PLayer{}", tank.orientation_angle)
+                        #jax.debug.print("MOVE TO PLayer{}", tank.orientation_angle)
                         # ToDO: shoot
                         return move_to_player(tank)
 
                     def away_player(tank):
                         # jax.debug.print("{}", tank.orientation_angle)
                         # ToDO: shoot
-                        return move_to_player(tank, 1)
+                        return move_to_player(tank, -1)
 
                     return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
                 def out_range(tank):
@@ -555,14 +559,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 return enemy_turn(tank)
                 #return jax.lax.switch(distance_threshold_indx(tank.distance), (), tank)
 
-            return jax.lax.cond(jnp.logical_and(tank.orientation_angle == out_angle, tank.active), player_spottet, player_not_spottet, tank)
+            return jax.lax.cond(jnp.abs(angle_diff)<=rot_speed,
+                                player_spottet, player_not_spottet, tank)
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
             phase = 0
             min_dist = 27.7
             beta = jnp.arctan(saucer.x / saucer.z)
-            speed = self.consts.SAUCER_SPEED
 
             def distance_threshold_indx(dist):
                 threshold = jnp.array([1000, 2000, 7000, 12000])
@@ -841,13 +845,12 @@ class BattlezoneRenderer(JAXGameRenderer):
         #----------------select sprite based on rotation------------
         n, _, _ = jnp.shape(selected_enemy_type)
         circle = 2*jnp.pi  #change to 2pi if radians
-        v = jnp.array([enemy.x, enemy.z])
-        w = jnp.array([0, 1])
+        #v = jnp.array([enemy.x, enemy.z])
+        #w = jnp.array([0, 1])
         #to_screen_angle = (jnp.dot(v, w)/jnp.linalg.norm(v))
         #angle = (enemy.orientation_angle + to_screen_angle - (jnp.pi/2)) % circle
-        angle = (enemy.orientation_angle - (jnp.pi/2)) % circle
+        angle = ((jnp.pi/2)-enemy.orientation_angle) % circle
         angle = jnp.where(angle<=jnp.pi, angle, jnp.where(angle <= jnp.pi+jnp.pi/2, jnp.pi, 0))
-        #flip = angle > jnp.pi
         index = jnp.round((angle/jnp.pi) * (n-1)).astype(int)
         rotated_sprite = selected_enemy_type[index]
 
