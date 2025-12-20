@@ -33,7 +33,7 @@ class WhiteUFOPattern(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    WHITE_UFOS_PER_SECTOR: int = 0
+    WHITE_UFOS_PER_SECTOR: int = 5
 
     RENDER_SCALE_FACTOR: int = 4
     SCREEN_WIDTH: int = 160
