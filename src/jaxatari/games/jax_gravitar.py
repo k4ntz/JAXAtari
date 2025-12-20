@@ -161,7 +161,7 @@ class SpriteIdx(IntEnum):
 
 
 TERRANT_SCALE_OVERRIDES = {
-    SpriteIdx.TERRANT2: 0.80,
+    SpriteIdx.TERRANT2: 0.8,
 }
 
 LEVEL_LAYOUTS = {
@@ -243,6 +243,7 @@ class Bullets(NamedTuple):
     vx: jnp.ndarray
     vy: jnp.ndarray
     alive: jnp.ndarray  # boolean array
+    sprite_idx: jnp.ndarray  # sprite index for each bullet (for different bullet types)
 
 
 # ========== Enemies States ==========
@@ -535,7 +536,8 @@ def create_empty_bullets_fixed(size: int) -> Bullets:
         y=jnp.zeros((size,), dtype=jnp.float32),
         vx=jnp.zeros((size,), dtype=jnp.float32),
         vy=jnp.zeros((size,), dtype=jnp.float32),
-        alive=jnp.zeros((size,), dtype=bool)
+        alive=jnp.zeros((size,), dtype=bool),
+        sprite_idx=jnp.full((size,), int(SpriteIdx.ENEMY_BULLET), dtype=jnp.int32)
     )
 
 
@@ -658,7 +660,8 @@ def update_bullets(bullets: Bullets) -> Bullets:
         y=new_y,
         vx=bullets.vx,
         vy=bullets.vy,
-        alive=valid
+        alive=valid,
+        sprite_idx=bullets.sprite_idx
     )
 
 
@@ -693,6 +696,7 @@ def merge_bullets(prev: Bullets, add: Bullets, max_len: int | None = None) -> Bu
                 vx=b.vx.at[idx].set(add.vx[i]),
                 vy=b.vy.at[idx].set(add.vy[i]),
                 alive=b.alive.at[idx].set(True),
+                sprite_idx=b.sprite_idx.at[idx].set(add.sprite_idx[i]),
             ),
             lambda _: b,
             operand=None
@@ -721,7 +725,7 @@ def _enforce_cap_keep_old(b: Bullets, cap: int) -> Bullets:
     rank = jnp.cumsum(b.alive.astype(jnp.int32)) - 1  # Sequential number for each alive bullet (0,1,2,...)
     keep = b.alive & (rank < cap_i)
 
-    return Bullets(x=b.x, y=b.y, vx=b.vx, vy=b.vy, alive=keep)
+    return Bullets(x=b.x, y=b.y, vx=b.vx, vy=b.vy, alive=keep, sprite_idx=b.sprite_idx)
 
 
 # ========== Fire Bullet ==========
@@ -738,7 +742,8 @@ def fire_bullet(bullets: Bullets, ship_x, ship_y, ship_angle, bullet_speed):
             y=bullets.y.at[idx].set(ship_y),
             vx=bullets.vx.at[idx].set(new_vx),
             vy=bullets.vy.at[idx].set(new_vy),
-            alive=bullets.alive.at[idx].set(True)
+            alive=bullets.alive.at[idx].set(True),
+            sprite_idx=bullets.sprite_idx.at[idx].set(int(SpriteIdx.SHIP_BULLET))
         )
 
     def skip_bullet(_):
@@ -762,7 +767,8 @@ def _fire_single_from_to(bullets: Bullets, sx, sy, tx, ty, speed=jnp.float32(0.7
         y=jnp.array([sy], dtype=jnp.float32),
         vx=jnp.array([vx], dtype=jnp.float32),
         vy=jnp.array([vy], dtype=jnp.float32),
-        alive=jnp.array([True])
+        alive=jnp.array([True]),
+        sprite_idx=jnp.array([int(SpriteIdx.ENEMY_BULLET)], dtype=jnp.int32)
     )
 
     return merge_bullets(bullets, one, max_len=16)
@@ -855,7 +861,8 @@ def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemie
         y=bullets.y,
         vx=bullets.vx,
         vy=bullets.vy,
-        alive=bullets.alive & (~bullet_hit)
+        alive=bullets.alive & (~bullet_hit),
+        sprite_idx=bullets.sprite_idx
     )
 
     # 3. Calculate all the new values for the enemies to be updated externally
@@ -934,7 +941,8 @@ def consume_ship_hits(state, bullets, hitbox_size):
     new_bullets = Bullets(
         x=bullets.x, y=bullets.y,
         vx=bullets.vx, vy=bullets.vy,
-        alive=bullets.alive & (~hit_mask)  # Eliminate hit bullets
+        alive=bullets.alive & (~hit_mask),  # Eliminate hit bullets
+        sprite_idx=bullets.sprite_idx
     )
 
     return new_bullets, any_hit
@@ -961,7 +969,7 @@ def kill_bullets_hit_terrain_segment(prev: Bullets, nxt: Bullets, terrain_mask: 
     hits = jax.lax.fori_loop(0, samples, body, init)
     alive = nxt.alive & (~hits) & prev.alive  # Only active bullets are considered
 
-    return Bullets(x=nxt.x, y=nxt.y, vx=nxt.vx, vy=nxt.vy, alive=alive)
+    return Bullets(x=nxt.x, y=nxt.y, vx=nxt.vx, vy=nxt.vy, alive=alive, sprite_idx=nxt.sprite_idx)
 
 
 # ========== Ship Step ==========
@@ -1229,7 +1237,8 @@ def _bullets_hit_saucer(bullets: Bullets, sauc: SaucerState):
     new_bullets = Bullets(
         x=bullets.x, y=bullets.y,
         vx=bullets.vx, vy=bullets.vy,
-        alive=bullets.alive & (~hit_mask)  # Eliminate hit bullets
+        alive=bullets.alive & (~hit_mask),  # Eliminate hit bullets
+        sprite_idx=bullets.sprite_idx
     )
 
     return new_bullets, any_hit
@@ -1249,7 +1258,8 @@ def _bullets_hit_ufo(bullets: Bullets, ufo) -> Tuple[Bullets, jnp.ndarray]:
     new_bullets = Bullets(
         x=bullets.x, y=bullets.y,
         vx=bullets.vx, vy=bullets.vy,
-        alive=bullets.alive & (~hit_mask)
+        alive=bullets.alive & (~hit_mask),
+        sprite_idx=bullets.sprite_idx
     )
 
     return new_bullets, any_hit
@@ -1760,8 +1770,12 @@ def _step_level_core(env_state: EnvState, action: int):
 
         vx_out = jnp.where(should_fire_mask, vx, 0.0)
         vy_out = jnp.where(should_fire_mask, vy, 0.0)
+        
+        # Determine bullet sprite: green enemies use green bullets, orange/flipped use orange bullets
+        is_green_enemy = (enemies.sprite_idx == int(SpriteIdx.ENEMY_GREEN))
+        bullet_sprite = jnp.where(is_green_enemy, int(SpriteIdx.ENEMY_GREEN_BULLET), int(SpriteIdx.ENEMY_BULLET))
 
-        return Bullets(x=x_out, y=y_out, vx=vx_out, vy=vy_out, alive=should_fire_mask)
+        return Bullets(x=x_out, y=y_out, vx=vx_out, vy=vy_out, alive=should_fire_mask, sprite_idx=bullet_sprite)
 
     def _get_empty_bullets(_):
         return create_empty_bullets_16()
@@ -3009,7 +3023,34 @@ class GravitarRenderer(JAXGameRenderer):
         frame = jax.lax.cond(should_draw_destination, draw_reactor_destination, lambda f: f, frame)
 
         # === 4. Draw Bullets ===
-        def draw_bullets_func(bullets, sprite_idx, current_frame):
+        def draw_bullets_with_sprite_idx(bullets, current_frame):
+            """Draw bullets using their individual sprite_idx field."""
+            # Pre-fetch the two possible blit functions
+            orange_blit = self.blit_branches[int(SpriteIdx.ENEMY_BULLET)]
+            green_blit = self.blit_branches[int(SpriteIdx.ENEMY_GREEN_BULLET)]
+            
+            def draw_one_bullet(i, f):
+                x, y = bullets.x[i], bullets.y[i]
+                is_alive = bullets.alive[i]
+                bullet_sprite = bullets.sprite_idx[i]
+                
+                # Select blit function based on sprite_idx (green bullet uses different sprite)
+                is_green = bullet_sprite == int(SpriteIdx.ENEMY_GREEN_BULLET)
+                
+                def blit_bullet(frame_in):
+                    return jax.lax.cond(
+                        is_green,
+                        lambda f_in: green_blit(f_in, x, y),
+                        lambda f_in: orange_blit(f_in, x, y),
+                        frame_in
+                    )
+                
+                return jax.lax.cond(is_alive, blit_bullet, lambda frame_in: frame_in, f)
+
+            return jax.lax.fori_loop(0, bullets.x.shape[0], draw_one_bullet, current_frame)
+        
+        def draw_bullets_fixed_sprite(bullets, sprite_idx, current_frame):
+            """Draw bullets using a fixed sprite (for ship bullets)."""
             blit_func = self.blit_branches[sprite_idx]
 
             def draw_one_bullet(i, f):
@@ -3021,9 +3062,9 @@ class GravitarRenderer(JAXGameRenderer):
             return jax.lax.fori_loop(0, bullets.x.shape[0], draw_one_bullet, current_frame)
 
         # Draw all types of bullets.
-        frame = draw_bullets_func(state.bullets, int(SpriteIdx.SHIP_BULLET), frame)
-        frame = draw_bullets_func(state.enemy_bullets, int(SpriteIdx.ENEMY_BULLET), frame)
-        frame = draw_bullets_func(state.ufo_bullets, int(SpriteIdx.ENEMY_BULLET), frame)
+        frame = draw_bullets_fixed_sprite(state.bullets, int(SpriteIdx.SHIP_BULLET), frame)
+        frame = draw_bullets_with_sprite_idx(state.enemy_bullets, frame)
+        frame = draw_bullets_with_sprite_idx(state.ufo_bullets, frame)
 
         # --- 5. Draw the ship ---
         ship_state = state.state
