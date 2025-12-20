@@ -1,8 +1,8 @@
-from jax._src.pjit import JitWrapped
 import os
 import math
 from functools import partial
 from typing import NamedTuple, Tuple
+
 import jax
 import jax.lax
 import jax.numpy as jnp
@@ -14,9 +14,8 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class UpNDownConstants(NamedTuple):
-    FRAME_SKIP: int = 4
+    FRAME_SKIP: int = 4  # Used by AtariWrapper
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
-    ACTION_REPEAT_PROBS: float = 0.25
     MAX_SPEED: int = 6
     INITIAL_LIVES: int = 5
     JUMP_ARC_HEIGHT: float = 18.0
@@ -42,8 +41,12 @@ class UpNDownConstants(NamedTuple):
     LANDING_TOLERANCE: int = 15  # Pixels tolerance for landing on a road (increased by 5 for off-road landings)
     LATE_JUMP_COLLISION_FRAMES: int = 2
     LANDING_COLLISION_DISTANCE: float = 8.0  # Larger collision distance when landing (for crossings)
+    GROUND_COLLISION_DISTANCE: float = 3.0  # Tight collision distance for ground collisions
     LATE_JUMP_ENEMY_SCORE: int = 400
     STEEP_ROAD_SPEED_REDUCTION_INTERVAL: int = 8  # Frames between each speed reduction on steep roads
+    PASSIVE_SCORE_INTERVAL: int = 60  # Steps between passive score awards
+    PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
+    COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
     TRACK_LENGTH: int = 1036
     FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]) 
     TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035])
@@ -52,8 +55,6 @@ class UpNDownConstants(NamedTuple):
     INITIAL_ROAD_POS_Y: int = 25
     # Flag constants - 8 flags with different colors matching the top row
     NUM_FLAGS: int = 8
-    FLAG_SIZE: Tuple[int, int] = (11, 6)  # height, width of the flag sprite
-    FLAG_POLE_SIZE: Tuple[int, int] = (7, 2)  # height, width of the pole sprite
     # Flag colors as RGBA values (matching the top row from left to right)
     FLAG_COLORS: chex.Array = jnp.array([
         [184, 50, 50, 255],    # Red
@@ -73,14 +74,8 @@ class UpNDownConstants(NamedTuple):
     # Life display constants - positions of life cars at the bottom
     LIFE_BOTTOM_X_POSITIONS: chex.Array = jnp.array([13, 18, 25, 33, 33])  # X positions for 5 life cars
     LIFE_BOTTOM_Y: int = 195
-    LIFE_BLACKOUT_SIZE: Tuple[int, int] = (14, 14)  # Size of blackout square for lives
-    PICKUP_SCORE: int = 100  # Points awarded for jumping on a pickup truck
-    FLAG_CARRIER_SCORE: int = 125  # Points awarded for jumping on a flag carrier
-    CAMARO_SCORE: int = 150  # Points awarded for jumping on a camaro
-    TRUCK_SCORE: int = 175  # Points awarded for jumping on a truck
     # Collectible constants - unified dynamic spawning
     MAX_COLLECTIBLES: int = 2  # Maximum collectibles that can exist at once (pool of mixed types)
-    COLLECTIBLE_SIZE: Tuple[int, int] = (8, 8)  # height, width of collectible sprite
     COLLECTIBLE_SPAWN_INTERVAL: int = 200  # Steps between spawn attempts
     COLLECTIBLE_DESPAWN_DISTANCE: int = 500  # Distance beyond which collectibles despawn
     # Collectible types (indices for type field)
@@ -88,8 +83,8 @@ class UpNDownConstants(NamedTuple):
     COLLECTIBLE_TYPE_BALLOON: int = 1
     COLLECTIBLE_TYPE_LOLLYPOP: int = 2
     COLLECTIBLE_TYPE_ICE_CREAM: int = 3
-    # Collectible type spawn probabilities (must sum to 100)
-    COLLECTIBLE_SPAWN_PROBABILITIES: chex.Array = jnp.array([35, 30, 25, 10], dtype=jnp.int32)  # Cherry: 40%, Balloon: 20%, Lollypop: 20%, IceCream: 20%
+    # Collectible type spawn probabilities (cumulative thresholds for random sampling)
+    COLLECTIBLE_SPAWN_PROBABILITIES: chex.Array = jnp.array([35, 65, 90, 100], dtype=jnp.int32)  # Cherry: 35%, Balloon: 30%, Lollypop: 25%, IceCream: 10%
     # Collectible type scores
     COLLECTIBLE_SCORES: chex.Array = jnp.array([50, 65, 70, 75], dtype=jnp.int32)  # [cherry, balloon, lollypop, ice_cream]
     # Shared collectible colors
@@ -198,6 +193,29 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             Action.DOWNFIRE,
         ]
         self.obs_size = 3*4+1+1
+        # Speed dividers for movement timing (indexed by speed level)
+        self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_movement_timing(self, speed: chex.Array, step_counter: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Calculate movement timing parameters based on speed.
+        
+        Returns:
+            Tuple of (move_y, move_x, step_size, speed_sign)
+        """
+        abs_speed = jnp.abs(speed)
+        speed_index = jnp.minimum(abs_speed, jnp.int32(self._speed_dividers.shape[0] - 1))
+        speed_divider = self._speed_dividers[speed_index]
+        effective_divider = jnp.maximum(1, speed_divider)
+        period = jnp.maximum(1, 16 // effective_divider)
+        half_period = jnp.maximum(1, period // 2)
+        speed_sign = jnp.sign(speed).astype(jnp.float32)
+        
+        move_y = jnp.logical_and((step_counter % period) == (half_period % period), speed != 0)
+        move_x = jnp.logical_and((step_counter % period) == 0, speed != 0)
+        step_size = jnp.where(speed_index >= self.consts.MAX_SPEED, 1.5, 1.0)
+        
+        return move_y, move_x, step_size, speed_sign
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> Tuple[chex.Array, chex.Array]:
@@ -215,14 +233,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         b = tracky[road_index] - slope * trackx[road_index]
         return slope, b
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _getSlopeAndB(self, state: UpNDownState) -> chex.Array:
-        return self._get_slope_and_intercept_from_indices(
-            state.player_car.current_road,
-            state.player_car.road_index_A,
-            state.player_car.road_index_B,
-        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _is_on_line_for_position(self, position: EntityPosition, slope: chex.Array, b: chex.Array, player_speed: chex.Array, turn: chex.Array) -> chex.Array:
@@ -276,30 +286,46 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         # A segment is steep if there's no X change (or very small change)
         return x_diff < 1.0
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _isOnLine(self, state: UpNDownState,  player_speed: chex.Array, turn: chex.Array) -> chex.Array:
-        slope, b = self._getSlopeAndB(state)
-        return self._is_on_line_for_position(state.player_car.position, slope, b, player_speed, turn)
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _landing_in_water(self, state: UpNDownState, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
-        road_A_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A]) / (self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A+1] - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[state.player_car.road_index_A]
-        road_B_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B]) / (self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B+1] - self.consts.TRACK_CORNERS_Y[state.player_car.road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[state.player_car.road_index_B]
-        distance_to_road_A = jnp.abs(new_position_x - road_A_x)
-        distance_to_road_B = jnp.abs(new_position_x - road_B_x)
-        landing_in_Water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_TOLERANCE, distance_to_road_B > self.consts.LANDING_TOLERANCE)
-        between_roads = jnp.logical_and(new_position_x > jnp.minimum(road_A_x, road_B_x), new_position_x < jnp.maximum(road_A_x, road_B_x))
-        return landing_in_Water, between_roads, road_A_x, road_B_x
 
     @partial(jax.jit, static_argnums=(0,))
-    def _landing_in_water_for_indices(self, road_index_A: chex.Array, road_index_B: chex.Array, new_position_x: chex.Array, new_position_y: chex.Array) -> chex.Array:
-        road_A_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[road_index_A]) / (self.consts.TRACK_CORNERS_Y[road_index_A+1] - self.consts.TRACK_CORNERS_Y[road_index_A])) * (self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A]) + self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
-        road_B_x = ((new_position_y - self.consts.TRACK_CORNERS_Y[road_index_B]) / (self.consts.TRACK_CORNERS_Y[road_index_B+1] - self.consts.TRACK_CORNERS_Y[road_index_B])) * (self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B]) + self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
+    def _check_landing_position(
+        self,
+        road_index_A: chex.Array,
+        road_index_B: chex.Array,
+        new_position_x: chex.Array,
+        new_position_y: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Check if a position is valid for landing (on or between roads).
+        
+        Returns:
+            Tuple of (landing_in_water, between_roads, road_A_x, road_B_x)
+        """
+        # Calculate X position on road A at the given Y
+        y_ratio_A = (new_position_y - self.consts.TRACK_CORNERS_Y[road_index_A]) / (
+            self.consts.TRACK_CORNERS_Y[road_index_A + 1] - self.consts.TRACK_CORNERS_Y[road_index_A]
+        )
+        road_A_x = y_ratio_A * (
+            self.consts.FIRST_TRACK_CORNERS_X[road_index_A + 1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
+        ) + self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
+        
+        # Calculate X position on road B at the given Y
+        y_ratio_B = (new_position_y - self.consts.TRACK_CORNERS_Y[road_index_B]) / (
+            self.consts.TRACK_CORNERS_Y[road_index_B + 1] - self.consts.TRACK_CORNERS_Y[road_index_B]
+        )
+        road_B_x = y_ratio_B * (
+            self.consts.SECOND_TRACK_CORNERS_X[road_index_B + 1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
+        ) + self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
+        
         distance_to_road_A = jnp.abs(new_position_x - road_A_x)
         distance_to_road_B = jnp.abs(new_position_x - road_B_x)
-        landing_in_water = jnp.logical_and(distance_to_road_A > self.consts.LANDING_TOLERANCE, distance_to_road_B > self.consts.LANDING_TOLERANCE)
-        between_roads = jnp.logical_and(new_position_x > jnp.minimum(road_A_x, road_B_x), new_position_x < jnp.maximum(road_A_x, road_B_x))
+        landing_in_water = jnp.logical_and(
+            distance_to_road_A > self.consts.LANDING_TOLERANCE,
+            distance_to_road_B > self.consts.LANDING_TOLERANCE,
+        )
+        between_roads = jnp.logical_and(
+            new_position_x > jnp.minimum(road_A_x, road_B_x),
+            new_position_x < jnp.maximum(road_A_x, road_B_x),
+        )
         return landing_in_water, between_roads, road_A_x, road_B_x
 
     @partial(jax.jit, static_argnums=(0,))
@@ -312,7 +338,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         current_road: chex.Array,
         speed: chex.Array,
         is_jumping: chex.Array,
-        is_on_road: chex.Array,
         step_counter: chex.Array,
         width: chex.Array,
         height: chex.Array,
@@ -330,15 +355,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - If between roads: snap to nearest road
         - If too far from both roads (outside the road area): crash (water)
         """
-        # Speed-based movement timing
-        dividers = jnp.array([0, 1, 2, 4, 8, 16, 16])
-        abs_speed = jnp.abs(speed)
-        speed_index = jnp.minimum(abs_speed, jnp.int32(dividers.shape[0] - 1))
-        speed_divider = dividers[speed_index]
-        effective_divider = jnp.maximum(1, speed_divider)
-        period = jnp.maximum(1, 16 // effective_divider)
-        half_period = jnp.maximum(1, period // 2)
-        speed_sign = jax.lax.cond(speed != 0, lambda _: jax.lax.abs(speed) / speed, lambda _: jnp.array(0.0), operand=None)
+        # Calculate movement timing using helper
+        move_y, move_x, step_size, speed_sign = self._compute_movement_timing(speed, step_counter)
 
         # Get slope and intercept for current road
         slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
@@ -350,14 +368,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
             operand=None,
         )
-        car_direction_x = jax.lax.cond(direction_raw > 0, lambda _: 1, lambda _: -1, operand=None)
-
-        # Movement timing flags
-        move_y = jnp.logical_and((step_counter % period) == (half_period % period), speed != 0)
-        move_x = jnp.logical_and((step_counter % period) == 0, speed != 0)
-
-        # Step size (slightly larger at max speed)
-        step_size = jnp.where(speed_index >= self.consts.MAX_SPEED, 1.5, 1.0)
+        # Use sign, default to -1 for zero (vertical segments)
+        car_direction_x = jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
 
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
 
@@ -529,14 +541,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         car_type: chex.Array,
     ) -> Car:
         """Simplified car advancement for enemy cars (no jumping/landing logic)."""
-        dividers = jnp.array([0, 1, 2, 4, 8, 16, 16])
-        abs_speed = jnp.abs(speed)
-        speed_index = jnp.minimum(abs_speed, jnp.int32(dividers.shape[0] - 1))
-        speed_divider = dividers[speed_index]
-        effective_divider = jnp.maximum(1, speed_divider)
-        period = jnp.maximum(1, 16 // effective_divider)
-        half_period = jnp.maximum(1, period // 2)
-        speed_sign = jax.lax.cond(speed != 0, lambda _: jax.lax.abs(speed) / speed, lambda _: jnp.array(0.0), operand=None)
+        # Calculate movement timing using helper
+        move_y, move_x, step_size, speed_sign = self._compute_movement_timing(speed, step_counter)
 
         slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
 
@@ -546,12 +552,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
             operand=None,
         )
-        car_direction_x = jax.lax.cond(direction_raw > 0, lambda _: 1, lambda _: -1, operand=None)
-
-        move_y = jnp.logical_and((step_counter % period) == (half_period % period), speed != 0)
-        move_x = jnp.logical_and((step_counter % period) == 0, speed != 0)
-
-        step_size = jnp.where(speed_index >= self.consts.MAX_SPEED, 1.5, 1.0)
+        # Use sign, default to -1 for zero (vertical segments)
+        car_direction_x = jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
 
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
 
@@ -650,7 +652,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             )
 
             collision = jnp.logical_and(
-                jnp.logical_and(y_distance < 5, x_distance < 5),   #change the distance threshold if needed
+                jnp.logical_and(y_distance < self.consts.COLLISION_THRESHOLD, x_distance < self.consts.COLLISION_THRESHOLD),
                 jnp.logical_and(same_road, ~flag_collected)
             )
             return collision
@@ -717,34 +719,19 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Generate random spawn position using fold_in for deterministic randomness
         base_key = jax.random.PRNGKey(0)
         key_for_spawn = jax.random.fold_in(base_key, state.step_counter)
-        key1, key2, key3, key4, key5 = jax.random.split(key_for_spawn, 5)
+        key1, key2, key3, key4 = jax.random.split(key_for_spawn, 4)
         y_spawn = jax.random.uniform(key1, minval=-900.0, maxval=-100.0)
         road_spawn = jnp.array(jax.random.randint(key2, shape=(), minval=0, maxval=2), dtype=jnp.int32)
         color_spawn = jnp.array(jax.random.randint(key3, shape=(), minval=0, maxval=len(self.consts.COLLECTIBLE_COLORS)), dtype=jnp.int32)
         
-        # Randomly select collectible type based on spawn probabilities
-        # Convert probabilities (%) to cumulative distribution for sampling
+        # Randomly select collectible type using cumulative probability thresholds
+        # COLLECTIBLE_SPAWN_PROBABILITIES contains cumulative values: [35, 65, 90, 100]
+        # Cherry: [0-35), Balloon: [35-65), Lollypop: [65-90), IceCream: [90-100]
         rand_type = jax.random.uniform(key4, minval=0.0, maxval=100.0)
         
-        # Use cumulative probabilities: cherry [0-40], balloon [40-60], lollypop [60-80], ice_cream [80-100]
-        def select_type(rand_val):
-            # Returns 0=cherry, 1=balloon, 2=lollypop, 3=ice_cream
-            type_id = jnp.where(
-                rand_val < self.consts.COLLECTIBLE_SPAWN_PROBABILITIES[0],
-                jnp.int32(self.consts.COLLECTIBLE_TYPE_CHERRY),
-                jnp.where(
-                    rand_val < self.consts.COLLECTIBLE_SPAWN_PROBABILITIES[1],
-                    jnp.int32(self.consts.COLLECTIBLE_TYPE_BALLOON),
-                    jnp.where(
-                        rand_val < self.consts.COLLECTIBLE_SPAWN_PROBABILITIES[2],
-                        jnp.int32(self.consts.COLLECTIBLE_TYPE_LOLLYPOP),
-                        jnp.int32(self.consts.COLLECTIBLE_TYPE_ICE_CREAM)
-                    )
-                )
-            )
-            return type_id
-        
-        type_id_spawn = select_type(rand_type)
+        # Use searchsorted for efficient threshold lookup
+        type_id_spawn = jnp.searchsorted(self.consts.COLLECTIBLE_SPAWN_PROBABILITIES, rand_type, side='right')
+        type_id_spawn = jnp.clip(type_id_spawn, 0, 3).astype(jnp.int32)
         
         # Calculate X position on road
         segment_spawn = self._get_road_segment(y_spawn)
@@ -758,34 +745,32 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Create mask for which collectibles to update
         update_mask = (jnp.arange(self.consts.MAX_COLLECTIBLES) == spawn_idx) & should_spawn & has_inactive_slot
         
-        # Update collectibles with proper masking
-        updated_collectibles = Collectible(
-            y=jnp.where(update_mask, y_spawn, state.collectibles.y),
-            x=jnp.where(update_mask, x_spawn, state.collectibles.x),
-            road=jnp.where(update_mask, road_spawn, state.collectibles.road),
-            color_idx=jnp.where(update_mask, color_spawn, state.collectibles.color_idx),
-            type_id=jnp.where(update_mask, type_id_spawn, state.collectibles.type_id),
-            active=jnp.where(update_mask, True, state.collectibles.active),
-        )
+        # Update collectibles with proper masking - spawn new items
+        spawned_y = jnp.where(update_mask, y_spawn, state.collectibles.y)
+        spawned_x = jnp.where(update_mask, x_spawn, state.collectibles.x)
+        spawned_road = jnp.where(update_mask, road_spawn, state.collectibles.road)
+        spawned_color_idx = jnp.where(update_mask, color_spawn, state.collectibles.color_idx)
+        spawned_type_id = jnp.where(update_mask, type_id_spawn, state.collectibles.type_id)
+        spawned_active = jnp.where(update_mask, True, state.collectibles.active)
         
         # Despawn logic - remove collectibles too far from player
         def check_despawn(idx):
-            c_y = updated_collectibles.y[idx]
-            c_active = updated_collectibles.active[idx]
+            c_y = spawned_y[idx]
+            c_active = spawned_active[idx]
             distance = jnp.abs(new_player_y - c_y)
             too_far = distance > self.consts.COLLECTIBLE_DESPAWN_DISTANCE
             should_despawn = jnp.logical_and(c_active, too_far)
             return should_despawn
         
         despawn_mask = jax.vmap(check_despawn)(jnp.arange(self.consts.MAX_COLLECTIBLES))
-        new_active = jnp.logical_and(updated_collectibles.active, ~despawn_mask)
+        active_after_despawn = jnp.logical_and(spawned_active, ~despawn_mask)
         
         # Collision detection
         def check_collision(idx):
-            c_y = updated_collectibles.y[idx]
-            c_x = updated_collectibles.x[idx]
-            c_road = updated_collectibles.road[idx]
-            c_active = updated_collectibles.active[idx]
+            c_y = spawned_y[idx]
+            c_x = spawned_x[idx]
+            c_road = spawned_road[idx]
+            c_active = spawned_active[idx]
             
             y_distance = jnp.abs(new_player_y - c_y)
             x_distance = jnp.abs(player_x - c_x)
@@ -795,7 +780,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             )
             
             collision = jnp.logical_and(
-                jnp.logical_and(y_distance < 5, x_distance < 5),
+                jnp.logical_and(y_distance < self.consts.COLLISION_THRESHOLD, x_distance < self.consts.COLLISION_THRESHOLD),
                 jnp.logical_and(same_road, c_active)
             )
             return collision
@@ -803,12 +788,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         collections = jax.vmap(check_collision)(jnp.arange(self.consts.MAX_COLLECTIBLES))
         
         # Deactivate collected items
-        new_active = jnp.logical_and(new_active, ~collections)
+        final_active = jnp.logical_and(active_after_despawn, ~collections)
         
         # Update score - use type_id to look up score value
         def get_collection_score(idx):
             is_collected = collections[idx]
-            type_id = updated_collectibles.type_id[idx]
+            type_id = spawned_type_id[idx]
             # Look up score based on type_id using array indexing
             score = self.consts.COLLECTIBLE_SCORES[type_id]
             return jnp.where(is_collected, score, 0)
@@ -816,13 +801,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         score_array = jax.vmap(get_collection_score)(jnp.arange(self.consts.MAX_COLLECTIBLES))
         score_delta = jnp.sum(score_array)
         
+        # Create final collectibles state
         updated_collectibles = Collectible(
-            y=updated_collectibles.y,
-            x=updated_collectibles.x,
-            road=updated_collectibles.road,
-            color_idx=updated_collectibles.color_idx,
-            type_id=updated_collectibles.type_id,
-            active=new_active,
+            y=spawned_y,
+            x=spawned_x,
+            road=spawned_road,
+            color_idx=spawned_color_idx,
+            type_id=spawned_type_id,
+            active=final_active,
         )
         
         return updated_collectibles, score_delta, new_collectible_timer
@@ -986,7 +972,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             current_road=state.player_car.current_road,
             speed=player_speed,
             is_jumping=is_jumping,
-            is_on_road=is_on_road,
             step_counter=state.step_counter,
             width=state.player_car.position.width,
             height=state.player_car.position.height,
@@ -1331,10 +1316,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         dy = jnp.abs(state.enemy_cars.position.y - player_y)
         wrapped_dy = jnp.minimum(dy, self.consts.TRACK_LENGTH - dy)
 
-        # For ground collision: only trigger when enemy position is within 3 pixels
-        ground_collision_distance = 3.0
-        overlap_x_ground = dx <= ground_collision_distance
-        overlap_y_ground = wrapped_dy <= ground_collision_distance
+        # For ground collision: only trigger when enemy position is within tight distance
+        overlap_x_ground = dx <= self.consts.GROUND_COLLISION_DISTANCE
+        overlap_y_ground = wrapped_dy <= self.consts.GROUND_COLLISION_DISTANCE
         # For landing collision: use larger distance and road-independent (for crossings)
         overlap_x_landing = dx <= self.consts.LANDING_COLLISION_DISTANCE
         overlap_y_landing = wrapped_dy <= self.consts.LANDING_COLLISION_DISTANCE
@@ -1402,10 +1386,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
     def _passive_score_step_main(self, state: UpNDownState) -> UpNDownState:
-        """Award passive score every 60 steps after the player has started moving."""
+        """Award passive score at regular intervals after the player has started moving."""
         bonus = jax.lax.cond(
-            jnp.logical_and(state.round_started, state.movement_steps % 60 == 0),
-            lambda _: jnp.int32(10),
+            jnp.logical_and(
+                state.round_started,
+                state.movement_steps % self.consts.PASSIVE_SCORE_INTERVAL == 0,
+            ),
+            lambda _: jnp.int32(self.consts.PASSIVE_SCORE_AMOUNT),
             lambda _: jnp.int32(0),
             operand=None,
         )
@@ -1640,22 +1627,21 @@ class UpNDownRenderer(JAXGameRenderer):
         self.flag_solid_mask = self.flag_base_mask != self.jr.TRANSPARENT_ID
         self.flag_palette_ids = self._compute_flag_palette_ids()
         
-        # Precompute collectible mask data for recoloring (unified for all types: cherry, balloon, lollypop, ice cream)
+        # Precompute collectible mask data for recoloring (unified for all types)
+        # Reuse the same palette IDs since all collectibles use FLAG_COLORS
+        self.collectible_palette_ids = self.flag_palette_ids
+        
         self.cherry_base_mask = self.SHAPE_MASKS["cherry"]
         self.cherry_solid_mask = self.cherry_base_mask != self.jr.TRANSPARENT_ID
-        self.cherry_palette_ids = self._compute_flag_palette_ids()
         
         self.balloon_base_mask = self.SHAPE_MASKS["balloon"]
         self.balloon_solid_mask = self.balloon_base_mask != self.jr.TRANSPARENT_ID
-        self.balloon_palette_ids = self._compute_flag_palette_ids()
         
         self.lollypop_base_mask = self.SHAPE_MASKS["lollypop"]
         self.lollypop_solid_mask = self.lollypop_base_mask != self.jr.TRANSPARENT_ID
-        self.lollypop_palette_ids = self._compute_flag_palette_ids()
         
         self.ice_cream_base_mask = self.SHAPE_MASKS["ice_cream"]
         self.ice_cream_solid_mask = self.ice_cream_base_mask != self.jr.TRANSPARENT_ID
-        self.ice_cream_palette_ids = self._compute_flag_palette_ids()
 
         # Score rendering helpers
         self.score_digit_masks = self.SHAPE_MASKS["score_digits"]
@@ -1681,7 +1667,6 @@ class UpNDownRenderer(JAXGameRenderer):
             sprite = jnp.load(f"{road_dir}/{sprite_name}")
             sizes.append(sprite.shape[0])
         complete_size = int(sum(sizes))
-        jax.debug.print("Complete road size: {}", complete_size)
         return sizes, complete_size
     
     def _find_palette_id(self, rgba: jnp.ndarray) -> int:
@@ -1946,25 +1931,20 @@ class UpNDownRenderer(JAXGameRenderer):
             )
 
             def get_sprite_and_mask(type_id):
-                cherry_result = (self.cherry_base_mask, self.cherry_solid_mask, self.cherry_palette_ids)
-                balloon_result = (self.balloon_base_mask, self.balloon_solid_mask, self.balloon_palette_ids)
-                lollypop_result = (self.lollypop_base_mask, self.lollypop_solid_mask, self.lollypop_palette_ids)
-                ice_cream_result = (self.ice_cream_base_mask, self.ice_cream_solid_mask, self.ice_cream_palette_ids)
-                return jax.lax.cond(
-                    type_id == self.consts.COLLECTIBLE_TYPE_CHERRY,
-                    lambda _: cherry_result,
-                    lambda _: jax.lax.cond(
-                        type_id == self.consts.COLLECTIBLE_TYPE_BALLOON,
-                        lambda _: balloon_result,
-                        lambda _: jax.lax.cond(
-                            type_id == self.consts.COLLECTIBLE_TYPE_LOLLYPOP,
-                            lambda _: lollypop_result,
-                            lambda _: ice_cream_result,
-                            operand=None,
-                        ),
-                        operand=None,
-                    ),
-                    operand=None,
+                # Use switch for O(1) lookup instead of nested conditionals
+                def get_cherry(_):
+                    return (self.cherry_base_mask, self.cherry_solid_mask, self.collectible_palette_ids)
+                def get_balloon(_):
+                    return (self.balloon_base_mask, self.balloon_solid_mask, self.collectible_palette_ids)
+                def get_lollypop(_):
+                    return (self.lollypop_base_mask, self.lollypop_solid_mask, self.collectible_palette_ids)
+                def get_ice_cream(_):
+                    return (self.ice_cream_base_mask, self.ice_cream_solid_mask, self.collectible_palette_ids)
+                
+                return jax.lax.switch(
+                    type_id,
+                    [get_cherry, get_balloon, get_lollypop, get_ice_cream],
+                    None,
                 )
 
             base_mask, solid_mask, palette_ids = get_sprite_and_mask(collectible_type_id)
