@@ -530,11 +530,43 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
 
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
-        previous_state = state
-        state = self._player_step(state, action)
+     def _dragon_step(self, state: AdventureState) -> AdventureState:
+        direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
+        direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
+        dragon_yellow_x = state.dragon_yellow[0]
+        dragon_yellow_y = state.dragon_yellow[1]
+        dragon_yellow_x, dragon_yellow_y = jax.lax.cond(
+            state.player[2]==state.dragon_yellow[2],
+            lambda _: ((dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2)),
+            lambda _: (dragon_yellow_x, dragon_yellow_y),
+            operand  = None
+        )
+        direction_x = jnp.sign(state.player[0] - state.dragon_green[0])
+        direction_y = jnp.sign(state.player[1]- state.dragon_green[1])
+        dragon_green_x = state.dragon_green[0]
+        dragon_green_y = state.dragon_green[1]
+        dragon_green_x, dragon_green_y = jax.lax.cond(
+            state.player[2]==state.dragon_green[2],
+            lambda _: ((dragon_green_x + direction_x*2, dragon_green_y + direction_y*2)),
+            lambda _: (dragon_green_x, dragon_green_y),
+            operand  = None
+        )
+
+
+        return AdventureState(
+            step_counter = state.step_counter,
+            player = state.player,
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2]]).astype(jnp.int32),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2]]).astype(jnp.int32),
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
+        )
 
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
@@ -604,6 +636,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
         state = self._player_step(state, action)
+        state = self._dragon_step(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
