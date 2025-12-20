@@ -67,7 +67,7 @@ class BeamriderConstants(NamedTuple):
     # Delay from button press to shot appearance (measured ~3 frames in ALE).
     PLAYER_SHOT_LAUNCH_DELAY: int = 2
 
-    BOTTOM_CLIP:int = 175
+    BOTTOM_CLIP:int = 164
     TOP_CLIP:int=43
     LASER_ID: int = 1
     TORPEDO_ID: int = 2
@@ -156,7 +156,7 @@ class BeamriderConstants(NamedTuple):
     FALLING_ROCK_MAX: int = 3
     FALLING_ROCK_SPAWN_PROB: float = 0.0065
     FALLING_ROCK_SPAWN_Y: float = 43.0
-    FALLING_ROCK_BOTTOM_CLIP: float = 175.0
+    FALLING_ROCK_BOTTOM_CLIP: float = 164.0
     FALLING_ROCK_INIT_VEL: float = 0.07
     FALLING_ROCK_ACCEL: float = 0.02
 
