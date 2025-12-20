@@ -347,6 +347,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def _create_level_state(self, white_ufo_left=None) -> LevelState:
         white_ufo_left = white_ufo_left if white_ufo_left is not None else jnp.array(self.consts.WHITE_UFOS_PER_SECTOR)
         
+        active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
+        active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
+        ufo_offscreen = jnp.tile(
+            jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
+            (1, 3),
+        )
+        initial_ufo_pos = jnp.array([[77.0, 77.0, 77.0], [43.0, 43.0, 43.0]])
+
         enemy_shot_offscreen = jnp.tile(
             jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
             (1, 3),
@@ -365,8 +373,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             shooting_cooldown=jnp.array(0),
             bullet_type=jnp.array(self.consts.LASER_ID),
             enemy_type=jnp.array([0, 0, 0]),
-            white_ufo_pos=jnp.array([[77.0, 77.0, 77.0], [43.0, 43.0, 43.0]]),
-            white_ufo_vel=jnp.array([[-0.5, 0.5, 0.3], [0.0, 0.0, 0.0]]),
+            white_ufo_pos=jnp.where(active_mask[None, :], initial_ufo_pos, ufo_offscreen),
+            white_ufo_vel=jnp.zeros((2, 3), dtype=jnp.float32),
             enemy_shot_pos=enemy_shot_offscreen,
             enemy_shot_vel=jnp.zeros((3,), dtype=jnp.int32),
             enemy_shot_timer=jnp.zeros((3,), dtype=jnp.int32),
@@ -520,7 +528,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 ufo_update.pattern_id,
                 ufo_update.pattern_timer,
             )
-
             (
                 bouncer_pos,
                 bouncer_vel,
@@ -863,17 +870,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_time_on_lane = jnp.where(hit_mask, 0, ufo_update.time_on_lane)
             white_ufo_attack_time = jnp.where(hit_mask, 0, ufo_update.attack_time)
 
-            active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
-            active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
-            ufo_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1), (1, 3))
-            
-            white_ufo_pos = jnp.where(active_mask[None, :], white_ufo_pos, ufo_offscreen)
-            white_ufo_vel = jnp.where(active_mask[None, :], white_ufo_vel, 0.0)
-            white_ufo_time_on_lane = jnp.where(active_mask, white_ufo_time_on_lane, 0)
-            white_ufo_attack_time = jnp.where(active_mask, white_ufo_attack_time, 0)
-            white_ufo_pattern_id = jnp.where(active_mask, white_ufo_pattern_id, int(WhiteUFOPattern.IDLE))
-            white_ufo_pattern_timer = jnp.where(active_mask, white_ufo_pattern_timer, 0)
-
             enemy_shot_offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=enemy_shot_pos.dtype).reshape(2, 1), (1, 3))
             # Removing masking of enemy shots by active_mask to allow shots to persist after UFO death
             # enemy_shot_pos = jnp.where(active_mask[None, :], enemy_shot_pos, enemy_shot_offscreen)
@@ -909,6 +905,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             falling_rock_lane = jnp.where(sector_advanced, 0, falling_rock_lane)
             falling_rock_vel_y = jnp.where(sector_advanced, 0.0, falling_rock_vel_y)
 
+            ufo_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1), (1, 3))
             white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
             enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
             chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
@@ -1165,9 +1162,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         hit_mask = jnp.array((distance_bullet_radius[:, 0] <= 0) & (distance_bullet_radius[:, 1] <= 0))
         hit_index = jnp.argmax(hit_mask)
         hit_exists = jnp.any(hit_mask)
-        enemy_pos_after_hit = enemies_raw.at[hit_index].set(
-            jnp.array([77.0, 43.0], dtype=enemies_raw.dtype)
-        ).T
+
+        # If there are more than 3 UFOs, the hit one respawns.
+        # Otherwise, it stays offscreen.
+        should_respawn = state.level.white_ufo_left > 3
+        respawn_pos = jnp.array([77.0, 43.0], dtype=enemies_raw.dtype)
+        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=enemies_raw.dtype)
+        target_pos = jnp.where(should_respawn, respawn_pos, offscreen_pos)
+
+        enemy_pos_after_hit = enemies_raw.at[hit_index].set(target_pos).T
 
         # Reset pattern and timer for hit UFO
         new_patterns = jnp.where(hit_mask, int(WhiteUFOPattern.IDLE), current_patterns)
@@ -1244,6 +1247,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_id = state.level.white_ufo_pattern_id[index]
         pattern_timer = state.level.white_ufo_pattern_timer[index]
 
+        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_position.dtype)
+        is_offscreen = jnp.all(white_ufo_position == offscreen_pos)
+
         key_pattern, key_motion = jax.random.split(key)
         pattern_id, pattern_timer, time_on_lane, attack_time = self._white_ufo_update_pattern_state(
             white_ufo_position, time_on_lane, attack_time, pattern_id, pattern_timer, key_pattern
@@ -1274,11 +1280,15 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.PLAYER_POS_Y + 1.0)
         
-        should_respawn = jnp.logical_or(
-            new_x < 0,
+        # Only respawn if it was not already offscreen (i.e. it was active)
+        should_respawn = jnp.logical_and(
+            jnp.logical_not(is_offscreen),
             jnp.logical_or(
-                new_x > self.consts.SCREEN_WIDTH,
-                new_y > self.consts.PLAYER_POS_Y
+                new_x < 0,
+                jnp.logical_or(
+                    new_x > self.consts.SCREEN_WIDTH,
+                    new_y > self.consts.PLAYER_POS_Y
+                )
             )
         )
 
@@ -1290,16 +1300,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_id = jnp.where(should_respawn, int(WhiteUFOPattern.IDLE), pattern_id)
         pattern_timer = jnp.where(should_respawn, 0, pattern_timer)
 
-        active_count = jnp.minimum(state.level.white_ufo_left.astype(jnp.int32), 3)
-        is_active = jnp.array(index, dtype=jnp.int32) < active_count
-        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_position.dtype)
-        white_ufo_position = jnp.where(is_active, white_ufo_position, offscreen_pos)
-        white_ufo_vel_x = jnp.where(is_active, white_ufo_vel_x, 0.0)
-        white_ufo_vel_y = jnp.where(is_active, white_ufo_vel_y, 0.0)
-        time_on_lane = jnp.where(is_active, time_on_lane, 0)
-        attack_time = jnp.where(is_active, attack_time, 0)
-        pattern_id = jnp.where(is_active, pattern_id, int(WhiteUFOPattern.IDLE))
-        pattern_timer = jnp.where(is_active, pattern_timer, 0)
+        # Ensure that if it was offscreen, it stays offscreen and its state is reset
+        white_ufo_position = jnp.where(is_offscreen, offscreen_pos, white_ufo_position)
+        white_ufo_vel_x = jnp.where(is_offscreen, 0.0, white_ufo_vel_x)
+        white_ufo_vel_y = jnp.where(is_offscreen, 0.0, white_ufo_vel_y)
+        time_on_lane = jnp.where(is_offscreen, 0, time_on_lane)
+        attack_time = jnp.where(is_offscreen, 0, attack_time)
+        pattern_id = jnp.where(is_offscreen, int(WhiteUFOPattern.IDLE), pattern_id)
+        pattern_timer = jnp.where(is_offscreen, 0, pattern_timer)
 
         return (
             white_ufo_position,
