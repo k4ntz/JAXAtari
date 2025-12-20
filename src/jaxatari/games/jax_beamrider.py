@@ -198,7 +198,7 @@ class BeamriderConstants(NamedTuple):
 
     # Coin constants
     COIN_MAX: int = 3
-    COIN_SPAWN_PROB: float = 1.5/700
+    COIN_SPAWN_PROB: float = 1/300
     COIN_SPAWN_Y: float = 55.0
     COIN_EXIT_Y: float = 95.0
     COIN_SPAWN_X_LEFT: float = 5.0
@@ -2594,10 +2594,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             is_sector_4_plus,
             jnp.sum(active.astype(jnp.int32)) < self.consts.COIN_MAX,
         ]))
-        should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.COIN_SPAWN_PROB)
+        should_spawn = jnp.logical_and(can_spawn, jax.random.uniform(key_spawn) < self.consts.COIN_SPAWN_PROB)
 
-        # Alternating side: 0 for Left, 1 for Right
-        spawn_side_idx = spawn_count % 2
+        # 50/50 chance for side choice: 0 for Left, 1 for Right
+        spawn_side_idx = (jax.random.uniform(key_side) < 0.5).astype(jnp.int32)
         spawn_x = jnp.where(spawn_side_idx == 0, self.consts.COIN_SPAWN_X_LEFT, self.consts.COIN_SPAWN_X_RIGHT)
         spawn_y = self.consts.COIN_SPAWN_Y
         spawn_pos = jnp.array([spawn_x, spawn_y], dtype=pos.dtype)
