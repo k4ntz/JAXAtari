@@ -81,8 +81,8 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MIN_INTERVAL: int = 30
     TRUCK_SPAWN_MAX_INTERVAL: int = 80
     LEVEL_TRANSITION_DURATION: int = 30
-    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
-    STARTING_LIVES: int = 5
+    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 1500
+    STARTING_LIVES: int = 3
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     SIDE_MARGIN: int = 8
     RAVINE_SIZE: Tuple[int, int] = (13, 32)
@@ -1962,20 +1962,13 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return canvas
 
     def _render_lives(self, canvas: jnp.ndarray, lives: jnp.ndarray) -> jnp.ndarray:
-        # Render lives as green squares below the score
-        # lives=3 -> 2 squares
-        # lives=2 -> 1 square
-        # lives=1 -> 0 squares
-
         num_squares = jnp.maximum(lives - 1, 0)
 
-        start_y = 40
+        start_y = 24
         square_size = 6
         spacing = 2
 
-        # We can render up to 2 squares (assuming max 3 lives for now, but let's support more generically)
-        total_width = num_squares * square_size + jnp.maximum(num_squares - 1, 0) * spacing
-        start_x = (self.consts.WIDTH - total_width) // 2
+        start_x = (self.consts.WIDTH // 3) + 2
 
         def render_square(i, r):
             x = start_x + i * (square_size + spacing)
