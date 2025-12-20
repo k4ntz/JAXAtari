@@ -62,6 +62,7 @@ SAUCER_SPEED_MAP = jnp.float32(0.4) / WORLD_SCALE
 SAUCER_SPEED_ARENA = jnp.float32(0.4) / WORLD_SCALE
 SAUCER_RADIUS = jnp.float32(3.0)
 SHIP_RADIUS = jnp.float32(2.0)
+TRACTOR_BEAM_RANGE = jnp.float32(15.0)  # Range for tractor beam to pick up fuel tanks
 SAUCER_INIT_HP = jnp.int32(1)
 
 # SAUCER_SCALE              = 2.2
@@ -1585,7 +1586,7 @@ def step_map(env_state: EnvState, action: int):
         ], dtype=jnp.float32),
     }
 
-    new_env = new_env._replace(score=new_env.score + reward)
+    new_env = new_env._replace(score=new_env.score + reward, shield_active=is_using_shield_tractor)
 
     return obs, new_env, reward, jnp.array(False), info, should_reset, final_level_id
 
@@ -1684,10 +1685,26 @@ def _step_level_core(env_state: EnvState, action: int):
     tank_top = tanks.y - tank_half_h
     tank_bottom = tanks.y + tank_half_h
 
+    # Direct collision with fuel tank
     overlap_x = (ship_right > tank_left) & (ship_left < tank_right)
     overlap_y = (ship_bottom > tank_top) & (ship_top < tank_bottom)
+    direct_collision = tanks.active & overlap_x & overlap_y
     
-    collision_mask = tanks.active & overlap_x & overlap_y
+    # Tractor beam pickup: when shield/tractor is active in planet levels (not reactor)
+    is_planet_level = state_after_spawn.mode == 1
+    is_reactor = state_after_spawn.terrain_sprite_idx == int(SpriteIdx.REACTOR_TERR)
+    can_use_tractor = is_planet_level & ~is_reactor
+    
+    # Calculate distance from ship to each tank
+    dx = tanks.x - ship.x
+    dy = tanks.y - ship.y
+    distance_sq = dx * dx + dy * dy
+    in_tractor_range = distance_sq <= (TRACTOR_BEAM_RANGE ** 2)
+    
+    # Pickup happens on direct collision OR when using tractor beam and in range (planet levels only)
+    tractor_pickup = can_use_tractor & is_using_shield_tractor & in_tractor_range & tanks.active
+    collision_mask = direct_collision | tractor_pickup
+    
     new_tanks_active = tanks.active & ~collision_mask
     new_fuel_tanks = tanks._replace(active=new_tanks_active)
 
@@ -3123,11 +3140,30 @@ class GravitarRenderer(JAXGameRenderer):
         
         frame = jax.lax.cond(is_thrusting & (~is_crashing), draw_thrust_flame, lambda f: f, frame)
 
-        def draw_shield(f):
+        # Draw shield (works in all modes) and tractor beam (only in planet surface levels)
+        def draw_shield_and_tractor(f):
+            # Always draw shield when shield_active is true (works in solar system, planet levels, and reactor)
             shield_blit_func = self.blit_branches[int(SpriteIdx.SHIELD)]
-            return shield_blit_func(f, ship_state.x, ship_state.y)
+            f_with_shield = shield_blit_func(f, ship_state.x, ship_state.y)
+            
+            # Check if we should also show tractor beam (only in planet surface levels, not reactor)
+            is_planet_level = state.mode == 1
+            is_reactor = state.terrain_sprite_idx == int(SpriteIdx.REACTOR_TERR)
+            can_show_tractor = is_planet_level & ~is_reactor
+            
+            # Draw tractor beam (thrust back sprite) at the back of the ship in planet surface levels only
+            def draw_tractor(frame_in):
+                # Position tractor beam at the back of the ship, opposite to forward direction
+                TRACTOR_OFFSET = 8.0  # Distance from ship center to tractor beam position
+                tractor_x = ship_state.x - jnp.cos(ship_state.angle) * TRACTOR_OFFSET
+                tractor_y = ship_state.y - jnp.sin(ship_state.angle) * TRACTOR_OFFSET
+                
+                tractor_blit_func = self.blit_branches[int(SpriteIdx.SHIP_THRUST_BACK)]
+                return tractor_blit_func(frame_in, tractor_x, tractor_y)
+            
+            return jax.lax.cond(can_show_tractor, draw_tractor, lambda frame_in: frame_in, f_with_shield)
 
-        frame = jax.lax.cond(state.shield_active, draw_shield, lambda f: f, frame)
+        frame = jax.lax.cond(state.shield_active, draw_shield_and_tractor, lambda f: f, frame)
         
         # --- 6. Draw the HUD ---
         def draw_hud(f):
