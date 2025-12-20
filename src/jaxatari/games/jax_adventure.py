@@ -98,8 +98,18 @@ class AdventureConstants(NamedTuple):
     BRIDGE_ID: int = 4
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
+    #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (77, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (77, 140, 11)
+    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #ToDO
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (120, 50, 5, 0) #ToDO
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (120, 80, 4, 0) #ToDO
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 80, 0) #ToDO
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 80, 4) #ToDO
+    SWORD_SPAWN: Tuple[int, int, int] = (120,120,1) #ToDO
+    BRIDGE_SPAWN: Tuple[int, int, int] = (120,120,10) #ToDO
+    MAGNET_SPAWN: Tuple[int, int, int] = (120,120,12) #ToDO
+    CHALICE_SPAWN: Tuple[int, int, int] = (120,120,14) #ToDO
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -273,7 +283,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         new_player_y, new_player_tile = jax.lax.cond(
             new_player_y < 27,
-            lambda _: (212, jax.lax.switch( new_player_tile, [lambda:1,lambda:0,lambda:0, lambda:0, lambda:3, lambda:6, lambda:9, lambda:10, lambda:7, lambda: 0, lambda:11, lambda:12, lambda:14, lambda:0])),
+            lambda _: (212, jax.lax.switch( new_player_tile, [lambda:1,lambda:0,lambda:0, lambda:0, lambda:3, lambda:6, lambda:9, lambda:10, lambda:7, lambda: 0, lambda:11, lambda:12, lambda:13, lambda:0])),
             lambda _: (new_player_y, new_player_tile),
             operand = None,
         )
@@ -317,22 +327,43 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
             #Player Spawn: x, y, tile, color, inventory
-            player = jnp.array([78,174,0,0,self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
+            player = jnp.array([self.consts.PLAYER_SPAWN[0],
+                                self.consts.PLAYER_SPAWN[1],
+                                self.consts.PLAYER_SPAWN[2],0,
+                                self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
-            dragon_yellow = jnp.array([120,50,5,0]).astype(jnp.int32), #ToDo
-            dragon_green = jnp.array([120,80,4,2]).astype(jnp.int32), #ToDo
+            dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
+                                       self.consts.DRAGON_YELLOW_SPAWN[1],
+                                       self.consts.DRAGON_YELLOW_SPAWN[2],
+                                       self.consts.DRAGON_YELLOW_SPAWN[3]]).astype(jnp.int32), #ToDo
+            dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
+                                      self.consts.DRAGON_GREEN_SPAWN[1],
+                                      self.consts.DRAGON_GREEN_SPAWN[2],
+                                      self.consts.DRAGON_GREEN_SPAWN[3]]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
-            key_yellow = jnp.array([31,110,0]).astype(jnp.int32),
-            key_black = jnp.array([31,80,4]).astype(jnp.int32),
+            key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
+                                    self.consts.KEY_YELLOW_SPAWN[1],
+                                    self.consts.KEY_YELLOW_SPAWN[2]]).astype(jnp.int32),
+            key_black = jnp.array([self.consts.KEY_BLACK_SPAWN[0],
+                                    self.consts.KEY_BLACK_SPAWN[1],
+                                    self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
             #Gate: state
             gate_yellow=jnp.array([0]).astype(jnp.int32),
             gate_black=jnp.array([0]).astype(jnp.int32),
             #Items: x, y, tile
-            sword = jnp.array([120,120,1]).astype(jnp.int32), #ToDo
-            bridge= jnp.array([120,120,10]).astype(jnp.int32), #ToDo
-            magnet= jnp.array([120,120,12]).astype(jnp.int32), #ToDo
+            sword = jnp.array([self.consts.SWORD_SPAWN[0],
+                               self.consts.SWORD_SPAWN[1],
+                               self.consts.SWORD_SPAWN[2]]).astype(jnp.int32), #ToDo
+            bridge = jnp.array([self.consts.BRIDGE_SPAWN[0],
+                               self.consts.BRIDGE_SPAWN[1],
+                               self.consts.BRIDGE_SPAWN[2]]).astype(jnp.int32), #ToDo
+            magnet= jnp.array([self.consts.MAGNET_SPAWN[0],
+                               self.consts.MAGNET_SPAWN[1],
+                               self.consts.MAGNET_SPAWN[2]]).astype(jnp.int32), #ToDo
             #Chalice: x, y, tile, color
-            chalice= jnp.array([120,120,15,7]).astype(jnp.int32), #ToDo
+            chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
+                                 self.consts.CHALICE_SPAWN[1],
+                                 self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
