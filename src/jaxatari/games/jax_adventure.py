@@ -163,13 +163,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         new_player_x = state.player[0]
         new_player_x = jax.lax.cond(
             left,
-            lambda x: x-1,
+            lambda x: x-4,
             lambda x: x,
             operand = new_player_x,
         )
         new_player_x = jax.lax.cond(
             right,
-            lambda x: x+1,
+            lambda x: x+4,
             lambda x: x,
             operand = new_player_x,
         )
@@ -177,20 +177,27 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         new_player_y = state.player[1]
         new_player_y = jax.lax.cond(
             down,
-            lambda y: y+1,
+            lambda y: y+8,
             lambda y: y,
             operand = new_player_y,
         )
         new_player_y = jax.lax.cond(
             up,
-            lambda y: y-1,
+            lambda y: y-8,
             lambda y: y,
             operand = new_player_y,
+        )
+        new_player_tile = state.player[2]
+        new_player_y, new_player_tile = jax.lax.cond(
+            jnp.logical_and(new_player_y >=212, new_player_tile == 0),
+            lambda _: (27, 2),
+            lambda _: (new_player_y, new_player_tile),
+            operand = None,
         )
 
         return AdventureState(
             step_counter = state.step_counter,
-            player = jnp.array([new_player_x,new_player_y,state.player[2],state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
+            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
             key_yellow=state.key_yellow,
@@ -217,20 +224,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #Player Spawn: x, y, tile, color
             player = jnp.array([78,174,0,0]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
-            dragon_yellow = jnp.array([120,50,0,0]).astype(jnp.int32), #ToDo
-            dragon_green = jnp.array([120,80,0,2]).astype(jnp.int32), #ToDo
+            dragon_yellow = jnp.array([120,50,2,0]).astype(jnp.int32), #ToDo
+            dragon_green = jnp.array([120,80,2,2]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([31,110,0]).astype(jnp.int32),
-            key_black = jnp.array([31,80,0]).astype(jnp.int32),
+            key_black = jnp.array([31,80,2]).astype(jnp.int32),
             #Gate: state
             gate_yellow=jnp.array([0]).astype(jnp.int32),
             gate_black=jnp.array([0]).astype(jnp.int32),
             #Items: x, y, tile
-            sword = jnp.array([120,120,0]).astype(jnp.int32), #ToDo
-            bridge= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
-            magnet= jnp.array([120,120,0]).astype(jnp.int32), #ToDo
+            sword = jnp.array([120,120,2]).astype(jnp.int32), #ToDo
+            bridge= jnp.array([120,120,2]).astype(jnp.int32), #ToDo
+            magnet= jnp.array([120,120,2]).astype(jnp.int32), #ToDo
             #Chalice: x, y, tile, color
-            chalice= jnp.array([120,120,0,0]).astype(jnp.int32), #ToDo
+            chalice= jnp.array([120,120,2,0]).astype(jnp.int32), #ToDo
         )
         initial_obs = self._get_observation(state)
 
@@ -460,29 +467,83 @@ class AdventureRenderer(JAXGameRenderer):
 
         #dragons
         dragon_yellow_mask = self.SHAPE_MASKS["dragon_yellow"][state.dragon_yellow[3]]
-        raster = self.jr.render_at(raster, state.dragon_yellow[0], state.dragon_yellow[1], dragon_yellow_mask)
+        raster = jax.lax.cond(
+            state.dragon_yellow[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.dragon_yellow[0], state.dragon_yellow[1], dragon_yellow_mask),
+            lambda r : r,
+            operand = raster,
+        )
         dragon_green_mask = self.SHAPE_MASKS["dragon_green"][state.dragon_green[3]]
-        raster = self.jr.render_at(raster, state.dragon_green[0], state.dragon_green[1], dragon_green_mask)
+        raster = jax.lax.cond(
+            state.dragon_green[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.dragon_green[0], state.dragon_green[1], dragon_green_mask),
+            lambda r : r,
+            operand = raster,
+        )
+        
         #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
-        raster = self.jr.render_at(raster, state.key_yellow[0], state.key_yellow[1], key_yellow_mask)
+        raster = jax.lax.cond(
+            state.key_yellow[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.key_yellow[0], state.key_yellow[1], key_yellow_mask),
+            lambda r : r,
+            operand = raster,
+        )
         key_black_mask = self.SHAPE_MASKS["key_black"]
-        raster = self.jr.render_at(raster, state.key_black[0], state.key_black[1], key_black_mask)
+        raster = jax.lax.cond(
+            state.key_black[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.key_black[0], state.key_black[1], key_black_mask),
+            lambda r : r,
+            operand = raster,
+        )
+
         #Gates
         gate_yellow_mask = self.SHAPE_MASKS["gate_state"][state.gate_yellow[0]]
-        raster = self.jr.render_at(raster, 77, 140, gate_yellow_mask)
+        raster = jax.lax.cond(
+            0==state.player[2],
+            lambda r : self.jr.render_at(raster, 77, 140, gate_yellow_mask),
+            lambda r : r,
+            operand = raster,
+        )
         gate_black_mask = self.SHAPE_MASKS["gate_state"][state.gate_black[0]]
-        raster = self.jr.render_at(raster, 30, 30, gate_black_mask)#ToDO
+        raster = jax.lax.cond(
+            10==state.player[2],
+            lambda r : self.jr.render_at(raster, 30, 30, gate_black_mask),#ToDO
+            lambda r : r,
+            operand = raster,
+        )
+        
 
         #items
         sword_mask = self.SHAPE_MASKS["sword"]
-        raster = self.jr.render_at(raster, state.sword[0], state.sword[1], sword_mask)
+        raster = jax.lax.cond(
+            state.sword[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.sword[0], state.sword[1], sword_mask),
+            lambda r : r,
+            operand = raster,
+        )
         bridge_mask = self.SHAPE_MASKS["bridge"]
-        raster = self.jr.render_at(raster, state.bridge[0], state.bridge[1], bridge_mask)
+        raster = jax.lax.cond(
+            state.bridge[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.bridge[0], state.bridge[1], bridge_mask),
+            lambda r : r,
+            operand = raster,
+        )
         magnet_mask = self.SHAPE_MASKS["magnet"]
-        raster = self.jr.render_at(raster, state.magnet[0], state.magnet[1], magnet_mask)
+        raster = jax.lax.cond(
+            state.magnet[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.magnet[0], state.magnet[1], magnet_mask),
+            lambda r : r,
+            operand = raster,
+        )
+
         #chalice
         chalice_mask = self.SHAPE_MASKS["chalice"][state.chalice[3]]
-        raster = self.jr.render_at(raster, state.chalice[0], state.chalice[1], chalice_mask)
+        raster = jax.lax.cond(
+            state.chalice[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.chalice[0], state.chalice[1], chalice_mask),
+            lambda r : r,
+            operand = raster,
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
