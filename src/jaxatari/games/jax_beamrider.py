@@ -61,6 +61,7 @@ class LaneBlockerState(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
+    STARTING_SECTOR: int = 12
     WHITE_UFOS_PER_SECTOR: int = 3
 
     RENDER_SCALE_FACTOR: int = 4
@@ -478,7 +479,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[BeamriderObservation, BeamriderState]:
-        state = self.reset_level(12)
+        state = self.reset_level(self.consts.STARTING_SECTOR)
         observation = self._get_observation(state)
         return observation, state
 
