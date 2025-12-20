@@ -19,20 +19,20 @@ def _get_default_asset_config() -> tuple:
     """
     return (
         #all rooms in order
-        {'name': 'bg_yellow_castle', 'type': 'background', 'file': 'Room_YellowCastle.npy'},
-        {'name': 'bg_yellow', 'type': 'background', 'file': 'Room_Yellow.npy'},
-        {'name': 'bg_green', 'type': 'background', 'file': 'Room_Green.npy'},
-        {'name': 'bg_purple', 'type': 'background', 'file': 'Room_Purple.npy'},
-        {'name': 'bg_pink', 'type': 'background', 'file': 'Room_Pink.npy'},
-        {'name': 'bg_green_yellow', 'type': 'background', 'file': 'Room_Green_Yellow.npy'},
-        {'name': 'bg_maze_1', 'type': 'background', 'file': 'Room_Maze_1.npy'},
-        {'name': 'bg_maze_2', 'type': 'background', 'file': 'Room_Maze_2.npy'},
-        {'name': 'bg_maze_3', 'type': 'background', 'file': 'Room_Maze_3.npy'},
-        {'name': 'bg_maze_4', 'type': 'background', 'file': 'Room_Maze_4.npy'},
-        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_Maze_5.npy'},
-        {'name': 'bg_black_castle', 'type': 'background', 'file': 'Room_Black_Castle.npy'},
-        {'name': 'bg_ping_corridor', 'type': 'background', 'file': 'Room_Pink_Corridor.npy'},
-        {'name': 'bg_magenta', 'type': 'background', 'file': 'Room_Magenta.npy'},
+        {'name': 'bg_yellow_castle', 'type': 'background', 'file': 'Room_1.npy'},
+        {'name': 'bg_yellow', 'type': 'background', 'file': 'Room_2.npy'},
+        {'name': 'bg_green', 'type': 'background', 'file': 'Room_3.npy'},
+        {'name': 'bg_purple', 'type': 'background', 'file': 'Room_4.npy'},
+        {'name': 'bg_pink', 'type': 'background', 'file': 'Room_5.npy'},
+        {'name': 'bg_green_yellow', 'type': 'background', 'file': 'Room_6.npy'},
+        {'name': 'bg_maze_1', 'type': 'background', 'file': 'Room_7.npy'},
+        {'name': 'bg_maze_2', 'type': 'background', 'file': 'Room_8.npy'},
+        {'name': 'bg_maze_3', 'type': 'background', 'file': 'Room_9.npy'},
+        {'name': 'bg_maze_4', 'type': 'background', 'file': 'Room_10.npy'},
+        {'name': 'bg_maze_5', 'type': 'background', 'file': 'Room_11.npy'},
+        {'name': 'bg_black_castle', 'type': 'background', 'file': 'Room_12.npy'},
+        {'name': 'bg_ping_corridor', 'type': 'background', 'file': 'Room_13.npy'},
+        {'name': 'bg_magenta', 'type': 'background', 'file': 'Room_14.npy'},
         #all player colors in order
         {'name': 'player_yellow', 'type': 'single', 'file': 'Player_Yellow.npy'},
         {'name': 'player_green', 'type': 'single', 'file': 'Player_Green.npy'},
@@ -59,7 +59,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'bridge', 'type': 'single', 'file': 'Bridge.npy'},
         {'name': 'magnet', 'type': 'single', 'file': 'Magnet.npy'},
         #Chalice
-        {'name': 'chalice', 'type': 'single', 'file': 'Trophy_Pink.npy'}
+        {'name': 'chalice', 'type': 'single', 'file': 'Chalice_Pink.npy'}
         #ToDo remaining chalice colors for blinking
     )
 
