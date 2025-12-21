@@ -28,14 +28,14 @@ class UpNDownConstants(NamedTuple):
     ENEMY_SPAWN_INTERVAL_MAX: int = 60  # Max spawn interval when many enemies exist
     ENEMY_MIN_VISIBLE_COUNT: int = 2  # Minimum enemies to keep on screen
     ENEMY_VISIBLE_DISTANCE: int = 120  # Distance within which enemies are considered "visible"
-    ENEMY_DESPAWN_DISTANCE: int = 250  
+    ENEMY_DESPAWN_DISTANCE: int = 250
     ENEMY_SPEED_MIN: int = 3
     ENEMY_SPEED_MAX: int = 5
     ENEMY_DIRECTION_SWITCH_PROB: float = 0.0001
-    ENEMY_SPAWN_OFFSET_MIN: float = 70.0  # Closer spawn distance 
+    ENEMY_SPAWN_OFFSET_MIN: float = 70.0  # Closer spawn distance
     ENEMY_SPAWN_OFFSET_MAX: float = 130.0  # Max spawn offset
     ENEMY_MIN_SPAWN_GAP: float = 25.0  # Reduced gap between spawns
-    ENEMY_MAX_AGE: int = 1900  
+    ENEMY_MAX_AGE: int = 1900
     INITIAL_ENEMY_COUNT: int = 4
     INITIAL_ENEMY_BASE_OFFSET: float = 35.0  # Closer initial enemies
     INITIAL_ENEMY_GAP: float = 25.0  # Tighter initial spacing
@@ -55,9 +55,9 @@ class UpNDownConstants(NamedTuple):
     PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
     TRACK_LENGTH: int = 1036
-    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]) 
+    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30])
     TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035])
-    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115]) 
+    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115])
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
     INITIAL_ROAD_POS_Y: int = 25
     # Flag constants - 8 flags with different colors matching the top row
@@ -65,7 +65,7 @@ class UpNDownConstants(NamedTuple):
     # Flag colors as RGBA values (matching the top row from left to right)
     FLAG_COLORS: chex.Array = jnp.array([
         [184, 50, 50, 255],    # Red
-        [181, 83, 40, 255],    # Orange  
+        [181, 83, 40, 255],    # Orange
         [162, 98, 33, 255],    # Dark orange
         [134, 134, 29, 255],   # Yellow/olive
         [200, 72, 72, 255],    # Pink (original)
@@ -175,15 +175,46 @@ class UpNDownState(NamedTuple):
     # Enemy cars - dynamic spawning and movement
     enemy_cars: EnemyCars
     enemy_spawn_timer: chex.Array
+    # Death/respawn state - player is dead and waiting for input to respawn
+    awaiting_respawn: chex.Array  # True when player died and is waiting for input
+    # Round start state - everything frozen and hidden until player presses input
+    awaiting_round_start: chex.Array  # True at game start and after respawn until input received
+    # Input debounce - requires button release before next input triggers round start
+    input_released: chex.Array  # True when player has released all buttons since last state change
 
 
 
 
 class UpNDownObservation(NamedTuple):
-    player: EntityPosition
+    """Complete observation for RL agents in Up N Down.
+    
+    Reuses existing game classes for consistency:
+    - player_car: Car with EntityPosition, speed, type, road info
+    - enemy_cars: EnemyCars pool with positions, speeds, types, active flags
+    - flags: Flag with y, road, segment, color, collected status
+    - collectibles: Collectible with positions, types, active status
+    - Additional game state: score, lives, jumping status, etc.
+    """
+    player_car: Car  # Reuse existing Car class
+    enemy_cars: EnemyCars  # Reuse existing EnemyCars class
+    flags: Flag  # Reuse existing Flag class
+    collectibles: Collectible  # Reuse existing Collectible class
+    flags_collected_mask: jnp.ndarray  # Shape (NUM_FLAGS,) - boolean mask
+    player_score: jnp.ndarray
+    lives: jnp.ndarray
+    is_jumping: jnp.ndarray  # Whether player is currently jumping
+    jump_cooldown: jnp.ndarray  # Frames remaining in jump
+    is_on_steep_road: jnp.ndarray  # Whether currently on steep section
+    round_started: jnp.ndarray  # Whether player has started moving
+
 
 class UpNDownInfo(NamedTuple):
-    time: jnp.ndarray
+    """Additional info for debugging and analysis."""
+    step_counter: jnp.ndarray  # Total steps taken
+    difficulty: jnp.ndarray  # Current difficulty level
+    movement_steps: jnp.ndarray  # Steps since round started
+    jump_slope: jnp.ndarray  # Current jump trajectory slope
+    player_road_segment: jnp.ndarray  # Current road segment index
 class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, UpNDownConstants]):
     def __init__(self, consts: UpNDownConstants = None, reward_funcs: list[callable]=None):
         consts = consts or UpNDownConstants()
@@ -200,7 +231,22 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             Action.DOWN,
             Action.DOWNFIRE,
         ]
-        self.obs_size = 3*4+1+1
+        # Calculate obs_size based on observation structure:
+        # Player car: 8 values (x, y, w, h, speed, type, road, direction_x)
+        # Enemy cars: MAX_ENEMY_CARS * 8 = 8 * 8 = 64 (x, y, w, h, speed, type, road, active per car)
+        # Flags: NUM_FLAGS * 5 = 8 * 5 = 40 (y, road, segment, color, collected per flag)
+        # Collectibles: MAX_COLLECTIBLES * 5 = 1 * 5 = 5 (y, x, road, type, active per collectible)
+        # Flags collected mask: NUM_FLAGS = 8
+        # Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6
+        # Total: 8 + 64 + 40 + 5 + 8 + 6 = 131
+        self.obs_size = (
+            8 +  # player car
+            self.consts.MAX_ENEMY_CARS * 8 +  # enemy cars
+            self.consts.NUM_FLAGS * 5 +  # flags
+            self.consts.MAX_COLLECTIBLES * 5 +  # collectibles
+            self.consts.NUM_FLAGS +  # flags_collected_mask
+            6  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started
+        )
         # Speed dividers for movement timing (indexed by speed level)
         self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16])
 
@@ -783,41 +829,41 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _death_step(self, state: UpNDownState) -> UpNDownState:
-        """Handle player death when on water road (index 2)."""
-        # Player on water road (index 2 assumed water)
+        """Handle player death - this is now only used for water crashes during landing.
+        
+        When the player dies:
+        - Lives are decremented
+        - is_dead is set to True
+        - awaiting_respawn is set to True
+        - Player car is moved off-screen (despawned)
+        - Game waits for player input before respawning
+        """
+        # Skip if already awaiting respawn
+        already_awaiting = state.awaiting_respawn
+        
+        # Player on water road (index 2 assumed water) and not already dead
         died = jnp.logical_and(
-            state.player_car.current_road == 2,
-            ~state.is_dead,
+            jnp.logical_and(
+                state.player_car.current_road == 2,
+                ~state.is_dead,
+            ),
+            ~already_awaiting,
         )
 
         # Use jnp.where for branchless execution
         lives = jnp.where(died, state.lives - 1, state.lives)
-        respawn_timer = jnp.where(
-            died,
-            jnp.array(self.consts.RESPAWN_DELAY_FRAMES),
-            jnp.maximum(state.respawn_timer - 1, 0),
-        )
-        is_dead = jnp.logical_and(
-            jnp.logical_or(state.is_dead, died),
-            respawn_timer > 0,
-        )
-
-        # Respawn player when dead and timer expires
-        should_respawn = jnp.logical_and(state.is_dead, respawn_timer == 0)
-        new_position = state.player_car.position._replace(
-            x=jnp.where(should_respawn, jnp.array(self.consts.RESPAWN_X, dtype=jnp.float32), state.player_car.position.x),
-            y=jnp.where(should_respawn, jnp.array(self.consts.RESPAWN_Y, dtype=jnp.float32), state.player_car.position.y),
-        )
+        is_dead = jnp.logical_or(state.is_dead, died)
+        awaiting_respawn = jnp.logical_or(state.awaiting_respawn, died)
+        
+        # Stop player movement but keep position (renderer will hide player when awaiting_respawn)
         player_car = state.player_car._replace(
-            position=new_position,
-            speed=jnp.where(should_respawn, 0, state.player_car.speed),
-            current_road=jnp.where(should_respawn, 0, state.player_car.current_road),
+            speed=jnp.where(died, 0, state.player_car.speed),
         )
 
         return state._replace(
             lives=lives,
             is_dead=is_dead,
-            respawn_timer=respawn_timer,
+            awaiting_respawn=awaiting_respawn,
             player_car=player_car,
         )
     
@@ -1017,9 +1063,22 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
         water_crash = jnp.logical_and(is_landing, updated_player_car.current_road == 2)
 
+        # On water crash, trigger death state instead of immediate respawn
+        def trigger_death(s):
+            # Stop player but keep position (renderer will hide player when awaiting_respawn)
+            dead_car = s.player_car._replace(
+                speed=jnp.array(0, dtype=jnp.int32),
+            )
+            return s._replace(
+                lives=s.lives - 1,
+                is_dead=jnp.array(True),
+                awaiting_respawn=jnp.array(True),
+                player_car=dead_car,
+            )
+
         return jax.lax.cond(
             water_crash,
-            lambda _: self._respawn_after_collision(next_state, next_state.lives - 1),
+            lambda _: trigger_death(next_state),
             lambda _: next_state,
             operand=None,
         )
@@ -1137,7 +1196,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _enemy_step_main(self, state: UpNDownState) -> UpNDownState:
         """Spawn and move enemy cars with adaptive spawning for consistent enemy presence."""
-        rng_key, key_spawn_offset, key_spawn_side, key_spawn_speed, key_spawn_direction, key_spawn_type, key_spawn_sign, key_flip_root = jax.random.split(state.rng_key, 8)
+        # Split RNG keys - use more splits to ensure better randomization
+        rng_key, key_spawn_offset, key_spawn_side, key_spawn_speed, key_spawn_direction, key_spawn_type, key_spawn_sign, key_flip_root, key_extra = jax.random.split(state.rng_key, 9)
+        
+        # Further split key_spawn_type to get more entropy for type selection
+        key_spawn_type = jax.random.fold_in(key_spawn_type, state.step_counter)
 
         active_mask = state.enemy_cars.active
         active_count = jnp.sum(active_mask.astype(jnp.int32))
@@ -1350,6 +1413,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
             enemy_cars=enemy_cars,
             enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
+            awaiting_respawn=jnp.array(False),
+            awaiting_round_start=jnp.array(True),  # Wait for input to start round after respawn
+            input_released=jnp.array(False),  # Require button release before round can start
             rng_key=rng_key,
         )
 
@@ -1418,9 +1484,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             return state._replace(score=state.score + bonus, enemy_cars=new_enemy_cars)
 
         def handle_ground_collision():
-            return self._respawn_after_collision(state, state.lives - 1)
+            # Trigger death state - stop player but keep position (renderer hides player when awaiting_respawn)
+            dead_car = state.player_car._replace(
+                speed=jnp.array(0, dtype=jnp.int32),
+            )
+            return state._replace(
+                lives=state.lives - 1,
+                is_dead=jnp.array(True),
+                awaiting_respawn=jnp.array(True),
+                player_car=dead_car,
+            )
 
-        # Ground collision causes respawn (landing is now protected by invincibility)
+        # Ground collision causes death (landing is now protected by invincibility)
         any_fatal_collision = grounded_collision
 
         return jax.lax.cond(
@@ -1515,6 +1590,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
             enemy_cars=enemy_cars,
             enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
+            awaiting_respawn=jnp.array(False),
+            awaiting_round_start=jnp.array(True),  # Start frozen until first input
+            input_released=jnp.array(True),  # Can start immediately at game start
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -1528,15 +1606,62 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: UpNDownState, action: chex.Array) -> Tuple[UpNDownObservation, UpNDownState, float, bool, UpNDownInfo]:
         previous_state = state
-        state = self._player_step(state, action)
-        state = self._death_step(state)
-
-        state = self._passive_score_step_main(state)
-        state = self._flag_step_main(state)
-        state = self._completion_bonus_step(state)
-        state = self._collectible_step_main(state)
-        state = self._enemy_step_main(state)
-        state = self._enemy_collision_step_main(state)
+        
+        any_action = action != Action.NOOP
+        
+        # Track input release - set to True when no button is pressed
+        input_released = jnp.where(any_action, state.input_released, jnp.array(True))
+        state = state._replace(input_released=input_released)
+        
+        # Check if we're awaiting respawn - if so, check for input to trigger respawn
+        should_respawn = jnp.logical_and(state.awaiting_respawn, any_action)
+        
+        # Respawn if player pressed any key while awaiting
+        state = jax.lax.cond(
+            should_respawn,
+            lambda s: self._respawn_after_collision(s, s.lives),  # lives already decremented
+            lambda s: s,
+            state,
+        )
+        
+        # Check if we're awaiting round start - if so, check for input to start round
+        # Only start if input was released since respawn (prevents holding button through)
+        should_start_round = jnp.logical_and(
+            jnp.logical_and(state.awaiting_round_start, any_action),
+            state.input_released  # Must have released button first
+        )
+        state = jax.lax.cond(
+            should_start_round,
+            lambda s: s._replace(awaiting_round_start=jnp.array(False)),
+            lambda s: s,
+            state,
+        )
+        
+        # Skip all game logic if awaiting respawn OR awaiting round start
+        is_frozen = jnp.logical_or(state.awaiting_respawn, state.awaiting_round_start)
+        
+        def run_game_logic(s):
+            s = self._player_step(s, action)
+            s = self._death_step(s)
+            s = self._passive_score_step_main(s)
+            s = self._flag_step_main(s)
+            s = self._completion_bonus_step(s)
+            s = self._collectible_step_main(s)
+            s = self._enemy_step_main(s)
+            s = self._enemy_collision_step_main(s)
+            return s
+        
+        def freeze_game(s):
+            # Only increment step counter while frozen, everything else paused
+            return s._replace(step_counter=s.step_counter + 1)
+        
+        # Run game logic only if not frozen
+        state = jax.lax.cond(
+            is_frozen,
+            freeze_game,
+            run_game_logic,
+            state,
+        )
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -1551,39 +1676,175 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return jnp.asarray(frame, dtype=jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: UpNDownState):
-        # Clamp to screen-friendly coordinates so observation_space.contains passes
-        x = jnp.int32(jnp.clip(state.player_car.position.x, 0, 160))
-        screen_y = jnp.int32(105)
-
-        player = EntityPosition(
-            x=x,
-            y=screen_y,
-            width=jnp.int32(self.consts.PLAYER_SIZE[0]),
-            height=jnp.int32(self.consts.PLAYER_SIZE[1]),
+    def _get_observation(self, state: UpNDownState) -> UpNDownObservation:
+        """Build complete observation for RL agents.
+        
+        Reuses existing game classes directly from state for consistency.
+        """
+        # Check if on steep road
+        is_on_steep_road = self._is_steep_road_segment(
+            state.player_car.current_road,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
         )
-        return UpNDownObservation(player=player)
+        
+        return UpNDownObservation(
+            player_car=state.player_car,
+            enemy_cars=state.enemy_cars,
+            flags=state.flags,
+            collectibles=state.collectibles,
+            flags_collected_mask=state.flags_collected_mask,
+            player_score=jnp.int32(state.score),
+            lives=jnp.int32(state.lives),
+            is_jumping=jnp.int32(state.is_jumping),
+            jump_cooldown=jnp.int32(state.jump_cooldown),
+            is_on_steep_road=jnp.int32(is_on_steep_road),
+            round_started=jnp.int32(state.round_started),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def flatten_car(self, car: Car) -> jnp.ndarray:
+        """Flatten a Car to a 1D array."""
+        return jnp.concatenate([
+            jnp.array([car.position.x], dtype=jnp.float32),
+            jnp.array([car.position.y], dtype=jnp.float32),
+            jnp.array([car.position.width], dtype=jnp.float32),
+            jnp.array([car.position.height], dtype=jnp.float32),
+            jnp.array([car.speed], dtype=jnp.float32),
+            jnp.array([car.type], dtype=jnp.float32),
+            jnp.array([car.current_road], dtype=jnp.float32),
+            jnp.array([car.direction_x], dtype=jnp.float32),
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def flatten_enemy_cars(self, enemy_cars: EnemyCars) -> jnp.ndarray:
+        """Flatten EnemyCars to a 1D array."""
+        return jnp.concatenate([
+            enemy_cars.position.x,
+            enemy_cars.position.y,
+            enemy_cars.position.width,
+            enemy_cars.position.height,
+            enemy_cars.speed.astype(jnp.float32),
+            enemy_cars.type.astype(jnp.float32),
+            enemy_cars.current_road.astype(jnp.float32),
+            enemy_cars.active.astype(jnp.float32),
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def flatten_flags(self, flags: Flag) -> jnp.ndarray:
+        """Flatten Flag to a 1D array."""
+        return jnp.concatenate([
+            flags.y,
+            flags.road.astype(jnp.float32),
+            flags.road_segment.astype(jnp.float32),
+            flags.color_idx.astype(jnp.float32),
+            flags.collected.astype(jnp.float32),
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
+    def flatten_collectibles(self, collectibles: Collectible) -> jnp.ndarray:
+        """Flatten Collectible to a 1D array."""
+        return jnp.concatenate([
+            collectibles.y,
+            collectibles.x,
+            collectibles.road.astype(jnp.float32),
+            collectibles.type_id.astype(jnp.float32),
+            collectibles.active.astype(jnp.float32),
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: UpNDownObservation) -> jnp.ndarray:
+        """Flatten the complete observation to a 1D array for RL.
+        
+        Order:
+        - Player car: 8 values (x, y, w, h, speed, type, road, direction_x)
+        - Enemy cars: MAX_ENEMY_CARS * 8 values (x, y, w, h, speed, type, road, active per car)
+        - Flags: NUM_FLAGS * 5 values (y, road, segment, color, collected per flag)
+        - Collectibles: MAX_COLLECTIBLES * 5 values (y, x, road, type, active per collectible)
+        - Flags collected mask: NUM_FLAGS values
+        - Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6 values
+        """
         return jnp.concatenate([
-            jnp.asarray(obs.player.x, dtype=jnp.int32).reshape(-1),
-            jnp.asarray(obs.player.y, dtype=jnp.int32).reshape(-1),
-            jnp.asarray(obs.player.height, dtype=jnp.int32).reshape(-1),
-            jnp.asarray(obs.player.width, dtype=jnp.int32).reshape(-1),
+            self.flatten_car(obs.player_car),
+            self.flatten_enemy_cars(obs.enemy_cars),
+            self.flatten_flags(obs.flags),
+            self.flatten_collectibles(obs.collectibles),
+            obs.flags_collected_mask.flatten().astype(jnp.float32),
+            jnp.array([obs.player_score], dtype=jnp.float32),
+            jnp.array([obs.lives], dtype=jnp.float32),
+            jnp.array([obs.is_jumping], dtype=jnp.float32),
+            jnp.array([obs.jump_cooldown], dtype=jnp.float32),
+            jnp.array([obs.is_on_steep_road], dtype=jnp.float32),
+            jnp.array([obs.round_started], dtype=jnp.float32),
         ])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(6)
 
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
+        """Returns the observation space for Up N Down.
+        
+        The observation reuses existing game classes:
+        - player_car: Car with position (x, y, w, h), speed, type, current_road, direction_x
+        - enemy_cars: EnemyCars with positions, speeds, types, roads, active flags
+        - flags: Flag with y, road, road_segment, color_idx, collected
+        - collectibles: Collectible with y, x, road, type_id, active
+        - flags_collected_mask: boolean array of shape (NUM_FLAGS,)
+        - player_score: int (0-999999)
+        - lives: int (0-5)
+        - is_jumping: int (0 or 1)
+        - jump_cooldown: int (0-28)
+        - is_on_steep_road: int (0 or 1)
+        - round_started: int (0 or 1)
+        """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            "player_car": spaces.Dict({
+                "position": spaces.Dict({
+                    "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                    "y": spaces.Box(low=-2000, high=0, shape=(), dtype=jnp.float32),
+                    "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                    "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                }),
+                "speed": spaces.Box(low=-6, high=6, shape=(), dtype=jnp.int32),
+                "type": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+                "current_road": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+                "road_index_A": spaces.Box(low=0, high=30, shape=(), dtype=jnp.int32),
+                "road_index_B": spaces.Box(low=0, high=30, shape=(), dtype=jnp.int32),
+                "direction_x": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
             }),
+            "enemy_cars": spaces.Dict({
+                "position": spaces.Dict({
+                    "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
+                    "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
+                    "width": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
+                    "height": spaces.Box(low=0, high=210, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
+                }),
+                "speed": spaces.Box(low=-6, high=6, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "type": spaces.Box(low=0, high=3, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "current_road": spaces.Box(low=0, high=2, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.bool_),
+            }),
+            "flags": spaces.Dict({
+                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.NUM_FLAGS,), dtype=jnp.float32),
+                "road": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
+                "road_segment": spaces.Box(low=0, high=30, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
+                "color_idx": spaces.Box(low=0, high=7, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
+                "collected": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.bool_),
+            }),
+            "collectibles": spaces.Dict({
+                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.float32),
+                "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.float32),
+                "road": spaces.Box(low=0, high=1, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
+                "type_id": spaces.Box(low=0, high=3, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.bool_),
+            }),
+            "flags_collected_mask": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.bool_),
+            "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "is_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "jump_cooldown": spaces.Box(low=0, high=28, shape=(), dtype=jnp.int32),
+            "is_on_steep_road": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "round_started": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -1595,8 +1856,22 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: UpNDownState, ) -> UpNDownInfo:
-        return UpNDownInfo(time=jnp.asarray(state.step_counter, dtype=jnp.int32))
+    def _get_info(self, state: UpNDownState) -> UpNDownInfo:
+        """Build info dict with additional debugging/analysis data."""
+        # Get current road segment for player
+        road_index = jnp.where(
+            state.player_car.current_road == 0,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
+        )
+        
+        return UpNDownInfo(
+            step_counter=jnp.int32(state.step_counter),
+            difficulty=jnp.int32(state.difficulty),
+            movement_steps=jnp.int32(state.movement_steps),
+            jump_slope=jnp.float32(state.jump_slope),
+            player_road_segment=jnp.int32(road_index),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: UpNDownState, state: UpNDownState):
@@ -1627,11 +1902,10 @@ class UpNDownRenderer(JAXGameRenderer):
         temp_pointer = self._createBackgroundSprite((1, 1))
         blackout_square = self._createBackgroundSprite(self.consts.FLAG_BLACKOUT_SIZE)
         
-        # 2. Update asset config to include both walls
+        # Build asset config locally (matches other games' pattern)
         asset_config, road_files = self._get_asset_config(background, top_block, bottom_block, temp_pointer, blackout_square)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
 
-        # 3. Make a single call to the setup function
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -1720,6 +1994,37 @@ class UpNDownRenderer(JAXGameRenderer):
             sizes.append(sprite.shape[0])
         complete_size = int(sum(sizes))
         return sizes, complete_size
+
+    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[str]]:
+        """Return asset manifest and ordered road files (renderer-local like other games)."""
+        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
+        road_files = sorted(
+            file for file in os.listdir(road_dir)
+            if file.endswith(".npy")
+        )
+        roads = [f"roads/{file}" for file in road_files]
+        return [
+            {'name': 'background', 'type': 'background', 'data': backgroundSprite},
+            {'name': 'road', 'type': 'group', 'files': roads},
+            {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
+            {'name': 'camero_left', 'type': 'single', 'file': 'enemy_cars/camero_left.npy'},
+            {'name': 'flag_carrier_left', 'type': 'single', 'file': 'enemy_cars/flag_carrier_left.npy'},
+            {'name': 'pick_up_truck_left', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_left.npy'},
+            {'name': 'truck_left', 'type': 'single', 'file': 'enemy_cars/truck_left.npy'},
+            {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
+            {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
+            {'name': 'all_flags_top', 'type': 'single', 'file': 'all_flags_top.npy'},
+            {'name': 'all_lives_bottom', 'type': 'single', 'file': 'all_lives_bottom.npy'},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
+            {'name': 'pink_flag', 'type': 'single', 'file': 'pink_flag.npy'},
+            {'name': 'flag_pole', 'type': 'single', 'file': 'flag_pole.npy'},
+            {'name': 'cherry', 'type': 'single', 'file': 'cherry.npy'},
+            {'name': 'balloon', 'type': 'single', 'file': 'balloon.npy'},
+            {'name': 'lollypop', 'type': 'single', 'file': 'lollypop.npy'},
+            {'name': 'ice_cream', 'type': 'single', 'file': 'ice_cream_cone.npy'},
+            {'name': 'tempPointer', 'type': 'procedural', 'data': tempPointer},
+            {'name': 'blackout_square', 'type': 'procedural', 'data': blackoutSquare},
+        ], roads
     
     def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
         """Calculate the X position on a road given a Y coordinate and road segment."""
@@ -1751,38 +2056,6 @@ class UpNDownRenderer(JAXGameRenderer):
         progress = jnp.clip((total - remaining) / jnp.maximum(total, 1.0), 0.0, 1.0)
         centered = (progress - 0.5) * 2.0
         return self.consts.JUMP_ARC_HEIGHT * (1.0 - centered * centered)
-
-    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[str]]:
-        """Returns the asset manifest and ordered road files."""
-        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
-        road_files = sorted(
-            file for file in os.listdir(road_dir)
-            if file.endswith(".npy")
-        )
-        roads = [f"roads/{file}" for file in road_files]
-        return [
-            {'name': 'background', 'type': 'background', 'data': backgroundSprite},
-            {'name': 'road', 'type': 'group', 'files': roads},
-            {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
-            # Only load left-facing enemy sprites; right-facing are created by flipping
-            {'name': 'camero_left', 'type': 'single', 'file': 'enemy_cars/camero_left.npy'},
-            {'name': 'flag_carrier_left', 'type': 'single', 'file': 'enemy_cars/flag_carrier_left.npy'},
-            {'name': 'pick_up_truck_left', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_left.npy'},
-            {'name': 'truck_left', 'type': 'single', 'file': 'enemy_cars/truck_left.npy'},
-            {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
-            {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
-            {'name': 'all_flags_top', 'type': 'single', 'file': 'all_flags_top.npy'},
-            {'name': 'all_lives_bottom', 'type': 'single', 'file': 'all_lives_bottom.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
-            {'name': 'pink_flag', 'type': 'single', 'file': 'pink_flag.npy'},
-            {'name': 'flag_pole', 'type': 'single', 'file': 'flag_pole.npy'},
-            {'name': 'cherry', 'type': 'single', 'file': 'cherry.npy'},
-            {'name': 'balloon', 'type': 'single', 'file': 'balloon.npy'},
-            {'name': 'lollypop', 'type': 'single', 'file': 'lollypop.npy'},
-            {'name': 'ice_cream', 'type': 'single', 'file': 'ice_cream_cone.npy'},
-            {'name': 'tempPointer', 'type': 'procedural', 'data': tempPointer},
-            {'name': 'blackout_square', 'type': 'procedural', 'data': blackoutSquare},
-        ], roads
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -1848,7 +2121,12 @@ class UpNDownRenderer(JAXGameRenderer):
             enemy_type = state.enemy_cars.type[enemy_idx]
             direction_x = state.enemy_cars.direction_x[enemy_idx]
             screen_y = 105 + (enemy_y - state.player_car.position.y)
-            is_visible = jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195))
+            # Hide enemies when awaiting round start or awaiting respawn
+            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+            is_visible = jnp.logical_and(
+                jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195)),
+                ~should_hide
+            )
             enemy_mask = select_enemy_mask(enemy_type, direction_x < 0)
 
             raster = jax.lax.cond(
@@ -1870,7 +2148,14 @@ class UpNDownRenderer(JAXGameRenderer):
 
         player_screen_y = jnp.int32(105 - jump_offset)
         player_mask = self.SHAPE_MASKS["player"]
-        raster_player = self.jr.render_at_clipped(raster_enemies, state.player_car.position.x, player_screen_y, player_mask)
+        # Skip rendering player when awaiting respawn OR awaiting round start
+        should_hide_player = jnp.logical_or(state.awaiting_respawn, state.awaiting_round_start)
+        raster_player = jax.lax.cond(
+            should_hide_player,
+            lambda _: raster_enemies,  # Don't render player
+            lambda _: self.jr.render_at_clipped(raster_enemies, state.player_car.position.x, player_screen_y, player_mask),
+            operand=None,
+        )
 
         wall_top_mask = self.SHAPE_MASKS["wall_top"]
         raster_wall_top = self.jr.render_at(raster_player, 0, 0, wall_top_mask)
@@ -1922,9 +2207,11 @@ class UpNDownRenderer(JAXGameRenderer):
                 operand=None,
             )
             screen_y = 105 + (flag_y - state.player_car.position.y)
+            # Hide flags when awaiting round start or awaiting respawn
+            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
             is_visible = jnp.logical_and(
                 jnp.logical_and(screen_y > 25, screen_y < 195),
-                ~flag_collected
+                jnp.logical_and(~flag_collected, ~should_hide)
             )
             color_id = self.flag_palette_ids[flag_color_idx]
             colored_flag_mask = jnp.where(
@@ -1970,9 +2257,11 @@ class UpNDownRenderer(JAXGameRenderer):
             collectible_color_idx = state.collectibles.color_idx[collectible_idx]
             collectible_type_id = state.collectibles.type_id[collectible_idx]
             screen_y = 105 + (collectible_y - state.player_car.position.y)
+            # Hide collectibles when awaiting round start or awaiting respawn
+            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
             is_visible = jnp.logical_and(
                 jnp.logical_and(screen_y > 25, screen_y < 195),
-                collectible_active
+                jnp.logical_and(collectible_active, ~should_hide)
             )
 
             def get_sprite_and_mask(type_id):
