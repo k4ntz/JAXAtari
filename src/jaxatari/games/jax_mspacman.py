@@ -34,6 +34,159 @@ class MsPacmanInfo(NamedTuple):
     lives: chex.Array
 
 
+# Simple 5x5 pixel font for text rendering
+PIXEL_FONT = {
+    'P': [
+        [1,1,1,1,1],
+        [1,0,0,0,1],
+        [1,1,1,1,1],
+        [1,0,0,0,0],
+        [1,0,0,0,0],
+    ],
+    'R': [
+        [1,1,1,1,1],
+        [1,0,0,0,1],
+        [1,1,1,1,1],
+        [1,0,1,0,0],
+        [1,0,0,1,0],
+    ],
+    'E': [
+        [1,1,1,1,1],
+        [1,0,0,0,0],
+        [1,1,1,0,0],
+        [1,0,0,0,0],
+        [1,1,1,1,1],
+    ],
+    'S': [
+        [0,1,1,1,0],
+        [1,0,0,0,1],
+        [0,1,1,1,0],
+        [1,0,0,0,1],
+        [0,1,1,1,0],
+    ],
+    'A': [
+        [0,1,1,1,0],
+        [1,0,0,0,1],
+        [1,1,1,1,1],
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+    ],
+    'N': [
+        [1,0,0,0,1],
+        [1,1,0,0,1],
+        [1,0,1,0,1],
+        [1,0,0,1,1],
+        [1,0,0,0,1],
+    ],
+    'Y': [
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [0,1,1,1,0],
+        [0,0,1,0,0],
+        [0,1,0,1,0],
+    ],
+    'T': [
+        [1,1,1,1,1],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+    ],
+    'H': [
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [1,1,1,1,1],
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+    ],
+    'I': [
+        [1,1,1,1,1],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [1,1,1,1,1],
+    ],
+    'G': [
+        [0,1,1,1,0],
+        [1,0,0,0,1],
+        [1,0,0,1,1],
+        [1,0,0,0,1],
+        [0,1,1,1,0],
+    ],
+    'M': [
+        [1,0,0,0,1],
+        [1,1,1,1,1],
+        [1,0,1,0,1],
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+    ],
+    'O': [
+        [0,1,1,1,0],
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [0,1,1,1,0],
+    ],
+    'V': [
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [0,1,0,1,0],
+        [0,1,0,1,0],
+        [0,0,1,0,0],
+    ],
+    'W': [
+        [1,0,0,0,1],
+        [1,0,0,0,1],
+        [1,0,1,0,1],
+        [1,1,1,1,1],
+        [1,0,0,0,1],
+    ],
+    ' ': [
+        [0,0,0,0,0],
+        [0,0,0,0,0],
+        [0,0,0,0,0],
+        [0,0,0,0,0],
+        [0,0,0,0,0],
+    ],
+}
+
+def render_text(canvas, text, start_x, start_y, color, font_size=1):
+    """Render text using pixel font on canvas"""
+    x_offset = 0
+    for char in text.upper():
+        if char in PIXEL_FONT:
+            pattern = PIXEL_FONT[char]
+            for row_idx, row in enumerate(pattern):
+                for col_idx, pixel in enumerate(row):
+                    if pixel == 1:
+                        px = start_x + x_offset + col_idx * font_size
+                        py = start_y + row_idx * font_size
+                        # Draw pixel
+                        for fy in range(font_size):
+                            for fx in range(font_size):
+                                canvas = canvas.at[py + fy, px + fx, :].set(color)
+            x_offset += 6 * font_size  # 5 pixels + 1 space
+        else:
+            x_offset += 6 * font_size  # Space for unknown character
+    return canvas
+
+def get_text_width(text, font_size=1):
+    """Calculate the width of text in pixels"""
+    width = 0
+    for char in text.upper():
+        if char in PIXEL_FONT:
+            width += 6 * font_size  # 5 pixels + 1 space
+        else:
+            width += 6 * font_size  # Space for unknown character
+    return width
+
+def render_centered_text(canvas, text, start_y, color, font_size=1, screen_width=160):
+    """Render text centered horizontally on screen"""
+    text_width = get_text_width(text, font_size)
+    start_x = (screen_width - text_width) // 2
+    return render_text(canvas, text, start_x, start_y, color, font_size)
+
+
 class MsPacmanConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
@@ -234,6 +387,8 @@ class MsPacmanState(NamedTuple):
     lives: chex.Array
     pellets_remaining: chex.Array
     game_over: chex.Array
+    game_phase: chex.Array  # 0=start_screen, 1=playing, 2=game_over
+    game_over_waiting: chex.Array  # 1=waiting for input to restart
 
 
 def _parse_layout(layout: Tuple[str, ...], expected_ghosts: int):
@@ -384,7 +539,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             dtype=jnp.int32,
         )
 
-        self.state = self.reset()[1]
+        self.state = self.reset()[1]  # This should start in start screen
         self.renderer = MsPacmanRenderer(
             self.consts,
             self.wall_grid,
@@ -405,6 +560,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             lives=jnp.array(self.consts.initial_lives, dtype=jnp.int32),
             pellets_remaining=self.initial_pellet_count,
             game_over=jnp.array(False, dtype=jnp.bool_),
+            game_phase=jnp.array(0, dtype=jnp.int32),  # Start in start screen
+            game_over_waiting=jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -412,6 +569,82 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: MsPacmanState, action: int) -> Tuple[MsPacmanObservation, MsPacmanState, float, bool, MsPacmanInfo]:
         action = jnp.asarray(action, dtype=jnp.int32)
+        
+        # Handle different game phases
+        def handle_start_screen(_):
+            # Only transition to playing on non-NOOP action (action != 0)
+            def start_game(_):
+                new_state = state._replace(game_phase=jnp.array(1, dtype=jnp.int32))
+                return self._get_observation(new_state), new_state, jnp.float32(0.0), False, self._get_info(new_state)
+            
+            def stay_in_start(_):
+                return self._get_observation(state), state, jnp.float32(0.0), False, self._get_info(state)
+            
+            return jax.lax.cond(
+                action != 0,  # Only start on non-NOOP action
+                start_game,
+                stay_in_start,
+                None
+            )
+        
+        def handle_game_over(_):
+            # If we just entered game over, set waiting flag
+            def set_waiting_flag(_):
+                new_state = state._replace(game_over_waiting=jnp.array(1, dtype=jnp.int32))
+                return self._get_observation(new_state), new_state, jnp.float32(0.0), False, self._get_info(new_state)
+            
+            # Already waiting, now reset to start screen on non-NOOP action
+            def reset_to_start(_):
+                new_state = MsPacmanState(
+                    pacman_x=self.pacman_spawn[0],
+                    pacman_y=self.pacman_spawn[1],
+                    direction=jnp.array([-1, 0], dtype=jnp.int32),
+                    ghost_positions=self.ghost_spawn_positions,
+                    pellets=self.initial_pellets,
+                    power_timer=jnp.array(0, dtype=jnp.int32),
+                    score=jnp.array(0, dtype=jnp.int32),
+                    time=jnp.array(0, dtype=jnp.int32),
+                    lives=jnp.array(self.consts.initial_lives, dtype=jnp.int32),
+                    pellets_remaining=self.initial_pellet_count,
+                    game_over=jnp.array(False, dtype=jnp.bool_),
+                    game_phase=jnp.array(0, dtype=jnp.int32),  # Back to start screen
+                    game_over_waiting=jnp.array(0, dtype=jnp.int32),
+                )
+                return self._get_observation(new_state), new_state, jnp.float32(0.0), False, self._get_info(new_state)
+            
+            def stay_in_game_over(_):
+                return self._get_observation(state), state, jnp.float32(0.0), False, self._get_info(state)
+            
+            return jax.lax.cond(
+                state.game_over_waiting == 0,
+                set_waiting_flag,
+                lambda _: jax.lax.cond(
+                    action != 0,  # Only reset on non-NOOP action
+                    reset_to_start,
+                    stay_in_game_over,
+                    None
+                ),
+                None
+            )
+        
+        def handle_playing():
+            # Normal game logic
+            return self._step_game(state, action)
+        
+        # Branch based on game phase
+        return jax.lax.cond(
+            state.game_phase == 0,
+            handle_start_screen,
+            lambda _: jax.lax.cond(
+                state.game_phase == 2,
+                handle_game_over,
+                lambda _: handle_playing(),
+                None
+            ),
+            None
+        )
+    
+    def _step_game(self, state: MsPacmanState, action: int) -> Tuple[MsPacmanObservation, MsPacmanState, float, bool, MsPacmanInfo]:
         action_idx = jnp.clip(action, 0, self._action_deltas.shape[0] - 1)
         delta = self._action_deltas[action_idx]
 
@@ -500,6 +733,10 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             ),
         )
 
+        # Transition to game over phase when lives run out
+        game_phase = jnp.where(lives <= 0, jnp.array(2, dtype=jnp.int32), jnp.array(1, dtype=jnp.int32))
+        game_over_waiting = jnp.where(lives <= 0, jnp.array(0, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+
         new_state = MsPacmanState(
             pacman_x=pacman_x,
             pacman_y=pacman_y,
@@ -512,10 +749,12 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             lives=lives,
             pellets_remaining=pellets_remaining,
             game_over=game_over,
+            game_phase=game_phase,
+            game_over_waiting=game_over_waiting,
         )
 
         done = self._get_done(new_state)
-        env_reward = self._get_reward(state, new_state)
+        env_reward = jnp.float32(self._get_reward(state, new_state))
         obs = self._get_observation(new_state)
         info = self._get_info(new_state)
 
@@ -821,6 +1060,36 @@ class MsPacmanRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: MsPacmanState) -> jnp.ndarray:
+        # Always render the game first
+        canvas = self._render_game(state)
+        
+        # Add overlay text based on game phase
+        def add_start_overlay(canvas):
+            # Add "PRESS START" text centered using pixel font (shorter text, smaller font)
+            text_color = jnp.array([255, 255, 255], dtype=jnp.uint8)  # White
+            canvas = render_centered_text(canvas, "PRESS START", 100, text_color, font_size=2, screen_width=self.consts.screen_width)
+            return canvas
+        
+        def add_game_over_overlay(canvas):
+            # Add "GAME OVER" text centered using pixel font (smaller font to fit)
+            over_color = jnp.array([255, 0, 0], dtype=jnp.uint8)  # Red
+            canvas = render_centered_text(canvas, "GAME OVER", 80, over_color, font_size=2, screen_width=self.consts.screen_width)
+            return canvas
+        
+        # Apply overlay based on game phase
+        canvas = jax.lax.cond(
+            state.game_phase == 0,
+            lambda: add_start_overlay(canvas),
+            lambda: jax.lax.cond(
+                state.game_phase == 2,
+                lambda: add_game_over_overlay(canvas),
+                lambda: canvas  # No overlay during gameplay
+            )
+        )
+        
+        return canvas
+    
+    def _render_game(self, state: MsPacmanState) -> jnp.ndarray:
         cell = self.consts.cell_size
 
         pellet_tiles = (state.pellets == 1)[..., None]
@@ -1005,6 +1274,24 @@ class MsPacmanRenderer(JAXGameRenderer):
                 canvas,
                 (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
             )
+
+        # Draw lives display near score (top-left area)
+        def draw_life_icon(canvas, idx):
+            # Position lives icons at top-left, below score area
+            life_x = 10 + idx * 20
+            life_y = 30
+            # Draw small Pac-Man icon for each life (only if idx < remaining lives)
+            life_color = jnp.where(idx < state.lives, jnp.array(self.consts.pacman_color, dtype=jnp.uint8), jnp.array([0, 0, 0], dtype=jnp.uint8))
+            life_block = jnp.ones((8, 8, 3), dtype=jnp.uint8) * life_color
+            canvas = jax.lax.dynamic_update_slice(canvas, life_block, (life_y, life_x, 0))
+            return canvas, None
+
+        # Draw up to 3 life icons (fixed maximum for JAX compatibility)
+        canvas, _ = jax.lax.scan(
+            draw_life_icon,
+            canvas,
+            jnp.arange(3, dtype=jnp.int32),  # Fixed maximum of 3 lives
+        )
 
         return canvas
 
