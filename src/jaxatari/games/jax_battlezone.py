@@ -624,8 +624,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards: int = 1) -> Enemy:  # Enemy towards player with 1 and away with -1
-            k = (enemy.distance + towards * speed) / enemy.distance
+        def move_to_player(enemy: Enemy, towards: int = 1) -> Enemy:  # Enemy towards player with -1 and away with 1
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
             return enemy._replace(x=enemy.x +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
@@ -651,22 +650,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             #jax.debug.print("{}",tank.distance)
             def player_spotted(tank):
 
-                def in_range(tank):
-
-                    def towards_player(tank):
-                        #jax.debug.print("MOVE TO PLayer{}", tank.orientation_angle)
-                        return move_to_player(tank)
-
-                    def away_player(tank):
-                        # jax.debug.print("{}", tank.orientation_angle)
-                        return move_to_player(tank, -1)
-
-                    return jax.lax.cond(tank.distance <= 30.0, away_player, towards_player, tank)  # Enemy keeps 30 units distance to player
+                def too_close(tank):
+                    return move_to_player(tank, -1)  # Enemy keeps 30 units distance to player
                 
-                def out_range(tank):
+                def too_far(tank):
                     return move_to_player(tank, -1)
 
-                return jax.lax.cond(tank.distance <= 30.0, in_range, out_range, tank)
+                return jax.lax.cond(tank.distance <= 30.0, too_close, too_far, tank)
             
             def player_not_spotted(tank):
                 return enemy_turn(tank)
