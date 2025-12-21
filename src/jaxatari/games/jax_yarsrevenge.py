@@ -1405,6 +1405,31 @@ class JaxYarsRevenge(
             lambda: new_state,
         )
 
+        # Allow yar movement on qotile death animation, also energy missile handling
+        new_state = jax.lax.cond(
+            qotile_death,
+            lambda: new_state._replace(
+                **{
+                    k: v
+                    for k, v in self._yar_step(new_state, direction_flags)[0].items()
+                    if k != "energy_shield_state"
+                },
+                **{
+                    k: v
+                    for k, v in self._energy_missile_step(
+                        new_state,
+                        fire,
+                        new_state.energy_shield_state,
+                        False,
+                        False,
+                        False,
+                    )[0].items()
+                    if k != "energy_shield_state"
+                },
+            ),
+            lambda: new_state,
+        )
+
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1425,7 +1450,15 @@ class JaxYarsRevenge(
             YarsRevengeGameState.PLAYING,
             YarsRevengeGameState.SCOREBOARD,
         )
-        new_state = new_state._replace(game_state=new_game_state, game_state_timer=0)
+        new_state = new_state._replace(
+            game_state=new_game_state,
+            game_state_timer=0,
+            yar=state.yar._replace(
+                x=jnp.array(10).astype(jnp.float32),
+                y=jnp.array(105).astype(jnp.float32),
+                direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
+            ),
+        )
 
         return new_state
 
@@ -1881,7 +1914,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         begin = jnp.where(begin <= interval, begin, (interval * 2) - begin)
 
         start_indices = jnp.array([begin])
-        slice_sizes   = (self.consts.NEUTRAL_ZONE_SIZE[1],) 
+        slice_sizes = (self.consts.NEUTRAL_ZONE_SIZE[1],)
 
         neutral_zone_mask = self._construct_neutral_zone_array(
             jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
@@ -2133,6 +2166,23 @@ class YarsRevengeRenderer(JAXGameRenderer):
         return raster.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _render_qotile_death(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the relevant items into the raster on Qotile's death.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        # Render Yar
+        raster = self._render_yar((state, raster))
+
+        # Render energy missile
+        raster = self._render_energy_missile((state, raster))
+
+        return raster.astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: YarsRevengeState):
         """
         Render the complete frame by compositing all game elements onto a background raster.
@@ -2147,7 +2197,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 self._render_game_elements,
                 self._render_scoreboard,
                 self._render_yar_death,
-                self._render_game_elements,
+                self._render_qotile_death,
             ],
             operand=(state, raster),
         )
