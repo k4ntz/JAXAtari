@@ -22,6 +22,9 @@ class JourneyEscapeConstants(NamedTuple):
     screen_width: int = 160
     screen_height: int = 210
 
+    background_frame_switch: int = 4 # set to 0 for static background
+    background_frames_amount: int = 8 # defined order of 2*4 sprites
+
     player_width: int = 8
     player_height: int = 28
     start_player_x: int = 44  # Fixed x position
@@ -247,8 +250,8 @@ class JaxJourneyEscape(
         """Take a step in the game given an action"""
 
         # ---BACKGROUND ANIMATION---
-        new_bg_frames = (state.bg_frames + 1) % 16
-        new_bg_frames = jnp.where(new_bg_frames >= 16, 0, new_bg_frames)
+        cycle_length = self.consts.background_frame_switch * self.consts.background_frames_amount
+        new_bg_frames = (state.bg_frames + 1) % cycle_length
 
         # ---RAW PLAYER INPUT---
         # Compute vertical movement
@@ -978,9 +981,9 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # Render Background
-        frame_idx = state.bg_frames//2
+        frame_idx = state.bg_frames // self.consts.background_frame_switch
         bg_mask = self.SHAPE_MASKS["backgrounds"][frame_idx]
-        raster = self.jr.render_at(raster, 0, 20 , bg_mask)
+        raster = self.jr.render_at(raster, 0, 20, bg_mask)
 
         # Render obstacles
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
