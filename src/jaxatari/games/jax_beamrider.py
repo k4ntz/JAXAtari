@@ -68,7 +68,7 @@ class StandbyPhase(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    STARTING_SECTOR: int = 12
+    STARTING_SECTOR: int = 1
     WHITE_UFOS_PER_SECTOR: int = 3
 
     RENDER_SCALE_FACTOR: int = 4
@@ -2542,9 +2542,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         key_start, key_wave, key_interval, key_side = jax.random.split(key, 4)
 
         ms_stage = state.level.mothership_stage
+        ms_pos = state.level.mothership_position
+        is_ltr = (state.sector % 2) != 0
+        # Stop spawning if mothership surpasses 100 pixels (coming from left) or 60 pixels (coming from right)
+        ms_too_far = jnp.where(is_ltr, ms_pos > 100, ms_pos < 60)
+
         # Stop spawning if mothership is descending (3) or exploding (5)
         # This ensures they finish their tracing before the mothership disappears.
-        can_spawn_in_ms = (white_ufo_left == 0) & (ms_stage < 3)
+        can_spawn_in_ms = (white_ufo_left == 0) & (ms_stage < 3) & jnp.logical_not(ms_too_far)
 
         # Trigger waves of chasing meteoroids:
         # 1. Periodically when all UFOs are cleared (all sectors)
@@ -2578,6 +2583,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         should_cancel = jnp.logical_and(jnp.logical_not(is_sector_6_plus), white_ufo_left > 0)
         # Also stop spawning waves if it's too late in the Mothership phase
         should_cancel = jnp.logical_or(should_cancel, (white_ufo_left == 0) & (ms_stage >= 3))
+        should_cancel = jnp.logical_or(should_cancel, (white_ufo_left == 0) & ms_too_far)
         
         # Also reset wave_active when finished so it can repeat.
         wave_finished = wave_active & (remaining == 0) & jnp.all(jnp.logical_not(active))
