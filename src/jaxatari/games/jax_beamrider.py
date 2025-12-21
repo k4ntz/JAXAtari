@@ -180,7 +180,8 @@ class BeamriderConstants(NamedTuple):
     MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
     MOTHERSHIP_HEIGHT: int = 7
     MOTHERSHIP_EMERGE_Y: int = 44
-    REJUVENATOR_SPAWN_PROB: float = 1/3000
+
+    REJUVENATOR_SPAWN_PROB: float = 1/4000
     REJUVENATOR_STAGE_2_Y: float = 62.0
     REJUVENATOR_STAGE_3_Y: float = 93.0
     REJUVENATOR_STAGE_4_Y: float = 112.0
@@ -223,7 +224,7 @@ class BeamriderConstants(NamedTuple):
 
     # Coin constants
     COIN_MAX: int = 3
-    COIN_SPAWN_PROB: float = 1/300
+    COIN_SPAWN_PROB: float = 1/500
     COIN_SPAWN_Y: float = 55.0
     COIN_EXIT_Y: float = 95.0
     COIN_SPAWN_X_LEFT: float = 5.0
