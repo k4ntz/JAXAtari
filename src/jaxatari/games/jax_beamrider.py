@@ -1284,8 +1284,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
         sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
         
+        any_explosion_triggered = collision_results["any_explosion_triggered"]
         current_flash_timer = state.level.background_flash_timer
-        next_flash_timer = jnp.where(any_explosion_triggered, 17, jnp.maximum(current_flash_timer - 1, 0))
+        
+        # Mothership hit suppresses background animation; other explosions trigger flash.
+        flash_trigger = jnp.where(hit_mothership, 0, jnp.where(any_explosion_triggered, 17, jnp.maximum(current_flash_timer - 1, 0)))
+        next_flash_timer = flash_trigger
 
         white_ufo_vel = jnp.where(hit_mask_ufo[None, :], 0.0, white_ufo_vel_raw)
         white_ufo_time_on_lane = jnp.where(hit_mask_ufo, 0, white_ufo_time_on_lane_raw)
@@ -4030,6 +4034,8 @@ class BeamriderRenderer(JAXGameRenderer):
         flash_timer = state.level.background_flash_timer
         death_timer = state.level.death_timer
         standby_phase = state.level.standby_phase
+        mothership_stage = state.level.mothership_stage
+        mothership_timer = state.level.mothership_timer
         
         # Flash sequence (UFO destruction)
         is_yellow_flash = (flash_timer == 16) | (flash_timer == 15)
@@ -4048,6 +4054,7 @@ class BeamriderRenderer(JAXGameRenderer):
         is_lila_death = is_dying & (((death_idx >= 19) & (death_idx <= 22)) | ((death_idx >= 51) & (death_idx <= 54)))
         is_blood_orange_death = is_dying & (death_idx >= 27) & (death_idx <= 30)
         is_red_death = is_dying & (((death_idx >= 43) & (death_idx <= 46)) | ((death_idx >= 59) & (death_idx <= 62)))
+        is_mothership_flash = (mothership_stage == 5) & (mothership_timer < 2)
         
         def render_color(r, mask_name):
             mask = self.SHAPE_MASKS[mask_name]
@@ -4064,6 +4071,7 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = jax.lax.cond(is_white_death, lambda r: render_color(r, "white_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_lila_death, lambda r: render_color(r, "lila_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_blood_orange_death, lambda r: render_color(r, "blood_orange_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_mothership_flash, lambda r: render_color(r, "white_background"), lambda r: r, raster)
         
         return raster
 
