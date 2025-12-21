@@ -1,9 +1,0 @@
-=== Render Comparison Results ===
-ALE Game: BeamRider-v5
-JAXAtari Game: jax_beamrider
-Timestamp: 1763474091.018368
-
-✅ Shapes match!
-Mean Squared Error: 62.81
-Mean Absolute Error: 0.52
-Frames Identical: False
