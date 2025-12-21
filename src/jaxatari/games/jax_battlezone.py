@@ -98,11 +98,10 @@ class EnemyType(IntEnum):
 
 
 class BattlezoneConstants(NamedTuple):
+
+    # --- rendering: positions ---
     WIDTH: int = 160  # rgb_array size
     HEIGHT: int = 210
-    WORLD_SIZE_X: int = 256  # world size in x direction
-    WORLD_SIZE_Z: int = 256  # world size in z direction
-    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)  # (45, 129, 105) but we need to change pallette first
     WALL_TOP_Y: int = 0     # correct
     WALL_TOP_HEIGHT: int = 36   # correct
     WALL_BOTTOM_Y: int = 177    # correct
@@ -111,42 +110,45 @@ class BattlezoneConstants(NamedTuple):
     TANK_SPRITE_POS_Y: int = 140
     TARGET_INDICATOR_POS_X: int = 80
     TARGET_INDICATOR_POS_Y: int = 77
-    TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = (255, 255, 0)
-    TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = (0, 0, 0)
     CHAINS_POS_Y: int = 158
     CHAINS_L_POS_X: int = 19
     CHAINS_R_POS_X: int = 109
-    CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
-    CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
     MOUNTAINS_Y: int = 36
     GRASS_BACK_Y: int = 95
     HORIZON_Y: int = 92
     GRASS_FRONT_Y: int = 137
-    RADAR_ROTATION_SPEED: float = -0.05
     RADAR_CENTER_X: int = 80
     RADAR_CENTER_Y: int = 18
     RADAR_RADIUS: int = 10
-    RADAR_MAX_SCAN_RADIUS: int = 70
-    RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
-    RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
-    LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
     LIFE_POS_X: int = 64
     LIFE_POS_Y: int = 189
     LIFE_X_OFFSET: int = 8
     SCORE_POS_X: int = 89
     SCORE_POS_Y: int = 179
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1
+    ENEMY_POS_Y: int = 85
+
+    # --- rendering: colors ---
+    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)  # (45, 129, 105) but we need to change pallette first
+    TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = (255, 255, 0)
+    TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = (0, 0, 0)
+    CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
+    CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
+    RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
+    RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
+    LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
+
+    # --- world movement ---
+    WORLD_SIZE_X: int = 256  # world size in x direction
+    WORLD_SIZE_Z: int = 256  # world size in z direction
     PLAYER_ROTATION_SPEED: float = 2*jnp.pi/536
     PLAYER_SPEED: float = 0.25
     PROJECTILE_SPEED: float = 0.5
-    PROJECTILE_TTL: int = 110
-    ENEMY_POS_Y: int = 85
-    FIRE_CD: int = 114
-    HITBOX_SIZE: float = 6.0
-    DEATH_ANIM_LENGTH: int = 30
+    ENEMY_SPEED: jnp.array = jnp.array([0.25, 0.25, 1.0, 1.0]) #todo change
+    ENEMY_ROT_SPEED: jnp.array = jnp.array([2*jnp.pi/2048, 0.01, 0.01, 0.01]) #todo change
+
+    # --- game mechanics ---
+    HITBOX_SIZE: float = 6.0  # player
     ENEMY_HITBOX_SIZE: float = 4.0
-    ENEMY_SCORES: chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
-    ENEMY_DEATH_ANIM_LENGTH: int = 30
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
@@ -154,9 +156,19 @@ class BattlezoneConstants(NamedTuple):
         [0.6, 0.4],# 0.1, 0.0],   #7_000
         [0.5, 0.5]#, 0.2, 0.1]    #12_000
         ])
-    ENEMY_SPEED: jnp.array = jnp.array([0.25, 0.25, 1.0, 1.0]) #todo change
-    ENEMY_ROT_SPEED: jnp.array = jnp.array([2*jnp.pi/2048, 0.01, 0.01, 0.01]) #todo change
+    RADAR_MAX_SCAN_RADIUS: int = 70
+
+    # --- timing ---
+    FIRE_CD: int = 114  # player
+    PROJECTILE_TTL: int = 110
+    DEATH_ANIM_LENGTH: int = 30
+    ENEMY_DEATH_ANIM_LENGTH: int = 30
     ENEMY_SHOOT_CDS: jnp.array = jnp.array([400, 400, 400, 400]) #todo change
+
+    # --- misc ---
+    RADAR_ROTATION_SPEED: float = -0.05
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1
+    ENEMY_SCORES: chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
 
 
 class Projectile(NamedTuple):
@@ -240,10 +252,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE]
-        self.obs_size = 3*4+1+1  #?? TODO: change later from pong currently
+        self.obs_size = 3*4+1+1  #?? TODO: change later, from pong currently
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
+        
+        #-------------------parse action--------------------
         noop = (action == Action.NOOP)
         up = jnp.logical_or(action==Action.UP,action==Action.UPFIRE)
         down = jnp.logical_or(action==Action.DOWN,action==Action.DOWNFIRE)
@@ -257,6 +272,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                  action == Action.UPFIRE, action == Action.UPLEFTFIRE,
                                  action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
         direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
+
         #-------------------fire--------------
         will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
         def fire_projectile(state: BattlezoneState):
