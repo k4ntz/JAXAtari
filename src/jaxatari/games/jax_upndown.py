@@ -184,28 +184,18 @@ class UpNDownState(NamedTuple):
 
 
 
-
 class UpNDownObservation(NamedTuple):
-    """Complete observation for RL agents in Up N Down.
-    
-    Reuses existing game classes for consistency:
-    - player_car: Car with EntityPosition, speed, type, road info
-    - enemy_cars: EnemyCars pool with positions, speeds, types, active flags
-    - flags: Flag with y, road, segment, color, collected status
-    - collectibles: Collectible with positions, types, active status
-    - Additional game state: score, lives, jumping status, etc.
-    """
-    player_car: Car  # Reuse existing Car class
-    enemy_cars: EnemyCars  # Reuse existing EnemyCars class
-    flags: Flag  # Reuse existing Flag class
-    collectibles: Collectible  # Reuse existing Collectible class
-    flags_collected_mask: jnp.ndarray  # Shape (NUM_FLAGS,) - boolean mask
-    player_score: jnp.ndarray
-    lives: jnp.ndarray
-    is_jumping: jnp.ndarray  # Whether player is currently jumping
-    jump_cooldown: jnp.ndarray  # Frames remaining in jump
-    is_on_steep_road: jnp.ndarray  # Whether currently on steep section
-    round_started: jnp.ndarray  # Whether player has started moving
+    player_car: Car
+    enemy_cars: EnemyCars
+    flags: Flag
+    collectibles: Collectible
+    flags_collected_mask: chex.Array  # Shape (NUM_FLAGS,) - int32 (0 or 1)
+    player_score: chex.Array
+    lives: chex.Array
+    is_jumping: chex.Array
+    jump_cooldown: chex.Array
+    is_on_steep_road: chex.Array
+    round_started: chex.Array
 
 
 class UpNDownInfo(NamedTuple):
@@ -232,18 +222,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             Action.DOWNFIRE,
         ]
         # Calculate obs_size based on observation structure:
-        # Player car: 8 values (x, y, w, h, speed, type, road, direction_x)
-        # Enemy cars: MAX_ENEMY_CARS * 8 = 8 * 8 = 64 (x, y, w, h, speed, type, road, active per car)
+        # Player car: 10 values (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x)
+        # Enemy cars: MAX_ENEMY_CARS * 12 = 8 * 12 = 96 (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x, active, age)
         # Flags: NUM_FLAGS * 5 = 8 * 5 = 40 (y, road, segment, color, collected per flag)
-        # Collectibles: MAX_COLLECTIBLES * 5 = 1 * 5 = 5 (y, x, road, type, active per collectible)
+        # Collectibles: MAX_COLLECTIBLES * 6 = 1 * 6 = 6 (y, x, road, color_idx, type, active per collectible)
         # Flags collected mask: NUM_FLAGS = 8
         # Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6
-        # Total: 8 + 64 + 40 + 5 + 8 + 6 = 131
+        # Total: 10 + 96 + 40 + 6 + 8 + 6 = 166
         self.obs_size = (
-            8 +  # player car
-            self.consts.MAX_ENEMY_CARS * 8 +  # enemy cars
+            10 +  # player car
+            self.consts.MAX_ENEMY_CARS * 12 +  # enemy cars (all fields)
             self.consts.NUM_FLAGS * 5 +  # flags
-            self.consts.MAX_COLLECTIBLES * 5 +  # collectibles
+            self.consts.MAX_COLLECTIBLES * 6 +  # collectibles (all fields)
             self.consts.NUM_FLAGS +  # flags_collected_mask
             6  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started
         )
@@ -1679,7 +1669,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _get_observation(self, state: UpNDownState) -> UpNDownObservation:
         """Build complete observation for RL agents.
         
-        Reuses existing game classes directly from state for consistency.
+        Reuses existing game classes directly. Extra fields are filtered during flatten.
         """
         # Check if on steep road
         is_on_steep_road = self._is_steep_road_segment(
@@ -1693,7 +1683,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             enemy_cars=state.enemy_cars,
             flags=state.flags,
             collectibles=state.collectibles,
-            flags_collected_mask=state.flags_collected_mask,
+            flags_collected_mask=state.flags_collected_mask.astype(jnp.int32),
             player_score=jnp.int32(state.score),
             lives=jnp.int32(state.lives),
             is_jumping=jnp.int32(state.is_jumping),
@@ -1706,50 +1696,57 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def flatten_car(self, car: Car) -> jnp.ndarray:
         """Flatten a Car to a 1D array."""
         return jnp.concatenate([
-            jnp.array([car.position.x], dtype=jnp.float32),
-            jnp.array([car.position.y], dtype=jnp.float32),
-            jnp.array([car.position.width], dtype=jnp.float32),
-            jnp.array([car.position.height], dtype=jnp.float32),
-            jnp.array([car.speed], dtype=jnp.float32),
-            jnp.array([car.type], dtype=jnp.float32),
-            jnp.array([car.current_road], dtype=jnp.float32),
-            jnp.array([car.direction_x], dtype=jnp.float32),
+            jnp.array([car.position.x], dtype=jnp.int32),
+            jnp.array([car.position.y], dtype=jnp.int32),
+            jnp.array([car.position.width], dtype=jnp.int32),
+            jnp.array([car.position.height], dtype=jnp.int32),
+            jnp.array([car.speed], dtype=jnp.int32),
+            jnp.array([car.type], dtype=jnp.int32),
+            jnp.array([car.current_road], dtype=jnp.int32),
+            jnp.array([car.road_index_A], dtype=jnp.int32),
+            jnp.array([car.road_index_B], dtype=jnp.int32),
+            jnp.array([car.direction_x], dtype=jnp.int32),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
     def flatten_enemy_cars(self, enemy_cars: EnemyCars) -> jnp.ndarray:
-        """Flatten EnemyCars to a 1D array."""
+        """Flatten EnemyCars to a 1D array (all fields)."""
         return jnp.concatenate([
-            enemy_cars.position.x,
-            enemy_cars.position.y,
-            enemy_cars.position.width,
-            enemy_cars.position.height,
-            enemy_cars.speed.astype(jnp.float32),
-            enemy_cars.type.astype(jnp.float32),
-            enemy_cars.current_road.astype(jnp.float32),
-            enemy_cars.active.astype(jnp.float32),
+            enemy_cars.position.x.astype(jnp.int32),
+            enemy_cars.position.y.astype(jnp.int32),
+            enemy_cars.position.width.astype(jnp.int32),
+            enemy_cars.position.height.astype(jnp.int32),
+            enemy_cars.speed.astype(jnp.int32),
+            enemy_cars.type.astype(jnp.int32),
+            enemy_cars.current_road.astype(jnp.int32),
+            enemy_cars.road_index_A.astype(jnp.int32),
+            enemy_cars.road_index_B.astype(jnp.int32),
+            enemy_cars.direction_x.astype(jnp.int32),
+            enemy_cars.active.astype(jnp.int32),
+            enemy_cars.age.astype(jnp.int32),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
     def flatten_flags(self, flags: Flag) -> jnp.ndarray:
         """Flatten Flag to a 1D array."""
         return jnp.concatenate([
-            flags.y,
-            flags.road.astype(jnp.float32),
-            flags.road_segment.astype(jnp.float32),
-            flags.color_idx.astype(jnp.float32),
-            flags.collected.astype(jnp.float32),
+            flags.y.astype(jnp.int32),
+            flags.road.astype(jnp.int32),
+            flags.road_segment.astype(jnp.int32),
+            flags.color_idx.astype(jnp.int32),
+            flags.collected.astype(jnp.int32),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
     def flatten_collectibles(self, collectibles: Collectible) -> jnp.ndarray:
-        """Flatten Collectible to a 1D array."""
+        """Flatten Collectible to a 1D array (all fields)."""
         return jnp.concatenate([
-            collectibles.y,
-            collectibles.x,
-            collectibles.road.astype(jnp.float32),
-            collectibles.type_id.astype(jnp.float32),
-            collectibles.active.astype(jnp.float32),
+            collectibles.y.astype(jnp.int32),
+            collectibles.x.astype(jnp.int32),
+            collectibles.road.astype(jnp.int32),
+            collectibles.color_idx.astype(jnp.int32),
+            collectibles.type_id.astype(jnp.int32),
+            collectibles.active.astype(jnp.int32),
         ])
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1757,10 +1754,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         """Flatten the complete observation to a 1D array for RL.
         
         Order:
-        - Player car: 8 values (x, y, w, h, speed, type, road, direction_x)
-        - Enemy cars: MAX_ENEMY_CARS * 8 values (x, y, w, h, speed, type, road, active per car)
+        - Player car: 10 values (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x)
+        - Enemy cars: MAX_ENEMY_CARS * 12 values (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x, active, age)
         - Flags: NUM_FLAGS * 5 values (y, road, segment, color, collected per flag)
-        - Collectibles: MAX_COLLECTIBLES * 5 values (y, x, road, type, active per collectible)
+        - Collectibles: MAX_COLLECTIBLES * 6 values (y, x, road, color_idx, type, active per collectible)
         - Flags collected mask: NUM_FLAGS values
         - Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6 values
         """
@@ -1769,13 +1766,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             self.flatten_enemy_cars(obs.enemy_cars),
             self.flatten_flags(obs.flags),
             self.flatten_collectibles(obs.collectibles),
-            obs.flags_collected_mask.flatten().astype(jnp.float32),
-            jnp.array([obs.player_score], dtype=jnp.float32),
-            jnp.array([obs.lives], dtype=jnp.float32),
-            jnp.array([obs.is_jumping], dtype=jnp.float32),
-            jnp.array([obs.jump_cooldown], dtype=jnp.float32),
-            jnp.array([obs.is_on_steep_road], dtype=jnp.float32),
-            jnp.array([obs.round_started], dtype=jnp.float32),
+            obs.flags_collected_mask.flatten().astype(jnp.int32),
+            jnp.array([obs.player_score], dtype=jnp.int32),
+            jnp.array([obs.lives], dtype=jnp.int32),
+            jnp.array([obs.is_jumping], dtype=jnp.int32),
+            jnp.array([obs.jump_cooldown], dtype=jnp.int32),
+            jnp.array([obs.is_on_steep_road], dtype=jnp.int32),
+            jnp.array([obs.round_started], dtype=jnp.int32),
         ])
 
     def action_space(self) -> spaces.Discrete:
@@ -1800,10 +1797,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return spaces.Dict({
             "player_car": spaces.Dict({
                 "position": spaces.Dict({
-                    "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                    "y": spaces.Box(low=-2000, high=0, shape=(), dtype=jnp.float32),
-                    "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                    "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                    "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                    "y": spaces.Box(low=-2000, high=0, shape=(), dtype=jnp.int32),
+                    "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                    "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 }),
                 "speed": spaces.Box(low=-6, high=6, shape=(), dtype=jnp.int32),
                 "type": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
@@ -1814,31 +1811,36 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             }),
             "enemy_cars": spaces.Dict({
                 "position": spaces.Dict({
-                    "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
-                    "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
-                    "width": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
-                    "height": spaces.Box(low=0, high=210, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.float32),
+                    "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                    "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                    "width": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                    "height": spaces.Box(low=0, high=210, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 }),
                 "speed": spaces.Box(low=-6, high=6, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 "type": spaces.Box(low=0, high=3, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 "current_road": spaces.Box(low=0, high=2, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.bool_),
+                "road_index_A": spaces.Box(low=0, high=30, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "road_index_B": spaces.Box(low=0, high=30, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "direction_x": spaces.Box(low=-1, high=1, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "age": spaces.Box(low=0, high=10000, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
             }),
             "flags": spaces.Dict({
-                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.NUM_FLAGS,), dtype=jnp.float32),
+                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
                 "road": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
                 "road_segment": spaces.Box(low=0, high=30, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
                 "color_idx": spaces.Box(low=0, high=7, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
-                "collected": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.bool_),
+                "collected": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
             }),
             "collectibles": spaces.Dict({
-                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.float32),
-                "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.float32),
+                "y": spaces.Box(low=-2000, high=0, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=160, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
                 "road": spaces.Box(low=0, high=1, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
+                "color_idx": spaces.Box(low=0, high=7, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
                 "type_id": spaces.Box(low=0, high=3, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.bool_),
+                "active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_COLLECTIBLES,), dtype=jnp.int32),
             }),
-            "flags_collected_mask": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.bool_),
+            "flags_collected_mask": spaces.Box(low=0, high=1, shape=(self.consts.NUM_FLAGS,), dtype=jnp.int32),
             "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "is_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
