@@ -3,7 +3,6 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-from dataclasses import dataclass
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -13,17 +12,34 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 class JourneyEscapeConstants(NamedTuple):
+
+    starting_score: int = 50000
+
+    # frame countdown for timer
+    countdown_frame: int = 50  # countdown decreases by one second every 50 frames
+    start_countdown: int = 59  # for a 59-second countdown
+
     screen_width: int = 160
     screen_height: int = 210
+
     player_width: int = 8
     player_height: int = 28
     start_player_x: int = 44  # Fixed x position
-    start_player_y: int = 162  # Fixed y position
-    player_speed: int = 2 # ToDo: calibrate
+    start_player_y: int = 160  # Fixed y position
+    player_speed: int = 1
+    player_frame_switch: int = 16 # should match ALE
 
-    # frame countdown for timer
-    countdown_frame: int = 50 # countdown decreases by one second every 50 frames
-    start_countdown: int = 59 # for a 59 second countdown
+    # border of the valid game space
+    top_border: int = 33
+    bottom_border: int = screen_height - player_height - 47
+    left_border: int = 8
+    right_border: int = screen_width - 8
+
+    # Line where the obstacles disappear behind
+    bottom_blue_area: int = screen_height - 24
+
+    # player position rules
+    min_player_position_y: int = top_border + (screen_height // 4)
 
     # Standard sizes
     obstacle_width: int = 8
@@ -33,33 +49,15 @@ class JourneyEscapeConstants(NamedTuple):
     big_obstacle_width: int = 16
     big_obstacle_height: int = 20
 
+    obstacle_frame_switch: int = 17  # should match ALE
+    obstacle_speed_px_per_frame: int = 1
+    row_spawn_period_frames: int = 50  # spawn every N frames # ToDo: calibrate
+    hit_cooldown_frames: int = 17
+
     # Define the Width and Height for every ID (0 to 9)
     # 0: Fence, 1: Robot, 2: Heart, 3: Manager, 4: Light, 5: BigRobot, 6: BigHeart, 7: BigManager, 8: BigLight, 9: BigFireFace
     TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16, 16, 17)
     TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15, 15, 15)
-
-    # Line where the obstacles disappear behind
-    bottom_blue_area: int = screen_height - 24
-
-    lightbulb_blink_period: int = 15
-
-    obstacle_speed_px_per_frame: int = 1  # ToDo: calibrate
-    row_spawn_period_frames: int = 25  # spawn every N frames (tweakable)
-
-    # border of the valid game space
-    top_border: int = 33
-    bottom_border: int = screen_height - player_height - 47
-
-    left_border: int = 8
-    right_border: int = screen_width - 8
-
-    starting_score: int = 50000
-
-    hit_cooldown_frames: int = 8
-
-    # player position rules
-    min_player_position_y: int = top_border + (screen_height // 4)
-
     
     MAX_OBS = 64
 
@@ -75,28 +73,66 @@ class JourneyEscapeConstants(NamedTuple):
         8: Big Lightbulb
         9: Big Fire Face
     """
+
+    # Blinking Effect
+    lightbulb_on_duration: int = 17
+    lightbulb_off_duration: int = 49
+
+    # Invincible Effect
+    INV_DURATION_ROBOT: int = 6 * countdown_frame # 6 seconds @ 50fps
+    INV_DURATION_FIREFACE: int = 100000 # (longer than the max possible game time of ~60s)
+
+    # True if the object stops movement / drags player
+    IS_SOLID: chex.Array = jnp.array([
+        True,           # 0: Fence
+        False,          # 1: Blue Robot
+        True,           # 2: Heart
+        True,           # 3: Manager
+        True,           # 4: Lightbulb
+        False,          # 5: Big Blue Robot
+        True,           # 6: Big Heart
+        True,           # 7: Big Manager
+        True,           # 8: Big Lightbulb
+        False,          # 9: Big Fire Face
+    ])
+
+    # Points deducted on contact
+    SCORE_PENALTIES: chex.Array = jnp.array([
+        0,              # 0: Fence
+        0,              # 1: Blue Robot
+        -300,           # 2: Heart
+        -2000,          # 3: Manager
+        -600,           # 4: Lightbulb
+        0,              # 5: Big Blue Robot
+        -300,           # 6: Big Heart
+        -2000,          # 7: Big Manager
+        -600,           # 8: Big Lightbulb
+        9900,           # 9: Big Fire Face
+    ])
+    # ---------------------CHANGE END-----------------------
+
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
-        (0, 1, 0),  # Fence
-        (1, 2, 20),  # Blue Robots
-        (5, 1, 0),  # Big Robot (1)
+        (0, 1, 0),      # Fence
+        (1, 2, 20),     # Blue Robots
+        (5, 1, 0),      # Big Robot (1)
 
-        (2, 1, 0),  # Heart (1)
-        (2, 2, 55),  # Hearts (2, Wide spacing)
-        (2, 3, 10),  # Hearts (3, Tight spacing)
-        (2, 3, 45),  # Hearts (3, Wide spacing)
-        (6, 1, 0),  # Big Heart (1)
+        (2, 1, 0),      # Heart (1)
+        (2, 2, 55),     # Hearts (2, Wide spacing)
+        (2, 3, 10),     # Hearts (3, Tight spacing)
+        (2, 3, 45),     # Hearts (3, Wide spacing)
+        (6, 1, 0),      # Big Heart (1)
 
-        (3, 1, 0),  # Manager (1)
-        (3, 3, 15),  # Manager (3, Tight spacing)
-        (3, 2, 55),  # Manager (2, Wide spacing)
-        (7, 1, 0),  # Big Manager (1)
+        (3, 1, 0),      # Manager (1)
+        (3, 3, 15),     # Manager (3, Tight spacing)
+        (3, 2, 55),     # Manager (2, Wide spacing)
+        (7, 1, 0),      # Big Manager (1)
 
-        (4, 3, 20),  # Lightbulbs (3, Tight spacing)
-        (4, 2, 70),  # Lightbulbs (2, Very wide spacing)
-        (8, 1, 0),  # Big Lightbulb (1)
+        (4, 3, 20),     # Lightbulbs (3, Tight spacing)
+        (4, 2, 70),     # Lightbulbs (2, Very wide spacing)
+        (8, 1, 0),      # Big Lightbulb (1)
 
-        (9, 1, 0),  # Big Fire Face (1)
+        (9, 1, 0),      # Big Fire Face (1)
     )
     # SPAWN PROBABILITIES
     spawn_weights: chex.Array = jnp.array([
@@ -119,7 +155,7 @@ class JourneyEscapeConstants(NamedTuple):
         0.05263158,     # 13: (4, 2, 70)  Lightbulbs (2)
         0.05263158,     # 14: (8, 1, 0)   Big Lightbulb
 
-        0.000001,       # 15: (9, 1, 0) Big Fire Face
+        0.0001,       # 15: (9, 1, 0) Big Fire Face
     ])
 
 
@@ -137,6 +173,7 @@ class JourneyEscapeState(NamedTuple):
     row_timer: chex.Array  # int32
     obstacles: chex.Array  # (MAX_OBS, 5) -> x, y, w, h, type_idx | [pool]
     obstacle_frames: chex.Array
+    invincibility_timer: chex.Array
     spawn_count: chex.Array
     rng_key: chex.Array  # PRNGKey
 
@@ -181,9 +218,6 @@ class JaxJourneyEscape(
         empty_boxes = jnp.zeros((self.consts.MAX_OBS, 5), dtype=jnp.int32)
         rng_key = jax.random.PRNGKey(0)
 
-        # Initialize spawn_count to 2 (Since we already placed 2 rows)
-        spawn_count = jnp.array(2, dtype=jnp.int32)
-
         state = JourneyEscapeState(
             player_y=jnp.array(player_y, dtype=jnp.int32),
             player_x=jnp.array(player_x, dtype=jnp.int32),
@@ -195,7 +229,8 @@ class JaxJourneyEscape(
             row_timer=jnp.array(0, dtype=jnp.int32),
             obstacles=empty_boxes,
             obstacle_frames=jnp.array(0, dtype=jnp.int32),
-            spawn_count=spawn_count,
+            invincibility_timer=jnp.array(0, dtype=jnp.int32),
+            spawn_count=jnp.array(0, dtype=jnp.int32),
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
             countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32)
@@ -245,12 +280,11 @@ class JaxJourneyEscape(
         )
 
         # advance walking animation every frame, independent of input
-        new_walking_frames = (state.walking_frames + 1) % 8
-        new_walking_frames = jnp.where(new_walking_frames >= 8, 0, new_walking_frames)
+        new_walking_frames = (state.walking_frames + 1) % self.consts.player_frame_switch
 
         # Effective player movement boundaries
         player_min_y = self.consts.min_player_position_y
-        player_max_y = self.consts.bottom_border + self.consts.player_height - 1
+        player_max_y = self.consts.bottom_border + self.consts.player_height - 3
         player_min_x = self.consts.left_border
         player_max_x = self.consts.right_border - self.consts.player_width - 1
 
@@ -260,7 +294,7 @@ class JaxJourneyEscape(
 
         #---OBSTACLES---
 
-        # move & cull obstacles (no spawns yet) ---
+        # move & cull
 
         boxes = state.obstacles
         active = boxes[:, 3] > 0  # Active mask: entries with height > 0 are “alive”
@@ -290,22 +324,13 @@ class JaxJourneyEscape(
             boxes_in, rng_in, sp_count = carry
             rng_in, r1, r2 = jax.random.split(rng_in, 3)
 
-            # Rule: If spawn_count == 2 (meaning 3rd row), Force Index 1 (Robots).
-            # Else: Random choice based on weights.
-
-            is_robot_turn = (sp_count == 2)
-
-            # 1. Random Selection
+            # Random Selection based on weights.
             logits = jnp.log(self.consts.spawn_weights)
             random_idx = jax.random.categorical(r1, logits)
 
-            # 2. Final Selection
-            # The 'presets' array index to use
-            group_array_idx = jax.lax.select(is_robot_turn, 1, random_idx)
-
             # Get Data
             presets = jnp.array(self.consts.obstacle_groups, dtype=jnp.int32)
-            group_data = presets[group_array_idx]
+            group_data = presets[random_idx]
 
             type_idx = group_data[0]  # Sprite ID
             amount = group_data[1]
@@ -320,14 +345,11 @@ class JaxJourneyEscape(
             this_h = height_table[type_idx]
 
             # Calculate total width for spacing logic
-            # Note: This assumes all items in a group are same size (which they are)
             total_w = (this_w + spacing) * (amount - 1) + this_w
 
-            # Choose spawn_x so the whole row is inside the screen horizontally.
-            # We assume presets ALWAYS allow at least one valid position.
+            # Choose spawn_x so the whole row is inside the screen horizontally
             min_x = self.consts.left_border
             max_x = self.consts.right_border - total_w
-            # span must be positive; we don't treat "doesn't fit" as an option.
             span = (max_x - min_x) + 1
             spawn_x = min_x + jax.random.randint(r2, (), 0, span)
 
@@ -337,8 +359,7 @@ class JaxJourneyEscape(
             enough_space = available >= amount
 
             def do_spawn(_):
-                # Fixed loop bound to keep JAX happy (your presets have up to 3)
-                MAX_GROUP = 3  # This might change later, when > 3 obstacles should be in one group
+                MAX_GROUP = 3  # no more than 3 obstacles should be in one group
 
                 # First MAX_GROUP free indices (static shape)
                 free_idx = jnp.nonzero(inactive, size=MAX_GROUP, fill_value=0)[0]
@@ -378,180 +399,291 @@ class JaxJourneyEscape(
             operand=(boxes, state.rng_key, state.spawn_count)
         )
 
-        new_obstacle_frames = (state.obstacle_frames + 1) % 8
+        new_obstacle_frames = (state.obstacle_frames + 1) % self.consts.obstacle_frame_switch
 
         # --- COLLISIONS---
 
         # We treat any obstacle with h > 0 as active.
         # boxes has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
 
-        def check_collision(box):
-            # box: [x, y, w, h, type_idx]
-            box_x = box[0]
-            box_y = box[1]
-            box_w = box[2]
-            box_h = box[3]
-            box_type = box[4]
+        def get_collision_data(box):
+            b_x, b_y, b_w, b_h, b_type = box
 
-            # Ignore inactive entries (h == 0)
-            active = box_h > 0
+            is_active = b_h > 0
 
-            # 2. Blink Logic (Ghost State)
-            is_lightbulb = (box_type == 4) | (box_type == 7)
-            # Phase 1 = Invisible/Non-collidable
-            phase = (state.time // self.consts.lightbulb_blink_period) % 2
-            is_ghost = is_lightbulb & (phase == 1)
+            # Blink Logic (Ghost State for Lightbulbs)
+            # IDs: 4 = Lightbulb, 8 = Big Lightbulb
+            is_lightbulb = (b_type == 4) | (b_type == 8)
+            # Calculate cycle position
+            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_pos = state.time % cycle_len
 
-            # It is only "dangerous" if it exists AND is not a ghost
-            is_dangerous = active & jnp.logical_not(is_ghost)
+            # It is a ghost (invisible/pass-through) if we are past the ON duration
+            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
 
-            # --- Player AABB  --- [axis-aligned bounding box]
+            # AABB Collision
+            p_x, p_y = pre_x, pre_y
+            p_w, p_h = self.consts.player_width, self.consts.player_height
 
-            ch_x0 = pre_x
-            ch_x1 = pre_x + self.consts.player_width
-            ch_y0 = pre_y - self.consts.player_height
-            ch_y1 = pre_y
+            overlap_x = (p_x < b_x + b_w) & (p_x + p_w > b_x)
+            overlap_y = (p_y < b_y + b_h) & (p_y + p_h > b_y)
 
-            # --- Obstacle AABB ---
-            ob_x0 = box_x
-            ob_x1 = box_x + box_w
-            ob_y0 = box_y - box_h
-            ob_y1 = box_y
+            hit = is_active & jnp.logical_not(is_ghost) & overlap_x & overlap_y
 
-            overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
-            overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
-            hit = jnp.logical_and(overlap_x, overlap_y)
+            # Relative X Position (Center to Center)
+            # Positive = Player is to the Right of Obstacle
+            # Negative = Player is to the Left of Obstacle
+            p_center_x = p_x + (p_w // 2)
+            b_center_x = b_x + (b_w // 2)
+            rel_x = (p_center_x - b_center_x).astype(jnp.int32)
 
-            # Only count if this obstacle is active
-            return jnp.logical_and(is_dangerous, hit)
+            return hit, b_type, rel_x
 
-        # Vectorized over all entries in the obstacle pool
-        collisions = jax.vmap(check_collision)(boxes)
-        any_collision = jnp.any(collisions)
+        # Vectorize over all obstacles
+        # collision_mask: bool[MAX_OBS]
+        # type_mask: int32[MAX_OBS]
+        # relative_x: int32[MAX_OBS]
+        collision_mask, type_mask, relative_x = jax.vmap(get_collision_data)(boxes)
 
-        # --- SCORE + COOLDOWN ---
-        # - collision detected every frame (any_collision)
-        # - score decremented only when NOT in cooldown
-        # - after a "scoring hit", start the cooldown
+        # --- Consumables, Physics & Scoring ---
 
-        prev_cd = state.hit_cooldown
-        cooling_down = prev_cd > 0
+        # Distinguish Collision Types
+        is_solid_type = self.consts.IS_SOLID[type_mask]
+        solid_collisions = collision_mask & is_solid_type
+        consumable_collisions = collision_mask & jnp.logical_not(is_solid_type)
 
-        # Cooldown ticks down every frame
-        cd_after_tick = jnp.maximum(prev_cd - 1, 0)
+        def check_anchor(box):
+            """
+            Checks if the player is *currently* physically inside a solid obstacle.
 
-        # Apply hit only if we're currently NOT cooling down
-        apply_hit = jnp.logical_and(any_collision, jnp.logical_not(cooling_down))
-        hit_penalty = jnp.where(apply_hit, 1, 0).astype(jnp.int32)
-        new_score = (state.score - hit_penalty).astype(jnp.int32)
-        new_score = jnp.maximum(new_score, 0)  # don't go below 0
+            Standard `solid_collisions` checks the PROPOSED position (`pre_y`).
+            If the player is at the bottom edge of an obstacle and presses DOWN,
+            `pre_y` might project a position just *outside* the hitbox.
+            Without this check, the game would think the path is clear, release the
+            'sticky' drag, and allow the player to strafe away (not possible in ALE).
 
-        # If we scored a hit this frame, reset cooldown to N frames.
-        # Otherwise, keep ticking it down.
+            This function ensures that if the player's CURRENT coordinates overlap,
+            the drag physics remain active.
+            """
+            b_x, b_y, b_w, b_h, b_type = box
+            is_active = b_h > 0
+            is_lightbulb = (b_type == 4) | (b_type == 8)
+
+            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_pos = state.time % cycle_len
+            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
+            is_solid = self.consts.IS_SOLID[b_type]
+
+            overlap_x = (state.player_x < b_x + b_w) & (state.player_x + self.consts.player_width > b_x)
+            overlap_y = (state.player_y < b_y + b_h) & (state.player_y + self.consts.player_height > b_y)
+            return is_active & is_solid & jnp.logical_not(is_ghost) & overlap_x & overlap_y
+
+        anchor_collisions = jax.vmap(check_anchor)(boxes)
+        is_stuck = jnp.any(solid_collisions | anchor_collisions)
+
+        # Handle Consumables (whole row disapears)
+
+        # Identify the Y-coordinates of consumed items
+        hit_y_values = jnp.where(consumable_collisions, boxes[:, 1], -999)
+
+        # Does box[i].y match ANY of the hit_y_values?
+        # We compare every box Y against every Hit Y.
+        # Matrix: (MAX_OBS, MAX_OBS) -> [i, j] is True if Box i has same Y as Hit Box j
+        all_y = boxes[:, 1]
+        match_matrix = (all_y[:, None] == hit_y_values[None, :])
+
+        # If a box matches ANY hit Y, it is part of the group.
+        # We also ensure we only cull active items that are essentially "linked".
+        is_part_of_group = jnp.any(match_matrix, axis=1)
+
+        # Set height to 0 if it is part of a consumed group.
+        current_heights = boxes[:, 3]
+        new_heights_after_eat = jnp.where(is_part_of_group, 0, current_heights)
+        boxes = boxes.at[:, 3].set(new_heights_after_eat)
+
+        # Invincibility Logic (Variable Duration)
+
+        # Identify Specific Power-up Hits
+        hit_fireface = jnp.any(consumable_collisions & (type_mask == 9))
+        hit_robot = jnp.any(consumable_collisions & ((type_mask == 1) | (type_mask == 5)))
+
+        # Determine Duration to Set
+        added_duration = jnp.where(
+            hit_fireface,
+            self.consts.INV_DURATION_FIREFACE,
+            jnp.where(hit_robot, self.consts.INV_DURATION_ROBOT, 0)
+        )
+
+        # Update Invincible Timer
+        new_inv_timer = jnp.maximum(
+            jnp.maximum(state.invincibility_timer - 1, 0),
+            added_duration
+        )
+
+        is_invincible = new_inv_timer > 0
+
+        # Override Physics (The "Ghost" Effect)
+        # If invincible, we are effectively never stuck.
+        is_stuck_final = is_stuck & jnp.logical_not(is_invincible)
+
+        # Scoring Logic
+
+        # - Solid/Damage
+        cooling_down = state.hit_cooldown > 0
+        solid_score_effect = jnp.min(
+            jnp.where(solid_collisions | anchor_collisions, self.consts.SCORE_PENALTIES[type_mask], 0)
+        ).astype(jnp.int32)
+
+        apply_damage = (solid_score_effect < 0) & jnp.logical_not(cooling_down) & jnp.logical_not(is_invincible)
+
+        # - Consumable/Reward
+        consumable_score_effect = jnp.sum(
+            jnp.where(consumable_collisions, self.consts.SCORE_PENALTIES[type_mask], 0)
+        ).astype(jnp.int32)
+
+        # Update Score
+        damage_delta = jnp.where(apply_damage, solid_score_effect, 0)
+        total_delta = damage_delta + consumable_score_effect
+        new_score = jnp.maximum(state.score + total_delta, 0)
+
+        # Update Cooldown
         new_hit_cooldown = jnp.where(
-            apply_hit,
-            jnp.asarray(self.consts.hit_cooldown_frames, dtype=jnp.int32),
-            cd_after_tick,
+            apply_damage,
+            self.consts.hit_cooldown_frames,
+            jnp.maximum(state.hit_cooldown - 1, 0)
         )
 
-        # ---MOVEMENT WITH OBSTACLE PHYSICS---
+        # [Debugging]
 
-        def move_no_collision(_):
-            # Just use the raw positions from input
-            return pre_x, pre_y
-
-        def move_collision(_):
-            # When colliding:
-            # - Can't move up; instead obstacles drag you down by their speed.
-            # - At the very bottom, you get pushed to the right instead.
-            # - Horizontal movement is
-            #       - allowed but slower (half speed)
-            #       - not allowed if you would get behind an obstacle
-
-            # Already at the bottom?
-            at_bottom = (pre_y >= player_max_y)
-
-            # Vertical:
-            #  - if not at bottom: move down with the obstacle speed
-            #  - if at bottom: stay at bottom vertically
-            moved_down_y = jnp.clip(
-                state.player_y + self.consts.obstacle_speed_px_per_frame,
-                player_min_y,
-                player_max_y,
-            )
-            new_y0 = jax.lax.cond(
-                at_bottom,
-                lambda _: pre_y,
-                lambda _: moved_down_y,
-                operand=None,
-            )
-
-            # Horizontal:
-            # Slow sideways movement while colliding
-            slow_dx = dx_int // 2
-
-            # Stay in screen
-            cand_x_side = jnp.clip(state.player_x + slow_dx, player_min_x, player_max_x)
-
-            # [avoid moving behind the obstacle]
-            # Check if cand_x_side would break the collision -> only execute it in this case
-            def check_collision_at(box):
-                box_x = box[0]
-                box_y = box[1]
-                box_w = box[2]
-                box_h = box[3]
-                box_type = box[4]
-
-                active_box = box_h > 0
-
-                # 2. Blink Logic (Ghost State) - SAME AS ABOVE
-                is_lightbulb = (box_type == 4) | (box_type == 7)
-                phase = (state.time // self.consts.lightbulb_blink_period) % 2
-                is_ghost = is_lightbulb & (phase == 1)
-
-                is_solid = active_box & jnp.logical_not(is_ghost)
-
-                ch_x0 = cand_x_side
-                ch_x1 = cand_x_side + self.consts.player_width
-                ch_y0 = new_y0 - self.consts.player_height
-                ch_y1 = new_y0
-
-                ob_x0 = box_x
-                ob_x1 = box_x + box_w
-                ob_y0 = box_y
-                ob_y1 = box_y - box_h
-
-                overlap_x = jnp.logical_and(ch_x0 < ob_x1, ch_x1 > ob_x0)
-                overlap_y = jnp.logical_and(ch_y0 < ob_y1, ch_y1 > ob_y0)
-                hit = jnp.logical_and(overlap_x, overlap_y)
-                return jnp.logical_and(is_solid, hit)
-
-            collisions_side = jax.vmap(check_collision_at)(boxes)
-            still_collide_side = jnp.any(collisions_side)
-
-            allowed_x_side = jax.lax.cond(
-                still_collide_side,
-                lambda _: state.player_x,  # block pushing further into the obstacle
-                lambda _: cand_x_side,  # allow movement if it resolves collision
-                operand=None,
-            )
-
-            # At bottom + collision: push right to make space
-            push_dx = jnp.where(at_bottom, 2, 0)
-            # Stay in screen
-            new_x0 = jnp.clip(allowed_x_side + push_dx, player_min_x, player_max_x)
-
-            return new_x0, new_y0
-
-        new_x, new_y = jax.lax.cond(
-            any_collision,
-            move_collision,
-            move_no_collision,
-            operand=None,
+        jax.lax.cond(
+            apply_damage,
+            lambda _: jax.debug.print("Hit! Effect: {}, New Score: {}", total_delta, new_score),
+            lambda _: None,
+            operand=None
         )
+
+        # --- Movement Physics ("Sticky" Logic) ---
+
+        # Reduce left and right movement speed on collision
+        move_tick = (state.time % 4 == 0).astype(jnp.int32)
+        reduced_dx = dx_int * move_tick
+
+        drag_speed = self.consts.obstacle_speed_px_per_frame
+
+        # Y-Axis
+        new_y_raw = jnp.where(
+            is_stuck_final,
+            state.player_y + drag_speed,  # Strict Drag
+            pre_y  # Normal Movement
+        ).astype(jnp.int32)
+
+        # Clip to screen
+        new_y = jnp.clip(new_y_raw, player_min_y, player_max_y)
+
+        # X-Axis
+        # Determine Blocking
+        # We use the union of collision masks to ensure blocking works for both cases
+        combined_collisions = solid_collisions | anchor_collisions
+
+        block_right = jnp.any(combined_collisions & (relative_x < 0))
+        block_left = jnp.any(combined_collisions & (relative_x > 0))
+
+        # Determine Speed
+        effective_dx = jnp.where(is_stuck_final, reduced_dx, dx_int)
+
+        # Apply Blocking
+        can_move_x_raw = jnp.logical_not(
+            (block_right & (effective_dx > 0)) |
+            (block_left & (effective_dx < 0))
+        )
+
+        can_move_x = can_move_x_raw | is_invincible
+
+        final_dx = jnp.where(can_move_x, effective_dx, 0)
+
+        # Bottom Push Out Edge Case
+        at_bottom_edge = (state.player_y >= player_max_y - 1)
+
+        def check_static_overlap(box):
+            """
+            Checks overlap using the player's CURRENT position.
+
+            The main collision logic is predictive (uses the proposed position after input).
+            This check catches cases where an obstacle has already moved into the player,
+            so we don't incorrectly release drag or allow sideways escape.
+            """
+            b_x, b_y, b_w, b_h, b_type = box
+
+            p_x, p_y = state.player_x, state.player_y
+            p_w, p_h = self.consts.player_width, self.consts.player_height
+
+            overlap_x = (p_x < b_x + b_w) & (p_x + p_w > b_x)
+            overlap_y = (p_y < b_y + b_h) & (p_y + p_h > b_y)
+
+            is_active = b_h > 0
+            is_solid = self.consts.IS_SOLID[b_type]
+
+            return is_active & is_solid & overlap_x & overlap_y
+
+        # Compute static mask
+        static_collisions = jax.vmap(check_static_overlap)(boxes)
+        is_crushed = jnp.any(static_collisions)
+
+        # Determine Push Direction with Bias (25% Left / 75% Right) (as it is in ALE)
+
+        # Get the width of the obstacle we are currently crushed by
+        # boxes[:, 2] is width. We sum the widths of colliding boxes (usually just 1).
+        crushed_width = jnp.sum(jnp.where(static_collisions, boxes[:, 2], 0))
+
+        # Calculate the split threshold
+        # Normal center split is at 0.
+        # Since 0 is 50%, 25% corresponds to -Width/4 relative to center.
+        split_threshold = -(crushed_width // 4).astype(jnp.int32)
+
+        # Get relative position
+        crushed_rel_x = jnp.sum(jnp.where(static_collisions, relative_x, 0))
+
+        # Determine Direction
+        # If we are to the right of the 25% mark -> Push Right (+1)
+        # Otherwise -> Push Left (-1)
+        push_dir = jnp.where(crushed_rel_x >= split_threshold, 1, -1)
+
+        # Trigger Force Push ONLY if we are physically inside AND at the bottom
+        should_eject = is_crushed & at_bottom_edge
+
+        force_push_val = jnp.where(should_eject, push_dir, 0)
+
+        # Apply: If ejecting, override normal movement input
+        dx_applied = jnp.where(should_eject, force_push_val, final_dx)
+
+        new_x = jnp.clip(state.player_x + dx_applied, player_min_x, player_max_x).astype(jnp.int32)
 
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
+
+        # [Debugging]
+        # Print when we hit specific Powerups
+        jax.lax.cond(
+            hit_fireface,
+            lambda _: jax.debug.print(">> HIT FIREFACE! (Infinite Invincibility) Score: {}", consumable_score_effect),
+            lambda _: None,
+            operand=None
+        )
+
+        jax.lax.cond(
+            hit_robot,
+            lambda _: jax.debug.print(">> HIT ROBOT! (6s Invincibility)"),
+            lambda _: None,
+            operand=None
+        )
+
+        # Print Timer status periodically (e.g., every 60 frames) if active
+        jax.lax.cond(
+            (new_inv_timer > 0) & (new_time % 60 == 0),
+            lambda _: jax.debug.print("... Invincibility Active. Timer: {}", new_inv_timer),
+            lambda _: None,
+            operand=None
+        )
 
         # Update countdown
         update_countdown = (new_time % self.consts.countdown_frame == 0)
@@ -575,6 +707,7 @@ class JaxJourneyEscape(
             row_timer=new_row_timer.astype(jnp.int32),
             obstacles=boxes.astype(jnp.int32),  # updated pool
             obstacle_frames=new_obstacle_frames.astype(jnp.int32),
+            invincibility_timer=new_inv_timer,
             spawn_count=new_spawn_count,
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
@@ -585,7 +718,6 @@ class JaxJourneyEscape(
         obs = self._get_observation(new_state)
         info = self._get_info(new_state)
 
-        
         def after_timer_end(_):
             obs2, st2 = self.reset()
             return obs2, st2, jnp.array(0, dtype=jnp.int32), jnp.array(False, dtype=jnp.bool_), JourneyEscapeInfo(time=jnp.array(0, dtype=jnp.int32))
@@ -696,15 +828,14 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
-            #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # Load and setup assets using the new pattern
+        # Load and setup assets
         asset_config = self._get_asset_config()
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
 
-        # --- 1. PROCEDURAL ASSET GENERATION ---
+        # --- ASSET GENERATION ---
 
         # Colors (R, G, B)
         COLOR_BLACK = (0, 0, 0)
@@ -740,7 +871,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         asset_config.append({'name': 'header', 'type': 'procedural', 'data': header_sprite})
         asset_config.append({'name': 'footer', 'type': 'procedural', 'data': footer_sprite})
 
-        # --- 2. LOAD ASSETS ---
+        # --- LOAD ASSETS ---
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -748,31 +879,6 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-
-       # --- SPRITE SCALING (Small -> Big) ---
-
-        def scale_sprite(mask):
-            """Scales a sprite 2x using nearest neighbor (repeat)"""
-            return mask.repeat(2, axis=0).repeat(2, axis=1)
-
-        """ not needed as big versions are preloaded
-        new_masks = {}
-
-        for name, mask in self.SHAPE_MASKS.items():
-            if "obstacle_" in name:
-                # 1. Store Original (Small)
-                new_masks[name] = mask
-
-                # 2. Create Big Version
-                if len(mask.shape) == 3:  # Animation (Frames, H, W)
-                    new_masks[f"{name}_big"] = jax.vmap(scale_sprite)(mask)
-                else:  # Single Image (H, W)
-                    new_masks[f"{name}_big"] = scale_sprite(mask)
-            else:
-                new_masks[name] = mask
-
-        self.SHAPE_MASKS = new_masks
-        """
 
     def _create_solid_block(self, width: int, height: int, color: Tuple[int, int, int]) -> jnp.ndarray:
         """Creates a solid color sprite with full alpha."""
@@ -840,14 +946,6 @@ class JourneyEscapeRenderer(JAXGameRenderer):
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Select player sprite based on walking frames and direction
-        use_idle = state.walking_frames < 4
-        sprite_index = state.walking_direction * 2
-        player_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index + 1)
-
-        player_mask = self.SHAPE_MASKS["player"][player_frame_index]
-        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
-
         # Render obstacles
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
         # We consider entries with h > 0 as "active".
@@ -911,19 +1009,20 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             box_h = box[3]
             obs_type = box[4]
 
-            # 1. Check physical existence
             does_exist = box_h > 0
 
-            # 2. Blink Logic
             is_lightbulb = (obs_type == 4) | (obs_type == 8)
-            phase = (state.time // self.consts.lightbulb_blink_period) % 2
-            is_ghost = is_lightbulb & (phase == 1)
 
-            # 3. Final Decision: Draw if existing AND not a ghost
+            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_pos = state.time % cycle_len
+
+            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
+
+            # Final Decision: Draw if existing AND not a ghost
             should_draw = does_exist & jnp.logical_not(is_ghost)
 
             x, y = box[0], box[1]
-            obs_frame_idx = jnp.where(state.obstacle_frames >= 4, 0, 1)
+            obs_frame_idx = jnp.where(state.obstacle_frames >= (self.consts.obstacle_frame_switch // 2), 0, 1)
 
             def render_op(curr_raster):
                 return jax.lax.cond(
@@ -945,19 +1044,27 @@ class JourneyEscapeRenderer(JAXGameRenderer):
 
             return jax.lax.cond(should_draw, render_op, lambda _r: _r, r)
 
-        # Iterate all possible slots in a JAX-friendly loop
+        # Iterate all possible slots
         raster = jax.lax.fori_loop(0, obs_boxes.shape[0], body, raster)
 
-        # 3. Render Header (Top Blue)
+        # Select player sprite based on walking frames and direction
+        use_idle = state.walking_frames < (self.consts.player_frame_switch // 2)
+        sprite_index = state.walking_direction * 2
+        player_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index + 1)
+
+        player_mask = self.SHAPE_MASKS["player"][player_frame_index]
+        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
+
+        # Render Header (Top Blue)
         header_mask = self.SHAPE_MASKS["header"]
         raster = self.jr.render_at(raster, 0, 0, header_mask)
 
-        # 4. Render Footer (Bottom Blue)
+        # Render Footer (Bottom Blue)
         footer_y = self.consts.bottom_blue_area
         footer_mask = self.SHAPE_MASKS["footer"]
         raster = self.jr.render_at(raster, 0, footer_y, footer_mask)
 
-        # 5. Render Score (On top of Blue Header)
+        # Render Score (On top of Blue Header)
         score_digits = self.jr.int_to_digits(state.score, max_digits=5)
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
         num_to_render = (
@@ -975,7 +1082,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                                                 score_digit_masks, start_index,num_to_render, spacing=8, 
                                                 max_digits_to_render=5)
 
-        # 6. Render Countdown (On top of Blue Header)
+        # Render Countdown (On top of Blue Header)
         countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
         countdown_digit_masks = self.SHAPE_MASKS["timer_digits"]
         num_to_render = 2
