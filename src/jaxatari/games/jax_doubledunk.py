@@ -1669,22 +1669,42 @@ class DunkRenderer(JAXGameRenderer):
             final_image
         )
 
+        # Blinking logic for penalties
+        # We use the timer to toggle visibility: visible if (timer // 8) % 2 == 0
+        
+        is_travel_visible = (state.game_mode == GameMode.TRAVEL_PENALTY) & ((state.timers.travel // 8) % 2 == 0)
         final_image = jax.lax.cond(
-            state.game_mode == GameMode.TRAVEL_PENALTY,
+            is_travel_visible,
             lambda x: apply_penalty_overlay(x, 'travel'),
             lambda x: x, 
             final_image
         )
 
+        is_oob_visible = (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY) & ((state.timers.out_of_bounds // 8) % 2 == 0)
         final_image = jax.lax.cond(
-            state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY,
+            is_oob_visible,
             lambda x: apply_penalty_overlay(x, 'out_of_bounds'),
             lambda x: x, 
             final_image
         )
 
+        # Clearance Logic:
+        # 1. Static if P1 has ball and needs clearance (warning)
+        # 2. Blinking if Penalty triggered
+        
+        ball_holder = state.ball.holder
+        p1_needs_clearance = (
+            ((ball_holder == PlayerID.PLAYER1_INSIDE) & state.player1_inside.clearance_needed) |
+            ((ball_holder == PlayerID.PLAYER1_OUTSIDE) & state.player1_outside.clearance_needed)
+        )
+        
+        is_clearance_static = p1_needs_clearance & (state.game_mode != GameMode.CLEARANCE_PENALTY)
+        is_clearance_blinking = (state.game_mode == GameMode.CLEARANCE_PENALTY) & ((state.timers.clearance // 8) % 2 == 0)
+        
+        is_clearance_visible = is_clearance_static | is_clearance_blinking
+
         return jax.lax.cond(
-            state.game_mode == GameMode.CLEARANCE_PENALTY,
+            is_clearance_visible,
             lambda x: apply_penalty_overlay(x, 'clearance'),
             lambda x: x, 
             final_image
