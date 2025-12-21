@@ -180,7 +180,7 @@ class BeamriderConstants(NamedTuple):
     MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
     MOTHERSHIP_HEIGHT: int = 7
     MOTHERSHIP_EMERGE_Y: int = 44
-    REJUVENATOR_SPAWN_PROB: float = 1/4500
+    REJUVENATOR_SPAWN_PROB: float = 1/3000
     REJUVENATOR_STAGE_2_Y: float = 62.0
     REJUVENATOR_STAGE_3_Y: float = 93.0
     REJUVENATOR_STAGE_4_Y: float = 112.0
@@ -1283,6 +1283,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
         sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
+        clear_entities = jnp.logical_or(is_dying_sequence, hit_mothership)
         
         any_explosion_triggered = collision_results["any_explosion_triggered"]
         current_flash_timer = state.level.background_flash_timer
@@ -1349,51 +1350,75 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         coin_spawn_count = jnp.where(sector_advanced, 0, coin_spawn_count)
 
         ufo_offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=white_ufo_pos.dtype).reshape(2, 1), (1, 3))
-        white_ufo_pos = jnp.where(is_dying_sequence, ufo_offscreen, white_ufo_pos)
-        enemy_shot_pos = jnp.where(is_dying_sequence, enemy_shot_offscreen, enemy_shot_pos)
-        chasing_meteoroid_pos = jnp.where(is_dying_sequence, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
-        chasing_meteoroid_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_active)
-        chasing_meteoroid_vel_y = jnp.where(is_dying_sequence, 0.0, chasing_meteoroid_vel_y)
-        chasing_meteoroid_phase = jnp.where(is_dying_sequence, 0, chasing_meteoroid_phase)
-        chasing_meteoroid_frame = jnp.where(is_dying_sequence, 0, chasing_meteoroid_frame)
-        chasing_meteoroid_lane = jnp.where(is_dying_sequence, 0, chasing_meteoroid_lane)
-        chasing_meteoroid_side = jnp.where(is_dying_sequence, 1, chasing_meteoroid_side)
-        chasing_meteoroid_spawn_timer = jnp.where(is_dying_sequence, 0, chasing_meteoroid_spawn_timer)
-        chasing_meteoroid_remaining = jnp.where(is_dying_sequence, 0, chasing_meteoroid_remaining)
-        chasing_meteoroid_wave_active = jnp.where(is_dying_sequence, False, chasing_meteoroid_wave_active)
+        white_ufo_pos = jnp.where(clear_entities, ufo_offscreen, white_ufo_pos)
+        enemy_shot_pos = jnp.where(clear_entities, enemy_shot_offscreen, enemy_shot_pos)
+        enemy_shot_timer = jnp.where(hit_mothership, 0, enemy_shot_timer)
+        enemy_shot_lane = jnp.where(hit_mothership, 0, enemy_shot_lane)
+        enemy_shot_explosion_frame = jnp.where(hit_mothership, jnp.zeros_like(enemy_shot_explosion_frame), enemy_shot_explosion_frame)
+        enemy_shot_explosion_pos = jnp.where(hit_mothership, enemy_shot_offscreen, enemy_shot_explosion_pos)
+        chasing_meteoroid_pos = jnp.where(clear_entities, chasing_meteoroid_offscreen, chasing_meteoroid_pos)
+        chasing_meteoroid_active = jnp.where(clear_entities, False, chasing_meteoroid_active)
+        chasing_meteoroid_vel_y = jnp.where(clear_entities, 0.0, chasing_meteoroid_vel_y)
+        chasing_meteoroid_phase = jnp.where(clear_entities, 0, chasing_meteoroid_phase)
+        chasing_meteoroid_frame = jnp.where(clear_entities, 0, chasing_meteoroid_frame)
+        chasing_meteoroid_lane = jnp.where(clear_entities, 0, chasing_meteoroid_lane)
+        chasing_meteoroid_side = jnp.where(clear_entities, 1, chasing_meteoroid_side)
+        chasing_meteoroid_spawn_timer = jnp.where(clear_entities, 0, chasing_meteoroid_spawn_timer)
+        chasing_meteoroid_remaining = jnp.where(clear_entities, 0, chasing_meteoroid_remaining)
+        chasing_meteoroid_wave_active = jnp.where(clear_entities, False, chasing_meteoroid_wave_active)
+        chasing_meteoroid_explosion_frame = jnp.where(
+            hit_mothership, jnp.zeros_like(chasing_meteoroid_explosion_frame), chasing_meteoroid_explosion_frame
+        )
+        chasing_meteoroid_explosion_pos = jnp.where(hit_mothership, chasing_meteoroid_offscreen, chasing_meteoroid_explosion_pos)
         
-        rejuv_pos = jnp.where(is_dying_sequence, jnp.array(self.consts.ENEMY_OFFSCREEN_POS), rejuv_pos)
-        rejuv_active = jnp.where(is_dying_sequence, False, rejuv_active)
-        rejuv_dead = jnp.where(is_dying_sequence, False, rejuv_dead)
-        rejuv_frame = jnp.where(is_dying_sequence, 0, rejuv_frame)
-        rejuv_lane = jnp.where(is_dying_sequence, 0, rejuv_lane)
+        rejuv_offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=rejuv_pos.dtype)
+        rejuv_pos = jnp.where(clear_entities, rejuv_offscreen, rejuv_pos)
+        rejuv_active = jnp.where(clear_entities, False, rejuv_active)
+        rejuv_dead = jnp.where(clear_entities, False, rejuv_dead)
+        rejuv_frame = jnp.where(clear_entities, 0, rejuv_frame)
+        rejuv_lane = jnp.where(clear_entities, 0, rejuv_lane)
+        rejuv_explosion_frame = jnp.where(hit_mothership, jnp.zeros_like(rejuv_explosion_frame), rejuv_explosion_frame)
+        rejuv_explosion_pos = jnp.where(hit_mothership, rejuv_offscreen, rejuv_explosion_pos)
         
-        falling_rock_pos = jnp.where(is_dying_sequence, falling_rock_offscreen, falling_rock_pos)
-        falling_rock_active = jnp.where(is_dying_sequence, False, falling_rock_active)
-        falling_rock_lane = jnp.where(is_dying_sequence, 0, falling_rock_lane)
-        falling_rock_vel_y = jnp.where(is_dying_sequence, 0.0, falling_rock_vel_y)
+        falling_rock_pos = jnp.where(clear_entities, falling_rock_offscreen, falling_rock_pos)
+        falling_rock_active = jnp.where(clear_entities, False, falling_rock_active)
+        falling_rock_lane = jnp.where(clear_entities, 0, falling_rock_lane)
+        falling_rock_vel_y = jnp.where(clear_entities, 0.0, falling_rock_vel_y)
+        falling_rock_explosion_frame = jnp.where(
+            hit_mothership, jnp.zeros_like(falling_rock_explosion_frame), falling_rock_explosion_frame
+        )
+        falling_rock_explosion_pos = jnp.where(hit_mothership, falling_rock_offscreen, falling_rock_explosion_pos)
 
-        lane_blocker_pos = jnp.where(is_dying_sequence, lane_blocker_offscreen, lane_blocker_pos)
-        lane_blocker_active = jnp.where(is_dying_sequence, False, lane_blocker_active)
-        lane_blocker_lane = jnp.where(is_dying_sequence, 0, lane_blocker_lane)
-        lane_blocker_vel_y = jnp.where(is_dying_sequence, 0.0, lane_blocker_vel_y)
-        lane_blocker_phase = jnp.where(is_dying_sequence, 0, lane_blocker_phase)
-        lane_blocker_timer = jnp.where(is_dying_sequence, 0, lane_blocker_timer)
+        lane_blocker_pos = jnp.where(clear_entities, lane_blocker_offscreen, lane_blocker_pos)
+        lane_blocker_active = jnp.where(clear_entities, False, lane_blocker_active)
+        lane_blocker_lane = jnp.where(clear_entities, 0, lane_blocker_lane)
+        lane_blocker_vel_y = jnp.where(clear_entities, 0.0, lane_blocker_vel_y)
+        lane_blocker_phase = jnp.where(clear_entities, 0, lane_blocker_phase)
+        lane_blocker_timer = jnp.where(clear_entities, 0, lane_blocker_timer)
+        lane_blocker_explosion_frame = jnp.where(
+            hit_mothership, jnp.zeros_like(lane_blocker_explosion_frame), lane_blocker_explosion_frame
+        )
+        lane_blocker_explosion_pos = jnp.where(hit_mothership, lane_blocker_offscreen, lane_blocker_explosion_pos)
 
-        kamikaze_pos = jnp.where(is_dying_sequence, jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1), kamikaze_pos)
-        kamikaze_active = jnp.where(is_dying_sequence, jnp.array([False]), kamikaze_active)
-        kamikaze_lane = jnp.where(is_dying_sequence, 0, kamikaze_lane)
-        kamikaze_vel_y = jnp.where(is_dying_sequence, 0.0, kamikaze_vel_y)
-        kamikaze_tracking = jnp.where(is_dying_sequence, jnp.array([False]), kamikaze_tracking)
-        kamikaze_spawn_timer = jnp.where(is_dying_sequence, 0, kamikaze_spawn_timer)
+        kamikaze_offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=kamikaze_pos.dtype).reshape(2, 1)
+        kamikaze_pos = jnp.where(clear_entities, kamikaze_offscreen, kamikaze_pos)
+        kamikaze_active = jnp.where(clear_entities, jnp.array([False]), kamikaze_active)
+        kamikaze_lane = jnp.where(clear_entities, 0, kamikaze_lane)
+        kamikaze_vel_y = jnp.where(clear_entities, 0.0, kamikaze_vel_y)
+        kamikaze_tracking = jnp.where(clear_entities, jnp.array([False]), kamikaze_tracking)
+        kamikaze_spawn_timer = jnp.where(clear_entities, 0, kamikaze_spawn_timer)
+        kamikaze_explosion_frame = jnp.where(hit_mothership, jnp.zeros_like(kamikaze_explosion_frame), kamikaze_explosion_frame)
+        kamikaze_explosion_pos = jnp.where(hit_mothership, kamikaze_offscreen, kamikaze_explosion_pos)
 
-        coin_pos = jnp.where(is_dying_sequence, coin_offscreen, coin_pos)
-        coin_active = jnp.where(is_dying_sequence, False, coin_active)
-        coin_timer = jnp.where(is_dying_sequence, 0, coin_timer)
-        coin_side = jnp.where(is_dying_sequence, 0, coin_side)
-        coin_explosion_frame = jnp.where(is_dying_sequence, jnp.zeros_like(coin_explosion_frame), coin_explosion_frame)
-        coin_explosion_pos = jnp.where(is_dying_sequence, coin_offscreen, coin_explosion_pos)
-        coin_spawn_count = jnp.where(is_dying_sequence, 0, coin_spawn_count)
+        coin_pos = jnp.where(clear_entities, coin_offscreen, coin_pos)
+        coin_active = jnp.where(clear_entities, False, coin_active)
+        coin_timer = jnp.where(clear_entities, 0, coin_timer)
+        coin_side = jnp.where(clear_entities, 0, coin_side)
+        coin_explosion_frame = jnp.where(clear_entities, jnp.zeros_like(coin_explosion_frame), coin_explosion_frame)
+        coin_explosion_pos = jnp.where(clear_entities, coin_offscreen, coin_explosion_pos)
+        coin_spawn_count = jnp.where(clear_entities, 0, coin_spawn_count)
+        ufo_explosion_frame = jnp.where(hit_mothership, jnp.zeros_like(ufo_explosion_frame), ufo_explosion_frame)
+        ufo_explosion_pos = jnp.where(hit_mothership, ufo_offscreen, ufo_explosion_pos)
 
         mothership_position = jnp.where(is_dying_sequence, self.consts.MOTHERSHIP_OFFSCREEN_POS, mothership_position)
         mothership_timer = jnp.where(is_dying_sequence, 0, mothership_timer)
@@ -1401,8 +1426,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         vel_x = jnp.where(is_dying_sequence, 0.0, vel_x)
         player_shot_pos = jnp.where(is_dying_sequence, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_pos)
         player_shot_frame = jnp.where(is_dying_sequence, jnp.array(-1, dtype=player_shot_frame.dtype), player_shot_frame)
-        bouncer_pos = jnp.where(is_dying_sequence, jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=bouncer_pos.dtype), bouncer_pos)
-        bouncer_active = jnp.where(is_dying_sequence, False, bouncer_active)
+        bouncer_offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=bouncer_pos.dtype)
+        bouncer_pos = jnp.where(clear_entities, bouncer_offscreen, bouncer_pos)
+        bouncer_active = jnp.where(clear_entities, False, bouncer_active)
+        bouncer_explosion_frame = jnp.where(hit_mothership, jnp.zeros_like(bouncer_explosion_frame), bouncer_explosion_frame)
+        bouncer_explosion_pos = jnp.where(hit_mothership, bouncer_offscreen, bouncer_explosion_pos)
 
         new_level_state = LevelState(
             player_pos=player_x, player_vel=vel_x, white_ufo_left=white_ufo_left, mothership_position=mothership_position,
