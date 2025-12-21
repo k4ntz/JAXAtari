@@ -298,7 +298,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 )
             )
 
-        def dont_fire(state:BattlezoneState):
+        def dont_fire(state: BattlezoneState):
             return state
 
         new_state = jax.lax.cond(will_fire, fire_projectile, dont_fire, state)
