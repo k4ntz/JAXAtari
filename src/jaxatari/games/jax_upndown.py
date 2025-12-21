@@ -16,23 +16,13 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 class UpNDownConstants(NamedTuple):
     FRAME_SKIP: int = 4  # Used by AtariWrapper
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
-<<<<<<< HEAD
-    ACTION_REPEAT_PROBS: float = 0.25
-    MAX_SPEED: int = 4
-    INITIAL_LIVES: int = 3
-    RESPAWN_Y: int = 0
-    RESPAWN_X: int = 30
-    RESPAWN_DELAY_FRAMES: int = 60
-    WATER_DEATH_PENALTY: int = 0
-    JUMP_FRAMES: int = 10
-    ALL_FLAGS_BONUS: int = 1000
-    LANDING_ZONE: int = 15
-    FIRST_ROAD_LENGTH: int = 4
-    SECOND_ROAD_LENGTH: int = 4
-=======
     MAX_SPEED: int = 6
     INITIAL_LIVES: int = 5
     JUMP_ARC_HEIGHT: float = 18.0
+    RESPAWN_DELAY_FRAMES: int = 60
+    RESPAWN_Y: int = 0
+    RESPAWN_X: int = 30
+    ALL_FLAGS_BONUS: int = 1000
     # Enemy spawning and movement
     MAX_ENEMY_CARS: int = 8
     ENEMY_SPAWN_INTERVAL: int = 80
@@ -62,7 +52,6 @@ class UpNDownConstants(NamedTuple):
     PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
     TRACK_LENGTH: int = 1036
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
     FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]) 
     TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035])
     SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115]) 
@@ -159,7 +148,6 @@ class EnemyCars(NamedTuple):
 
 class UpNDownState(NamedTuple):
     score: chex.Array
-    lives: chex.Array
     difficulty: chex.Array
     jump_cooldown: chex.Array
     post_jump_cooldown: chex.Array
@@ -884,15 +872,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-<<<<<<< HEAD
-        lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
-        is_dead=jnp.array(False),
-        respawn_timer=jnp.array(0, dtype=jnp.int32),
-
-
-
-=======
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
         player_speed = state.player_car.speed
 
         player_speed = jax.lax.cond(
@@ -1066,27 +1045,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             post_jump_cooldown=post_jump_cooldown,
             is_jumping=is_jumping,
             is_on_road=is_on_road,
-<<<<<<< HEAD
-            player_car=Car(
-                position=EntityPosition(
-                    x=player_x,
-                    y=new_player_y,
-                    width=state.player_car.position.width,
-                    height=state.player_car.position.height,
-                ),
-                speed=player_speed,
-                direction_x=car_direction_x,
-                current_road=current_road,
-                road_index_A=road_index_A,
-                road_index_B=road_index_B,
-                type=state.player_car.type,
-            ),
-            lives=state.lives,
-            is_dead=state.is_dead,
-            respawn_timer=state.respawn_timer,
-=======
             player_car=updated_player_car,
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
             step_counter=state.step_counter + 1,
             round_started=round_started_now,
             movement_steps=jax.lax.cond(
@@ -1120,20 +1079,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         return state._replace(
             score=state.score + flag_score,
-<<<<<<< HEAD
-            difficulty=state.difficulty,
-            jump_cooldown=state.jump_cooldown,
-            is_jumping=state.is_jumping,
-            is_on_road=state.is_on_road,
-            player_car=state.player_car,
-            lives=state.lives,
-            is_dead=state.is_dead,
-            respawn_timer=state.respawn_timer,
-            step_counter=state.step_counter,
-            round_started=state.round_started,
-            movement_steps=state.movement_steps,
-=======
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
             flags=new_flags,
             flags_collected_mask=new_flags_collected_mask,
         )
@@ -1162,22 +1107,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         return state._replace(
             score=state.score + collectible_score,
-<<<<<<< HEAD
-            difficulty=state.difficulty,
-            jump_cooldown=state.jump_cooldown,
-            is_jumping=state.is_jumping,
-            is_on_road=state.is_on_road,
-            player_car=state.player_car,
-            lives=state.lives,
-            is_dead=state.is_dead,
-            respawn_timer=state.respawn_timer,
-            step_counter=state.step_counter,
-            round_started=state.round_started,
-            movement_steps=state.movement_steps,
-            flags=state.flags,
-            flags_collected_mask=state.flags_collected_mask,
-=======
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
             collectibles=updated_collectibles,
             collectible_spawn_timer=new_collectible_timer,
         )
@@ -1418,6 +1347,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return UpNDownState(
             score=state.score,
             lives=new_lives,
+            is_dead=jnp.array(False),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
             difficulty=state.difficulty,
             jump_cooldown=jnp.array(0, dtype=jnp.int32),
             post_jump_cooldown=jnp.array(0, dtype=jnp.int32),
@@ -1535,28 +1466,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
-<<<<<<< HEAD
-        return UpNDownState(
-            score=state.score + bonus,
-            difficulty=state.difficulty,
-            jump_cooldown=state.jump_cooldown,
-            is_jumping=state.is_jumping,
-            is_on_road=state.is_on_road,
-            player_car=state.player_car,
-            lives=state.lives,
-            is_dead=state.is_dead,
-            respawn_timer=state.respawn_timer,
-            step_counter=state.step_counter,
-            round_started=state.round_started,
-            movement_steps=state.movement_steps,
-            flags=state.flags,
-            flags_collected_mask=state.flags_collected_mask,
-            collectibles=state.collectibles,
-            collectible_spawn_timer=state.collectible_spawn_timer,
-        )
-=======
         return state._replace(score=state.score + bonus)
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
 
 
     def reset(self, key=None) -> Tuple[UpNDownObservation, UpNDownState]:
@@ -1592,55 +1502,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         
         # Initialize collectibles as all inactive (will spawn dynamically with mixed types)
-<<<<<<< HEAD
-        collectibles = Collectible(
-            y=jnp.zeros(self.consts.MAX_COLLECTIBLES),
-            x=jnp.zeros(self.consts.MAX_COLLECTIBLES),
-            road=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
-            color_idx=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
-            type_id=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
-            active=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.bool_),
-        )
-        player_car = Car(
-        position=EntityPosition(
-            x=jnp.array(30, dtype=jnp.int32),
-            y=jnp.array(0, dtype=jnp.int32),
-            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
-        ),
-        speed=jnp.array(0, dtype=jnp.int32),
-        direction_x=jnp.array(0, dtype=jnp.int32),
-        current_road=jnp.array(0, dtype=jnp.int32),
-        road_index_A=jnp.array(0, dtype=jnp.int32),
-        road_index_B=jnp.array(0, dtype=jnp.int32),
-        type=jnp.array(0, dtype=jnp.int32),
-    )
-        state = UpNDownState(
-        score=jnp.array(0, dtype=jnp.int32),
-        difficulty=jnp.array(self.consts.DIFFICULTIES[0], dtype=jnp.int32),
-        jump_cooldown=jnp.array(0, dtype=jnp.int32),
-        is_jumping=jnp.array(False),
-        is_on_road=jnp.array(True),
-
-        player_car=player_car,
-
-        step_counter=jnp.array(0, dtype=jnp.int32),
-        round_started=jnp.array(False),
-        movement_steps=jnp.array(0, dtype=jnp.int32),
-
-        flags=flags,
-        flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
-        collectibles=collectibles,
-        collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
-
-        # -------- NEW REQUIRED FIELDS --------
-        lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
-        is_dead=jnp.array(False),
-        respawn_timer=jnp.array(0, dtype=jnp.int32),
-    )
-
-        
-=======
         collectibles = self._initialize_collectibles()
 
         # Seed initial visible enemies spaced around the player
@@ -1650,6 +1511,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = UpNDownState(
             score=0,
             lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
+            is_dead=jnp.array(False),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
             difficulty=self.consts.DIFFICULTIES[0],
             jump_cooldown=0,
             post_jump_cooldown=0,
@@ -1681,7 +1544,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             enemy_cars=enemy_cars,
             enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL, dtype=jnp.int32),
         )
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
@@ -1695,13 +1557,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = self._flag_step_main(state)
         state = self._completion_bonus_step(state)
         state = self._collectible_step_main(state)
-<<<<<<< HEAD
-        
-
-=======
         state = self._enemy_step_main(state)
         state = self._enemy_collision_step_main(state)
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -1772,16 +1629,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: UpNDownState) -> bool:
-<<<<<<< HEAD
-        return jnp.logical_or(
-            state.lives <= 0,
-            jnp.all(state.flags_collected_mask),
-)
-
-        
-=======
         return state.lives <= 0
->>>>>>> f9c9eca688b16434b077c0cf4a47f1861134d3b5
 
 class UpNDownRenderer(JAXGameRenderer):
     def __init__(self, consts: UpNDownConstants = None):
@@ -2181,6 +2029,7 @@ class UpNDownRenderer(JAXGameRenderer):
             colored_mask = jnp.where(
                 (base_mask != self.jr.TRANSPARENT_ID) & (base_mask != 0),
                 color_id,
+
                 base_mask,
             )
             raster = jax.lax.cond(
