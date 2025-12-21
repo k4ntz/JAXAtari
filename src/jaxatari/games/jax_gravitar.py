@@ -65,6 +65,11 @@ SHIP_RADIUS = jnp.float32(2.0)
 TRACTOR_BEAM_RANGE = jnp.float32(15.0)  # Range for tractor beam to pick up fuel tanks
 SAUCER_INIT_HP = jnp.int32(1)
 
+# Solar system completion bonus rewards (for destroying reactor OR clearing all planets)
+SOLAR_SYSTEM_BONUS_FUEL = 7000.0
+SOLAR_SYSTEM_BONUS_LIVES = 2
+SOLAR_SYSTEM_BONUS_SCORE = 4000.0
+
 # SAUCER_SCALE              = 2.2
 # ENEMY_ORANGE_SCALE = 2.5
 # ENEMY_GREEN_SCALE = 2.5
@@ -359,6 +364,7 @@ class EnvState(NamedTuple):
 
     reactor_timer: jnp.ndarray 
     reactor_activated: jnp.ndarray 
+    exit_allowed: jnp.ndarray  # bool, whether ship can exit through top of level
 
 # ========== Init Function ==========
 
@@ -627,7 +633,8 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         ufo_bullets=create_empty_bullets_16(),
         level_offset=jnp.array([0, 0], dtype=jnp.float32),
         reactor_destroyed=jnp.array(False),
-        planets_cleared_mask=jnp.zeros(7, dtype=bool), 
+        planets_cleared_mask=jnp.zeros(7, dtype=bool),
+        exit_allowed=jnp.array(False),
     )
 
 
@@ -981,7 +988,8 @@ def ship_step(state: ShipState,
               window_size: tuple[int, int],
               hud_height: int,
               fuel: jnp.ndarray,
-              terrain_bank_idx: jnp.ndarray = jnp.int32(0)) -> ShipState:
+              terrain_bank_idx: jnp.ndarray = jnp.int32(0),
+              allow_exit_top: jnp.ndarray = jnp.bool_(False)) -> ShipState:
     # --- Track thrusting state for rendering ---
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])  # UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
@@ -1113,7 +1121,8 @@ def ship_step(state: ShipState,
     hit_left = next_x < ship_half_size
     hit_right = next_x > window_width - ship_half_size
 
-    hit_top = next_y < hud_height + ship_half_size
+    # Top boundary: only enforce if exit is not allowed
+    hit_top = (next_y < hud_height + ship_half_size) & (~allow_exit_top)
     hit_bottom = next_y > window_height - ship_half_size
 
     # c. Based on the prediction, calculate the velocity for the *next* frame
@@ -1122,7 +1131,9 @@ def ship_step(state: ShipState,
 
     # d. Force the next frame's position to be within boundaries using clip
     final_x = jnp.clip(next_x, ship_half_size, window_width - ship_half_size)
-    final_y = jnp.clip(next_y, hud_height + ship_half_size, window_height - ship_half_size)
+    # Top boundary: only clip if exit is not allowed
+    min_y = jnp.where(allow_exit_top, jnp.float32(-100.0), hud_height + ship_half_size)
+    final_y = jnp.clip(next_y, min_y, window_height - ship_half_size)
 
     # e. Normalize the angle (remains unchanged)
     normalized_angle = (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
@@ -1638,6 +1649,11 @@ def _step_level_core(env_state: EnvState, action: int):
     new_reactor_timer = jnp.where(is_in_reactor, timer_after_tick, env_state.reactor_timer)
 
     timer_ran_out = is_in_reactor & (new_reactor_timer <= 0)
+    
+    # Use exit_allowed from previous frame to determine if ship can exit through top
+    # (This was set based on the previous frame's enemy status)
+    allow_exit_top = state_after_spawn.exit_allowed
+    
     # --- 2. State Update (Movement & Player Firing) ---
     was_crashing = state_after_spawn.crash_timer > 0
     ship_state_before_move = state_after_spawn.state._replace(
@@ -1646,7 +1662,7 @@ def _step_level_core(env_state: EnvState, action: int):
     )
     actual_action = jnp.where(was_crashing, NOOP, action)
 
-    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx)
+    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx, allow_exit_top)
     can_fire_player = jnp.isin(action, jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])) & (
                 state_after_spawn.cooldown == 0) & (_bullets_alive_count(state_after_spawn.bullets) < 2)
 
@@ -1908,8 +1924,10 @@ def _step_level_core(env_state: EnvState, action: int):
     
     # e) The final Reset signal
     all_enemies_gone = jnp.all(enemies.w == 0) & (~ufo.alive) & (ufo.death_timer == 0)
-    has_meaningful_enemies = jnp.any(state_after_ufo.enemies.w > 0)
-    reset_level_win = all_enemies_gone & has_meaningful_enemies & (~is_in_reactor)
+    
+    # Planet level win: all enemies destroyed AND player exits through top
+    # Remove has_meaningful_enemies check - if you can exit (exit_allowed was True), you should be able to leave
+    reset_level_win = all_enemies_gone & (~is_in_reactor) & exited_top
 
     reset = reset_level_win | win_reactor | reset_from_reactor_crash
 
@@ -1950,6 +1968,9 @@ def _step_level_core(env_state: EnvState, action: int):
         state_after_ufo.planets_cleared_mask
     )
 
+    # Update exit_allowed flag for next frame: reactor activated OR all enemies destroyed
+    new_exit_allowed = new_reactor_activated | (all_enemies_gone & (~is_in_reactor))
+
     final_env_state = state_after_ufo._replace(
         state=state, bullets=bullets, cooldown=cooldown, enemies=enemies,
         enemy_bullets=enemy_bullets, fire_cooldown=fire_cooldown, key=key,
@@ -1965,7 +1986,8 @@ def _step_level_core(env_state: EnvState, action: int):
         done=game_over,
         reactor_destroyed=reactor_destroyed_next,
         planets_cleared_mask=cleared_mask_next,
-        mode_timer=state_after_ufo.mode_timer + 1
+        mode_timer=state_after_ufo.mode_timer + 1,
+        exit_allowed=new_exit_allowed,
     )
 
     obs_vector = jnp.array([state.x, state.y, state.vx, state.vy, state.angle])
@@ -2337,12 +2359,32 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
 
             def _on_win(_):
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
+                
+                # Check if solar system is complete (reactor destroyed OR all planets cleared)
+                all_planets_cleared = jnp.all(current_state.planets_cleared_mask)
+                solar_system_complete = current_state.reactor_destroyed | all_planets_cleared
+                
+                # When solar system is complete: add bonuses and reset planets and reactor
+                bonus_fuel = jnp.where(solar_system_complete, SOLAR_SYSTEM_BONUS_FUEL, 0.0)
+                bonus_lives = jnp.where(solar_system_complete, SOLAR_SYSTEM_BONUS_LIVES, 0)
+                bonus_score = jnp.where(solar_system_complete, SOLAR_SYSTEM_BONUS_SCORE, 0.0)
+                final_fuel = current_state.fuel + bonus_fuel
+                final_lives = current_state.lives + bonus_lives
+                final_score = current_state.score + bonus_score
+                
+                # Reset reactor and planets if solar system was completed, otherwise keep state
+                final_reactor_destroyed = jnp.where(solar_system_complete, jnp.array(False), current_state.reactor_destroyed)
+                final_planets_cleared = jnp.where(solar_system_complete, 
+                                                   jnp.zeros_like(current_state.planets_cleared_mask),
+                                                   current_state.planets_cleared_mask)
+                
                 obs_reset, map_state = env_instance.reset_map(
                     subkey_for_reset,
-                    lives=current_state.lives,
-                    score=current_state.score,
-                    reactor_destroyed=current_state.reactor_destroyed,
-                    planets_cleared_mask=current_state.planets_cleared_mask
+                    lives=final_lives,
+                    score=final_score,
+                    fuel=final_fuel,
+                    reactor_destroyed=final_reactor_destroyed,
+                    planets_cleared_mask=final_planets_cleared
                 )
                 map_state = map_state._replace(key=new_main_key)
                 win_info = {**info, "level_cleared": jnp.array(True)}
@@ -2676,6 +2718,7 @@ class JaxGravitar(JaxEnvironment):
             level_offset=jnp.array([0, 0], dtype=jnp.float32),
             reactor_destroyed=final_reactor_destroyed, 
             planets_cleared_mask=final_cleared_mask,
+            exit_allowed=jnp.array(False),
         )
 
         # Ensure obs is a JAX array
@@ -2767,6 +2810,7 @@ class JaxGravitar(JaxEnvironment):
             level_offset=jnp.array(level_offset, dtype=jnp.float32),
             reactor_timer=initial_timer.astype(jnp.int32),
             reactor_activated=jnp.array(False),
+            exit_allowed=jnp.array(False),
         )
 
         # Ensure obs is a JAX array
