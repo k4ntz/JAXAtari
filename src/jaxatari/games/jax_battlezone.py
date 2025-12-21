@@ -142,6 +142,7 @@ class BattlezoneConstants(NamedTuple):
     WORLD_SIZE_Z: int = 256  # world size in z direction
     PLAYER_ROTATION_SPEED: float = 2*jnp.pi/536
     PLAYER_SPEED: float = 0.25
+    PLAYER_SPEED_DRIVETURN: float = 0.057674
     PROJECTILE_SPEED: float = 0.5
     ENEMY_SPEED: jnp.array = jnp.array([0.25, 0.25, 1.0, 1.0]) #todo change
     ENEMY_ROT_SPEED: jnp.array = jnp.array([2*jnp.pi/2048, 0.01, 0.01, 0.01]) #todo change
@@ -282,7 +283,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             action == Action.DOWNRIGHTFIRE,  # TODO: why doesn't this work?
         ]), axis=0)
         
-        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft])
+        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft])  # leave order as is!
 
         #-------------------fire--------------
         will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
@@ -518,8 +519,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         """
         #jax.debug.print("{}",direction)
         ###
+        idx = jnp.argmax(player_direction)
         alpha = self.consts.PLAYER_ROTATION_SPEED
-        speed = self.consts.PLAYER_SPEED
+        speed = jax.lax.cond(idx > 4, lambda: self.consts.PLAYER_SPEED_DRIVETURN, lambda: self.consts.PLAYER_SPEED)
         ###
         sin_alpha = jnp.sin(alpha)
         cos_alpha = jnp.cos(alpha)
@@ -537,7 +539,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             [(prev_x * cos_alpha - (prev_z + speed) * sin_alpha) - prev_x, (prev_x * sin_alpha + (prev_z + speed) * cos_alpha) - prev_z]  # DownLeft
         ])
         #jax.debug.print("{}",jnp.argmax(direction)
-        idx = jnp.argmax(player_direction)
         offset = offset_xz[idx]
 
         new_x = prev_x + offset[0] 
