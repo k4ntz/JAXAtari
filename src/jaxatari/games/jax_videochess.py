@@ -1,6 +1,7 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Callable, Optional
+import importlib
 
 import chex
 import jax
@@ -669,7 +670,12 @@ class JaxVideoChess(
             check_stalemate,
             state,
         )
-    def __init__(self, consts: VideoChessConstants = None):
+    def __init__(
+        self,
+        consts: VideoChessConstants = None,
+        bot_mode: Optional[str] = None,
+        bot_module: Optional[str] = None,
+    ):
         consts = consts or VideoChessConstants()
         super().__init__(consts)
         self.renderer = VideoChessRenderer(self.consts)
@@ -681,6 +687,273 @@ class JaxVideoChess(
             Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT,
         }
+
+        # ------------------------------------------------------------
+        # Optional bot hook
+        # ------------------------------------------------------------
+        # Default is 2-player mode (no bot). If enabled, the bot moves for BLACK
+        # right after WHITE completes a move.
+        self.bot_mode = bot_mode  # None | "random" | "mods"
+
+        @partial(jax.jit, static_argnums=(0,))
+        def _bot_noop(_self, s: VideoChessState) -> VideoChessState:
+            return s
+
+        self._bot_step: Callable[[VideoChessState], VideoChessState] = lambda s: s
+
+        # Built-in random bot (JAX-native)
+        if bot_mode == "random":
+            self._bot_step = lambda s: self._bot_random_move(s)
+
+        # External bot (mods) loaded from a module, e.g. `jaxatari.games.videochess_mods`
+        if bot_mode == "mods" or bot_module is not None:
+            module_name = bot_module or "jaxatari.games.videochess_mods"
+            mod = importlib.import_module(module_name)
+
+            # Preferred: factory that can close over constants
+            if hasattr(mod, "make_bot"):
+                bot_fn = mod.make_bot(self.consts)
+            elif hasattr(mod, "bot_step"):
+                bot_fn = mod.bot_step
+            else:
+                raise AttributeError(
+                    f"{module_name} must define either make_bot(consts) or bot_step(state, consts)"
+                )
+
+            # Normalize signature: bot_fn(state) -> state
+            if hasattr(mod, "make_bot"):
+                self._bot_step = bot_fn
+            else:
+                # Expect bot_step(state, consts)
+                self._bot_step = lambda s: bot_fn(s, self.consts)
+
+        # If no bot selected, keep a no-op (so step stays simple)
+        if self.bot_mode is None:
+            self._bot_step = lambda s: _bot_noop(self, s)
+    @partial(jax.jit, static_argnums=(0,))
+    def _bot_random_move(self, state: VideoChessState) -> VideoChessState:
+        """One random move for the side to move.
+
+        Implementation detail: we sample uniformly from the set of *all legal moves*
+        (from_square, to_square) for `state.to_move`. This avoids "stalling" when a
+        naive random sampler keeps picking invalid targets.
+        """
+        c = self.consts
+
+        # Only act in normal play and only when nothing is selected.
+        can_act = (
+            (state.game_phase == c.PHASE_SELECT_PIECE)
+            & (state.selected_square[0] < 0)
+        )
+
+        def do_bot(s: VideoChessState) -> VideoChessState:
+            key, key_sample = jax.random.split(s.rng_key)
+
+            # Generate all 64 from-squares.
+            idx = jnp.arange(c.NUM_RANKS * c.NUM_FILES, dtype=jnp.int32)
+            from_rows = idx // c.NUM_FILES
+            from_cols = idx % c.NUM_FILES
+            from_sq = jnp.stack([from_rows, from_cols], axis=1)  # (64,2)
+
+            # Compute legal move targets for each square (64,56,2)
+            moves = jax.vmap(lambda fs: BoardHandler.legal_moves_for_colour(s.board, fs, s.to_move))(from_sq)
+
+            # A move is valid if target row >= 0
+            valid = moves[..., 0] >= jnp.int32(0)  # (64,56)
+
+            # Flatten all candidates.
+            moves_flat = moves.reshape((-1, 2))          # (64*56,2)
+            valid_flat = valid.reshape((-1,))            # (64*56,)
+
+            # We also need the matching from-square for each candidate.
+            from_rep = jnp.repeat(from_sq, repeats=moves.shape[1], axis=0)  # (64*56,2)
+
+            valid_f = valid_flat.astype(jnp.float32)
+            total = jnp.sum(valid_f)
+
+            def no_move(ss: VideoChessState) -> VideoChessState:
+                # No legal moves: just advance RNG.
+                return ss._replace(rng_key=key)
+
+            def pick_and_apply(ss: VideoChessState) -> VideoChessState:
+                probs = valid_f / total
+                pick = jax.random.choice(key_sample, probs.shape[0], p=probs, shape=())
+
+                fs = from_rep[pick].astype(jnp.int32)
+                ts = moves_flat[pick].astype(jnp.int32)
+
+                new_board = BoardHandler.apply_move(ss.board, fs, ts)
+
+                return ss._replace(
+                    board=new_board,
+                    to_move=jnp.int32(1) - jnp.int32(ss.to_move),
+                    game_phase=c.PHASE_SELECT_PIECE,
+                    selected_square=jnp.array([-1, -1], dtype=jnp.int32),
+                    last_move_target=ts,
+                    last_move_timer=jnp.int32(c.LAST_MOVE_BLINK_FRAMES),
+                    rng_key=key,
+                )
+
+            return jax.lax.cond(total <= 0.0, no_move, pick_and_apply, s)
+
+        return jax.lax.cond(can_act, do_bot, lambda ss: ss, state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _enumerate_all_legal_moves(self, state: VideoChessState):
+        """Return (from_rep, to_flat, valid_flat) for the current `state.to_move`.
+
+        - from_rep: (64*56,2)
+        - to_flat:  (64*56,2)
+        - valid_flat: (64*56,) bool
+        """
+        c = self.consts
+
+        idx = jnp.arange(c.NUM_RANKS * c.NUM_FILES, dtype=jnp.int32)
+        from_rows = idx // c.NUM_FILES
+        from_cols = idx % c.NUM_FILES
+        from_sq = jnp.stack([from_rows, from_cols], axis=1)  # (64,2)
+
+        moves = jax.vmap(lambda fs: BoardHandler.legal_moves_for_colour(state.board, fs, state.to_move))(from_sq)  # (64,56,2)
+        valid = moves[..., 0] >= jnp.int32(0)  # (64,56)
+
+        to_flat = moves.reshape((-1, 2))
+        valid_flat = valid.reshape((-1,))
+        from_rep = jnp.repeat(from_sq, repeats=moves.shape[1], axis=0)
+
+        return from_rep, to_flat, valid_flat
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _bot_greedy_move(self, state: VideoChessState) -> VideoChessState:
+        """Greedy move for the side to move.
+
+        Heuristic: prefer captures with the highest captured material value.
+        If no capture exists, falls back to a random legal move.
+        """
+        c = self.consts
+
+        can_act = (
+            (state.game_phase == c.PHASE_SELECT_PIECE)
+            & (state.selected_square[0] < 0)
+        )
+
+        # Piece values indexed by piece-id 0..12
+        # (values are intentionally simple; tune later)
+        piece_vals = jnp.array(
+            [0, 1, 3, 3, 5, 9, 200, 1, 3, 3, 5, 9, 200],
+            dtype=jnp.int32,
+        )
+
+        def do_bot(s: VideoChessState) -> VideoChessState:
+            key, k_noise, k_fallback = jax.random.split(s.rng_key, 3)
+
+            from_rep, to_flat, valid_flat = self._enumerate_all_legal_moves(s)
+
+            # Compute capture score for each candidate
+            r = jnp.clip(to_flat[:, 0], 0, c.NUM_RANKS - 1)
+            cc = jnp.clip(to_flat[:, 1], 0, c.NUM_FILES - 1)
+            target_piece = s.board[r, cc]
+
+            # Only count captures of opponent pieces
+            is_cap = BoardHandler.is_opponent(target_piece, s.to_move)
+            cap_val = piece_vals[target_piece]
+            cap_score = jnp.where(is_cap, cap_val, jnp.int32(0))
+
+            # Mask invalid moves
+            cap_score = jnp.where(valid_flat, cap_score, jnp.int32(-1))
+
+            best_cap = jnp.max(cap_score)
+            has_capture = best_cap > jnp.int32(0)
+
+            def apply_move(ss: VideoChessState, fs: chex.Array, ts: chex.Array, out_key: chex.PRNGKey) -> VideoChessState:
+                new_board = BoardHandler.apply_move(ss.board, fs, ts)
+                return ss._replace(
+                    board=new_board,
+                    to_move=jnp.int32(1) - jnp.int32(ss.to_move),
+                    game_phase=c.PHASE_SELECT_PIECE,
+                    selected_square=jnp.array([-1, -1], dtype=jnp.int32),
+                    last_move_target=ts,
+                    last_move_timer=jnp.int32(c.LAST_MOVE_BLINK_FRAMES),
+                    rng_key=out_key,
+                )
+
+            def pick_best_capture(ss: VideoChessState) -> VideoChessState:
+                # Add tiny noise to break ties deterministically but not repetitively.
+                noise = (jax.random.uniform(k_noise, cap_score.shape, minval=0.0, maxval=1.0) * 1e-3)
+                score_f = cap_score.astype(jnp.float32) + noise
+                pick = jnp.argmax(score_f)
+                fs = from_rep[pick].astype(jnp.int32)
+                ts = to_flat[pick].astype(jnp.int32)
+                return apply_move(ss, fs, ts, key)
+
+            def fallback_random(ss: VideoChessState) -> VideoChessState:
+                # Uniform over all valid moves
+                valid_f = valid_flat.astype(jnp.float32)
+                total = jnp.sum(valid_f)
+
+                def no_move(sss):
+                    return sss._replace(rng_key=key)
+
+                def pick(sss):
+                    probs = valid_f / total
+                    pick_idx = jax.random.choice(k_fallback, probs.shape[0], p=probs, shape=())
+                    fs = from_rep[pick_idx].astype(jnp.int32)
+                    ts = to_flat[pick_idx].astype(jnp.int32)
+                    return apply_move(sss, fs, ts, key)
+
+                return jax.lax.cond(total <= 0.0, no_move, pick, ss)
+
+            return jax.lax.cond(has_capture, pick_best_capture, fallback_random, s)
+
+        return jax.lax.cond(can_act, do_bot, lambda ss: ss, state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def greedy_black_reply(self, prev_state: VideoChessState, new_state: VideoChessState) -> VideoChessState:
+        """If WHITE just completed a move, make exactly one GREEDY BLACK move."""
+        c = self.consts
+
+        player_just_moved = (
+            (prev_state.to_move == c.COLOUR_WHITE)
+            & (new_state.to_move == c.COLOUR_BLACK)
+            & (new_state.game_phase == c.PHASE_SELECT_PIECE)
+            & (new_state.selected_square[0] < 0)
+        )
+
+        def do_bot(s: VideoChessState) -> VideoChessState:
+            forced = s._replace(to_move=jnp.int32(c.COLOUR_BLACK))
+            moved = self._bot_greedy_move(forced)
+            # Keep human cursor position (bot moves invisibly)
+            return moved._replace(to_move=jnp.int32(c.COLOUR_WHITE), cursor_pos=s.cursor_pos)
+
+        return jax.lax.cond(player_just_moved, do_bot, lambda s: s, new_state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def random_black_reply(self, prev_state: VideoChessState, new_state: VideoChessState) -> VideoChessState:
+        """If WHITE just completed a move, make exactly one random BLACK move.
+
+        This is meant to be called from a *mod* (post-step plugin), so the main
+        logic stays here and the mod only delegates.
+        """
+        c = self.consts
+
+        player_just_moved = (
+            (prev_state.to_move == c.COLOUR_WHITE)
+            & (new_state.to_move == c.COLOUR_BLACK)
+            & (new_state.game_phase == c.PHASE_SELECT_PIECE)
+            & (new_state.selected_square[0] < 0)
+        )
+
+        def do_bot(s: VideoChessState) -> VideoChessState:
+            # Reuse the random-move sampler, but force it to act as BLACK.
+            # (We temporarily treat it as BLACK-to-move, then ensure turn returns to WHITE.)
+            forced = s._replace(to_move=jnp.int32(c.COLOUR_BLACK))
+            moved = self._bot_random_move(forced)
+
+            # If a move happened, _bot_random_move will have toggled to_move.
+            # We want: after bot move -> WHITE to play.
+            # Keep the human cursor where it was (don't reveal bot move via cursor).
+            return moved._replace(to_move=jnp.int32(c.COLOUR_WHITE), cursor_pos=s.cursor_pos)
+
+        return jax.lax.cond(player_just_moved, do_bot, lambda s: s, new_state)
 
     def render(self, state: VideoChessState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -808,6 +1081,21 @@ class JaxVideoChess(
             )
 
         new_state = fire_or_not(state)
+
+        # If WHITE just moved and it is now BLACK's turn, optionally let the bot play one move.
+        player_just_moved = (
+            (state.to_move == self.consts.COLOUR_WHITE)
+            & (new_state.to_move == self.consts.COLOUR_BLACK)
+            & (new_state.game_phase == self.consts.PHASE_SELECT_PIECE)
+            & (new_state.selected_square[0] < 0)
+        )
+
+        new_state = jax.lax.cond(
+            player_just_moved,
+            lambda s: self._bot_step(s),
+            lambda s: s,
+            new_state,
+        )
 
         # If NOOP, reset both last_was_move and last_was_fire (release input edge detection)
         def reset_flags(s):
