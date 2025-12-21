@@ -919,7 +919,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             },
             {
                 'name': 'obstacle_heart_big', 'type': 'group',
-                'files': ['6_Big_heart_0.npy', '6_Big_Heart_1.npy']
+                'files': ['6_Big_Heart_0.npy', '6_Big_Heart_1.npy']
             },
             {
                 'name': 'obstacle_face_big', 'type': 'group',
