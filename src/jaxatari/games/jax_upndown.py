@@ -1,5 +1,4 @@
 import os
-import math
 from functools import partial
 from typing import NamedTuple, Tuple
 
@@ -14,7 +13,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 class UpNDownConstants(NamedTuple):
-    FRAME_SKIP: int = 4  # Used by AtariWrapper
+    FRAME_SKIP: int = 4
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
     MAX_SPEED: int = 6
     INITIAL_LIVES: int = 5
@@ -259,12 +258,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         x2 = track_corners_x[road_segment + 1]
         
         # Linear interpolation: x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
-        t = jax.lax.cond(
-            y2 != y1,
-            lambda _: (y - y1) / (y2 - y1),
-            lambda _: 0.0,
-            operand=None,
-        )
+        t = jnp.where(y2 != y1, (y - y1) / (y2 - y1), 0.0)
         return x1 + t * (x2 - x1)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -515,7 +509,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
         # Wrap Y position for looping track
-        wrapped_y = -((new_player_y * -1) % 1036)
+        wrapped_y = -((new_player_y * -1) % self.consts.TRACK_LENGTH)
 
         return Car(
             position=EntityPosition(
@@ -587,25 +581,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
-        wrapped_y = -((new_y * -1) % 1036)
+        wrapped_y = -((new_y * -1) % self.consts.TRACK_LENGTH)
         
         # Update road segment indices based on new position
         segment_from_y = self._get_road_segment(new_y)
         
-        # Update road indices to track the current segment
-        next_road_index_A = jax.lax.cond(
-            current_road == 0,
-            lambda _: segment_from_y,
-            lambda _: road_index_A,
-            operand=None,
-        )
-        
-        next_road_index_B = jax.lax.cond(
-            current_road == 1,
-            lambda _: segment_from_y,
-            lambda _: road_index_B,
-            operand=None,
-        )
+        # Update road indices to track the current segment (use jnp.where for branchless execution)
+        next_road_index_A = jnp.where(current_road == 0, segment_from_y, road_index_A)
+        next_road_index_B = jnp.where(current_road == 1, segment_from_y, road_index_B)
 
         return Car(
             position=EntityPosition(
@@ -622,6 +605,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             type=car_type,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _flag_step(self, state: UpNDownState, new_player_y: chex.Array, player_x: chex.Array, current_road: chex.Array) -> Tuple[Flag, chex.Array, chex.Array]:
         """Update flag collection state and score.
         
@@ -681,7 +665,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         
         return new_flags, flag_score, new_flags_collected_mask
-    
+
+    @partial(jax.jit, static_argnums=(0,))
     def _collectible_step(self, state: UpNDownState, new_player_y: chex.Array, player_x: chex.Array, current_road: chex.Array) -> Tuple[Collectible, chex.Array, chex.Array]:
         """Update collectible spawning, despawning, and collection (unified for all types).
         
@@ -697,30 +682,20 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         Returns:
             Tuple of (updated_collectibles, score_delta, new_spawn_timer)
         """
-        # Collectible spawning logic - decrement timer and spawn when ready
-        new_collectible_timer = jax.lax.cond(
+        # Collectible spawning logic - decrement timer and spawn when ready (use jnp.where for branchless)
+        new_collectible_timer = jnp.where(
             state.collectible_spawn_timer <= 0,
-            lambda _: self.consts.COLLECTIBLE_SPAWN_INTERVAL,
-            lambda _: state.collectible_spawn_timer - 1,
-            operand=None,
+            self.consts.COLLECTIBLE_SPAWN_INTERVAL,
+            state.collectible_spawn_timer - 1,
         )
         
         # Attempt to spawn when timer hits 0
         should_spawn = state.collectible_spawn_timer <= 0
         
-        # Find first inactive collectible slot
-        def find_inactive_idx(collectibles_in):
-            inactive_mask = ~collectibles_in.active
-            first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
-            has_inactive = jnp.any(inactive_mask)
-            return jax.lax.cond(
-                has_inactive,
-                lambda _: first_inactive,
-                lambda _: jnp.array(0, dtype=jnp.int32),
-                operand=None,
-            ), has_inactive
-        
-        spawn_idx, has_inactive_slot = find_inactive_idx(state.collectibles)
+        inactive_mask = ~state.collectibles.active
+        first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
+        has_inactive_slot = jnp.any(inactive_mask)
+        spawn_idx = jnp.where(has_inactive_slot, first_inactive, jnp.array(0, dtype=jnp.int32))
         
         # Generate random spawn position using fold_in for deterministic randomness
         base_key = jax.random.PRNGKey(0)
@@ -739,13 +714,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         type_id_spawn = jnp.searchsorted(self.consts.COLLECTIBLE_SPAWN_PROBABILITIES, rand_type, side='right')
         type_id_spawn = jnp.clip(type_id_spawn, 0, 3).astype(jnp.int32)
         
-        # Calculate X position on road
+        # Calculate X position on road (use jnp.where for branchless)
         segment_spawn = self._get_road_segment(y_spawn)
-        x_spawn = jax.lax.cond(
+        x_spawn = jnp.where(
             road_spawn == 0,
-            lambda _: self._get_x_on_road(y_spawn, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
-            lambda _: self._get_x_on_road(y_spawn, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
-            operand=None,
+            self._get_x_on_road(y_spawn, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
+            self._get_x_on_road(y_spawn, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
         )
         
         # Create mask for which collectibles to update
@@ -796,16 +770,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Deactivate collected items
         final_active = jnp.logical_and(active_after_despawn, ~collections)
         
-        # Update score - use type_id to look up score value
-        def get_collection_score(idx):
-            is_collected = collections[idx]
-            type_id = spawned_type_id[idx]
-            # Look up score based on type_id using array indexing
-            score = self.consts.COLLECTIBLE_SCORES[type_id]
-            return jnp.where(is_collected, score, 0)
-        
-        score_array = jax.vmap(get_collection_score)(jnp.arange(self.consts.MAX_COLLECTIBLES))
-        score_delta = jnp.sum(score_array)
+        # Update score - vectorized lookup without vmap overhead
+        scores = self.consts.COLLECTIBLE_SCORES[spawned_type_id]
+        score_delta = jnp.sum(jnp.where(collections, scores, 0))
         
         # Create final collectibles state
         updated_collectibles = Collectible(
@@ -818,74 +785,66 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         
         return updated_collectibles, score_delta, new_collectible_timer
+
+    @partial(jax.jit, static_argnums=(0,))
     def _death_step(self, state: UpNDownState) -> UpNDownState:
-    # Player on water road (index 2 assumed water)
+        """Handle player death when on water road (index 2)."""
+        # Player on water road (index 2 assumed water)
         died = jnp.logical_and(
             state.player_car.current_road == 2,
             ~state.is_dead,
-    )
+        )
 
-        lives = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        lives = jnp.where(died, state.lives - 1, state.lives)
+        respawn_timer = jnp.where(
             died,
-            lambda _: state.lives - 1,
-            lambda _: state.lives,
-            operand=None,
-    )
-        lives = jax.lax.cond(
-        died,
-        lambda _: state.lives - 1,
-        lambda _: state.lives,
-        operand=None,
-    )
-        respawn_timer = jax.lax.cond(
-        died,
-        lambda _: jnp.array(self.consts.RESPAWN_DELAY_FRAMES),
-        lambda _: jnp.maximum(state.respawn_timer - 1, 0),
-        operand=None,
-    )
+            jnp.array(self.consts.RESPAWN_DELAY_FRAMES),
+            jnp.maximum(state.respawn_timer - 1, 0),
+        )
         is_dead = jnp.logical_and(
-        jnp.logical_or(state.is_dead, died),
-        respawn_timer > 0)
-    
-        player_car = jax.lax.cond(
-        jnp.logical_and(state.is_dead, respawn_timer == 0),
-        lambda _: state.player_car._replace(
-            position=state.player_car.position._replace(
-                x=jnp.array(self.consts.RESPAWN_X, dtype=jnp.float32),
-                y=jnp.array(self.consts.RESPAWN_Y, dtype=jnp.float32),
-            ),
-            speed=0,
-            current_road=0,
-        ),
-        lambda _: state.player_car,
-        operand=None,
-    )
+            jnp.logical_or(state.is_dead, died),
+            respawn_timer > 0,
+        )
+
+        # Respawn player when dead and timer expires
+        should_respawn = jnp.logical_and(state.is_dead, respawn_timer == 0)
+        new_position = state.player_car.position._replace(
+            x=jnp.where(should_respawn, jnp.array(self.consts.RESPAWN_X, dtype=jnp.float32), state.player_car.position.x),
+            y=jnp.where(should_respawn, jnp.array(self.consts.RESPAWN_Y, dtype=jnp.float32), state.player_car.position.y),
+        )
+        player_car = state.player_car._replace(
+            position=new_position,
+            speed=jnp.where(should_respawn, 0, state.player_car.speed),
+            current_road=jnp.where(should_respawn, 0, state.player_car.current_road),
+        )
+
         return state._replace(
-        lives=lives,
-        is_dead=is_dead,
-        respawn_timer=respawn_timer,
-        player_car=player_car,
-    )
+            lives=lives,
+            is_dead=is_dead,
+            respawn_timer=respawn_timer,
+            player_car=player_car,
+        )
     
 
+    @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
         player_speed = state.player_car.speed
 
-        player_speed = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        player_speed = jnp.where(
             jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
-            lambda s: s + 1,
-            lambda s: s,
-            operand=player_speed,
+            player_speed + 1,
+            player_speed,
         )
 
-        player_speed = jax.lax.cond(
+        player_speed = jnp.where(
             jnp.logical_and(state.player_car.speed > -self.consts.MAX_SPEED, down),
-            lambda s: s - 1,
-            lambda s: s,
-            operand=player_speed,
+            player_speed - 1,
+            player_speed,
         )
 
         # Check if on a steep road section (no X direction change) and apply speed reduction
@@ -906,31 +865,28 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 player_speed > 0
             )
         )
-        # Update steep road timer - increment when on steep road going up, reset otherwise
-        steep_road_timer = jax.lax.cond(
+        # Update steep road timer - increment when on steep road going up, reset otherwise (use jnp.where)
+        steep_road_timer = jnp.where(
             on_steep_going_up,
-            lambda _: state.steep_road_timer + 1,
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            operand=None,
+            state.steep_road_timer + 1,
+            jnp.array(0, dtype=jnp.int32),
         )
         # Only reduce speed when timer reaches the interval threshold
         should_reduce_speed = jnp.logical_and(
             on_steep_going_up,
             steep_road_timer >= self.consts.STEEP_ROAD_SPEED_REDUCTION_INTERVAL
         )
-        # Gradually reduce speed toward -2 when on steep section without jumping
-        player_speed = jax.lax.cond(
+        # Gradually reduce speed toward -2 when on steep section without jumping (use jnp.where)
+        player_speed = jnp.where(
             should_reduce_speed,
-            lambda s: jnp.maximum(s - 1, jnp.int32(-2)),
-            lambda s: s,
-            operand=player_speed,
+            jnp.maximum(player_speed - 1, jnp.int32(-2)),
+            player_speed,
         )
-        # Reset timer after speed reduction
-        steep_road_timer = jax.lax.cond(
+        # Reset timer after speed reduction (use jnp.where)
+        steep_road_timer = jnp.where(
             should_reduce_speed,
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            lambda _: steep_road_timer,
-            operand=None,
+            jnp.array(0, dtype=jnp.int32),
+            steep_road_timer,
         )
 
         can_start_jump = jnp.logical_and(state.jump_cooldown == 0, state.post_jump_cooldown == 0)
@@ -944,80 +900,63 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         # Calculate jump slope at jump start (X change per Y step)
         # Uses the road segment slope to follow the road trajectory
-        road_index = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        road_index = jnp.where(
             state.player_car.current_road == 0,
-            lambda _: state.player_car.road_index_A,
-            lambda _: state.player_car.road_index_B,
-            operand=None,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
         )
         
         # Get corner coordinates for the current segment
         # Segment goes from corner[road_index] to corner[road_index+1]
-        start_x = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        start_x = jnp.where(
             state.player_car.current_road == 0,
-            lambda _: self.consts.FIRST_TRACK_CORNERS_X[road_index],
-            lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index],
-            operand=None,
+            self.consts.FIRST_TRACK_CORNERS_X[road_index],
+            self.consts.SECOND_TRACK_CORNERS_X[road_index],
         )
-        end_x = jax.lax.cond(
+        end_x = jnp.where(
             state.player_car.current_road == 0,
-            lambda _: self.consts.FIRST_TRACK_CORNERS_X[road_index +1],
-            lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index +1],
-            operand=None,
+            self.consts.FIRST_TRACK_CORNERS_X[road_index + 1],
+            self.consts.SECOND_TRACK_CORNERS_X[road_index + 1],
         )
         start_y = self.consts.TRACK_CORNERS_Y[road_index]
 
-        end_y = jax.lax.cond(
+        end_y = jnp.where(
             jnp.equal(self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], self.consts.FIRST_TRACK_CORNERS_X[road_index + 2]),
-            lambda _: self.consts.TRACK_CORNERS_Y[road_index + 2],
-            lambda _: self.consts.TRACK_CORNERS_Y[road_index + 1],
-            operand=None
+            self.consts.TRACK_CORNERS_Y[road_index + 2],
+            self.consts.TRACK_CORNERS_Y[road_index + 1],
         )
         
         # Calculate slope: how much X changes per unit Y change
         delta_x = end_x - start_x
         delta_y = end_y - start_y
-        # Avoid division by zero for horizontal segments
-        new_jump_slope = jax.lax.cond(
+        # Avoid division by zero for horizontal segments (use jnp.where)
+        new_jump_slope = jnp.where(
             jnp.abs(delta_y) > 0.001,
-            lambda _: jnp.float32(delta_x) / jnp.float32(delta_y),
-            lambda _: jnp.float32(0.0),
-            operand=None,
+            jnp.float32(delta_x) / jnp.float32(delta_y),
+            jnp.float32(0.0),
         )
         
-        # Lock slope at jump start, keep previous slope during jump
-        jump_slope = jax.lax.cond(
-            starting_jump,
-            lambda _: new_jump_slope,
-            lambda _: state.jump_slope,
-            operand=None,
-        )
+        # Lock slope at jump start, keep previous slope during jump (use jnp.where)
+        jump_slope = jnp.where(starting_jump, new_jump_slope, state.jump_slope)
 
-        jump_cooldown = jax.lax.cond(
+        # Use jnp.where for branchless execution of jump_cooldown
+        jump_cooldown = jnp.where(
             state.jump_cooldown > 0,
-            lambda s: s - 1,
-            lambda s: jax.lax.cond(
-                is_jumping,
-                lambda _: self.consts.JUMP_FRAMES,
-                lambda _: 0,
-                operand=None,
-            ),
-            operand=state.jump_cooldown,
+            state.jump_cooldown - 1,
+            jnp.where(is_jumping, self.consts.JUMP_FRAMES, 0),
         )
 
-        post_jump_cooldown = jax.lax.cond(
-            jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0),
-            lambda _: self.consts.POST_JUMP_DELAY,
-            lambda _: jax.lax.cond(
-                state.post_jump_cooldown > 0,
-                lambda s: s - 1,
-                lambda s: s,
-                operand=state.post_jump_cooldown,
-            ),
-            operand=None,
+        # Use jnp.where for branchless execution of post_jump_cooldown
+        is_landing_now = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
+        post_jump_cooldown = jnp.where(
+            is_landing_now,
+            self.consts.POST_JUMP_DELAY,
+            jnp.where(state.post_jump_cooldown > 0, state.post_jump_cooldown - 1, state.post_jump_cooldown),
         )
         is_on_road = ~is_jumping
-        is_landing = jnp.logical_and(state.jump_cooldown == 1, jump_cooldown == 0)
+        is_landing = is_landing_now
 
         updated_player_car = self._advance_player_car(
             position_x=state.player_car.position.x,
@@ -1048,12 +987,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             player_car=updated_player_car,
             step_counter=state.step_counter + 1,
             round_started=round_started_now,
-            movement_steps=jax.lax.cond(
-                round_started_now,
-                lambda _: state.movement_steps + 1,
-                lambda _: state.movement_steps,
-                operand=None,
-            ),
+            movement_steps=jnp.where(round_started_now, state.movement_steps + 1, state.movement_steps),
             steep_road_timer=steep_road_timer,
             jump_slope=jump_slope,
         )
@@ -1067,6 +1001,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _flag_step_main(self, state: UpNDownState) -> UpNDownState:
         """Update flag collection state and score."""
         new_player_y = state.player_car.position.y
@@ -1082,19 +1017,16 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             flags=new_flags,
             flags_collected_mask=new_flags_collected_mask,
         )
-    def _completion_bonus_step(self, state: UpNDownState) -> UpNDownState:
-        all_flags_collected = jnp.all(state.flags_collected_mask)
 
-        bonus = jax.lax.cond(
-            all_flags_collected,
-            lambda _: self.consts.ALL_FLAGS_BONUS,
-            lambda _: 0,
-            operand=None,
-    )
-        return state._replace(score=state.score + bonus,lives=state.lives,
-            is_dead=state.is_dead,
-            respawn_timer=state.respawn_timer,)
-    
+    @partial(jax.jit, static_argnums=(0,))
+    def _completion_bonus_step(self, state: UpNDownState) -> UpNDownState:
+        """Award bonus when all flags are collected."""
+        all_flags_collected = jnp.all(state.flags_collected_mask)
+        # Use jnp.where for branchless execution
+        bonus = jnp.where(all_flags_collected, self.consts.ALL_FLAGS_BONUS, 0)
+        return state._replace(score=state.score + bonus)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _collectible_step_main(self, state: UpNDownState) -> UpNDownState:
         """Update collectible spawning, despawning, and collection."""
         new_player_y = state.player_car.position.y
@@ -1111,6 +1043,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectible_spawn_timer=new_collectible_timer,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _initialize_collectibles(self) -> Collectible:
         """Return a cleared collectible pool."""
         return Collectible(
@@ -1188,32 +1121,33 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         active_count = jnp.sum(active_mask.astype(jnp.int32))
         can_spawn = active_count < self.consts.MAX_ENEMY_CARS
 
-        spawn_timer = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        spawn_timer = jnp.where(
             jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn),
-            lambda _: self.consts.ENEMY_SPAWN_INTERVAL,
-            lambda _: state.enemy_spawn_timer - 1,
-            operand=None,
+            self.consts.ENEMY_SPAWN_INTERVAL,
+            state.enemy_spawn_timer - 1,
         )
         should_spawn = jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn)
 
         inactive_mask = jnp.logical_not(active_mask)
         first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
         has_inactive = jnp.any(inactive_mask)
-        spawn_idx = jax.lax.cond(has_inactive, lambda _: first_inactive, lambda _: jnp.array(0, dtype=jnp.int32), operand=None)
+        # Use jnp.where for branchless execution
+        spawn_idx = jnp.where(has_inactive, first_inactive, jnp.array(0, dtype=jnp.int32))
         spawn_mask = (jnp.arange(self.consts.MAX_ENEMY_CARS) == spawn_idx) & should_spawn & has_inactive
 
         spawn_offset = self.consts.ENEMY_OFFSCREEN_SPAWN_OFFSET + active_count * self.consts.ENEMY_MIN_SPAWN_GAP + jax.random.uniform(key_spawn_offset, minval=0.0, maxval=40.0)
         spawn_side = jax.random.choice(key_spawn_side, jnp.array([-1.0, 1.0]))
         raw_spawn_y = state.player_car.position.y + spawn_side * spawn_offset
-        spawn_y = -(((raw_spawn_y) * -1) % 1036)
+        spawn_y = -(((raw_spawn_y) * -1) % self.consts.TRACK_LENGTH)
         spawn_road = jax.random.randint(key_spawn_direction, shape=(), minval=0, maxval=2)
 
         segment_spawn = self._get_road_segment(spawn_y)
-        spawn_x = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        spawn_x = jnp.where(
             spawn_road == 0,
-            lambda _: self._get_x_on_road(spawn_y, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
-            lambda _: self._get_x_on_road(spawn_y, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
-            operand=None,
+            self._get_x_on_road(spawn_y, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
+            self._get_x_on_road(spawn_y, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
         )
 
         spawn_speed_mag = jax.random.randint(key_spawn_speed, shape=(), minval=self.consts.ENEMY_SPEED_MIN, maxval=self.consts.ENEMY_SPEED_MAX + 1)
@@ -1221,13 +1155,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         spawn_speed = spawn_speed_mag * spawn_speed_sign
         spawn_type = jax.random.randint(key_spawn_type, shape=(), minval=0, maxval=4)
 
-        direction_raw = jax.lax.cond(
+        # Use jnp.where for branchless execution
+        direction_raw = jnp.where(
             spawn_road == 0,
-            lambda _: self.consts.FIRST_TRACK_CORNERS_X[segment_spawn+1] - self.consts.FIRST_TRACK_CORNERS_X[segment_spawn],
-            lambda _: self.consts.SECOND_TRACK_CORNERS_X[segment_spawn+1] - self.consts.SECOND_TRACK_CORNERS_X[segment_spawn],
-            operand=None,
+            self.consts.FIRST_TRACK_CORNERS_X[segment_spawn+1] - self.consts.FIRST_TRACK_CORNERS_X[segment_spawn],
+            self.consts.SECOND_TRACK_CORNERS_X[segment_spawn+1] - self.consts.SECOND_TRACK_CORNERS_X[segment_spawn],
         )
-        spawn_direction_x = jax.lax.cond(direction_raw > 0, lambda _: 1, lambda _: -1, operand=None)
+        spawn_direction_x = jnp.where(direction_raw > 0, 1, -1)
 
         enemy_position_x = jnp.where(spawn_mask, spawn_x, state.enemy_cars.position.x)
         enemy_position_y = jnp.where(spawn_mask, spawn_y, state.enemy_cars.position.y)
@@ -1279,7 +1213,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         enemy_age = jnp.where(enemy_active, enemy_age + 1, enemy_age)
 
         delta_y = moved_position_y - state.player_car.position.y
-        wrapped_dist = jnp.minimum(jnp.abs(delta_y), 1036 - jnp.abs(delta_y))
+        wrapped_dist = jnp.minimum(jnp.abs(delta_y), self.consts.TRACK_LENGTH - jnp.abs(delta_y))
         far_mask = wrapped_dist > self.consts.ENEMY_DESPAWN_DISTANCE
         age_mask = enemy_age > self.consts.ENEMY_MAX_AGE
         despawn_mask = jnp.logical_and(enemy_active, jnp.logical_or(far_mask, age_mask))
@@ -1454,17 +1388,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             operand=None,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _passive_score_step_main(self, state: UpNDownState) -> UpNDownState:
         """Award passive score at regular intervals after the player has started moving."""
-        bonus = jax.lax.cond(
-            jnp.logical_and(
-                state.round_started,
-                state.movement_steps % self.consts.PASSIVE_SCORE_INTERVAL == 0,
-            ),
-            lambda _: jnp.int32(self.consts.PASSIVE_SCORE_AMOUNT),
-            lambda _: jnp.int32(0),
-            operand=None,
+        should_award = jnp.logical_and(
+            state.round_started,
+            state.movement_steps % self.consts.PASSIVE_SCORE_INTERVAL == 0,
         )
+        bonus = jnp.where(should_award, jnp.int32(self.consts.PASSIVE_SCORE_AMOUNT), jnp.int32(0))
 
         return state._replace(score=state.score + bonus)
 
@@ -1664,7 +1595,7 @@ class UpNDownRenderer(JAXGameRenderer):
         self.view_height = self.config.game_dimensions[0]
         # Precompute offsets so repeated road tiles can wrap seamlessly without gaps.
         road_cycle = max(1, self.complete_road_size)
-        repeats = max(1, math.ceil(self.view_height / road_cycle) + 2)
+        repeats = max(1, int(-(-self.view_height // road_cycle)) + 2)  # Ceiling division trick
         self._road_tile_offsets = jnp.arange(-repeats, repeats + 1, dtype=jnp.int32) * jnp.int32(self.complete_road_size)
         self._num_road_tiles = int(self._road_tile_offsets.shape[0])
 
