@@ -791,8 +791,6 @@ class JaxTutankham(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
-        return False
-        """if state.player_lives <= 0: # Game Over
-            return True
-        # TODO: beat final level condition
-        return False"""
+        game_over = state.player_lives <= 0
+        beat_game = False  # TODO: replace game winning condition later
+        return jnp.logical_or(game_over, beat_game)
