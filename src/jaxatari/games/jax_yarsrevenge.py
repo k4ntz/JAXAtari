@@ -1814,7 +1814,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         rev_counter = jnp.packbits(rev_bits, axis=1).squeeze(-1)
 
         xor_bits = data ^ rev_counter
-        stripped_bits = jnp.unpackbits(xor_bits[:, None], axis=1)[:, :7]
+        stripped_bits = jnp.unpackbits(xor_bits[:, None], axis=1)[:, 1:8]
 
         return stripped_bits.astype(jnp.uint8)
 
