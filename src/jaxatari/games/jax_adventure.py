@@ -961,10 +961,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         return return_bool
 
     def _player_step(self, state: AdventureState, action: chex.Array) -> AdventureState:
-        left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+        left = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.LEFT, action == Action.LEFTFIRE),action== Action.UPLEFT),action == Action.UPLEFTFIRE), action==Action.DOWNLEFT), action==Action.DOWNLEFTFIRE)
+        right = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.RIGHT, action == Action.RIGHTFIRE),action== Action.UPRIGHT),action == Action.UPRIGHTFIRE), action==Action.DOWNRIGHT), action==Action.DOWNRIGHTFIRE)
+        up = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.UP, action == Action.UPFIRE),action== Action.UPRIGHT),action == Action.UPRIGHTFIRE), action==Action.UPLEFT), action==Action.UPLEFTFIRE)
+        down = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.DOWN, action == Action.DOWNFIRE),action== Action.DOWNRIGHT),action == Action.DOWNRIGHTFIRE), action==Action.DOWNLEFT), action==Action.DOWNLEFTFIRE)
 
       
 
