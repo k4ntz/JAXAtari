@@ -147,7 +147,7 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
-    #position player: x ,y ,tile, inventory
+    #position player: x ,y ,tile, inventory, inventory cooldown
     player: chex.Array
     #positions dragons: x, y ,tile ,state
     dragon_yellow: chex.Array
@@ -998,14 +998,14 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   )
         )
     
-    def _item_pickup(self, state: AdventureState) -> AdventureState:
+    def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
         
         def check_for_item(self:JaxAdventure, state: AdventureState, item_ID: int) -> bool:
             item_x, item_y, tile, item_width, item_height = jax.lax.switch(
                 item_ID,
                 [lambda:(0,0,0,0,0), #this should never occour
                 lambda:(state.key_yellow[0],state.key_yellow[1],state.key_yellow[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
-                lambda:(state.key_black[0],state.key_yellow[1],state.key_yellow[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
+                lambda:(state.key_black[0],state.key_black[1],state.key_black[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
                 lambda:(state.sword[0],state.sword[1],state.sword[2],self.consts.SWORD_SIZE[0],self.consts.SWORD_SIZE[1]),
                 lambda:(state.bridge[0],state.bridge[1],state.bridge[2],self.consts.BRIDGE_SIZE[0],self.consts.BRIDGE_SIZE[1]),
                 lambda:(state.magnet[0],state.magnet[1],state.magnet[2],self.consts.MAGNET_SIZE[0],self.consts.MAGNET_SIZE[1]),
@@ -1014,41 +1014,107 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #jax.debug.print("Hitbox values item:{a},{b},{c},{d},{e}",a=item_x,b=item_y,c=tile,d=item_width,e=item_height)
             #HARDCODED BAAAAAD, but i dont care right now (performance?)(items smaler then 4 pixels would be buggy)
             on_same_tile = (tile==state.player[2])
-            player_hitbox_nw = (state.player[0]-1,state.player[1]-1)
-            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1]-1)
-            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1]+self.consts.PLAYER_SIZE[1])
-            player_hitbox_sw = (state.player[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1])
+            player_hitbox_nw = (state.player[0],state.player[1])
+            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0]-1,state.player[1])
+            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1]-1)
+            player_hitbox_sw = (state.player[0],state.player[1]+self.consts.PLAYER_SIZE[1]-1)
 
             #jax.debug.print("Hitbox values Player:{a},{b}|{c},{d}|{e},{f}|{g},{h}",
             #                a=player_hitbox_nw[0],b=player_hitbox_nw[1],
             #                c=player_hitbox_ne[0],d=player_hitbox_ne[1],
             #                e=player_hitbox_se[0],f=player_hitbox_se[1],
             #                g=player_hitbox_sw[0],h=player_hitbox_sw[1])
-
-            def diff_of_4(val1:int, val2:int) -> bool:
-                return ((val1 - val2) <= 4)
-
-            nw_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_nw[0]),diff_of_4(player_hitbox_nw[0],(item_x+item_width)))
-            nw_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_nw[1]),diff_of_4(player_hitbox_nw[1],(item_y+item_height)))
-            nw_touches_item = jnp.logical_and(nw_close_in_x,nw_close_in_y)
-
-            ne_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_ne[0]),diff_of_4(player_hitbox_ne[0],(item_x+item_width)))
-            ne_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_ne[1]),diff_of_4(player_hitbox_ne[1],(item_y+item_height)))
-            ne_touches_item = jnp.logical_and(ne_close_in_x,ne_close_in_y)
             
-            se_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_se[0]),diff_of_4(player_hitbox_se[0],(item_x+item_width)))
-            se_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_se[1]),diff_of_4(player_hitbox_se[1],(item_y+item_height)))
-            se_touches_item = jnp.logical_and(se_close_in_x,se_close_in_y)
+            walk_direction = jax.lax.switch(
+                action,
+                [lambda:Action.NOOP, #this should never occour
+                lambda:Action.FIRE,
+                lambda:Action.UP,
+                lambda:Action.RIGHT,
+                lambda:Action.LEFT,
+                lambda:Action.DOWN,
+                lambda:Action.UPRIGHT,
+                lambda:Action.UPLEFT,
+                lambda:Action.DOWNRIGHT,
+                lambda:Action.DOWNLEFT,
+                lambda:Action.UP,           #UPFIRE,
+                lambda:Action.RIGHT,        #RIGHTFIRE,
+                lambda:Action.LEFT,         #LEFTFIRE....etc
+                lambda:Action.DOWN,
+                lambda:Action.UPRIGHT,
+                lambda:Action.UPLEFT,
+                lambda:Action.DOWNRIGHT,
+                lambda:Action.DOWNLEFT
+                ]
+            )
+            
+            def diff_of_4(val1:int, val2:int) -> bool:
+                return ((val1 - val2) < 4)
+
+            nw_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_nw[0]),diff_of_4(player_hitbox_nw[0],(item_x+item_width-1)))
+            nw_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_nw[1]),diff_of_4(player_hitbox_nw[1],(item_y+item_height-1)))
+            nw_close = jnp.logical_and(nw_close_in_x,nw_close_in_y)
+
+            ne_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_ne[0]),diff_of_4(player_hitbox_ne[0],(item_x+item_width-1)))
+            ne_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_ne[1]),diff_of_4(player_hitbox_ne[1],(item_y+item_height-1)))
+            ne_close = jnp.logical_and(ne_close_in_x,ne_close_in_y)
+
+            se_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_se[0]),diff_of_4(player_hitbox_se[0],(item_x+item_width-1)))
+            se_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_se[1]),diff_of_4(player_hitbox_se[1],(item_y+item_height-1)))
+            se_close = jnp.logical_and(se_close_in_x,se_close_in_y)
 
             sw_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_sw[0]),diff_of_4(player_hitbox_sw[0],(item_x+item_width)))
             sw_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_sw[1]),diff_of_4(player_hitbox_sw[1],(item_y+item_height)))
-            sw_touches_item = jnp.logical_and(sw_close_in_x,sw_close_in_y)
+            sw_close = jnp.logical_and(sw_close_in_x,sw_close_in_y)   
+            
+            #player is north to the item
+            player_north = jnp.logical_and(jnp.logical_or(sw_close,se_close),
+                                           jnp.logical_or(nw_close_in_x,ne_close_in_x))
+            player_north_walks_south = jnp.logical_and(player_north, 
+                                                       jnp.logical_or(walk_direction==Action.DOWN,
+                                                                      jnp.logical_or(walk_direction==Action.DOWNLEFT,
+                                                                                     walk_direction==Action.DOWNRIGHT)))
+            #player is north-east to the item
 
+            #player is east to the item
+            player_east = jnp.logical_and(jnp.logical_or(nw_close,sw_close),
+                                           jnp.logical_or(ne_close_in_y,se_close_in_y))
+            player_east_walks_west = jnp.logical_and(player_east,
+                                                     jnp.logical_or(walk_direction==Action.LEFT,
+                                                                    jnp.logical_or(walk_direction==Action.DOWNLEFT,
+                                                                                   walk_direction==Action.UPLEFT)))
+            #player is south-east to the item
+
+            #player is south to the item
+            player_south = jnp.logical_and(jnp.logical_or(nw_close,ne_close),
+                                           jnp.logical_or(sw_close_in_x,se_close_in_x))
+            player_south_walks_north = jnp.logical_and(player_south,
+                                                      jnp.logical_or(walk_direction==Action.UP,
+                                                                     jnp.logical_or(walk_direction==Action.UPLEFT,
+                                                                                    walk_direction==Action.UPRIGHT)))
+            #player is south-west to the item
+
+            #player is west to the item
+            player_west = jnp.logical_and(jnp.logical_or(ne_close,se_close),
+                                           jnp.logical_or(nw_close_in_y,sw_close_in_y))
+            player_west_walks_east = jnp.logical_and(player_west,
+                                                     jnp.logical_or(walk_direction==Action.RIGHT,
+                                                                    jnp.logical_or(walk_direction==Action.DOWNRIGHT,
+                                                                                   walk_direction==Action.UPRIGHT)))
+            #player is north-west to the item
+
+            #jax.debug.print("Walking Direction: {a},{b},{c},{d},{e}",
+            #                a=walk_direction,
+            #                b=player_north_walks_south,
+            #                c=player_east_walks_west,
+            #                d=player_south_walks_north,
+            #                e=player_west_walks_east)
+            #item is on the same tile and is being approached from the correct side
             item_touches = jnp.logical_and(on_same_tile,
-                                           jnp.logical_or(jnp.logical_or(nw_touches_item,
-                                                                         ne_touches_item),
-                                                           jnp.logical_or(se_touches_item,
-                                                                          sw_touches_item)))
+                                           jnp.logical_or(jnp.logical_or(player_north_walks_south,
+                                                                         player_east_walks_west),
+                                                            jnp.logical_or(player_south_walks_north,
+                                                                           player_west_walks_east)))
             #jax.debug.print("Logical values: nw:{a},{b},ne:{c},{d},se:{e},{f},sw:{g},{h}",
             #                a=nw_close_in_x,
             #                b=nw_close_in_y,
@@ -1061,17 +1127,43 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #jax.debug.print("Logical values: {a},{b},{c},{d},{e}",a=on_same_tile,b=nw_touches_item,c=sw_touches_item,d=ne_touches_item,e=se_touches_item)
             return item_touches
 
+        #HOLY ASS, this is a sin
         new_player_inventory = jax.lax.cond(
-            check_for_item(self=self, state=state, item_ID=self.consts.KEY_YELLOW_ID),
-            lambda _: self.consts.KEY_YELLOW_ID, 
+            action == Action.NOOP,
             lambda op: op,
+            lambda _: jax.lax.cond(
+                check_for_item(self=self, state=state, item_ID=self.consts.KEY_YELLOW_ID),
+                lambda _: self.consts.KEY_YELLOW_ID, 
+                lambda _: jax.lax.cond(
+                    check_for_item(self=self, state=state, item_ID=self.consts.KEY_BLACK_ID),
+                    lambda _: self.consts.KEY_BLACK_ID, 
+                    lambda _: jax.lax.cond(
+                        check_for_item(self=self, state=state, item_ID=self.consts.SWORD_ID),
+                        lambda _: self.consts.SWORD_ID, 
+                        lambda _: jax.lax.cond(
+                            check_for_item(self=self, state=state, item_ID=self.consts.BRIDGE_ID),
+                            lambda _: self.consts.BRIDGE_ID, 
+                            lambda _: jax.lax.cond(
+                                check_for_item(self=self, state=state, item_ID=self.consts.MAGNET_ID),
+                                lambda _: self.consts.MAGNET_ID, 
+                                lambda _: jax.lax.cond(
+                                    check_for_item(self=self, state=state, item_ID=self.consts.CHALICE_ID),
+                                    lambda _: self.consts.CHALICE_ID, 
+                                    lambda op: op,
+                                    operand=state.player[3]
+                                ),
+                                operand=state.player[3]
+                            ),
+                            operand=state.player[3]
+                        ),
+                        operand=state.player[3]
+                    ),
+                    operand=state.player[3]
+                ),
+                operand=state.player[3]
+            ),
             operand=state.player[3]
         )
-        
-        #ToDo check around the player, if there is an item
-        #if yes pick it up
-        #check clockwise if an item is near the player
-        #picking up the FIRST item it sees and according to a certain priority
         
 
         return AdventureState(
@@ -1152,22 +1244,16 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
     
-    #Did Yo delete this Daniel?
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
-        previous_state = state
-        state = self._player_step(state, action)
-
-    
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
-            #Player Spawn: x, y, tile, inventory
+            #Player Spawn: x, y, tile, inventory, inventory cooldown
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
                                 self.consts.PLAYER_SPAWN[2],
-                                self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
+                                self.consts.EMPTY_HAND_ID,
+                                0]).astype(jnp.int32),
             #Dragons: x, y ,tile ,state
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
@@ -1226,7 +1312,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
         state = self._player_step(state, action)
-        state = self._item_pickup(state)
+        state = self._item_pickup(state, action)
         state = self._item_drop(state, action)
         state = self._dragon_step(state)
 
@@ -1403,7 +1489,7 @@ class AdventureRenderer(JAXGameRenderer):
         self.config = render_utils.RendererConfig(
             game_dimensions=(250, 160),
             channels=3,
-            #downscale=(200, 128)
+            #ownscale=(200, 128)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
