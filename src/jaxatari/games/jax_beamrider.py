@@ -57,6 +57,13 @@ class LaneBlockerState(IntEnum):
     RETREAT = 3
 
 
+class StandbyPhase(IntEnum):
+    NONE = 0
+    DECEL = 1
+    WAIT = 2
+    SECTOR_DONE = 3
+
+
 class BeamriderConstants(NamedTuple):
 
     WHITE_UFOS_PER_SECTOR: int = 3
@@ -195,6 +202,11 @@ class BeamriderConstants(NamedTuple):
     LANE_BLOCKER_WIDTH: int = 8
     LANE_BLOCKER_HEIGHT: int = 7
     LANE_BLOCKER_RETREAT_SPEED_MULT: float = 2.5
+    
+    # Standby Mode
+    STANDBY_DECEL_DURATION: int = 180
+    STANDBY_SECTOR_DONE_DURATION: int = 124
+    STANDBY_BLINK_DURATION: int = 16
 
 
 def _get_index_ufo(pos: chex.Array) -> chex.Array:
@@ -341,6 +353,10 @@ class LevelState(NamedTuple):
     bouncer_explosion_frame: chex.Array
     bouncer_explosion_pos: chex.Array
 
+    standby_phase: chex.Array
+    standby_timer: chex.Array
+    standby_accumulator: chex.Array
+
 
 class BeamriderState(NamedTuple):
     level: LevelState
@@ -417,12 +433,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         observation = self._get_observation(state)
         return observation, state
 
-    def _create_level_state(self, white_ufo_left=None, torpedoes_left=None, shooting_cooldown=None, shooting_delay=None, shot_type_pending=None) -> LevelState:
+    def _create_level_state(self, white_ufo_left=None, torpedoes_left=None, shooting_cooldown=None, shooting_delay=None, shot_type_pending=None, standby_phase=None) -> LevelState:
         white_ufo_left = white_ufo_left if white_ufo_left is not None else jnp.array(self.consts.WHITE_UFOS_PER_SECTOR)
         torpedoes_left = torpedoes_left if torpedoes_left is not None else jnp.array(3)
         shooting_cooldown = shooting_cooldown if shooting_cooldown is not None else jnp.array(0)
         shooting_delay = shooting_delay if shooting_delay is not None else jnp.array(0)
         shot_type_pending = shot_type_pending if shot_type_pending is not None else jnp.array(self.consts.LASER_ID)
+        standby_phase = standby_phase if standby_phase is not None else jnp.array(int(StandbyPhase.NONE), dtype=jnp.int32)
         
         active_count = jnp.minimum(white_ufo_left.astype(jnp.int32), 3)
         active_mask = jnp.arange(3, dtype=jnp.int32) < active_count
@@ -533,6 +550,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             bouncer_step_index=jnp.array(0, dtype=jnp.int32),
             bouncer_explosion_frame=jnp.array(0, dtype=jnp.int32),
             bouncer_explosion_pos=jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32),
+            standby_phase=standby_phase,
+            standby_timer=jnp.array(0, dtype=jnp.int32),
+            standby_accumulator=jnp.array(0.0, dtype=jnp.float32),
         )
 
     def reset_level(self, next_level=1) -> BeamriderState:
@@ -588,7 +608,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         action = jnp.take(jnp.array(self.action_set), action)
 
         # --- 1. Advance Blue Lines (Always happens) ---
-        line_positions, blue_line_counter = self._line_step(state)
+        line_positions, blue_line_counter, standby_accum = self._line_step(state)
         
         # --- 2. Check for Initialization Phase ---
         # The game logic only starts after the BLUE_LINE_INIT_TABLE is exhausted.
@@ -1181,6 +1201,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 bouncer_step_index=bouncer_step_index,
                 bouncer_explosion_frame=bouncer_explosion_frame,
                 bouncer_explosion_pos=bouncer_explosion_pos,
+                standby_phase=jnp.array(int(StandbyPhase.NONE), dtype=jnp.int32),
+                standby_timer=jnp.array(0, dtype=jnp.int32),
+                standby_accumulator=jnp.array(0.0, dtype=jnp.float32),
             )
 
             reset_level_state = self._create_level_state(
@@ -1188,7 +1211,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 torpedoes_left=torpedos_left,
                 shooting_cooldown=shooting_cooldown,
                 shooting_delay=shooting_delay,
-                shot_type_pending=shot_type_pending
+                shot_type_pending=shot_type_pending,
+                standby_phase=jnp.where(just_died, int(StandbyPhase.DECEL), int(StandbyPhase.SECTOR_DONE)).astype(jnp.int32)
+            )
+            reset_level_state = reset_level_state._replace(
+                line_positions=line_positions,
+                blue_line_counter=blue_line_counter,
+                death_timer=jnp.where(just_died, self.consts.STANDBY_DECEL_DURATION, reset_level_state.death_timer),
+                player_pos=player_x
             )
             final_level_state = jax.tree_util.tree_map(
                 lambda normal, reset: jnp.where(jnp.logical_or(just_died, sector_advanced), reset, normal),
@@ -1228,7 +1258,76 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             observation = self._get_observation(new_state)
             return observation, new_state, env_reward, done, info
 
-        return jax.lax.cond(is_init, handle_init, handle_normal, operand=None)
+        def handle_active(_):
+            return jax.lax.cond(is_init, handle_init, handle_normal, operand=None)
+
+        def handle_standby_decel(_):
+            timer = state.level.standby_timer + 1
+            finished = timer >= self.consts.STANDBY_DECEL_DURATION
+            next_phase = jnp.where(finished, int(StandbyPhase.WAIT), int(StandbyPhase.DECEL))
+            next_timer = jnp.where(finished, 0, timer)
+            
+            # Clear death timer when transitioning to WAIT so blinking sprite appears
+            next_death_timer = jnp.where(finished, 0, state.level.death_timer)
+            
+            new_level = state.level._replace(
+                line_positions=line_positions,
+                blue_line_counter=blue_line_counter,
+                standby_phase=next_phase,
+                standby_timer=next_timer,
+                standby_accumulator=standby_accum,
+                death_timer=next_death_timer,
+                player_pos=jnp.where(finished, 77.0, state.level.player_pos)
+            )
+            new_state = state._replace(level=new_level, steps=state.steps + 1)
+            
+            return self._get_observation(new_state), new_state, jnp.array(0.0, dtype=jnp.float32), jnp.array(False, dtype=jnp.bool_), self._get_info(new_state)
+
+        def handle_standby_wait(_):
+            timer = state.level.standby_timer + 1
+            # Check for any input (non-NOOP)
+            pressed = action != Action.NOOP
+            
+            next_phase = jnp.where(pressed, int(StandbyPhase.NONE), int(StandbyPhase.WAIT))
+            # Reset blue_line_counter to 0 if we exit wait phase, to trigger acceleration (init)
+            next_counter = jnp.where(pressed, 0, blue_line_counter)
+            
+            new_level = state.level._replace(
+                line_positions=line_positions,
+                blue_line_counter=next_counter,
+                standby_phase=next_phase,
+                standby_timer=timer,
+                standby_accumulator=standby_accum
+            )
+            # Advance RNG to ensure variety after resume
+            rngs = jax.random.split(state.rng, 2)
+            new_state = state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
+            
+            return self._get_observation(new_state), new_state, jnp.array(0.0, dtype=jnp.float32), jnp.array(False, dtype=jnp.bool_), self._get_info(new_state)
+
+        def handle_standby_sector_done(_):
+            timer = state.level.standby_timer + 1
+            finished = timer >= self.consts.STANDBY_SECTOR_DONE_DURATION
+            next_phase = jnp.where(finished, int(StandbyPhase.WAIT), int(StandbyPhase.SECTOR_DONE))
+            next_timer = jnp.where(finished, 0, timer)
+            
+            new_level = state.level._replace(
+                line_positions=line_positions,
+                blue_line_counter=blue_line_counter,
+                standby_phase=next_phase,
+                standby_timer=next_timer,
+                standby_accumulator=standby_accum,
+                player_pos=jnp.where(finished, 77.0, state.level.player_pos)
+            )
+            new_state = state._replace(level=new_level, steps=state.steps + 1)
+            
+            return self._get_observation(new_state), new_state, jnp.array(0.0, dtype=jnp.float32), jnp.array(False, dtype=jnp.bool_), self._get_info(new_state)
+
+        return jax.lax.switch(
+            state.level.standby_phase,
+            [handle_active, handle_standby_decel, handle_standby_wait, handle_standby_sector_done],
+            operand=None
+        )
 
 
     def _player_step(self, state: BeamriderState, action: chex.Array):
@@ -2826,12 +2925,36 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
 
     def _line_step(self, state: BeamriderState):
-        counter = state.level.blue_line_counter + 1
+        counter = state.level.blue_line_counter
+        standby_phase = state.level.standby_phase
+        standby_timer = state.level.standby_timer
+        standby_accum = state.level.standby_accumulator
         
-        # Determine current table and index
-        # Transition from INIT to LOOP
-        # Use length-1 to avoid out of bounds during the very last frame of init
-        is_init = counter < len(BLUE_LINE_INIT_TABLE)
+        def get_inc_normal(_):
+            return 1, 0.0
+
+        def get_inc_decel(_):
+            # Speed linearly decreases from 1.0 to 0.0 over 180 frames
+            speed = 1.0 - (standby_timer.astype(jnp.float32) / float(self.consts.STANDBY_DECEL_DURATION))
+            speed = jnp.maximum(speed, 0.0)
+            
+            new_accum = standby_accum + speed
+            inc = new_accum.astype(jnp.int32)
+            rem_accum = new_accum - inc.astype(jnp.float32)
+            return inc, rem_accum
+
+        def get_inc_wait(_):
+            return 0, 0.0
+
+        inc, next_accum = jax.lax.switch(
+            standby_phase,
+            [get_inc_normal, get_inc_decel, get_inc_wait, get_inc_normal],
+            operand=None
+        )
+        
+        next_counter = counter + inc
+        
+        is_init = next_counter < len(BLUE_LINE_INIT_TABLE)
         
         def get_init_pos(c):
             return BLUE_LINE_INIT_TABLE[jnp.minimum(c, len(BLUE_LINE_INIT_TABLE) - 1)]
@@ -2840,9 +2963,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             loop_idx = (c - len(BLUE_LINE_INIT_TABLE)) % len(BLUE_LINE_LOOP_TABLE)
             return BLUE_LINE_LOOP_TABLE[loop_idx]
             
-        positions = jax.lax.cond(is_init, get_init_pos, get_loop_pos, counter)
+        positions = jax.lax.cond(is_init, get_init_pos, get_loop_pos, next_counter)
         
-        return positions, counter
+        return positions, next_counter, next_accum
 
     def _bullet_infos(self, state: BeamriderState):
         shot_frame = state.level.player_shot_frame
@@ -3092,6 +3215,7 @@ class BeamriderRenderer(JAXGameRenderer):
         return [
             {'name': 'background_sprite', 'type': 'background', 'file': 'new_background.npy'},
             {'name': 'player_sprite', 'type': 'group', 'files': [f'Player/Player_{i}.npy' for i in range(1, 17)]},
+            {'name': 'purple_player', 'type': 'single', 'file': 'Purple_player_standby.npy'},
             {'name': 'dead_player', 'type': 'single', 'file': 'Dead_Player.npy'},
             {'name': 'white_ufo', 'type': 'group', 'files': ['White_Ufo_Stage_1.npy', 'White_Ufo_Stage_2.npy', 'White_Ufo_Stage_3.npy', 'White_Ufo_Stage_4.npy', 'White_Ufo_Stage_5.npy', 'White_Ufo_Stage_6.npy', 'White_Ufo_Stage_7.npy']},
             {'name': 'bouncer', 'type': 'single', 'file': 'Bouncer.npy'},
@@ -3346,14 +3470,27 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_player_and_bullet(self, raster, state):
         player_masks = self.SHAPE_MASKS["player_sprite"]
         dead_player_mask = self.SHAPE_MASKS["dead_player"]
+        purple_player_mask = self.SHAPE_MASKS["purple_player"]
         
         # Determine which mask to use
         is_dead = state.level.death_timer > 0
         is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
         
+        standby_phase = state.level.standby_phase
+        standby_timer = state.level.standby_timer
+        is_wait = standby_phase == int(StandbyPhase.WAIT)
+        
         def render_alive(r):
             sprite_idx = jnp.where(is_init, 9, ((state.steps // 2) + 1) % 16)
             mask = player_masks[sprite_idx]
+            
+            # Standby Override
+            use_purple = is_wait & ((standby_timer // self.consts.STANDBY_BLINK_DURATION) % 2 == 1)
+            use_p10 = is_wait & jnp.logical_not(use_purple)
+            
+            mask = jnp.where(use_purple, purple_player_mask, mask)
+            mask = jnp.where(use_p10, player_masks[9], mask)
+            
             return self.jr.render_at(r, state.level.player_pos, self.consts.PLAYER_POS_Y, mask)
 
         def render_dead(r):
