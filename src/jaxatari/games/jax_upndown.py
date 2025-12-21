@@ -17,7 +17,13 @@ class UpNDownConstants(NamedTuple):
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
     ACTION_REPEAT_PROBS: float = 0.25
     MAX_SPEED: int = 4
+    INITIAL_LIVES: int = 3
+    RESPAWN_Y: int = 0
+    RESPAWN_X: int = 30
+    RESPAWN_DELAY_FRAMES: int = 60
+    WATER_DEATH_PENALTY: int = 0
     JUMP_FRAMES: int = 10
+    ALL_FLAGS_BONUS: int = 1000
     LANDING_ZONE: int = 15
     FIRST_ROAD_LENGTH: int = 4
     SECOND_ROAD_LENGTH: int = 4
@@ -113,6 +119,9 @@ class UpNDownState(NamedTuple):
     is_jumping: chex.Array
     is_on_road: chex.Array
     player_car: Car
+    lives: chex.Array
+    is_dead: chex.Array
+    respawn_timer: chex.Array
     step_counter: chex.Array
     round_started: chex.Array
     movement_steps: chex.Array
@@ -421,11 +430,63 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         
         return updated_collectibles, score_delta, new_collectible_timer
+    def _death_step(self, state: UpNDownState) -> UpNDownState:
+    # Player on water road (index 2 assumed water)
+        died = jnp.logical_and(
+            state.player_car.current_road == 2,
+            ~state.is_dead,
+    )
+
+        lives = jax.lax.cond(
+            died,
+            lambda _: state.lives - 1,
+            lambda _: state.lives,
+            operand=None,
+    )
+        lives = jax.lax.cond(
+        died,
+        lambda _: state.lives - 1,
+        lambda _: state.lives,
+        operand=None,
+    )
+        respawn_timer = jax.lax.cond(
+        died,
+        lambda _: jnp.array(self.consts.RESPAWN_DELAY_FRAMES),
+        lambda _: jnp.maximum(state.respawn_timer - 1, 0),
+        operand=None,
+    )
+        is_dead = jnp.logical_and(
+        jnp.logical_or(state.is_dead, died),
+        respawn_timer > 0)
+    
+        player_car = jax.lax.cond(
+        jnp.logical_and(state.is_dead, respawn_timer == 0),
+        lambda _: state.player_car._replace(
+            position=state.player_car.position._replace(
+                x=jnp.array(self.consts.RESPAWN_X, dtype=jnp.float32),
+                y=jnp.array(self.consts.RESPAWN_Y, dtype=jnp.float32),
+            ),
+            speed=0,
+            current_road=0,
+        ),
+        lambda _: state.player_car,
+        operand=None,
+    )
+        return state._replace(
+        lives=lives,
+        is_dead=is_dead,
+        respawn_timer=respawn_timer,
+        player_car=player_car,
+    )
+    
 
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
+        lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
+        is_dead=jnp.array(False),
+        respawn_timer=jnp.array(0, dtype=jnp.int32),
 
 
 
@@ -622,6 +683,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 road_index_B=road_index_B,
                 type=state.player_car.type,
             ),
+            lives=state.lives,
+            is_dead=state.is_dead,
+            respawn_timer=state.respawn_timer,
             step_counter=state.step_counter + 1,
             round_started=jnp.logical_or(state.round_started, player_speed != 0),
             movement_steps=jax.lax.cond(
@@ -653,6 +717,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_jumping=state.is_jumping,
             is_on_road=state.is_on_road,
             player_car=state.player_car,
+            lives=state.lives,
+            is_dead=state.is_dead,
+            respawn_timer=state.respawn_timer,
             step_counter=state.step_counter,
             round_started=state.round_started,
             movement_steps=state.movement_steps,
@@ -661,6 +728,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectibles=state.collectibles,
             collectible_spawn_timer=state.collectible_spawn_timer,
         )
+    def _completion_bonus_step(self, state: UpNDownState) -> UpNDownState:
+        all_flags_collected = jnp.all(state.flags_collected_mask)
+
+        bonus = jax.lax.cond(
+            all_flags_collected,
+            lambda _: self.consts.ALL_FLAGS_BONUS,
+            lambda _: 0,
+            operand=None,
+    )
+        return state._replace(score=state.score + bonus,lives=state.lives,
+            is_dead=state.is_dead,
+            respawn_timer=state.respawn_timer,)
     
     def _collectible_step_main(self, state: UpNDownState) -> UpNDownState:
         """Update collectible spawning, despawning, and collection."""
@@ -679,6 +758,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_jumping=state.is_jumping,
             is_on_road=state.is_on_road,
             player_car=state.player_car,
+            lives=state.lives,
+            is_dead=state.is_dead,
+            respawn_timer=state.respawn_timer,
             step_counter=state.step_counter,
             round_started=state.round_started,
             movement_steps=state.movement_steps,
@@ -704,6 +786,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_jumping=state.is_jumping,
             is_on_road=state.is_on_road,
             player_car=state.player_car,
+            lives=state.lives,
+            is_dead=state.is_dead,
+            respawn_timer=state.respawn_timer,
             step_counter=state.step_counter,
             round_started=state.round_started,
             movement_steps=state.movement_steps,
@@ -728,6 +813,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
         # Alternate roads 0/1 for variety
         flag_roads = jnp.arange(self.consts.NUM_FLAGS) % 2
+        
+        
+
         
         # Calculate which road segment each flag is on based on Y position
         def get_road_segment(y):
@@ -757,35 +845,45 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             type_id=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
             active=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.bool_),
         )
-        
+        player_car = Car(
+        position=EntityPosition(
+            x=jnp.array(30, dtype=jnp.int32),
+            y=jnp.array(0, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+        ),
+        speed=jnp.array(0, dtype=jnp.int32),
+        direction_x=jnp.array(0, dtype=jnp.int32),
+        current_road=jnp.array(0, dtype=jnp.int32),
+        road_index_A=jnp.array(0, dtype=jnp.int32),
+        road_index_B=jnp.array(0, dtype=jnp.int32),
+        type=jnp.array(0, dtype=jnp.int32),
+    )
         state = UpNDownState(
-            score=0,
-            difficulty=self.consts.DIFFICULTIES[0],
-            jump_cooldown=0,
-            is_jumping=False,
-            is_on_road=True,
-            player_car=Car(
-                position=EntityPosition(
-                    x=30,
-                    y= 0,
-                    width=self.consts.PLAYER_SIZE[0],
-                    height=self.consts.PLAYER_SIZE[1],
-                ),
-                speed=0,
-                direction_x=0,
-                current_road=0,
-                road_index_A=0,
-                road_index_B=0,
-                type=0,
-            ),
-            step_counter=jnp.array(0),
-            round_started=jnp.array(False),
-            movement_steps=jnp.array(0),
-            flags=flags,
-            flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
-            collectibles=collectibles,
-            collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
-        )
+        score=jnp.array(0, dtype=jnp.int32),
+        difficulty=jnp.array(self.consts.DIFFICULTIES[0], dtype=jnp.int32),
+        jump_cooldown=jnp.array(0, dtype=jnp.int32),
+        is_jumping=jnp.array(False),
+        is_on_road=jnp.array(True),
+
+        player_car=player_car,
+
+        step_counter=jnp.array(0, dtype=jnp.int32),
+        round_started=jnp.array(False),
+        movement_steps=jnp.array(0, dtype=jnp.int32),
+
+        flags=flags,
+        flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
+        collectibles=collectibles,
+        collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
+
+        # -------- NEW REQUIRED FIELDS --------
+        lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
+        is_dead=jnp.array(False),
+        respawn_timer=jnp.array(0, dtype=jnp.int32),
+    )
+
+        
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
@@ -793,9 +891,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def step(self, state: UpNDownState, action: chex.Array) -> Tuple[UpNDownObservation, UpNDownState, float, bool, UpNDownInfo]:
         previous_state = state
         state = self._player_step(state, action)
+        state = self._death_step(state)
+
         state = self._passive_score_step_main(state)
         state = self._flag_step_main(state)
+        state = self._completion_bonus_step(state)
         state = self._collectible_step_main(state)
+        
+
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -860,7 +963,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: UpNDownState) -> bool:
-        return jnp.logical_not(True)
+        return jnp.logical_or(
+            state.lives <= 0,
+            jnp.all(state.flags_collected_mask),
+)
+
+        
 
 class UpNDownRenderer(JAXGameRenderer):
     def __init__(self, consts: UpNDownConstants = None):
