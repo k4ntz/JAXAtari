@@ -312,7 +312,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             step_counter=0,
             acceleration_counter=0,
             game_mode=GameMode.PLAY_SELECTION,
-            controlled_player_id = PlayerID.PLAYER1_OUTSIDE,
+            controlled_player_id = jax.lax.select(
+                (holder == PlayerID.PLAYER1_INSIDE) | (holder == PlayerID.PLAYER2_INSIDE),
+                PlayerID.PLAYER1_INSIDE,
+                PlayerID.PLAYER1_OUTSIDE
+            ),
             key=key,
         )
 
@@ -1175,8 +1179,19 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             b_state = jax.lax.cond(is_held, update_held_pos, lambda b: b, b_state)
 
             # Update controlled player
-            is_p1_team_holder = (b_state.holder == PlayerID.PLAYER1_INSIDE) | (b_state.holder == PlayerID.PLAYER1_OUTSIDE)
-            new_controlled_player_id = jax.lax.select(is_p1_team_holder, b_state.holder, s.controlled_player_id)
+            holder = b_state.holder
+            should_switch_to_inside = (holder == PlayerID.PLAYER1_INSIDE) | (holder == PlayerID.PLAYER2_INSIDE)
+            should_switch_to_outside = (holder == PlayerID.PLAYER1_OUTSIDE) | (holder == PlayerID.PLAYER2_OUTSIDE)
+            
+            new_controlled_player_id = jax.lax.select(
+                should_switch_to_inside,
+                PlayerID.PLAYER1_INSIDE,
+                jax.lax.select(
+                    should_switch_to_outside,
+                    PlayerID.PLAYER1_OUTSIDE,
+                    s.controlled_player_id
+                )
+            )
             
             return s.replace(ball=b_state, controlled_player_id=new_controlled_player_id)
 
