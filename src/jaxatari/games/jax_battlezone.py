@@ -223,7 +223,6 @@ class BattlezoneInfo(NamedTuple):
     time: jnp.ndarray
 
 
-
 #----------------------------Battlezone Environment------------------------
 class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, BattlezoneInfo, BattlezoneConstants]):
     def __init__(self, consts: BattlezoneConstants = None, reward_funcs: list[callable]=None):
@@ -257,24 +256,37 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: BattlezoneState, action: chex.Array) -> BattlezoneState:
-        
+
         #-------------------parse action--------------------
         noop = (action == Action.NOOP)
-        up = jnp.logical_or(action==Action.UP,action==Action.UPFIRE)
-        down = jnp.logical_or(action==Action.DOWN,action==Action.DOWNFIRE)
-        right = jnp.logical_or(action==Action.RIGHT,action==Action.RIGHTFIRE)
+        up = jnp.logical_or(action==Action.UP, action==Action.UPFIRE)
+        down = jnp.logical_or(action==Action.DOWN, action==Action.DOWNFIRE)
+        right = jnp.logical_or(action==Action.RIGHT, action==Action.RIGHTFIRE)
         left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
         upLeft = jnp.logical_or(action == Action.UPLEFT, action == Action.UPLEFTFIRE)
-        upRight = jnp.logical_or(action==Action.UPRIGHT,action==Action.UPRIGHTFIRE)
+        upRight = jnp.logical_or(action==Action.UPRIGHT, action==Action.UPRIGHTFIRE)
         downLeft = jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNLEFTFIRE)
-        downRight = jnp.logical_or(action==Action.DOWNRIGHT,action==Action.DOWNRIGHTFIRE)
-        wants_fire = jnp.any(jnp.stack([action == Action.FIRE, action == Action.LEFTFIRE,
-                                 action == Action.UPFIRE, action == Action.UPLEFTFIRE,
-                                 action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
-        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
+        downRight = jnp.logical_or(action==Action.DOWNRIGHT, action==Action.DOWNRIGHTFIRE)
+        
+        wants_fire = jnp.any(jnp.stack([
+            action == Action.FIRE, 
+            action == Action.LEFTFIRE,
+            action == Action.UPFIRE,
+            action == Action.RIGHTFIRE,
+            action == Action.DOWNFIRE, 
+            action == Action.UPLEFTFIRE,  # TODO: why doesn't this work?
+            action == Action.UPRIGHTFIRE,
+            action == Action.DOWNLEFTFIRE,
+            action == Action.DOWNRIGHTFIRE,  # TODO: why doesn't this work?
+        ]), axis=0)
+
+        jax.debug.print("{}", action)
+        
+        direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft])
 
         #-------------------fire--------------
         will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
+        
         def fire_projectile(state: BattlezoneState):
             return state._replace(
                 cur_fire_cd=jnp.array(self.consts.FIRE_CD, dtype=jnp.int32),
