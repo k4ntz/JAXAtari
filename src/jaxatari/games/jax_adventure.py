@@ -95,7 +95,7 @@ class AdventureConstants(NamedTuple):
     DRAGON_SIZE: Tuple[int, int] = (8, 44)
     GATE_SIZE: Tuple[int, int] = (7, 32)
     SWORD_SIZE: Tuple[int, int] = (8, 10)
-    BRIDGE_SIZE: Tuple[int, int] = (32, 48)
+    BRIDGE_SIZE: Tuple[int, int] = (4, 48)
     MAGNET_SIZE: Tuple[int, int] = (8, 16)
     CHALICE_SIZE: Tuple[int, int] = (8, 18)
     #Inventory IDs
@@ -1182,8 +1182,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
     
     def _gate_interaction(self, state: AdventureState) -> AdventureState:
-        gate_yellow_open = state.gate_yellow[0]
-        gate_black_open = state.gate_black[0]
+        gate_yellow_state = state.gate_yellow[0]
+        gate_yellow_close = False
+        gate_black_state = state.gate_black[0]
+        gate_black_close = False
         gate_yellow_counter = state.gate_yellow[1]
         gate_black_counter = state.gate_black[1]
 
@@ -1224,55 +1226,73 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         yellow_key_in_range = jnp.logical_and(yellow_key_in_inventory, player_infront_yellow_gate)
         black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
         
-        gate_opening_yellow = jnp.logical_or(jnp.logical_and(gate_yellow_open>0, gate_yellow_open<5), yellow_key_in_range)
-        gate_opening_black = jnp.logical_or(jnp.logical_and(gate_black_open>0, gate_black_open<5), black_key_in_range)
+        gate_opening_yellow = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_yellow_state>=0, gate_yellow_state<6), yellow_key_in_range), gate_yellow_counter == 0)
+        gate_opening_black = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_black_state>=0, gate_black_state<6), black_key_in_range), gate_black_counter == 0)
+    
+        gate_yellow_close =jnp.logical_and(jnp.logical_and(gate_yellow_state>0, gate_yellow_counter > 20), yellow_key_in_range)
+        gate_black_close = jnp.logical_and(jnp.logical_and(gate_black_state>0, gate_black_counter > 20), black_key_in_range)
 
-        gate_render_yellow = False
-        gate_render_yellow = jax.lax.cond(
-            jnp.logical_and(gate_opening_yellow, gate_yellow_counter >= gate_yellow_open * 20),
-            lambda _: True,
-            lambda _: False,
-            operand = None
-        )
-
-        gate_yellow_counter = jax.lax.cond(
-            gate_render_yellow,
-            lambda op: op,
-            lambda op: op+1,
-            operand = gate_yellow_counter
-        )
-
-        gate_render_black = False
-        gate_render_black = jax.lax.cond(
-            jnp.logical_and(gate_opening_black, gate_black_counter >= gate_black_open * 20),
-            lambda _: True,
-            lambda _: False,
-            operand = None
-        )
-
-        gate_black_counter = jax.lax.cond(
-            gate_render_black,
-            lambda op: op,
-            lambda op: op+1,
-            operand = gate_black_counter
-        )
-
-        gate_yellow_open = jax.lax.cond(
-            gate_render_yellow,
+        gate_opening_yellow = jnp.logical_and(gate_opening_yellow, jnp.logical_not(gate_yellow_close))
+        gate_opening_black = jnp.logical_and(gate_opening_black, jnp.logical_not(gate_black_close))
+        
+        gate_yellow_state = jax.lax.cond(
+            gate_opening_yellow,
             lambda op: op + 1,
             lambda op: op,
-            operand = gate_yellow_open
+            operand = gate_yellow_state
         )
 
-        gate_black_open = jax.lax.cond(
+        gate_yellow_state = jax.lax.cond(
+            gate_yellow_close,
+            lambda op: op - 1,
+            lambda op:op,
+            operand = gate_yellow_state
+        )
+
+        gate_black_state = jax.lax.cond(
             gate_opening_black,
             lambda op: op + 1,
             lambda op: op,
-            operand = gate_black_open
+            operand = gate_black_state
         )
 
-        new_gate_yellow = [gate_yellow_open, gate_yellow_counter]
-        new_gate_black = [gate_black_open, gate_black_counter]
+        gate_black_state = jax.lax.cond(
+            gate_black_close,
+            lambda op: op - 1,
+            lambda op:op,
+            operand = gate_black_state
+        )
+
+        gate_yellow_counter = jax.lax.cond(
+            jnp.logical_or(gate_yellow_state == 6, jnp.logical_and(gate_yellow_state==0, gate_yellow_counter<30)),
+            lambda op:op + 1,
+            lambda op:op,
+            operand = gate_yellow_counter
+        )
+
+        gate_yellow_counter = jax.lax.cond(
+            jnp.logical_and(gate_yellow_state == 0, gate_yellow_counter>=30),
+            lambda _: 0,
+            lambda op:op,
+            operand = gate_yellow_counter
+        )
+
+        gate_black_counter = jax.lax.cond(
+            jnp.logical_or(gate_black_state == 6, jnp.logical_and(gate_black_state==0, gate_black_counter<30)),
+            lambda op:op + 1,
+            lambda op:op,
+            operand = gate_black_counter
+        )
+
+        gate_black_counter = jax.lax.cond(
+            jnp.logical_and(gate_black_state == 0, gate_black_counter>=30),
+            lambda _: 0,
+            lambda op:op,
+            operand = gate_black_counter
+        )
+
+        new_gate_yellow = [gate_yellow_state, gate_yellow_counter]
+        new_gate_black = [gate_black_state, gate_black_counter]
 
         return AdventureState(
             step_counter=state.step_counter,
