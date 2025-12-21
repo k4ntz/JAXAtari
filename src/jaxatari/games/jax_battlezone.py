@@ -89,31 +89,32 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 
-
 #------------------------named Tuples---------------------------
 class EnemyType(IntEnum):
     TANK = 0
     SAUCER = 1
-    #FIGHTER_JET = 2
-    #SUPER_TANK = 3
+    # FIGHTER_JET = 2
+    # SUPER_TANK = 3
 
 
 class BattlezoneConstants(NamedTuple):
-    WIDTH: int = 160  #rgb_array size
+    WIDTH: int = 160  # rgb_array size
     HEIGHT: int = 210
-    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)#(45, 129, 105) but we need to change pallette first
-    WALL_TOP_Y: int = 0     #correct
-    WALL_TOP_HEIGHT: int = 36   #correct
-    WALL_BOTTOM_Y: int = 177    #correct
-    WALL_BOTTOM_HEIGHT: int = 33    #correct
+    WORLD_SIZE_X: int = 256  # world size in x direction
+    WORLD_SIZE_Z: int = 256  # world size in z direction
+    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)  # (45, 129, 105) but we need to change pallette first
+    WALL_TOP_Y: int = 0     # correct
+    WALL_TOP_HEIGHT: int = 36   # correct
+    WALL_BOTTOM_Y: int = 177    # correct
+    WALL_BOTTOM_HEIGHT: int = 33    # correct
     TANK_SPRITE_POS_X: int = 43
     TANK_SPRITE_POS_Y: int = 140
     TARGET_INDICATOR_POS_X: int = 80
     TARGET_INDICATOR_POS_Y: int = 77
     TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = (255, 255, 0)
     TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = (0, 0, 0)
-    CHAINS_POS_Y:int = 158
-    CHAINS_L_POS_X:int = 19
+    CHAINS_POS_Y: int = 158
+    CHAINS_L_POS_X: int = 19
     CHAINS_R_POS_X: int = 109
     CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
     CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
@@ -121,30 +122,30 @@ class BattlezoneConstants(NamedTuple):
     GRASS_BACK_Y: int = 95
     HORIZON_Y: int = 92
     GRASS_FRONT_Y: int = 137
-    RADAR_ROTATION_SPEED:float = -0.05
-    RADAR_CENTER_X:int = 80
-    RADAR_CENTER_Y:int = 18
-    RADAR_RADIUS:int = 10
+    RADAR_ROTATION_SPEED: float = -0.05
+    RADAR_CENTER_X: int = 80
+    RADAR_CENTER_Y: int = 18
+    RADAR_RADIUS: int = 10
     RADAR_MAX_SCAN_RADIUS: int = 70
     RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
     RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
     LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
-    LIFE_POS_X:int = 64
-    LIFE_POS_Y:int = 189
-    LIFE_X_OFFSET:int = 8
-    SCORE_POS_X:int = 89
-    SCORE_POS_Y:int = 179
+    LIFE_POS_X: int = 64
+    LIFE_POS_Y: int = 189
+    LIFE_X_OFFSET: int = 8
+    SCORE_POS_X: int = 89
+    SCORE_POS_Y: int = 179
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1
-    PLAYER_ROTATION_SPEED:float = 2*jnp.pi/536
-    PLAYER_SPEED:float = 0.25
-    PROJECTILE_SPEED:float = 0.5
-    ENEMY_POS_Y:int = 85
-    FIRE_CD:int = 150 #todo change
-    HITBOX_SIZE:float = 6.0
-    DEATH_ANIM_LENGTH:int = 30
+    PLAYER_ROTATION_SPEED: float = 2*jnp.pi/536
+    PLAYER_SPEED: float = 0.25
+    PROJECTILE_SPEED: float = 0.5
+    ENEMY_POS_Y: int = 85
+    FIRE_CD: int = 114
+    HITBOX_SIZE: float = 6.0
+    DEATH_ANIM_LENGTH: int = 30
     ENEMY_HITBOX_SIZE: float = 4.0
-    ENEMY_SCORES:chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
-    ENEMY_DEATH_ANIM_LENGTH:int = 30
+    ENEMY_SCORES: chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
+    ENEMY_DEATH_ANIM_LENGTH: int = 30
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
@@ -174,7 +175,7 @@ class Enemy(NamedTuple):
     orientation_angle: chex.Array
     active: chex.Array
     death_anim_counter: chex.Array
-    shoot_cd:chex.Array
+    shoot_cd: chex.Array
     phase: chex.Array
     dist_moved_temp: chex.Array
     point_store_1_temp: chex.Array      # Especially for Saucer
@@ -194,8 +195,8 @@ class BattlezoneState(NamedTuple):
     grass_anim_counter: chex.Array
     radar_rotation_counter: chex.Array
     enemies: Enemy
-    player_projectile: Projectile #player can only fire 1 projectile
-    enemy_projectiles: Projectile #per enemy 1 projectile
+    player_projectile: Projectile # player can only fire 1 projectile
+    enemy_projectiles: Projectile # per enemy 1 projectile
     random_key: chex.PRNGKey
     shot_spawn: chex.Array
 
@@ -484,7 +485,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         ###
         sin_alpha = jnp.sin(alpha)
         cos_alpha = jnp.cos(alpha)
-        # Changing position bsed on player movement
+        # Changing position based on player movement
+        # TODO: it would be better if we only computed the offset for the active movement
         offset_xz = jnp.array([
             [0, 0],     # Noop
             [0, -speed],  # Up
@@ -500,8 +502,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         idx = jnp.argmax(player_direction)
         offset = offset_xz[idx]
 
-        new_x = prev_x + offset[0] * active
-        new_z = prev_z + offset[1] * active
+        new_x = prev_x + offset[0] #* active
+        new_z = prev_z + offset[1] #* active
 
         return new_x, new_z
 
@@ -577,24 +579,24 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     # -------------Enemy Movements-----------------
     @partial(jax.jit, static_argnums=(0,))
-    def enemy_movement(self, enemy:Enemy, projectile:Projectile):
-        perfect_angle = (2*jnp.pi - jnp.arctan2(enemy.x , enemy.z))%(2*jnp.pi)
-        angle_diff = (perfect_angle-enemy.orientation_angle+jnp.pi)%(2*jnp.pi)-jnp.pi
+    def enemy_movement(self, enemy: Enemy, projectile: Projectile):
+        perfect_angle = (2*jnp.pi - jnp.arctan2(enemy.x , enemy.z)) % (2*jnp.pi)
+        angle_diff = (perfect_angle-enemy.orientation_angle+jnp.pi) % (2*jnp.pi)-jnp.pi
         speed = self.consts.ENEMY_SPEED[enemy.enemy_type]
         rot_speed = self.consts.ENEMY_ROT_SPEED[enemy.enemy_type]
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards:int = 1) -> Enemy:    # Enemy towards player with 1 and away with -1
+        def move_to_player(enemy: Enemy, towards: int = 1) -> Enemy:  # Enemy towards player with 1 and away with -1
             k = (enemy.distance + towards * speed) / enemy.distance
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
-            return enemy._replace(x=enemy.x  +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
+            return enemy._replace(x=enemy.x +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
 
         def enemy_turn(enemy: Enemy) -> Enemy:
             return enemy._replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
 
-        def shoot_projectile(args)->(Enemy, Projectile):
+        def shoot_projectile(args) -> Tuple[Enemy, Projectile]:
             enemy, projectile= args
             new_enemy = enemy._replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
             return new_enemy, projectile._replace(
@@ -609,8 +611,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         ## Tank
         def tank_movement(tank: Enemy) -> Enemy:
             #jax.debug.print("{}",tank.distance)
-            def player_spottet(tank):
+            def player_spotted(tank):
+
                 def in_range(tank):
+
                     def towards_player(tank):
                         #jax.debug.print("MOVE TO PLayer{}", tank.orientation_angle)
                         return move_to_player(tank)
@@ -620,17 +624,18 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                         return move_to_player(tank, -1)
 
                     return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
+                
                 def out_range(tank):
                     return move_to_player(tank, -1)
 
                 return jax.lax.cond(tank.distance <= 30.0, in_range, out_range, tank)
-            def player_not_spottet(tank):
-
+            
+            def player_not_spotted(tank):
                 return enemy_turn(tank)
                 #return jax.lax.switch(distance_threshold_indx(tank.distance), (), tank)
 
-            return jax.lax.cond(jnp.abs(angle_diff)<=rot_speed,
-                                player_spottet, player_not_spottet, tank)
+            return jax.lax.cond(jnp.abs(angle_diff) <= rot_speed,
+                                player_spotted, player_not_spotted, tank)
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
@@ -1134,7 +1139,7 @@ class BattlezoneRenderer(JAXGameRenderer):
                 zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
                                self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
-                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)  # TODO: why is the animation fixed to a screen position, not the world position of the enemy?
+                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
                 return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
             
