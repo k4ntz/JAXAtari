@@ -2739,6 +2739,19 @@ class JaxDefender(
             score=state.score,
         )
 
+    def obs_to_flat_array(self, obs: DefenderObservation) -> jnp.ndarray:
+        return jnp.concatenate(
+            [obs.player_x.flatten(), obs.player_y.flatten(), obs.score.flatten()]
+        )
+
+    def observation_space(self) -> Space:
+        return spaces.Dict(
+            {"player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32)}
+        )
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
     def _get_info(
         self, state: DefenderState, all_rewards: jnp.array = None
     ) -> DefenderInfo:
