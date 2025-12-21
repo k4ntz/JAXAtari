@@ -1,7 +1,6 @@
 """
 3D Tic-Tac-Toe for JAXAtari
 JAX Implementation (JIT-compatible & Vectorized)
-
 """
 
 from typing import NamedTuple, Tuple
@@ -157,6 +156,7 @@ class TicTacToe3DState(NamedTuple):
     cursor_y: jnp.ndarray
     cursor_z: jnp.ndarray
     frame: jnp.ndarray
+    key: chex.PRNGKey           # Random key for AI
 
 class TicTacToe3DObservation(NamedTuple):
     """Object-centric observation exposed to agent."""
@@ -223,6 +223,9 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         return self.renderer.render(state)
 
     def reset(self, key: chex.PRNGKey):
+        # Split key for initial randomness if needed (though start is deterministic)
+        key, subkey = jax.random.split(key)
+        
         state = TicTacToe3DState(
             board=jnp.zeros((4, 4, 4), dtype=jnp.uint8),
             current_player=jnp.int32(self.consts.FIRST_PLAYER),
@@ -233,6 +236,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             cursor_y=jnp.int32(0),
             cursor_z=jnp.int32(0),
             frame=jnp.int32(0),
+            key=subkey
         )
 
         observation = state.board
@@ -240,301 +244,252 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TicTacToe3DState, action: jnp.ndarray):
-        """Execute one game step."""
+        """Execute one game step (User Move -> CPU Move)."""
         
-        # --- Move cursor based on action ---
+        # --- 1. USER TURN (Cursor Move & Place) ---
         cursor_array = jnp.array([state.cursor_x, state.cursor_y, state.cursor_z])
         new_cursor = self._move_cursor(cursor_array, action, state.frame)
         cx, cy, cz = new_cursor[0], new_cursor[1], new_cursor[2]
         
         board = state.board
-        player = state.current_player
+        player = state.current_player # Should be PLAYER_X
         
-        # --- PLACE action ---
+        # Check Place
         is_place = action == Action.FIRE
         is_empty = board[cz, cy, cx] == self.consts.EMPTY
         can_place = jnp.logical_and(is_place, is_empty)
-        can_place = jnp.logical_and(can_place, jnp.logical_not(state.game_over))  # Can't play if game over
+        can_place = jnp.logical_and(can_place, jnp.logical_not(state.game_over))
         
-        def place_mark(b):
+        # Apply User Move
+        def place_mark_user(b):
             return b.at[cz, cy, cx].set(player.astype(b.dtype))
         
-        new_board = jax.lax.cond(
-            can_place,
-            place_mark,
+        new_board_after_user = jax.lax.cond(can_place, place_mark_user, lambda b: b, board)
+        
+        # Check User Win
+        winner_after_user = self._check_winner(new_board_after_user)
+        game_over_user = jnp.logical_or(winner_after_user != self.consts.EMPTY, state.move_count >= 63)
+        
+        # --- 2. CPU TURN (Automatic Response) ---
+        # Only if user actually placed a mark AND game is not over
+        cpu_should_play = jnp.logical_and(can_place, jnp.logical_not(game_over_user))
+        
+        # Generate random key for CPU
+        key, subkey = jax.random.split(state.key)
+        
+        def play_cpu_turn(current_board):
+            # Calculate best move
+            best_move_flat = self._compute_cpu_move(current_board, subkey)
+            bz = best_move_flat // 16
+            by = (best_move_flat % 16) // 4
+            bx = best_move_flat % 4
+            
+            # Place O
+            return current_board.at[bz, by, bx].set(self.consts.PLAYER_O)
+
+        final_board = jax.lax.cond(
+            cpu_should_play,
+            play_cpu_turn,
             lambda b: b,
-            board
+            new_board_after_user
         )
         
-        # --- Check for winner (Vectorized) ---
-        winner = self._check_winner(new_board)
-        game_over = jnp.logical_or(winner != self.consts.EMPTY, state.move_count >= 63)
+        # Check CPU Win
+        final_winner = self._check_winner(final_board)
+        # Note: If user won, winner is X. If CPU won later, winner is O.
+        # But CPU only plays if user didn't win, so this is safe.
         
-        # --- Switch player only if placed ---
-        next_player = jnp.where(
-            player == self.consts.PLAYER_X,
-            self.consts.PLAYER_O,
-            self.consts.PLAYER_X
+        # Update move count (User + CPU = +2 moves if CPU played)
+        moves_added = jax.lax.cond(
+            cpu_should_play, 
+            lambda: 2, 
+            lambda: jax.lax.cond(can_place, lambda: 1, lambda: 0)
         )
+        new_move_count = state.move_count + moves_added
         
-        new_player = jax.lax.cond(
-            can_place,
-            lambda _: next_player,
-            lambda _: player,
-            operand=None
-        )
-        
-        new_move_count = jax.lax.cond(
-            can_place,
-            lambda c: c + 1,
-            lambda c: c,
-            state.move_count
-        )
-        
+        final_game_over = jnp.logical_or(final_winner != self.consts.EMPTY, new_move_count >= 64)
+
         # --- Build new state ---
         new_state = state._replace(
-            board=new_board,
-            current_player=new_player,
+            board=final_board,
+            current_player=self.consts.PLAYER_X, # Always returns control to X
             move_count=new_move_count,
             cursor_x=cx,
             cursor_y=cy,
             cursor_z=cz,
             frame=state.frame + 1,
-            winner=winner,      
-            game_over=game_over
+            winner=final_winner,      
+            game_over=final_game_over,
+            key=key
         )
         
-        # --- Compute observation ---
-        valid_moves = (new_board == self.consts.EMPTY).reshape(64)
         observation = new_state.board
-        
-        # --- Compute reward ---
         reward = self._get_reward(state, new_state)
-        
-        # --- Compute done ---
         done = self._get_done(new_state)
-        
-        # --- Compute info ---
         info = self._get_info(state, new_state, action)
         
         return observation, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _move_cursor(self, cursor, ale_action, step_count):
+    def _compute_cpu_move(self, board, key):
         """
-        Move cursor based on action with Layer Navigation.
-        - Horizontal: Wraps or Clips on current layer.
-        - Vertical: Moving past top/bottom edge switches layers (z-axis).
+        Vectorized Heuristic AI for 3D Tic-Tac-Toe.
+        Priorities:
+        1. WIN: Complete a line of 3 Os.
+        2. BLOCK: Stop X from completing a line of 3 Xs.
+        3. RANDOM: Pick any empty spot.
         """
-        x, y, z = cursor[0], cursor[1], cursor[2]
+        is_x = (board == self.consts.PLAYER_X).astype(jnp.int32)
+        is_o = (board == self.consts.PLAYER_O).astype(jnp.int32)
+        is_empty = (board == self.consts.EMPTY).astype(jnp.int32)
         
+        # Calculate counts per line
+        # masks shape: (76, 4, 4, 4)
+        x_counts = jnp.tensordot(self.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2))) # (76,)
+        o_counts = jnp.tensordot(self.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2))) # (76,)
+        
+        # Identification logic
+        # A line is "Winnable" if O=3 and X=0
+        winnable_lines = jnp.logical_and(o_counts == 3, x_counts == 0) # (76,)
+        # A line is "Blockable" if X=3 and O=0
+        blockable_lines = jnp.logical_and(x_counts == 3, o_counts == 0) # (76,)
+        
+        # Map back to board cells to create a "Heatmap"
+        # We broadcast the line status back to the mask shape
+        
+        # Priority 1: Winning Spots (Weight 1000)
+        win_mask = self.consts.WIN_MASKS * winnable_lines[:, None, None, None] # (76, 4, 4, 4)
+        win_heatmap = jnp.sum(win_mask, axis=0) # (4, 4, 4)
+        
+        # Priority 2: Blocking Spots (Weight 100)
+        block_mask = self.consts.WIN_MASKS * blockable_lines[:, None, None, None]
+        block_heatmap = jnp.sum(block_mask, axis=0)
+        
+        # Priority 3: Random Noise (Weight 0-1)
+        random_heatmap = jax.random.uniform(key, shape=(4, 4, 4))
+        
+        # Combine Heatmaps
+        final_scores = (win_heatmap * 1000.0) + (block_heatmap * 100.0) + random_heatmap
+        
+        # Mask occupied cells (Set to -infinity)
+        # We only want empty cells
+        final_scores = jnp.where(is_empty, final_scores, -1e9)
+        
+        # Find index of max score
+        best_move_flat = jnp.argmax(final_scores.ravel())
+        return best_move_flat
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _move_cursor(self, cursor, ale_action, step_count):
+        x, y, z = cursor[0], cursor[1], cursor[2]
         can_move = (step_count % self.consts.MOVE_COOLDOWN) == 0
 
-        # --- Horizontal Move (Simple Clamp) ---
+        # Horizontal
         dx = jnp.where(ale_action == int(Action.LEFT), -1,
              jnp.where(ale_action == int(Action.RIGHT), 1, 0))
-        
-        new_x = jnp.clip(x + dx, 0, self.consts.BOARD_SIZE - 1)
-        new_x = jnp.where(can_move, new_x, x)
+        new_x = jnp.where(can_move, jnp.clip(x + dx, 0, 3), x)
 
-        # --- Vertical Move (Layer Transition Logic) ---
+        # Vertical / Layer
         dy = jnp.where(ale_action == int(Action.UP), -1,
              jnp.where(ale_action == int(Action.DOWN), 1, 0))
-        
         raw_y = y + dy
         
-        # Check transitions
-        # Moving DOWN past bottom (y=3) -> go to next layer (z+1), reset y to 0
         move_down_layer = jnp.logical_and(dy == 1, raw_y > 3)
-        # Moving UP past top (y=0) -> go to prev layer (z-1), reset y to 3
         move_up_layer = jnp.logical_and(dy == -1, raw_y < 0)
         
-        # Calculate potential new Z
         z_down = jnp.clip(z + 1, 0, 3)
         z_up = jnp.clip(z - 1, 0, 3)
         
         new_z = jnp.where(move_down_layer, z_down,
                 jnp.where(move_up_layer, z_up, z))
-        
-        # Check if Z actually changed (to avoid wrapping at the very top/bottom of entire stack)
         z_changed = new_z != z
         
-        # Determine new Y
-        new_y_if_down = 0
-        new_y_if_up = 3
-        new_y_standard = jnp.clip(raw_y, 0, 3)
-        
-        # If we changed layer, snap Y. If not, clip Y.
-        new_y = jnp.where(jnp.logical_and(move_down_layer, z_changed), new_y_if_down,
-                jnp.where(jnp.logical_and(move_up_layer, z_changed), new_y_if_up,
-                new_y_standard))
+        new_y = jnp.where(jnp.logical_and(move_down_layer, z_changed), 0,
+                jnp.where(jnp.logical_and(move_up_layer, z_changed), 3,
+                jnp.clip(raw_y, 0, 3)))
 
-        # Apply cooldown check
         final_y = jnp.where(can_move, new_y, y)
         final_z = jnp.where(can_move, new_z, z)
-        # Preserve X when switching layers (standard Atari behavior)
         final_x = new_x
 
         return jnp.array([final_x, final_y, final_z], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_winner(self, board: jnp.ndarray) -> jnp.ndarray:
-        """
-        100% vectorized win check using tensor contraction.
-        Complexity: O(1) ops, no Python loops.
-        """
-        # Create boolean masks for each player
         is_x = (board == self.consts.PLAYER_X).astype(jnp.int32)
         is_o = (board == self.consts.PLAYER_O).astype(jnp.int32)
-        
-        # Tensor dot product against the 76 winning masks
-        # Masks: (76, 4, 4, 4), Board: (4, 4, 4)
-        # Result: (76,) containing the count of markers in each winning line
         scores_x = jnp.tensordot(self.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2)))
         scores_o = jnp.tensordot(self.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
-        
-        # Check if any line has sum == 4
         x_wins = jnp.any(scores_x == 4)
         o_wins = jnp.any(scores_o == 4)
-        
         return jnp.where(x_wins, self.consts.PLAYER_X, 
                jnp.where(o_wins, self.consts.PLAYER_O, self.consts.EMPTY))
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(
-        self, previous_state: TicTacToe3DState, state: TicTacToe3DState
-    ) -> jnp.ndarray:
-        """Calculate reward for state transition."""
+    def _get_reward(self, previous_state, state):
         player_won = state.winner == self.consts.PLAYER_X
         opponent_won = state.winner == self.consts.PLAYER_O
         return jnp.where(player_won, 1.0, jnp.where(opponent_won, -1.0, 0.0))
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(
-        self,
-        previous_state: TicTacToe3DState,
-        state: TicTacToe3DState,
-        action: jnp.ndarray
-    ) -> TicTacToe3DInfo:
-        """Extract diagnostic information from transition."""
+    def _get_info(self, previous_state, state, action):
         game_phase = jnp.where(
-            state.winner == self.consts.PLAYER_X,
-            1,  # X won
-            jnp.where(
-                state.winner == self.consts.PLAYER_O,
-                2,  # O won
-                jnp.where(
-                    state.move_count >= 64,  # 4*4*4=64
-                    3,  # Draw
-                    0   # Ongoing
-                )
-            )
+            state.winner == self.consts.PLAYER_X, 1,
+            jnp.where(state.winner == self.consts.PLAYER_O, 2,
+            jnp.where(state.move_count >= 64, 3, 0))
         )
-        
         return TicTacToe3DInfo(
             move_count=state.move_count,
             game_phase=jnp.int32(game_phase),
-            last_move_player=previous_state.current_player,  # Who made the move
-            last_move_action=action,  # What action was taken
+            last_move_player=previous_state.current_player,
+            last_move_action=action,
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: TicTacToe3DState) -> jnp.ndarray:
-        return jnp.logical_or(
-            state.game_over,
-            state.move_count >= 64
-        )
+    def _get_done(self, state):
+        return jnp.logical_or(state.game_over, state.move_count >= 64)
 
 
 class TicTacToe3DRenderer(JAXGameRenderer):
     def __init__(self, consts: TicTacToe3DConstants | None = None):
         self.consts = consts or TicTacToe3DConstants()
         super().__init__(self.consts)
-
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-
-        # 1) Start from constants asset config
         final_asset_config = list(self.consts.ASSET_CONFIG)
-
-        # 2) Sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
-
-        # 3) Bake assets once
-        (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
-
+        (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
+            self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         self.x_mask = self.SHAPE_MASKS["x"]
         self.o_mask = self.SHAPE_MASKS["o"]
         self.cursor_mask = self.SHAPE_MASKS["cursor"]
 
     def cell_to_pixel(self, x, y, z):
-        """Get pixel coordinates - JAX-native indexing."""
         px = self.consts.PIXEL_COORDS[z, y, x, 0]
         py = self.consts.PIXEL_COORDS[z, y, x, 1]
         return px, py
 
     def cell_center_to_pixel(self, x, y, z):
-        """Get pixel coordinates for cell center (with offset for cursor)."""
         px, py = self.cell_to_pixel(x, y, z) 
-        # Apply offset if defined, otherwise align with X/O
         cpx = px + self.consts.CELL_CENTER_X
         cpy = py + self.consts.CELL_CENTER_Y
         return cpx, cpy
 
     def render(self, state):
-        """
-        Decoupled Renderer: Eager execution.
-        Safely runs outside JIT to prevent pure_callback crashes on macOS.
-        """
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        
-        # Access data directly (works for both JIT traces and concrete values)
         board = state.board
-        
-        # Using standard loops here allows this to run safely in eager mode
-        # without building a massive graph or using pure_callback
         for idx in range(64):
             z = idx // 16
             y = (idx % 16) // 4
             x = idx % 4
-            
             cell_val = board[z, y, x]
             px, py = self.cell_to_pixel(x, y, z)
-            
-            # Use lax.cond to remain compatible if user mistakenly JITs this,
-            # but relies on standard loop structure to avoid OOM.
-            raster = jax.lax.cond(
-                cell_val == self.consts.PLAYER_X,
-                lambda r: self.jr.render_at(r, px, py, self.x_mask),
-                lambda r: r,
-                raster
-            )
-            
-            raster = jax.lax.cond(
-                cell_val == self.consts.PLAYER_O,
-                lambda r: self.jr.render_at(r, px, py, self.o_mask),
-                lambda r: r,
-                raster
-            )
-
-        # Draw Cursor
+            raster = jax.lax.cond(cell_val == self.consts.PLAYER_X, lambda r: self.jr.render_at(r, px, py, self.x_mask), lambda r: r, raster)
+            raster = jax.lax.cond(cell_val == self.consts.PLAYER_O, lambda r: self.jr.render_at(r, px, py, self.o_mask), lambda r: r, raster)
         cpx, cpy = self.cell_center_to_pixel(state.cursor_x, state.cursor_y, state.cursor_z)
         blink_on = (state.frame // 15) % 2 == 0
-        
-        raster = jax.lax.cond(
-            blink_on,
-            lambda r: self.jr.render_at(r, cpx, cpy, self.cursor_mask),
-            lambda r: r,
-            raster
-        )
-        
+        raster = jax.lax.cond(blink_on, lambda r: self.jr.render_at(r, cpx, cpy, self.cursor_mask), lambda r: r, raster)
         return self.jr.render_from_palette(raster, self.PALETTE)
