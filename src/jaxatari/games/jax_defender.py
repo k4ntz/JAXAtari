@@ -267,14 +267,11 @@ class DefenderState(NamedTuple):
 
 class DefenderObservation(NamedTuple):
     # Needs more implementation, work in progress
-    player_x: chex.Array
-    player_y: chex.Array
     score: chex.Array
 
 
 class DefenderInfo(NamedTuple):
     score: chex.Array
-    game_over: chex.Array
 
 
 # Helper class that gets implemented by renderer and game for shared functionality
@@ -1019,7 +1016,24 @@ class JaxDefender(
     ## -------- SCORE ------------------------------
 
     def _add_score(self, state: DefenderState, score) -> DefenderState:
+        old_score = jnp.floor_divide(state.score, self.consts.SCORE_BONUS_THRESHOLD)
+
         score += state.score
+
+        new_score = jnp.floor_divide(score, self.consts.SCORE_BONUS_THRESHOLD)
+
+        # Check for item threshold
+        gain_items = new_score > old_score
+
+        space_ship_lives = state.space_ship_lives + 1
+        smart_bombs = state.smart_bomb_amount + 1
+        state = jax.lax.cond(
+            gain_items,
+            lambda: state._replace(
+                space_ship_lives=space_ship_lives, smart_bomb_amount=smart_bombs
+            ),
+            lambda: state,
+        )
         return state._replace(score=score)
 
     ## -------- ENTITY UTILS ------------------------------
@@ -1582,6 +1596,7 @@ class JaxDefender(
         state = jax.lax.cond(
             shoot_smart_bomb, lambda: self._shoot_smart_bomb(state), lambda: state
         )
+
         return state
 
     ## -------- CAMERA STEP ------------------------------
@@ -2733,34 +2748,25 @@ class JaxDefender(
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        return DefenderObservation(
-            player_x=state.space_ship_x,
-            player_y=state.space_ship_y,
-            score=state.score,
-        )
+        return DefenderObservation(score=state.score)
+
+    def action_space(self) -> Space:
+        return spaces.Discrete(len(self.action_set))
 
     def obs_to_flat_array(self, obs: DefenderObservation) -> jnp.ndarray:
-        return jnp.concatenate(
-            [obs.player_x.flatten(), obs.player_y.flatten(), obs.score.flatten()]
-        )
+        return super().obs_to_flat_array(obs)
 
     def observation_space(self) -> Space:
-        return spaces.Dict(
-            {"player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32)}
-        )
-
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return super().observation_space()
 
     def _get_info(
         self, state: DefenderState, all_rewards: jnp.array = None
     ) -> DefenderInfo:
-        game_over = state.game_state == self.consts.GAME_STATE_GAMEOVER
-        return DefenderInfo(score=state.score, game_over=game_over)
+        return DefenderInfo(score=state.score)
 
     def _get_reward(self, previous_state: DefenderState, state: DefenderState) -> float:
         reward = state.score - previous_state.score
-        return 0.0
+        return reward
 
     def _get_done(self, state: DefenderState) -> bool:
         is_done = jnp.logical_and(
