@@ -95,7 +95,7 @@ class AdventureConstants(NamedTuple):
     DRAGON_SIZE: Tuple[int, int] = (8, 44)
     GATE_SIZE: Tuple[int, int] = (7, 32)
     SWORD_SIZE: Tuple[int, int] = (8, 10)
-    BRIDGE_SIZE: Tuple[int, int] = (32, 48)
+    BRIDGE_SIZE: Tuple[int, int] = (4, 48)
     MAGNET_SIZE: Tuple[int, int] = (8, 16)
     CHALICE_SIZE: Tuple[int, int] = (8, 18)
     #Inventory IDs
@@ -1226,7 +1226,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
         
         gate_opening_yellow = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_yellow_state>=0, gate_yellow_state<6), yellow_key_in_range), gate_yellow_counter == 0)
-        gate_opening_black = jnp.logical_and(jnp.logical_and(gate_black_state>=0, gate_black_state<6), black_key_in_range)
+        gate_opening_black = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_black_state>=0, gate_black_state<6), black_key_in_range), gate_black_counter == 0)
     
         gate_yellow_close =jnp.logical_and(jnp.logical_and(gate_yellow_state>0, gate_yellow_counter > 20), yellow_key_in_range)
         gate_black_close = jnp.logical_and(jnp.logical_and(gate_black_state>0, gate_black_counter > 20), black_key_in_range)
@@ -1276,17 +1276,15 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = gate_yellow_counter
         )
 
-        jax.debug.print("Counter yellow: {a}", a = gate_yellow_counter)
-
         gate_black_counter = jax.lax.cond(
-            gate_black_state == 6,
+            jnp.logical_or(gate_black_state == 6, jnp.logical_and(gate_black_state==0, gate_black_counter<30)),
             lambda op:op + 1,
             lambda op:op,
             operand = gate_black_counter
         )
 
         gate_black_counter = jax.lax.cond(
-            gate_black_state == 0,
+            jnp.logical_and(gate_black_state == 0, gate_black_counter>=30),
             lambda _: 0,
             lambda op:op,
             operand = gate_black_counter
