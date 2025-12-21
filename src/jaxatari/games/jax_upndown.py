@@ -364,6 +364,31 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return x_diff < 1.0
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_steep_segment_progress(self, position_y: chex.Array, current_road: chex.Array, 
+                                     road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+        """Calculate progress (0.0 to 1.0) through the current steep road segment.
+        
+        0.0 = at the bottom (start) of the steep segment
+        1.0 = at the top (end) of the steep segment
+        
+        Progress is measured in the direction of forward travel (upward = positive Y direction in game space,
+        but Y decreases as we go forward on the track).
+        """
+        road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
+        # Y coordinates of segment boundaries
+        y_start = self.consts.TRACK_CORNERS_Y[road_index]      # Start of segment (lower Y = further ahead)
+        y_end = self.consts.TRACK_CORNERS_Y[road_index + 1]    # End of segment (higher Y in absolute terms)
+        
+        # Calculate progress: how far through the segment are we?
+        # Since Y decreases as we go forward, we need to invert
+        segment_length = jnp.abs(y_end - y_start)
+        # Distance from segment start (in forward direction)
+        distance_from_start = jnp.abs(position_y - y_start)
+        
+        progress = jnp.where(segment_length > 0.001, distance_from_start / segment_length, 0.0)
+        return jnp.clip(progress, 0.0, 1.0)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _check_landing_position(
         self,
         road_index_A: chex.Array,
@@ -804,61 +829,89 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-        player_speed = state.player_car.speed
-
-        # Use jnp.where for branchless execution
-        player_speed = jnp.where(
-            jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
-            player_speed + 1,
-            player_speed,
-        )
-
-        player_speed = jnp.where(
-            jnp.logical_and(state.player_car.speed > -self.consts.MAX_SPEED, down),
-            player_speed - 1,
-            player_speed,
-        )
-
-        # Check if on a steep road section (no X direction change) and apply speed reduction
-        # This simulates steep road sections that require a jump to pass when going upward
+        
+        # Check if on a steep road section FIRST (before applying speed changes)
         is_on_steep_road = self._is_steep_road_segment(
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
         )
-        # Only apply steep road penalty when:
-        # 1. Player is on a steep road section
-        # 2. Player is not jumping
-        # 3. Player has positive speed (going upward)
-        on_steep_going_up = jnp.logical_and(
-            is_on_steep_road,
-            jnp.logical_and(
-                jnp.logical_not(state.is_jumping),
-                player_speed > 0
-            )
+        
+        # Calculate progress through steep segment (0.0 = bottom, 1.0 = top)
+        steep_progress = self._get_steep_segment_progress(
+            state.player_car.position.y,
+            state.player_car.current_road,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
         )
-        # Update steep road timer - increment when on steep road going up, reset otherwise (use jnp.where)
+        
+        # Determine if player is on steep road going up (not jumping)
+        on_steep_not_jumping = jnp.logical_and(is_on_steep_road, jnp.logical_not(state.is_jumping))
+        
+        # Start with current speed
+        player_speed = state.player_car.speed
+        
+        # === STEEP ROAD BLOCKING LOGIC ===
+        # On steep road: UP action has NO effect (can't accelerate while on steep section)
+        # Apply UP acceleration only if NOT on steep road (or if jumping over it)
+        can_accelerate = jnp.logical_not(on_steep_not_jumping)
+        player_speed = jnp.where(
+            jnp.logical_and(jnp.logical_and(player_speed < self.consts.MAX_SPEED, up), can_accelerate),
+            player_speed + 1,
+            player_speed,
+        )
+        
+        # DOWN action always works (can brake/reverse)
+        player_speed = jnp.where(
+            jnp.logical_and(player_speed > -self.consts.MAX_SPEED, down),
+            player_speed - 1,
+            player_speed,
+        )
+        
+        # === STEEP ROAD SPEED REDUCTION & SLIDE BACK ===
+        # Only apply when on steep road, not jumping, and trying to go up (positive speed)
+        on_steep_going_up = jnp.logical_and(on_steep_not_jumping, player_speed > 0)
+        
+        # Update steep road timer - increment when on steep road going up
         steep_road_timer = jnp.where(
             on_steep_going_up,
             state.steep_road_timer + 1,
             jnp.array(0, dtype=jnp.int32),
         )
-        # Only reduce speed when timer reaches the interval threshold
+        
+        # Check if player has reached halfway point (50% progress through segment)
+        past_halfway = steep_progress >= 0.5
+        
+        # Two behaviors based on progress:
+        # 1. Before halfway: gradually reduce speed using timer
+        # 2. At/past halfway: immediately set speed to -2 (slide back)
+        
+        # Before halfway: reduce speed periodically using timer
         should_reduce_speed = jnp.logical_and(
             on_steep_going_up,
-            steep_road_timer >= self.consts.STEEP_ROAD_SPEED_REDUCTION_INTERVAL
+            jnp.logical_and(
+                jnp.logical_not(past_halfway),
+                steep_road_timer >= self.consts.STEEP_ROAD_SPEED_REDUCTION_INTERVAL
+            )
         )
-        # Gradually reduce speed toward -2 when on steep section without jumping (use jnp.where)
         player_speed = jnp.where(
             should_reduce_speed,
-            jnp.maximum(player_speed - 1, jnp.int32(-2)),
+            jnp.maximum(player_speed - 1, jnp.int32(0)),  # Reduce but not below 0 yet
             player_speed,
         )
-        # Reset timer after speed reduction (use jnp.where)
+        # Reset timer after speed reduction
         steep_road_timer = jnp.where(
             should_reduce_speed,
             jnp.array(0, dtype=jnp.int32),
             steep_road_timer,
+        )
+        
+        # At/past halfway: force speed to -2 (slide back down)
+        should_slide_back = jnp.logical_and(on_steep_going_up, past_halfway)
+        player_speed = jnp.where(
+            should_slide_back,
+            jnp.int32(-3),
+            player_speed,
         )
 
         can_start_jump = jnp.logical_and(state.jump_cooldown == 0, state.post_jump_cooldown == 0)
