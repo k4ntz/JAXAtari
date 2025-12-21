@@ -410,8 +410,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                             player_y <= 40,
                             jnp.logical_or(
                                 jnp.logical_or(
-                                    jnp.logical_and(player_x >= 62, player_x <= 70), #todo smaller
-                                    jnp.logical_and(player_x >= 86, player_x <= 94) #todo smaller
+                                    jnp.logical_and(player_x >= 62, player_x <= 70), 
+                                    jnp.logical_and(player_x >= 86, player_x <= 94) 
                                 ),
                                 jnp.logical_or(
                                     jnp.logical_and(player_x >= 102, player_x <= 110), 
@@ -426,25 +426,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         room_8_walls = jnp.logical_or(
             jnp.logical_or(
-                jnp.logical_and(
-                    player_y >= 199,
-                    jnp.logical_or(
-                        jnp.logical_or(
-                            jnp.logical_and(player_x >= 30, player_x <= 38), 
-                            jnp.logical_and(player_x >= 120, player_x <= 126)  
-                        ),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                jnp.logical_and(player_x >= 45, player_x <= 53) 
-                            ),
-                            jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                        )
-                    )
-                ),
-                jnp.logical_and(
-                    jnp.logical_and(player_y >= 170, player_y <= 199),
-                    jnp.logical_or(
+                jnp.logical_or(
+                    jnp.logical_and(
+                        player_y >= 199,
                         jnp.logical_or(
                             jnp.logical_or(
                                 jnp.logical_and(player_x >= 30, player_x <= 38), 
@@ -457,18 +441,104 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                 ),
                                 jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
                             )
-                            ),
+                        )
+                    ),
+                    jnp.logical_and(
+                        jnp.logical_and(player_y >= 170, player_y <= 199),
+                        jnp.logical_or(
                             jnp.logical_or(
-                                player_x <= 20,
-                                player_x >= 135
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 30, player_x <= 38), 
+                                    jnp.logical_and(player_x >= 120, player_x <= 126)  
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
+                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
+                                    ),
+                                    jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+                                )
+                                ),
+                                jnp.logical_or(
+                                    player_x <= 20,
+                                    player_x >= 135
+                                )
                             )
                         )
-                    )
+                    ),
+                
+                    jnp.logical_or(
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 135, player_y <= 170),
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 30, player_x <= 38), 
+                                    jnp.logical_and(player_x >= 120, player_x <= 126)  
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
+                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
+                                    ),
+                                    jnp.logical_and(player_x>=72, player_x<=84)
+                                )
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x <= 20, player_x >= 14),
+                                    jnp.logical_and(player_x >= 135, player_x <= 142)
+                                )
+                            )
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 105, player_y <= 135),
+                        jnp.logical_or(
+                                jnp.logical_or(
+                                    player_x <= 38, 
+                                    player_x >= 120
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
+                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
+                                    ),
+                                    jnp.logical_and(player_x>=72, player_x<=84)
+                                )
+                            )
+                        )
+                    ),
                 ),
                 jnp.logical_or(
-                    jnp.logical_and(
-                    jnp.logical_and(player_y >= 135, player_y <= 170),
                     jnp.logical_or(
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 75, player_y <= 105),
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_and(player_x >= 102, player_x <= 110), 
+                                jnp.logical_and(player_x >= 45, player_x <= 53) 
+                            ),
+                            jnp.logical_and(player_x>=72, player_x<=84)
+                        ),
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 40, player_y <= 70),
+                         jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 30, player_x <= 53), 
+                                    jnp.logical_and(player_x >= 102, player_x <= 126)  
+                                ),
+                                jnp.logical_and(player_x>=72, player_x<=84)
+                                ),
+                                jnp.logical_or(
+                                    player_x <= 20,
+                                    player_x >= 135
+                                )
+                            )
+                        )
+                    ),
+                    jnp.logical_and(
+                        player_y <= 40,
                         jnp.logical_or(
                             jnp.logical_or(
                                 jnp.logical_and(player_x >= 30, player_x <= 38), 
@@ -476,36 +546,16 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                             ),
                             jnp.logical_or(
                                 jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                    jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                ),
-                                jnp.logical_and(player_x>=72, player_x<=84)
-                            )
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_and(player_x <= 20, player_x >= 14),
-                                jnp.logical_and(player_x >= 135, player_x <= 142)
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                    jnp.logical_and(player_y >= 105, player_y <= 135),
-                    jnp.logical_or(
-                            jnp.logical_or(
-                                player_x <= 38, 
-                                player_x >= 120
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                    jnp.logical_and(player_x >= 45, player_x <= 53) 
+                                    jnp.logical_and(player_x <= 20, player_x >= 14),
+                                    jnp.logical_and(player_x >= 135, player_x <= 142)
                                 ),
                                 jnp.logical_and(player_x>=72, player_x<=84)
                             )
                         )
-                    )
+                    )                    
                 )
             )
+        
         
 
 
