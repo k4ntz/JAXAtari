@@ -24,17 +24,21 @@ class UpNDownConstants(NamedTuple):
     ALL_FLAGS_BONUS: int = 1000
     # Enemy spawning and movement
     MAX_ENEMY_CARS: int = 8
-    ENEMY_SPAWN_INTERVAL: int = 80
-    ENEMY_DESPAWN_DISTANCE: int = 300
+    ENEMY_SPAWN_INTERVAL_BASE: int = 30  # Base spawn interval
+    ENEMY_SPAWN_INTERVAL_MAX: int = 60  # Max spawn interval when many enemies exist
+    ENEMY_MIN_VISIBLE_COUNT: int = 2  # Minimum enemies to keep on screen
+    ENEMY_VISIBLE_DISTANCE: int = 120  # Distance within which enemies are considered "visible"
+    ENEMY_DESPAWN_DISTANCE: int = 250  
     ENEMY_SPEED_MIN: int = 3
     ENEMY_SPEED_MAX: int = 5
     ENEMY_DIRECTION_SWITCH_PROB: float = 0.0001
-    ENEMY_OFFSCREEN_SPAWN_OFFSET: float = 100.0
-    ENEMY_MIN_SPAWN_GAP: float = 30.0
-    ENEMY_MAX_AGE: int = 1900
+    ENEMY_SPAWN_OFFSET_MIN: float = 70.0  # Closer spawn distance 
+    ENEMY_SPAWN_OFFSET_MAX: float = 130.0  # Max spawn offset
+    ENEMY_MIN_SPAWN_GAP: float = 25.0  # Reduced gap between spawns
+    ENEMY_MAX_AGE: int = 1900  
     INITIAL_ENEMY_COUNT: int = 4
-    INITIAL_ENEMY_BASE_OFFSET: float = 40.0
-    INITIAL_ENEMY_GAP: float = 30.0
+    INITIAL_ENEMY_BASE_OFFSET: float = 35.0  # Closer initial enemies
+    INITIAL_ENEMY_GAP: float = 25.0  # Tighter initial spacing
     ENEMY_TYPE_CAMERO: int = 0
     ENEMY_TYPE_FLAG_CARRIER: int = 1
     ENEMY_TYPE_PICKUP: int = 2
@@ -78,7 +82,7 @@ class UpNDownConstants(NamedTuple):
     LIFE_BOTTOM_X_POSITIONS: chex.Array = jnp.array([13, 18, 25, 33, 33])  # X positions for 5 life cars
     LIFE_BOTTOM_Y: int = 195
     # Collectible constants - unified dynamic spawning
-    MAX_COLLECTIBLES: int = 2  # Maximum collectibles that can exist at once (pool of mixed types)
+    MAX_COLLECTIBLES: int = 1  # Maximum collectibles that can exist at once (pool of mixed types)
     COLLECTIBLE_SPAWN_INTERVAL: int = 200  # Steps between spawn attempts
     COLLECTIBLE_DESPAWN_DISTANCE: int = 500  # Distance beyond which collectibles despawn
     # Collectible types (indices for type field)
@@ -1112,7 +1116,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _enemy_step_main(self, state: UpNDownState) -> UpNDownState:
-        """Spawn and move enemy cars that share the player's road logic."""
+        """Spawn and move enemy cars with adaptive spawning for consistent enemy presence."""
         base_key = jax.random.PRNGKey(2025)
         step_key = jax.random.fold_in(base_key, state.step_counter)
         key_spawn_offset, key_spawn_side, key_spawn_speed, key_spawn_direction, key_spawn_type, key_spawn_sign, key_flip_root = jax.random.split(step_key, 7)
@@ -1121,29 +1125,59 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         active_count = jnp.sum(active_mask.astype(jnp.int32))
         can_spawn = active_count < self.consts.MAX_ENEMY_CARS
 
-        # Use jnp.where for branchless execution
-        spawn_timer = jnp.where(
-            jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn),
-            self.consts.ENEMY_SPAWN_INTERVAL,
-            state.enemy_spawn_timer - 1,
+        # Calculate how many enemies are "visible" (within visible distance of player)
+        player_y = state.player_car.position.y
+        enemy_distances = jnp.abs(state.enemy_cars.position.y - player_y)
+        wrapped_distances = jnp.minimum(enemy_distances, self.consts.TRACK_LENGTH - enemy_distances)
+        visible_mask = jnp.logical_and(active_mask, wrapped_distances < self.consts.ENEMY_VISIBLE_DISTANCE)
+        visible_count = jnp.sum(visible_mask.astype(jnp.int32))
+
+        # Adaptive spawn interval: spawn faster when fewer visible enemies
+        # If below minimum, spawn immediately (interval = 0)
+        # Otherwise scale between BASE and MAX based on visible count
+        needs_urgent_spawn = visible_count < self.consts.ENEMY_MIN_VISIBLE_COUNT
+        spawn_interval = jnp.where(
+            needs_urgent_spawn,
+            jnp.int32(0),  # Spawn immediately when too few visible
+            jnp.int32(self.consts.ENEMY_SPAWN_INTERVAL_BASE + 
+                     (visible_count * (self.consts.ENEMY_SPAWN_INTERVAL_MAX - self.consts.ENEMY_SPAWN_INTERVAL_BASE)) // 
+                     self.consts.MAX_ENEMY_CARS)
         )
-        should_spawn = jnp.logical_and(state.enemy_spawn_timer <= 0, can_spawn)
+
+        # Spawn when timer expires OR when we urgently need more enemies
+        timer_expired = state.enemy_spawn_timer <= 0
+        should_spawn = jnp.logical_and(
+            jnp.logical_or(timer_expired, needs_urgent_spawn),
+            can_spawn
+        )
+        
+        # Reset timer with adaptive interval
+        spawn_timer = jnp.where(
+            should_spawn,
+            spawn_interval,
+            jnp.maximum(state.enemy_spawn_timer - 1, 0),
+        )
 
         inactive_mask = jnp.logical_not(active_mask)
         first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
         has_inactive = jnp.any(inactive_mask)
-        # Use jnp.where for branchless execution
         spawn_idx = jnp.where(has_inactive, first_inactive, jnp.array(0, dtype=jnp.int32))
         spawn_mask = (jnp.arange(self.consts.MAX_ENEMY_CARS) == spawn_idx) & should_spawn & has_inactive
 
-        spawn_offset = self.consts.ENEMY_OFFSCREEN_SPAWN_OFFSET + active_count * self.consts.ENEMY_MIN_SPAWN_GAP + jax.random.uniform(key_spawn_offset, minval=0.0, maxval=40.0)
+        # Spawn closer when urgent (fewer visible enemies), farther when plenty exist
+        base_offset = jnp.where(
+            needs_urgent_spawn,
+            self.consts.ENEMY_SPAWN_OFFSET_MIN,  # Spawn closer when needed
+            self.consts.ENEMY_SPAWN_OFFSET_MIN + visible_count * 10.0  # Farther when plenty exist
+        )
+        spawn_offset = base_offset + jax.random.uniform(key_spawn_offset, minval=0.0, maxval=30.0)
+        
         spawn_side = jax.random.choice(key_spawn_side, jnp.array([-1.0, 1.0]))
         raw_spawn_y = state.player_car.position.y + spawn_side * spawn_offset
         spawn_y = -(((raw_spawn_y) * -1) % self.consts.TRACK_LENGTH)
         spawn_road = jax.random.randint(key_spawn_direction, shape=(), minval=0, maxval=2)
 
         segment_spawn = self._get_road_segment(spawn_y)
-        # Use jnp.where for branchless execution
         spawn_x = jnp.where(
             spawn_road == 0,
             self._get_x_on_road(spawn_y, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
@@ -1155,7 +1189,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         spawn_speed = spawn_speed_mag * spawn_speed_sign
         spawn_type = jax.random.randint(key_spawn_type, shape=(), minval=0, maxval=4)
 
-        # Use jnp.where for branchless execution
         direction_raw = jnp.where(
             spawn_road == 0,
             self.consts.FIRST_TRACK_CORNERS_X[segment_spawn+1] - self.consts.FIRST_TRACK_CORNERS_X[segment_spawn],
@@ -1299,7 +1332,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectibles=collectibles,
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
             enemy_cars=enemy_cars,
-            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL, dtype=jnp.int32),
+            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1473,7 +1506,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             collectibles=collectibles,
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
             enemy_cars=enemy_cars,
-            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL, dtype=jnp.int32),
+            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
