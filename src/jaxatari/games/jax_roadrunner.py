@@ -29,6 +29,7 @@ class LevelConfig(NamedTuple):
     spawn_seeds: bool
     spawn_trucks: bool
     spawn_ravines: bool = False
+    decorations: Tuple[Tuple[int, int, int, int], ...] = ()
     seed_spawn_config: Optional[Tuple[int, int]] = None
     truck_spawn_config: Optional[Tuple[int, int]] = None
     ravine_spawn_config: Optional[Tuple[int, int]] = None
@@ -103,6 +104,12 @@ class RoadRunnerConstants(NamedTuple):
     # Enemy approach slowdown/reversal multiplier (when player moves right)
     # Positive values slow down (0.5 = half speed), negative values reverse direction (-0.5 = move away at half speed)
     ENEMY_APPROACH_SLOWDOWN: float = -0.5     # Moves backwards at half speed when player approaches
+    # --- Decoration Type Constants ---
+    DECO_CACTUS = 0
+    DECO_SIGN_THIS_WAY = 1
+    DECO_SIGN_BIRD_SEED = 2
+    DECO_SIGN_CARS_AHEAD = 3
+    DECO_SIGN_EXIT = 4
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -112,6 +119,7 @@ _DEFAULT_ROAD_HEIGHT = _BASE_CONSTS.ROAD_HEIGHT
 
 def _centered_top(height: int) -> int:
     return max((_DEFAULT_ROAD_HEIGHT - height) // 2, 0)
+
 
 RoadRunner_Level_1 = LevelConfig(
     level_number=1,
@@ -135,6 +143,32 @@ RoadRunner_Level_1 = LevelConfig(
     truck_spawn_config=(
         _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
+    ),
+    decorations=(
+        # --- INTRO (0-6s) ---
+        (50, 60, 1, _BASE_CONSTS.DECO_SIGN_THIS_WAY),
+        (0, 45, 2, _BASE_CONSTS.DECO_CACTUS),
+        (30, 55, 1, _BASE_CONSTS.DECO_CACTUS),
+        (180, 70, 1, _BASE_CONSTS.DECO_SIGN_BIRD_SEED),
+        (350, 60, 1, _BASE_CONSTS.DECO_SIGN_CARS_AHEAD),
+
+        # --- THE DESERT RUN (13 Cacti) ---
+        (420, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (500, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (580, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (660, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (740, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (820, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (900, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (980, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1060, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (1140, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1220, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (1300, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1380, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+
+        # --- OUTRO ---
+        (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
     ),
 )
 
@@ -1817,6 +1851,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def __init__(self, consts: RoadRunnerConstants = None):
         super().__init__()
         self.consts = consts or RoadRunnerConstants()
+        self.deco_id_to_sprite = {
+            0: "cactus",
+            1: "sign_this_way",
+            2: "sign_birdseed",
+            3: "sign_cars_ahead",
+            4: "sign_exit"
+        }
+
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
@@ -1935,6 +1977,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "landmine", "type": "single", "file": "landmine.npy"},
             {"name": "player_burnt", "type": "single", "file": "roadrunner_burnt.npy"},
             {"name": "end_of_level_1", "type": "single", "file": "end_of_level_1.npy"},
+            {"name": "cactus", "type": "single", "file": "cactus.npy"},
+            {"name": "tumbleweed", "type": "single", "file": "tumbleweed.npy"},
+            {"name": "sign_this_way", "type": "single", "file": "sign_this_way.npy"},
+            {"name": "sign_birdseed", "type": "single", "file": "sign_birdseed.npy"},
+            {"name": "sign_cars_ahead", "type": "single", "file": "sign_cars_ahead.npy"},
+            {"name": "sign_exit", "type": "single", "file": "sign_exit.npy"},
         ]
 
         return asset_config
@@ -2017,6 +2065,43 @@ class RoadRunnerRenderer(JAXGameRenderer):
             lambda can: can,
             canvas,
         )
+
+    def _render_decorations(self, canvas: jnp.ndarray, state: RoadRunnerState) -> jnp.ndarray:
+        # Calculate scroll position
+        get_scroll_x = lambda slowdown: state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED / (2 * slowdown)
+        # Iterate over all levels defined in constants
+        for i, level_cfg in enumerate(self.consts.levels):
+            # Check if this is the active level
+            # We use a relaxed check: (state.current_level == i)
+            # Since we are inside a Python loop unrolling, we need to defer the check to JAX execution time.
+            is_active_level = (state.current_level == i)
+
+            # Iterate over all decorations in this level's config
+            for deco in level_cfg.decorations:
+                d_x, d_y, d_slowdown, d_type = deco
+
+                # Get the sprite mask name for this type
+                sprite_name = self.deco_id_to_sprite[d_type]
+                sprite = self.SHAPE_MASKS[sprite_name]
+
+                # Calculate screen position
+                screen_x = get_scroll_x(d_slowdown) - d_x
+
+                # Check visibility
+                is_visible = (screen_x > 0) & (screen_x < self.consts.WIDTH - 16)
+
+                # Combined condition: Level is active AND decoration is visible
+                should_render = is_active_level & is_visible
+
+                # Render
+                canvas = jax.lax.cond(
+                    should_render,
+                    lambda c: self.jr.render_at(c, screen_x, d_y, sprite),
+                    lambda c: c,
+                    canvas
+                )
+
+        return canvas
     
     def _render_ravines(self, canvas: jnp.ndarray, ravines: jnp.ndarray) -> jnp.ndarray:
         # Only render active ravines (x >= 0)
@@ -2144,6 +2229,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render Lives
         canvas = self._render_lives(canvas, state.lives)
+
+        canvas = self._render_decorations(canvas, state)
 
         # Render Player
         def _render_burnt_player(c):
