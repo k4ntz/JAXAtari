@@ -18,7 +18,7 @@ def _get_default_asset_config() -> tuple:
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
     """
     return (
-        #all rooms in order ToDo pt overview map into the readme?
+        #all rooms in order ToDo put overview map into the readme?
         {'name': 'room_number', 'type': 'group', 'files': ['Room_1.npy', 
                                                            'Room_2.npy', 
                                                            'Room_3.npy', 
@@ -34,7 +34,7 @@ def _get_default_asset_config() -> tuple:
                                                            'Room_13.npy', 
                                                            'Room_14.npy']},
         {'name': 'bg', 'type': 'background', 'file': 'Room_1.npy'},
-        #Player in all the different colors
+        #Player in all the different colors, which change depending on the background
         {'name': 'player_colors', 'type': 'group', 'files': ["Player_Yellow.npy",
                                                              "Player_Yellow.npy", 
                                                              "Player_Green.npy",
@@ -71,7 +71,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'sword', 'type': 'single', 'file': 'Sword.npy'},
         {'name': 'bridge', 'type': 'single', 'file': 'Bridge.npy'},
         {'name': 'magnet', 'type': 'single', 'file': 'Magnet.npy'},
-        #Chalice
+        #Chalice and its diffrent colors
         {'name': 'chalice', 'type': 'group', 'files': ['Chalice_Black.npy',
                                                        'Chalice_DarkBlue.npy',
                                                        'Chalice_Gray.npy',
@@ -86,8 +86,41 @@ def _get_default_asset_config() -> tuple:
 
 
 class AdventureConstants(NamedTuple):
+    #Map Size,  coordinates are (x,y) and the upper left corner is (0,0)
     WIDTH: int = 160
     HEIGHT: int = 250
+    #Entity Sizes
+    PLAYER_SIZE: Tuple[int, int] = (4, 8)
+    KEY_SIZE: Tuple[int, int] = (8, 6)
+    DRAGON_SIZE: Tuple[int, int] = (8, 44)
+    GATE_SIZE: Tuple[int, int] = (7, 32)
+    SWORD_SIZE: Tuple[int, int] = (8, 10)
+    BRIDGE_SIZE: Tuple[int, int] = (32, 48)
+    MAGNET_SIZE: Tuple[int, int] = (8, 16)
+    CHALICE_SIZE: Tuple[int, int] = (8, 18)
+    #Inventory IDs
+    EMPTY_HAND_ID: int = 0
+    KEY_YELLOW_ID: int = 1
+    KEY_BLACK_ID: int = 2
+    SWORD_ID: int = 3
+    BRIDGE_ID: int = 4
+    MAGNET_ID: int = 5
+    CHALICE_ID: int = 6
+    #dragons (X,Y, Room, state, counter, eat)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0, 0, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0, 0, 0)
+    #Spawn Locations of all Entities: (X, Y, Room/Tile)
+    YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
+    BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
+    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
+    SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
+    BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
+    MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
+    CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
+    
+    #Constants that are used for restricting player movement, for easy of fine tuning
     # Wall coordinates the player cannot pass through
     LEFT_WALL_X: int = 8
     RIGHT_WALL_X: int = 148
@@ -110,41 +143,11 @@ class AdventureConstants(NamedTuple):
     CASTLE_TOWER_CORNER_Y: int = 105
     CASTLE_BASE_CORNER_Y: int = 170
 
-    #upper left corner is 0, 0
-    PLAYER_SIZE: Tuple[int, int] = (4, 8)
-    KEY_SIZE: Tuple[int, int] = (8, 6)
-    DRAGON_SIZE: Tuple[int, int] = (8, 44)
-    GATE_SIZE: Tuple[int, int] = (7, 32)
-    SWORD_SIZE: Tuple[int, int] = (8, 10)
-    BRIDGE_SIZE: Tuple[int, int] = (32, 48)
-    MAGNET_SIZE: Tuple[int, int] = (8, 16)
-    CHALICE_SIZE: Tuple[int, int] = (8, 18)
-    EMPTY_HAND_ID: int = 0
-    KEY_YELLOW_ID: int = 1
-    KEY_BLACK_ID: int = 2
-    SWORD_ID: int = 3
-    BRIDGE_ID: int = 4
-    MAGNET_ID: int = 5
-    CHALICE_ID: int = 6
-    #dragons (X,Y, Room, state, counter, eat)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0, 0, 0)
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0, 0, 0)
-    #Spawn Locations of all Entities: (X, Y, Room/Tile)
-    YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
-    BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
-    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
-    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
-    SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
-    BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
-    MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
-    CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # immutable state container
-
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
@@ -1010,13 +1013,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         right_no_wall = jnp.logical_and(right,self._check_for_wall(state, 1))
         up_no_wall =  jnp.logical_and(up,self._check_for_wall(state, 2))
         down_no_wall =  jnp.logical_and(down,self._check_for_wall(state, 3))
-
-        #chek for item
-        #has_item = jax.lax.cond(
-        #    pred=state.player[3]==self.consts.EMPTY_HAND_ID,
-        #    true_fun=False,
-        #    false_fun=True
-        #)
         
         new_item_x = jax.lax.switch(
             state.player[3],
