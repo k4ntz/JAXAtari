@@ -1527,6 +1527,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         
         done = jnp.array(self._get_done(new_state), dtype=jnp.bool_)
+        done = jnp.logical_or(done, (state.sector == 14) & sector_advanced)
         env_reward = jnp.array(self._get_reward(state, new_state), dtype=jnp.float32)
         info = self._get_info(new_state)
         observation = self._get_observation(new_state)
