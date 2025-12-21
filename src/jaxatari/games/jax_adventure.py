@@ -126,12 +126,13 @@ class AdventureConstants(NamedTuple):
     BRIDGE_ID: int = 4
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
+    #dragons (X,Y, Room, state, counter, eat)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0, 0, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0, 0, 0)
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
     PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0)
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0)
     KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
     KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
     SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
@@ -1213,33 +1214,97 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         
 
     def _dragon_step(self, state: AdventureState) -> AdventureState:
+
+        #yellow dragon
         direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
         direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
         dragon_yellow_x = state.dragon_yellow[0]
         dragon_yellow_y = state.dragon_yellow[1]
-        dragon_yellow_x, dragon_yellow_y = jax.lax.cond(
-            state.player[2]==state.dragon_yellow[2],
-            lambda _: ((dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2)),
-            lambda _: (dragon_yellow_x, dragon_yellow_y),
+        dragon_yellow_animation = state.dragon_yellow[3]
+        dragon_yellow_counter = state.dragon_yellow[4]
+        #dragon_yellow_eat = state.dragon_yellow[5]
+        # wait after attack
+        dragon_yellow_counter = jax.lax.cond(
+            dragon_yellow_animation == 1,
+            lambda f: f+1,
+            lambda f:f,
+            operand = dragon_yellow_counter
+        )
+        dragon_yellow_freeze = dragon_yellow_counter % 15 != 0
+        #dragon eats player
+        dragon_yellow_eat = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),jnp.logical_and(dragon_yellow_animation==1,jnp.logical_not(dragon_yellow_freeze))),
+            lambda:1,
+            lambda:0
+        )
+        #move towards player and attack
+        dragon_yellow_x, dragon_yellow_y, dragon_yellow_animation, dragon_yellow_counter= jax.lax.cond(
+            jnp.logical_and(state.player[2]==state.dragon_yellow[2],jnp.logical_not(dragon_yellow_freeze)),
+            lambda _: (dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2, jax.lax.cond(
+                jnp.logical_and(jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),dragon_yellow_animation!=2),
+                lambda _:1,
+                lambda _:0,
+                operand = None
+            ),0),
+            lambda _: (dragon_yellow_x, dragon_yellow_y, jax.lax.cond(jnp.logical_not(dragon_yellow_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_yellow_counter),
             operand  = None
         )
+        # dont ever move again when dead
+        dragon_yellow_counter = jax.lax.cond(
+            dragon_yellow_animation == 2,
+            lambda _: 1,
+            lambda f:f,
+            operand=dragon_yellow_counter
+        )
+
+
+        #green dragon
         direction_x = jnp.sign(state.player[0] - state.dragon_green[0])
         direction_y = jnp.sign(state.player[1]- state.dragon_green[1])
         dragon_green_x = state.dragon_green[0]
         dragon_green_y = state.dragon_green[1]
-        dragon_green_x, dragon_green_y = jax.lax.cond(
-            state.player[2]==state.dragon_green[2],
-            lambda _: ((dragon_green_x + direction_x*2, dragon_green_y + direction_y*2)),
-            lambda _: (dragon_green_x, dragon_green_y),
+        dragon_green_animation = state.dragon_green[3]
+        dragon_green_counter = state.dragon_green[4]
+        # wait after attack
+        dragon_green_counter = jax.lax.cond(
+            dragon_green_animation == 1,
+            lambda f: f+1,
+            lambda f:f,
+            operand = dragon_green_counter
+        )
+        dragon_green_freeze = dragon_green_counter % 15 != 0
+        #dragon eats player
+        dragon_green_eat = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),jnp.logical_and(dragon_green_animation==1,jnp.logical_not(dragon_green_freeze))),
+            lambda:1,
+            lambda:0
+        )
+        #move towards player and attack
+        dragon_green_x, dragon_green_y, dragon_green_animation, dragon_green_counter= jax.lax.cond(
+            jnp.logical_and(state.player[2]==state.dragon_green[2],jnp.logical_not(dragon_green_freeze)),
+            lambda _: (dragon_green_x + direction_x*2, dragon_green_y + direction_y*2, jax.lax.cond(
+                jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),dragon_green_animation!=2),
+                lambda _:1,
+                lambda _:0,
+                operand = None
+            ),0),
+            lambda _: (dragon_green_x, dragon_green_y, jax.lax.cond(jnp.logical_not(dragon_green_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_green_counter),
             operand  = None
+        )
+        # dont ever move again when dead
+        dragon_green_counter = jax.lax.cond(
+            dragon_green_animation == 2,
+            lambda _: 1,
+            lambda f:f,
+            operand=dragon_green_counter
         )
 
 
         return AdventureState(
             step_counter = state.step_counter,
             player = state.player,
-            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2]]).astype(jnp.int32),
-            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2]]).astype(jnp.int32),
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2],dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat]).astype(jnp.int32),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2],dragon_green_animation,dragon_green_counter,dragon_green_eat]).astype(jnp.int32),
             key_yellow=state.key_yellow,
             key_black=state.key_black,
             gate_yellow=state.gate_yellow,
@@ -1249,12 +1314,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
-    
-    #Did Yo delete this Daniel?
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
-        previous_state = state
-        state = self._player_step(state, action)
 
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
@@ -1270,11 +1329,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
                                        self.consts.DRAGON_YELLOW_SPAWN[2],
-                                       self.consts.DRAGON_YELLOW_SPAWN[3]]).astype(jnp.int32), #ToDo
+                                       self.consts.DRAGON_YELLOW_SPAWN[3],
+                                       self.consts.DRAGON_YELLOW_SPAWN[4]]).astype(jnp.int32), #ToDo
             dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
-                                      self.consts.DRAGON_GREEN_SPAWN[3]]).astype(jnp.int32), #ToDo
+                                      self.consts.DRAGON_GREEN_SPAWN[3],
+                                      self.consts.DRAGON_GREEN_SPAWN[4]]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
@@ -1488,11 +1549,16 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: AdventureState, state: AdventureState):
-        return 1
+        reward = jax.lax.cond(
+            jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),
+            lambda :-1,
+            lambda :0
+        )
+        return reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return 0
+        return jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1)
 
 class AdventureRenderer(JAXGameRenderer):
     def __init__(self, consts: AdventureConstants = None):
