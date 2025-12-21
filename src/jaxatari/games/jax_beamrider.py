@@ -511,6 +511,294 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE,
         ]
+
+    def _resolve_hits(self, all_masks, all_ys):
+        # Flatten
+        flat_mask = jnp.concatenate([m.flatten() for m in all_masks])
+        flat_ys = jnp.concatenate([y.flatten() for y in all_ys])
+        
+        # Filter Ys
+        # We want max Y where mask is True.
+        # Set masked-out Ys to -infinity
+        candidate_ys = jnp.where(flat_mask, flat_ys, -9999.0)
+        
+        best_idx = jnp.argmax(candidate_ys)
+        any_hit = jnp.any(flat_mask)
+        
+        # Create one-hot for winner
+        winner_one_hot = jax.nn.one_hot(best_idx, flat_mask.shape[0], dtype=jnp.bool_)
+        
+        # If no hit, all false
+        final_flat_mask = winner_one_hot & any_hit
+        
+        sizes = [m.size for m in all_masks]
+        shapes = [m.shape for m in all_masks]
+        
+        split_indices = jnp.cumsum(jnp.array(sizes[:-1]))
+        confirmed_splits = jnp.split(final_flat_mask, split_indices)
+        
+        confirmed_masks = [m.reshape(s) for m, s in zip(confirmed_splits, shapes)]
+        
+        return confirmed_masks, any_hit
+    
+        return confirmed_masks, any_hit
+
+    def _apply_ufo_hit(self, state, hit_mask, white_ufo_pos, white_ufo_pattern_id, white_ufo_pattern_timer):
+        enemies_raw = white_ufo_pos.T
+        hit_index = jnp.argmax(hit_mask)
+        hit_exists = jnp.any(hit_mask)
+
+        should_respawn = state.level.white_ufo_left > 3
+        respawn_pos = jnp.array([77.0, 43.0], dtype=enemies_raw.dtype)
+        offscreen_pos = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=enemies_raw.dtype)
+        target_pos = jnp.where(should_respawn, respawn_pos, offscreen_pos)
+
+        enemy_pos_after_hit = enemies_raw.at[hit_index].set(target_pos).T
+        new_pos = jnp.where(hit_exists, enemy_pos_after_hit, white_ufo_pos)
+        
+        # Reset pattern/timer for hit UFO
+        new_patterns = jnp.where(hit_mask, int(WhiteUFOPattern.IDLE), white_ufo_pattern_id)
+        new_timers = jnp.where(hit_mask, 0, white_ufo_pattern_timer)
+        
+        return new_pos, new_patterns, new_timers, hit_exists
+
+    def _apply_meteoroid_hit(self, state, hit_mask):
+        pos = state.level.chasing_meteoroid_pos
+        active = state.level.chasing_meteoroid_active
+        
+        hit_index = jnp.argmax(hit_mask)
+        hit_one_hot = jax.nn.one_hot(hit_index, self.consts.CHASING_METEOROID_MAX, dtype=pos.dtype)
+        hit_one_hot_bool = hit_one_hot.astype(jnp.bool_)
+        hit_exists = jnp.any(hit_mask)
+
+        offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=pos.dtype)
+        
+        # Reset pos and active for the hit one
+        pos_after = pos + (offscreen[:, None] - pos) * hit_one_hot[None, :]
+        active_after = jnp.where(hit_one_hot_bool, False, active)
+        
+        new_pos = jnp.where(hit_exists, pos_after, pos)
+        new_active = jnp.where(hit_exists, active_after, active)
+        
+        return new_pos, new_active, hit_exists
+
+    def _apply_falling_rock_hit(self, state, hit_mask):
+        pos = state.level.falling_rock_pos
+        active = state.level.falling_rock_active
+        hit_exists = jnp.any(hit_mask)
+        
+        offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=pos.dtype).reshape(2, 1), (1, self.consts.FALLING_ROCK_MAX))
+        
+        new_pos = jnp.where(hit_mask[None, :], offscreen, pos)
+        new_active = jnp.where(hit_mask, False, active)
+        
+        return new_pos, new_active, hit_exists
+
+    def _apply_lane_blocker_hit(self, state, hit_mask, is_torpedo):
+        pos = state.level.lane_blocker_pos
+        active = state.level.lane_blocker_active
+        phase = state.level.lane_blocker_phase
+        timer = state.level.lane_blocker_timer
+        vel_y = state.level.lane_blocker_vel_y
+        hit_exists = jnp.any(hit_mask)
+        
+        blocker_destroyed = hit_mask & is_torpedo
+        blocker_retreat = hit_mask & jnp.logical_not(is_torpedo)
+        
+        offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=pos.dtype).reshape(2, 1), (1, self.consts.LANE_BLOCKER_MAX))
+        
+        new_pos = jnp.where(blocker_destroyed[None, :], offscreen, pos)
+        new_active = jnp.where(blocker_destroyed, False, active)
+        
+        new_phase = jnp.where(blocker_retreat, int(LaneBlockerState.RETREAT), phase)
+        new_phase = jnp.where(blocker_destroyed, int(LaneBlockerState.DESCEND), new_phase)
+        
+        new_timer = jnp.where(blocker_retreat | blocker_destroyed, 0, timer)
+        new_vel_y = jnp.where(blocker_retreat | blocker_destroyed, 0.0, vel_y)
+        
+        return new_pos, new_active, new_phase, new_timer, new_vel_y, jnp.any(blocker_destroyed), hit_exists
+
+    def _apply_kamikaze_hit(self, state, hit_mask, is_torpedo):
+        pos = state.level.kamikaze_pos
+        active = state.level.kamikaze_active
+        hit_exists = jnp.any(hit_mask)
+        
+        destroyed = hit_mask & is_torpedo
+        any_destroyed = jnp.any(destroyed)
+        
+        offscreen = jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=pos.dtype).reshape(2, 1)
+        new_pos = jnp.where(destroyed[None, :], offscreen, pos)
+        new_active = jnp.where(destroyed, False, active)
+        
+        return new_pos, new_active, any_destroyed, hit_exists
+
+    def _apply_coin_hit(self, state, hit_mask):
+        pos = state.level.coin_pos
+        active = state.level.coin_active
+        hit_exists = jnp.any(hit_mask)
+        
+        offscreen = jnp.tile(jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=pos.dtype).reshape(2, 1), (1, self.consts.COIN_MAX))
+        new_pos = jnp.where(hit_mask[None, :], offscreen, pos)
+        new_active = jnp.where(hit_mask, False, active)
+        
+        return new_pos, new_active, hit_exists
+
+    def _apply_enemy_shot_hit(self, state, hit_mask, is_torpedo):
+        pos = state.level.enemy_shot_pos
+        timer = state.level.enemy_shot_timer
+        hit_exists = jnp.any(hit_mask)
+        
+        destroyed = hit_mask & is_torpedo
+        
+        offscreen = jnp.tile(jnp.array(self.consts.BULLET_OFFSCREEN_POS, dtype=pos.dtype).reshape(2, 1), (1, 9))
+        new_pos = jnp.where(destroyed[None, :], offscreen, pos)
+        new_timer = jnp.where(destroyed, 0, timer)
+        
+        return new_pos, new_timer, hit_exists
+    
+        return new_pos, new_timer, hit_exists
+
+    def _white_ufo_detect_collision(self, state, white_ufo_pos, shot_pos, shot_vel, bullet_type):
+        ufo_x = white_ufo_pos[0, :] + _get_ufo_alignment(white_ufo_pos[1, :])
+        ufo_y = white_ufo_pos[1, :]
+        
+        ufo_indices = jnp.clip(_get_index_ufo(ufo_y) - 1, 0, len(self.consts.UFO_SPRITE_SIZES) - 1)
+        ufo_sizes = jnp.take(jnp.array(self.consts.UFO_SPRITE_SIZES), ufo_indices, axis=0)
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        hit_mask = (ufo_x < shot_x + bullet_size[1]) & (shot_x < ufo_x + ufo_sizes[:, 1]) & \
+                   (ufo_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < ufo_y + ufo_sizes[:, 0])
+        return hit_mask
+
+    def _chasing_meteoroid_detect_collision(self, state, meteoroid_pos, active, shot_pos, shot_vel, bullet_type):
+        meteoroid_x = meteoroid_pos[0] + _get_ufo_alignment(meteoroid_pos[1]).astype(meteoroid_pos.dtype)
+        meteoroid_y = meteoroid_pos[1]
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        meteoroid_size = jnp.array(self.consts.METEOROID_SPRITE_SIZE)
+        
+        collision_mask = (
+            active & shot_active
+            & (meteoroid_x < shot_x + bullet_size[1]) & (shot_x < meteoroid_x + meteoroid_size[1])
+            & (meteoroid_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < meteoroid_y + meteoroid_size[0])
+        )
+        return collision_mask
+
+    def _falling_rock_detect_collision(self, state, rock_pos, active, shot_pos, shot_vel, bullet_type):
+        rock_x = rock_pos[0] + _get_ufo_alignment(rock_pos[1]).astype(rock_pos.dtype)
+        rock_y = rock_pos[1]
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        rock_indices = jnp.clip(_get_index_falling_rock(rock_y) - 1, 0, len(self.consts.FALLING_ROCK_SPRITE_SIZES) - 1)
+        rock_sizes = jnp.take(jnp.array(self.consts.FALLING_ROCK_SPRITE_SIZES), rock_indices, axis=0)
+        
+        hit_mask = (
+            active & shot_active
+            & (rock_x < shot_x + bullet_size[1]) & (shot_x < rock_x + rock_sizes[:, 1])
+            & (rock_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < rock_y + rock_sizes[:, 0])
+        )
+        return hit_mask
+
+    def _lane_blocker_detect_collision(self, state, blocker_pos, active, shot_pos, shot_vel, bullet_type):
+        blocker_x = blocker_pos[0] + _get_ufo_alignment(blocker_pos[1]).astype(blocker_pos.dtype)
+        blocker_y = blocker_pos[1]
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        blocker_indices = jnp.clip(_get_index_lane_blocker(blocker_y) - 1, 0, len(self.consts.LANE_BLOCKER_SPRITE_SIZES) - 1)
+        blocker_indices = jnp.where(blocker_indices == 2, 3, blocker_indices)
+        blocker_sizes = jnp.take(jnp.array(self.consts.LANE_BLOCKER_SPRITE_SIZES), blocker_indices, axis=0)
+        
+        hit_mask = (
+            active & shot_active
+            & (blocker_x < shot_x + bullet_size[1]) & (shot_x < blocker_x + blocker_sizes[:, 1])
+            & (blocker_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < blocker_y + blocker_sizes[:, 0])
+        )
+        return hit_mask
+
+    def _kamikaze_detect_collision(self, state, kamikaze_pos, active, shot_pos, shot_vel, bullet_type):
+        kamikaze_x = kamikaze_pos[0, 0] + _get_ufo_alignment(kamikaze_pos[1, 0]).astype(kamikaze_pos.dtype)
+        kamikaze_y = kamikaze_pos[1, 0]
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        kamikaze_indices = jnp.clip(_get_index_kamikaze(kamikaze_y) - 1, 0, 3)
+        kamikaze_sizes = jnp.take(jnp.array(self.consts.LANE_BLOCKER_SPRITE_SIZES), kamikaze_indices, axis=0)
+        
+        hit_mask = (
+            active[0] & shot_active
+            & (kamikaze_x < shot_x + bullet_size[1]) & (shot_x < kamikaze_x + kamikaze_sizes[1])
+            & (kamikaze_y < shot_y + bullet_size[0]) & (shot_y < kamikaze_y + kamikaze_sizes[0])
+        )
+        return jnp.array([hit_mask])
+
+    def _coin_detect_collision(self, state, coin_pos, active, shot_pos, shot_vel, bullet_type):
+        coin_x = coin_pos[0] + _get_ufo_alignment(coin_pos[1]).astype(coin_pos.dtype)
+        coin_y = coin_pos[1]
+        
+        shot_x = _get_player_shot_screen_x(shot_pos, shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        coin_size = jnp.array(self.consts.COIN_SPRITE_SIZE)
+        
+        hit_mask = (
+            active & shot_active
+            & (coin_x < shot_x + bullet_size[1]) & (shot_x < coin_x + coin_size[1])
+            & (coin_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < coin_y + coin_size[0])
+        )
+        return hit_mask
+
+    def _enemy_shot_detect_collision(self, state, shot_pos, timer, player_shot_pos, player_shot_vel, bullet_type):
+        enemy_shot_x = shot_pos[0, :] + _get_ufo_alignment(shot_pos[1, :])
+        enemy_shot_y = shot_pos[1, :]
+        
+        shot_x = _get_player_shot_screen_x(player_shot_pos, player_shot_vel, bullet_type, self.consts.LASER_ID)
+        shot_y = player_shot_pos[1]
+        shot_active = shot_y < float(self.consts.BOTTOM_CLIP)
+        
+        sprite_idx = (jnp.floor_divide(timer, 4) % 2).astype(jnp.int32)
+        enemy_shot_sizes = jnp.take(jnp.array(self.consts.ENEMY_SHOT_SPRITE_SIZES), sprite_idx, axis=0)
+        
+        bullet_idx = _get_index_bullet(shot_y, bullet_type, self.consts.LASER_ID)
+        bullet_size = jnp.take(jnp.array(self.consts.BULLET_SPRITE_SIZES), bullet_idx, axis=0)
+        
+        shot_on_screen = enemy_shot_y <= float(self.consts.BOTTOM_CLIP)
+        
+        hit_mask = (
+            shot_on_screen & shot_active
+            & (enemy_shot_x < shot_x + bullet_size[1]) & (shot_x < enemy_shot_x + enemy_shot_sizes[:, 1])
+            & (enemy_shot_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < enemy_shot_y + enemy_shot_sizes[:, 0])
+        )
+        return hit_mask
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[BeamriderObservation, BeamriderState]:
