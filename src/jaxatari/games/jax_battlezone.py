@@ -171,6 +171,9 @@ class Enemy(NamedTuple):
     death_anim_counter: chex.Array
     shoot_cd:chex.Array
     phase: chex.Array
+    dist_moved_temp: chex.Array
+    point_store_1_temp: chex.Array      # Especially for Saucer
+    point_store_2_temp: chex.Array      # Especially for Saucer
 
 
 # immutable state container
@@ -378,6 +381,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 death_anim_counter=jnp.array([0,0], dtype=jnp.int32),
                 shoot_cd=jnp.array([0, 0], dtype=jnp.int32),
                 phase=jnp.array([0, 0], dtype=jnp.int32),
+                dist_moved_temp=jnp.array([0, 0], dtype=jnp.float32),
+                point_store_1_temp=jnp.array([[0, 0], [0, 0]], dtype=jnp.float32),
+                point_store_2_temp=jnp.array([[0, 0], [0, 0]], dtype=jnp.float32),
             ),
             player_projectile=Projectile(
                 x=jnp.array(0, dtype=jnp.float32),
@@ -548,7 +554,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                   orientation_angle=jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi),
                                   active=True,
                                   shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
-                                  phase=0
+                                  phase=0,
+                                  dist_moved_temp=0.0,
+                                  point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
+                                  point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
                                   )
 
         cond = jnp.logical_or(enemy.active, enemy.death_anim_counter>0)
@@ -558,7 +567,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return jax.lax.cond(cond, no_spawn, do_spawn, (enemy, key, score))
 
     # -------------Enemy Movements-----------------
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def enemy_movement(self, enemy:Enemy, projectile:Projectile):
         perfect_angle = (2*jnp.pi - jnp.arctan2(enemy.x , enemy.z))%(2*jnp.pi)
         angle_diff = (perfect_angle-enemy.orientation_angle+jnp.pi)%(2*jnp.pi)-jnp.pi
@@ -567,7 +576,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards:int = 1) -> Enemy:    # Enemy towoards player with 1 and away with -1
+        def move_to_player(enemy: Enemy, towards:int = 1) -> Enemy:    # Enemy towards player with 1 and away with -1
             k = (enemy.distance + towards * speed) / enemy.distance
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
@@ -601,7 +610,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                         # jax.debug.print("{}", tank.orientation_angle)
                         return move_to_player(tank, -1)
 
-                    return jax.lax.cond(tank.distance <= 5.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
+                    return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
                 def out_range(tank):
                     return move_to_player(tank, -1)
 
@@ -616,15 +625,93 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
-            phase = 0
             min_dist = 27.7
             beta = jnp.arctan(saucer.x / saucer.z)
 
-            def distance_threshold_indx(dist):
-                threshold = jnp.array([1000, 2000, 7000, 12000])
-                return jnp.sum(dist >= threshold)
+            def near_player(saucer):
+                saucer = saucer._replace(phase=0)
+                return move_to_player(saucer, -1)
+            def far_player(saucer):
 
-            return saucer
+                def p0(saucer):
+                    saucer = saucer._replace(dist_moved_temp=saucer.dist_moved_temp + speed)
+                    saucer = move_to_player(saucer, -1)
+
+                    def next_phase(saucer):
+                        saucer = saucer._replace(dist_moved_temp=0.0)
+                        saucer = saucer._replace(phase=1)
+                        return saucer
+
+                    def cont_move(saucer):
+                        return saucer
+
+                    return jax.lax.cond(saucer.dist_moved_temp>11.8, next_phase, cont_move, saucer)
+
+                def p1(saucer: Enemy):
+                    # Rotation center
+                    ux = saucer.x/saucer.distance
+                    uz = saucer.z/saucer.distance
+                    rot_centre_x = saucer.x+(9.22*ux)+(4.33*uz)
+                    rot_centre_z = saucer.z+(9.22*uz)-(4.33*ux)
+                    # Intersection circle and line
+                    ## Component for abc
+                    rad = jnp.sqrt((saucer.x-rot_centre_x)*(saucer.x-rot_centre_x) + (saucer.z-rot_centre_z)*(saucer.z-rot_centre_z))
+                    m = saucer.z/saucer.x
+                    a = 1+m*m
+                    b =(-2)*(rot_centre_x+m*rot_centre_z)
+                    c = rot_centre_x*rot_centre_x+rot_centre_z*rot_centre_z-rad*rad
+                    ## abc
+                    x_1 = ((-b)+jnp.sqrt(b*b-4*a*c))/(2*a)
+                    x_2 = ((-b)-jnp.sqrt(b*b-4*a*c))/(2*a)
+                    ## z values
+                    z_1 = m*x_1
+                    z_2 = m*x_2
+                    ## furdest point from origin
+                    dist_sq1 = x_1*x_1 + z_1*z_1
+                    dist_sq2 = x_2*x_2 + z_2*z_2
+                    ## Set x and z
+                    intersection_point_x = jnp.where(dist_sq1>dist_sq2, x_1, x_2)
+                    intersection_point_y = jnp.where(dist_sq1>dist_sq2, z_1, z_2)
+                    # Update saucer
+                    saucer = saucer._replace(point_store_1_temp=jnp.array([rot_centre_x, rot_centre_z]))    # Centre of rotation
+                    saucer = saucer._replace(point_store_2_temp=jnp.array([intersection_point_x, intersection_point_y]))    # Stop point for rotation
+                    return saucer._replace(phase=2)
+
+                def p2(saucer):
+                    rot_centre_x = saucer.point_store_2_temp[0]
+                    rot_centre_z = saucer.point_store_2_temp[1]
+                    end_rot_point = saucer.point_store_2_temp
+
+                    vx = saucer.x - rot_centre_x
+                    vz = saucer.z - rot_centre_z
+                    ## Radius
+                    rad = jnp.sqrt(vx*vx + vz*vz)
+                    ##
+                    dtheta = speed/rad
+                    ##
+                    cos_dtheta = jnp.cos(dtheta)
+                    sin_dtheta = jnp.sin(dtheta)
+                    vx_new = cos_dtheta*vx-sin_dtheta*vz
+                    vz_new = sin_dtheta*vx+cos_dtheta*vz
+                    # Update saucer
+                    saucer = saucer._replace(x = rot_centre_x+vx_new, z = rot_centre_z+vz_new)
+
+                    def next_phase(saucer):
+                        return saucer._replace(point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
+                                                 point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
+                                                 phase=0)
+
+                    def cont_circular(saucer):
+                        return saucer
+
+                    reach_end_point = jnp.isclose(jnp.array([saucer.x, saucer.z]), end_rot_point, atol=1)
+                    reach_end_point = jnp.all(reach_end_point)
+                    return jax.lax.cond(reach_end_point, next_phase, cont_circular, saucer)
+
+                return jax.lax.switch(saucer.phase, (p0, p1, p2), saucer)
+
+            return jax.lax.cond(saucer.distance<min_dist, near_player, far_player, saucer)
+
 
         shoot_cond = jnp.all(jnp.array([enemy.enemy_type != EnemyType.SAUCER,
                                         enemy.shoot_cd <= 0,
