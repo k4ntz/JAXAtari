@@ -6,6 +6,8 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import apply_modifications
 from jaxatari.wrappers import JaxatariWrapper
 
+
+
 # Map of game names to their module paths
 GAME_MODULES = {
     "asterix": "jaxatari.games.jax_asterix",
@@ -66,8 +68,8 @@ def list_available_games() -> list[str]:
     return list(GAME_MODULES.keys())
 
 
-def make(game_name: str,
-         mode: int = 0,
+def make(game_name: str, 
+         mode: int = 0, 
          difficulty: int = 0,
          mods_config: list = None,
          allow_conflicts: bool = False
@@ -95,7 +97,7 @@ def make(game_name: str,
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-
+    
     try:
         # 1. Load the base environment class
         module = importlib.import_module(GAME_MODULES[game_name])
@@ -127,7 +129,6 @@ def make(game_name: str,
     except (ImportError, AttributeError, ValueError, NotImplementedError) as e:
         raise ImportError(f"Failed to load game '{game_name}': {e}") from e
 
-
 def make_renderer(game_name: str) -> JAXGameRenderer:
     """
     Creates and returns a JaxAtari game environment renderer.
@@ -142,17 +143,17 @@ def make_renderer(game_name: str) -> JAXGameRenderer:
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-
+    
     try:
         # 1. Dynamically load the module
         module = importlib.import_module(GAME_MODULES[game_name])
-
+        
         # 2. Find the correct environment class within the module
         renderer_class = None
         for _, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
                 renderer_class = obj
-                break  # Found it
+                break # Found it
 
         if renderer_class is None:
             raise ImportError(f"No AXGameRenderer subclass found in {GAME_MODULES[game_name]}")
@@ -160,4 +161,4 @@ def make_renderer(game_name: str) -> JAXGameRenderer:
         # 3. Instantiate the class, passing along the arguments, and return it
         return renderer_class()
     except (ImportError, AttributeError) as e:
-        raise ImportError(f"Failed to load renderer for '{game_name}': {e}") from e
+      raise ImportError(f"Failed to load renderer for '{game_name}': {e}") from e
