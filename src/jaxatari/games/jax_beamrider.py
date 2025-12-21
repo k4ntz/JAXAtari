@@ -192,7 +192,7 @@ class BeamriderConstants(NamedTuple):
     FALLING_ROCK_SPAWN_Y: float = 43.0
     FALLING_ROCK_BOTTOM_CLIP: float = 164.0
     FALLING_ROCK_INIT_VEL: float = 0.07
-    FALLING_ROCK_ACCEL: float = 0.02
+    FALLING_ROCK_ACCEL: float = 0.021
 
     # Lane blocker constants
     LANE_BLOCKER_MAX: int = 3
@@ -4162,8 +4162,6 @@ class BeamriderRenderer(JAXGameRenderer):
             def render_blocker(r_in):
                 sprite_idx = _get_index_lane_blocker(state.level.lane_blocker_pos[1][idx]) - 1
                 sprite_idx = jnp.clip(sprite_idx, 0, lane_blocker_masks.shape[0] - 1)
-                # Asset 3 is oversized; reuse stage 4 visuals for mid-height range.
-                sprite_idx = jnp.where(sprite_idx == 2, 3, sprite_idx)
                 sprite = lane_blocker_masks[sprite_idx]
                 x_pos = state.level.lane_blocker_pos[0][idx] + _get_ufo_alignment(
                     state.level.lane_blocker_pos[1][idx]
