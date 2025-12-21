@@ -309,6 +309,9 @@ class YarsRevengeConstants(NamedTuple):
         dtype=jnp.int32,
     )
 
+    NEUTRAL_ZONE_DATA = "TU Darmstadt"
+    NEUTRAL_ZONE_DATA_SIZE = 254
+
 
 class YarsRevengeState(NamedTuple):
     """
@@ -1761,6 +1764,27 @@ class YarsRevengeRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        neutral_zone_data_list = [ord(c) for c in self.consts.NEUTRAL_ZONE_DATA]
+        self.neutral_zone_data = jnp.tile(
+            jnp.array(neutral_zone_data_list),
+            (self.consts.NEUTRAL_ZONE_DATA_SIZE + len(neutral_zone_data_list) - 1)
+            // len(neutral_zone_data_list),
+        )[: self.consts.NEUTRAL_ZONE_DATA_SIZE]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _construct_neutral_zone_array(self, data: jnp.ndarray):
+        data = data.astype(jnp.uint8)
+
+        counter = jnp.arange(1, data.shape[0] + 1, dtype=jnp.uint8)
+        rev_bits = jnp.unpackbits(counter[:, None], axis=1)
+        rev_bits = jnp.flip(rev_bits, axis=1)
+        rev_counter = jnp.packbits(rev_bits, axis=1).squeeze(-1)
+
+        xor_bits = data ^ rev_counter
+        stripped_bits = jnp.unpackbits(xor_bits[:, None], axis=1)[:, :7]
+
+        return stripped_bits.astype(jnp.uint8)
+
     def _get_asset_config(self) -> list:
         """Return the asset description for the renderer."""
         return [
@@ -1852,10 +1876,23 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def _render_neutral_zone(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         state, raster = info
 
-        neutral_zone_mask = jnp.full(
-            (self.consts.NEUTRAL_ZONE_SIZE[1], self.consts.NEUTRAL_ZONE_SIZE[0]),
-            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR],
+        interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - self.consts.NEUTRAL_ZONE_SIZE[1]
+        begin = state.step_counter % (interval * 2)
+        begin = jnp.where(begin <= interval, begin, (interval * 2) - begin)
+
+        start_indices = jnp.array([begin])
+        slice_sizes   = (self.consts.NEUTRAL_ZONE_SIZE[1],) 
+
+        neutral_zone_mask = self._construct_neutral_zone_array(
+            jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
         )
+        neutral_zone_mask = jnp.where(
+            neutral_zone_mask == 1,
+            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR],
+            neutral_zone_mask,
+        )
+        neutral_zone_mask = jnp.repeat(neutral_zone_mask, repeats=4, axis=1)
+
         raster = self.jr.render_at(
             raster, state.neutral_zone.x, state.neutral_zone.y, neutral_zone_mask
         )
