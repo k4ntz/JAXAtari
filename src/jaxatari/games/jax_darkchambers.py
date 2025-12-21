@@ -19,6 +19,19 @@ def _get_default_asset_config():
         # Player sprite
         {"name": "player", "type": "single", "file": "player.npy"},
 
+        # Enemy sprites
+        {"name": "zombie", "type": "single", "file": "green_1.npy"},      # ENEMY_ZOMBIE = 1
+        {"name": "wraith", "type": "single", "file": "ghost_1.npy"},      # ENEMY_WRAITH = 2
+        {"name": "skeleton", "type": "single", "file": "skel_1.npy"},     # ENEMY_SKELETON = 3
+        {"name": "wizard", "type": "single", "file": "wizard_1.npy"},     # ENEMY_WIZARD = 4
+        # Note: No sprite for ENEMY_GRIM_REAPER = 5 yet, will use colored box
+
+        # Item sprites
+        {"name": "pot", "type": "single", "file": "pot.npy"},             # Money bag/treasure chest
+        {"name": "skull", "type": "single", "file": "skull.npy"},         # Poison/Trap (danger items)
+        {"name": "stairs", "type": "single", "file": "stairs.npy"},       # Ladder up (exit door)
+        {"name": "trapdoor", "type": "single", "file": "trapdoor.npy"},   # Ladder down (descent)
+
         # Digits for UI - commented out, using hardcoded digit patterns instead
         # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
     )
@@ -161,15 +174,15 @@ class DarkChambersConstants(NamedTuple):
     
     # Sizes
     PLAYER_WIDTH: int = 12
-    PLAYER_HEIGHT: int = 12
+    PLAYER_HEIGHT: int = 24  # Double height for human-like shape
     ENEMY_WIDTH: int = 10
-    ENEMY_HEIGHT: int = 10
+    ENEMY_HEIGHT: int = 20  # Double height for human-like shape
     
     PLAYER_SPEED: int = 2
     WALL_THICKNESS: int = 8
     
-    PLAYER_START_X: int = 24
-    PLAYER_START_Y: int = 24
+    PLAYER_START_X: int = 160  # Center of world (WORLD_W/2 = 320/2)
+    PLAYER_START_Y: int = 210  # Center of world (WORLD_H/2 = 420/2)
     
     # Health mechanics (scaled to classic 31 strength units)
     MAX_HEALTH: int = 31
@@ -314,6 +327,30 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
+        # Print sprite sizes for debugging
+        print("\n=== SPRITE SIZES ===")
+        if "player" in self.SHAPE_MASKS:
+            print(f"Player sprite shape: {self.SHAPE_MASKS['player'].shape}")
+        if "zombie" in self.SHAPE_MASKS:
+            print(f"Zombie sprite shape: {self.SHAPE_MASKS['zombie'].shape}")
+        if "wraith" in self.SHAPE_MASKS:
+            print(f"Wraith sprite shape: {self.SHAPE_MASKS['wraith'].shape}")
+        if "skeleton" in self.SHAPE_MASKS:
+            print(f"Skeleton sprite shape: {self.SHAPE_MASKS['skeleton'].shape}")
+        if "wizard" in self.SHAPE_MASKS:
+            print(f"Wizard sprite shape: {self.SHAPE_MASKS['wizard'].shape}")
+        
+        # Item sprites
+        if "pot" in self.SHAPE_MASKS:
+            print(f"Pot sprite shape: {self.SHAPE_MASKS['pot'].shape}")
+        if "skull" in self.SHAPE_MASKS:
+            print(f"Skull sprite shape: {self.SHAPE_MASKS['skull'].shape}")
+        if "stairs" in self.SHAPE_MASKS:
+            print(f"Stairs sprite shape: {self.SHAPE_MASKS['stairs'].shape}")
+        if "trapdoor" in self.SHAPE_MASKS:
+            print(f"Trapdoor sprite shape: {self.SHAPE_MASKS['trapdoor'].shape}")
+        print("===================\n")
+        
         # Helper to scale palette-index masks to a target size (centered pad/crop)
         def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
             if mask is None:
@@ -357,8 +394,40 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Fallback: use original player mask without scaling
             self.PLAYER_SCALED_MASK = self.SHAPE_MASKS.get("player")
 
-        # No enemy/item sprite scaling; enemies/items stay as colored boxes
-        self.ENEMY_SCALED_MASKS = None
+        # Scale enemy sprites to match gameplay size (10×20)
+        target_enemy_w = int(self.consts.ENEMY_WIDTH)
+        target_enemy_h = int(self.consts.ENEMY_HEIGHT)
+        
+        self.ENEMY_SCALED_MASKS = {}
+        for enemy_name in ["zombie", "wraith", "skeleton", "wizard"]:
+            enemy_mask = self.SHAPE_MASKS.get(enemy_name)
+            if enemy_mask is not None:
+                self.ENEMY_SCALED_MASKS[enemy_name] = _scale_mask(enemy_mask, target_enemy_h, target_enemy_w)
+                print(f"Scaled {enemy_name} to {target_enemy_h}×{target_enemy_w}")
+            else:
+                self.ENEMY_SCALED_MASKS[enemy_name] = None
+        
+        # Scale item sprites to 12×12 boxes for consistent rendering
+        target_item_w = 12
+        target_item_h = 12
+        
+        self.ITEM_SCALED_MASKS = {}
+        item_sprites = {
+            "pot": "pot",          # ITEM_STRONGBOX (money bag)
+            "skull": "skull",      # ITEM_POISON
+            "trapdoor": "trapdoor", # ITEM_TRAP
+            "stairs": "stairs"     # ITEM_LADDER_UP
+        }
+        
+        for item_key, sprite_name in item_sprites.items():
+            item_mask = self.SHAPE_MASKS.get(sprite_name)
+            if item_mask is not None:
+                self.ITEM_SCALED_MASKS[item_key] = _scale_mask(item_mask, target_item_h, target_item_w)
+                print(f"Scaled {sprite_name} to {target_item_h}×{target_item_w}")
+            else:
+                self.ITEM_SCALED_MASKS[item_key] = None
+        
+        # Grim Reaper has no sprite, will use colored box
         self.HEART_MASK_6 = None
         self.POISON_MASK_6 = None
         self.TREASURE_MASKS = {}
@@ -452,14 +521,24 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Walls in world coordinates - format: [x, y, width, height]
         # Multiple levels with different layouts
         # Shape: (MAX_LEVELS, max_walls_per_level, 4)
+        # Define portal hole parameters (centered vertically)
+        portal_hole_height = 40  # Height of the wraparound hole
+        portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
+        portal_y_end = portal_y_start + portal_hole_height
+        
         level_0_walls = jnp.array([
-            # Border
+            # Border - Top and Bottom
             [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
             [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
              self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT],
+            # Left wall - split into two parts with gap in middle
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            # Right wall - split into two parts with gap in middle
             [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT],
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
             # Labyrinth structure - Level 0
             [60, 80, 120, 8],
             [200, 150, 80, 8],
@@ -472,13 +551,18 @@ class DarkChambersRenderer(JAXGameRenderer):
         ], dtype=jnp.int32)
         
         level_1_walls = jnp.array([
-            # Border
+            # Border - Top and Bottom
             [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
             [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
              self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT],
+            # Left wall - split into two parts with gap in middle
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            # Right wall - split into two parts with gap in middle
             [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT],
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
             # Different labyrinth structure - Level 1
             [50, 100, 100, 8],
             [180, 180, 100, 8],
@@ -577,10 +661,10 @@ class DarkChambersRenderer(JAXGameRenderer):
         ], dtype=jnp.int32)
         # Python constants for item type color IDs (indexed by item_type - 1)
         self.ITEM_TYPE_COLOR_IDS_PY = [
-            self.HEART_ID,         # 1: ITEM_HEART
+            self.TREASURE_ID,      # 1: ITEM_HEART (swapped with STRONGBOX so pot sprite shows for money)
             self.POISON_ID,        # 2: ITEM_POISON
             self.TRAP_ID,          # 3: ITEM_TRAP
-            self.TREASURE_ID,      # 4: ITEM_STRONGBOX
+            self.HEART_ID,         # 4: ITEM_STRONGBOX (swapped with HEART to use pot sprite)
             self.TREASURE_ID,      # 5: ITEM_AMBER_CHALICE
             self.TREASURE_ID,      # 6: ITEM_AMULET
             self.TREASURE_ID,      # 7: ITEM_GOLD_CHALICE
@@ -704,35 +788,92 @@ class DarkChambersRenderer(JAXGameRenderer):
         player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
         object_raster = self.jr.render_at(object_raster, player_screen_x, player_screen_y, self.PLAYER_SCALED_MASK)
         
-        # Enemies (colored rectangles)
+        # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
         enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         num_enemies = enemy_screen_pos.shape[0]
-        enemy_sizes = jnp.tile(
-            jnp.array([self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT], dtype=jnp.int32)[None, :],
-            (num_enemies, 1)
-        )
-        _off = jnp.array([-100, -100], dtype=jnp.int32)
         enemy_active_mask = (state.enemy_active == 1)
+        
+        # Use same approach as boxes: mask inactive enemies to off-screen position
+        _off = jnp.array([-100, -100], dtype=jnp.int32)
         masked_enemy_pos = jnp.where(
             enemy_active_mask[:, None],
             enemy_screen_pos,
             _off
         )
-        # Draw each enemy type separately with its color
-        for enemy_type, color_id in [(1, self.ZOMBIE_ID), (2, self.WRAITH_ID), (3, self.SKELETON_ID), (4, self.WIZARD_ID), (5, self.GRIM_REAPER_ID)]:
-            type_mask = (state.enemy_types == enemy_type) & enemy_active_mask
-            type_positions = jnp.where(
-                type_mask[:, None],
-                masked_enemy_pos,
-                _off
+        
+        # Render each enemy type using sprites (types 1-4)
+        def render_one_enemy(i, raster):
+            ex = masked_enemy_pos[i, 0]
+            ey = masked_enemy_pos[i, 1]
+            enemy_type = state.enemy_types[i]
+            is_active = enemy_active_mask[i]
+            
+            # Use render_at_clipped to handle partial visibility automatically
+            # No visibility check needed - render_at_clipped handles off-screen clipping
+            
+            # Type 1: Zombie
+            is_zombie = (enemy_type == 1) & is_active
+            zombie_sprite = self.ENEMY_SCALED_MASKS.get("zombie")
+            raster = jax.lax.cond(
+                is_zombie & (zombie_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, zombie_sprite),
+                lambda r: r,
+                raster
             )
-            object_raster = self.jr.draw_rects(
-                object_raster,
-                positions=type_positions,
-                sizes=enemy_sizes,
-                color_id=color_id
+            
+            # Type 2: Wraith
+            is_wraith = (enemy_type == 2) & is_active
+            wraith_sprite = self.ENEMY_SCALED_MASKS.get("wraith")
+            raster = jax.lax.cond(
+                is_wraith & (wraith_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, wraith_sprite),
+                lambda r: r,
+                raster
             )
+            
+            # Type 3: Skeleton
+            is_skeleton = (enemy_type == 3) & is_active
+            skeleton_sprite = self.ENEMY_SCALED_MASKS.get("skeleton")
+            raster = jax.lax.cond(
+                is_skeleton & (skeleton_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, skeleton_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # Type 4: Wizard
+            is_wizard = (enemy_type == 4) & is_active
+            wizard_sprite = self.ENEMY_SCALED_MASKS.get("wizard")
+            raster = jax.lax.cond(
+                is_wizard & (wizard_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, wizard_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            return raster
+        
+        # Render all enemies with sprites
+        object_raster = jax.lax.fori_loop(0, NUM_ENEMIES, render_one_enemy, object_raster)
+        
+        # Type 5: Grim Reaper (use colored box - no sprite yet)
+        grim_reaper_mask = (state.enemy_types == 5) & enemy_active_mask
+        grim_reaper_positions = jnp.where(
+            grim_reaper_mask[:, None],
+            masked_enemy_pos,
+            _off
+        )
+        enemy_sizes = jnp.tile(
+            jnp.array([self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT], dtype=jnp.int32)[None, :],
+            (num_enemies, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=grim_reaper_positions,
+            sizes=enemy_sizes,
+            color_id=self.GRIM_REAPER_ID
+        )
         
         # Items - mask inactive ones by moving off-screen
         items_world_pos = state.item_positions.astype(jnp.int32)
@@ -746,7 +887,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             off_screen
         )
         
-        # Draw items by type using size and color mappings (rectangles)
+        # Draw items by type using sprites (for heart, poison, trap, ladder_up) or rectangles (for others)
         def draw_item_type(raster, t, positions_world):
             mask = (state.item_types == t) & (state.item_active == 1)
             pos = jnp.where(mask[:, None], positions_world, off_screen)
@@ -759,7 +900,62 @@ class DarkChambersRenderer(JAXGameRenderer):
                 sizes=sizes,
                 color_id=color_id_py
             )
-        for t in range(1, 13):  # 1..12 item types (including ladders)
+        
+        # Render items with sprites for specific types
+        def render_item_sprite(i, raster):
+            item_type = state.item_types[i]
+            is_active = state.item_active[i] == 1
+            item_x = masked_item_pos[i, 0]
+            item_y = masked_item_pos[i, 1]
+            
+            # ITEM_STRONGBOX = 4 -> pot sprite (money bag)
+            is_strongbox = (item_type == ITEM_STRONGBOX) & is_active
+            pot_sprite = self.ITEM_SCALED_MASKS.get("pot")
+            raster = jax.lax.cond(
+                is_strongbox & (pot_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, pot_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_POISON = 2 -> skull sprite
+            is_poison = (item_type == ITEM_POISON) & is_active
+            skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
+            raster = jax.lax.cond(
+                is_poison & (skull_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_TRAP = 3 -> trapdoor sprite
+            is_trap = (item_type == ITEM_TRAP) & is_active
+            trapdoor_sprite = self.ITEM_SCALED_MASKS.get("trapdoor")
+            raster = jax.lax.cond(
+                is_trap & (trapdoor_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, trapdoor_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_LADDER_UP = 12 -> stairs sprite
+            is_ladder_up = (item_type == ITEM_LADDER_UP) & is_active
+            stairs_sprite = self.ITEM_SCALED_MASKS.get("stairs")
+            raster = jax.lax.cond(
+                is_ladder_up & (stairs_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            return raster
+        
+        # First render sprite-based items using fori_loop
+        object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_item_sprite, object_raster)
+        
+        # Then render remaining items (treasures, powerups, etc.) as colored boxes
+        # Skip types 2,3,4,12 since they now use sprites (POISON, TRAP, STRONGBOX, LADDER_UP)
+        for t in [1, 5, 6, 7, 8, 9, 10, 11, 13]:  # Skip POISON(2), TRAP(3), STRONGBOX(4), LADDER_UP(12)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners
@@ -1243,7 +1439,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         (spawner_positions, key), _ = jax.lax.scan(spawn_spawner, (spawner_positions_init, subkey), jnp.arange(NUM_SPAWNERS))
         
         spawner_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
-        spawner_active = jnp.ones(NUM_SPAWNERS, dtype=jnp.int32)
+        spawner_active = jnp.zeros(NUM_SPAWNERS, dtype=jnp.int32)  # Disabled - no spawners placed
         key, subkey = jax.random.split(key)
         spawner_timers = jax.random.randint(
             subkey, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32
@@ -1434,22 +1630,41 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Normal logic continues below (existing code)
             # We will return at the end of this function.
             
-            # Track player direction from action
-            new_direction = jnp.where(a == Action.RIGHT, 0,
-                            jnp.where(a == Action.LEFT, 1,
-                            jnp.where(a == Action.UP, 2,
-                            jnp.where(a == Action.DOWN, 3, state.player_direction))))
+            # Track player direction from action (prioritize horizontal for diagonals)
+            new_direction = jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), 0,
+                            jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), 1,
+                            jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), 2,
+                            jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), 3, 
+                                      state.player_direction))))
             
-            dx = jnp.where(a == Action.LEFT, -self.consts.PLAYER_SPEED, 
-                   jnp.where(a == Action.RIGHT, self.consts.PLAYER_SPEED, 0))
-            dy = jnp.where(a == Action.UP, -self.consts.PLAYER_SPEED, 
-                   jnp.where(a == Action.DOWN, self.consts.PLAYER_SPEED, 0))
+            # Calculate movement deltas - support diagonal movement
+            dx = jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), -self.consts.PLAYER_SPEED,
+                   jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), self.consts.PLAYER_SPEED, 0))
+            dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -self.consts.PLAYER_SPEED,
+                   jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), self.consts.PLAYER_SPEED, 0))
             
             prop_x = state.player_x + dx
             prop_y = state.player_y + dy
             
-            prop_x = jnp.clip(prop_x, 0, self.consts.WORLD_WIDTH - 1)
-            prop_y = jnp.clip(prop_y, 0, self.consts.WORLD_HEIGHT - 1)
+            prop_x = jnp.clip(prop_x, 0, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
+            prop_y = jnp.clip(prop_y, 0, self.consts.WORLD_HEIGHT - self.consts.PLAYER_HEIGHT)
+            
+            # Check if player is in portal zone (vertically centered 40-pixel hole)
+            portal_hole_height = 40
+            portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
+            portal_y_end = portal_y_start + portal_hole_height
+            in_portal_zone = (prop_y >= portal_y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= portal_y_end)
+            
+            # Wraparound: If player exits left edge in portal zone, teleport to right edge
+            # If player exits right edge in portal zone, teleport to left edge
+            should_wrap_right = in_portal_zone & (prop_x <= 0)
+            should_wrap_left = in_portal_zone & (prop_x >= self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
+            
+            # Track if player crossed portal (for zombie spawning)
+            crossed_portal = should_wrap_right | should_wrap_left
+            
+            prop_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
+            prop_x = jnp.where(should_wrap_left, 2, prop_x)
             
             # Wall collision check - use walls for current level
             WALLS = self.renderer.LEVEL_WALLS[state.current_level]
@@ -1825,11 +2040,27 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
             
                 def clip_pos(pos):
-                    return jnp.clip(
+                    clipped = jnp.clip(
                         pos,
                         jnp.array([0, 0], dtype=jnp.int32),
-                        jnp.array([self.consts.WORLD_WIDTH - 1, self.consts.WORLD_HEIGHT - 1], dtype=jnp.int32),
+                        jnp.array([self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH, 
+                                   self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT], dtype=jnp.int32),
                     )
+                    
+                    # Apply wraparound for enemies in portal zone
+                    portal_hole_height = 40
+                    portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
+                    portal_y_end = portal_y_start + portal_hole_height
+                    in_portal_zone = (clipped[1] >= portal_y_start - self.consts.ENEMY_HEIGHT) & (clipped[1] <= portal_y_end)
+                    
+                    # Wraparound logic
+                    should_wrap_right = in_portal_zone & (clipped[0] <= 0)
+                    should_wrap_left = in_portal_zone & (clipped[0] >= self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH)
+                    
+                    wrapped_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH - 2,
+                                jnp.where(should_wrap_left, 2, clipped[0]))
+                    
+                    return jnp.array([wrapped_x, clipped[1]], dtype=jnp.int32)
             
                 pos_full = clip_pos(cur + step_full)
                 pos_x    = clip_pos(cur + step_x)
@@ -1993,6 +2224,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             should_remove = item_collisions & (~is_ladder) | (is_key & item_collisions)  # Remove keys when collected
             new_item_active = jnp.where(should_remove, 0, state.item_active)
             
+            # Initialize positions/types for potential updates from drops
+            new_item_positions_after_drops = state.item_positions
+            new_item_types_after_drops = state.item_types
+            
             # Bullet-enemy collision detection
             def check_bullet_enemy_collision(bullet_pos, enemy_pos):
                 """Check if bullet hits enemy."""
@@ -2060,6 +2295,66 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Deactivate enemies that have been killed (type becomes 0)
             new_enemy_active = jnp.where(new_enemy_types <= 0, 0, state.enemy_active)
+            
+            # Drop items from killed zombies (20% chance)
+            zombies_just_killed = (state.enemy_active == 1) & (new_enemy_active == 0) & (state.enemy_types == ENEMY_ZOMBIE)
+            
+            # Generate random values for each enemy to determine if they drop items
+            rng, drop_rng = jax.random.split(rng)
+            drop_chances = jax.random.uniform(drop_rng, shape=(NUM_ENEMIES,))
+            should_drop = zombies_just_killed & (drop_chances < 0.2)  # 20% chance
+            
+            # Find inactive item slots to spawn drops
+            def try_spawn_item_drop(idx, carry):
+                rng, item_active, item_positions, item_types = carry
+                
+                # Check if this enemy should drop an item
+                drop_item = should_drop[idx]
+                
+                # Find first inactive item slot
+                inactive_slots = (item_active == 0)
+                has_slot = jnp.any(inactive_slots)
+                first_slot = jnp.argmax(inactive_slots)  # First True index
+                
+                # Generate random item type (1-7: treasure items, 8-10: powerups)
+                rng, item_type_rng = jax.random.split(rng)
+                random_item_type = jax.random.randint(item_type_rng, shape=(), minval=ITEM_STRONGBOX, maxval=ITEM_BOMB + 1)
+                
+                # Spawn item at enemy position
+                enemy_pos = state.enemy_positions[idx]
+                
+                # Only spawn if enemy drops, there's a slot, and enemy was at valid position
+                should_spawn = drop_item & has_slot & (enemy_pos[0] > 0) & (enemy_pos[1] > 0)
+                
+                item_active = jax.lax.cond(
+                    should_spawn,
+                    lambda ia: ia.at[first_slot].set(1),
+                    lambda ia: ia,
+                    item_active
+                )
+                
+                item_positions = jax.lax.cond(
+                    should_spawn,
+                    lambda ip: ip.at[first_slot].set(enemy_pos),
+                    lambda ip: ip,
+                    item_positions
+                )
+                
+                item_types = jax.lax.cond(
+                    should_spawn,
+                    lambda it: it.at[first_slot].set(random_item_type),
+                    lambda it: it,
+                    item_types
+                )
+                
+                return rng, item_active, item_positions, item_types
+            
+            # Process all enemies for item drops
+            _, new_item_active_after_drops, new_item_positions_after_drops, new_item_types_after_drops = jax.lax.fori_loop(
+                0, NUM_ENEMIES,
+                try_spawn_item_drop,
+                (rng, new_item_active, state.item_positions, state.item_types)
+            )
             
             # Move dead enemies off-screen
             final_enemy_positions = jnp.where(
@@ -2132,10 +2427,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 
                 return (new_pos, new_types, new_active, key), None
             
-            rng, subkey = jax.random.split(state.key)
+            rng, subkey = jax.random.split(rng)
             (final_item_positions, final_item_types, final_item_active, rng), _ = jax.lax.scan(
                 add_spawner_drop,
-                (state.item_positions, state.item_types, new_item_active, subkey),
+                (new_item_positions_after_drops, new_item_types_after_drops, new_item_active_after_drops, subkey),
                 jnp.arange(NUM_SPAWNERS)
             )
             
@@ -2184,9 +2479,109 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             final_health = jnp.clip(final_health - enemy_bullet_damage, 0, self.consts.MAX_HEALTH)
             final_enemy_bullet_active3 = final_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
             
-            # Spawner logic: spawn enemies near active spawners
+            # Enemy spawning when crossing portals or changing levels
+            # Calculate level_changed early for enemy spawning trigger
+            level_changed_early = new_level != state.current_level
+            
+            active_enemy_count = jnp.sum(state.enemy_active)
+            many_enemies = active_enemy_count >= 10
+            
+            # Determine how many enemies to spawn (all types equally likely)
+            rng, subkey = jax.random.split(rng)
+            spawn_count_if_few = jax.random.randint(subkey, (), 1, 11, dtype=jnp.int32)  # 1-10 enemies
+            rng, subkey = jax.random.split(rng)
+            spawn_count_if_many = jax.random.randint(subkey, (), 1, 3, dtype=jnp.int32)  # 1-2 enemies
+            zombies_to_spawn = jnp.where(many_enemies, spawn_count_if_many, spawn_count_if_few)
+            
+            # Trigger spawning on portal cross or level change
+            should_trigger_spawn = crossed_portal | level_changed_early
+            
+            # Spawner logic: spawn enemies near active spawners (disabled, but keep for compatibility)
             new_spawner_timers = state.spawner_timers - 1
             should_spawn_enemy = (new_spawner_timers <= 0) & (new_spawner_active == 1)
+            
+            # Spawn enemies at random positions when portal crossed or level changed
+            def spawn_random_enemy(spawn_idx, carry):
+                enemy_pos, enemy_types_arr, enemy_active_arr, timers_arr, key = carry
+                
+                # Only spawn if spawn_idx < zombies_to_spawn
+                should_spawn_this = (spawn_idx < zombies_to_spawn) & should_trigger_spawn
+                
+                # Find first inactive enemy slot
+                first_inactive = jnp.argmax(enemy_active_arr == 0)
+                can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn_this
+                
+                # Random enemy type (1-5: zombie, wraith, skeleton, wizard, grim_reaper)
+                key, subkey = jax.random.split(key)
+                spawn_type = jax.random.randint(subkey, (), ENEMY_ZOMBIE, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32)
+                
+                # Get current level walls for collision checking
+                WALLS = self.renderer.LEVEL_WALLS[state.current_level]
+                
+                # Try to find valid spawn position (not on walls)
+                # We'll try multiple random positions and use the first valid one
+                def try_spawn_position(attempt, best_carry):
+                    best_pos, best_key, found_valid = best_carry
+                    
+                    new_key, subkey = jax.random.split(best_key)
+                    spawn_x = jax.random.randint(subkey, (), 50, self.consts.WORLD_WIDTH - 50, dtype=jnp.int32)
+                    new_key, subkey = jax.random.split(new_key)
+                    spawn_y = jax.random.randint(subkey, (), 50, self.consts.WORLD_HEIGHT - 50, dtype=jnp.int32)
+                    
+                    # Check wall collision
+                    wx = WALLS[:, 0]
+                    wy = WALLS[:, 1]
+                    ww = WALLS[:, 2]
+                    wh = WALLS[:, 3]
+                    overlap_x = (spawn_x <= (wx + ww - 1)) & ((spawn_x + self.consts.ENEMY_WIDTH - 1) >= wx)
+                    overlap_y = (spawn_y <= (wy + wh - 1)) & ((spawn_y + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                    on_wall = jnp.any(overlap_x & overlap_y)
+                    
+                    # Use this position if it's valid and we haven't found one yet
+                    new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([spawn_x, spawn_y]), best_pos)
+                    new_found = found_valid | (~on_wall)
+                    
+                    return (new_pos, new_key, new_found)
+                
+                # Try up to 10 times to find a valid position
+                init_pos = jnp.array([100, 100])
+                spawn_pos, key, _ = jax.lax.fori_loop(0, 10, try_spawn_position, (init_pos, key, False))
+                
+                # Update arrays
+                new_pos = jnp.where(
+                    (jnp.arange(NUM_ENEMIES)[:, None] == first_inactive) & can_spawn,
+                    spawn_pos,
+                    enemy_pos
+                )
+                new_types = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    spawn_type,
+                    enemy_types_arr
+                )
+                new_active = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    1,
+                    enemy_active_arr
+                )
+                new_timers = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    0,
+                    timers_arr
+                )
+                
+                return (new_pos, new_types, new_active, new_timers, key)
+            
+            # Spawn enemies using fori_loop (max 10 iterations)
+            init_carry = (new_enemy_positions, new_enemy_types, new_enemy_active, new_wizard_timers, rng)
+            (spawned_enemy_pos, spawned_enemy_types, spawned_enemy_active, spawned_wizard_timers, rng) = jax.lax.fori_loop(
+                0, 10, spawn_random_enemy, init_carry
+            )
+            
+            # Use spawned enemies if trigger active, otherwise use current
+            # Don't overwrite positions - let the spawner scan use the spawned values
+            spawner_affected_types = jnp.where(should_trigger_spawn, spawned_enemy_types, new_enemy_types)
+            spawner_affected_active = jnp.where(should_trigger_spawn, spawned_enemy_active, new_enemy_active)
+            spawner_affected_timers = jnp.where(should_trigger_spawn, spawned_wizard_timers, new_wizard_timers)
             
             # spawn each enemy exactly in the middle of the spawner
             def try_spawn_from_spawner(carry, spawner_idx):
@@ -2238,7 +2633,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             (enemy_positions_after_spawner, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng), _ = jax.lax.scan(
                 try_spawn_from_spawner,
-                (final_enemy_positions, new_enemy_types, new_enemy_active, new_wizard_timers, rng),
+                (spawned_enemy_pos, spawner_affected_types, spawner_affected_active, spawner_affected_timers, rng),
                 jnp.arange(NUM_SPAWNERS)
             )
             
@@ -2506,7 +2901,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 init_pos = jnp.zeros((NUM_SPAWNERS, 2), dtype=jnp.int32)
                 (new_sp_positions, key), _ = jax.lax.scan(spawn_one, (init_pos, sk), jnp.arange(NUM_SPAWNERS))
                 new_sp_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
-                new_sp_active = jnp.ones(NUM_SPAWNERS, dtype=jnp.int32)
+                new_sp_active = jnp.zeros(NUM_SPAWNERS, dtype=jnp.int32)  # Disabled - no spawners on any level
                 key, sk = jax.random.split(key)
                 new_sp_timers = jax.random.randint(sk, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32)
                 return new_sp_positions, new_sp_health, new_sp_active, new_sp_timers, key
