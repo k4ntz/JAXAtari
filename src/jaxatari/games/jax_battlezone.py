@@ -185,7 +185,7 @@ class Enemy(NamedTuple):
 class BattlezoneState(NamedTuple):
     score: chex.Array
     life: chex.Array
-    cur_fire_cd: chex.Array
+    cur_fire_cd: chex.Array  # player current fire cooldown
     step_counter: chex.Array
     chains_l_anim_counter: chex.Array
     chains_r_anim_counter: chex.Array
@@ -255,7 +255,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                  action == Action.DOWNFIRE, action == Action.DOWNLEFTFIRE]), axis=0)
         direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
         #-------------------fire--------------
-        will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd<=0)
+        will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
         def fire_projectile(state:BattlezoneState):
             return state._replace(
                 cur_fire_cd=jnp.array(self.consts.FIRE_CD, dtype=jnp.int32),
@@ -302,8 +302,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         updated_projectiles = (jax.vmap(self._obj_player_rotation_update, in_axes=(0,None))
                                (updated_projectiles, angle_change))
         new_player_projectile = self._obj_player_rotation_update(new_player_projectile, angle_change)
-
-
 
         return new_state._replace(
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
@@ -456,7 +454,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_state = jax.lax.cond(new_death_counter <= 0, self.player_shot_reset, lambda x: x, new_state)
             return new_state
 
-        new_state = jax.lax.cond(state.death_anim_counter<=0, normal_step, death_step, state)
+        new_state = jax.lax.cond(state.death_anim_counter <= 0, normal_step, death_step, state)
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(previous_state, new_state)
@@ -466,7 +464,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return observation, new_state, env_reward, done, info
 
 
-    def _obj_player_position_update(self, obj:NamedTuple, player_direction)->Enemy:
+    def _obj_player_position_update(self, obj: NamedTuple, player_direction) -> Enemy:
         """
         _position_update version for named tuples that contain x, z, distance
         """
@@ -741,6 +739,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return self.renderer.render(state)
 
     def player_shot_reset(self, state:BattlezoneState) -> BattlezoneState:
+        """reset function for when the player was shot but still has remaining lives"""
+
         split_key, key = jax.random.split(state.random_key, 2)
         # Set enemies to inactive
         inactive_enemies = state.enemies._replace(active=jnp.zeros_like(state.enemies.active))
@@ -764,7 +764,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=jnp.array([False, False], dtype=jnp.bool),
                 distance=jnp.array([0, 0], dtype=jnp.float32)
             ),
-            random_key=key)
+            random_key=key,
+            cur_fire_cd=jnp.array(0, dtype=jnp.int32),
+        )
 
         return new_state
 
@@ -1132,7 +1134,7 @@ class BattlezoneRenderer(JAXGameRenderer):
                 zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
                                self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
-                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)  # TODO: why is the animation fixed to a screen position, not the world position of the enemy?
 
                 return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
             
