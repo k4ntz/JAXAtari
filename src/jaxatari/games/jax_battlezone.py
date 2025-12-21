@@ -279,8 +279,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             action == Action.DOWNLEFTFIRE,
             action == Action.DOWNRIGHTFIRE,  # TODO: why doesn't this work?
         ]), axis=0)
-
-        jax.debug.print("{}", action)
         
         direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft])
 
@@ -663,7 +661,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                         # jax.debug.print("{}", tank.orientation_angle)
                         return move_to_player(tank, -1)
 
-                    return jax.lax.cond(tank.distance <= 10.0, away_player, towards_player, tank)    # Enemy keeps 10 metrics distance to player
+                    return jax.lax.cond(tank.distance <= 30.0, away_player, towards_player, tank)  # Enemy keeps 30 units distance to player
                 
                 def out_range(tank):
                     return move_to_player(tank, -1)
