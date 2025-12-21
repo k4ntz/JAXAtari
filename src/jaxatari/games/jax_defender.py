@@ -265,20 +265,16 @@ class DefenderState(NamedTuple):
     key: chex.Array
 
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
 class DefenderObservation(NamedTuple):
-    player: EntityPosition
-    score: jnp.ndarray
+    # Needs more implementation, work in progress
+    player_x: chex.Array
+    player_y: chex.Array
+    score: chex.Array
 
 
 class DefenderInfo(NamedTuple):
-    time: jnp.ndarray
+    score: chex.Array
+    game_over: chex.Array
 
 
 # Helper class that gets implemented by renderer and game for shared functionality
@@ -2736,35 +2732,21 @@ class JaxDefender(
     def render(self, state: DefenderState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def action_space(self) -> spaces.Space:
-        pass
-
-    def observation_space(self) -> spaces.Space:
-        pass
-
-    def image_space(self) -> Space:
-        pass
-
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
         return DefenderObservation(
-            player=EntityPosition(
-                x=state.space_ship_x,
-                y=state.space_ship_y,
-                width=jnp.array(self.consts.SPACE_SHIP_WIDTH),
-                height=jnp.array(self.consts.SPACE_SHIP_HEIGHT),
-            ),
-            score=0,
+            player_x=state.space_ship_x,
+            player_y=state.space_ship_y,
+            score=state.score,
         )
-
-    def observation_spaces(self) -> spaces.Space:
-        pass
 
     def _get_info(
         self, state: DefenderState, all_rewards: jnp.array = None
     ) -> DefenderInfo:
-        return DefenderInfo(time=state.step_counter)
+        game_over = state.game_state == self.consts.GAME_STATE_GAMEOVER
+        return DefenderInfo(score=state.score, game_over=game_over)
 
     def _get_reward(self, previous_state: DefenderState, state: DefenderState) -> float:
+        reward = state.score - previous_state.score
         return 0.0
 
     def _get_done(self, state: DefenderState) -> bool:
