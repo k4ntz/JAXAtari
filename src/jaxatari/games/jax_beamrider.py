@@ -68,7 +68,7 @@ class StandbyPhase(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    STARTING_SECTOR: int = 1
+    STARTING_SECTOR: int = 10
     WHITE_UFOS_PER_SECTOR: int = 3
 
     RENDER_SCALE_FACTOR: int = 4
@@ -195,11 +195,12 @@ class BeamriderConstants(NamedTuple):
     FALLING_ROCK_ACCEL: float = 0.021
 
     # Lane blocker constants
-    LANE_BLOCKER_MAX: int = 3
+    LANE_BLOCKER_MAX: int = 1
     LANE_BLOCKER_START_LEVEL: int = 10
     LANE_BLOCKER_SPAWN_PROB: float = 1 / 1800
     LANE_BLOCKER_SPAWN_Y: float = 43.0
     LANE_BLOCKER_BOTTOM_Y: float = 155.0
+    LANE_BLOCKER_SPAWN_LANES: Tuple[int, int, int] = (2, 3, 4)
     LANE_BLOCKER_HOLD_FRAMES: int = 122
     LANE_BLOCKER_INIT_VEL: float = 0.02
     LANE_BLOCKER_SINK_INTERVAL: int = 2
@@ -3205,8 +3206,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.LANE_BLOCKER_SPAWN_PROB)
 
-        # Random lane from 1 to 5 (inner lanes)
-        spawn_lane = jax.random.randint(key_lane, (), 1, 6)
+        # Random lane from the middle lanes (2, 3, 4)
+        middle_lanes = jnp.array(self.consts.LANE_BLOCKER_SPAWN_LANES)
+        spawn_lane = jax.random.choice(key_lane, middle_lanes)
 
         # Find first inactive slot
         inactive_mask = jnp.logical_not(active)
