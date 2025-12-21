@@ -486,7 +486,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         sin_alpha = jnp.sin(alpha)
         cos_alpha = jnp.cos(alpha)
         # Changing position based on player movement
-        # TODO: it would be better if we only computed the offset for the active movement
+        # TODO: it would be better if we only computed the offset for the active movement, right?
         offset_xz = jnp.array([
             [0, 0],     # Noop
             [0, -speed],  # Up
@@ -502,13 +502,17 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         idx = jnp.argmax(player_direction)
         offset = offset_xz[idx]
 
-        new_x = prev_x + offset[0] #* active
-        new_z = prev_z + offset[1] #* active
+        new_x = prev_x + offset[0] 
+        new_z = prev_z + offset[1] 
 
+        # Wrap around world edges
+        new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
+        new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+        
         return new_x, new_z
 
 
-    def _obj_player_rotation_update(self, obj:NamedTuple, angle_change):
+    def _obj_player_rotation_update(self, obj: NamedTuple, angle_change):
         alpha = self.consts.PLAYER_ROTATION_SPEED
         dist = self._get_distance(obj.x, obj.z)
         opp = jnp.tan(alpha)*dist
