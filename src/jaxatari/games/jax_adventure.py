@@ -126,12 +126,13 @@ class AdventureConstants(NamedTuple):
     BRIDGE_ID: int = 4
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
+    #dragons (X,Y, Room, state, counter, eat)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0, 0, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0, 0, 0)
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
     PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0)
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0)
     KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
     KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
     SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
@@ -149,13 +150,13 @@ class AdventureState(NamedTuple):
     step_counter: chex.Array
     #position player: x ,y ,tile, inventory, inventory cooldown
     player: chex.Array
-    #positions dragons: x, y ,tile ,state
+    #positions dragons: x, y ,tile ,state, counter
     dragon_yellow: chex.Array
     dragon_green: chex.Array
     #positions keys: x, y, tile
     key_yellow: chex.Array
     key_black: chex.Array
-    #gates: state
+    #gates: state, counter
     gate_yellow: chex.Array
     gate_black: chex.Array
     #position sword: x, y, tile
@@ -732,6 +733,101 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 )
             )
         
+        room_11_walls = jnp.logical_or(
+            jnp.logical_or(
+                jnp.logical_or(
+                    jnp.logical_and(
+                        player_y >= 199,
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_and(player_x >= 30, player_x <= 38), 
+                                jnp.logical_and(player_x >= 120, player_x <= 126)  
+                            ),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x <= 20, player_x >= 14),
+                                    jnp.logical_and(player_x >= 135, player_x <= 142)
+                                ),
+                                jnp.logical_and(player_x>=72, player_x<=84)
+                            )
+                        )
+                    ),
+                    jnp.logical_and(
+                        jnp.logical_and(player_y >= 170, player_y <= 199),
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 30, player_x <= 60), 
+                                    jnp.logical_and(player_x >= edge_right, player_x <= 126)  
+                                ),
+                                jnp.logical_and(player_x>=72, player_x<=84)
+                                ),
+                                jnp.logical_or(
+                                    player_x <= 20,
+                                    player_x >= 135
+                                )
+                            )
+                        )
+                    ),
+                
+                    jnp.logical_or(
+                        jnp.logical_and(
+                            jnp.logical_and(player_y >= 135, player_y <= 170),
+                            jnp.logical_and(player_x>=72, player_x<=84)
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 105, player_y <= 135),
+                        jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x>=16, player_x<=30),
+                                    jnp.logical_and(player_x>=126, player_x<=140)
+                                ),
+                               jnp.logical_and(player_x>=38, player_x<=118)
+                            )
+                        )
+                    ),
+                ),
+                jnp.logical_or(
+                    jnp.logical_or(
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 75, player_y <= 105),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        jnp.logical_and(player_x>=16, player_x<=30),
+                                        jnp.logical_and(player_x>=104, player_x<=118)
+                                    ),
+                                jnp.logical_or(
+                                        jnp.logical_and(player_x>=38, player_x<=53),
+                                        jnp.logical_and(player_x>=126, player_x<=140)
+                                    ),
+                                ),
+                            jnp.logical_and(player_x>=72, player_x<=84)
+                            )
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 40, player_y <= 70),
+                        jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        player_x<=30,
+                                        player_x>=126
+                                    ),
+                                jnp.logical_or(
+                                        jnp.logical_and(player_x>=38, player_x<=53),
+                                        jnp.logical_and(player_x>=104, player_x<=118)
+                                    ),
+                                ),
+                            jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+                            )
+                        )
+                    ),
+                    jnp.logical_and(
+                        player_y <= 40,
+                        jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+                    )                   
+                )
+            )
 
 
         ### end extra maze walls
@@ -759,7 +855,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             room_10_walls
         )
 
-        room_11_clear = True
+        room_11_clear = jnp.logical_or(
+            jnp.logical_not(room == 10),
+            room_11_walls
+        )
 
         room_12_clear = jnp.logical_or(
                 jnp.logical_not(room == 11), #either it is not room 1 or
@@ -816,12 +915,49 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         castle_towers = jnp.logical_or(player_y >= castle_tower_height, jnp.logical_or(castle_towers_in, castle_towers_out))
 
         castle_base_out = jnp.logical_or(player_x<=castle_base_left, player_x>=castle_base_right)
-        castle_base_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_base_in_1 = jnp.logical_and(jnp.logical_and(player_y>= castle_tower_height, player_y <= castle_base_height),jnp.logical_and(player_x>=edge_left+8, player_x<=edge_right-10))
+        castle_base_in_2 = jnp.logical_and(player_y <= castle_tower_height, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
+        castle_base_in = jnp.logical_or(castle_base_in_1, castle_base_in_2)
         castle_base = jnp.logical_or(player_y >= castle_base_height, jnp.logical_or(castle_base_in, castle_base_out))
 
+        castle_walls = jnp.logical_and(castle_towers, castle_base)
+
+        ##logic implementation gate border
+
+        gate_yellow_x = self.consts.YELLOW_GATE_POS[0]
+        gate_yellow_y = self.consts.YELLOW_GATE_POS[1]
+        gate_yellow_open = state.gate_yellow[0]
+
+        gate_black_x = self.consts.BLACK_GATE_POS[0]
+        gate_black_y = self.consts.BLACK_GATE_POS[1]
+        gate_black_open = state.gate_black[0]
+
+        gate_yellow_not_block = jnp.logical_or(
+            jnp.logical_not(room == 0),
+            gate_yellow_open > 4
+        )
+
+        gate_black_not_block = jnp.logical_or(
+            jnp.logical_not(room == 11),
+            gate_black_open > 4
+        )
+
+        gates_not_blocking = jnp.logical_and(gate_yellow_not_block, gate_black_not_block)
+
+        castle_gate = jnp.logical_or(
+            gates_not_blocking,
+            jnp.logical_or(
+                jnp.logical_or(
+                player_x >= edge_right,
+                player_x <= edge_left
+            ),
+            player_y >= castle_base_height
+            )
+        )
+        
         castle_collision = jnp.logical_or(
             jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
-            jnp.logical_and(castle_towers, castle_base)
+            jnp.logical_and(castle_walls, castle_gate)
         )
 
         room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
@@ -840,15 +976,32 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
 
-        return_bool = jnp.logical_and(base_rooms, castle_collision )# todo
+        walls_detected = jnp.logical_and(base_rooms, castle_collision )
+
+        #Check for Bridge negating wall
+        
+        bridgeX = state.bridge[0]
+        bridgeY = state.bridge[1]
+        bridgeTile =state.bridge[2]
+
+        bridgeOnSameTile = bridgeTile == room
+        bridgeInRange = jnp.logical_and(
+            jnp.logical_and(player_x >= bridgeX + 8, player_x <= bridgeX + 24),
+            jnp.logical_and(player_y >= bridgeY, player_y <= bridgeY + 48)
+        )
+
+        bridge_detected = jnp.logical_and(bridgeOnSameTile, bridgeInRange)
+
+
+        return_bool = jnp.logical_or(walls_detected, bridge_detected)
         
         return return_bool
 
     def _player_step(self, state: AdventureState, action: chex.Array) -> AdventureState:
-        left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-        up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-        down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+        left = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.LEFT, action == Action.LEFTFIRE),action== Action.UPLEFT),action == Action.UPLEFTFIRE), action==Action.DOWNLEFT), action==Action.DOWNLEFTFIRE)
+        right = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.RIGHT, action == Action.RIGHTFIRE),action== Action.UPRIGHT),action == Action.UPRIGHTFIRE), action==Action.DOWNRIGHT), action==Action.DOWNRIGHTFIRE)
+        up = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.UP, action == Action.UPFIRE),action== Action.UPRIGHT),action == Action.UPRIGHTFIRE), action==Action.UPLEFT), action==Action.UPLEFTFIRE)
+        down = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.DOWN, action == Action.DOWNFIRE),action== Action.DOWNRIGHT),action == Action.DOWNRIGHTFIRE), action==Action.DOWNLEFT), action==Action.DOWNLEFTFIRE)
 
       
 
@@ -996,6 +1149,114 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,state.chalice[2],state.chalice[3],state.chalice)
                                   )
+        )
+    
+    def _gate_interaction(self, state: AdventureState) -> AdventureState:
+        gate_yellow_open = state.gate_yellow[0]
+        gate_black_open = state.gate_black[0]
+        gate_yellow_counter = state.gate_yellow[1]
+        gate_black_counter = state.gate_black[1]
+
+        room = state.player[2]
+        player_x = state.player[0]
+        player_y = state.player[1]
+
+        yellow_key_in_inventory = (state.player[3] == 1)
+        black_key_in_inventory = (state.player[3] == 2)
+
+        player_infront_yellow_gate = jnp.logical_and(
+            room == 0,
+            jnp.logical_and(
+                jnp.logical_and(
+                    player_x >= self.consts.PATH_VERTICAL_LEFT,
+                    player_x <= self.consts.PATH_VERTICAL_RIGHT
+                ),jnp.logical_and(
+                    player_y >= self.consts.CASTLE_BASE_CORNER_Y,
+                    player_y <= self.consts.CASTLE_BASE_CORNER_Y + 8
+                )
+            )
+        )
+
+        player_infront_black_gate = jnp.logical_and(
+            room == 11,
+            jnp.logical_and(
+                jnp.logical_and(
+                    player_x >= self.consts.PATH_VERTICAL_LEFT,
+                    player_x <= self.consts.PATH_VERTICAL_RIGHT
+                ),jnp.logical_and(
+                    player_y >= self.consts.CASTLE_BASE_CORNER_Y,
+                    player_y <= self.consts.CASTLE_BASE_CORNER_Y + 8
+                )
+            )
+        )
+
+
+        yellow_key_in_range = jnp.logical_and(yellow_key_in_inventory, player_infront_yellow_gate)
+        black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
+        
+        gate_opening_yellow = jnp.logical_or(jnp.logical_and(gate_yellow_open>0, gate_yellow_open<5), yellow_key_in_range)
+        gate_opening_black = jnp.logical_or(jnp.logical_and(gate_black_open>0, gate_black_open<5), black_key_in_range)
+
+        gate_render_yellow = False
+        gate_render_yellow = jax.lax.cond(
+            jnp.logical_and(gate_opening_yellow, gate_yellow_counter >= gate_yellow_open * 20),
+            lambda _: True,
+            lambda _: False,
+            operand = None
+        )
+
+        gate_yellow_counter = jax.lax.cond(
+            gate_render_yellow,
+            lambda op: op,
+            lambda op: op+1,
+            operand = gate_yellow_counter
+        )
+
+        gate_render_black = False
+        gate_render_black = jax.lax.cond(
+            jnp.logical_and(gate_opening_black, gate_black_counter >= gate_black_open * 20),
+            lambda _: True,
+            lambda _: False,
+            operand = None
+        )
+
+        gate_black_counter = jax.lax.cond(
+            gate_render_black,
+            lambda op: op,
+            lambda op: op+1,
+            operand = gate_black_counter
+        )
+
+        gate_yellow_open = jax.lax.cond(
+            gate_render_yellow,
+            lambda op: op + 1,
+            lambda op: op,
+            operand = gate_yellow_open
+        )
+
+        gate_black_open = jax.lax.cond(
+            gate_opening_black,
+            lambda op: op + 1,
+            lambda op: op,
+            operand = gate_black_open
+        )
+
+        new_gate_yellow = [gate_yellow_open, gate_yellow_counter]
+        new_gate_black = [gate_black_open, gate_black_counter]
+
+        return AdventureState(
+            step_counter=state.step_counter,
+            player = state.player,
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=new_gate_yellow,
+            gate_black=new_gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1207,33 +1468,118 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         
 
     def _dragon_step(self, state: AdventureState) -> AdventureState:
+        #get sword position to kill dragons
+        sword_x = state.sword[0]
+        sword_y = state.sword[1]
+        sword_room = state.sword[2]
+
+        #yellow dragon
         direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
         direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
         dragon_yellow_x = state.dragon_yellow[0]
         dragon_yellow_y = state.dragon_yellow[1]
-        dragon_yellow_x, dragon_yellow_y = jax.lax.cond(
-            state.player[2]==state.dragon_yellow[2],
-            lambda _: ((dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2)),
-            lambda _: (dragon_yellow_x, dragon_yellow_y),
+        dragon_yellow_animation = state.dragon_yellow[3]
+        dragon_yellow_counter = state.dragon_yellow[4]
+        # wait after attack
+        dragon_yellow_counter = jax.lax.cond(
+            dragon_yellow_animation == 1,
+            lambda f: f+1,
+            lambda f:f,
+            operand = dragon_yellow_counter
+        )
+        dragon_yellow_freeze = dragon_yellow_counter % 15 != 0
+        #dragon eats player
+        dragon_yellow_eat = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),jnp.logical_and(dragon_yellow_animation==1,jnp.logical_not(dragon_yellow_freeze))),
+            lambda:1,
+            lambda:0
+        )
+        #move towards player and attack
+        dragon_yellow_x, dragon_yellow_y, dragon_yellow_animation, dragon_yellow_counter= jax.lax.cond(
+            jnp.logical_and(state.player[2]==state.dragon_yellow[2],jnp.logical_not(dragon_yellow_freeze)),
+            lambda _: (dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2, jax.lax.cond(
+                jnp.logical_and(jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),dragon_yellow_animation!=2),
+                lambda _:1,
+                lambda _:0,
+                operand = None
+            ),0),
+            lambda _: (dragon_yellow_x, dragon_yellow_y, jax.lax.cond(jnp.logical_not(dragon_yellow_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_yellow_counter),
             operand  = None
         )
+        #kill dragon
+        direction_x = jnp.sign(sword_x - state.dragon_yellow[0])
+        direction_y = jnp.sign(sword_y- state.dragon_yellow[1])
+        dragon_yellow_animation = jax.lax.cond(
+            jnp.logical_and(state.dragon_yellow[2]==sword_room, jnp.logical_and((sword_x-dragon_yellow_x)*direction_x<4, (sword_y-dragon_yellow_y)*direction_y<22)),
+            lambda _:2,
+            lambda a:a,
+            operand = dragon_yellow_animation
+        )
+        # dont ever move again when dead
+        dragon_yellow_counter = jax.lax.cond(
+            dragon_yellow_animation == 2,
+            lambda _: 1,
+            lambda f:f,
+            operand=dragon_yellow_counter
+        )
+
+
+        #green dragon
         direction_x = jnp.sign(state.player[0] - state.dragon_green[0])
         direction_y = jnp.sign(state.player[1]- state.dragon_green[1])
         dragon_green_x = state.dragon_green[0]
         dragon_green_y = state.dragon_green[1]
-        dragon_green_x, dragon_green_y = jax.lax.cond(
-            state.player[2]==state.dragon_green[2],
-            lambda _: ((dragon_green_x + direction_x*2, dragon_green_y + direction_y*2)),
-            lambda _: (dragon_green_x, dragon_green_y),
+        dragon_green_animation = state.dragon_green[3]
+        dragon_green_counter = state.dragon_green[4]
+        # wait after attack
+        dragon_green_counter = jax.lax.cond(
+            dragon_green_animation == 1,
+            lambda f: f+1,
+            lambda f:f,
+            operand = dragon_green_counter
+        )
+        dragon_green_freeze = dragon_green_counter % 15 != 0
+        #dragon eats player
+        dragon_green_eat = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),jnp.logical_and(dragon_green_animation==1,jnp.logical_not(dragon_green_freeze))),
+            lambda:1,
+            lambda:0
+        )
+        #move towards player and attack
+        dragon_green_x, dragon_green_y, dragon_green_animation, dragon_green_counter= jax.lax.cond(
+            jnp.logical_and(state.player[2]==state.dragon_green[2],jnp.logical_not(dragon_green_freeze)),
+            lambda _: (dragon_green_x + direction_x*2, dragon_green_y + direction_y*2, jax.lax.cond(
+                jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),dragon_green_animation!=2),
+                lambda _:1,
+                lambda _:0,
+                operand = None
+            ),0),
+            lambda _: (dragon_green_x, dragon_green_y, jax.lax.cond(jnp.logical_not(dragon_green_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_green_counter),
             operand  = None
+        )
+        #kill dragon
+        direction_x = jnp.sign(sword_x - state.dragon_green[0])
+        direction_y = jnp.sign(sword_y- state.dragon_green[1])
+        dragon_green_animation = jax.lax.cond(
+            jnp.logical_and(state.dragon_green[2]==sword_room, jnp.logical_and((sword_x-dragon_green_x)*direction_x<4, (sword_y-dragon_green_y)*direction_y<22)),
+            lambda _:2,
+            lambda a:a,
+            operand = dragon_green_animation
+        )
+        # dont ever move again when dead
+        dragon_green_counter = jax.lax.cond(
+            dragon_green_animation == 2,
+            lambda _: 1,
+            lambda f:f,
+            operand=dragon_green_counter
         )
 
 
         return AdventureState(
             step_counter = state.step_counter,
             player = state.player,
-            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2]]).astype(jnp.int32),
-            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2]]).astype(jnp.int32),
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2],dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat]).astype(jnp.int32),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2],dragon_green_animation,dragon_green_counter,dragon_green_eat]).astype(jnp.int32),
             key_yellow=state.key_yellow,
             key_black=state.key_black,
             gate_yellow=state.gate_yellow,
@@ -1243,6 +1589,86 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
+
+    def _magnet_step(self, state: AdventureState) -> AdventureState:
+        magnet_x = state.magnet[0]
+        magnet_y = state.magnet[1]
+
+        #try to pull sword
+        sword_x = state.sword[0]
+        sword_y = state.sword[1]
+        direction_x = jnp.sign(magnet_x - sword_x)
+        direction_y = jnp.sign(magnet_y - sword_y)
+        sword_x, sword_y = jax.lax.cond(
+            jnp.logical_and(state.sword[2]==state.magnet[2], state.player[3]!=3),
+            lambda _: (sword_x+direction_x,sword_y+direction_y),
+            lambda _: (sword_x,sword_y), 
+            operand = None
+        )
+
+        #try to pull yellow key
+        key_yellow_x = state.key_yellow[0]
+        key_yellow_y = state.key_yellow[1]
+        direction_x = jnp.sign(magnet_x - key_yellow_x)
+        direction_y = jnp.sign(magnet_y - key_yellow_y)
+        key_yellow_x, key_yellow_y = jax.lax.cond(
+            jnp.logical_and(state.key_yellow[2]==state.magnet[2], state.player[3]!=1),
+            lambda _: (key_yellow_x+direction_x,key_yellow_y+direction_y),
+            lambda _: (key_yellow_x,key_yellow_y), 
+            operand = None
+        )
+
+        #try to pull black key
+        key_black_x = state.key_black[0]
+        key_black_y = state.key_black[1]
+        direction_x = jnp.sign(magnet_x - key_black_x)
+        direction_y = jnp.sign(magnet_y - key_black_y)
+        key_black_x, key_black_y = jax.lax.cond(
+            jnp.logical_and(state.key_black[2]==state.magnet[2], state.player[3]!=2),
+            lambda _: (key_black_x+direction_x,key_black_y+direction_y),
+            lambda _: (key_black_x,key_black_y), 
+            operand = None
+        )
+
+        #try to pull bridge
+        bridge_x = state.bridge[0]
+        bridge_y = state.bridge[1]
+        direction_x = jnp.sign(magnet_x - bridge_x)
+        direction_y = jnp.sign(magnet_y - bridge_y)
+        bridge_x, bridge_y = jax.lax.cond(
+            jnp.logical_and(state.bridge[2]==state.magnet[2], state.player[3]!=4),
+            lambda _: (bridge_x+direction_x,bridge_y+direction_y),
+            lambda _: (bridge_x,bridge_y), 
+            operand = None
+        )
+
+        #try to pull chalice
+        chalice_x = state.chalice[0]
+        chalice_y = state.chalice[1]
+        direction_x = jnp.sign(magnet_x - chalice_x)
+        direction_y = jnp.sign(magnet_y - chalice_y)
+        chalice_x, chalice_y = jax.lax.cond(
+            jnp.logical_and(state.chalice[2]==state.magnet[2], state.player[3]!=6),
+            lambda _: (chalice_x+direction_x,chalice_y+direction_y),
+            lambda _: (chalice_x,chalice_y), 
+            operand = None
+        )
+
+        return AdventureState(
+            step_counter = state.step_counter,
+            player = state.player,
+            dragon_yellow = state.dragon_yellow,
+            dragon_green = state.dragon_green,
+            key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]).astype(jnp.int32),
+            key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]).astype(jnp.int32),
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=jnp.array([sword_x,sword_y,state.sword[2]]).astype(jnp.int32),
+            bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
+            magnet=state.magnet,
+            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
+        )
+    
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
@@ -1258,11 +1684,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
                                        self.consts.DRAGON_YELLOW_SPAWN[2],
-                                       self.consts.DRAGON_YELLOW_SPAWN[3]]).astype(jnp.int32), #ToDo
+                                       self.consts.DRAGON_YELLOW_SPAWN[3],
+                                       self.consts.DRAGON_YELLOW_SPAWN[4]]).astype(jnp.int32), #ToDo
             dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
-                                      self.consts.DRAGON_GREEN_SPAWN[3]]).astype(jnp.int32), #ToDo
+                                      self.consts.DRAGON_GREEN_SPAWN[3],
+                                      self.consts.DRAGON_GREEN_SPAWN[4]]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
@@ -1271,8 +1699,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                     self.consts.KEY_BLACK_SPAWN[1],
                                     self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
             #Gate: state
-            gate_yellow=jnp.array([0]).astype(jnp.int32),
-            gate_black=jnp.array([0]).astype(jnp.int32),
+            gate_yellow=jnp.array([0,0]).astype(jnp.int32),
+            gate_black=jnp.array([0,0]).astype(jnp.int32),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
@@ -1315,6 +1743,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         state = self._item_pickup(state, action)
         state = self._item_drop(state, action)
         state = self._dragon_step(state)
+        state = self._gate_interaction(state)
+        state = self._magnet_step(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -1476,11 +1906,16 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: AdventureState, state: AdventureState):
-        return 1
+        reward = jax.lax.cond(
+            jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),
+            lambda :-1,
+            lambda :0
+        )
+        return reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return 0
+        return jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1)
 
 class AdventureRenderer(JAXGameRenderer):
     def __init__(self, consts: AdventureConstants = None):
