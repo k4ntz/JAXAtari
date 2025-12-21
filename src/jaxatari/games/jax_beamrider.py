@@ -68,7 +68,7 @@ class StandbyPhase(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    STARTING_SECTOR: int = 10
+    STARTING_SECTOR: int = 4
     WHITE_UFOS_PER_SECTOR: int = 3
 
     RENDER_SCALE_FACTOR: int = 4
@@ -209,7 +209,7 @@ class BeamriderConstants(NamedTuple):
     LANE_BLOCKER_RETREAT_SPEED_MULT: float = 2.5
     
     # Standby Mode
-    STANDBY_DECEL_DURATION: int = 180
+    STANDBY_DECEL_DURATION: int = 120
     STANDBY_SECTOR_DONE_DURATION: int = 124
     STANDBY_BLINK_DURATION: int = 16
 
@@ -1572,8 +1572,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             next_phase = jnp.where(finished, int(StandbyPhase.WAIT), int(StandbyPhase.DECEL))
             next_timer = jnp.where(finished, 0, timer)
             
-            # Clear death timer when transitioning to WAIT so blinking sprite appears
-            next_death_timer = jnp.where(finished, 0, state.level.death_timer)
+            # Keep death timer ticking during decel so life icons keep blinking.
+            next_death_timer = jnp.where(
+                finished,
+                0,
+                jnp.maximum(state.level.death_timer - 1, 0),
+            )
             
             new_level = state.level._replace(
                 line_positions=line_positions,
@@ -3501,13 +3505,24 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         standby_phase = state.level.standby_phase
         standby_timer = state.level.standby_timer
         standby_accum = state.level.standby_accumulator
+        death_timer = state.level.death_timer
+        total_decel_duration = float(self.consts.DEATH_DURATION + self.consts.STANDBY_DECEL_DURATION)
+        decel_timer = jnp.where(
+            standby_phase == int(StandbyPhase.DECEL),
+            self.consts.DEATH_DURATION + standby_timer,
+            jnp.where(death_timer > 0, self.consts.DEATH_DURATION - death_timer, standby_timer),
+        )
+        decel_active = (standby_phase == int(StandbyPhase.DECEL)) | (
+            (standby_phase == int(StandbyPhase.NONE)) & (death_timer > 0)
+        )
+        line_phase = jnp.where(decel_active, int(StandbyPhase.DECEL), standby_phase)
         
         def get_inc_normal(_):
             return 1, 0.0
 
         def get_inc_decel(_):
-            # Speed linearly decreases from 1.0 to 0.0 over 180 frames
-            speed = 1.0 - (standby_timer.astype(jnp.float32) / float(self.consts.STANDBY_DECEL_DURATION))
+            # Speed linearly decreases from 1.0 to 0.0 over the combined decel duration.
+            speed = 1.0 - (decel_timer.astype(jnp.float32) / total_decel_duration)
             speed = jnp.maximum(speed, 0.0)
             
             new_accum = standby_accum + speed
@@ -3519,7 +3534,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             return 0, 0.0
 
         inc, next_accum = jax.lax.switch(
-            standby_phase,
+            line_phase,
             [get_inc_normal, get_inc_decel, get_inc_wait, get_inc_normal],
             operand=None
         )
