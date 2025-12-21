@@ -68,7 +68,7 @@ class StandbyPhase(IntEnum):
 
 class BeamriderConstants(NamedTuple):
 
-    STARTING_SECTOR: int = 4
+    STARTING_SECTOR: int = 1
     WHITE_UFOS_PER_SECTOR: int = 15
 
     RENDER_SCALE_FACTOR: int = 4
@@ -439,6 +439,7 @@ class BeamriderState(NamedTuple):
     reset_coords: chex.Array
     lives: chex.Array
     steps: chex.Array
+    ufo_killed: chex.Array
     rng: chex.Array
 
 
@@ -721,6 +722,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             reset_coords=jnp.array(False),
             lives=jnp.array(3),
             steps=jnp.array(0),
+            ufo_killed=jnp.array(False),
             rng=jax.random.PRNGKey(42),
         )
     
@@ -1503,7 +1505,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         new_state = BeamriderState(
             level=final_level_state, score=score, sector=state.sector,
             level_finished=jnp.array(0), reset_coords=jnp.array(False),
-            lives=new_lives, steps=state.steps + 1, rng=next_rng,
+            lives=new_lives, steps=state.steps + 1, 
+            ufo_killed=state.ufo_killed | jnp.any(hit_mask_ufo),
+            rng=next_rng,
         )
         
         done = jnp.array(self._get_done(new_state), dtype=jnp.bool_)
@@ -2482,6 +2486,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         first_inactive_slot = jnp.argmax(jnp.logical_not(ufo_shot_active), axis=1) # UFO
         has_inactive_slot = jnp.any(jnp.logical_not(ufo_shot_active), axis=1)
         
+        can_shoot = (state.steps > 2000) | state.ufo_killed
+
         spawn = jnp.logical_and.reduce(
             jnp.array([
                 wants_spawn,
@@ -2490,7 +2496,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 allowed_shot_lane,
                 has_inactive_slot,
             ])
-        )
+        ) & can_shoot
 
         spawn_y = jnp.clip(ufo_y + 4.0, float(self.consts.TOP_CLIP), float(self.consts.BOTTOM_CLIP))
         spawn_x = jnp.take(lanes_top_x, closest_lane) + jnp.take(lane_dx_over_dy, closest_lane) * (
