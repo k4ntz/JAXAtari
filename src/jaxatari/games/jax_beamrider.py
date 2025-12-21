@@ -370,6 +370,8 @@ class LevelState(NamedTuple):
     rejuvenator_dead: chex.Array
     rejuvenator_frame: chex.Array
     rejuvenator_lane: chex.Array
+    rejuvenator_explosion_frame: chex.Array
+    rejuvenator_explosion_pos: chex.Array
 
     falling_rock_pos: chex.Array
     falling_rock_active: chex.Array
@@ -423,6 +425,8 @@ class LevelState(NamedTuple):
     kamikaze_spawn_timer: chex.Array
     kamikaze_explosion_frame: chex.Array
     kamikaze_explosion_pos: chex.Array
+
+    background_flash_timer: chex.Array
 
 
 class BeamriderState(NamedTuple):
@@ -634,6 +638,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuvenator_dead=jnp.array(False),
             rejuvenator_frame=jnp.array(0, dtype=jnp.int32),
             rejuvenator_lane=jnp.array(0, dtype=jnp.int32),
+            rejuvenator_explosion_frame=jnp.array(0, dtype=jnp.int32),
+            rejuvenator_explosion_pos=jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32),
             falling_rock_pos=jnp.tile(
                 jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
                 (1, self.consts.FALLING_ROCK_MAX),
@@ -672,12 +678,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             bouncer_step_index=jnp.array(0, dtype=jnp.int32),
             bouncer_explosion_frame=jnp.array(0, dtype=jnp.int32),
             bouncer_explosion_pos=jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32),
-            standby_phase=standby_phase,
-            standby_timer=jnp.array(0, dtype=jnp.int32),
-            standby_accumulator=jnp.array(0.0, dtype=jnp.float32),
-            coin_pos=jnp.tile(
-                jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),
-                (1, self.consts.COIN_MAX),
+                    standby_phase=standby_phase,
+                    standby_timer=jnp.array(0, dtype=jnp.int32),
+                    standby_accumulator=jnp.array(0.0, dtype=jnp.float32),
+                    background_flash_timer=jnp.array(0, dtype=jnp.int32),
+                    coin_pos=jnp.tile(
+                        jnp.array(self.consts.ENEMY_OFFSCREEN_POS, dtype=jnp.float32).reshape(2, 1),                (1, self.consts.COIN_MAX),
             ),
             coin_active=jnp.zeros((self.consts.COIN_MAX,), dtype=jnp.bool_),
             coin_timer=jnp.zeros((self.consts.COIN_MAX,), dtype=jnp.int32),
@@ -811,15 +817,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rejuv_indices = jnp.where(rejuv_dead, 4, jnp.clip(_get_index_rejuvenator(rejuv_y) - 1, 0, 3))
         rejuv_sizes = jnp.take(jnp.array(self.consts.REJUVENATOR_SPRITE_SIZES), rejuv_indices, axis=0)
 
-        rejuv_hit_by_shot = jnp.logical_and.reduce(jnp.array([
+        rejuv_hit = jnp.logical_and.reduce(jnp.array([
             rejuv_active,
-            jnp.logical_not(rejuv_dead),
             (rejuv_x_screen < shot_x_screen + bullet_size[1]) & (shot_x_screen < rejuv_x_screen + rejuv_sizes[1]),
             (rejuv_y - self.consts.ENEMY_HITBOX_TOP_EXTENSION < shot_y + bullet_size[0]) & (shot_y < rejuv_y + rejuv_sizes[0]),
             shot_y < self.consts.BOTTOM_CLIP
         ]))
         
-        return rejuv_hit_by_shot
+        is_torpedo = bullet_type == self.consts.TORPEDO_ID
+        rejuv_destroyed = rejuv_hit & rejuv_dead & is_torpedo
+        
+        return rejuv_hit, rejuv_destroyed
 
     def _mothership_bullet_collision(
         self,
@@ -1134,7 +1142,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pre_collision_lane_blocker_pos = lane_blocker_pos
         (
             lane_blocker_pos, lane_blocker_active, lane_blocker_phase, lane_blocker_timer,
-            lane_blocker_vel_y, player_shot_pos, lane_blocker_hit_mask, hit_exists_lane_blocker,
+            lane_blocker_vel_y, player_shot_pos, blocker_destroyed, hit_exists_lane_blocker,
         ) = self._lane_blocker_bullet_collision(
             lane_blocker_pos, lane_blocker_active, lane_blocker_phase, lane_blocker_timer,
             lane_blocker_vel_y, player_shot_pos, player_shot_vel, bullet_type, white_ufo_left
@@ -1156,9 +1164,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         score = jnp.where(hit_exists_coin, score + 300 + 30 * clamped_sector + jnp.maximum(state.lives - 1, 0) * (100 + 10 * clamped_sector), score)
 
         # Rejuvenator bullet collision
-        rejuv_hit_by_shot = self._rejuvenator_bullet_collision(rejuv_pos, rejuv_active, rejuv_dead, player_shot_pos, player_shot_vel, bullet_type)
-        rejuv_dead = jnp.logical_or(rejuv_dead, rejuv_hit_by_shot)
-        player_shot_pos = jnp.where(rejuv_hit_by_shot, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_pos)
+        rejuv_hit, rejuv_destroyed = self._rejuvenator_bullet_collision(rejuv_pos, rejuv_active, rejuv_dead, player_shot_pos, player_shot_vel, bullet_type)
+        pre_collision_rejuv_pos = rejuv_pos
+        rejuv_dead = jnp.logical_or(rejuv_dead, rejuv_hit)
+        rejuv_active = jnp.where(rejuv_destroyed, False, rejuv_active)
+        rejuv_pos = jnp.where(rejuv_destroyed, jnp.array(self.consts.ENEMY_OFFSCREEN_POS), rejuv_pos)
+        player_shot_pos = jnp.where(rejuv_hit, jnp.array(self.consts.BULLET_OFFSCREEN_POS), player_shot_pos)
+        score = jnp.where(rejuv_destroyed, score + 150, score)
 
         # Mothership bullet collision
         hit_mothership = self._mothership_bullet_collision(state.level.mothership_stage, state.level.mothership_position, player_shot_pos, player_shot_vel, bullet_type)
@@ -1174,20 +1186,33 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         # Projectile resolution
         projectile_at_horizon = self._projectile_resolved(state)
-        bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | hit_exists_lane_blocker | rejuv_hit_by_shot | hit_mothership | hit_exists_shot | hit_exists_coin
+        bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | hit_exists_lane_blocker | rejuv_hit | hit_mothership | hit_exists_shot | hit_exists_coin
         projectile_resolved_now = projectile_at_horizon | bullet_hit_any
         player_shot_frame = jnp.where(projectile_resolved_now, jnp.array(-1, dtype=player_shot_frame.dtype), player_shot_frame)
         shooting_cooldown = jnp.where(projectile_resolved_now, self.consts.PLAYER_SHOT_RECOVERY, shooting_cooldown)
+
+        any_explosion_triggered = (
+            jnp.any(hit_mask_ufo)
+            | bouncer_destroyed
+            | jnp.any(chasing_meteoroid_hit_mask)
+            | jnp.any(falling_rock_hit_mask)
+            | jnp.any(blocker_destroyed)
+            | jnp.any(kamikaze_destroyed)
+            | jnp.any(hit_mask_coin)
+            | jnp.any(hit_mask_shot)
+            | rejuv_destroyed
+        )
 
         # Explosions
         ufo_explosion_frame, ufo_explosion_pos = self._update_enemy_explosions(state.level.ufo_explosion_frame, state.level.ufo_explosion_pos, hit_mask_ufo, ufo_update.pos)
         bouncer_explosion_frame, bouncer_explosion_pos = self._update_enemy_explosions(state.level.bouncer_explosion_frame[None], state.level.bouncer_explosion_pos[:, None], bouncer_destroyed[None], pre_collision_bouncer_pos[:, None])
         chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos = self._update_enemy_explosions(state.level.chasing_meteoroid_explosion_frame, state.level.chasing_meteoroid_explosion_pos, chasing_meteoroid_hit_mask, pre_collision_meteoroid_pos)
         falling_rock_explosion_frame, falling_rock_explosion_pos = self._update_enemy_explosions(state.level.falling_rock_explosion_frame, state.level.falling_rock_explosion_pos, falling_rock_hit_mask, pre_collision_rock_pos)
-        lane_blocker_explosion_frame, lane_blocker_explosion_pos = self._update_enemy_explosions(state.level.lane_blocker_explosion_frame, state.level.lane_blocker_explosion_pos, lane_blocker_hit_mask, pre_collision_lane_blocker_pos)
+        lane_blocker_explosion_frame, lane_blocker_explosion_pos = self._update_enemy_explosions(state.level.lane_blocker_explosion_frame, state.level.lane_blocker_explosion_pos, blocker_destroyed, pre_collision_lane_blocker_pos)
         enemy_shot_explosion_frame, enemy_shot_explosion_pos = self._update_enemy_explosions(state.level.enemy_shot_explosion_frame, state.level.enemy_shot_explosion_pos, hit_mask_shot, enemy_shot_pos_pre_collision)
         coin_explosion_frame, coin_explosion_pos = self._update_enemy_explosions(state.level.coin_explosion_frame, state.level.coin_explosion_pos, hit_mask_coin, pre_collision_coin_pos)
         kamikaze_explosion_frame, kamikaze_explosion_pos = self._update_enemy_explosions(state.level.kamikaze_explosion_frame, state.level.kamikaze_explosion_pos, kamikaze_destroyed, pre_collision_kamikaze_pos)
+        rejuv_explosion_frame, rejuv_explosion_pos = self._update_enemy_explosions(state.level.rejuvenator_explosion_frame[None], state.level.rejuvenator_explosion_pos[:, None], rejuv_destroyed[None], pre_collision_rejuv_pos[:, None])
 
         # Player collisions
         (total_hit_count, bouncer_hits_p, chasing_meteoroid_hits_p, rejuv_hit_player, gain_life, lose_life_rejuv, kamikaze_hits_player) = self._player_collision_check(
@@ -1217,12 +1242,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "blocker": (lane_blocker_pos, lane_blocker_active, lane_blocker_lane, lane_blocker_vel_y, lane_blocker_phase, lane_blocker_timer),
             "kamikaze": (kamikaze_pos, kamikaze_active, kamikaze_lane, kamikaze_vel_y, kamikaze_tracking, kamikaze_spawn_timer),
             "coin": (coin_pos, coin_active, coin_timer, coin_side, coin_spawn_count),
-            "rejuv": (rejuv_pos, rejuv_active, rejuv_dead, rejuv_frame, rejuv_lane, gain_life),
+            "rejuv": (rejuv_pos, rejuv_active, rejuv_dead, rejuv_frame, rejuv_lane, gain_life, rejuv_hit),
             "shots": (enemy_shot_pos, enemy_shot_lane, enemy_shot_timer),
             "score": score,
             "total_hit_count": total_hit_count,
             "hit_mothership": hit_mothership,
-            "explosions": (ufo_explosion_frame, ufo_explosion_pos, bouncer_explosion_frame[0], bouncer_explosion_pos[:, 0], chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos, falling_rock_explosion_frame, falling_rock_explosion_pos, lane_blocker_explosion_frame, lane_blocker_explosion_pos, enemy_shot_explosion_frame, enemy_shot_explosion_pos, coin_explosion_frame, coin_explosion_pos, kamikaze_explosion_frame, kamikaze_explosion_pos)
+            "any_explosion_triggered": any_explosion_triggered,
+            "explosions": (ufo_explosion_frame, ufo_explosion_pos, bouncer_explosion_frame[0], bouncer_explosion_pos[:, 0], chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos, falling_rock_explosion_frame, falling_rock_explosion_pos, lane_blocker_explosion_frame, lane_blocker_explosion_pos, enemy_shot_explosion_frame, enemy_shot_explosion_pos, coin_explosion_frame, coin_explosion_pos, kamikaze_explosion_frame, kamikaze_explosion_pos, rejuv_explosion_frame[0], rejuv_explosion_pos[:, 0])
         }
 
     def _finalize_normal_step(self, state, collision_results, line_positions, blue_line_counter, standby_accum, next_rng):
@@ -1230,6 +1256,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         score = collision_results["score"]
         total_hit_count = collision_results["total_hit_count"]
         hit_mothership = collision_results["hit_mothership"]
+        any_explosion_triggered = collision_results["any_explosion_triggered"]
         
         (player_x, vel_x, player_shot_pos, player_shot_vel, player_shot_frame, torpedos_left, bullet_type, shooting_cooldown, shooting_delay, shot_type_pending) = collision_results["player"]
         (white_ufo_pos, white_ufo_pattern_id, white_ufo_pattern_timer, white_ufo_left, white_ufo_vel_raw, white_ufo_time_on_lane_raw, white_ufo_attack_time_raw, hit_mask_ufo) = collision_results["ufo"]
@@ -1239,9 +1266,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         (lane_blocker_pos, lane_blocker_active, lane_blocker_lane, lane_blocker_vel_y, lane_blocker_phase, lane_blocker_timer) = collision_results["blocker"]
         (kamikaze_pos, kamikaze_active, kamikaze_lane, kamikaze_vel_y, kamikaze_tracking, kamikaze_spawn_timer) = collision_results["kamikaze"]
         (coin_pos, coin_active, coin_timer, coin_side, coin_spawn_count) = collision_results["coin"]
-        (rejuv_pos, rejuv_active, rejuv_dead, rejuv_frame, rejuv_lane, gain_life) = collision_results["rejuv"]
+        (rejuv_pos, rejuv_active, rejuv_dead, rejuv_frame, rejuv_lane, gain_life, rejuv_hit) = collision_results["rejuv"]
         (enemy_shot_pos, enemy_shot_lane, enemy_shot_timer) = collision_results["shots"]
-        (ufo_explosion_frame, ufo_explosion_pos, bouncer_explosion_frame, bouncer_explosion_pos, chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos, falling_rock_explosion_frame, falling_rock_explosion_pos, lane_blocker_explosion_frame, lane_blocker_explosion_pos, enemy_shot_explosion_frame, enemy_shot_explosion_pos, coin_explosion_frame, coin_explosion_pos, kamikaze_explosion_frame, kamikaze_explosion_pos) = collision_results["explosions"]
+        (ufo_explosion_frame, ufo_explosion_pos, bouncer_explosion_frame, bouncer_explosion_pos, chasing_meteoroid_explosion_frame, chasing_meteoroid_explosion_pos, falling_rock_explosion_frame, falling_rock_explosion_pos, lane_blocker_explosion_frame, lane_blocker_explosion_pos, enemy_shot_explosion_frame, enemy_shot_explosion_pos, coin_explosion_frame, coin_explosion_pos, kamikaze_explosion_frame, kamikaze_explosion_pos, rejuv_explosion_frame, rejuv_explosion_pos) = collision_results["explosions"]
 
         current_death_timer = state.level.death_timer
         is_hit = total_hit_count > 0
@@ -1257,6 +1284,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
         sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
         
+        current_flash_timer = state.level.background_flash_timer
+        next_flash_timer = jnp.where(any_explosion_triggered, 17, jnp.maximum(current_flash_timer - 1, 0))
+
         white_ufo_vel = jnp.where(hit_mask_ufo[None, :], 0.0, white_ufo_vel_raw)
         white_ufo_time_on_lane = jnp.where(hit_mask_ufo, 0, white_ufo_time_on_lane_raw)
         white_ufo_attack_time = jnp.where(hit_mask_ufo, 0, white_ufo_attack_time_raw)
@@ -1401,6 +1431,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             coin_explosion_pos=coin_explosion_pos, coin_spawn_count=coin_spawn_count, kamikaze_pos=kamikaze_pos, kamikaze_active=kamikaze_active,
             kamikaze_lane=kamikaze_lane, kamikaze_vel_y=kamikaze_vel_y, kamikaze_tracking=kamikaze_tracking, kamikaze_spawn_timer=kamikaze_spawn_timer,
             kamikaze_explosion_frame=kamikaze_explosion_frame, kamikaze_explosion_pos=kamikaze_explosion_pos,
+            background_flash_timer=next_flash_timer,
+            rejuvenator_explosion_frame=rejuv_explosion_frame,
+            rejuvenator_explosion_pos=rejuv_explosion_pos,
         )
 
         reset_level_state = self._create_level_state(
@@ -1413,6 +1446,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             line_positions=line_positions, blue_line_counter=blue_line_counter,
             death_timer=jnp.where(just_died, self.consts.STANDBY_DECEL_DURATION, reset_level_state.death_timer),
             player_pos=player_x,
+            background_flash_timer=next_flash_timer,
+            rejuvenator_explosion_frame=rejuv_explosion_frame,
+            rejuvenator_explosion_pos=rejuv_explosion_pos,
         )
         final_level_state = jax.tree_util.tree_map(
             lambda normal, reset: jnp.where(jnp.logical_or(just_died, sector_advanced), reset, normal),
@@ -1442,7 +1478,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             line_positions=line_positions,
             blue_line_counter=blue_line_counter,
             shooting_cooldown=jnp.maximum(state.level.shooting_cooldown - 1, 0),
-            shooting_delay=jnp.maximum(state.level.shooting_delay - 1, 0)
+            shooting_delay=jnp.maximum(state.level.shooting_delay - 1, 0),
+            background_flash_timer=jnp.maximum(state.level.background_flash_timer - 1, 0),
+            rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
+            rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
         new_state = state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
         
@@ -1472,7 +1511,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             standby_timer=next_timer,
             standby_accumulator=standby_accum,
             death_timer=next_death_timer,
-            player_pos=jnp.where(finished, 77.0, state.level.player_pos)
+            player_pos=jnp.where(finished, 77.0, state.level.player_pos),
+            background_flash_timer=jnp.maximum(state.level.background_flash_timer - 1, 0),
+            rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
+            rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
         new_state = state._replace(level=new_level, steps=state.steps + 1)
         
@@ -1492,7 +1534,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             blue_line_counter=next_counter,
             standby_phase=next_phase,
             standby_timer=timer,
-            standby_accumulator=standby_accum
+            standby_accumulator=standby_accum,
+            background_flash_timer=jnp.maximum(state.level.background_flash_timer - 1, 0),
+            rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
+            rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
         # Advance RNG to ensure variety after resume
         rngs = jax.random.split(state.rng, 2)
@@ -1528,7 +1573,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_pos=next_ufo_pos,
             white_ufo_vel=jnp.where(finished, 0.0, state.level.white_ufo_vel),
             white_ufo_pattern_id=jnp.where(finished, 0, state.level.white_ufo_pattern_id),
-            white_ufo_pattern_timer=jnp.where(finished, 0, state.level.white_ufo_pattern_timer)
+            white_ufo_pattern_timer=jnp.where(finished, 0, state.level.white_ufo_pattern_timer),
+            background_flash_timer=jnp.maximum(state.level.background_flash_timer - 1, 0),
+            rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
+            rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
         new_state = state._replace(level=new_level, steps=state.steps + 1, sector=next_sector)
         
@@ -3629,6 +3677,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             enemy_shot_explosion_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_explosion_pos),
             chasing_meteoroid_pos=jnp.where(is_init, chasing_meteoroid_offscreen, state.level.chasing_meteoroid_pos),
             rejuvenator_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_pos),
+            rejuvenator_explosion_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_explosion_pos),
             falling_rock_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_pos),
             falling_rock_explosion_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_explosion_pos),
             lane_blocker_pos=jnp.where(is_init, lane_blocker_offscreen, state.level.lane_blocker_pos),
@@ -3948,11 +3997,20 @@ class BeamriderRenderer(JAXGameRenderer):
                 'Mothership/Mothership_explosion2.npy',
                 'Mothership/Mothership_explosion3.npy',
             ]},
+            {'name': 'yellow_background', 'type': 'single', 'file': 'colored_backgrounds/Yellow_background.npy'},
+            {'name': 'light_orange_background', 'type': 'single', 'file': 'colored_backgrounds/LightOrange_background.npy'},
+            {'name': 'middle_orange_background', 'type': 'single', 'file': 'colored_backgrounds/MiddleOrange_background.npy'},
+            {'name': 'dark_orange_background', 'type': 'single', 'file': 'colored_backgrounds/DarkOrange_background.npy'},
+            {'name': 'red_background', 'type': 'single', 'file': 'colored_backgrounds/Red_background.npy'},
+            {'name': 'white_background', 'type': 'single', 'file': 'colored_backgrounds/White_background.npy'},
+            {'name': 'lila_background', 'type': 'single', 'file': 'colored_backgrounds/Lila_background.npy'},
+            {'name': 'blood_orange_background', 'type': 'single', 'file': 'colored_backgrounds/BloodOrange_background.npy'},
         ]
     
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:BeamriderState) -> chex.Array:
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self._render_colored_background(raster, state)
         raster = self._render_blue_lines(raster, state)
         raster = self._render_player_and_bullet(raster, state)
         raster = self._render_enemy_shots(raster, state)
@@ -3967,6 +4025,47 @@ class BeamriderRenderer(JAXGameRenderer):
         raster = self._render_hud(raster, state)
         raster = self._render_mothership(raster, state)
         return self.jr.render_from_palette(raster, self.PALETTE)
+
+    def _render_colored_background(self, raster, state):
+        flash_timer = state.level.background_flash_timer
+        death_timer = state.level.death_timer
+        standby_phase = state.level.standby_phase
+        
+        # Flash sequence (UFO destruction)
+        is_yellow_flash = (flash_timer == 16) | (flash_timer == 15)
+        is_light_orange_flash = (flash_timer == 12) | (flash_timer == 11)
+        is_middle_orange_flash = (flash_timer == 10) | (flash_timer == 9)
+        is_dark_orange_flash = (flash_timer == 8) | (flash_timer == 7)
+        is_red_flash = (flash_timer >= 1) & (flash_timer <= 6)
+
+        # Death sequence
+        # Happens only during StandbyPhase.NONE (the actual dying animation)
+        is_dying = (standby_phase == 0) & (death_timer > 0)
+        death_idx = 120 - death_timer
+        
+        is_yellow_death = is_dying & (((death_idx >= 3) & (death_idx <= 6)) | ((death_idx >= 35) & (death_idx <= 38)))
+        is_white_death = is_dying & (death_idx >= 11) & (death_idx <= 14)
+        is_lila_death = is_dying & (((death_idx >= 19) & (death_idx <= 22)) | ((death_idx >= 51) & (death_idx <= 54)))
+        is_blood_orange_death = is_dying & (death_idx >= 27) & (death_idx <= 30)
+        is_red_death = is_dying & (((death_idx >= 43) & (death_idx <= 46)) | ((death_idx >= 59) & (death_idx <= 62)))
+        
+        def render_color(r, mask_name):
+            mask = self.SHAPE_MASKS[mask_name]
+            return self.jr.render_at_clipped(r, 0, 0, mask)
+
+        # Note: Conditions are checked in order, but jax.lax.cond only updates raster if True.
+        # We combine flash and death colors using logical OR where they share the same color.
+        
+        raster = jax.lax.cond(is_yellow_flash | is_yellow_death, lambda r: render_color(r, "yellow_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_light_orange_flash, lambda r: render_color(r, "light_orange_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_middle_orange_flash, lambda r: render_color(r, "middle_orange_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_dark_orange_flash, lambda r: render_color(r, "dark_orange_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_red_flash | is_red_death, lambda r: render_color(r, "red_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_white_death, lambda r: render_color(r, "white_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_lila_death, lambda r: render_color(r, "lila_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_blood_orange_death, lambda r: render_color(r, "blood_orange_background"), lambda r: r, raster)
+        
+        return raster
 
     def _render_kamikaze(self, raster, state):
         kamikaze_masks = self.SHAPE_MASKS["kamikaze"]
@@ -4126,22 +4225,41 @@ class BeamriderRenderer(JAXGameRenderer):
         rejuv_pos = state.level.rejuvenator_pos
         active = state.level.rejuvenator_active
         dead = state.level.rejuvenator_dead
-        
-        # Determine mask
-        rejuv_masks = self.SHAPE_MASKS["rejuvenator"]
-        
-        stage = _get_index_rejuvenator(rejuv_pos[1])
-        # stage 1..4 maps to masks 0..3
-        # dead state is mask index 4
-        sprite_idx = jnp.where(dead, 4, jnp.clip(stage - 1, 0, 3))
-        
-        mask = rejuv_masks[sprite_idx]
-        
-        # Handle offscreen for rendering: ensure they are definitely outside [0, 160/210]
-        final_y = jnp.where(active, rejuv_pos[1], -50.0)
-        final_x = jnp.where(active, rejuv_pos[0], -50.0)
-        
-        return self.jr.render_at_clipped(raster, final_x, final_y, mask)
+        explosion_frame = state.level.rejuvenator_explosion_frame
+        explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+
+        def render_explosion(r_in):
+            sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
+            sprite = explosion_masks[sprite_idx]
+            x_pos = state.level.rejuvenator_explosion_pos[0] + _get_ufo_alignment(
+                state.level.rejuvenator_explosion_pos[1]
+            )
+            y_pos = state.level.rejuvenator_explosion_pos[1] + y_offset
+            return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
+
+        def render_rejuv(r_in):
+            # Determine mask
+            rejuv_masks = self.SHAPE_MASKS["rejuvenator"]
+            
+            stage = _get_index_rejuvenator(rejuv_pos[1])
+            # stage 1..4 maps to masks 0..3
+            # dead state is mask index 4
+            sprite_idx = jnp.where(dead, 4, jnp.clip(stage - 1, 0, 3))
+            
+            mask = rejuv_masks[sprite_idx]
+            
+            # Handle offscreen for rendering: ensure they are definitely outside [0, 160/210]
+            final_y = jnp.where(active, rejuv_pos[1], -50.0)
+            final_x = jnp.where(active, rejuv_pos[0], -50.0)
+            
+            return self.jr.render_at_clipped(r_in, final_x, final_y, mask)
+
+        return jax.lax.cond(
+            explosion_frame > 0,
+            render_explosion,
+            render_rejuv,
+            raster,
+        )
 
     def _render_blue_lines(self, raster, state):
         """Draw the scrolling foreground lines."""
