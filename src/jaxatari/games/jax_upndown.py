@@ -45,9 +45,9 @@ class UpNDownConstants(NamedTuple):
     ENEMY_TYPE_TRUCK: int = 3
     JUMP_FRAMES: int = 28
     POST_JUMP_DELAY: int = 10
-    LANDING_TOLERANCE: int = 15  # Pixels tolerance for landing on a road (increased by 5 for off-road landings)
+    LANDING_TOLERANCE: int = 20  # Pixels tolerance for landing on a road (increased by 5 for wider landing zone)
     LATE_JUMP_COLLISION_FRAMES: int = 2
-    LANDING_COLLISION_DISTANCE: float = 8.0  # Larger collision distance when landing (for crossings)
+    LANDING_COLLISION_DISTANCE: float = 12.0  # Larger collision distance when landing (increased for easier enemy kills)
     GROUND_COLLISION_DISTANCE: float = 3.0  # Tight collision distance for ground collisions
     LATE_JUMP_ENEMY_SCORE: int = 400
     STEEP_ROAD_SPEED_REDUCTION_INTERVAL: int = 8  # Frames between each speed reduction on steep roads
@@ -1355,34 +1355,30 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # For ground collision: only trigger when enemy position is within tight distance
         overlap_x_ground = dx <= self.consts.GROUND_COLLISION_DISTANCE
         overlap_y_ground = wrapped_dy <= self.consts.GROUND_COLLISION_DISTANCE
-        # For landing collision: use larger distance and road-independent (for crossings)
-        overlap_x_landing = dx <= self.consts.LANDING_COLLISION_DISTANCE
-        overlap_y_landing = wrapped_dy <= self.consts.LANDING_COLLISION_DISTANCE
-        # For late jump collision: use original larger overlap based on car dimensions
+        # For late jump collision: use larger overlap based on car dimensions
         overlap_x_jump = dx <= (state.player_car.position.width + state.enemy_cars.position.width) / 2.0
         overlap_y_jump = wrapped_dy <= (state.player_car.position.height + state.enemy_cars.position.height) / 2.0
         same_road = state.enemy_cars.current_road == state.player_car.current_road
 
         # Ground collision mask uses tight 3-pixel distance and same road
         ground_collision_mask = jnp.logical_and(state.enemy_cars.active, jnp.logical_and(same_road, jnp.logical_and(overlap_x_ground, overlap_y_ground)))
-        # Landing collision mask uses larger distance and is road-independent (for crossings)
-        landing_collision_mask = jnp.logical_and(state.enemy_cars.active, jnp.logical_and(overlap_x_landing, overlap_y_landing))
-        # Jump collision mask uses original larger overlap (for scoring when jumping on enemies)
-        jump_collision_mask = jnp.logical_and(state.enemy_cars.active, jnp.logical_and(same_road, jnp.logical_and(overlap_x_jump, overlap_y_jump)))
+        # Jump collision mask is road-independent - can destroy enemies on either road when jumping
+        jump_collision_mask = jnp.logical_and(state.enemy_cars.active, jnp.logical_and(overlap_x_jump, overlap_y_jump))
         collision_mask = jump_collision_mask  # For late jump scoring
         
         any_jump_collision = jnp.any(jump_collision_mask)
         any_ground_collision = jnp.any(ground_collision_mask)
-        any_landing_collision = jnp.any(landing_collision_mask)
 
-        # Check if player is in the landing phase (just landed from a jump)
-        is_landing_phase = jnp.logical_and(state.post_jump_cooldown > 0, state.post_jump_cooldown <= self.consts.POST_JUMP_DELAY)
+        # Check if player is in post-landing invincibility phase
+        is_invincible = state.post_jump_cooldown > 0
         
         late_jump_window = jnp.logical_and(state.is_jumping, state.jump_cooldown <= self.consts.LATE_JUMP_COLLISION_FRAMES)
         late_jump_collision = jnp.logical_and(any_jump_collision, late_jump_window)
-        grounded_collision = jnp.logical_and(any_ground_collision, jnp.logical_not(state.is_jumping))
-        # Landing collision is road-independent and uses larger distance
-        landing_collision = jnp.logical_and(any_landing_collision, is_landing_phase)
+        # Ground collision only applies when not jumping AND not in post-landing invincibility
+        grounded_collision = jnp.logical_and(
+            any_ground_collision,
+            jnp.logical_and(jnp.logical_not(state.is_jumping), jnp.logical_not(is_invincible))
+        )
 
         def handle_late_jump():
             hits = collision_mask.astype(jnp.int32)
@@ -1406,8 +1402,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         def handle_ground_collision():
             return self._respawn_after_collision(state, state.lives - 1)
 
-        # Check for any collision that should cause respawn (ground or landing)
-        any_fatal_collision = jnp.logical_or(grounded_collision, landing_collision)
+        # Ground collision causes respawn (landing is now protected by invincibility)
+        any_fatal_collision = grounded_collision
 
         return jax.lax.cond(
             late_jump_collision,
@@ -1866,7 +1862,7 @@ class UpNDownRenderer(JAXGameRenderer):
 
         player_screen_y = jnp.int32(105 - jump_offset)
         player_mask = self.SHAPE_MASKS["player"]
-        raster_player = self.jr.render_at(raster_enemies, state.player_car.position.x, player_screen_y, player_mask)
+        raster_player = self.jr.render_at_clipped(raster_enemies, state.player_car.position.x, player_screen_y, player_mask)
 
         wall_top_mask = self.SHAPE_MASKS["wall_top"]
         raster_wall_top = self.jr.render_at(raster_player, 0, 0, wall_top_mask)
