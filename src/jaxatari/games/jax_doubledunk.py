@@ -47,7 +47,7 @@ class DunkConstants:
     BALL_SIZE: Tuple[int, int] = (3,3)
     JUMP_STRENGTH: int = 5
     PLAYER_MAX_SPEED: int = 2
-    PLAYER_Y_MIN: int = 20
+    PLAYER_Y_MIN: int = 10
     PLAYER_Y_MAX: int = 130
     PLAYER_X_MIN: int  = 0
     PLAYER_X_MAX: int = 145
@@ -382,10 +382,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p1_inside_out_of_bounds = updated_p1_inside.is_out_of_bounds & (updated_p1_inside.id == ball_holder_id)
         p1_out_of_bounds = p1_inside_out_of_bounds | p1_outside_out_of_bounds # if Player 1 triggered out of bounds
 
-        # --- Reset Game State ---
-        # Give ball to the team that didn't trigger out of bounds
-        new_ball_holder = jax.lax.select(p1_out_of_bounds, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
-
         # --- Updated Game State ---
         updated_state = state.replace(
             player1_inside=updated_p1_inside,
@@ -514,7 +510,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_ball = ball.replace(
             vel_x=0.0, 
             vel_y=2.0,  # Positive y is downwards
-            landing_y=float(self.constants.PLAYER_Y_MIN+20), # Ground level
+            landing_y=float(self.constants.PLAYER_Y_MIN+30), # Ground level
             receiver=PlayerID.NONE, # Reset receiver
             missed_shot=True
         )
@@ -1082,7 +1078,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         def continue_play(s):
             # Handle miss
-            is_miss = reached_target & ~s.ball.is_goal
+            # Check if ball went past the basket line (Y < 10) while moving up
+            overshot = (s.ball.y < self.constants.BASKET_POSITION[1]) & (s.ball.vel_y < 0)
+            is_miss = (reached_target & ~s.ball.is_goal) | overshot
+            
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
 
@@ -1490,7 +1489,7 @@ class DunkRenderer(JAXGameRenderer):
         ])
 
         # --- Render players by visual Y position ---
-        visual_ys = all_players_y - all_players_z
+        visual_ys = jnp.maximum(0, all_players_y - all_players_z)
         sort_indices = jnp.argsort(visual_ys)
 
         def render_player_body(i, current_raster):
