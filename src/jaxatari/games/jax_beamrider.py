@@ -4064,6 +4064,7 @@ class BeamriderRenderer(JAXGameRenderer):
         standby_phase = state.level.standby_phase
         mothership_stage = state.level.mothership_stage
         mothership_timer = state.level.mothership_timer
+        blue_line_counter = state.level.blue_line_counter
         
         # Flash sequence (UFO destruction)
         is_yellow_flash = (flash_timer == 16) | (flash_timer == 15)
@@ -4083,23 +4084,28 @@ class BeamriderRenderer(JAXGameRenderer):
         is_blood_orange_death = is_dying & (death_idx >= 27) & (death_idx <= 30)
         is_red_death = is_dying & (((death_idx >= 43) & (death_idx <= 46)) | ((death_idx >= 59) & (death_idx <= 62)))
         is_mothership_flash = (mothership_stage == 5) & (mothership_timer < 2)
+
+        # Startup/Resume sequence (starts at idx 118)
+        # 2 steps purple (118, 119), 2 normal (120, 121), 2 blood orange (122, 123), 4 normal (124-127), 2 white (128, 129)
+        is_lila_startup = (blue_line_counter == 118) | (blue_line_counter == 119)
+        is_blood_orange_startup = (blue_line_counter == 122) | (blue_line_counter == 123)
+        is_white_startup = (blue_line_counter == 128) | (blue_line_counter == 129)
         
         def render_color(r, mask_name):
             mask = self.SHAPE_MASKS[mask_name]
             return self.jr.render_at_clipped(r, 0, 0, mask)
 
         # Note: Conditions are checked in order, but jax.lax.cond only updates raster if True.
-        # We combine flash and death colors using logical OR where they share the same color.
+        # We combine flash, death, and startup colors using logical OR where they share the same color.
         
         raster = jax.lax.cond(is_yellow_flash | is_yellow_death, lambda r: render_color(r, "yellow_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_light_orange_flash, lambda r: render_color(r, "light_orange_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_middle_orange_flash, lambda r: render_color(r, "middle_orange_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_dark_orange_flash, lambda r: render_color(r, "dark_orange_background"), lambda r: r, raster)
         raster = jax.lax.cond(is_red_flash | is_red_death, lambda r: render_color(r, "red_background"), lambda r: r, raster)
-        raster = jax.lax.cond(is_white_death, lambda r: render_color(r, "white_background"), lambda r: r, raster)
-        raster = jax.lax.cond(is_lila_death, lambda r: render_color(r, "lila_background"), lambda r: r, raster)
-        raster = jax.lax.cond(is_blood_orange_death, lambda r: render_color(r, "blood_orange_background"), lambda r: r, raster)
-        raster = jax.lax.cond(is_mothership_flash, lambda r: render_color(r, "white_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_white_death | is_mothership_flash | is_white_startup, lambda r: render_color(r, "white_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_lila_death | is_lila_startup, lambda r: render_color(r, "lila_background"), lambda r: r, raster)
+        raster = jax.lax.cond(is_blood_orange_death | is_blood_orange_startup, lambda r: render_color(r, "blood_orange_background"), lambda r: r, raster)
         
         return raster
 
