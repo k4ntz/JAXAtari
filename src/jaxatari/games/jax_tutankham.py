@@ -1,6 +1,6 @@
 from typing import NamedTuple, Tuple
 import jax
-import jnp
+import jax.numpy as jnp
 import numpy as np
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Discrete, Box
@@ -19,57 +19,65 @@ def _get_default_asset_config() -> tuple:
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
     """
     # Define file lists for groups
-    tombs = [f"tomb_{i + 1}.npy" for i in range(4)]
+    #tombs = [f"tomb_{i + 1}.npy" for i in range(4)]
 
     # Define the sprites
     config = (
         # Backgrounds (loaded as a group)
         # Note: The 'background' type is not used here, as the city map is the primary background.
         # We will treat 'tombs' as our base background sprites.
-        {'name': 'tombs', 'type': 'group', 'files': tombs},
+        #{'name': 'tombs', 'type': 'group', 'files': tombs},
+
+        # Roomparts
+        {'name': 'room_floor', 'type': 'single', 'file': 'room_floor.npy'},
 
         # Player (loaded as single sprites for manual padding)
-        {'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
-        {'name': 'bullet ', 'type': 'single', 'file': 'bullet.npy'},
+        #{'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
+        {'name': 'player_idle', 'type': 'single', 'file': 'player_idle.npy'},
+        {'name': 'player_move_00 ', 'type': 'single', 'file': 'player_move_00.npy'},
+        {'name': 'player_move_01 ', 'type': 'single', 'file': 'player_move_01.npy'},
+        {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
+        #{'name': 'bullet ', 'type': 'single', 'file': 'bullet.npy'},
 
         # Creatures (loaded as single sprites for manual padding)
-        {'name': 'snake', 'type': 'single', 'file': 'snake.npy'},
-        {'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
-        {'name': 'bat', 'type': 'single', 'file': 'bat.npy'},
-        {'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
-        {'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
-        {'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
-        {'name': 'lion', 'type': 'single', 'file': 'lion.npy'},
-        {'name': 'moth', 'type': 'single', 'file': 'moth.npy'},
-        {'name': 'virus', 'type': 'single', 'file': 'virus.npy'},
-        {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
-        {'name': 'mystery', 'type': 'single', 'file': 'mystery.npy'},
-        {'name': 'weapon', 'type': 'single', 'file': 'weapon.npy'},
+        #{'name': 'snake', 'type': 'single', 'file': 'snake.npy'},
+        #{'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
+        #{'name': 'bat', 'type': 'single', 'file': 'bat.npy'},
+        #{'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
+        #{'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
+        #{'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
+        #{'name': 'lion', 'type': 'single', 'file': 'lion.npy'},
+        #{'name': 'moth', 'type': 'single', 'file': 'moth.npy'},
+        #{'name': 'virus', 'type': 'single', 'file': 'virus.npy'},
+        #{'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
+        #{'name': 'mystery', 'type': 'single', 'file': 'mystery.npy'},
+        #{'name': 'weapon', 'type': 'single', 'file': 'weapon.npy'},
 
         # Treasures
-        {'name': 'key', 'type': 'single', 'file': 'key.npy'},
-        {'name': 'crown', 'type': 'single', 'file': 'crown.npy'},
-        {'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
-        {'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
-        {'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
-        {'name': 'emerald', 'type': 'single', 'file': 'emerald.npy'},
-        {'name': 'goblet', 'type': 'single', 'file': 'goblet.npy'},
-        {'name': 'bust', 'type': 'single', 'file': 'bust.npy'},
-        {'name': 'trident', 'type': 'single', 'file': 'trident.npy'},
-        {'name': 'herb', 'type': 'single', 'file': 'herb.npy'},
-        {'name': 'diamond', 'type': 'single', 'file': 'diamond.npy'},
-        {'name': 'candelabra', 'type': 'single', 'file': 'candelabra.npy'},
-        {'name': 'amulet', 'type': 'single', 'file': 'amulet.npy'},
-        {'name': 'fan', 'type': 'single', 'file': 'fan.npy'},
-        {'name': 'crystal', 'type': 'single', 'file': 'crystal.npy'},
-        {'name': 'zircon', 'type': 'single', 'file': 'zircon.npy'},
-        {'name': 'dagger', 'type': 'single', 'file': 'dagger.npy'},
+        #{'name': 'key', 'type': 'single', 'file': 'key.npy'},
+        #{'name': 'crown', 'type': 'single', 'file': 'crown.npy'},
+        #{'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
+        #{'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
+        #{'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
+        #{'name': 'emerald', 'type': 'single', 'file': 'emerald.npy'},
+        #{'name': 'goblet', 'type': 'single', 'file': 'goblet.npy'},
+        #{'name': 'bust', 'type': 'single', 'file': 'bust.npy'},
+        #{'name': 'trident', 'type': 'single', 'file': 'trident.npy'},
+        #{'name': 'herb', 'type': 'single', 'file': 'herb.npy'},
+        #{'name': 'diamond', 'type': 'single', 'file': 'diamond.npy'},
+        #{'name': 'candelabra', 'type': 'single', 'file': 'candelabra.npy'},
+        #{'name': 'amulet', 'type': 'single', 'file': 'amulet.npy'},
+        #{'name': 'fan', 'type': 'single', 'file': 'fan.npy'},
+        #{'name': 'crystal', 'type': 'single', 'file': 'crystal.npy'},
+        #{'name': 'zircon', 'type': 'single', 'file': 'zircon.npy'},
+        #{'name': 'dagger', 'type': 'single', 'file': 'dagger.npy'},
 
         # UI
-        {'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
-        {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
-        {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
-        {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
+        #{'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
+        #{'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
+        #{'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
+        #{'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
+        {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
     )
     return config
 
@@ -167,35 +175,12 @@ class TutankhamRenderer(JAXGameRenderer):
 
 
     # ---------------------------------------------------------
-    # Sprite Loader
-    # ---------------------------------------------------------
-    def load_sprite(self, name, path, size=None):
-        if size is None:
-            size = (self.tile_size, self.tile_size)
-        img = Image.open(path).convert("RGB").resize(size)
-        self.sprites[name] = np.array(img, dtype=np.uint8)
-
-    # ---------------------------------------------------------
-    # Draw a sprite into canvas
-    # ---------------------------------------------------------
-    def draw_sprite(self, canvas, sprite_name, x, y):
-        if sprite_name not in self.sprites:
-            raise ValueError(f"Sprite '{sprite_name}' not loaded!")
-
-        sprite = self.sprites[sprite_name]
-        h, w, _ = sprite.shape
-
-        # Clipping
-        x = max(0, min(self.width - w, x))
-        y = max(0, min(self.height - h, y))
-
-        canvas[y:y + h, x:x + w] = sprite
-
-    # ---------------------------------------------------------
     # Main render() method
     # ---------------------------------------------------------
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState):
+        ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
         #pseudo for no errors
         player_mask = 0
         camera_offset = 0
@@ -210,26 +195,33 @@ class TutankhamRenderer(JAXGameRenderer):
         # 1. Start with the static blue background
         raster = self.jr.create_object_raster(self.BACKGROUND)
         raster = self.jr.render_at(
-            raster, state.player[0], state.player[1] - camera_offset,
-            player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
+            raster,
+            0,  # x
+            0,  # y
+            self.SHAPE_MASKS["room_floor"],
+            flip_offset=ZERO_FLIP
         )
-        raster = jax.lax.cond(
-            floor_checks[0] & not_vanishing,
-            lambda r: self.jr.render_at_clipped(
-                r, state.ghost[0], state.ghost[1] - camera_offset,
-                self.SHAPE_MASKS['ghost_group'][ghost_frame],
-                flip_offset=self.FLIP_OFFSETS['ghost_group']
-            ),
-            lambda r: r,
-            raster
-        )
+        #raster = self.jr.render_at(
+        #    raster, state.player[0], state.player[1] - camera_offset,
+        #    player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
+        #)
+        #raster = jax.lax.cond(
+        #    floor_checks[0] & not_vanishing,
+        #    lambda r: self.jr.render_at_clipped(
+        #        r, state.ghost[0], state.ghost[1] - camera_offset,
+        #        self.SHAPE_MASKS['ghost_group'][ghost_frame],
+        #        flip_offset=self.FLIP_OFFSETS['ghost_group']
+        #    ),
+        #    lambda r: r,
+        #    raster
+        #)
         # 2. Render Player
-        player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
-        player_mask = self.SHAPE_MASKS['player_group'][player_frame]
-        raster = self.jr.render_at(
-            raster, state.player[0], state.player[1] - camera_offset,
-            player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
-        )
+        #player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
+        #player_mask = self.SHAPE_MASKS['player_group'][player_frame]
+        #raster = self.jr.render_at(
+        #    raster, state.player[0], state.player[1] - camera_offset,
+        #    player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
+        #)
         # 2.5 Animations
         # 3. Render Walls
         # 4. Render Teleporter and Spawner
@@ -244,31 +236,6 @@ class TutankhamRenderer(JAXGameRenderer):
             indices_to_update=indices_to_update,
             new_color_ids=new_color_ids
         )
-    def srender(self, state):
-
-        """
-        state muss folgende Keys enthalten:
-        - tilemap: 2D array von Tile-IDs
-        - player: {"x":..., "y":...}
-        - enemies: [{"x":..., "y":...}, ...]
-        - projectiles: [{"x":..., "y":...}, ...]
-        - items: [{"x":..., "y":..., "type":...}]
-        """
-
-        canvas = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-
-        # -------------------------------------------------
-        # 1. TILEMAP ZEICHNEN (Labyrinth)
-        # -------------------------------------------------
-        tilemap = state["tilemap"]
-        for row_idx, row in enumerate(tilemap):
-            for col_idx, tile_id in enumerate(row):
-                tile_name = f"tile_{tile_id}"
-                if tile_name in self.sprites:  # floor, wall, door, etc.
-                    x = col_idx * self.tile_size
-                    y = row_idx * self.tile_size
-                    self.draw_sprite(canvas, tile_name, x, y)
-
 
 
 # ---------------------------------------------------------------------
@@ -304,7 +271,7 @@ class JaxTutankham(JaxEnvironment):
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
 
-        state = TutankhamState(player_x=start_x, player_y=start_y, player_lives=3)
+        state = TutankhamState(player_x=start_x, player_y=start_y, level=None, player=None, creature_positions=None, treasure_positions = None, creature=None, flashbangs=None, points=None, time=None, has_key=None, end_reached=None, player_lives=True)
         return state, state
 
     def lose_life(self, state: TutankhamState) -> TutankhamState:
@@ -341,33 +308,60 @@ class JaxTutankham(JaxEnvironment):
     def _get_done(self, state: TutankhamState):
         return state.player_lives == 0 or state.end_reached
 
-    def player_step(self):
-        pass
+    def player_step(self, state, action):
+        player = None
+        player_direction = None
+        stun_duration = None
+        match_duration = None
+        matches_used = None
+        item_dropped = None
+        stairs_active = None
+        fire_button_active = None
+        lives = None
+        game_ends = None
+        return (player, player_direction, stun_duration, match_duration, matches_used,
+         item_dropped, stairs_active, fire_button_active, lives, game_ends)
 
-    def item_step(self):
-        pass
+    def item_step(self, state, item_dropped):
+        urn = None
+        urn_left_right= None
+        urn_middle_right= None
+        urn_left_middle= None
+        urn_right= None
+        urn_middle= None
+        urn_left= None
+        scepter= None
+        item_held= None
+        return (item_held, scepter, urn_left, urn_middle, urn_right,
+         urn_left_middle, urn_middle_right, urn_left_right, urn)
 
-    def enemy_step(self):
-        pass
+    def enemy_step(self, state):
+        ghost = None
+        spider = None
+        bat = None
+        current_nodes = None
+        previous_nodes = None
+        chasing = None
+        return (ghost, spider, bat, current_nodes, previous_nodes, chasing)
 
     def step(self, state: TutankhamState, action: int):
 
         x, y = state.player_x, state.player_y
 
-        if action == Action.LEFT:
-            x -= self.consts.SPEED
-        elif action == Action.RIGHT:
-            x += self.consts.SPEED
-        elif action == Action.UP:
-            y -= self.consts.SPEED
-        elif action == Action.DOWN:
-            y += self.consts.SPEED
+        #if action == Action.LEFT:
+        #    x -= self.consts.SPEED
+        #elif action == Action.RIGHT:
+        #    x += self.consts.SPEED
+        #elif action == Action.UP:
+        #    y -= self.consts.SPEED
+        #elif action == Action.DOWN:
+        #    y += self.consts.SPEED
 
         # Clip bounds
-        x = max(0, min(x, self.consts.WIDTH - 1))
-        y = max(0, min(y, self.consts.HEIGHT - 1))
+        #x = max(0, min(x, self.consts.WIDTH - 1))
+        #y = max(0, min(y, self.consts.HEIGHT - 1))
 
-        state = TutankhamState(player_x=x, player_y=y)
+        state = TutankhamState(player_x=x, player_y=y, level=None, player=None, creature_positions=None, treasure_positions = None, creature=None, flashbangs=None, points=None, time=None, has_key=None, end_reached=None, player_lives=True)
 
         # Step 1: Player Mechanics
 
@@ -379,7 +373,7 @@ class JaxTutankham(JaxEnvironment):
          urn_left_middle, urn_middle_right, urn_left_right, urn) = self.item_step(state, item_dropped)
 
         # Step 3: Enemy Mechanics
-        ghost, spider, bat, current_nodes, previous_nodes, chasing = self.enemy_step(state)
+        (ghost, spider, bat, current_nodes, previous_nodes, chasing) = self.enemy_step(state)
 
         # Step 4: Increase Step Counter
         step_counter_reset_condition = False
@@ -387,12 +381,12 @@ class JaxTutankham(JaxEnvironment):
             step_counter_reset_condition,
             lambda s: jnp.array(0),
             lambda s: s + 1,
-            operand=state.step_counter,
+            operand=4,
+            #operand=state.step_counter,
         )
 
-        new_state = TutankhamState(
-            #TODO fill new state with states
-        )
+        new_state = TutankhamState(player_lives=None,player_x=x, player_y=y, level=None, player=None, creature_positions=None, treasure_positions = None, creature=None, flashbangs=None, points=None, time=None, has_key=None, end_reached=None)
+
 
         done = self._get_done(new_state)
         # env_reward = self._get_reward(state, new_state)
@@ -424,7 +418,7 @@ class JaxTutankham(JaxEnvironment):
     # -----------------------------
     # Rendering
     # -----------------------------
-    def render(self, state: TutankhamState) -> np.ndarray:
+    def render(self, state: TutankhamState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     # -----------------------------
