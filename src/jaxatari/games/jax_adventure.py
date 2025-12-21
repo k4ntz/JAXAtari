@@ -148,7 +148,7 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
-    #position player: x ,y ,tile, inventory, inventory cooldown
+    #position player: x ,y ,tile, inventory
     player: chex.Array
     #positions dragons: x, y ,tile ,state, counter
     dragon_yellow: chex.Array
@@ -1112,6 +1112,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = None,
         )
 
+        #only change the state of the player and the item that is beeing carried
         return AdventureState(
             step_counter = state.step_counter,
             player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
@@ -1261,6 +1262,11 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
         
+        #helper function that chhecks if an item is near the player
+        #same tile, in range of 4 pixels
+        #it used the corners of the player and calculates if they are in x and y range to the item corners
+        #followed by TRYING to integrate that items are only piced p when walked into. NOT woring, tried, gave up
+        #VERY questionalble performance due to hardcoded checks
         def check_for_item(self:JaxAdventure, state: AdventureState, item_ID: int) -> bool:
             item_x, item_y, tile, item_width, item_height = jax.lax.switch(
                 item_ID,
@@ -1273,7 +1279,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 lambda:(state.chalice[0],state.chalice[1],state.chalice[2],self.consts.CHALICE_SIZE[0],self.consts.CHALICE_SIZE[1])
                 ])
             #jax.debug.print("Hitbox values item:{a},{b},{c},{d},{e}",a=item_x,b=item_y,c=tile,d=item_width,e=item_height)
-            #HARDCODED BAAAAAD, but i dont care right now (performance?)(items smaler then 4 pixels would be buggy)
+            
             on_same_tile = (tile==state.player[2])
             player_hitbox_nw = (state.player[0],state.player[1])
             player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0]-1,state.player[1])
@@ -1286,6 +1292,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #                e=player_hitbox_se[0],f=player_hitbox_se[1],
             #                g=player_hitbox_sw[0],h=player_hitbox_sw[1])
             
+            
+            #change the waling and FIRE actions to ony walking actions for simplicity 
             walk_direction = jax.lax.switch(
                 action,
                 [lambda:Action.NOOP, #this should never occour
@@ -1389,6 +1397,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             return item_touches
 
         #HOLY ASS, this is a sin
+        #check if the player is moving (not action NOOP)
+        #it checks for every item if it is near the player
+        #if that is the case it puts it in the Player inventory
         new_player_inventory = jax.lax.cond(
             action == Action.NOOP,
             lambda op: op,
@@ -1443,7 +1454,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
     
     def _item_drop(self, state: AdventureState, action: chex.Array) -> AdventureState:
-
+        #check if the Action Fire is used (ToDo, for all Fire actions?)
+        #set the player inventory to EMPTY_HAND_ID
         new_player_inventory = jax.lax.cond(
             action == Action.FIRE,
             lambda _: self.consts.EMPTY_HAND_ID,
@@ -1669,6 +1681,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
         )
     
+    """This function solely exists for maing the chalice change colors"""
     def _chalice_step(self, state:AdventureState) -> AdventureState:
         
         chalice_color=state.chalice[3]
@@ -1689,18 +1702,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32),
         )
     
-    
+    """This function is called when the game starts and when it is reseted
+    It initializes the Adventure state, for the most part these Values are pulled from the consts"""
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
-            #Player Spawn: x, y, tile, inventory, inventory cooldown
+            #Player Spawn: x, y, tile, inventory
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
                                 self.consts.PLAYER_SPAWN[2],
-                                self.consts.EMPTY_HAND_ID,
-                                0]).astype(jnp.int32),
-            #Dragons: x, y ,tile ,state
+                                self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
+            #Dragons: x, y ,tile ,state(neutral,dead,atacking), counter( ToDo for?? )
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
                                        self.consts.DRAGON_YELLOW_SPAWN[2],
@@ -1718,7 +1731,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             key_black = jnp.array([self.consts.KEY_BLACK_SPAWN[0],
                                     self.consts.KEY_BLACK_SPAWN[1],
                                     self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
-            #Gate: state
+            #Gate: state, counter (ToDo for animation?)
             gate_yellow=jnp.array([0,0]).astype(jnp.int32),
             gate_black=jnp.array([0,0]).astype(jnp.int32),
             #Items: x, y, tile
@@ -1731,7 +1744,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet= jnp.array([self.consts.MAGNET_SPAWN[0],
                                self.consts.MAGNET_SPAWN[1],
                                self.consts.MAGNET_SPAWN[2]]).astype(jnp.int32), #ToDo
-            #Chalice: x, y, tile, color
+            #Chalice: x, y, tile, color (ToDo move color to constants)
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
                                  self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
@@ -1740,6 +1753,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return initial_obs, state
 
+    #this is the ??main loop??, it will go throught all called steps, that change the Adventure state
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
         # Split step key from state and keep a new key for the next state
@@ -1778,6 +1792,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     def render(self, state: AdventureState) -> jnp.ndarray:
         return self.renderer.render(state)
 
+    #ToDo, done for all movable entities, why, no clue
     def _get_observation(self, state: AdventureState):
         player = EntityPosition(
             x=state.player[0],
@@ -1882,6 +1897,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=chalice
         )
 
+    #ToDo, no clue what this is used for
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: AdventureObservation) -> jnp.ndarray:
            return jnp.concatenate([
@@ -1895,6 +1911,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(6)
 
+    #ToDo, used for the RL?
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "player": spaces.Dict({
@@ -1970,7 +1987,13 @@ class AdventureRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        #set bg color here
+        #in general, assets are loaded in based on the Adventure state
+        #where the state.player[2] is the current room of the player
+        #dragon_xxx[3] are their state (neutral,attacking, dead)
+        #gate[0] is the state (open, closing, closed)
+        #chalice[3] is or the blinking
+        
+        #set bg here
         raster = self.jr.create_object_raster(self.BACKGROUND)
         room_mask =self.SHAPE_MASKS["room_number"][state.player[2]]
         raster = self.jr.render_at(raster, 0, 0, room_mask)
