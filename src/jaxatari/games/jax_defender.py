@@ -185,14 +185,14 @@ class DefenderConstants(NamedTuple):
     HUMAN_FALLING_SPEED: float = 0.5
     HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
     HUMAN_INIT_GAME_Y: int = WORLD_HEIGHT - HUMAN_HEIGHT
+    HUMAN_BRING_BACK_FRAMES: int = 300  # 10 sec
 
     # INACTIVE = 0
     HUMAN_STATE_IDLE: int = 1
     HUMAN_STATE_ABDUCTED: int = 2
     HUMAN_STATE_FALLING: int = 3
     HUMAN_STATE_FALLING_DEADLY: int = 4
-    HUMAN_STATE_CATCHED: int = 5
-    HUMAN_STATE_RELEASED: int = 6
+    HUMAN_STATE_CAUGHT: int = 5
 
     HUMAN_SCANNER_HEIGHT: int = 1
     HUMAN_SCANNER_WIDTH: int = 1
@@ -260,6 +260,7 @@ class DefenderState(NamedTuple):
     human_states: chex.Array
     # Cooldowns
     shooting_cooldown: chex.Array
+    bring_back_human: chex.Array
     # Randomness
     key: chex.Array
 
@@ -697,6 +698,11 @@ class DefenderRenderer(JAXGameRenderer):
             )
 
             def render_normal(r):
+                # Test for hyperspace
+                in_screen = screen_y > (
+                    self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT
+                )
+
                 # Render exhaust
                 draw_exhaust = (
                     jnp.mod(
@@ -705,6 +711,7 @@ class DefenderRenderer(JAXGameRenderer):
                     )
                     == 0
                 )
+                draw_exhaust = jnp.logical_and(draw_exhaust, in_screen)
                 exhaust_game_x = screen_x + jnp.where(
                     flip_horizontal,
                     self.consts.SPACE_SHIP_WIDTH,
@@ -726,8 +733,7 @@ class DefenderRenderer(JAXGameRenderer):
                 # Render on screen
                 mask = self.SHAPE_MASKS["space_ship"]
                 r = jax.lax.cond(
-                    screen_y
-                    > (self.consts.GAME_AREA_TOP - self.consts.SPACE_SHIP_HEIGHT),
+                    in_screen,
                     lambda: self.jr.render_at(
                         r,
                         screen_x,
@@ -1069,8 +1075,10 @@ class JaxDefender(
 
     def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
         is_index = jnp.logical_and(index >= 0, index < self.consts.ENEMY_MAX_IN_GAME)
-        enemy_type = self._get_enemy(state, index)[2].astype(int)
-
+        _, _, enemy_type, e_arg1, e_arg2 = self._get_enemy(state, index)
+        enemy_type = enemy_type.astype(int)
+        e_arg1 = e_arg1.astype(int)
+        e_arg2 = e_arg2.astype(int)
         # When iterating in enemy_step, dead ones go to inactive, only one frame dead for animation
         is_dead = enemy_type == self.consts.DEAD
         new_type = jax.lax.cond(
@@ -1110,12 +1118,6 @@ class JaxDefender(
 
         state = self._add_score(state, score - 50)
 
-        state = jax.lax.cond(
-            jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
-            lambda: self._set_human_from_lander_falling(state, index),
-            lambda: state,
-        )
-
         def add_killed_enemy(state: DefenderState, e_type) -> DefenderState:
             enemy_killed = state.enemy_killed
             e_index = e_type - 1
@@ -1132,9 +1134,30 @@ class JaxDefender(
 
         def lander_death(state: DefenderState) -> DefenderState:
             current_killed = state.enemy_killed[self.consts.LANDER - 1]
+
+            # Spawn human if lander held one
+            is_holding = e_arg1 == self.consts.LANDER_STATE_ASCEND
+            state = jax.lax.cond(
+                is_holding,
+                lambda: self._set_human_from_lander_falling(state, index),
+                lambda: state,
+            )
+
+            # If its with collision with player, kill the human and give nothing
+            game_over = state.game_state == self.consts.GAME_STATE_GAMEOVER
+            state = jax.lax.cond(
+                game_over,
+                lambda: self._update_human(
+                    state, e_arg2, 0.0, 0.0, self.consts.INACTIVE
+                ),
+                lambda: state,
+            )
+
+            # Spawn new landers
             spawn_more = jnp.less(
                 current_killed, self.consts.LANDER_LEVEL_AMOUNT[state.level]
             )
+
             state = jax.lax.cond(
                 spawn_more,
                 lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER),
@@ -1320,27 +1343,6 @@ class JaxDefender(
         )
 
         return state
-
-    ## -------- COLLISION ------------------------------
-
-    def _is_colliding(
-        self, e1_x, e1_y, e1_width, e1_height, e2_x, e2_y, e2_width, e2_height
-    ) -> chex.Array:
-        e1max_x = e1_x + e1_width
-        e2max_x = e2_x + e2_width
-        e1max_y = e1_y + e1_height
-        e2max_y = e2_y + e2_height
-
-        check_1 = e1_x <= e2max_x
-        check_2 = e1max_x >= e2_x
-
-        check_3 = e1_y <= e2max_y
-        check_4 = e1max_y >= e2_y
-
-        check_x = jnp.logical_and(check_1, check_2)
-        check_y = jnp.logical_and(check_3, check_4)
-
-        return jnp.logical_and(check_x, check_y)
 
     ## -------- MOVEMENT ------------------------------
 
@@ -1754,15 +1756,14 @@ class JaxDefender(
                 speed_y = -self.consts.LANDER_Y_SPEED * 5
 
                 enemy_states = state.enemy_states
-                human_states = state.human_states
                 human = state.human_states[human_index]
-                human_x = human[0]
                 human_y = lander_y + 5  # Move human up with lander
-                new_human = [
-                    human_x,
-                    human_y,
-                    self.consts.HUMAN_STATE_ABDUCTED,
-                ]
+                state = self._update_human(
+                    state,
+                    human_index,
+                    game_y=human_y,
+                    h_state=self.consts.HUMAN_STATE_ABDUCTED,
+                )
 
                 x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
                 new_lander = [
@@ -1772,11 +1773,15 @@ class JaxDefender(
                     self.consts.LANDER_STATE_ASCEND,
                     counter_id,
                 ]
-                new_enemy_states = enemy_states.at[enemy_index].set(new_lander)
-                new_human_states = human_states.at[human_index].set(new_human)
-                return state._replace(
-                    human_states=new_human_states, enemy_states=new_enemy_states
+                state = self._update_enemy(
+                    state,
+                    enemy_index,
+                    x,
+                    y,
+                    arg1=self.consts.LANDER_STATE_ASCEND,
+                    arg2=counter_id.astype(float),
                 )
+                return state
 
             # Check if lander reached the top
             state = jax.lax.cond(
@@ -1949,35 +1954,17 @@ class JaxDefender(
         lander_index,
     ) -> DefenderState:
 
-        human_states = state.human_states
-        enemy_states = state.enemy_states
-
-        human_index = enemy_states[lander_index][4].astype(int)
+        human_index = state.enemy_states[lander_index][4].astype(int)
         human = state.human_states[human_index]
-        human_height = human[1]
-
-        new_human_states = jax.lax.cond(
-            enemy_states[lander_index][2] != self.consts.LANDER,
-            lambda: state.human_states,  # Only Ascending landers can update humans
-            lambda: jax.lax.cond(
-                human_height > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
-                lambda: human_states.at[human_index].set(
-                    [
-                        human[0],
-                        human[1],
-                        self.consts.HUMAN_STATE_FALLING,
-                    ]
-                ),
-                lambda: human_states.at[human_index].set(
-                    [
-                        human[0],
-                        human[1],
-                        self.consts.HUMAN_STATE_FALLING_DEADLY,
-                    ]
-                ),
-            ),
+        human_y = human[1]
+        human_status = jnp.where(
+            human_y > self.consts.HUMAN_DEADLY_FALL_HEIGHT,
+            self.consts.HUMAN_STATE_FALLING,
+            self.consts.HUMAN_STATE_FALLING_DEADLY,
         )
-        return state._replace(human_states=new_human_states)
+
+        state = self._update_human(state, human_index, h_state=human_status)
+        return state
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(enemy_index: int, state: DefenderState) -> DefenderState:
@@ -2019,83 +2006,99 @@ class JaxDefender(
     ## -------- HUMAN STEP ------------------------------
 
     def _human_step(self, state: DefenderState) -> DefenderState:
-        human_states = state.human_states
-
-        def _human_falling(human_states: chex.Array, index: int, deadly: bool) -> float:
-            human = human_states[index]
+        def _human_falling(state: DefenderState, index: int) -> DefenderState:
+            human = state.human_states[index]
             human_y = human[1]
             human_y += self.consts.HUMAN_FALLING_SPEED
-            # Check if human reached ground
-            human_states = jax.lax.cond(
-                human_y >= self.consts.HUMAN_INIT_GAME_Y,
-                lambda: jax.lax.cond(
-                    not deadly,
-                    lambda: human_states.at[index].set(
-                        [
-                            human[0],
-                            self.consts.HUMAN_INIT_GAME_Y,
-                            self.consts.HUMAN_STATE_IDLE,
-                        ]
-                    ),
-                    lambda: human_states.at[index].set(
-                        [
-                            human[0],
-                            self.consts.HUMAN_INIT_GAME_Y,
-                            self.consts.INACTIVE,
-                        ]
-                    ),
+
+            hit_ground = human_y >= self.consts.HUMAN_INIT_GAME_Y
+
+            state = jax.lax.cond(
+                jnp.logical_and(
+                    hit_ground, human[2] == self.consts.HUMAN_STATE_FALLING
                 ),
-                lambda: human_states.at[index].set([human[0], human_y, human[2]]),
+                lambda: self._add_score(state, self.consts.HUMAN_LIVING_FALL_SCORE),
+                lambda: state,
             )
 
-            return human_states
+            state = jax.lax.cond(
+                hit_ground,
+                lambda: self._update_human(
+                    state, index, 0.0, 0.0, float(self.consts.INACTIVE)
+                ),
+                lambda: self._update_human(state, index, game_y=human_y),
+            )
 
-        def _human_catched(human_states: chex.Array, index: int) -> chex.Array:
-            human = human_states[index]
+            return state
 
-            # Move human with spaceship
+        def _human_caught(state: DefenderState, index: int) -> DefenderState:
+            human = state.human_states[index]
 
-            # Update human position
-
-            human_states = jax.lax.cond(
-                human[1]
-                >= self.consts.WORLD_HEIGHT
+            is_in_city = human[1] >= (
+                self.consts.WORLD_HEIGHT
                 - self.consts.CITY_HEIGHT
-                - self.consts.HUMAN_HEIGHT,
-                lambda: human_states.at[index].set(
-                    [human[0], human[1], self.consts.HUMAN_STATE_RELEASED]
+                - self.consts.HUMAN_HEIGHT
+            )
+
+            bring_back_human = state.bring_back_human + 1
+            is_overdue = bring_back_human >= self.consts.HUMAN_BRING_BACK_FRAMES
+
+            # It is either in the city and then overdue is not counted, or overdue, or nothing
+
+            state = jax.lax.cond(
+                is_in_city,
+                lambda: self._add_score(
+                    state, self.consts.HUMAN_CAUGHT_AND_RETURNED_SCORE
                 ),
-                lambda: human_states.at[index].set(
-                    [state.space_ship_x + 5, state.space_ship_y + 4, human[2]]
+                lambda: state,
+            )
+            state = jax.lax.cond(
+                jnp.logical_and(is_overdue, jnp.logical_not(is_in_city)),
+                lambda: self._add_score(
+                    state, self.consts.HUMAN_CAUGHT_BUT_FORGOTTEN_SCORE
+                ),
+                lambda: state,
+            )
+
+            state = jax.lax.cond(
+                jnp.logical_or(is_in_city, is_overdue),
+                lambda: self._update_human(
+                    state, index, 0.0, 0.0, self.consts.INACTIVE
+                ),
+                lambda: self._update_human(
+                    state, index, state.space_ship_x + 5, state.space_ship_y + 4
                 ),
             )
 
-            return human_states
+            bring_back_human = jnp.where(
+                jnp.logical_or(is_overdue, is_in_city), 0, bring_back_human
+            )
+            state = state._replace(bring_back_human=bring_back_human)
+            return state
 
-        def _human_move_switch(index: int, human_states: chex.Array) -> chex.Array:
-            human_states = jax.lax.switch(
-                jnp.array(human_states[index][2], int),
+        def _human_move_switch(index: int, state: DefenderState) -> DefenderState:
+            state = jax.lax.switch(
+                jnp.array(state.human_states[index][2], int),
                 [
-                    lambda: human_states,  # Inactive
-                    lambda: human_states,  # Idle
-                    lambda: human_states,  # Abducted
-                    lambda: _human_falling(human_states, index, False),  # Falling
-                    lambda: _human_falling(human_states, index, True),  # Falling Deadly
-                    lambda: _human_catched(human_states, index),  # Catched
-                    lambda: _human_falling(human_states, index, False),  # Released
+                    lambda: state,  # Inactive
+                    lambda: state,  # Idle
+                    lambda: state,  # Abducted
+                    lambda: _human_falling(state, index),  # Falling
+                    lambda: _human_falling(state, index),  # Falling Deadly
+                    lambda: _human_caught(state, index),  # Caught
                 ],
             )
 
-            return human_states
+            return state
 
-        human_states = jax.lax.fori_loop(
+        state = jax.lax.fori_loop(
             0,
             self.consts.HUMAN_MAX_AMOUNT,
             _human_move_switch,
-            human_states,
+            state,
         )
 
-        return state._replace(human_states=human_states)
+        return state
 
     ## -------- BULLET STEP ------------------------------
 
@@ -2347,16 +2350,11 @@ class JaxDefender(
             )
 
             def catch_human(state: DefenderState, index: int) -> DefenderState:
-                human = state.human_states[index]
-                human_x = human[0]
-                human_y = human[1]
-                new_human = [
-                    human_x,
-                    human_y,
-                    self.consts.HUMAN_STATE_CATCHED,
-                ]
-                new_human_states = state.human_states.at[index].set(new_human)
-                return state._replace(human_states=new_human_states)
+                state = self._update_human(
+                    state, index, h_state=self.consts.HUMAN_STATE_CAUGHT
+                )
+                bring_back_human = 0
+                return state._replace(bring_back_human=bring_back_human)
 
             state = jax.lax.cond(
                 is_colliding, lambda: catch_human(state, index), lambda: state
@@ -2450,8 +2448,10 @@ class JaxDefender(
         )
         # check laser and enemies
         state = self._check_enemy_collisions(state)
+
         # check space ship and humans
         state = self._space_ship_catching_human(state)
+
         return state
 
     ## -------- GAME STATE CHANGERS ------------------------------
@@ -2504,6 +2504,19 @@ class JaxDefender(
         return state
 
     def _end_level(self, state: DefenderState) -> DefenderState:
+        # Add score for every human alive
+        def alive_human_bonus(index, state):
+            is_alive = state.human_states[index][2] == self.consts.HUMAN_STATE_IDLE
+            state = jax.lax.cond(
+                is_alive, lambda: self._add_score(state, 100), lambda: state
+            )
+            return state
+
+        state = jax.lax.fori_loop(
+            0, self.consts.HUMAN_MAX_AMOUNT, alive_human_bonus, state
+        )
+
+        # End level
         state = state._replace(
             game_state=self.consts.GAME_STATE_TRANSITION,
             camera_offset=self.consts.CAMERA_INIT_OFFSET,
@@ -2525,6 +2538,22 @@ class JaxDefender(
         return state
 
     def _game_over(self, state: DefenderState) -> DefenderState:
+        # Clears human that died with ship
+        def kill_human_that_was_on_ship(index, state: DefenderState) -> DefenderState:
+            is_caught = state.human_states[index][2] == self.consts.HUMAN_STATE_CAUGHT
+            state = jax.lax.cond(
+                is_caught,
+                lambda: self._update_human(
+                    state, index, 0.0, 0.0, self.consts.INACTIVE
+                ),
+                lambda: state,
+            )
+            return state
+
+        state = jax.lax.fori_loop(
+            0, self.consts.HUMAN_MAX_AMOUNT, kill_human_that_was_on_ship, state
+        )
+
         # Shows game over animation, subtracts a live
         # As game is over, use shooting_cooldown for animation index, to not waste state space
         state = state._replace(
@@ -2696,6 +2725,7 @@ class JaxDefender(
             ),
             # Cooldowns
             shooting_cooldown=jnp.array(0).astype(jnp.int32),
+            bring_back_human=jnp.array(0).astype(jnp.int32),
             # Randomness
             key=key,
         )
