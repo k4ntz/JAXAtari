@@ -439,6 +439,25 @@ class BeamriderObservation(NamedTuple):
     enemy_shot_pos: chex.Array
     enemy_shot_vel: chex.Array
 
+    # other objects
+    chasing_meteoroid_pos: chex.Array
+    chasing_meteoroid_active: chex.Array
+    rejuvenator_pos: chex.Array
+    rejuvenator_active: chex.Array
+    falling_rock_pos: chex.Array
+    falling_rock_active: chex.Array
+    lane_blocker_pos: chex.Array
+    lane_blocker_active: chex.Array
+    bouncer_pos: chex.Array
+    bouncer_active: chex.Array
+    coin_pos: chex.Array
+    coin_active: chex.Array
+    kamikaze_pos: chex.Array
+    kamikaze_active: chex.Array
+
+    # game state
+    lives: chex.Array
+
 class WhiteUFOUpdate(NamedTuple):
     """Aggregated quantities needed after updating all white UFOs."""
 
@@ -663,6 +682,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             white_ufo_vel=jnp.where(is_init, 0.0, level.white_ufo_vel),
             enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, level.enemy_shot_pos),
             enemy_shot_vel=jnp.where(is_init, 0, level.enemy_shot_vel),
+            chasing_meteoroid_pos=level.chasing_meteoroid_pos,
+            chasing_meteoroid_active=level.chasing_meteoroid_active,
+            rejuvenator_pos=level.rejuvenator_pos,
+            rejuvenator_active=level.rejuvenator_active,
+            falling_rock_pos=level.falling_rock_pos,
+            falling_rock_active=level.falling_rock_active,
+            lane_blocker_pos=level.lane_blocker_pos,
+            lane_blocker_active=level.lane_blocker_active,
+            bouncer_pos=level.bouncer_pos,
+            bouncer_active=level.bouncer_active,
+            coin_pos=level.coin_pos,
+            coin_active=level.coin_active,
+            kamikaze_pos=level.kamikaze_pos,
+            kamikaze_active=level.kamikaze_active,
+            lives=state.lives,
         )
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
@@ -3676,6 +3710,73 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         return new_pos, jnp.array([new_active]), new_player_shot_pos, jnp.array([destroyed]), jnp.array([hit_mask])
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "pos": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+            "shooting_cd": spaces.Box(low=0, high=255, shape=(), dtype=jnp.int32),
+            "torpedoes_left": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+            "player_shots_pos": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.float32),
+            "player_shots_vel": spaces.Box(low=-10, high=10, shape=(2,), dtype=jnp.float32),
+            "white_ufo_left": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+            "enemy_type": spaces.Box(low=0, high=10, shape=(3,), dtype=jnp.int32),
+            "white_ufo_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
+            "white_ufo_vel": spaces.Box(low=-10, high=10, shape=(2, 3), dtype=jnp.float32),
+            "enemy_shot_pos": spaces.Box(low=-100, high=255, shape=(2, 9), dtype=jnp.float32),
+            "enemy_shot_vel": spaces.Box(low=-10, high=10, shape=(9,), dtype=jnp.int32),
+            "chasing_meteoroid_pos": spaces.Box(low=-100, high=255, shape=(2, 8), dtype=jnp.float32),
+            "chasing_meteoroid_active": spaces.Box(low=0, high=1, shape=(8,), dtype=jnp.bool_),
+            "rejuvenator_pos": spaces.Box(low=-100, high=255, shape=(2,), dtype=jnp.float32),
+            "rejuvenator_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+            "falling_rock_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
+            "falling_rock_active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_),
+            "lane_blocker_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
+            "lane_blocker_active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_),
+            "bouncer_pos": spaces.Box(low=-100, high=255, shape=(2,), dtype=jnp.float32),
+            "bouncer_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
+            "coin_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
+            "coin_active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_),
+            "kamikaze_pos": spaces.Box(low=-100, high=255, shape=(2, 1), dtype=jnp.float32),
+            "kamikaze_active": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.bool_),
+            "lives": spaces.Box(low=0, high=255, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3), dtype=jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: BeamriderObservation) -> jnp.ndarray:
+        return jnp.concatenate([
+            obs.pos.flatten(),
+            obs.shooting_cd.flatten(),
+            obs.torpedoes_left.flatten(),
+            obs.player_shots_pos.flatten(),
+            obs.player_shots_vel.flatten(),
+            obs.white_ufo_left.flatten(),
+            obs.enemy_type.flatten(),
+            obs.white_ufo_pos.flatten(),
+            obs.white_ufo_vel.flatten(),
+            obs.enemy_shot_pos.flatten(),
+            obs.enemy_shot_vel.flatten(),
+            obs.chasing_meteoroid_pos.flatten(),
+            obs.chasing_meteoroid_active.flatten(),
+            obs.rejuvenator_pos.flatten(),
+            obs.rejuvenator_active.flatten(),
+            obs.falling_rock_pos.flatten(),
+            obs.falling_rock_active.flatten(),
+            obs.lane_blocker_pos.flatten(),
+            obs.lane_blocker_active.flatten(),
+            obs.bouncer_pos.flatten(),
+            obs.bouncer_active.flatten(),
+            obs.coin_pos.flatten(),
+            obs.coin_active.flatten(),
+            obs.kamikaze_pos.flatten(),
+            obs.kamikaze_active.flatten(),
+            obs.lives.flatten(),
+        ])
 
 class BeamriderRenderer(JAXGameRenderer):
     def __init__(self, consts=None):
