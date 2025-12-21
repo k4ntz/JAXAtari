@@ -121,7 +121,7 @@ class BattlezoneConstants(NamedTuple):
     GRASS_BACK_Y: int = 95
     HORIZON_Y: int = 92
     GRASS_FRONT_Y: int = 137
-    RADAR_ROTATION_SPEED:float = -0.1
+    RADAR_ROTATION_SPEED:float = -0.05
     RADAR_CENTER_X:int = 80
     RADAR_CENTER_Y:int = 18
     RADAR_RADIUS:int = 10
@@ -136,7 +136,7 @@ class BattlezoneConstants(NamedTuple):
     SCORE_POS_Y:int = 179
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/536
-    PLAYER_SPEED:float = 0.24804691667
+    PLAYER_SPEED:float = 0.25
     PROJECTILE_SPEED:float = 0.5
     ENEMY_POS_Y:int = 85
     FIRE_CD:int = 150 #todo change
@@ -152,8 +152,8 @@ class BattlezoneConstants(NamedTuple):
         [0.6, 0.4],# 0.1, 0.0],   #7_000
         [0.5, 0.5]#, 0.2, 0.1]    #12_000
         ])
-    ENEMY_SPEED: jnp.array = jnp.array([0.2, 0.2, 1.0, 1.0]) #todo change
-    ENEMY_ROT_SPEED: jnp.array = jnp.array([0.01, 0.01, 0.01, 0.01]) #todo change
+    ENEMY_SPEED: jnp.array = jnp.array([0.25, 0.25, 1.0, 1.0]) #todo change
+    ENEMY_ROT_SPEED: jnp.array = jnp.array([2*jnp.pi/2048, 0.01, 0.01, 0.01]) #todo change
     ENEMY_SHOOT_CDS: jnp.array = jnp.array([400, 400, 400, 400]) #todo change
 
 
@@ -189,9 +189,9 @@ class BattlezoneState(NamedTuple):
     chains_l_anim_counter: chex.Array
     chains_r_anim_counter: chex.Array
     death_anim_counter: chex.Array
-    mountains_anim_counter:chex.Array
-    grass_anim_counter:chex.Array
-    radar_rotation_counter:chex.Array
+    mountains_anim_counter: chex.Array
+    grass_anim_counter: chex.Array
+    radar_rotation_counter: chex.Array
     enemies: Enemy
     player_projectile: Projectile #player can only fire 1 projectile
     enemy_projectiles: Projectile #per enemy 1 projectile
