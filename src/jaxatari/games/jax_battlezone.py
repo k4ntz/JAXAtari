@@ -215,11 +215,13 @@ class BattlezoneState(NamedTuple):
     shot_spawn: chex.Array
 
 
-class BattlezoneObservation(NamedTuple):
-    score: jnp.ndarray
+class BattlezoneObservation(NamedTuple):  # TODO: fill out properly
+    score: int
+    lives: int
 
 
-class BattlezoneInfo(NamedTuple):
+
+class BattlezoneInfo(NamedTuple):  # TODO: fill out properly
     time: jnp.ndarray
 
 
@@ -377,9 +379,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         """"""
         hit_arr = (jax.vmap(self._player_projectile_collision_check, in_axes=(0, None))
                    (state.enemies, state.player_projectile))
-        def _score_func(state1:BattlezoneState, in_tuple):
+        
+        def _score_func(state1: BattlezoneState, in_tuple):
             enemy, hit = in_tuple
             new_score = state1.score + jnp.where(hit, self.consts.ENEMY_SCORES[enemy.enemy_type], 0)
+
             return state1._replace(score=new_score), None
 
         new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
@@ -387,6 +391,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_enemies_death_anim_counter = jnp.where(hit_arr,
                             self.consts.ENEMY_DEATH_ANIM_LENGTH, new_state.enemies.death_anim_counter)
         new_player_projectile_active = jnp.logical_and(new_state.player_projectile.active, jnp.invert(jnp.any(hit_arr)))
+
         return new_state._replace(
             enemies=new_state.enemies._replace(active=new_enemies_active,
                                                death_anim_counter=new_enemies_death_anim_counter),
@@ -808,32 +813,29 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return new_state
 
     def _get_observation(self, state: BattlezoneState):
-        return BattlezoneObservation(
+        return BattlezoneObservation(  # TODO
             score=state.score,
+            lives=state.life,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BattlezoneObservation) -> jnp.ndarray:
-           return jnp.concatenate([
+           return jnp.concatenate([  # TODO
                #obs.player.x.flatten(),
                #obs.player.y.flatten(),
                #etc.
-               obs.score.flatten(),
+               obs.score,
+               obs.lives
             ]
            )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(18)  # [Noop, Up, Right, Left, Down, UpRight, UpLeft, DownRight, DownLeft] all with and without Fire
 
-    def observation_space(self) -> spaces:
-        return spaces.Dict({
-            "player": spaces.Dict({  #from pong currently
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "score": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({  # TODO
+            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -850,12 +852,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BattlezoneState, state: BattlezoneState):
-        return state.score - previous_state.score  #temporary intuition change later
+        return state.score - previous_state.score  # TODO: temporary intuition change later
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BattlezoneState) -> bool:
         player_dead = state.life == 0
-        return player_dead  # if lives are < 0 change later
+        return player_dead  # if lives are < 0 TODO change later
 
 
 
