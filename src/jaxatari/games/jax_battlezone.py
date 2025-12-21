@@ -139,6 +139,7 @@ class BattlezoneConstants(NamedTuple):
     PLAYER_ROTATION_SPEED: float = 2*jnp.pi/536
     PLAYER_SPEED: float = 0.25
     PROJECTILE_SPEED: float = 0.5
+    PROJECTILE_TTL: int = 110
     ENEMY_POS_Y: int = 85
     FIRE_CD: int = 114
     HITBOX_SIZE: float = 6.0
@@ -165,6 +166,7 @@ class Projectile(NamedTuple):
     orientation_angle: chex.Array
     active: chex.Array
     distance: chex.Array
+    time_to_live: chex.Array
 
 
 class Enemy(NamedTuple):
@@ -257,7 +259,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft, downRight])
         #-------------------fire--------------
         will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
-        def fire_projectile(state:BattlezoneState):
+        def fire_projectile(state: BattlezoneState):
             return state._replace(
                 cur_fire_cd=jnp.array(self.consts.FIRE_CD, dtype=jnp.int32),
                 player_projectile= Projectile(
@@ -265,7 +267,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     z=jnp.array(7, dtype=jnp.float32),
                     orientation_angle=jnp.array(jnp.pi, dtype=jnp.float32),
                     active=jnp.array(True, dtype=jnp.bool),
-                    distance=jnp.array(0, dtype=jnp.float32)
+                    distance=jnp.array(0, dtype=jnp.float32),
+                    time_to_live=jnp.array(self.consts.PROJECTILE_TTL, dtype=jnp.int32)
                 )
             )
 
@@ -340,6 +343,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return projectile._replace(
             x=new_x,
             z=new_z,
+            time_to_live=jnp.where(projectile.time_to_live>0, projectile.time_to_live-1, 0),
+            active=jnp.logical_and(projectile.active, projectile.time_to_live>0)
         )
 
     def _player_projectile_col_check(self, state: BattlezoneState):
@@ -396,14 +401,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 z=jnp.array(0, dtype=jnp.float32),
                 orientation_angle=jnp.array(0, dtype=jnp.float32),
                 active=jnp.array(False, dtype=jnp.bool),
-                distance=jnp.array(0, dtype=jnp.float32)
+                distance=jnp.array(0, dtype=jnp.float32),
+                time_to_live=jnp.array(0, dtype=jnp.int32)
             ),
             enemy_projectiles=Projectile(
                 x=jnp.array([0, 0], dtype=jnp.float32),
                 z=jnp.array([0, 0], dtype=jnp.float32),
                 orientation_angle=jnp.array([0, 0], dtype=jnp.float32),
                 active=jnp.array([False, False], dtype=jnp.bool),
-                distance=jnp.array([0, 0], dtype=jnp.float32)
+                distance=jnp.array([0, 0], dtype=jnp.float32),
+                time_to_live=jnp.array([0, 0], dtype=jnp.int32)
             ),
             random_key=key,
             shot_spawn=jnp.array([False], dtype=jnp.bool)
@@ -530,7 +537,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return jnp.all(jnp.stack([distx, distz, enemies.active, player_projectiles.active]))
 
 
-    def _enemy_projectile_collision_check(self, obj:Projectile):
+    def _enemy_projectile_collision_check(self, obj: Projectile):
         s = self.consts.HITBOX_SIZE
         distx = jnp.abs(obj.x) <= s
         distz = jnp.abs(obj.z) <= s
@@ -607,7 +614,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 orientation_angle=perfect_angle,
                 x = enemy.x+self.consts.ENEMY_HITBOX_SIZE,
                 z = enemy.z,
-                active=True
+                active=True,
+                time_to_live=jnp.array(self.consts.PROJECTILE_TTL, dtype=jnp.int32)
             )
 
 
@@ -764,14 +772,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 z=jnp.array(0, dtype=jnp.float32),
                 orientation_angle=jnp.array(0, dtype=jnp.float32),
                 active=jnp.array(False, dtype=jnp.bool),
-                distance=jnp.array(0, dtype=jnp.float32)
+                distance=jnp.array(0, dtype=jnp.float32),
+                time_to_live=jnp.array(0, dtype=jnp.int32)
             ),
             enemy_projectiles=Projectile(
                 x=jnp.array([0, 0], dtype=jnp.float32),
                 z=jnp.array([0, 0], dtype=jnp.float32),
                 orientation_angle=jnp.array([0, 0], dtype=jnp.float32),
                 active=jnp.array([False, False], dtype=jnp.bool),
-                distance=jnp.array([0, 0], dtype=jnp.float32)
+                distance=jnp.array([0, 0], dtype=jnp.float32),
+                time_to_live=jnp.array([0, 0], dtype=jnp.int32)
             ),
             random_key=key,
             cur_fire_cd=jnp.array(0, dtype=jnp.int32),
@@ -1156,7 +1166,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jax.lax.cond(enemy.active, enemy_active, enemy_inactive, enemy)
 
 
-    def render_single_projectile(self, raster, projectile:Projectile):
+    def render_single_projectile(self, raster, projectile: Projectile):
         def projectile_active(projectile):
             projectile_mask_index = jnp.where(projectile.distance <= 15,0,1)
             projectile_mask = self.projectile_masks[projectile_mask_index]
@@ -1166,7 +1176,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             return raster
 
         render_condition = jnp.all(jnp.stack([projectile.active,
-                                              projectile.z >=self.consts.HITBOX_SIZE,
+                                              projectile.z >= self.consts.HITBOX_SIZE,
                                               projectile.distance <= self.consts.RADAR_MAX_SCAN_RADIUS]))
         return jax.lax.cond(render_condition, projectile_active, projectile_inactive, projectile)
 
