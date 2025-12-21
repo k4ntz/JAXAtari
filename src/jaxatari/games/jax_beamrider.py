@@ -246,8 +246,8 @@ def _get_index_ufo(pos: chex.Array) -> chex.Array:
 
 def _get_index_rejuvenator(pos: chex.Array) -> chex.Array:
     stage_1 = (pos >= 0).astype(jnp.int32)
-    stage_2 = (pos >= 62).astype(jnp.int32)
-    stage_3 = (pos >= 93).astype(jnp.int32)
+    stage_2 = (pos >= 65).astype(jnp.int32)
+    stage_3 = (pos >= 86).astype(jnp.int32)
     stage_4 = (pos >= 112).astype(jnp.int32)
     return stage_1 + stage_2 + stage_3 + stage_4
 
