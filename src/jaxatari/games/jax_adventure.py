@@ -1352,6 +1352,85 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
+
+    def _magnet_step(self, state: AdventureState) -> AdventureState:
+        magnet_x = state.magnet[0]
+        magnet_y = state.magnet[1]
+
+        #try to pull sword
+        sword_x = state.sword[0]
+        sword_y = state.sword[1]
+        direction_x = jnp.sign(magnet_x - sword_x)
+        direction_y = jnp.sign(magnet_y - sword_y)
+        sword_x, sword_y = jax.lax.cond(
+            jnp.logical_and(state.sword[2]==state.magnet[2], state.player[3]!=3),
+            lambda _: (sword_x+direction_x,sword_y+direction_y),
+            lambda _: (sword_x,sword_y), 
+            operand = None
+        )
+
+        #try to pull yellow key
+        key_yellow_x = state.key_yellow[0]
+        key_yellow_y = state.key_yellow[1]
+        direction_x = jnp.sign(magnet_x - key_yellow_x)
+        direction_y = jnp.sign(magnet_y - key_yellow_y)
+        key_yellow_x, key_yellow_y = jax.lax.cond(
+            jnp.logical_and(state.key_yellow[2]==state.magnet[2], state.player[3]!=1),
+            lambda _: (key_yellow_x+direction_x,key_yellow_y+direction_y),
+            lambda _: (key_yellow_x,key_yellow_y), 
+            operand = None
+        )
+
+        #try to pull black key
+        key_black_x = state.key_black[0]
+        key_black_y = state.key_black[1]
+        direction_x = jnp.sign(magnet_x - key_black_x)
+        direction_y = jnp.sign(magnet_y - key_black_y)
+        key_black_x, key_black_y = jax.lax.cond(
+            jnp.logical_and(state.key_black[2]==state.magnet[2], state.player[3]!=2),
+            lambda _: (key_black_x+direction_x,key_black_y+direction_y),
+            lambda _: (key_black_x,key_black_y), 
+            operand = None
+        )
+
+        #try to pull bridge
+        bridge_x = state.bridge[0]
+        bridge_y = state.bridge[1]
+        direction_x = jnp.sign(magnet_x - bridge_x)
+        direction_y = jnp.sign(magnet_y - bridge_y)
+        bridge_x, bridge_y = jax.lax.cond(
+            jnp.logical_and(state.bridge[2]==state.magnet[2], state.player[3]!=4),
+            lambda _: (bridge_x+direction_x,bridge_y+direction_y),
+            lambda _: (bridge_x,bridge_y), 
+            operand = None
+        )
+
+        #try to pull chalice
+        chalice_x = state.chalice[0]
+        chalice_y = state.chalice[1]
+        direction_x = jnp.sign(magnet_x - chalice_x)
+        direction_y = jnp.sign(magnet_y - chalice_y)
+        chalice_x, chalice_y = jax.lax.cond(
+            jnp.logical_and(state.chalice[2]==state.magnet[2], state.player[3]!=6),
+            lambda _: (chalice_x+direction_x,chalice_y+direction_y),
+            lambda _: (chalice_x,chalice_y), 
+            operand = None
+        )
+
+        return AdventureState(
+            step_counter = state.step_counter,
+            player = state.player,
+            dragon_yellow = state.dragon_yellow,
+            dragon_green = state.dragon_green,
+            key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]).astype(jnp.int32),
+            key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]).astype(jnp.int32),
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=jnp.array([sword_x,sword_y,state.sword[2]]).astype(jnp.int32),
+            bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
+            magnet=state.magnet,
+            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
+        )
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
@@ -1425,6 +1504,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         state = self._item_pickup(state)
         state = self._item_drop(state, action)
         state = self._dragon_step(state)
+        state = self._magnet_step(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
