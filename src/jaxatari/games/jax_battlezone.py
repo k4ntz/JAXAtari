@@ -144,11 +144,11 @@ class BattlezoneConstants(NamedTuple):
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
-        [0.6, 0.4],# 0.0, 0.0],   #2_000
-        [0.5, 0.4],# 0.1, 0.0],   #7_000
-        [0.4, 0.3]#, 0.2, 0.1]    #12_000
+        [0.8, 0.2],# 0.0, 0.0],   #2_000
+        [0.6, 0.4],# 0.1, 0.0],   #7_000
+        [0.5, 0.5]#, 0.2, 0.1]    #12_000
         ])
-    ENEMY_SPEED: jnp.array = jnp.array([0.3, 0.5, 1.0, 1.0]) #todo change
+    ENEMY_SPEED: jnp.array = jnp.array([0.2, 0.2, 1.0, 1.0]) #todo change
     ENEMY_ROT_SPEED: jnp.array = jnp.array([0.01, 0.01, 0.01, 0.01]) #todo change
     ENEMY_SHOOT_CDS: jnp.array = jnp.array([400, 400, 400, 400]) #todo change
 
