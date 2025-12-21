@@ -17,7 +17,7 @@ def _get_default_asset_config():
         {"name": "background", "type": "background", "file": "background.npy"},
 
         # Player sprite
-        {"name": "player", "type": "single", "file": "player.npy"},
+        {"name": "player", "type": "single", "file": "player_1.npy"},
 
         # Enemy sprites
         {"name": "zombie", "type": "single", "file": "green_1.npy"},      # ENEMY_ZOMBIE = 1
@@ -27,10 +27,18 @@ def _get_default_asset_config():
         # Note: No sprite for ENEMY_GRIM_REAPER = 5 yet, will use colored box
 
         # Item sprites
-        {"name": "pot", "type": "single", "file": "pot.npy"},             # Money bag/treasure chest
+        {"name": "pot", "type": "single", "file": "pot.npy"},             # Shield icon (was pot)
         {"name": "skull", "type": "single", "file": "skull.npy"},         # Poison/Trap (danger items)
         {"name": "stairs", "type": "single", "file": "stairs.npy"},       # Ladder up (exit door)
         {"name": "trapdoor", "type": "single", "file": "trapdoor.npy"},   # Ladder down (descent)
+
+        # New props / tiles
+        {"name": "apple", "type": "single", "file": "apple.npy"},
+        {"name": "barrel", "type": "single", "file": "barrel.npy"},
+        {"name": "candle", "type": "single", "file": "candle.npy"},
+        {"name": "chain", "type": "single", "file": "chain.npy"},
+        {"name": "door", "type": "single", "file": "door.npy"},
+        {"name": "key", "type": "single", "file": "key.npy"},
 
         # Digits for UI - commented out, using hardcoded digit patterns instead
         # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
@@ -62,7 +70,7 @@ ENEMY_WRAITH = 2
 ENEMY_ZOMBIE = 1  # Weakest
 
 # Item configuration
-NUM_ITEMS = 20  # Increased variety
+NUM_ITEMS = 20  # 5 fixed (key, ladders, cage door, cage reward) + 15 random
 # Item type codes
 ITEM_HEART = 1          # +health, no points
 ITEM_POISON = 2         # -4 health, no points
@@ -74,9 +82,10 @@ ITEM_GOLD_CHALICE = 7   # +3000 points
 ITEM_SHIELD = 8         # Damage reduction
 ITEM_GUN = 9            # Faster shooting
 ITEM_BOMB = 10          # Kill all enemies in area
-ITEM_KEY = 11           # Key to unlock exit (gated door)
-ITEM_LADDER_UP = 12     # Exit/door leading up (requires key)
+ITEM_KEY = 11           # Key used to unlock gated extras
+ITEM_LADDER_UP = 12     # Exit/door leading up (always accessible)
 ITEM_LADDER_DOWN = 13   # Ladder leading down (always open)
+ITEM_CAGE_DOOR = 14     # Door item that gates entry into the bonus cage
 
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
@@ -111,7 +120,7 @@ WIZARD_SHOOT_INTERVAL = 20  # base steps between shots for each wizard
 WIZARD_SHOOT_OFFSET_MAX = 20  # random offset added to shooting interval (0-20)
 
 # Lives configuration
-MAX_LIVES = 5  # Number of lives player starts with
+MAX_LIVES = 1  # Number of lives player starts with
 
 # Death freeze configuration (ticks to freeze before respawn)
 DEATH_FREEZE_TICKS = 60
@@ -149,7 +158,7 @@ class DarkChambersConstants(NamedTuple):
     WORLD_HEIGHT: int = WORLD_H
     
     # Color scheme
-    BACKGROUND_COLOR: Tuple[int, int, int] = (8, 10, 20)
+    BACKGROUND_COLOR: Tuple[int, int, int] = (74, 74, 74)  # Dark gray floor from screenshot
     PLAYER_COLOR: Tuple[int, int, int] = (200, 80, 60)
     # Enemy colors by type (from weakest to strongest)
     ZOMBIE_COLOR: Tuple[int, int, int] = (100, 100, 100)  # Gray
@@ -157,7 +166,7 @@ class DarkChambersConstants(NamedTuple):
     SKELETON_COLOR: Tuple[int, int, int] = (220, 220, 200)  # Bone white
     WIZARD_COLOR: Tuple[int, int, int] = (150, 80, 200)  # Purple
     GRIM_REAPER_COLOR: Tuple[int, int, int] = (50, 50, 50)  # Dark gray/black
-    WALL_COLOR: Tuple[int, int, int] = (150, 120, 70)
+    WALL_COLOR: Tuple[int, int, int] = (213, 117, 114)  # Salmon/coral pink walls from screenshot
     HEART_COLOR: Tuple[int, int, int] = (220, 30, 30)
     POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)  # Green poison
     TRAP_COLOR: Tuple[int, int, int] = (120, 70, 20)     # Brown trap
@@ -241,6 +250,7 @@ class DarkChambersState(NamedTuple):
     last_fire_step: chex.Array  # step counter when fire was last pressed (for double-tap)
     
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
+    map_index: chex.Array       # current map variant (0=middle, 1=left, 2=right)
     ladder_timer: chex.Array    # time standing on ladder (0 to LADDER_INTERACTION_TIME)
     lives: chex.Array           # remaining lives (0 to MAX_LIVES)
     
@@ -327,6 +337,11 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
+        # Override background with solid color based on BACKGROUND_COLOR constant
+        bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
+        if bg_color_id is not None:
+            self.BACKGROUND = jnp.full((self.consts.HEIGHT, self.consts.WIDTH), bg_color_id, dtype=jnp.uint8)
+        
         # Print sprite sizes for debugging
         print("\n=== SPRITE SIZES ===")
         if "player" in self.SHAPE_MASKS:
@@ -342,13 +357,25 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Item sprites
         if "pot" in self.SHAPE_MASKS:
-            print(f"Pot sprite shape: {self.SHAPE_MASKS['pot'].shape}")
+            print(f"Pot (shield) sprite shape: {self.SHAPE_MASKS['pot'].shape}")
         if "skull" in self.SHAPE_MASKS:
             print(f"Skull sprite shape: {self.SHAPE_MASKS['skull'].shape}")
         if "stairs" in self.SHAPE_MASKS:
             print(f"Stairs sprite shape: {self.SHAPE_MASKS['stairs'].shape}")
         if "trapdoor" in self.SHAPE_MASKS:
             print(f"Trapdoor sprite shape: {self.SHAPE_MASKS['trapdoor'].shape}")
+        if "apple" in self.SHAPE_MASKS:
+            print(f"Apple sprite shape: {self.SHAPE_MASKS['apple'].shape}")
+        if "barrel" in self.SHAPE_MASKS:
+            print(f"Barrel sprite shape: {self.SHAPE_MASKS['barrel'].shape}")
+        if "candle" in self.SHAPE_MASKS:
+            print(f"Candle sprite shape: {self.SHAPE_MASKS['candle'].shape}")
+        if "chain" in self.SHAPE_MASKS:
+            print(f"Chain sprite shape: {self.SHAPE_MASKS['chain'].shape}")
+        if "door" in self.SHAPE_MASKS:
+            print(f"Door sprite shape: {self.SHAPE_MASKS['door'].shape}")
+        if "key" in self.SHAPE_MASKS:
+            print(f"Key sprite shape: {self.SHAPE_MASKS['key'].shape}")
         print("===================\n")
         
         # Helper to scale palette-index masks to a target size (centered pad/crop)
@@ -390,6 +417,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             target_w = int(self.consts.PLAYER_WIDTH)
             target_h = int(self.consts.PLAYER_HEIGHT)
             self.PLAYER_SCALED_MASK = _scale_mask(player_mask, target_h, target_w)
+            print(f"Scaled player to {target_h}×{target_w}")
         else:
             # Fallback: use original player mask without scaling
             self.PLAYER_SCALED_MASK = self.SHAPE_MASKS.get("player")
@@ -413,10 +441,17 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         self.ITEM_SCALED_MASKS = {}
         item_sprites = {
-            "pot": "pot",          # ITEM_STRONGBOX (money bag)
+            "pot": "pot",          # ITEM_SHIELD (shield icon)
             "skull": "skull",      # ITEM_POISON
             "trapdoor": "trapdoor", # ITEM_TRAP
-            "stairs": "stairs"     # ITEM_LADDER_UP
+            "stairs": "stairs",    # ITEM_LADDER_UP
+            "stairs_down": "stairs", # ITEM_LADDER_DOWN (use same stairs sprite)
+            "apple": "apple",      # ITEM_HEART
+            "barrel": "barrel",    # ITEM_BOMB
+            "candle": "candle",    # ITEM_AMBER_CHALICE
+            "chain": "chain",      # ITEM_AMULET
+            "key": "key",         # ITEM_KEY
+            "door": "door",       # ITEM_CAGE_DOOR
         }
         
         for item_key, sprite_name in item_sprites.items():
@@ -526,7 +561,8 @@ class DarkChambersRenderer(JAXGameRenderer):
         portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
         portal_y_end = portal_y_start + portal_hole_height
         
-        level_0_walls = jnp.array([
+        # Middle map (map_index=0) - original layout
+        middle_level_0_walls = jnp.array([
             # Border - Top and Bottom
             [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
             [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
@@ -540,61 +576,333 @@ class DarkChambersRenderer(JAXGameRenderer):
             [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
              self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
             # Labyrinth structure - Level 0
-            [60, 80, 120, 8],
-            [200, 150, 80, 8],
-            [80, 200, 100, 8],
-            [40, 280, 140, 8],
-            [220, 50, 8, 140],
-            [120, 180, 8, 100],
-            [280, 120, 8, 160],
-            [160, 300, 8, 80],
+            [60, 81, 120, 6],
+            [200, 151, 80, 6],
+            [80, 201, 100, 6],
+            [40, 281, 140, 6],
+            [161, 300, 6, 80],
         ], dtype=jnp.int32)
         
-        level_1_walls = jnp.array([
-            # Border - Top and Bottom
+        # Left map (map_index=1) - vertical corridor pattern
+        left_level_0_walls = jnp.array([
             [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
             [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
              self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            # Left wall - split into two parts with gap in middle
             [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
             [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Right wall - split into two parts with gap in middle
             [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
              self.consts.WALL_THICKNESS, portal_y_start],
             [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
              self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Different labyrinth structure - Level 1
-            [50, 100, 100, 8],
-            [180, 180, 100, 8],
-            [100, 250, 120, 8],
-            [60, 320, 100, 8],
-            [250, 80, 8, 120],
-            [140, 150, 8, 140],
-            [260, 200, 8, 140],
-            [80, 340, 8, 60],
+            # Vertical corridors
+            [80, 50, 6, 120],
+            [180, 100, 6, 130],
+            [40, 170, 100, 6],
+            [120, 250, 120, 6],
+            [230, 280, 6, 100],
         ], dtype=jnp.int32)
+        
+        # Right map (map_index=2) - horizontal chambers
+        right_level_0_walls = jnp.array([
+            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
+             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            # Horizontal chambers
+            [50, 80, 140, 6],
+            [140, 140, 6, 100],
+            [70, 220, 130, 6],
+            [50, 290, 110, 6],
+            [200, 320, 6, 70],
+        ], dtype=jnp.int32)
+        
+        # Middle map level 1
+        middle_level_1_walls = jnp.array([
+            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
+             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [50, 101, 100, 6],
+            [180, 181, 100, 6],
+            [100, 251, 120, 6],
+            [60, 321, 100, 6],
+            [81, 340, 6, 60],
+        ], dtype=jnp.int32)
+        
+        # Left map level 1 - alternating pattern
+        left_level_1_walls = jnp.array([
+            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
+             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [60, 70, 110, 6],
+            [70, 150, 6, 90],
+            [140, 210, 100, 6],
+            [190, 280, 6, 80],
+            [50, 340, 120, 6],
+        ], dtype=jnp.int32)
+        
+        # Right map level 1 - grid-like pattern
+        right_level_1_walls = jnp.array([
+            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
+             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
+            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
+            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
+             self.consts.WALL_THICKNESS, portal_y_start],
+            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
+             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
+            [80, 60, 120, 6],
+            [160, 130, 6, 90],
+            [40, 200, 130, 6],
+            [60, 270, 6, 90],
+            [170, 320, 90, 6],
+        ], dtype=jnp.int32)
+
+        # --- Hard-coded 4×4 cages (interior in nav cells) ---
+        self.CAGE_INTERIOR_CELLS = 4
+        self.CAGE_WALL_THICKNESS = 4
+        self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
+        self.CAGE_DOOR_SIZE = LADDER_WIDTH  # reuse ladder sizing for the door box
+        cage_interior_size = self.CAGE_INTERIOR_CELLS * CELL_SIZE
+        cage_outer_size = cage_interior_size + 2 * self.CAGE_WALL_THICKNESS
+        self.CAGE_OUTER_SIZE = cage_outer_size
+        self.CAGE_REWARD_TYPE = ITEM_AMULET
+        reward_size = jnp.array([11, 11], dtype=jnp.int32)
+
+        def build_cage(origin):
+            cx, cy = origin
+            gap_side = (cage_outer_size - self.CAGE_DOOR_GAP) // 2
+
+            top = jnp.array([cx, cy, cage_outer_size, self.CAGE_WALL_THICKNESS], dtype=jnp.int32)
+            bottom_left = jnp.array([cx, cy + cage_outer_size - self.CAGE_WALL_THICKNESS, gap_side, self.CAGE_WALL_THICKNESS], dtype=jnp.int32)
+            bottom_right = jnp.array([
+                cx + gap_side + self.CAGE_DOOR_GAP,
+                cy + cage_outer_size - self.CAGE_WALL_THICKNESS,
+                gap_side,
+                self.CAGE_WALL_THICKNESS
+            ], dtype=jnp.int32)
+            left = jnp.array([cx, cy, self.CAGE_WALL_THICKNESS, cage_outer_size], dtype=jnp.int32)
+            right = jnp.array([cx + cage_outer_size - self.CAGE_WALL_THICKNESS, cy, self.CAGE_WALL_THICKNESS, cage_outer_size], dtype=jnp.int32)
+            cage_walls = jnp.stack([top, bottom_left, bottom_right, left, right], axis=0)
+
+            # Door is centered at the bottom opening
+            door_x = cx + gap_side + (self.CAGE_DOOR_GAP - self.CAGE_DOOR_SIZE) // 2
+            door_y = cy + cage_outer_size - self.CAGE_DOOR_SIZE
+            door_pos = jnp.array([door_x, door_y], dtype=jnp.int32)
+
+            # Reward is centered inside the cage interior
+            reward_x = cx + self.CAGE_WALL_THICKNESS + (cage_interior_size - reward_size[0]) // 2
+            reward_y = cy + self.CAGE_WALL_THICKNESS + (cage_interior_size - reward_size[1]) // 2
+            reward_pos = jnp.array([reward_x, reward_y], dtype=jnp.int32)
+
+            # Entry position (where player teleports) is centered inside
+            entry_x = cx + self.CAGE_WALL_THICKNESS + (cage_interior_size - self.consts.PLAYER_WIDTH) // 2
+            entry_y = cy + self.CAGE_WALL_THICKNESS + (cage_interior_size - self.consts.PLAYER_HEIGHT) // 2
+            entry_pos = jnp.array([entry_x, entry_y], dtype=jnp.int32)
+            return cage_walls, door_pos, reward_pos, entry_pos
+
+        def add_cage(level_walls, origin):
+            cage_walls, door_pos, reward_pos, entry_pos = build_cage(origin)
+            return jnp.concatenate([level_walls, cage_walls], axis=0), door_pos, reward_pos, entry_pos
+
+        cage_origin_level0 = jnp.array([180, 20], dtype=jnp.int32)
+        cage_origin_level1 = jnp.array([180, 60], dtype=jnp.int32)
+        
+        # Cage positions for left map - clear areas avoiding all walls
+        cage_origin_level0_left = jnp.array([140, 280], dtype=jnp.int32)   # Lower middle - between walls at x=120-240 and below y=250
+        cage_origin_level1_left = jnp.array([180, 120], dtype=jnp.int32)   # Upper right - clear between vertical walls
+        
+        # Cage positions for right map - clear areas avoiding all walls
+        cage_origin_level0_right = jnp.array([200, 230], dtype=jnp.int32)  # Lower right - below wall at y=220, right of vertical at x=140
+        cage_origin_level1_right = jnp.array([200, 230], dtype=jnp.int32)  # Lower right - below wall at y=200, clear of vertical at x=160
+
+        # Add cages to all 3 map variants
+        middle_level_0_walls, level0_door_m, level0_reward_m, level0_entry_m = add_cage(middle_level_0_walls, cage_origin_level0)
+        middle_level_1_walls, level1_door_m, level1_reward_m, level1_entry_m = add_cage(middle_level_1_walls, cage_origin_level1)
+        
+        left_level_0_walls, level0_door_l, level0_reward_l, level0_entry_l = add_cage(left_level_0_walls, cage_origin_level0_left)
+        left_level_1_walls, level1_door_l, level1_reward_l, level1_entry_l = add_cage(left_level_1_walls, cage_origin_level1_left)
+        
+        right_level_0_walls, level0_door_r, level0_reward_r, level0_entry_r = add_cage(right_level_0_walls, cage_origin_level0_right)
+        right_level_1_walls, level1_door_r, level1_reward_r, level1_entry_r = add_cage(right_level_1_walls, cage_origin_level1_right)
 
         # Create additional levels by offsetting and varying walls
         def offset_walls(base, dx, dy):
-            # Preserve border walls (first 4 entries) and offset only interior labyrinth walls
-            borders = base[:4]
-            interior = base[4:]
+            # Preserve border walls and portal gaps (first 6 entries) and offset only interior labyrinth walls
+            borders = base[:6]
+            interior = base[6:]
             xy = interior[:, 0:2] + jnp.array([dx, dy])
             wh = interior[:, 2:4]
             interior_off = jnp.concatenate([xy, wh], axis=1)
             return jnp.concatenate([borders, interior_off], axis=0)
 
-        level_2_walls = offset_walls(level_1_walls, 10, -10)
-        level_3_walls = offset_walls(level_0_walls, -15, 20)
-        level_4_walls = offset_walls(level_1_walls, 25, 10)
-        level_5_walls = offset_walls(level_0_walls, -30, -20)
-        level_6_walls = offset_walls(level_1_walls, 5, 25)
+        def offset_pos(pos, dx, dy):
+            return pos + jnp.array([dx, dy], dtype=jnp.int32)
+
+        # Create higher levels by offsetting middle map base levels (for all 3 maps the same offset pattern)
+        middle_level_2_walls = offset_walls(middle_level_1_walls, 10, -10)
+        middle_level_3_walls = offset_walls(middle_level_0_walls, -15, 20)
+        middle_level_4_walls = offset_walls(middle_level_1_walls, 25, 10)
+        middle_level_5_walls = offset_walls(middle_level_0_walls, -30, -20)
+        middle_level_6_walls = offset_walls(middle_level_1_walls, 5, 25)
         
-        # Stack levels: shape (MAX_LEVELS, num_walls, 4)
-        self.LEVEL_WALLS = jnp.stack([level_0_walls, level_1_walls, level_2_walls, level_3_walls, level_4_walls, level_5_walls, level_6_walls], axis=0)
+        left_level_2_walls = offset_walls(left_level_1_walls, 10, -10)
+        left_level_3_walls = offset_walls(left_level_0_walls, -15, 20)
+        left_level_4_walls = offset_walls(left_level_1_walls, 25, 10)
+        left_level_5_walls = offset_walls(left_level_0_walls, -30, -20)
+        left_level_6_walls = offset_walls(left_level_1_walls, 5, 25)
         
-        # Default to level 0 for compatibility
-        self.WALLS = level_0_walls
+        right_level_2_walls = offset_walls(right_level_1_walls, 10, -10)
+        right_level_3_walls = offset_walls(right_level_0_walls, -15, 20)
+        right_level_4_walls = offset_walls(right_level_1_walls, 25, 10)
+        right_level_5_walls = offset_walls(right_level_0_walls, -30, -20)
+        right_level_6_walls = offset_walls(right_level_1_walls, 5, 25)
+
+        # Use middle map for cage positions (same for all 3 maps)
+        # MIDDLE MAP cage positions
+        level0_door_pos_m = level0_door_m
+        level0_reward_pos_m = level0_reward_m
+        level0_entry_pos_m = level0_entry_m
+
+        level1_door_pos_m = level1_door_m
+        level1_reward_pos_m = level1_reward_m
+        level1_entry_pos_m = level1_entry_m
+
+        level2_door_pos_m = offset_pos(level1_door_m, 10, -10)
+        level2_reward_pos_m = offset_pos(level1_reward_m, 10, -10)
+        level2_entry_pos_m = offset_pos(level1_entry_m, 10, -10)
+
+        level3_door_pos_m = offset_pos(level0_door_m, -15, 20)
+        level3_reward_pos_m = offset_pos(level0_reward_m, -15, 20)
+        level3_entry_pos_m = offset_pos(level0_entry_m, -15, 20)
+
+        level4_door_pos_m = offset_pos(level1_door_m, 25, 10)
+        level4_reward_pos_m = offset_pos(level1_reward_m, 25, 10)
+        level4_entry_pos_m = offset_pos(level1_entry_m, 25, 10)
+
+        level5_door_pos_m = offset_pos(level0_door_m, -30, -20)
+        level5_reward_pos_m = offset_pos(level0_reward_m, -30, -20)
+        level5_entry_pos_m = offset_pos(level0_entry_m, -30, -20)
+
+        level6_door_pos_m = offset_pos(level1_door_m, 5, 25)
+        level6_reward_pos_m = offset_pos(level1_reward_m, 5, 25)
+        level6_entry_pos_m = offset_pos(level1_entry_m, 5, 25)
+        
+        # LEFT MAP cage positions
+        level0_door_pos_l = level0_door_l
+        level0_reward_pos_l = level0_reward_l
+        level0_entry_pos_l = level0_entry_l
+
+        level1_door_pos_l = level1_door_l
+        level1_reward_pos_l = level1_reward_l
+        level1_entry_pos_l = level1_entry_l
+
+        level2_door_pos_l = offset_pos(level1_door_l, 10, -10)
+        level2_reward_pos_l = offset_pos(level1_reward_l, 10, -10)
+        level2_entry_pos_l = offset_pos(level1_entry_l, 10, -10)
+
+        level3_door_pos_l = offset_pos(level0_door_l, -15, 20)
+        level3_reward_pos_l = offset_pos(level0_reward_l, -15, 20)
+        level3_entry_pos_l = offset_pos(level0_entry_l, -15, 20)
+
+        level4_door_pos_l = offset_pos(level1_door_l, 25, 10)
+        level4_reward_pos_l = offset_pos(level1_reward_l, 25, 10)
+        level4_entry_pos_l = offset_pos(level1_entry_l, 25, 10)
+
+        level5_door_pos_l = offset_pos(level0_door_l, -30, -20)
+        level5_reward_pos_l = offset_pos(level0_reward_l, -30, -20)
+        level5_entry_pos_l = offset_pos(level0_entry_l, -30, -20)
+
+        level6_door_pos_l = offset_pos(level1_door_l, 5, 25)
+        level6_reward_pos_l = offset_pos(level1_reward_l, 5, 25)
+        level6_entry_pos_l = offset_pos(level1_entry_l, 5, 25)
+        
+        # RIGHT MAP cage positions
+        level0_door_pos_r = level0_door_r
+        level0_reward_pos_r = level0_reward_r
+        level0_entry_pos_r = level0_entry_r
+
+        level1_door_pos_r = level1_door_r
+        level1_reward_pos_r = level1_reward_r
+        level1_entry_pos_r = level1_entry_r
+
+        level2_door_pos_r = offset_pos(level1_door_r, 10, -10)
+        level2_reward_pos_r = offset_pos(level1_reward_r, 10, -10)
+        level2_entry_pos_r = offset_pos(level1_entry_r, 10, -10)
+
+        level3_door_pos_r = offset_pos(level0_door_r, -15, 20)
+        level3_reward_pos_r = offset_pos(level0_reward_r, -15, 20)
+        level3_entry_pos_r = offset_pos(level0_entry_r, -15, 20)
+
+        level4_door_pos_r = offset_pos(level1_door_r, 25, 10)
+        level4_reward_pos_r = offset_pos(level1_reward_r, 25, 10)
+        level4_entry_pos_r = offset_pos(level1_entry_r, 25, 10)
+
+        level5_door_pos_r = offset_pos(level0_door_r, -30, -20)
+        level5_reward_pos_r = offset_pos(level0_reward_r, -30, -20)
+        level5_entry_pos_r = offset_pos(level0_entry_r, -30, -20)
+
+        level6_door_pos_r = offset_pos(level1_door_r, 5, 25)
+        level6_reward_pos_r = offset_pos(level1_reward_r, 5, 25)
+        level6_entry_pos_r = offset_pos(level1_entry_r, 5, 25)
+
+        # Stack into 3D arrays: (3 maps, 7 levels, 2 coords)
+        self.CAGE_DOOR_POSITIONS = jnp.stack([
+            jnp.stack([level0_door_pos_m, level1_door_pos_m, level2_door_pos_m, level3_door_pos_m, level4_door_pos_m, level5_door_pos_m, level6_door_pos_m], axis=0),
+            jnp.stack([level0_door_pos_l, level1_door_pos_l, level2_door_pos_l, level3_door_pos_l, level4_door_pos_l, level5_door_pos_l, level6_door_pos_l], axis=0),
+            jnp.stack([level0_door_pos_r, level1_door_pos_r, level2_door_pos_r, level3_door_pos_r, level4_door_pos_r, level5_door_pos_r, level6_door_pos_r], axis=0),
+        ], axis=0)
+
+        self.CAGE_REWARD_POSITIONS = jnp.stack([
+            jnp.stack([level0_reward_pos_m, level1_reward_pos_m, level2_reward_pos_m, level3_reward_pos_m, level4_reward_pos_m, level5_reward_pos_m, level6_reward_pos_m], axis=0),
+            jnp.stack([level0_reward_pos_l, level1_reward_pos_l, level2_reward_pos_l, level3_reward_pos_l, level4_reward_pos_l, level5_reward_pos_l, level6_reward_pos_l], axis=0),
+            jnp.stack([level0_reward_pos_r, level1_reward_pos_r, level2_reward_pos_r, level3_reward_pos_r, level4_reward_pos_r, level5_reward_pos_r, level6_reward_pos_r], axis=0),
+        ], axis=0)
+
+        self.CAGE_ENTRY_POSITIONS = jnp.stack([
+            jnp.stack([level0_entry_pos_m, level1_entry_pos_m, level2_entry_pos_m, level3_entry_pos_m, level4_entry_pos_m, level5_entry_pos_m, level6_entry_pos_m], axis=0),
+            jnp.stack([level0_entry_pos_l, level1_entry_pos_l, level2_entry_pos_l, level3_entry_pos_l, level4_entry_pos_l, level5_entry_pos_l, level6_entry_pos_l], axis=0),
+            jnp.stack([level0_entry_pos_r, level1_entry_pos_r, level2_entry_pos_r, level3_entry_pos_r, level4_entry_pos_r, level5_entry_pos_r, level6_entry_pos_r], axis=0),
+        ], axis=0)
+        
+        # Stack levels into 3D array: shape (3 maps, MAX_LEVELS, num_walls, 4)
+        # Map index 0 = middle, 1 = left, 2 = right
+        middle_walls_stack = jnp.stack([
+            middle_level_0_walls, middle_level_1_walls, middle_level_2_walls, 
+            middle_level_3_walls, middle_level_4_walls, middle_level_5_walls, middle_level_6_walls
+        ], axis=0)
+        
+        left_walls_stack = jnp.stack([
+            left_level_0_walls, left_level_1_walls, left_level_2_walls,
+            left_level_3_walls, left_level_4_walls, left_level_5_walls, left_level_6_walls
+        ], axis=0)
+        
+        right_walls_stack = jnp.stack([
+            right_level_0_walls, right_level_1_walls, right_level_2_walls,
+            right_level_3_walls, right_level_4_walls, right_level_5_walls, right_level_6_walls
+        ], axis=0)
+        
+        self.LEVEL_WALLS = jnp.stack([middle_walls_stack, left_walls_stack, right_walls_stack], axis=0)
+        
+        # Default to middle map level 0 for compatibility
+        self.WALLS = middle_level_0_walls
 
         # --- Navigation grid: mark nav cells that are blocked by walls ---
         def make_occupancy(walls):
@@ -617,11 +925,12 @@ class DarkChambersRenderer(JAXGameRenderer):
             blocked = jnp.any(overlap_x & overlap_y, axis=-1)  # (GRID_H, GRID_W) bool
             return blocked
 
-        # Shape: (MAX_LEVELS, GRID_H, GRID_W)
-        self.LEVEL_WALL_GRID = jnp.stack(
-            [make_occupancy(self.LEVEL_WALLS[i]) for i in range(MAX_LEVELS)],
-            axis=0
-        )
+        # Shape: (3 maps, MAX_LEVELS, GRID_H, GRID_W)
+        self.LEVEL_WALL_GRID = jnp.stack([
+            jnp.stack([make_occupancy(self.LEVEL_WALLS[map_idx, level_idx]) 
+                      for level_idx in range(MAX_LEVELS)], axis=0)
+            for map_idx in range(3)
+        ], axis=0)
         
         # Per-item sizes (width, height) indexed by item type code
         # Index 0 unused placeholder for alignment
@@ -640,6 +949,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [6, 6],                 # 11 KEY (small key)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 14 CAGE_DOOR (box-sized door)
         ], dtype=jnp.int32)
 
         # Color id mapping per item type (aligning with palette above)
@@ -658,13 +968,14 @@ class DarkChambersRenderer(JAXGameRenderer):
             18,  # KEY (gold)
             19,  # LADDER_UP (brown exit door)
             20,  # LADDER_DOWN (dark brown ladder)
+            19,  # CAGE_DOOR (reuse ladder-up tint)
         ], dtype=jnp.int32)
         # Python constants for item type color IDs (indexed by item_type - 1)
         self.ITEM_TYPE_COLOR_IDS_PY = [
-            self.TREASURE_ID,      # 1: ITEM_HEART (swapped with STRONGBOX so pot sprite shows for money)
+            self.HEART_ID,         # 1: ITEM_HEART
             self.POISON_ID,        # 2: ITEM_POISON
             self.TRAP_ID,          # 3: ITEM_TRAP
-            self.HEART_ID,         # 4: ITEM_STRONGBOX (swapped with HEART to use pot sprite)
+            self.TREASURE_ID,      # 4: ITEM_STRONGBOX
             self.TREASURE_ID,      # 5: ITEM_AMBER_CHALICE
             self.TREASURE_ID,      # 6: ITEM_AMULET
             self.TREASURE_ID,      # 7: ITEM_GOLD_CHALICE
@@ -674,6 +985,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.KEY_ID,           # 11: ITEM_KEY
             self.LADDER_UP_ID,     # 12: ITEM_LADDER_UP
             self.LADDER_DOWN_ID,   # 13: ITEM_LADDER_DOWN
+            self.LADDER_UP_ID,     # 14: ITEM_CAGE_DOOR
         ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
@@ -693,8 +1005,10 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.consts.WORLD_HEIGHT - GAME_H
         ).astype(jnp.int32)
         
-        # Draw walls for current level
-        current_level_walls = self.LEVEL_WALLS[state.current_level]
+        # Draw walls for current level and map
+        # Note: Wall textures can't be dynamically indexed in JAX due to tracing limitations
+        # Using solid color rendering for walls
+        current_level_walls = self.LEVEL_WALLS[state.map_index, state.current_level]
         wall_positions = (current_level_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         wall_sizes = current_level_walls[:, 2:4]
         object_raster = self.jr.draw_rects(
@@ -783,10 +1097,19 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.UI_ID
         )
         
-        # Player (use scaled sprite if available)
+        # Player (use scaled sprite, analogous to enemy rendering)
         player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
         player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
-        object_raster = self.jr.render_at(object_raster, player_screen_x, player_screen_y, self.PLAYER_SCALED_MASK)
+        
+        # Render player sprite using same pattern as enemies
+        player_sprite = self.PLAYER_SCALED_MASK
+        has_player_sprite = player_sprite is not None
+        object_raster = jax.lax.cond(
+            has_player_sprite,
+            lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
+            lambda r: r,
+            object_raster
+        )
         
         # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
@@ -908,11 +1231,11 @@ class DarkChambersRenderer(JAXGameRenderer):
             item_x = masked_item_pos[i, 0]
             item_y = masked_item_pos[i, 1]
             
-            # ITEM_STRONGBOX = 4 -> pot sprite (money bag)
-            is_strongbox = (item_type == ITEM_STRONGBOX) & is_active
+            # ITEM_SHIELD = 8 -> pot sprite (shield icon)
+            is_shield = (item_type == ITEM_SHIELD) & is_active
             pot_sprite = self.ITEM_SCALED_MASKS.get("pot")
             raster = jax.lax.cond(
-                is_strongbox & (pot_sprite is not None),
+                is_shield & (pot_sprite is not None),
                 lambda r: self.jr.render_at_clipped(r, item_x, item_y, pot_sprite),
                 lambda r: r,
                 raster
@@ -947,6 +1270,81 @@ class DarkChambersRenderer(JAXGameRenderer):
                 lambda r: r,
                 raster
             )
+
+            # ITEM_CAGE_DOOR = 14 -> door sprite scaled to box
+            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
+            door_sprite = self.ITEM_SCALED_MASKS.get("door")
+            raster = jax.lax.cond(
+                is_cage_door & (door_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, door_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_LADDER_DOWN = 13 -> stairs sprite (same as ladder_up)
+            is_ladder_down = (item_type == ITEM_LADDER_DOWN) & is_active
+            stairs_down_sprite = self.ITEM_SCALED_MASKS.get("stairs_down")
+            raster = jax.lax.cond(
+                is_ladder_down & (stairs_down_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_down_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_HEART = 1 -> apple sprite
+            apple_sprite = self.ITEM_SCALED_MASKS.get("apple")
+            if apple_sprite is not None:
+                is_heart = (item_type == ITEM_HEART) & is_active
+                raster = jax.lax.cond(
+                    is_heart,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, apple_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_BOMB = 10 -> barrel sprite
+            barrel_sprite = self.ITEM_SCALED_MASKS.get("barrel")
+            if barrel_sprite is not None:
+                is_bomb = (item_type == ITEM_BOMB) & is_active
+                raster = jax.lax.cond(
+                    is_bomb,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, barrel_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_AMBER_CHALICE = 5 -> candle sprite (+500 points treasure)
+            candle_sprite = self.ITEM_SCALED_MASKS.get("candle")
+            if candle_sprite is not None:
+                is_amber_chalice = (item_type == ITEM_AMBER_CHALICE) & is_active
+                raster = jax.lax.cond(
+                    is_amber_chalice,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, candle_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_AMULET = 6 -> chain sprite (+1000 points treasure)
+            chain_sprite = self.ITEM_SCALED_MASKS.get("chain")
+            if chain_sprite is not None:
+                is_amulet = (item_type == ITEM_AMULET) & is_active
+                raster = jax.lax.cond(
+                    is_amulet,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, chain_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_KEY = 11 -> key sprite
+            key_sprite = self.ITEM_SCALED_MASKS.get("key")
+            if key_sprite is not None:
+                is_key = (item_type == ITEM_KEY) & is_active
+                raster = jax.lax.cond(
+                    is_key,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, key_sprite),
+                    lambda r: r,
+                    raster
+                )
             
             return raster
         
@@ -954,8 +1352,8 @@ class DarkChambersRenderer(JAXGameRenderer):
         object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_item_sprite, object_raster)
         
         # Then render remaining items (treasures, powerups, etc.) as colored boxes
-        # Skip types 2,3,4,12 since they now use sprites (POISON, TRAP, STRONGBOX, LADDER_UP)
-        for t in [1, 5, 6, 7, 8, 9, 10, 11, 13]:  # Skip POISON(2), TRAP(3), STRONGBOX(4), LADDER_UP(12)
+        # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
+        for t in [4, 7, 9]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners
@@ -1266,6 +1664,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
     def _distance_field(
         self,
+        map_index: chex.Array,
         level: chex.Array,
         player_x: chex.Array,
         player_y: chex.Array,
@@ -1277,8 +1676,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         Alive enemies are treated as obstacles. Returns an int32 array
         of shape (GRID_H, GRID_W) with distances in cells.
         """
-        # Base wall grid from the level
-        wall_grid = self.renderer.LEVEL_WALL_GRID[level]  # (GRID_H, GRID_W) bool
+        # Base wall grid from the level and current map
+        wall_grid = self.renderer.LEVEL_WALL_GRID[map_index, level]  # (GRID_H, GRID_W) bool
         H, W = wall_grid.shape
 
         # --- Enemy occupancy grid (treat alive enemies as walls) ---
@@ -1342,8 +1741,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[DarkChambersObservation, DarkChambersState]:
         """Reset the environment and return the initial observation and state."""
         
-        # Use level 0 walls for initial spawn
-        WALLS = self.renderer.LEVEL_WALLS[0]
+        # Use middle map (0), level 0 walls for initial spawn
+        WALLS = self.renderer.LEVEL_WALLS[0, 0]
         
         def check_wall_overlap(pos_x, pos_y, width, height):
             """Check if a rectangle overlaps with any wall."""
@@ -1396,12 +1795,17 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         enemy_positions_init = jnp.zeros((NUM_ENEMIES, 2), dtype=jnp.int32)
         (enemy_positions, key), _ = jax.lax.scan(spawn_enemy, (enemy_positions_init, subkey), jnp.arange(NUM_ENEMIES))
         
-        # Spawn enemies with random types (favor stronger types)
+        # Spawn random number of enemies (5-10)
+        key, subkey = jax.random.split(key)
+        num_active_enemies = jax.random.randint(subkey, (), 5, 11, dtype=jnp.int32)
+        
+        # Spawn enemies with random types (favor stronger types, exclude Grim Reaper)
         key, subkey = jax.random.split(key)
         enemy_types = jax.random.randint(
-            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32
-        )  # Random types from 2 (Wraith) to 5 (Grim Reaper)
-        enemy_active = jnp.ones(NUM_ENEMIES, dtype=jnp.int32)
+            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32
+        )  # Random types from 2 (Wraith) to 4 (Wizard), excluding 5 (Grim Reaper)
+        # Only activate the first num_active_enemies
+        enemy_active = jnp.where(jnp.arange(NUM_ENEMIES) < num_active_enemies, 1, 0)
         
         # Initialize wizard shooting timers with random offsets (base interval + 0-20 random offset)
         key, subkey = jax.random.split(key)
@@ -1473,8 +1877,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         
         key, subkey = jax.random.split(key)
         item_positions_init = jnp.zeros((NUM_ITEMS, 2), dtype=jnp.int32)
-        # Spawn only regular items (indices 3+), leave first 3 for fixed key, exit, ladder_down
-        (item_positions_temp, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(3, NUM_ITEMS))
+        # Spawn only regular items (indices 5+), leave first 5 for fixed key, ladders, and cage props
+        (item_positions_temp, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(5, NUM_ITEMS))
         
         # Place key at a random valid position away from player spawn; ladders fixed
         # Avoid walls and avoid upper-left spawn area (player starts around 24,24)
@@ -1500,44 +1904,46 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         key_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_key, (init_key_pos, key, False))
         exit_pos = jnp.array([300, 350], dtype=jnp.int32)
         ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
+        cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[0, 0]  # Middle map, level 0
+        cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[0, 0]  # Middle map, level 0
         
-        # Combine: first 3 positions are key, exit, ladder_down, rest are randomly spawned
-        item_positions = item_positions_temp.at[0:3].set(jnp.array([key_pos, exit_pos, ladder_down_pos]))
+        # Combine: first 5 positions are key, exit, ladder_down, cage door, cage reward, rest are randomly spawned
+        item_positions = item_positions_temp.at[0:5].set(jnp.array([key_pos, exit_pos, ladder_down_pos, cage_door_pos, cage_reward_pos]))
+        
+        # On level 0, hide the downward ladder by placing it off-screen (ladder_down is at index 2)
+        item_positions = item_positions.at[2].set(jnp.array([-1000, -1000], dtype=jnp.int32))
         
         # Weighted distribution of item types (no extra keys here to enforce exactly one key per level)
-        # Reserve first 3 slots for key, exit, ladder_down; rest are regular items without keys
+        # Reserve first 5 slots for key, ladders, cage door, cage reward; rest are regular items without keys
+        # Only spawn items that have sprites (exclude STRONGBOX, GOLD_CHALICE)
         key, subkey = jax.random.split(key)
         all_item_types = jnp.array([
-            ITEM_HEART,          # health +10
-            ITEM_POISON,         # -4 health
-            ITEM_TRAP,           # -6 health (increase frequency)
-            ITEM_STRONGBOX,      # 100 pts
-            ITEM_AMBER_CHALICE,  # 500 pts
-            ITEM_AMULET,         # 1000 pts
-            ITEM_GOLD_CHALICE,   # 3000 pts
-            ITEM_SHIELD,         # damage reduction
-            ITEM_GUN,            # faster shooting
-            ITEM_BOMB,           # kill all enemies
+            ITEM_HEART,          # health +10 -> apple sprite
+            ITEM_POISON,         # -4 health -> skull sprite
+            ITEM_TRAP,           # -6 health -> trapdoor sprite
+            ITEM_AMBER_CHALICE,  # 500 pts -> candle sprite
+            ITEM_AMULET,         # 1000 pts -> chain sprite
+            ITEM_SHIELD,         # damage reduction -> pot sprite
+            ITEM_GUN,            # faster shooting -> no sprite (colored box)
+            ITEM_BOMB,           # kill all enemies -> barrel sprite
         ], dtype=jnp.int32)
         # Probabilities for regular items; normalized to sum to 1.0
         spawn_probs = jnp.array([
-            0.12,  # heart
-            0.06,  # poison
-            0.14,  # trap
-            0.08,  # strongbox
-            0.08,  # amber chalice (yellow mid-tier)
-            0.06,  # amulet
-            0.06,  # gold chalice
-            0.04,  # shield (rarer – single-pickup buff)
-            0.035, # gun (rarer – single-pickup buff)
-            0.08,  # bomb (grenade) – more common
+            0.20,  # heart
+            0.10,  # poison
+            0.18,  # trap
+            0.14,  # amber chalice
+            0.10,  # amulet
+            0.08,  # shield
+            0.06,  # gun
+            0.14,  # bomb
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
-        # Spawn regular items (leave first 3 for key, exit, ladder_down)
-        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
-        # Add key, exit, ladder_down at beginning
+        # Spawn regular items (leave first 5 for key, ladders, cage contents)
+        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
+        # Add key, ladders, cage door and reward at beginning
         item_types = jnp.concatenate([
-            jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN], dtype=jnp.int32),
+            jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE], dtype=jnp.int32),
             regular_items
         ])
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
@@ -1569,6 +1975,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             bomb_count=jnp.array(0, dtype=jnp.int32),
             last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
+            map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
             ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
             lives=jnp.array(MAX_LIVES, dtype=jnp.int32),  # Start with MAX_LIVES
             step_counter=jnp.array(0, dtype=jnp.int32),
@@ -1602,8 +2009,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # When counter hits 1: perform respawn (keep game progress!)
             def respawn_now(_: None):
                 # Respawn position depends on current level
-                respawn_x = jnp.where(state.current_level == 0, self.consts.PLAYER_START_X, jnp.array(40, dtype=jnp.int32))
-                respawn_y = jnp.where(state.current_level == 0, self.consts.PLAYER_START_Y, jnp.array(70, dtype=jnp.int32))
+                # Use safe positions that avoid walls in all map variants
+                respawn_x = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
+                respawn_y = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
 
                 # KEEP EVERYTHING: score, collected items, level, powerups, etc.
                 # Only restore health and clear bullets for clean respawn
@@ -1655,19 +2063,33 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             portal_y_end = portal_y_start + portal_hole_height
             in_portal_zone = (prop_y >= portal_y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= portal_y_end)
             
-            # Wraparound: If player exits left edge in portal zone, teleport to right edge
-            # If player exits right edge in portal zone, teleport to left edge
+            # Cycle through maps: exit left → go left map, exit right → go right map
+            # Middle(0) → Left(1) → Middle(0) → Right(2) → Middle(0)
             should_wrap_right = in_portal_zone & (prop_x <= 0)
             should_wrap_left = in_portal_zone & (prop_x >= self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
             
             # Track if player crossed portal (for zombie spawning)
             crossed_portal = should_wrap_right | should_wrap_left
             
+            # Update map_index based on which direction player exits
+            # Exit left from middle(0) → left(1), from left(1) → middle(0), from right(2) → middle(0)
+            # Exit right from middle(0) → right(2), from right(2) → middle(0), from left(1) → middle(0)
+            new_map_index = jnp.where(
+                should_wrap_right,
+                jnp.where(state.map_index == 0, 1, 0),  # middle→left, others→middle
+                jnp.where(
+                    should_wrap_left,
+                    jnp.where(state.map_index == 0, 2, 0),  # middle→right, others→middle
+                    state.map_index  # no change
+                )
+            )
+            
+            # Teleport to opposite edge when crossing portal
             prop_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
             prop_x = jnp.where(should_wrap_left, 2, prop_x)
             
-            # Wall collision check - use walls for current level
-            WALLS = self.renderer.LEVEL_WALLS[state.current_level]
+            # Wall collision check - use walls for current map and level
+            WALLS = self.renderer.LEVEL_WALLS[new_map_index, state.current_level]
             
             def collides(px, py):
                 wx = WALLS[:, 0]
@@ -1790,13 +2212,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 1,
                 updated_bullet_active
             )
-            # Wizard shooting: all wizards shoot independently based on their timers
-            # Decrement all wizard timers
+            # Wizard shooting: DISABLED
+            # Keep timers but never trigger shooting
             new_wizard_timers = state.wizard_shoot_timers - 1
 
-            # Check which wizards should shoot (timer <= 0, wizard type, active)
-            wizard_mask = (state.enemy_active == 1) & (state.enemy_types == ENEMY_WIZARD)
-            should_shoot = wizard_mask & (new_wizard_timers <= 0)
+            # Disable wizard shooting - set should_shoot to always False
+            should_shoot = jnp.zeros(NUM_ENEMIES, dtype=bool)
 
             # Reset timers for wizards that shoot (base interval + random offset)
             rng, subkey = jax.random.split(state.key)
@@ -1905,6 +2326,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # distance field to player over nav grid
             # enemies are treated as dynamic obstacles
             dist_field = self._distance_field(
+                new_map_index,
                 state.current_level,
                 new_x,
                 new_y,
@@ -2164,6 +2586,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Update key status (persists until level change)
             new_has_key = jnp.where(collected_keys, 1, state.has_key)
+
+            # Cage door interaction (requires key)
+            collided_cage_door = jnp.any(item_collisions & (state.item_types == ITEM_CAGE_DOOR))
+            cage_entry_pos = self.renderer.CAGE_ENTRY_POSITIONS[new_map_index, state.current_level]
+            can_enter_cage = collided_cage_door & (new_has_key == 1)
+            blocked_cage = collided_cage_door & (new_has_key == 0)
+            new_x = jnp.where(can_enter_cage, cage_entry_pos[0], jnp.where(blocked_cage, state.player_x, new_x))
+            new_y = jnp.where(can_enter_cage, cage_entry_pos[1], jnp.where(blocked_cage, state.player_y, new_y))
             
             # Update bomb count (capped at MAX_BOMBS)
             new_bomb_count = jnp.clip(state.bomb_count + collected_bombs, 0, MAX_BOMBS)
@@ -2173,9 +2603,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             on_ladder_down = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_DOWN))
             on_any_ladder = on_ladder_up | on_ladder_down
             
-            # Gate UP ladder on key possession
-            on_ladder_up_gated = on_ladder_up & (new_has_key == 1)
-            
             # Update ladder timer: increment if on ladder, reset if not
             new_ladder_timer = jnp.where(
                 on_any_ladder,
@@ -2184,9 +2611,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             )
             
             # Level transition when timer reaches threshold
-            # Only allow UP transition if player has key
             should_change_level = new_ladder_timer >= LADDER_INTERACTION_TIME
-            going_up = should_change_level & on_ladder_up_gated
+            going_up = should_change_level & on_ladder_up
             going_down = should_change_level & on_ladder_down
             
             # Calculate new level (clamp to valid range)
@@ -2211,17 +2637,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 0,                    # 8 SHIELD
                 0,                    # 9 GUN
                 0,                    # 10 BOMB
-                0,                    # 11 LADDER_UP
-                0,                    # 12 LADDER_DOWN
+                0,                    # 11 KEY
+                0,                    # 12 LADDER_UP
+                0,                    # 13 LADDER_DOWN
+                0,                    # 14 CAGE_DOOR (no points)
             ], dtype=jnp.int32)
             item_points = points_by_type[state.item_types]
             gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
             new_score = state.score + gained_points
             
-            # Remove collected items (but NOT ladders - they stay persistent, and keys are consumable)
+            # Remove collected items; ladders persist; cage door disappears after valid entry with key
             is_ladder = (state.item_types == ITEM_LADDER_UP) | (state.item_types == ITEM_LADDER_DOWN)
-            is_key = (state.item_types == ITEM_KEY)
-            should_remove = item_collisions & (~is_ladder) | (is_key & item_collisions)  # Remove keys when collected
+            is_cage_door = (state.item_types == ITEM_CAGE_DOOR)
+            should_remove_cage = is_cage_door & can_enter_cage
+            should_remove = (item_collisions & (~is_ladder) & (~is_cage_door)) | should_remove_cage
             new_item_active = jnp.where(should_remove, 0, state.item_active)
             
             # Initialize positions/types for potential updates from drops
@@ -2316,9 +2745,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 has_slot = jnp.any(inactive_slots)
                 first_slot = jnp.argmax(inactive_slots)  # First True index
                 
-                # Generate random item type (1-7: treasure items, 8-10: powerups)
+                # Generate random item type (only items with sprites)
                 rng, item_type_rng = jax.random.split(rng)
-                random_item_type = jax.random.randint(item_type_rng, shape=(), minval=ITEM_STRONGBOX, maxval=ITEM_BOMB + 1)
+                drop_types = jnp.array([
+                    ITEM_HEART, ITEM_POISON, ITEM_TRAP,
+                    ITEM_AMBER_CHALICE, ITEM_AMULET,
+                    ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
+                ], dtype=jnp.int32)
+                random_item_type = jax.random.choice(item_type_rng, drop_types)
                 
                 # Spawn item at enemy position
                 enemy_pos = state.enemy_positions[idx]
@@ -2400,9 +2834,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 first_inactive = jnp.argmax(item_active_arr == 0)
                 can_add = jnp.any(item_active_arr == 0) & destroyed
                 
-                # Random item type (heart or treasures)
+                # Random item type (heart or treasures with sprites only)
                 key, subkey = jax.random.split(key)
-                drop_types = jnp.array([ITEM_HEART, ITEM_STRONGBOX, ITEM_AMBER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
+                drop_types = jnp.array([ITEM_HEART, ITEM_AMBER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
                 drop_type = jax.random.choice(subkey, drop_types)
                 
                 # Use spawner position (already placed off walls during reset)
@@ -2511,12 +2945,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 first_inactive = jnp.argmax(enemy_active_arr == 0)
                 can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn_this
                 
-                # Random enemy type (1-5: zombie, wraith, skeleton, wizard, grim_reaper)
+                # Random enemy type (2-4: wraith, skeleton, wizard) - exclude Zombie and Grim Reaper
                 key, subkey = jax.random.split(key)
-                spawn_type = jax.random.randint(subkey, (), ENEMY_ZOMBIE, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32)
+                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
                 
-                # Get current level walls for collision checking
-                WALLS = self.renderer.LEVEL_WALLS[state.current_level]
+                # Get current level and map walls for collision checking
+                WALLS = self.renderer.LEVEL_WALLS[state.map_index, state.current_level]
                 
                 # Try to find valid spawn position (not on walls)
                 # We'll try multiple random positions and use the first valid one
@@ -2592,9 +3026,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 first_inactive = jnp.argmax(enemy_active_arr == 0)
                 can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn
                 
-                # Random enemy type
+                # Random enemy type (2-4: wraith, skeleton, wizard) - exclude Zombie and Grim Reaper
                 key, subkey = jax.random.split(key)
-                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_GRIM_REAPER + 1, dtype=jnp.int32)
+                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
                 
                 # Random wizard timer for new enemy (in case it's a wizard)
                 key, subkey = jax.random.split(key)
@@ -2602,10 +3036,49 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 
                 spawner_pos = state.spawner_positions[spawner_idx]
                 
+                # Get current level walls for collision checking
+                WALLS_SPAWNER = self.renderer.LEVEL_WALLS[state.map_index, state.current_level]
+                
                 # Spawn enemy directly inside the spawner (centered)
                 spawn_offset_x = (SPAWNER_WIDTH - self.consts.ENEMY_WIDTH) // 2
                 spawn_offset_y = (SPAWNER_HEIGHT - self.consts.ENEMY_HEIGHT) // 2
-                spawn_pos = spawner_pos + jnp.array([spawn_offset_x, spawn_offset_y])
+                spawn_pos_center = spawner_pos + jnp.array([spawn_offset_x, spawn_offset_y])
+                
+                # Check if centered position overlaps with walls
+                wx = WALLS_SPAWNER[:, 0]
+                wy = WALLS_SPAWNER[:, 1]
+                ww = WALLS_SPAWNER[:, 2]
+                wh = WALLS_SPAWNER[:, 3]
+                overlap_x_center = (spawn_pos_center[0] <= (wx + ww - 1)) & ((spawn_pos_center[0] + self.consts.ENEMY_WIDTH - 1) >= wx)
+                overlap_y_center = (spawn_pos_center[1] <= (wy + wh - 1)) & ((spawn_pos_center[1] + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                center_on_wall = jnp.any(overlap_x_center & overlap_y_center)
+                
+                # If center is on wall, try random offsets from spawner
+                def try_nearby_pos(attempt, carry):
+                    best_pos, k, found = carry
+                    k, kx = jax.random.split(k)
+                    offset_x = jax.random.randint(kx, (), -20, 21, dtype=jnp.int32)
+                    k, ky = jax.random.split(k)
+                    offset_y = jax.random.randint(ky, (), -20, 21, dtype=jnp.int32)
+                    test_pos = spawner_pos + jnp.array([offset_x, offset_y])
+                    test_pos = jnp.clip(test_pos, jnp.array([16, 16]), jnp.array([self.consts.WORLD_WIDTH - 24, self.consts.WORLD_HEIGHT - 24]))
+                    
+                    # Check walls
+                    test_overlap_x = (test_pos[0] <= (wx + ww - 1)) & ((test_pos[0] + self.consts.ENEMY_WIDTH - 1) >= wx)
+                    test_overlap_y = (test_pos[1] <= (wy + wh - 1)) & ((test_pos[1] + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                    test_on_wall = jnp.any(test_overlap_x & test_overlap_y)
+                    
+                    new_pos = jnp.where((~test_on_wall) & (~found), test_pos, best_pos)
+                    new_found = found | (~test_on_wall)
+                    return (new_pos, k, new_found)
+                
+                # Use alternative position if center is on wall
+                spawn_pos, key, _ = jax.lax.cond(
+                    center_on_wall,
+                    lambda k: jax.lax.fori_loop(0, 10, try_nearby_pos, (spawn_pos_center, k, False)),
+                    lambda k: (spawn_pos_center, k, True),
+                    key
+                )
                 
                 # Update arrays
                 new_pos = jnp.where(
@@ -2640,28 +3113,31 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Reset spawner timers when they spawn
             final_spawner_timers = jnp.where(should_spawn_enemy, SPAWNER_SPAWN_INTERVAL, new_spawner_timers)
             
-            # Level transition: respawn items and reset player position when level changes
+            # Level transition: respawn items and reset player position when level OR map changes
             level_changed = new_level != state.current_level
+            map_changed = new_map_index != state.map_index
+            world_changed = level_changed | map_changed
             
-            # Reset player position on level change
+            # Reset player position on level/map change
             spawn_x_up = jnp.array(40, dtype=jnp.int32)  # At down ladder after going up
             spawn_y_up = jnp.array(70, dtype=jnp.int32)
-            spawn_x_down = jnp.array(40, dtype=jnp.int32)  # At up ladder after going down
-            spawn_y_down = jnp.array(40, dtype=jnp.int32)
+            spawn_x_down = jnp.array(300, dtype=jnp.int32)  # At up ladder after going down
+            spawn_y_down = jnp.array(350, dtype=jnp.int32)
             
-            # Determine spawn position based on which ladder was used
+            # Determine spawn position based on which ladder was used or map portal
+            # For map portal transitions (left/right exit), use portal position
             spawn_x = jnp.where(going_up, spawn_x_up,
-                      jnp.where(going_down, spawn_x_down, self.consts.PLAYER_START_X))
+                      jnp.where(going_down, spawn_x_down, new_x))  # Use new_x for portal transitions
             spawn_y = jnp.where(going_up, spawn_y_up,
-                      jnp.where(going_down, spawn_y_down, self.consts.PLAYER_START_Y))
+                      jnp.where(going_down, spawn_y_down, new_y))  # Use new_y for portal transitions
             
-            transition_x = jnp.where(level_changed, spawn_x, new_x)
-            transition_y = jnp.where(level_changed, spawn_y, new_y)
+            transition_x = jnp.where(world_changed, spawn_x, new_x)
+            transition_y = jnp.where(world_changed, spawn_y, new_y)
             
             # Respawn all items on level change
             def respawn_items_for_level(key):
-                # New level walls for collision checks
-                WALLS_NEW = self.renderer.LEVEL_WALLS[new_level]
+                # New level and map walls for collision checks
+                WALLS_NEW = self.renderer.LEVEL_WALLS[new_map_index, new_level]
                 
                 def check_wall_overlap_item(x, y):
                     wx = WALLS_NEW[:, 0]
@@ -2694,8 +3170,41 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 key, key_sk = jax.random.split(key)
                 init_kpos = jnp.array([100, 100], dtype=jnp.int32)
                 key_pos, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_key, (init_kpos, key_sk, False))
-                exit_pos = jnp.array([300, 350], dtype=jnp.int32)
-                ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
+                
+                # Spawn exit ladder at safe position (retry to avoid walls)
+                def try_spawn_exit(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, sk = jax.random.split(key_loc)
+                    x = jax.random.randint(sk, (), 250, self.consts.WORLD_WIDTH - 40, dtype=jnp.int32)
+                    key_loc, sk = jax.random.split(key_loc)
+                    y = jax.random.randint(sk, (), 300, self.consts.WORLD_HEIGHT - 40, dtype=jnp.int32)
+                    on_wall = check_wall_overlap_item(x, y)
+                    new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                    new_found = found | (~on_wall)
+                    return (new_pos, key_loc, new_found)
+                
+                key, key_sk = jax.random.split(key)
+                init_exit = jnp.array([280, 340], dtype=jnp.int32)
+                exit_pos, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_exit, (init_exit, key_sk, False))
+                
+                # Hide ladder_down on level 0, otherwise spawn at safe position
+                def try_spawn_ladder_down(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, sk = jax.random.split(key_loc)
+                    x = jax.random.randint(sk, (), 20, 100, dtype=jnp.int32)
+                    key_loc, sk = jax.random.split(key_loc)
+                    y = jax.random.randint(sk, (), 40, 120, dtype=jnp.int32)
+                    on_wall = check_wall_overlap_item(x, y)
+                    new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                    new_found = found | (~on_wall)
+                    return (new_pos, key_loc, new_found)
+                
+                key, key_sk = jax.random.split(key)
+                init_ladder = jnp.array([40, 70], dtype=jnp.int32)
+                ladder_down_temp, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_ladder_down, (init_ladder, key_sk, False))
+                ladder_down_pos = jnp.where(new_level == 0, jnp.array([-1000, -1000], dtype=jnp.int32), ladder_down_temp)
+                cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[new_map_index, new_level]
+                cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[new_map_index, new_level]
                 
                 # Generate random positions for regular items with retries to avoid walls
                 def spawn_regular_item(carry, idx):
@@ -2718,39 +3227,44 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     return (positions_arr, key_out), None
                 
                 key, sk = jax.random.split(key)
-                init_positions = jnp.zeros((NUM_ITEMS - 3, 2), dtype=jnp.int32)  # -3 for key, exit, ladder_down
-                (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 3))
+                init_positions = jnp.zeros((NUM_ITEMS - 5, 2), dtype=jnp.int32)  # -5 for key, ladders, cage props
+                (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 5))
                 
-                # Combine: first 3 are key, exit, ladder_down, rest are regular items
+                # Combine: first 5 are key, ladders, cage door and reward, rest are regular items
                 new_positions = jnp.concatenate([
                     key_pos[None, :],
                     exit_pos[None, :],
                     ladder_down_pos[None, :],
+                    cage_door_pos[None, :],
+                    cage_reward_pos[None, :],
                     regular_positions
                 ], axis=0)
                 
-                # Generate new item types
+                # Generate new item types - only items with sprites (exclude STRONGBOX, GOLD_CHALICE)
                 key, subkey = jax.random.split(key)
                 all_item_types = jnp.array([
-                    ITEM_HEART, ITEM_POISON, ITEM_TRAP, ITEM_STRONGBOX,
-                    ITEM_AMBER_CHALICE, ITEM_AMULET, ITEM_GOLD_CHALICE,
+                    ITEM_HEART, ITEM_POISON, ITEM_TRAP,
+                    ITEM_AMBER_CHALICE, ITEM_AMULET,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
-                spawn_probs = jnp.array([0.18, 0.08, 0.16, 0.11, 0.10, 0.08, 0.08, 0.06, 0.05, 0.10], dtype=jnp.float32)
-                regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 3,), p=spawn_probs)
-                new_types = jnp.concatenate([jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN]), regular_items])
+                spawn_probs = jnp.array([0.20, 0.10, 0.18, 0.14, 0.10, 0.08, 0.06, 0.14], dtype=jnp.float32)
+                regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
+                new_types = jnp.concatenate([
+                    jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
+                    regular_items
+                ])
                 new_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
                 
                 return new_positions, new_types, new_active, key
             
-            # Apply respawn only if level changed
+            # Apply respawn if level OR map changed
             respawned_positions, respawned_types, respawned_active, rng = respawn_items_for_level(rng)
-            transition_item_positions = jnp.where(level_changed, respawned_positions, final_item_positions)
-            transition_item_types = jnp.where(level_changed, respawned_types, final_item_types)
-            transition_item_active = jnp.where(level_changed, respawned_active, final_item_active)
+            transition_item_positions = jnp.where(world_changed, respawned_positions, final_item_positions)
+            transition_item_types = jnp.where(world_changed, respawned_types, final_item_types)
+            transition_item_active = jnp.where(world_changed, respawned_active, final_item_active)
             
             # On level change, ensure enemies are not overlapping new level walls
-            WALLS_NEWLVL = self.renderer.LEVEL_WALLS[new_level]
+            WALLS_NEWLVL = self.renderer.LEVEL_WALLS[new_map_index, new_level]
             def enemy_on_wall(enemy_pos):
                 ex = enemy_pos[0]
                 ey = enemy_pos[1]
@@ -2781,8 +3295,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
                 init = (cur, key_in, False)
                 final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once, init)
-                # If enemy inactive or level didn't change, keep original
-                final_pos = jnp.where(level_changed & is_active, final_pos, cur)
+                # If enemy inactive or world didn't change, keep original
+                final_pos = jnp.where(world_changed & is_active, final_pos, cur)
                 positions_arr = positions_arr.at[i].set(final_pos)
                 return (positions_arr, key_out), None
             
@@ -2866,8 +3380,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # On level change, respawn spawners avoiding new level walls
             def respawn_spawners_for_level(key):
-                # Use renderer-level walls structure
-                WALLS_NEW = self.renderer.LEVEL_WALLS[new_level]
+                # Use renderer-level walls structure with map index
+                WALLS_NEW = self.renderer.LEVEL_WALLS[new_map_index, new_level]
             
                 def check_wall_overlap_sp(x, y):
                     wx = WALLS_NEW[:, 0]
@@ -2950,6 +3464,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 bomb_count=bomb_count_after_detonation,
                 last_fire_step=new_last_fire_step,
                 current_level=new_level,
+                map_index=new_map_index,
                 ladder_timer=new_ladder_timer,
                 lives=new_lives,
                 step_counter=state.step_counter + 1,
@@ -2965,8 +3480,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         step_counter=state.step_counter + 1,
                     )
                 def respawn_now(_: None):
-                    respawn_x2 = jnp.where(state.current_level == 0, self.consts.PLAYER_START_X, jnp.array(40, dtype=jnp.int32))
-                    respawn_y2 = jnp.where(state.current_level == 0, self.consts.PLAYER_START_Y, jnp.array(70, dtype=jnp.int32))
+                    respawn_x2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
+                    respawn_y2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
                     # KEEP EVERYTHING: score, items, level, powerups - just restore health and clear bullets
                     return state._replace(
                         player_x=respawn_x2,
