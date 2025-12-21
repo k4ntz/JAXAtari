@@ -24,7 +24,7 @@ def _get_default_asset_config() -> tuple:
                 'backgrounds/cave_map.npy',
                 'backgrounds/forest_map.npy',
                 'backgrounds/map_4.npy',
-                'backgrounds/drawbridge_map.npy',
+                'backgrounds/castle_hall_map.npy',
                 'backgrounds/map_6.npy'
             ]
         },
@@ -68,7 +68,7 @@ class GamePhase:
     CAVE_MAP = 3
     FOREST_MAP = 4
     MAP_4 = 5
-    DRAWBRIDGE_MAP = 6
+    CASTLE_HALL_MAP = 6
     MAP_6 = 7
 
 class EnemyType:
@@ -222,7 +222,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
         return state._replace(friend_x=final_x.astype(jnp.int32))
 
-    def _drawbridge_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
+    def _castle_hall_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
         rng, key_spawn_general, key_type_general, key_x_archer, key_y_archer, key_y_vulture, key_scatter = jax.random.split(state.key, 7)
         is_dying = state.dying_timer > 0
         HIT_TOLERANCE = 8
@@ -459,7 +459,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_and(jnp.logical_and(cx >= 33, cx <= 48), jnp.logical_and(cy >= 125, cy <= 151)),
         ]
         trigger = jnp.logical_and(on_start, state.is_firing)
-        target = jnp.select(sel, [GamePhase.DESERT_MAP, GamePhase.CAVE_MAP, GamePhase.FOREST_MAP, GamePhase.MAP_4, GamePhase.DRAWBRIDGE_MAP, GamePhase.MAP_6], default=GamePhase.START_SCREEN)
+        target = jnp.select(sel, [GamePhase.DESERT_MAP, GamePhase.CAVE_MAP, GamePhase.FOREST_MAP, GamePhase.MAP_4, GamePhase.CASTLE_HALL_MAP, GamePhase.MAP_6], default=GamePhase.START_SCREEN)
         ready_done = jnp.logical_and(on_ready, state.get_ready_timer == 0)
         return state._replace(
             game_phase=jnp.where(jnp.logical_and(trigger, target != GamePhase.START_SCREEN), GamePhase.GET_READY, jnp.where(ready_done, state.selected_target_map, state.game_phase)).astype(jnp.int32),
@@ -499,7 +499,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         state = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), lambda s: self._friend_step(s), lambda s: s, state)
         def _combat_router(s):
             return jax.lax.cond(s.game_phase == GamePhase.DESERT_MAP, lambda _s: self._desert_map_logic(_s, action),
-                                lambda _s: jax.lax.cond(_s.game_phase == GamePhase.DRAWBRIDGE_MAP, lambda __s: self._drawbridge_map_logic(__s, action),
+                                lambda _s: jax.lax.cond(_s.game_phase == GamePhase.CASTLE_HALL_MAP, lambda __s: self._castle_hall_map_logic(__s, action),
                                                         lambda __s: self._generic_map_logic(__s, action), _s), s)
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
@@ -579,7 +579,7 @@ class CrossbowRenderer(JAXGameRenderer):
                              lambda _r: self.jr.render_at(_r, self.consts.ROPE_2_POS[0], self.consts.ROPE_2_POS[1], rope_sprite),
                              lambda _r: _r, r)
             return r
-        raster = jax.lax.cond(state.game_phase == GamePhase.DRAWBRIDGE_MAP, _draw_ropes, lambda r: r, raster)
+        raster = jax.lax.cond(state.game_phase == GamePhase.CASTLE_HALL_MAP, _draw_ropes, lambda r: r, raster)
 
         # Scatter
         def _draw_px(i, r):
