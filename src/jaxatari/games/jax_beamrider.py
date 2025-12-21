@@ -491,7 +491,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         super().__init__(consts)
         self.consts = consts or BeamriderConstants()
         self.renderer = BeamriderRenderer(self.consts)
-        self.obs_size = 111
+        self.obs_size = 105
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -709,7 +709,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             reset_coords=jnp.array(False),
             lives=jnp.array(3),
             steps=jnp.array(0),
-            rng=jnp.array(jax.random.key(42)),
+            rng=jax.random.key(42),
         )
     
 
@@ -3799,13 +3799,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "pos": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
             "shooting_cd": spaces.Box(low=0, high=255, shape=(), dtype=jnp.int32),
             "torpedoes_left": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
-            "player_shots_pos": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.float32),
+            "player_shots_pos": spaces.Box(low=0, high=800, shape=(2,), dtype=jnp.float32),
             "player_shots_vel": spaces.Box(low=-10, high=10, shape=(2,), dtype=jnp.float32),
             "white_ufo_left": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
             "enemy_type": spaces.Box(low=0, high=10, shape=(3,), dtype=jnp.int32),
             "white_ufo_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
             "white_ufo_vel": spaces.Box(low=-10, high=10, shape=(2, 3), dtype=jnp.float32),
-            "enemy_shot_pos": spaces.Box(low=-100, high=255, shape=(2, 9), dtype=jnp.float32),
+            "enemy_shot_pos": spaces.Box(low=-100, high=800, shape=(2, 9), dtype=jnp.float32),
             "enemy_shot_vel": spaces.Box(low=-10, high=10, shape=(9,), dtype=jnp.int32),
             "chasing_meteoroid_pos": spaces.Box(low=-100, high=255, shape=(2, 8), dtype=jnp.float32),
             "chasing_meteoroid_active": spaces.Box(low=0, high=1, shape=(8,), dtype=jnp.bool_),
@@ -3813,8 +3813,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "rejuvenator_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
             "falling_rock_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
             "falling_rock_active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_),
-            "lane_blocker_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
-            "lane_blocker_active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_),
+            "lane_blocker_pos": spaces.Box(low=-100, high=255, shape=(2, 1), dtype=jnp.float32),
+            "lane_blocker_active": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.bool_),
             "bouncer_pos": spaces.Box(low=-100, high=255, shape=(2,), dtype=jnp.float32),
             "bouncer_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.bool_),
             "coin_pos": spaces.Box(low=-100, high=255, shape=(2, 3), dtype=jnp.float32),
