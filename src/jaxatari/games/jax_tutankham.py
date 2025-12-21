@@ -137,7 +137,7 @@ class TutankhamConstants(NamedTuple):
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
                                             dtype=jnp.int32)  # points for each creature type
 
-    MAX_CREATURES: int = 3  # max number of creatures on screen at once
+    MAX_CREATURES: int = 2  # max number of creatures on screen at once
 
     # Item constants
     ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
@@ -354,8 +354,8 @@ class JaxTutankham(JaxEnvironment):
         tutankham_score = 0
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
-        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # TODO bullet state [3] is Flase still?
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
+        #creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
         creature_states = jnp.array([[50, 50, 0, 0], [50, 100, 1, 0]], dtype=jnp.int32) # TODO delete
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
@@ -363,31 +363,72 @@ class JaxTutankham(JaxEnvironment):
         respawn_step_counter = 0
         has_key = False
 
+
         state = TutankhamState(player_x=start_x,
-                               player_y=start_y,
-                               checkpoint_x=checkpoint_x,
-                               checkpoint_y=checkpoint_y,
-                               tutankham_score=tutankham_score,
-                               player_lives=player_lives,
-                               bullet_state=bullet_state,
-                               amonition_timer=amonition_timer,
-                               creature_states=creature_states,
-                               last_creature_spawn=last_creature_spawn,
-                               laser_flash_count=laser_flash_count,
-                               laser_flash_cooldown=laser_flash_cooldown,
-                               respawn_step_counter=respawn_step_counter,
-                               has_key=has_key
+                                player_y=start_y,
+                                checkpoint_x=checkpoint_x,
+                                checkpoint_y=checkpoint_y,
+                                tutankham_score=tutankham_score,
+                                player_lives=player_lives,
+                                bullet_state=bullet_state,
+                                amonition_timer=amonition_timer,
+                                creature_states=creature_states,
+                                last_creature_spawn=last_creature_spawn,
+                                laser_flash_count=laser_flash_count,
+                                laser_flash_cooldown=laser_flash_cooldown,
+                                respawn_step_counter=respawn_step_counter,
+                                has_key=has_key
                                )
-        return state, state  # TODO: (EnvObs, EnvState)
-
+        return state, state #TODO: (EnvObs, EnvState)
+    
+    
     # Player Step
-
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, player_x, player_y, action):
         speed = self.consts.SPEED
 
-        dx = jnp.array([-speed, speed, 0, 0])
-        dy = jnp.array([0, 0, -speed, speed])
+        dx = jnp.array([
+        0,          # 0  NOOP
+        0,          # 1  FIRE
+        0,          # 2  UP
+        speed,      # 3  RIGHT
+        -speed,     # 4  LEFT
+        0,          # 5  DOWN
+        0,          # 6  UPRIGHT
+        0,          # 7  UPLEFT
+        0,          # 8  DOWNRIGHT
+        0,          # 9  DOWNLEFT
+        0,          # 10 UPFIRE
+        speed,      # 11 RIGHTFIRE
+        -speed,     # 12 LEFTFIRE
+        0,          # 13 DOWNFIRE
+        0,          # 14 UPRIGHTFIRE
+        0,          # 15 UPLEFTFIRE
+        0,          # 16 DOWNRIGHTFIRE
+        0,          # 17 DOWNLEFTFIRE
+        ])
+
+        dy = jnp.array([
+            0,          # 0  NOOP
+            0,          # 1  FIRE
+            -speed,     # 2  UP
+            0,          # 3  RIGHT
+            0,          # 4  LEFT
+            speed,      # 5  DOWN
+            -speed,     # 6  UPRIGHT
+            -speed,     # 7  UPLEFT
+            speed,      # 8  DOWNRIGHT
+            speed,      # 9  DOWNLEFT
+            -speed,     # 10 UPFIRE
+            0,          # 11 RIGHTFIRE
+            0,          # 12 LEFTFIRE
+            speed,      # 13 DOWNFIRE
+            -speed,     # 14 UPRIGHTFIRE
+            -speed,     # 15 UPLEFTFIRE
+            speed,      # 16 DOWNRIGHTFIRE
+            speed,      # 17 DOWNLEFTFIRE
+        ])
+
 
         player_x = player_x + dx[action]
         player_y = player_y + dy[action]
@@ -396,39 +437,63 @@ class JaxTutankham(JaxEnvironment):
         player_y = jnp.clip(player_y, 0, self.consts.HEIGHT - 1)
 
         return player_x, player_y
+    
 
-    # Bullet Step
+    #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
-
+        
+        
         def get_rotation(action):
-            if action == Action.RIGHTFIRE: return 1
-            if action == Action.LEFTFIRE: return -1
-            return 0  # default if firing up/down/etc
+            return jax.lax.cond(
+                action == Action.RIGHTFIRE,
+                lambda _: 1, # bullet travels right
+                lambda _: jax.lax.cond(
+                    action == Action.LEFTFIRE,
+                    lambda _: -1, # bullet travels left
+                    lambda _: 0, # default if firing up/down/etc
+                    operand=None
+                ),
+                operand=None
+            )
 
-        space = (
-                (action == Action.LEFTFIRE)
-                or (action == Action.RIGHTFIRE)
+
+        space = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
+
+        new_bullet = bullet_state#array with (x, y, bullet_rotation, bullet_active)
+
+
+        # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---        
+        bullet_x = jax.lax.cond(
+            bullet_state[3] == 1,  # if bullet is active
+            lambda x: x + self.consts.BULLET_SPEED * bullet_state[2],
+            lambda x: x,
+            bullet_state[0],
         )
+        new_bullet = new_bullet.at[0].set(bullet_x)
+        
+        # Deactivate if out of bounds
+        # TODO: Wall collision detection
+        new_bullet = jax.lax.cond(
+            (bullet_x < 0) | (bullet_x >= self.consts.WIDTH),
+            lambda _: jnp.zeros((4,), dtype=new_bullet.dtype),
+            lambda bullet: bullet,
+            operand=new_bullet
+            )
 
-        new_bullet = bullet_state.copy()  # array with (x, y, bullet_rotation, bullet_active)
 
-        # --- update existing bullets ---
-        if bullet_state[3]:
-            bullet_x = bullet_state[0] + self.consts.BULLET_SPEED * bullet_state[2]
-            new_bullet[0] = bullet_x
-
-            # Deactivate if out of bounds
-            if not (0 <= bullet_x < self.consts.WIDTH):
-                new_bullet = [0, 0, 0, False]
 
         # --- firing logic ---
-        bullet_rdy = not bullet_state[3]
+        bullet_rdy = 1 - bullet_state[3]  # 1 if bullet inactive, 0 if active
 
-        if space and bullet_rdy and amonition_timer > 0:
-            new_bullet = np.array([player_x, player_y, get_rotation(action), True])
+        new_bullet = jax.lax.cond(
+            (space & bullet_rdy & (amonition_timer > 0)) == 1, # if firing action & bullet is inactive & amonition available
+            lambda _: jnp.array([player_x, player_y, get_rotation(action), 1], dtype=jnp.int32), # shoot bullet at player position,
+            lambda bullet: bullet, # don't shoot bullet
+            operand=new_bullet
+        )
 
-        amonition_timer -= 1  # TODO: adjust amonition timer
+        amonition_timer -= 1 # TODO: adjust amonition timer
 
         return new_bullet, amonition_timer
 
