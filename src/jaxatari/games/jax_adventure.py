@@ -732,6 +732,101 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 )
             )
         
+        room_11_walls = jnp.logical_or(
+            jnp.logical_or(
+                jnp.logical_or(
+                    jnp.logical_and(
+                        player_y >= 199,
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_and(player_x >= 30, player_x <= 38), 
+                                jnp.logical_and(player_x >= 120, player_x <= 126)  
+                            ),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x <= 20, player_x >= 14),
+                                    jnp.logical_and(player_x >= 135, player_x <= 142)
+                                ),
+                                jnp.logical_and(player_x>=72, player_x<=84)
+                            )
+                        )
+                    ),
+                    jnp.logical_and(
+                        jnp.logical_and(player_y >= 170, player_y <= 199),
+                        jnp.logical_or(
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 30, player_x <= 60), 
+                                    jnp.logical_and(player_x >= edge_right, player_x <= 126)  
+                                ),
+                                jnp.logical_and(player_x>=72, player_x<=84)
+                                ),
+                                jnp.logical_or(
+                                    player_x <= 20,
+                                    player_x >= 135
+                                )
+                            )
+                        )
+                    ),
+                
+                    jnp.logical_or(
+                        jnp.logical_and(
+                            jnp.logical_and(player_y >= 135, player_y <= 170),
+                            jnp.logical_and(player_x>=72, player_x<=84)
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 105, player_y <= 135),
+                        jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x>=16, player_x<=30),
+                                    jnp.logical_and(player_x>=126, player_x<=140)
+                                ),
+                               jnp.logical_and(player_x>=38, player_x<=118)
+                            )
+                        )
+                    ),
+                ),
+                jnp.logical_or(
+                    jnp.logical_or(
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 75, player_y <= 105),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        jnp.logical_and(player_x>=16, player_x<=30),
+                                        jnp.logical_and(player_x>=104, player_x<=118)
+                                    ),
+                                jnp.logical_or(
+                                        jnp.logical_and(player_x>=38, player_x<=53),
+                                        jnp.logical_and(player_x>=126, player_x<=140)
+                                    ),
+                                ),
+                            jnp.logical_and(player_x>=72, player_x<=84)
+                            )
+                        ),
+                        jnp.logical_and(
+                        jnp.logical_and(player_y >= 40, player_y <= 70),
+                        jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_or(
+                                        player_x<=30,
+                                        player_x>=126
+                                    ),
+                                jnp.logical_or(
+                                        jnp.logical_and(player_x>=38, player_x<=53),
+                                        jnp.logical_and(player_x>=104, player_x<=118)
+                                    ),
+                                ),
+                            jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+                            )
+                        )
+                    ),
+                    jnp.logical_and(
+                        player_y <= 40,
+                        jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+                    )                   
+                )
+            )
 
 
         ### end extra maze walls
@@ -759,7 +854,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             room_10_walls
         )
 
-        room_11_clear = True
+        room_11_clear = jnp.logical_or(
+            jnp.logical_not(room == 10),
+            room_11_walls
+        )
 
         room_12_clear = jnp.logical_or(
                 jnp.logical_not(room == 11), #either it is not room 1 or
