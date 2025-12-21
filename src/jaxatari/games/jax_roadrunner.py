@@ -1927,6 +1927,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
+            {"name": "score_blank", "type": "single", "file": "score_10.npy"},
             {"name": "seed", "type": "single", "file": "birdseed.npy"},
             {"name": "truck", "type": "single", "file": "truck.npy"},
             {"name": "life", "type": "single", "file": "lives.npy"},
@@ -1939,14 +1940,28 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return asset_config
 
     def _render_score(self, canvas: jnp.ndarray, score: jnp.ndarray) -> jnp.ndarray:
-        score_digits = self.jr.int_to_digits(score, max_digits=6)
-        score_digit_masks = self.SHAPE_MASKS["score_digits"]
+        MIN_DIGITS = 2
+        MAX_DIGITS = 6
 
-        # Position the score at the top center
-        score_x = (
-            self.consts.WIDTH // 2 - (score_digits.shape[0] * 6) // 2
-        )  # Assuming digit width of 6
-        score_y = 4 # 2 for the black border, 2 for spacing
+        safe_score = jnp.where(score == 0, 1, score)
+        score_digit_count = (jnp.floor(jnp.log10(safe_score)) + 1).astype(int)
+        visible_count = jnp.clip(score_digit_count, MIN_DIGITS, MAX_DIGITS)
+
+        raw_digits = self.jr.int_to_digits(score, max_digits=MAX_DIGITS)
+
+        digit_indices = jnp.arange(MAX_DIGITS)
+        cutoff_index = MAX_DIGITS - visible_count
+        is_visible_mask = digit_indices >= cutoff_index
+
+        EMPTY_INDEX = 10
+        score_digits = jnp.where(is_visible_mask, raw_digits, EMPTY_INDEX)
+
+        original_masks = self.SHAPE_MASKS["score_digits"]
+        blank_sprite = self.SHAPE_MASKS["score_blank"]
+        score_digit_masks = jnp.concatenate([original_masks, blank_sprite[None, ...]], axis=0)
+
+        score_x = (self.consts.WIDTH // 2 - (MAX_DIGITS * 6) // 2)
+        score_y = 4
 
         canvas = self.jr.render_label_selective(
             canvas,
@@ -1955,9 +1970,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
             score_digits,
             score_digit_masks,
             0,
-            score_digits.shape[0],
+            MAX_DIGITS,
             spacing=8, # offset, so width of digit + space
-            max_digits_to_render=6,
+            max_digits_to_render=MAX_DIGITS,
         )
         return canvas
 
