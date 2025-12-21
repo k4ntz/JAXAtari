@@ -216,8 +216,8 @@ class BattlezoneState(NamedTuple):
 
 
 class BattlezoneObservation(NamedTuple):  # TODO: fill out properly
-    score: int
-    lives: int
+    score: jnp.ndarray
+    lives: jnp.ndarray
 
 
 
@@ -817,27 +817,33 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             score=state.score,
             lives=state.life,
         )
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BattlezoneObservation) -> jnp.ndarray:
-           return jnp.concatenate([  # TODO
-               #obs.player.x.flatten(),
-               #obs.player.y.flatten(),
-               #etc.
-               obs.score,
-               obs.lives
-            ]
-           )
+        """needs to contain everything the observation contains"""
+        return jnp.array([  # TODO
+            #obs.player.x.flatten(),
+            #obs.player.y.flatten(),
+            #etc.
+            obs.score.flatten()[0],
+            obs.lives.flatten()[0]
+        ]
+        )
 
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(18)  # [Noop, Up, Right, Left, Down, UpRight, UpLeft, DownRight, DownLeft] all with and without Fire
 
     def observation_space(self) -> spaces.Dict:
+        """description of observation (must match)"""
         return spaces.Dict({  # TODO
             "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
         })
 
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(18)  # [Noop, Up, Right, Left, Down, UpRight, UpLeft, DownRight, DownLeft] all with and without Fire
+    
+    
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
