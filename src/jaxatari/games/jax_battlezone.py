@@ -483,7 +483,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             return new_state
 
         def death_step(state):
-            new_death_counter= state.death_anim_counter-1
+            new_death_counter = state.death_anim_counter - 1
             new_state = state._replace(death_anim_counter=new_death_counter)
             new_state = jax.lax.cond(new_death_counter <= 0, self.player_shot_reset, lambda x: x, new_state)
             return new_state
@@ -670,9 +670,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             min_dist = 27.
 
             def near_player(saucer):
+                """movement of the saucer when too near to the player"""
                 saucer = saucer._replace(phase=0)
                 return move_to_player(saucer, -1)
+            
             def far_player(saucer):
+                """movement of the saucer when far enough away from the player"""
 
                 def p0(saucer):
                     saucer = saucer._replace(dist_moved_temp=saucer.dist_moved_temp + speed)
@@ -686,7 +689,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     def cont_move(saucer):
                         return saucer
 
-                    return jax.lax.cond(saucer.dist_moved_temp>11.8, next_phase, cont_move, saucer)
+                    return jax.lax.cond(saucer.dist_moved_temp > 11.8, next_phase, cont_move, saucer)
 
                 def p1(saucer: Enemy):
                     # Rotation center
@@ -707,7 +710,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     ## z values
                     z_1 = m*x_1
                     z_2 = m*x_2
-                    ## furdest point from origin
+                    ## furthest point from origin
                     dist_sq1 = x_1*x_1 + z_1*z_1
                     dist_sq2 = x_2*x_2 + z_2*z_2
                     ## Set x and z
@@ -751,7 +754,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
                 return jax.lax.switch(saucer.phase, (p0, p1, p2), saucer)
 
-            return jax.lax.cond(saucer.distance<min_dist, near_player, far_player, saucer)
+            return jax.lax.cond(saucer.distance < min_dist, near_player, far_player, saucer)
 
 
         shoot_cond = jnp.all(jnp.array([enemy.enemy_type != EnemyType.SAUCER,
