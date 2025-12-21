@@ -147,7 +147,7 @@ class AdventureConstants(NamedTuple):
 class AdventureState(NamedTuple):
     #step conter for performance indicator?
     step_counter: chex.Array
-    #position player: x ,y ,tile , color, inventory
+    #position player: x ,y ,tile, inventory
     player: chex.Array
     #positions dragons: x, y ,tile ,state
     dragon_yellow: chex.Array
@@ -601,19 +601,65 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   operand=(new_item_x,new_item_y,state.chalice[2],state.chalice[3],state.chalice)
                                   )
         )
-    """
+    
     def _item_pickup(self, state: AdventureState) -> AdventureState:
         
+        def check_for_item(self, state: AdventureState, item_ID: int) -> bool:
+            item_x, item_y, tile, item_width, item_height = jax.lax.switch(
+                item_ID,
+                [lambda:(0,0,0,0,0), #this should never occour
+                lambda:(state.key_yellow[0],state.key_yellow[1],state.key_yellow[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
+                lambda:(state.key_black[0],state.key_yellow[1],state.key_yellow[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
+                lambda:(state.sword[0],state.sword[1],state.sword[2],self.consts.SWORD_SIZE[0],self.consts.SWORD_SIZE[1]),
+                lambda:(state.bridge[0],state.bridge[1],state.bridge[2],self.consts.BRIDGE_SIZE[0],self.consts.BRIDGE_SIZE[1]),
+                lambda:(state.magnet[0],state.magnet[1],state.magnet[2],self.consts.MAGNET_SIZE[0],self.consts.MAGNET_SIZE[1]),
+                lambda:(state.chalice[0],state.chalice[1],state.chalice[2],self.consts.CHALICE_SIZE[0],self.consts.CHALICE_SIZE[1])
+                ])
+
+            #HARDCODED BAAAAAD, but i dont care right now (performance?)(items smaler then 4 pixels would be buggy)
+            on_same_tile = (tile==state.player[2])
+            player_hitbox_nw = (state.player[0]-1,state.player[1]-1)
+            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0]+1,state.player[1]-1)
+            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0]+1,state.player[1]+self.consts.PLAYER_SIZE[1]+1)
+            player_hitbox_sw = (state.player[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1]+1)
+
+            nw_close_in_x = jnp.logical_and(player_hitbox_nw[0]>=item_x,player_hitbox_nw[0]<=(item_x+item_width))
+            nw_close_in_y = jnp.logical_and(player_hitbox_nw[1]>=item_y,player_hitbox_nw[1]<=(item_y+item_height))
+            nw_touches_item = jnp.logical_and(nw_close_in_x,nw_close_in_y)
+
+            ne_close_in_x = jnp.logical_and(player_hitbox_ne[0]>=item_x,player_hitbox_ne[0]<=(item_x+item_width))
+            ne_close_in_y = jnp.logical_and(player_hitbox_ne[1]>=item_y,player_hitbox_ne[1]<=(item_y+item_height))
+            ne_touches_item = jnp.logical_and(ne_close_in_x,ne_close_in_y)
+            
+            se_close_in_x = jnp.logical_and(player_hitbox_se[0]>=item_x,player_hitbox_se[0]<=(item_x+item_width))
+            se_close_in_y = jnp.logical_and(player_hitbox_se[1]>=item_y,player_hitbox_se[1]<=(item_y+item_height))
+            se_touches_item = jnp.logical_and(se_close_in_x,se_close_in_y)
+
+            sw_close_in_x = jnp.logical_and(player_hitbox_sw[0]>=item_x,player_hitbox_sw[0]<=(item_x+item_width))
+            sw_close_in_y = jnp.logical_and(player_hitbox_sw[1]>=item_y,player_hitbox_sw[1]<=(item_y+item_height))
+            sw_touches_item = jnp.logical_and(sw_close_in_x,sw_close_in_y)
+
+            item_touches = jnp.logical_and(on_same_tile,
+                                           jnp.logical_or(jnp.logical_or(nw_touches_item,
+                                                                         ne_touches_item),
+                                                           jnp.logical_or(se_touches_item,
+                                                                          sw_touches_item)))
+
+            return item_touches
+
         #ToDo if the player holds an item skip
         new_player_inventory = jax.lax.cond(
-            state.player[3] != self.consts.EMPTY_HAND_ID,
-            lambda op: op[3], 
-            lambda _: None,
-            operand=(state.player[0],state.player[1],state.player[2],state.player[3])
+            check_for_item(self=self, state=state, item_ID=self.consts.KEY_YELLOW_ID),
+            lambda _: self.consts.KEY_YELLOW_ID, 
+            lambda op: op,
+            operand=state.player[3]
         )
+        
         #ToDo check around the player, if there is an item
-
         #if yes pick it up
+        #check clockwise if an item is near the player
+        #picking up the FIRST item it sees and according to a certain priority
+        
 
         return AdventureState(
             step_counter=state.step_counter,
@@ -629,7 +675,31 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
-        """
+    
+    def _item_drop(self, state: AdventureState, action: chex.Array) -> AdventureState:
+
+        new_player_inventory = jax.lax.cond(
+            action == Action.FIRE,
+            lambda _: self.consts.EMPTY_HAND_ID,
+            lambda op: op,
+            operand=state.player[3]
+        )
+
+        return AdventureState(
+            step_counter=state.step_counter,
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32),
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
+        )
+        
 
     def _dragon_step(self, state: AdventureState) -> AdventureState:
         direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
@@ -669,6 +739,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
     
+    #Did Yo delete this Daniel?
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AdventureState, action: chex.Array) -> Tuple[AdventureObservation, AdventureState, float, bool, AdventureInfo]:
         previous_state = state
@@ -742,6 +813,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=state.chalice
         )
         state = self._player_step(state, action)
+        state = self._item_pickup(state)
+        state = self._item_drop(state, action)
         state = self._dragon_step(state)
 
         done = self._get_done(state)
