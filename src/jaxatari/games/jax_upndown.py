@@ -19,6 +19,10 @@ class UpNDownConstants(NamedTuple):
     MAX_SPEED: int = 6
     INITIAL_LIVES: int = 5
     JUMP_ARC_HEIGHT: float = 18.0
+    RESPAWN_DELAY_FRAMES: int = 60
+    RESPAWN_Y: int = 0
+    RESPAWN_X: int = 30
+    ALL_FLAGS_BONUS: int = 1000
     # Enemy spawning and movement
     MAX_ENEMY_CARS: int = 8
     ENEMY_SPAWN_INTERVAL: int = 80
@@ -144,7 +148,6 @@ class EnemyCars(NamedTuple):
 
 class UpNDownState(NamedTuple):
     score: chex.Array
-    lives: chex.Array
     difficulty: chex.Array
     jump_cooldown: chex.Array
     post_jump_cooldown: chex.Array
@@ -1332,6 +1335,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return UpNDownState(
             score=state.score,
             lives=new_lives,
+            is_dead=jnp.array(False),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
             difficulty=state.difficulty,
             jump_cooldown=jnp.array(0, dtype=jnp.int32),
             post_jump_cooldown=jnp.array(0, dtype=jnp.int32),
@@ -1491,6 +1496,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = UpNDownState(
             score=0,
             lives=jnp.array(self.consts.INITIAL_LIVES, dtype=jnp.int32),
+            is_dead=jnp.array(False),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
             difficulty=self.consts.DIFFICULTIES[0],
             jump_cooldown=0,
             post_jump_cooldown=0,
@@ -2007,6 +2014,7 @@ class UpNDownRenderer(JAXGameRenderer):
             colored_mask = jnp.where(
                 (base_mask != self.jr.TRANSPARENT_ID) & (base_mask != 0),
                 color_id,
+
                 base_mask,
             )
             raster = jax.lax.cond(
