@@ -1194,8 +1194,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         yellow_key_in_range = jnp.logical_and(yellow_key_in_inventory, player_infront_yellow_gate)
         black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
         
-        gate_opening_yellow = jnp.logical_or(jnp.logical_and(gate_yellow_open>0, gate_yellow_open<6), yellow_key_in_range)
-        gate_opening_black = jnp.logical_or(jnp.logical_and(gate_black_open>0, gate_black_open<6), black_key_in_range)
+        gate_opening_yellow = jnp.logical_or(jnp.logical_and(gate_yellow_open>0, gate_yellow_open<5), yellow_key_in_range)
+        gate_opening_black = jnp.logical_or(jnp.logical_and(gate_black_open>0, gate_black_open<5), black_key_in_range)
 
         gate_render_yellow = False
         gate_render_yellow = jax.lax.cond(
