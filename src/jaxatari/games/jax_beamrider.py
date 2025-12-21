@@ -1279,10 +1279,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             died_after_clearing_ufos = jnp.logical_and(just_died, white_ufo_left == 0)
             sector_advanced = jnp.logical_or(died_after_clearing_ufos, sector_advanced_m)
-            sector = state.sector + sector_advanced.astype(jnp.int32)
+            # sector update delayed to handle_standby_sector_done
+            sector = state.sector 
 
-            white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
-            torpedos_left = jnp.where(sector_advanced, 3, torpedos_left)
+            # white_ufo_left and torpedos_left updates delayed to handle_standby_sector_done
+            # white_ufo_left = jnp.where(sector_advanced, self.consts.WHITE_UFOS_PER_SECTOR, white_ufo_left)
+            # torpedos_left = jnp.where(sector_advanced, 3, torpedos_left)
 
             white_ufo_vel = jnp.where(hit_mask_ufo[None, :], 0.0, ufo_update.vel)
             white_ufo_time_on_lane = jnp.where(hit_mask_ufo, 0, ufo_update.time_on_lane)
@@ -1613,15 +1615,31 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             next_phase = jnp.where(finished, int(StandbyPhase.WAIT), int(StandbyPhase.SECTOR_DONE))
             next_timer = jnp.where(finished, 0, timer)
             
+            # Apply sector update and resets when transitioning to WAIT
+            next_sector = state.sector + jnp.where(finished, 1, 0)
+            next_white_ufo = jnp.where(finished, self.consts.WHITE_UFOS_PER_SECTOR, state.level.white_ufo_left)
+            next_torpedoes = jnp.where(finished, 3, state.level.torpedoes_left)
+            
+            # Reset UFO positions and other states for the new sector
+            initial_ufo_pos = jnp.array([[77.0, 77.0, 77.0], [43.0, 43.0, 43.0]])
+            next_ufo_pos = jnp.where(finished, initial_ufo_pos, state.level.white_ufo_pos)
+            next_line_counter = jnp.where(finished, 0, blue_line_counter)
+
             new_level = state.level._replace(
                 line_positions=line_positions,
-                blue_line_counter=blue_line_counter,
+                blue_line_counter=next_line_counter,
                 standby_phase=next_phase,
                 standby_timer=next_timer,
                 standby_accumulator=standby_accum,
-                player_pos=jnp.where(finished, 77.0, state.level.player_pos)
+                player_pos=jnp.where(finished, 77.0, state.level.player_pos),
+                white_ufo_left=next_white_ufo,
+                torpedoes_left=next_torpedoes,
+                white_ufo_pos=next_ufo_pos,
+                white_ufo_vel=jnp.where(finished, 0.0, state.level.white_ufo_vel),
+                white_ufo_pattern_id=jnp.where(finished, 0, state.level.white_ufo_pattern_id),
+                white_ufo_pattern_timer=jnp.where(finished, 0, state.level.white_ufo_pattern_timer)
             )
-            new_state = state._replace(level=new_level, steps=state.steps + 1)
+            new_state = state._replace(level=new_level, steps=state.steps + 1, sector=next_sector)
             
             return self._get_observation(new_state), new_state, jnp.array(0.0, dtype=jnp.float32), jnp.array(False, dtype=jnp.bool_), self._get_info(new_state)
 
@@ -4229,8 +4247,10 @@ class BeamriderRenderer(JAXGameRenderer):
         return raster
 
     def _render_white_ufo_counter(self, raster, state):
-        # Hide counter if mothership animation is active
-        should_hide = state.level.mothership_stage > 0
+        # Hide counter if mothership animation is active or during SECTOR_DONE phase
+        is_mothership = state.level.mothership_stage > 0
+        is_sector_done = state.level.standby_phase == int(StandbyPhase.SECTOR_DONE)
+        should_hide = jnp.logical_or(is_mothership, is_sector_done)
         
         ufos_left_digits = self.jr.int_to_digits(state.level.white_ufo_left, max_digits=2)
         ufos_left_masks = self.SHAPE_MASKS["green_numbers"]
@@ -4379,6 +4399,10 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_white_ufos(self, raster, state):
         white_ufo_masks = self.SHAPE_MASKS["white_ufo"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+        
+        is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
+        if_hide = is_init
+        
         for idx in range(3):
             explosion_frame = state.level.ufo_explosion_frame[idx]
 
@@ -4397,7 +4421,7 @@ class BeamriderRenderer(JAXGameRenderer):
                 x_pos = state.level.white_ufo_pos[0][idx] + _get_ufo_alignment(
                     state.level.white_ufo_pos[1][idx]
                 )
-                y_pos = state.level.white_ufo_pos[1][idx]
+                y_pos = jnp.where(if_hide, 500.0, state.level.white_ufo_pos[1][idx])
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
             raster = jax.lax.cond(
