@@ -129,10 +129,10 @@ class AdventureConstants(NamedTuple):
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
-    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0)
+    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
     DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0)
     DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0)
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
     KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
     SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
     BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
@@ -909,7 +909,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     
     def _item_pickup(self, state: AdventureState) -> AdventureState:
         
-        def check_for_item(self, state: AdventureState, item_ID: int) -> bool:
+        def check_for_item(self:JaxAdventure, state: AdventureState, item_ID: int) -> bool:
             item_x, item_y, tile, item_width, item_height = jax.lax.switch(
                 item_ID,
                 [lambda:(0,0,0,0,0), #this should never occour
@@ -920,28 +920,37 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 lambda:(state.magnet[0],state.magnet[1],state.magnet[2],self.consts.MAGNET_SIZE[0],self.consts.MAGNET_SIZE[1]),
                 lambda:(state.chalice[0],state.chalice[1],state.chalice[2],self.consts.CHALICE_SIZE[0],self.consts.CHALICE_SIZE[1])
                 ])
-
+            #jax.debug.print("Hitbox values item:{a},{b},{c},{d},{e}",a=item_x,b=item_y,c=tile,d=item_width,e=item_height)
             #HARDCODED BAAAAAD, but i dont care right now (performance?)(items smaler then 4 pixels would be buggy)
             on_same_tile = (tile==state.player[2])
             player_hitbox_nw = (state.player[0]-1,state.player[1]-1)
-            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0]+1,state.player[1]-1)
-            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0]+1,state.player[1]+self.consts.PLAYER_SIZE[1]+1)
-            player_hitbox_sw = (state.player[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1]+1)
+            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1]-1)
+            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1]+self.consts.PLAYER_SIZE[1])
+            player_hitbox_sw = (state.player[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1])
 
-            nw_close_in_x = jnp.logical_and(player_hitbox_nw[0]>=item_x,player_hitbox_nw[0]<=(item_x+item_width))
-            nw_close_in_y = jnp.logical_and(player_hitbox_nw[1]>=item_y,player_hitbox_nw[1]<=(item_y+item_height))
+            #jax.debug.print("Hitbox values Player:{a},{b}|{c},{d}|{e},{f}|{g},{h}",
+            #                a=player_hitbox_nw[0],b=player_hitbox_nw[1],
+            #                c=player_hitbox_ne[0],d=player_hitbox_ne[1],
+            #                e=player_hitbox_se[0],f=player_hitbox_se[1],
+            #                g=player_hitbox_sw[0],h=player_hitbox_sw[1])
+
+            def diff_of_4(val1:int, val2:int) -> bool:
+                return ((val1 - val2) <= 4)
+
+            nw_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_nw[0]),diff_of_4(player_hitbox_nw[0],(item_x+item_width)))
+            nw_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_nw[1]),diff_of_4(player_hitbox_nw[1],(item_y+item_height)))
             nw_touches_item = jnp.logical_and(nw_close_in_x,nw_close_in_y)
 
-            ne_close_in_x = jnp.logical_and(player_hitbox_ne[0]>=item_x,player_hitbox_ne[0]<=(item_x+item_width))
-            ne_close_in_y = jnp.logical_and(player_hitbox_ne[1]>=item_y,player_hitbox_ne[1]<=(item_y+item_height))
+            ne_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_ne[0]),diff_of_4(player_hitbox_ne[0],(item_x+item_width)))
+            ne_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_ne[1]),diff_of_4(player_hitbox_ne[1],(item_y+item_height)))
             ne_touches_item = jnp.logical_and(ne_close_in_x,ne_close_in_y)
             
-            se_close_in_x = jnp.logical_and(player_hitbox_se[0]>=item_x,player_hitbox_se[0]<=(item_x+item_width))
-            se_close_in_y = jnp.logical_and(player_hitbox_se[1]>=item_y,player_hitbox_se[1]<=(item_y+item_height))
+            se_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_se[0]),diff_of_4(player_hitbox_se[0],(item_x+item_width)))
+            se_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_se[1]),diff_of_4(player_hitbox_se[1],(item_y+item_height)))
             se_touches_item = jnp.logical_and(se_close_in_x,se_close_in_y)
 
-            sw_close_in_x = jnp.logical_and(player_hitbox_sw[0]>=item_x,player_hitbox_sw[0]<=(item_x+item_width))
-            sw_close_in_y = jnp.logical_and(player_hitbox_sw[1]>=item_y,player_hitbox_sw[1]<=(item_y+item_height))
+            sw_close_in_x = jnp.logical_and(diff_of_4(item_x,player_hitbox_sw[0]),diff_of_4(player_hitbox_sw[0],(item_x+item_width)))
+            sw_close_in_y = jnp.logical_and(diff_of_4(item_y,player_hitbox_sw[1]),diff_of_4(player_hitbox_sw[1],(item_y+item_height)))
             sw_touches_item = jnp.logical_and(sw_close_in_x,sw_close_in_y)
 
             item_touches = jnp.logical_and(on_same_tile,
@@ -949,10 +958,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                                                          ne_touches_item),
                                                            jnp.logical_or(se_touches_item,
                                                                           sw_touches_item)))
-
+            #jax.debug.print("Logical values: nw:{a},{b},ne:{c},{d},se:{e},{f},sw:{g},{h}",
+            #                a=nw_close_in_x,
+            #                b=nw_close_in_y,
+            #                c=ne_close_in_x,
+            #                d=ne_close_in_y,
+            #                e=se_close_in_x,
+            #                f=se_close_in_y,
+            #                g=sw_close_in_x,
+            #                h=sw_close_in_y)
+            #jax.debug.print("Logical values: {a},{b},{c},{d},{e}",a=on_same_tile,b=nw_touches_item,c=sw_touches_item,d=ne_touches_item,e=se_touches_item)
             return item_touches
 
-        #ToDo if the player holds an item skip
         new_player_inventory = jax.lax.cond(
             check_for_item(self=self, state=state, item_ID=self.consts.KEY_YELLOW_ID),
             lambda _: self.consts.KEY_YELLOW_ID, 
