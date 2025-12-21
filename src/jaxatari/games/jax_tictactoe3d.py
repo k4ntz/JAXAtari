@@ -1,6 +1,5 @@
 """
 3D Tic-Tac-Toe for JAXAtari
-JAX Implementation (JIT-compatible & Vectorized)
 """
 
 from typing import NamedTuple, Tuple
@@ -16,49 +15,37 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# --- Helper to generate masks once (Module Level) ---
+# --- Helper to generate masks ---
 def _generate_win_masks():
-    """Generates the 76 winning line masks for 4x4x4."""
     masks = []
-    
-    # Helper to generate a single mask 4x4x4
     def get_mask(coords):
         m = np.zeros((4, 4, 4), dtype=np.int32)
         for z, y, x in coords:
             m[z, y, x] = 1
         return m
 
-    # 1. Rows (x-axis) - 16 lines
+    # 1. Rows
     for z in range(4):
-        for y in range(4):
-            masks.append(get_mask([(z, y, x) for x in range(4)]))
-            
-    # 2. Cols (y-axis) - 16 lines
+        for y in range(4): masks.append(get_mask([(z, y, x) for x in range(4)]))
+    # 2. Cols
     for z in range(4):
-        for x in range(4):
-            masks.append(get_mask([(z, y, x) for y in range(4)]))
-            
-    # 3. Pillars (z-axis) - 16 lines
+        for x in range(4): masks.append(get_mask([(z, y, x) for y in range(4)]))
+    # 3. Pillars
     for y in range(4):
-        for x in range(4):
-            masks.append(get_mask([(z, y, x) for z in range(4)]))
-            
-    # 4. Plane Diagonals (z-fixed) - 8 lines
+        for x in range(4): masks.append(get_mask([(z, y, x) for z in range(4)]))
+    # 4. Plane Diagonals (z-fixed)
     for z in range(4):
         masks.append(get_mask([(z, i, i) for i in range(4)]))
         masks.append(get_mask([(z, i, 3-i) for i in range(4)]))
-        
-    # 5. Plane Diagonals (y-fixed) - 8 lines
+    # 5. Plane Diagonals (y-fixed)
     for y in range(4):
         masks.append(get_mask([(i, y, i) for i in range(4)]))
         masks.append(get_mask([(3-i, y, i) for i in range(4)]))
-
-    # 6. Plane Diagonals (x-fixed) - 8 lines
+    # 6. Plane Diagonals (x-fixed)
     for x in range(4):
         masks.append(get_mask([(i, i, x) for i in range(4)]))
         masks.append(get_mask([(3-i, i, x) for i in range(4)]))
-
-    # 7. Space Diagonals - 4 lines
+    # 7. Space Diagonals
     masks.append(get_mask([(i, i, i) for i in range(4)]))
     masks.append(get_mask([(i, i, 3-i) for i in range(4)]))
     masks.append(get_mask([(i, 3-i, i) for i in range(4)]))
@@ -66,49 +53,33 @@ def _generate_win_masks():
     
     return jnp.array(masks, dtype=jnp.int32)
 
-# Pre-compute masks (Executed once at import time)
 WIN_MASKS_ARRAY = _generate_win_masks()
 
 # --- CALIBRATED COORDINATE GENERATOR ---
-# Based on User Measurements:
-# L0 Center: 61, 21  -> TopLeft approx 58, 18
-# L1 Center: 61, 67  -> Diff Y = 46
-# L2 Center: 61, 113 -> Diff Y = 46
-# L3 Center: 61, 159 -> Diff Y = 46
-# X is constant ~61 for the first column.
-
 def _generate_pixel_coords():
-    """Generates the pixel grid based on calibrated offsets."""
     coords = np.zeros((4, 4, 4, 2), dtype=np.int32)
-    
     start_x = 58
     start_y = 18
-    
-    level_step_y = 46  # Huge jump between boards
-    level_step_x = 0   # Vertically aligned
-    
+    level_step_y = 46
+    level_step_x = 0
     cell_step_x = 8
     cell_step_y = 10
-    row_skew_x = 5     # Diagonal perspective within a board
+    row_skew_x = 5
     
-    for z in range(4): # Levels
+    for z in range(4):
         level_base_x = start_x + (z * level_step_x)
         level_base_y = start_y + (z * level_step_y)
-        
-        for y in range(4): # Rows
-            for x in range(4): # Columns
-                # Skew X by Y (isometric-ish look)
+        for y in range(4):
+            for x in range(4):
                 px = level_base_x + (x * cell_step_x) + (y * row_skew_x)
                 py = level_base_y + (y * cell_step_y)
                 coords[z, y, x] = [px, py]
-                
     return jnp.array(coords, dtype=jnp.int32)
 
 PIXEL_COORDS_GENERATED = _generate_pixel_coords()
 
 
 def _get_default_asset_config() -> tuple:
-    """Default asset configuration for TicTacToe3D."""
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'x', 'type': 'single', 'file': 'X.npy'},
@@ -117,61 +88,46 @@ def _get_default_asset_config() -> tuple:
     )
     
 class TicTacToe3DConstants(NamedTuple):
-    """Game constants."""
     BOARD_SIZE: int = 4
     EMPTY: int = 0
     PLAYER_X: int = 1
     PLAYER_O: int = 2
-    FIRST_PLAYER: int = 1  # Player X starts
-    
-    # Store win masks in constants for easy JIT access
+    FIRST_PLAYER: int = 1
     WIN_MASKS: chex.Array = WIN_MASKS_ARRAY
-    
-    # Screen dimensions
     HEIGHT: int = 207
     WIDTH: int = 156
     NUM_ACTIONS: int = 8
-    
-    # Cursor settings
     BLINK_PERIOD: int = 15
     MOVE_COOLDOWN: int = 6
-    
-    # Cell rendering
-    # ZERO OFFSET: Aligns 7x7 cursor perfectly with 8x10 grid cell
     CELL_CENTER_X: int = 0
     CELL_CENTER_Y: int = 0
-    
-    # Use the dynamically generated coordinates
     PIXEL_COORDS: chex.Array = PIXEL_COORDS_GENERATED
-
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class TicTacToe3DState(NamedTuple):
-    board: jnp.ndarray          # (4, 4, 4), uint8 or int32
-    current_player: jnp.ndarray # scalar int32
-    game_over: jnp.ndarray      # scalar bool_
-    winner: jnp.ndarray         # scalar int32
-    move_count: jnp.ndarray     # scalar int32
+    board: jnp.ndarray          
+    current_player: jnp.ndarray 
+    game_over: jnp.ndarray      
+    winner: jnp.ndarray         
+    move_count: jnp.ndarray     
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     cursor_z: jnp.ndarray
     frame: jnp.ndarray
-    key: chex.PRNGKey           # Random key for AI
+    key: chex.PRNGKey           
 
 class TicTacToe3DObservation(NamedTuple):
-    """Object-centric observation exposed to agent."""
-    board: jnp.ndarray          # Shape (4,4,4): game state
-    current_player: jnp.ndarray # Scalar: whose turn it logically is
-    valid_moves: jnp.ndarray    # Shape (64,): bool mask of legal moves
-    game_over: jnp.ndarray      # Scalar bool
-    winner: jnp.ndarray         # Scalar int32
+    board: jnp.ndarray          
+    current_player: jnp.ndarray 
+    valid_moves: jnp.ndarray    
+    game_over: jnp.ndarray      
+    winner: jnp.ndarray         
 
 class TicTacToe3DInfo(NamedTuple):
-    """Auxiliary diagnostic information."""
     move_count: jnp.ndarray
-    game_phase: jnp.ndarray     # 0=ongoing, 1=x_won, 2=o_won, 3=draw
-    last_move_player: jnp.ndarray  # Who made last move
-    last_move_action: jnp.ndarray  # What action was taken
+    game_phase: jnp.ndarray     
+    last_move_player: jnp.ndarray  
+    last_move_action: jnp.ndarray  
 
 class JaxTicTacToe3DEnvironment(JaxEnvironment):
     """3D Tic-Tac-Toe environment for JAXAtari (Vectorized)."""
@@ -180,20 +136,10 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         super().__init__(self.consts)
         self.renderer = TicTacToe3DRenderer(self.consts)
 
-        # Discrete action space indices 0..7 map to ALE actions
         self.action_set = [
-            Action.NOOP,   # 0
-            Action.FIRE,   # 1  SPACE
-            Action.UP,     # 2  ↑
-            Action.RIGHT,  # 3  →
-            Action.LEFT,   # 4  ←
-            Action.DOWN,   # 5  ↓
+            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN
         ]
-        self.ACTION_MAP = jnp.array(
-            [int(a) for a in self.action_set],
-            dtype=jnp.int32,
-        )
-
+        self.ACTION_MAP = jnp.array([int(a) for a in self.action_set], dtype=jnp.int32)
         h, w = self.renderer.BACKGROUND.shape[:2]
         self._image_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=jnp.uint8)
 
@@ -201,31 +147,27 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         return spaces.Discrete(len(self.action_set)) 
 
     def observation_space(self) -> spaces.Space:
-        """Object-centric observation space."""
+        """
+        Object-centric observation space. 
+        KEYS MUST BE ALPHABETICAL to match JAX sorting!
+        Order: b, c, g, v, w.
+        """
         return spaces.Dict({
             "board": spaces.Box(0, 2, shape=(4, 4, 4), dtype=jnp.int32),
-            "current_player": spaces.Discrete(3),  # 1 or 2
-            "valid_moves": spaces.Box(0, 1, shape=(64,), dtype=jnp.bool_),
-            "game_over": spaces.Box(0, 1, shape=(), dtype=jnp.bool_),
+            "current_player": spaces.Discrete(3),  
+            "game_over": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
+            "valid_moves": spaces.Box(0, 1, shape=(64,), dtype=jnp.int32),
             "winner": spaces.Box(0, 2, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Space:
-        """Rendered image space."""
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
-            dtype=jnp.uint8
-        )
+        return spaces.Box(low=0, high=255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
     def render(self, state: TicTacToe3DState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def reset(self, key: chex.PRNGKey):
-        # Split key for initial randomness if needed (though start is deterministic)
         key, subkey = jax.random.split(key)
-        
         state = TicTacToe3DState(
             board=jnp.zeros((4, 4, 4), dtype=jnp.uint8),
             current_player=jnp.int32(self.consts.FIRST_PLAYER),
@@ -238,181 +180,141 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             frame=jnp.int32(0),
             key=subkey
         )
-
-        observation = state.board
+        observation = self._get_observation(state)
         return observation, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TicTacToe3DState, action: jnp.ndarray):
-        """Execute one game step (User Move -> CPU Move)."""
-        
-        # --- 1. USER TURN (Cursor Move & Place) ---
+        # --- 1. USER TURN ---
         cursor_array = jnp.array([state.cursor_x, state.cursor_y, state.cursor_z])
         new_cursor = self._move_cursor(cursor_array, action, state.frame)
         cx, cy, cz = new_cursor[0], new_cursor[1], new_cursor[2]
-        
         board = state.board
-        player = state.current_player # Should be PLAYER_X
+        player = state.current_player
         
-        # Check Place
         is_place = action == Action.FIRE
         is_empty = board[cz, cy, cx] == self.consts.EMPTY
         can_place = jnp.logical_and(is_place, is_empty)
         can_place = jnp.logical_and(can_place, jnp.logical_not(state.game_over))
         
-        # Apply User Move
-        def place_mark_user(b):
-            return b.at[cz, cy, cx].set(player.astype(b.dtype))
-        
+        def place_mark_user(b): return b.at[cz, cy, cx].set(player.astype(b.dtype))
         new_board_after_user = jax.lax.cond(can_place, place_mark_user, lambda b: b, board)
         
-        # Check User Win
         winner_after_user = self._check_winner(new_board_after_user)
         game_over_user = jnp.logical_or(winner_after_user != self.consts.EMPTY, state.move_count >= 63)
         
-        # --- 2. CPU TURN (Automatic Response) ---
-        # Only if user actually placed a mark AND game is not over
+        # --- 2. CPU TURN ---
         cpu_should_play = jnp.logical_and(can_place, jnp.logical_not(game_over_user))
-        
-        # Generate random key for CPU
         key, subkey = jax.random.split(state.key)
         
         def play_cpu_turn(current_board):
-            # Calculate best move
             best_move_flat = self._compute_cpu_move(current_board, subkey)
-            bz = best_move_flat // 16
-            by = (best_move_flat % 16) // 4
-            bx = best_move_flat % 4
-            
-            # Place O
+            bz, by, bx = best_move_flat // 16, (best_move_flat % 16) // 4, best_move_flat % 4
             return current_board.at[bz, by, bx].set(self.consts.PLAYER_O)
 
-        final_board = jax.lax.cond(
-            cpu_should_play,
-            play_cpu_turn,
-            lambda b: b,
-            new_board_after_user
-        )
-        
-        # Check CPU Win
+        final_board = jax.lax.cond(cpu_should_play, play_cpu_turn, lambda b: b, new_board_after_user)
         final_winner = self._check_winner(final_board)
-        # Note: If user won, winner is X. If CPU won later, winner is O.
-        # But CPU only plays if user didn't win, so this is safe.
         
-        # Update move count (User + CPU = +2 moves if CPU played)
-        moves_added = jax.lax.cond(
-            cpu_should_play, 
-            lambda: 2, 
-            lambda: jax.lax.cond(can_place, lambda: 1, lambda: 0)
-        )
+        moves_added = jax.lax.cond(cpu_should_play, lambda: 2, lambda: jax.lax.cond(can_place, lambda: 1, lambda: 0))
         new_move_count = state.move_count + moves_added
-        
         final_game_over = jnp.logical_or(final_winner != self.consts.EMPTY, new_move_count >= 64)
 
-        # --- Build new state ---
         new_state = state._replace(
-            board=final_board,
-            current_player=self.consts.PLAYER_X, # Always returns control to X
-            move_count=new_move_count,
-            cursor_x=cx,
-            cursor_y=cy,
-            cursor_z=cz,
-            frame=state.frame + 1,
-            winner=final_winner,      
-            game_over=final_game_over,
-            key=key
+            board=final_board, current_player=self.consts.PLAYER_X, move_count=new_move_count,
+            cursor_x=cx, cursor_y=cy, cursor_z=cz, frame=state.frame + 1,
+            winner=final_winner, game_over=final_game_over, key=key
         )
         
-        observation = new_state.board
+        observation = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
-        info = self._get_info(state, new_state, action)
-        
+        info = self._get_info(new_state, action)
         return observation, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: TicTacToe3DState) -> spaces.Dict:
+        """
+        Extracts observation dictionary. 
+        KEYS MUST BE ALPHABETICAL: b, c, g, v, w.
+        DTYPES MUST BE INT32.
+        """
+        return {
+            "board": state.board.astype(jnp.int32),
+            "current_player": state.current_player.astype(jnp.int32),
+            "game_over": state.game_over.astype(jnp.int32),
+            "valid_moves": (state.board == self.consts.EMPTY).reshape(64).astype(jnp.int32),
+            "winner": state.winner.astype(jnp.int32),
+        }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs) -> jnp.ndarray:
+        """
+        Flattens observation. 
+        MUST RETURN INT32 to match space definition.
+        ORDER MUST BE ALPHABETICAL BY KEY:
+        1. board
+        2. current_player
+        3. game_over
+        4. valid_moves
+        5. winner
+        """
+        board_flat = obs["board"].reshape(-1).astype(jnp.int32)
+        current_player = obs["current_player"].reshape(1).astype(jnp.int32)
+        game_over = obs["game_over"].reshape(1).astype(jnp.int32)
+        valid_moves_flat = obs["valid_moves"].astype(jnp.int32)
+        winner = obs["winner"].reshape(1).astype(jnp.int32)
+        
+        return jnp.concatenate([
+            board_flat, 
+            current_player, 
+            game_over,
+            valid_moves_flat, 
+            winner
+        ])
+
+    @partial(jax.jit, static_argnums=(0,))
     def _compute_cpu_move(self, board, key):
-        """
-        Vectorized Heuristic AI for 3D Tic-Tac-Toe.
-        Priorities:
-        1. WIN: Complete a line of 3 Os.
-        2. BLOCK: Stop X from completing a line of 3 Xs.
-        3. RANDOM: Pick any empty spot.
-        """
+        """Vectorized Heuristic AI."""
         is_x = (board == self.consts.PLAYER_X).astype(jnp.int32)
         is_o = (board == self.consts.PLAYER_O).astype(jnp.int32)
         is_empty = (board == self.consts.EMPTY).astype(jnp.int32)
         
-        # Calculate counts per line
-        # masks shape: (76, 4, 4, 4)
-        x_counts = jnp.tensordot(self.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2))) # (76,)
-        o_counts = jnp.tensordot(self.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2))) # (76,)
+        x_counts = jnp.tensordot(self.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2)))
+        o_counts = jnp.tensordot(self.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
         
-        # Identification logic
-        # A line is "Winnable" if O=3 and X=0
-        winnable_lines = jnp.logical_and(o_counts == 3, x_counts == 0) # (76,)
-        # A line is "Blockable" if X=3 and O=0
-        blockable_lines = jnp.logical_and(x_counts == 3, o_counts == 0) # (76,)
+        winnable_lines = jnp.logical_and(o_counts == 3, x_counts == 0)
+        blockable_lines = jnp.logical_and(x_counts == 3, o_counts == 0)
         
-        # Map back to board cells to create a "Heatmap"
-        # We broadcast the line status back to the mask shape
-        
-        # Priority 1: Winning Spots (Weight 1000)
-        win_mask = self.consts.WIN_MASKS * winnable_lines[:, None, None, None] # (76, 4, 4, 4)
-        win_heatmap = jnp.sum(win_mask, axis=0) # (4, 4, 4)
-        
-        # Priority 2: Blocking Spots (Weight 100)
-        block_mask = self.consts.WIN_MASKS * blockable_lines[:, None, None, None]
-        block_heatmap = jnp.sum(block_mask, axis=0)
-        
-        # Priority 3: Random Noise (Weight 0-1)
+        win_heatmap = jnp.sum(self.consts.WIN_MASKS * winnable_lines[:, None, None, None], axis=0)
+        block_heatmap = jnp.sum(self.consts.WIN_MASKS * blockable_lines[:, None, None, None], axis=0)
         random_heatmap = jax.random.uniform(key, shape=(4, 4, 4))
         
-        # Combine Heatmaps
         final_scores = (win_heatmap * 1000.0) + (block_heatmap * 100.0) + random_heatmap
-        
-        # Mask occupied cells (Set to -infinity)
-        # We only want empty cells
         final_scores = jnp.where(is_empty, final_scores, -1e9)
-        
-        # Find index of max score
-        best_move_flat = jnp.argmax(final_scores.ravel())
-        return best_move_flat
+        return jnp.argmax(final_scores.ravel())
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_cursor(self, cursor, ale_action, step_count):
         x, y, z = cursor[0], cursor[1], cursor[2]
         can_move = (step_count % self.consts.MOVE_COOLDOWN) == 0
 
-        # Horizontal
-        dx = jnp.where(ale_action == int(Action.LEFT), -1,
-             jnp.where(ale_action == int(Action.RIGHT), 1, 0))
+        dx = jnp.where(ale_action == int(Action.LEFT), -1, jnp.where(ale_action == int(Action.RIGHT), 1, 0))
         new_x = jnp.where(can_move, jnp.clip(x + dx, 0, 3), x)
 
-        # Vertical / Layer
-        dy = jnp.where(ale_action == int(Action.UP), -1,
-             jnp.where(ale_action == int(Action.DOWN), 1, 0))
+        dy = jnp.where(ale_action == int(Action.UP), -1, jnp.where(ale_action == int(Action.DOWN), 1, 0))
         raw_y = y + dy
-        
         move_down_layer = jnp.logical_and(dy == 1, raw_y > 3)
         move_up_layer = jnp.logical_and(dy == -1, raw_y < 0)
         
         z_down = jnp.clip(z + 1, 0, 3)
         z_up = jnp.clip(z - 1, 0, 3)
-        
-        new_z = jnp.where(move_down_layer, z_down,
-                jnp.where(move_up_layer, z_up, z))
+        new_z = jnp.where(move_down_layer, z_down, jnp.where(move_up_layer, z_up, z))
         z_changed = new_z != z
         
         new_y = jnp.where(jnp.logical_and(move_down_layer, z_changed), 0,
-                jnp.where(jnp.logical_and(move_up_layer, z_changed), 3,
-                jnp.clip(raw_y, 0, 3)))
+                jnp.where(jnp.logical_and(move_up_layer, z_changed), 3, jnp.clip(raw_y, 0, 3)))
 
-        final_y = jnp.where(can_move, new_y, y)
-        final_z = jnp.where(can_move, new_z, z)
-        final_x = new_x
-
-        return jnp.array([final_x, final_y, final_z], dtype=jnp.int32)
+        return jnp.array([new_x, jnp.where(can_move, new_y, y), jnp.where(can_move, new_z, z)], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_winner(self, board: jnp.ndarray) -> jnp.ndarray:
@@ -422,8 +324,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         scores_o = jnp.tensordot(self.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
         x_wins = jnp.any(scores_x == 4)
         o_wins = jnp.any(scores_o == 4)
-        return jnp.where(x_wins, self.consts.PLAYER_X, 
-               jnp.where(o_wins, self.consts.PLAYER_O, self.consts.EMPTY))
+        return jnp.where(x_wins, self.consts.PLAYER_X, jnp.where(o_wins, self.consts.PLAYER_O, self.consts.EMPTY))
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state, state):
@@ -431,18 +332,21 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         opponent_won = state.winner == self.consts.PLAYER_O
         return jnp.where(player_won, 1.0, jnp.where(opponent_won, -1.0, 0.0))
     
+    # Make action optional to prevent wrappers from crashing
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, previous_state, state, action):
+    def _get_info(self, state: TicTacToe3DState, action: jnp.ndarray = None) -> TicTacToe3DInfo:
+        """Returns info dict (Compatible with Gym wrappers)."""
+        act = jax.lax.select(action is None, jnp.int32(0), action) if action is not None else jnp.int32(0)
         game_phase = jnp.where(
             state.winner == self.consts.PLAYER_X, 1,
-            jnp.where(state.winner == self.consts.PLAYER_O, 2,
+            jnp.where(state.winner == self.consts.PLAYER_O, 2, 
             jnp.where(state.move_count >= 64, 3, 0))
         )
         return TicTacToe3DInfo(
-            move_count=state.move_count,
+            move_count=state.move_count, 
             game_phase=jnp.int32(game_phase),
-            last_move_player=previous_state.current_player,
-            last_move_action=action,
+            last_move_player=state.current_player,
+            last_move_action=act
         )
 
     @partial(jax.jit, static_argnums=(0,))
