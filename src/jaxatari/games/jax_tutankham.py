@@ -35,7 +35,7 @@ def _get_default_asset_config() -> tuple:
 
         # Player (loaded as single sprites for manual padding)
         #{'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
-        {'name': 'player_idle', 'type': 'single', 'file': 'player_idle.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player_idle.npy'},
         {'name': 'player_move_00 ', 'type': 'single', 'file': 'player_move_00.npy'},
         {'name': 'player_move_01 ', 'type': 'single', 'file': 'player_move_01.npy'},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
@@ -162,8 +162,8 @@ class TutankhamConstants(NamedTuple):
 # Game State
 # ---------------------------------------------------------------------
 class TutankhamState(NamedTuple):
-    player_x: int
-    player_y: int
+    player_x: chex.Array
+    player_y: chex.Array
     player_lives: int
     tutankham_score: int # current score
 
@@ -298,10 +298,15 @@ class TutankhamRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["room_floor"],
             flip_offset=ZERO_FLIP
         )
-        #raster = self.jr.render_at(
-        #    raster, state.player[0], state.player[1] - camera_offset,
-        #    player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
-        #)
+        raster = self.jr.render_at(
+            raster,
+            state.player_x,
+            state.player_y,
+            #- camera_offset,
+            self.SHAPE_MASKS["player"],
+            flip_offset=ZERO_FLIP
+            #self.FLIP_OFFSETS['player_group'],
+        )
         #raster = jax.lax.cond(
         #    floor_checks[0] & not_vanishing,
         #    lambda r: self.jr.render_at_clipped(
@@ -786,7 +791,8 @@ class JaxTutankham(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
-        if state.player_lives <= 0: # Game Over
+        return False
+        """if state.player_lives <= 0: # Game Over
             return True
         # TODO: beat final level condition
-        return False
+        return False"""
