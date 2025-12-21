@@ -1114,7 +1114,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return AdventureState(
             step_counter = state.step_counter,
-            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
+            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32),
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
             key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
@@ -1260,7 +1260,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
-        
+        #Funny comment for Daniel
         def check_for_item(self:JaxAdventure, state: AdventureState, item_ID: int) -> bool:
             item_x, item_y, tile, item_width, item_height = jax.lax.switch(
                 item_ID,
@@ -1388,7 +1388,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #jax.debug.print("Logical values: {a},{b},{c},{d},{e}",a=on_same_tile,b=nw_touches_item,c=sw_touches_item,d=ne_touches_item,e=se_touches_item)
             return item_touches
 
-        #HOLY ASS, this is a sin
+        #HOLY ASS, this seems like a sin
         new_player_inventory = jax.lax.cond(
             action == Action.NOOP,
             lambda op: op,
