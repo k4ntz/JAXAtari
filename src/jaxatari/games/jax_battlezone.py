@@ -625,8 +625,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
-            min_dist = 27.7
-            beta = jnp.arctan(saucer.x / saucer.z)
+            min_dist = 27.
 
             def near_player(saucer):
                 saucer = saucer._replace(phase=0)
@@ -678,8 +677,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     return saucer._replace(phase=2)
 
                 def p2(saucer):
-                    rot_centre_x = saucer.point_store_2_temp[0]
-                    rot_centre_z = saucer.point_store_2_temp[1]
+                    rot_centre_x = saucer.point_store_1_temp[0]
+                    rot_centre_z = saucer.point_store_1_temp[1]
                     end_rot_point = saucer.point_store_2_temp
 
                     vx = saucer.x - rot_centre_x
