@@ -1231,6 +1231,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         
 
     def _dragon_step(self, state: AdventureState) -> AdventureState:
+        #get sword position to kill dragons
+        sword_x = state.sword[0]
+        sword_y = state.sword[1]
+        sword_room = state.sword[2]
 
         #yellow dragon
         direction_x = jnp.sign(state.player[0] - state.dragon_yellow[0])
@@ -1239,7 +1243,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         dragon_yellow_y = state.dragon_yellow[1]
         dragon_yellow_animation = state.dragon_yellow[3]
         dragon_yellow_counter = state.dragon_yellow[4]
-        #dragon_yellow_eat = state.dragon_yellow[5]
         # wait after attack
         dragon_yellow_counter = jax.lax.cond(
             dragon_yellow_animation == 1,
@@ -1265,6 +1268,15 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             ),0),
             lambda _: (dragon_yellow_x, dragon_yellow_y, jax.lax.cond(jnp.logical_not(dragon_yellow_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_yellow_counter),
             operand  = None
+        )
+        #kill dragon
+        direction_x = jnp.sign(sword_x - state.dragon_yellow[0])
+        direction_y = jnp.sign(sword_y- state.dragon_yellow[1])
+        dragon_yellow_animation = jax.lax.cond(
+            jnp.logical_and(state.dragon_yellow[2]==sword_room, jnp.logical_and((sword_x-dragon_yellow_x)*direction_x<4, (sword_y-dragon_yellow_y)*direction_y<22)),
+            lambda _:2,
+            lambda a:a,
+            operand = dragon_yellow_animation
         )
         # dont ever move again when dead
         dragon_yellow_counter = jax.lax.cond(
@@ -1308,6 +1320,15 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda _: (dragon_green_x, dragon_green_y, jax.lax.cond(jnp.logical_not(dragon_green_freeze), lambda _: 0, lambda _: 1, operand = None), dragon_green_counter),
             operand  = None
         )
+        #kill dragon
+        direction_x = jnp.sign(sword_x - state.dragon_green[0])
+        direction_y = jnp.sign(sword_y- state.dragon_green[1])
+        dragon_green_animation = jax.lax.cond(
+            jnp.logical_and(state.dragon_green[2]==sword_room, jnp.logical_and((sword_x-dragon_green_x)*direction_x<4, (sword_y-dragon_green_y)*direction_y<22)),
+            lambda _:2,
+            lambda a:a,
+            operand = dragon_green_animation
+        )
         # dont ever move again when dead
         dragon_green_counter = jax.lax.cond(
             dragon_green_animation == 2,
@@ -1331,7 +1352,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             magnet=state.magnet,
             chalice=state.chalice
         )
-
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
