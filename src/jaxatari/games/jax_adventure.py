@@ -1006,14 +1006,15 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         up = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.UP, action == Action.UPFIRE),action== Action.UPRIGHT),action == Action.UPRIGHTFIRE), action==Action.UPLEFT), action==Action.UPLEFTFIRE)
         down = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(action== Action.DOWN, action == Action.DOWNFIRE),action== Action.DOWNRIGHT),action == Action.DOWNRIGHTFIRE), action==Action.DOWNLEFT), action==Action.DOWNLEFTFIRE)
 
-      
-
         #check for no wall before walking
         left_no_wall = jnp.logical_and(left,self._check_for_wall(state, 0))
         right_no_wall = jnp.logical_and(right,self._check_for_wall(state, 1))
         up_no_wall =  jnp.logical_and(up,self._check_for_wall(state, 2))
         down_no_wall =  jnp.logical_and(down,self._check_for_wall(state, 3))
         
+        new_step_counter = state.step_counter
+
+        #get x cord of the item beeing held
         new_item_x = jax.lax.switch(
             state.player[3],
             [lambda:0,
@@ -1027,20 +1028,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         new_player_x = state.player[0]
-        new_player_x, new_item_x = jax.lax.cond(
+        new_player_x, new_item_x, new_step_counter = jax.lax.cond(
             left_no_wall,
-            lambda y: (y[0]-4,y[1]-4),
+            lambda y: (y[0]-4,y[1]-4,y[2]+1),
             lambda y: y,
-            operand = (new_player_x,new_item_x),
+            operand = (new_player_x,new_item_x,new_step_counter),
         )
-        new_player_x, new_item_x = jax.lax.cond(
+        new_player_x, new_item_x, new_step_counter = jax.lax.cond(
             right_no_wall,
-            lambda y: (y[0]+4,y[1]+4),
+            lambda y: (y[0]+4,y[1]+4,y[2]+1),
             lambda y: y,
-            operand = (new_player_x,new_item_x),
+            operand = (new_player_x,new_item_x,new_step_counter),
         )
 
-
+        #get y cord of the item beeing held
         new_item_y = jax.lax.switch(
             state.player[3],
             [lambda:0,
@@ -1054,17 +1055,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         new_player_y = state.player[1]
-        new_player_y, new_item_y = jax.lax.cond(
+        new_player_y, new_item_y, new_step_counter = jax.lax.cond(
             down_no_wall,
-            lambda y: (y[0]+8,y[1]+8),
+            lambda y: (y[0]+8,y[1]+8,y[2]),
             lambda y: y,
-            operand = (new_player_y,new_item_y)
+            operand = (new_player_y,new_item_y,new_step_counter)
         )
-        new_player_y, new_item_y = jax.lax.cond(
+        new_player_y, new_item_y, new_step_counter = jax.lax.cond(
             up_no_wall,
-            lambda y: (y[0]-8,y[1]-8),
+            lambda y: (y[0]-8,y[1]-8,y[2]),
             lambda y: y,
-            operand = (new_player_y,new_item_y)
+            operand = (new_player_y,new_item_y,new_step_counter)
         )
         new_player_tile = state.player[2]
         new_item_tile = jax.lax.switch(
@@ -1142,7 +1143,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         return AdventureState(
-            step_counter = state.step_counter,
+            step_counter = jnp.array(new_step_counter).astype(jnp.int32),
             player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
@@ -1975,13 +1976,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         reward = jax.lax.cond(
             jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),
             lambda :-1,
-            lambda :0
+            lambda : jax.lax.cond(
+                state.chalice[2]==1,
+                lambda :state.step_counter,
+                lambda :0 #this should happen on reset?
+            )
         )
-        reward = jax.lax.cond(
-            state.chalice[2]==1,
-            lambda :1,
-            lambda :0
-        )
+        #reward = jax.lax.cond(
+        #    state.chalice[2]==1,
+        #    lambda :1,
+        #    lambda :0
+        #)
         return reward
 
     @partial(jax.jit, static_argnums=(0,))
