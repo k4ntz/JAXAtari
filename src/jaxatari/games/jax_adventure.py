@@ -1114,7 +1114,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return AdventureState(
             step_counter = state.step_counter,
-            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32),
+            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             dragon_yellow = state.dragon_yellow,
             dragon_green = state.dragon_green,
             key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
@@ -1260,7 +1260,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
-        #Funny comment for Daniel
+        
         def check_for_item(self:JaxAdventure, state: AdventureState, item_ID: int) -> bool:
             item_x, item_y, tile, item_width, item_height = jax.lax.switch(
                 item_ID,
@@ -1388,7 +1388,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #jax.debug.print("Logical values: {a},{b},{c},{d},{e}",a=on_same_tile,b=nw_touches_item,c=sw_touches_item,d=ne_touches_item,e=se_touches_item)
             return item_touches
 
-        #HOLY ASS, this seems like a sin
+        #HOLY ASS, this is a sin
         new_player_inventory = jax.lax.cond(
             action == Action.NOOP,
             lambda op: op,
@@ -1669,6 +1669,26 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
         )
     
+    def _chalice_step(self, state:AdventureState) -> AdventureState:
+        
+        chalice_color=state.chalice[3]
+        chalice_color = (chalice_color +1) % 10
+
+        return AdventureState(
+            step_counter=state.step_counter,
+            player = state.player,
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=state.gate_yellow,
+            gate_black=state.gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32),
+        )
+    
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
 
@@ -1745,6 +1765,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         state = self._dragon_step(state)
         state = self._gate_interaction(state)
         state = self._magnet_step(state)
+        state = self._chalice_step(state)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -1911,11 +1932,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda :-1,
             lambda :0
         )
+        reward = jax.lax.cond(
+            state.chalice[2]==1,
+            lambda :1,
+            lambda :0
+        )
         return reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1)
+        return jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1), state.chalice[2]==1)
+
 
 class AdventureRenderer(JAXGameRenderer):
     def __init__(self, consts: AdventureConstants = None):
