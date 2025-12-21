@@ -20,8 +20,56 @@ from math import sqrt, cos, sin
 STATIC_COORDS = True
 # linear movement per frame when holding UP/DOWN (units matching parsed X/Z)
 MOVE_SPEED = 0.25 - 0.00195308333
+TURN_MOVE_SPEED = 0.057674
 # angular speed in radians per frame when holding LEFT/RIGHT
-ANGULAR_SPEED = np.pi/270 #+0.00005 #0.0115 #2*np.pi / 270.0 - 0.0115 # 0.023271
+ANGULAR_SPEED = 2*np.pi/536 #+0.00005 #0.0115 #2*np.pi / 270.0 - 0.0115 # 0.023271
+
+# --- Extra items to plot in the first subplot ---
+# Provide a Python list of items in the following forms:
+# - (x, z)                         -> plot a single point
+# - ((x1, z1), (x2, z2))           -> plot the line through the two points
+# - ((cx, cz), r) or ((cx, cz), r) -> plot a circle with center (cx,cz) and radius r
+# Examples:
+# EXTRA_ITEMS = [ (1.0, 2.0), ((0,0),(1,1)), ((5,5), 2.0) ]
+# EXTRA_ITEMS = [ # x>0
+#     ((0.0, 0.0), (8.667969, 36.94141)),
+#     (15.0, 44.925785),
+#     ((15.0, 44.925785), 10.1664), 
+#     (15.0 + 6.5517, 44.925785 + 27.7664),
+#     ((15.0 + 6.5517, 44.925785 + 27.7664), 10.1664),
+#     ((15.0 + 2.1*6.5517, 44.925785 + 2.1*27.7664), 10.1664),
+#     ((15.0, 44.925785), (15.0 + 6.5517, 44.925785 + 27.7664)),
+#     # (15.0 -10-0.6, 44.925785 + 15),
+#     # ((15.0 -10-0.6, 44.925785 + 15), 10.1664),
+#     (5.46105, 61.82456),
+#     ((5.46105, 61.82456), 10.1664),
+# ]
+
+# EXTRA_ITEMS = [ # x<0
+#     (-18.664187403, 45.372904048),
+#     ((-18.664187403, 45.372904048), 10.1664),
+#     ((-14.52999602, 46.66028963), (0.0,0.0)),
+#     (-14.52999602, 46.66028963),
+# ]
+
+# EXTRA_ITEMS = [
+#     (-8.4375, 51.52344),
+#     ((-8.4375, 51.52344), (0.0, 0.0)),
+#     (-8.4375-12.5, 51.52344+18),
+#     (-8.4375-12.5, 51.52344+18+sqrt(2)*10.1664),
+#     (-8.4375-12.5, 51.52344+18-sqrt(2)*10.1664),
+#     (-8.4375-12.5-sqrt(2)*10.1664, 51.52344+18),
+#     ((-8.4375-12.5, 51.52344+18+sqrt(2)*10.1664), 10.1664),
+#     ((-8.4375-12.5, 51.52344+18-sqrt(2)*10.1664), 10.1664),
+#     ((-8.4375-12.5-sqrt(2)*10.1664, 51.52344+18), 10.1664),
+
+# ]
+
+EXTRA_ITEMS = [
+
+]
+
+
 
 # TODO: the enemy position is being counter-rotated too much? or maybe around the wrong point? fix this
 
@@ -76,6 +124,9 @@ def add_event(frame, message):
     sort_key = frame if frame is not None else float("inf")
     events.append((sort_key, len(events), message))
 
+
+rotation_frames = 0
+
 for uid, kv in enumerate(kept):
     # print(uid, kv)
     a_x_hi = kv.get('enemy_a_X_hi (0xC3)')
@@ -92,6 +143,22 @@ for uid, kv in enumerate(kept):
     AZ = hilo_to_unit(a_z_hi, a_z_lo)
     BX = hilo_to_unit(b_x_hi, b_x_lo)
     BZ = hilo_to_unit(b_z_hi, b_z_lo)
+
+    inputs = kv.get("INPUTS", {}) or {}
+    left = bool(inputs.get("LEFT", False))
+    right = bool(inputs.get("RIGHT", False))
+    up = bool(inputs.get("UP", False))
+    down = bool(inputs.get("DOWN", False))
+
+    if left or right:
+        rotation_frames += 0.69  # Nice.
+
+    # AX = AX * 0.99994619679746**rotation_frames # correct for drift
+    # AZ = AZ * 0.99994619679746**rotation_frames
+
+    # BX = BX * 0.99994619679746**rotation_frames
+    # BZ = BZ * 0.99994619679746**rotation_frames
+
     frame_value = kv.get('frame (0x80)')
     if prev_frame is not None and frame_value is not None and frame_value == 0 and prev_frame == 255:
         # frame counter wrapped back to 0, so bump the offset for subsequent frames
@@ -125,6 +192,7 @@ prev_frame_for_player = None
 skip_frame = True
 prev_entry = None
 rotation_frames = 0
+alternator = False
 
 test_x=[]
 test_z=[]
@@ -155,18 +223,26 @@ for uid, entry in entries.items():
         rotation_frames += dt
 
     # Apply rotation (LEFT/RIGHT) then forward movement (UP/DOWN)
-    if left:
+    if left:# and alternator:
         theta += ANGULAR_SPEED * dt
-    if right:
+    if right:# and alternator:
         theta -= ANGULAR_SPEED * dt
 
     theta = theta % (2 * np.pi)
 
     forward = 0.0
-    if up:
-        forward += MOVE_SPEED * dt
-    if down:
-        forward -= MOVE_SPEED * dt
+    if up:# and not alternator:
+        if left or right:
+            forward += TURN_MOVE_SPEED * dt
+        else:
+            forward += MOVE_SPEED * dt
+    if down:# and not alternator:
+        if left or right:
+            forward -= TURN_MOVE_SPEED * dt
+        else:
+            forward -= MOVE_SPEED * dt
+
+    alternator = not alternator
 
     # Move in the current heading
     px += forward * cos(theta)
@@ -175,7 +251,7 @@ for uid, entry in entries.items():
     # Attach player state to the entry
     entry["player"] = {"x": px, "z": pz, "theta": theta}
 
-    print(np.sqrt((entry["AX"]-0.150)**2 + (entry["AZ"]-0.398)**2)) # center: 0.150, 0.398
+    # print(np.sqrt((entry["AX"]-0.150)**2 + (entry["AZ"]-0.398)**2)) # center: 0.150, 0.398
 
     if 50 < frame < 500:
         test_x.append(entry["AX"])
@@ -399,6 +475,38 @@ angle_changes = [el for el in b_deltas if el > -0.1 and el != 0] # filter
 
 distance_changes = step_distances(ax, az) + step_distances(bx, bz)
 distance_changes = [el for el in distance_changes if 0 < el < 100]  # filter
+# Validate EXTRA_ITEMS and prepare structures for plotting (points, lines, circles)
+extra_points = []     # list of (x,z)
+extra_lines = []      # list of ((x1,z1),(x2,z2))
+extra_circles = []    # list of (cx,cz,r)
+
+def _is_number(x):
+    return isinstance(x, (int, float, np.floating, np.integer))
+
+for it in EXTRA_ITEMS:
+    try:
+        # expect a length-2 container
+        if not (isinstance(it, (list, tuple)) and len(it) == 2):
+            continue
+        a, b = it[0], it[1]
+        # point: two numbers
+        if _is_number(a) and _is_number(b):
+            extra_points.append((float(a), float(b)))
+            continue
+        # line: two points
+        if (isinstance(a, (list, tuple)) and len(a) == 2 and _is_number(a[0]) and _is_number(a[1])
+                and isinstance(b, (list, tuple)) and len(b) == 2 and _is_number(b[0]) and _is_number(b[1])):
+            extra_lines.append(((float(a[0]), float(a[1])), (float(b[0]), float(b[1]))))
+            continue
+        # circle: point + radius (accept either order)
+        if (isinstance(a, (list, tuple)) and len(a) == 2 and _is_number(a[0]) and _is_number(a[1]) and _is_number(b)):
+            extra_circles.append((float(a[0]), float(a[1]), float(b)))
+            continue
+        if (_is_number(a) and isinstance(b, (list, tuple)) and len(b) == 2 and _is_number(b[0]) and _is_number(b[1])):
+            extra_circles.append((float(b[0]), float(b[1]), float(a)))
+            continue
+    except Exception:
+        continue
 
 # Plot
 fig = make_subplots(
@@ -429,6 +537,21 @@ fig.add_trace(go.Scatter(
     customdata=frames,
     hovertemplate="Enemy B<br>X: %{x}<br>Z: %{y}<br>Frame: %{customdata}<extra></extra>"
 ), row=1, col=1)
+# Plot any extra points/lines/circles on top of the enemy traces
+if extra_points:
+    xp_x = [p[0] for p in extra_points]
+    xp_z = [p[1] for p in extra_points]
+    fig.add_trace(go.Scatter(
+        x=xp_x,
+        y=xp_z,
+        mode='markers',
+        name='Extra points',
+        marker=dict(color='red', symbol='diamond', size=10),
+        hovertemplate='Extra point<br>X: %{x}<br>Z: %{y}<extra></extra>'
+    ), row=1, col=1)
+
+# Circles and lines will be added after axis extents are computed so they can be
+# extended to the visible area. They are stored for later.
 if STATIC_COORDS:
     fig.add_trace(go.Scatter(
         x=pxs,
@@ -453,8 +576,35 @@ fig.update_yaxes(title_text="Count", row=3, col=1)
 # Use Plotly's `scaleanchor` mechanism and compute an appropriate figure
 # height so the first subplot's pixels reflect a unit X == unit Z relationship.
 try:
-    x_min, x_max = (min(ax), max(ax)) if ax else (0.0, 1.0)
-    y_min, y_max = (min(az), max(az)) if az else (0.0, 1.0)
+    # Build combined coordinate lists including extra items so axis extents
+    # account for points, lines (include their defining points), and circles
+    combined_xs = list(filter(lambda v: v is not None, list(ax) + list(bx)))
+    combined_zs = list(filter(lambda v: v is not None, list(az) + list(bz)))
+    # include player trajectory if present
+    combined_xs += [v for v in pxs if v is not None]
+    combined_zs += [v for v in pzs if v is not None]
+
+    # include extra points
+    for (x, z) in extra_points:
+        combined_xs.append(x)
+        combined_zs.append(z)
+
+    # include circles' extreme extents
+    for (cx_c, cz_c, rr) in extra_circles:
+        combined_xs.extend([cx_c - rr, cx_c + rr])
+        combined_zs.extend([cz_c - rr, cz_c + rr])
+
+    # include lines' defining points
+    for ((x1, z1), (x2, z2)) in extra_lines:
+        combined_xs.extend([x1, x2])
+        combined_zs.extend([z1, z2])
+
+    if not combined_xs or not combined_zs:
+        x_min, x_max = (0.0, 1.0)
+        y_min, y_max = (0.0, 1.0)
+    else:
+        x_min, x_max = min(combined_xs), max(combined_xs)
+        y_min, y_max = min(combined_zs), max(combined_zs)
     x_span = x_max - x_min
     y_span = y_max - y_min
     print(f"x_span: {x_span}, y_span: {y_span}, x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
@@ -494,6 +644,39 @@ else:
     fig_height = max(900, computed_fig_height + 200)
     # Now it's safe to enforce 1:1 data-to-pixel aspect
     fig.update_yaxes(scaleanchor="x", scaleratio=1, row=1, col=1)
+
+    # Add line and circle traces now that we know axis extents.
+    # Compute a small padding so lines/circles extend slightly outside the data box.
+    pad_x = max(1e-3, 0.05 * max(1.0, x_span))
+    pad_z = max(1e-3, 0.05 * max(1.0, y_span))
+    plot_x_min = x_min - pad_x
+    plot_x_max = x_max + pad_x
+    plot_z_min = y_min - pad_z
+    plot_z_max = y_max + pad_z
+
+    # Draw lines: extend through the plotting x-range (handle vertical lines)
+    for (p1, p2) in extra_lines:
+        x1, z1 = p1
+        x2, z2 = p2
+        if abs(x2 - x1) < 1e-12:
+            # vertical line at x = x1
+            lx = [x1, x1]
+            lz = [plot_z_min, plot_z_max]
+        else:
+            m = (z2 - z1) / (x2 - x1)
+            b = z1 - m * x1
+            lx = [plot_x_min, plot_x_max]
+            lz = [m * xx + b for xx in lx]
+        fig.add_trace(go.Scatter(x=lx, y=lz, mode='lines', name=f'Line {p1}-{p2}',
+                                 line=dict(dash='dash', color='green')), row=1, col=1)
+
+    # Draw circles as sampled polygons
+    for (cx_c, cz_c, rr) in extra_circles:
+        thetas = np.linspace(0.0, 2 * np.pi, 180)
+        circ_x = (cx_c + rr * np.cos(thetas)).tolist()
+        circ_z = (cz_c + rr * np.sin(thetas)).tolist()
+        fig.add_trace(go.Scatter(x=circ_x, y=circ_z, mode='lines', name=f'Circle ({cx_c:.2f},{cz_c:.2f}) r={rr}',
+                                 line=dict(color='orange')), row=1, col=1)
 
 fig.update_layout(width=target_width, height=fig_height, showlegend=True)
 

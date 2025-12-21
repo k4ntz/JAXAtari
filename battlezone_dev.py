@@ -25,7 +25,7 @@ FPS_CAP = 60
 
 # Screenshot format: set to 'bmp' to save a bitmap image (default),
 # or 'npy' to save a 3D numpy array of RGB values (height, width, 3).
-SCREENSHOT_FORMAT = "npy"  # one of: 'bmp', 'png', 'npy'
+SCREENSHOT_FORMAT = "png"  # one of: 'bmp', 'png', 'npy'
 SAVESTATE_PATH = "battlezone_state.pkl"
 
 # Change-highlight parameters

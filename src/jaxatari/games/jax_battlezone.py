@@ -108,6 +108,10 @@ class BattlezoneConstants(NamedTuple):
     WALL_BOTTOM_HEIGHT: int = 33    #correct
     TANK_SPRITE_POS_X: int = 43
     TANK_SPRITE_POS_Y: int = 140
+    TARGET_INDICATOR_POS_X: int = 80
+    TARGET_INDICATOR_POS_Y: int = 77
+    TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = (255, 255, 0)
+    TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = (0, 0, 0)
     CHAINS_POS_Y:int = 158
     CHAINS_L_POS_X:int = 19
     CHAINS_R_POS_X: int = 109
@@ -908,6 +912,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             # Add the procedurally created sprites to the manifest
             {'name': 'blackscreen', 'type': 'procedural', 'data': wall_sprite_top},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom},
+            {'name': 'target_indicator', 'type': 'single', 'file': 'yellow_pixel.npy'},
         ]
 
     def _scroll_chain_colors(self, chainMask, scroll):
@@ -1132,6 +1137,30 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jax.lax.cond(render_condition, projectile_active, projectile_inactive, projectile)
 
 
+    def render_targeting_indicator(self, raster, state):
+
+        # determine if pointing at enemy
+        within_x = jnp.logical_and(state.enemies.x <= 0,
+                       state.enemies.x >= -2*self.consts.ENEMY_HITBOX_SIZE)  # TODO: for blue tank this is too large and for saucer too small (enemy hitboxes don't fit sprites in general, doesn't scale with distance?)
+        in_front = state.enemies.z > 0
+        overlaps = jnp.logical_and(jnp.logical_and(state.enemies.active, within_x), in_front)
+        pointing_at_enemy = jnp.any(overlaps)
+
+        color_id = jnp.where(pointing_at_enemy,
+                             jnp.array(self.COLOR_TO_ID[self.consts.TARGET_INDICATOR_COLOR_ACTIVE], dtype=jnp.int32),
+                             jnp.array(self.COLOR_TO_ID[self.consts.TARGET_INDICATOR_COLOR_INACTIVE], dtype=jnp.int32)
+                            )
+
+        return BattlezoneRenderer._draw_line(
+            raster, 
+            self.consts.TARGET_INDICATOR_POS_X, 
+            self.consts.TARGET_INDICATOR_POS_Y, 
+            self.consts.TARGET_INDICATOR_POS_X, 
+            self.consts.TARGET_INDICATOR_POS_Y + 6, 
+            color_id
+        )
+
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         #-----------------background
@@ -1194,6 +1223,9 @@ class BattlezoneRenderer(JAXGameRenderer):
             color_shifted_chain_r = self._scroll_chain_colors(chains_r_mask, state.chains_r_anim_counter)
             raster = self.jr.render_at(raster, self.consts.CHAINS_R_POS_X,
                                        self.consts.CHAINS_POS_Y, color_shifted_chain_r)
+            
+            # ------------------ target indicator -----------------
+            raster = self.render_targeting_indicator(raster, state)
 
             return raster
 
