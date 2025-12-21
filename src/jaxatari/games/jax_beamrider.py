@@ -501,7 +501,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def __init__(self, consts: Optional[BeamriderConstants] = None):
         super().__init__(consts)
         self.consts = consts or BeamriderConstants()
-        self.key = jax.random.PRNGKey(67)
+        self.key = jax.random.PRNGKey(42067)
         self.renderer = BeamriderRenderer(self.consts)
         self.obs_size = 105
         self.action_set = [
@@ -4213,7 +4213,8 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_coins(self, raster, state):
         coin_masks = self.SHAPE_MASKS["coin"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(self.consts.COIN_MAX):
+        
+        def body_fun(raster, idx):
             active = state.level.coin_active[idx]
             timer = state.level.coin_timer[idx]
             pos = state.level.coin_pos[:, idx]
@@ -4239,18 +4240,22 @@ class BeamriderRenderer(JAXGameRenderer):
                 y_pos = jnp.where(active, pos[1], 500)
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, mask)
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_coin,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(self.consts.COIN_MAX))
         return raster
 
     def _render_falling_rocks(self, raster, state):
         falling_rock_masks = self.SHAPE_MASKS["falling_rocks"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(self.consts.FALLING_ROCK_MAX):
+        
+        def body_fun(raster, idx):
             explosion_frame = state.level.falling_rock_explosion_frame[idx]
 
             def render_explosion(r_in):
@@ -4271,18 +4276,22 @@ class BeamriderRenderer(JAXGameRenderer):
                 y_pos = state.level.falling_rock_pos[1][idx]
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_rock,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(self.consts.FALLING_ROCK_MAX))
         return raster
 
     def _render_lane_blockers(self, raster, state):
         lane_blocker_masks = self.SHAPE_MASKS["lane_blocker"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(self.consts.LANE_BLOCKER_MAX):
+        
+        def body_fun(raster, idx):
             explosion_frame = state.level.lane_blocker_explosion_frame[idx]
 
             def render_explosion(r_in):
@@ -4319,12 +4328,15 @@ class BeamriderRenderer(JAXGameRenderer):
                 sprite = jax.lax.cond(is_sinking, clip_mask, lambda m: m, sprite)
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_blocker,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(self.consts.LANE_BLOCKER_MAX))
         return raster
 
     def _render_rejuvenator(self, raster, state):
@@ -4371,13 +4383,17 @@ class BeamriderRenderer(JAXGameRenderer):
         """Draw the scrolling foreground lines."""
 
         blue_line_mask = self.SHAPE_MASKS["blue_line"]
-        for idx in range(7):
+        
+        def body_fun(raster, idx):
             y_pos = state.level.line_positions[idx]
             # y_pos is -1 if line is inactive
             final_y = jnp.where(y_pos >= 0, y_pos, self.consts.BLUE_LINE_OFFSCREEN_Y)
-            raster = self.jr.render_at_clipped(
+            new_raster = self.jr.render_at_clipped(
                 raster, 8, final_y, blue_line_mask
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(7))
         return raster
 
     def _render_hud(self, raster, state):
@@ -4439,7 +4455,7 @@ class BeamriderRenderer(JAXGameRenderer):
         flash_visible = (death_timer // 8) % 2 == 0
         
         # Supporting up to 14 lives means up to 13 icons (lives-1)
-        for idx in range(13):
+        def body_fun(raster, idx):
             # Normal logic: render if idx < state.lives - 1 (Bonus HP display)
             
             # Flashing logic: if is_dead, we are about to lose a life.
@@ -4462,7 +4478,10 @@ class BeamriderRenderer(JAXGameRenderer):
             
             # Icons start at x=32, spaced by 9 pixels
             pos_x = jnp.where(is_visible, 32 + (idx * 9), -100)
-            raster = self.jr.render_at_clipped(raster, pos_x, 183, hp_mask)
+            new_raster = self.jr.render_at_clipped(raster, pos_x, 183, hp_mask)
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(13))
         return raster
 
     def _render_player_and_bullet(self, raster, state):
@@ -4516,7 +4535,8 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_enemy_shots(self, raster, state):
         enemy_shot_masks = self.SHAPE_MASKS["enemy_shot"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(9):
+        
+        def body_fun(raster, idx):
             explosion_frame = state.level.enemy_shot_explosion_frame[idx]
 
             def render_explosion(r_in):
@@ -4540,12 +4560,15 @@ class BeamriderRenderer(JAXGameRenderer):
                     r_in, state.level.enemy_shot_pos[0][idx] + _get_ufo_alignment(y_pos), y_pos, enemy_shot_masks[sprite_idx]
                 )
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_shot,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(9))
         return raster
 
     def _render_white_ufos(self, raster, state):
@@ -4555,7 +4578,7 @@ class BeamriderRenderer(JAXGameRenderer):
         is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
         if_hide = is_init
         
-        for idx in range(3):
+        def body_fun(raster, idx):
             explosion_frame = state.level.ufo_explosion_frame[idx]
 
             def render_explosion(r_in):
@@ -4576,12 +4599,15 @@ class BeamriderRenderer(JAXGameRenderer):
                 y_pos = jnp.where(if_hide, 500.0, state.level.white_ufo_pos[1][idx])
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_ufo,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(3))
         return raster
 
     def _render_bouncer(self, raster, state):
@@ -4618,7 +4644,8 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_chasing_meteoroids(self, raster, state):
         meteoroid_mask = self.SHAPE_MASKS["chasing_meteoroid"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        for idx in range(self.consts.CHASING_METEOROID_MAX):
+        
+        def body_fun(raster, idx):
             explosion_frame = state.level.chasing_meteoroid_explosion_frame[idx]
 
             def render_explosion(r_in):
@@ -4640,12 +4667,15 @@ class BeamriderRenderer(JAXGameRenderer):
                 )
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, meteoroid_mask)
 
-            raster = jax.lax.cond(
+            new_raster = jax.lax.cond(
                 explosion_frame > 0,
                 render_explosion,
                 render_meteoroid,
                 raster,
             )
+            return new_raster, None
+
+        raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(self.consts.CHASING_METEOROID_MAX))
         return raster
 
     def _render_mothership(self, raster, state):
