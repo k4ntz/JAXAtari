@@ -97,7 +97,7 @@ class AdventureConstants(NamedTuple):
     SPECIAL_WALL_LEFT: int = 12
     SPECIAL_WALL_RIGHT: int = 145
     # Path South and North to another Room, X-Coordinates that offer hole in the wall
-    PATH_VERTICAL_LEFT: int = 60
+    PATH_VERTICAL_LEFT: int = 64
     PATH_VERTICAL_RIGHT: int = 95
     # Path East and West, Y-Coordinates that offer hole in the wall
     PATH_HORIZONTAL_UP: int = 40
@@ -357,7 +357,84 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 )
         )
 
-        room_7_clear = True
+        ### extra maze walls
+
+        room_7_walls = jnp.logical_or(
+            player_y >= 170,        # either below lowest thick wall or
+            jnp.logical_or(
+                jnp.logical_or(     # the two corridors up
+                    jnp.logical_and(player_x>=30, player_x <= 38),  #left corridor
+                    jnp.logical_and(player_x>=120, player_x <= 126) #right corridor
+                ),
+                jnp.logical_or(
+                    jnp.logical_or(
+                        jnp.logical_and(
+                            jnp.logical_and(player_y <= 135, player_y >= 105),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >=45, player_x <= 110),
+                                    player_x <= 20
+                                ),
+                                player_x >=135
+                            )
+                        ),
+                        jnp.logical_and(
+                            jnp.logical_and(player_y <= 105, player_y >= 75),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 45, player_x <=53),
+                                    jnp.logical_and(player_x >= 15, player_x <= 20)
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 102, player_x <= 110),
+                                    jnp.logical_and(player_x >= 135, player_x <= 143)
+                                )
+                            )
+                        )
+                    ),
+                    jnp.logical_or(
+                        jnp.logical_and(
+                            jnp.logical_and(player_y <= 70, player_y >= 40),
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 62, player_x <= 94),
+                                    jnp.logical_or(player_x <= 20, player_x >=135)
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 102, player_x <= 110),
+                                    jnp.logical_and(player_x >= 45, player_x <= 53)
+                                )
+                            )
+                        ),
+                        jnp.logical_and(
+                            player_y <= 40,
+                            jnp.logical_or(
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 62, player_x <= 70), #todo smaller
+                                    jnp.logical_and(player_x >= 86, player_x <= 94) #todo smaller
+                                ),
+                                jnp.logical_or(
+                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
+                                    jnp.logical_and(player_x >= 45, player_x <= 53) 
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            )
+
+
+        ### end extra maze walls
+
+        room_7_clear = jnp.logical_or(
+            jnp.logical_not(room == 6),
+            jnp.logical_and(
+                collision_lower_wall_path,
+                room_7_walls
+            )
+            
+        )
         room_8_clear = True
         room_9_clear = True
         room_10_clear = True
@@ -420,8 +497,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         castle_base_out = jnp.logical_or(player_x<=castle_base_left, player_x>=castle_base_right)
         castle_base_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
         castle_base = jnp.logical_or(player_y >= castle_base_height, jnp.logical_or(castle_base_in, castle_base_out))
-        #castle_towers = player_y >= castle_tower_height
-        #castle_towers = player_y >= castle_tower_height
 
         castle_collision = jnp.logical_or(
             jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
