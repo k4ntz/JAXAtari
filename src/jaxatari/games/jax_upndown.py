@@ -228,19 +228,21 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        trackx, tracky, road_index = jax.lax.cond(
-            current_road == 0,
-            lambda _: (self.consts.FIRST_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, road_index_A),
-            lambda _: (self.consts.SECOND_TRACK_CORNERS_X, self.consts.TRACK_CORNERS_Y, road_index_B),
-            operand=None,
-        )
-        slope = jax.lax.cond(
-            trackx[road_index+1] - trackx[road_index] != 0,
-            lambda _: (tracky[road_index+1] - tracky[road_index]) / (trackx[road_index+1] - trackx[road_index]),
-            lambda _: 300.0,
-            operand=None,
-        )
-        b = tracky[road_index] - slope * trackx[road_index]
+        """Calculate slope and intercept for the current road segment."""
+        road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
+        x1 = jnp.where(current_road == 0, 
+                       self.consts.FIRST_TRACK_CORNERS_X[road_index], 
+                       self.consts.SECOND_TRACK_CORNERS_X[road_index])
+        x2 = jnp.where(current_road == 0, 
+                       self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
+                       self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
+        y1 = self.consts.TRACK_CORNERS_Y[road_index]
+        y2 = self.consts.TRACK_CORNERS_Y[road_index + 1]
+        
+        dx = x2 - x1
+        dy = y2 - y1
+        slope = jnp.where(dx != 0, dy / dx, 300.0)
+        b = y1 - slope * x1
         return slope, b
 
     @partial(jax.jit, static_argnums=(0,))
@@ -266,11 +268,79 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return x1 + t * (x2 - x1)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_x_for_road_index(self, y: chex.Array, road_segment: chex.Array, road_index: chex.Array) -> chex.Array:
+        """Get X position on road A (index 0) or road B (index 1) for given Y and segment."""
+        track_corners = jnp.where(
+            road_index == 0,
+            self.consts.FIRST_TRACK_CORNERS_X[road_segment],
+            self.consts.SECOND_TRACK_CORNERS_X[road_segment],
+        )
+        track_corners_next = jnp.where(
+            road_index == 0,
+            self.consts.FIRST_TRACK_CORNERS_X[road_segment + 1],
+            self.consts.SECOND_TRACK_CORNERS_X[road_segment + 1],
+        )
+        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
+        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
+        t = jnp.where(y2 != y1, (y - y1) / (y2 - y1), 0.0)
+        return track_corners + t * (track_corners_next - track_corners)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_road_segment(self, y: chex.Array) -> chex.Array:
         """Return the road segment index for a given y position."""
         segments = jnp.sum(self.consts.TRACK_CORNERS_Y > y, dtype=jnp.int32)
         max_idx = jnp.int32(len(self.consts.TRACK_CORNERS_Y) - 1)
         return jnp.clip(segments - 1, 0, max_idx)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_direction_x(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+        """Calculate the X direction for movement on the current road segment.
+        
+        Returns:
+            Direction as int32: -1 for left, 1 for right (defaults to -1 for vertical segments)
+        """
+        # Select the road index based on which road we're on
+        road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
+        # Select corners for the current road
+        x_curr = jnp.where(current_road == 0, 
+                           self.consts.FIRST_TRACK_CORNERS_X[road_index], 
+                           self.consts.SECOND_TRACK_CORNERS_X[road_index])
+        x_next = jnp.where(current_road == 0, 
+                           self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
+                           self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
+        direction_raw = x_next - x_curr
+        return jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _move_on_road(
+        self,
+        position: EntityPosition,
+        slope: chex.Array,
+        b: chex.Array,
+        speed_sign: chex.Array,
+        step_size: chex.Array,
+        car_direction_x: chex.Array,
+        move_y: chex.Array,
+        move_x: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array]:
+        """Move a car on the road based on timing and geometry.
+        
+        Returns:
+            Tuple of (new_x, new_y) positions
+        """
+        new_y = jnp.where(
+            jnp.logical_and(move_y, self._is_on_line_for_position(position, slope, b, speed_sign, 1)),
+            position.y + speed_sign * -step_size,
+            position.y,
+        )
+        
+        new_x = jnp.where(
+            jnp.logical_and(move_x, self._is_on_line_for_position(position, slope, b, speed_sign, 2)),
+            position.x + speed_sign * car_direction_x * step_size,
+            position.x,
+        )
+        
+        return new_x, new_y
 
     @partial(jax.jit, static_argnums=(0,))
     def _is_steep_road_segment(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
@@ -282,12 +352,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         Returns True if the segment is steep (requires jump to pass when going up).
         """
         # Get the X difference for the current road segment
-        x_diff = jax.lax.cond(
-            current_road == 0,
-            lambda _: jnp.abs(self.consts.FIRST_TRACK_CORNERS_X[road_index_A + 1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A]),
-            lambda _: jnp.abs(self.consts.SECOND_TRACK_CORNERS_X[road_index_B + 1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B]),
-            operand=None,
-        )
+        road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
+        x_curr = jnp.where(current_road == 0, 
+                           self.consts.FIRST_TRACK_CORNERS_X[road_index], 
+                           self.consts.SECOND_TRACK_CORNERS_X[road_index])
+        x_next = jnp.where(current_road == 0, 
+                           self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
+                           self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
+        x_diff = jnp.abs(x_next - x_curr)
         # A segment is steep if there's no X change (or very small change)
         return x_diff < 1.0
 
@@ -366,57 +438,26 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
 
         # Determine X direction based on current road segment (for normal movement)
-        direction_raw = jax.lax.cond(
-            current_road == 0,
-            lambda _: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
-            lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
-            operand=None,
-        )
-        # Use sign, default to -1 for zero (vertical segments)
-        car_direction_x = jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
+        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B)
 
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
 
+        # === CALCULATE ROAD-BASED MOVEMENT (used when not jumping) ===
+        road_x, road_y = self._move_on_road(
+            position, slope, b, speed_sign, step_size, car_direction_x, move_y, move_x
+        )
+
         # === Y MOVEMENT ===
         # When jumping: move freely in Y direction
-        # When on road: only move if allowed by road geometry
-        new_player_y = jax.lax.cond(
-            move_y,
-            lambda _: jax.lax.cond(
-                is_jumping,
-                lambda _: position_y + speed_sign * -step_size,  # Free movement while jumping
-                lambda _: jax.lax.cond(
-                    self._is_on_line_for_position(position, slope, b, speed_sign, 1),
-                    lambda _: position_y + speed_sign * -step_size,
-                    lambda _: jnp.array(position_y, float),
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            lambda _: jnp.array(position_y, float),
-            operand=None,
-        )
+        # When on road: use road-based movement result
+        jump_y = jnp.where(move_y, position_y + speed_sign * -step_size, position_y)
+        new_player_y = jnp.where(is_jumping, jump_y, road_y)
 
         # === X MOVEMENT ===
         # When jumping: use stored_jump_slope (locked at jump start) - moves X proportionally to Y
-        # The slope already encodes direction (dx/dy), so multiply by Y step size and speed_sign
-        # When on road: only move if allowed by road geometry
-        new_player_x = jax.lax.cond(
-            move_x,
-            lambda _: jax.lax.cond(
-                is_jumping,
-                lambda _: position_x - speed_sign * stored_jump_slope * step_size,  # Slope-based movement (negated because Y decreases going forward)
-                lambda _: jax.lax.cond(
-                    self._is_on_line_for_position(position, slope, b, speed_sign, 2),
-                    lambda _: position_x + speed_sign * car_direction_x * step_size,  # Normal road movement
-                    lambda _: jnp.array(position_x, float),
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            lambda _: jnp.array(position_x, float),
-            operand=None,
-        )
+        # When on road: use road-based movement result
+        jump_x = jnp.where(move_x, position_x - speed_sign * stored_jump_slope * step_size, position_x)
+        new_player_x = jnp.where(is_jumping, jump_x, road_x)
 
         # === LANDING LOGIC ===
         # Get the current road segment based on new Y position
@@ -457,60 +498,21 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         landing_in_water = jnp.logical_and(is_landing, jnp.logical_not(valid_landing))
         
         # === UPDATE ROAD STATE ===
-        # Determine which road to assign on landing
-        landed_road = jax.lax.cond(
-            on_road_A,
-            lambda _: jnp.int32(0),
-            lambda _: jax.lax.cond(
-                on_road_B,
-                lambda _: jnp.int32(1),
-                lambda _: nearest_road_id,  # Between roads - use nearest
-                operand=None,
-            ),
-            operand=None,
-        )
+        # Determine which road to assign on landing (priority: road A > road B > nearest)
+        landed_road = jnp.where(on_road_A, jnp.int32(0), jnp.where(on_road_B, jnp.int32(1), nearest_road_id))
         
-        # Update current_road
-        # - If landing in water: set to 2 (water/crash marker)
-        # - If landing successfully: set to the landed road
-        # - If still jumping: keep current road (frozen during jump)
-        # - If on road normally: update based on position
-        updated_current_road = jax.lax.cond(
-            landing_in_water,
-            lambda _: jnp.int32(2),  # Water crash
-            lambda _: jax.lax.cond(
-                is_landing,
-                lambda _: landed_road,  # Successfully landed
-                lambda _: jax.lax.cond(
-                    is_jumping,
-                    lambda _: current_road,  # Keep road frozen while jumping
-                    lambda _: jax.lax.cond(
-                        current_road == 2,
-                        lambda _: nearest_road_id,  # Recover from water state
-                        lambda _: current_road,  # Normal on-road movement
-                        operand=None,
-                    ),
-                    operand=None,
-                ),
-                operand=None,
-            ),
-            operand=None,
-        )
+        # Update current_road using nested jnp.where for vectorized execution
+        # Priority: water crash > landing > jumping (frozen) > recover from water > normal
+        normal_road = jnp.where(current_road == 2, nearest_road_id, current_road)
+        jumping_road = jnp.where(is_jumping, current_road, normal_road)
+        landing_road = jnp.where(is_landing, landed_road, jumping_road)
+        updated_current_road = jnp.where(landing_in_water, jnp.int32(2), landing_road)
         
         # Update road indices to match current segment when not jumping
-        next_road_index_A = jax.lax.cond(
-            jnp.logical_and(jnp.logical_not(is_jumping), updated_current_road == 0),
-            lambda _: segment,
-            lambda _: road_index_A,
-            operand=None,
-        )
-        
-        next_road_index_B = jax.lax.cond(
-            jnp.logical_and(jnp.logical_not(is_jumping), updated_current_road == 1),
-            lambda _: segment,
-            lambda _: road_index_B,
-            operand=None,
-        )
+        not_jumping_on_road_A = jnp.logical_and(jnp.logical_not(is_jumping), updated_current_road == 0)
+        not_jumping_on_road_B = jnp.logical_and(jnp.logical_not(is_jumping), updated_current_road == 1)
+        next_road_index_A = jnp.where(not_jumping_on_road_A, segment, road_index_A)
+        next_road_index_B = jnp.where(not_jumping_on_road_B, segment, road_index_B)
 
         # Wrap Y position for looping track
         wrapped_y = -((new_player_y * -1) % self.consts.TRACK_LENGTH)
@@ -547,42 +549,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         """Simplified car advancement for enemy cars (no jumping/landing logic)."""
         # Calculate movement timing using helper
         move_y, move_x, step_size, speed_sign = self._compute_movement_timing(speed, step_counter)
-
         slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
-
-        direction_raw = jax.lax.cond(
-            current_road == 0,
-            lambda _: self.consts.FIRST_TRACK_CORNERS_X[road_index_A+1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A],
-            lambda _: self.consts.SECOND_TRACK_CORNERS_X[road_index_B+1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B],
-            operand=None,
-        )
-        # Use sign, default to -1 for zero (vertical segments)
-        car_direction_x = jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
-
+        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B)
+        
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
-
-        new_y = jax.lax.cond(
-            move_y,
-            lambda _: jax.lax.cond(
-                self._is_on_line_for_position(position, slope, b, speed_sign, 1),
-                lambda _: position_y + speed_sign * -step_size,
-                lambda _: jnp.array(position_y, float),
-                operand=None,
-            ),
-            lambda _: jnp.array(position_y, float),
-            operand=None,
-        )
-
-        new_x = jax.lax.cond(
-            move_x,
-            lambda _: jax.lax.cond(
-                self._is_on_line_for_position(position, slope, b, speed_sign, 2),
-                lambda _: position_x + speed_sign * car_direction_x * step_size,
-                lambda _: jnp.array(position_x, float),
-                operand=None,
-            ),
-            lambda _: jnp.array(position_x, float),
-            operand=None,
+        
+        # Use shared movement helper
+        new_x, new_y = self._move_on_road(
+            position, slope, b, speed_sign, step_size, car_direction_x, move_y, move_x
         )
 
         wrapped_y = -((new_y * -1) % self.consts.TRACK_LENGTH)
@@ -640,10 +614,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             # Check if player is close enough to collect the flag
             y_distance = jnp.abs(new_player_y - flag_y)
             x_distance = jnp.abs(player_x - flag_x)
-            same_road = jnp.logical_or(
-                jnp.logical_and(current_road == 0, flag_road == 0),
-                jnp.logical_and(current_road == 1, flag_road == 1),
-            )
+            same_road = (current_road == flag_road)
 
             collision = jnp.logical_and(
                 jnp.logical_and(y_distance < self.consts.COLLISION_THRESHOLD, x_distance < self.consts.COLLISION_THRESHOLD),
@@ -758,10 +729,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             
             y_distance = jnp.abs(new_player_y - c_y)
             x_distance = jnp.abs(player_x - c_x)
-            same_road = jnp.logical_or(
-                jnp.logical_and(current_road == 0, c_road == 0),
-                jnp.logical_and(current_road == 1, c_road == 1),
-            )
+            same_road = (current_road == c_road)
             
             collision = jnp.logical_and(
                 jnp.logical_and(y_distance < self.consts.COLLISION_THRESHOLD, x_distance < self.consts.COLLISION_THRESHOLD),
@@ -1629,27 +1597,22 @@ class UpNDownRenderer(JAXGameRenderer):
         self._num_road_tiles = int(self._road_tile_offsets.shape[0])
 
         self.enemy_sprite_names = {
-            self.consts.ENEMY_TYPE_CAMERO: ("camero_left", "camero_right"),
-            self.consts.ENEMY_TYPE_FLAG_CARRIER: ("flag_carrier_left", "flag_carrier_right"),
-            self.consts.ENEMY_TYPE_PICKUP: ("pick_up_truck_left", "pick_up_truck_right"),
-            self.consts.ENEMY_TYPE_TRUCK: ("truck_left", "truck_right"),
+            self.consts.ENEMY_TYPE_CAMERO: "camero_left",
+            self.consts.ENEMY_TYPE_FLAG_CARRIER: "flag_carrier_left",
+            self.consts.ENEMY_TYPE_PICKUP: "pick_up_truck_left",
+            self.consts.ENEMY_TYPE_TRUCK: "truck_left",
         }
 
         # Pre-pad enemy masks to a common shape so switch/array indexing works under jit
+        # Only use left sprites - right sprites are created by flipping horizontally
         enemy_left_raw = [
             self.SHAPE_MASKS["camero_left"],
             self.SHAPE_MASKS["flag_carrier_left"],
             self.SHAPE_MASKS["pick_up_truck_left"],
             self.SHAPE_MASKS["truck_left"],
         ]
-        enemy_right_raw = [
-            self.SHAPE_MASKS["camero_right"],
-            self.SHAPE_MASKS["flag_carrier_right"],
-            self.SHAPE_MASKS["pick_up_truck_right"],
-            self.SHAPE_MASKS["truck_right"],
-        ]
-        max_h = max([m.shape[0] for m in enemy_left_raw + enemy_right_raw])
-        max_w = max([m.shape[1] for m in enemy_left_raw + enemy_right_raw])
+        max_h = max([m.shape[0] for m in enemy_left_raw])
+        max_w = max([m.shape[1] for m in enemy_left_raw])
 
         def _pad_mask(mask):
             pad_h = max_h - mask.shape[0]
@@ -1657,7 +1620,8 @@ class UpNDownRenderer(JAXGameRenderer):
             return jnp.pad(mask, ((0, pad_h), (0, pad_w)), constant_values=self.jr.TRANSPARENT_ID)
 
         self.enemy_left_masks = jnp.stack([_pad_mask(m) for m in enemy_left_raw], axis=0)
-        self.enemy_right_masks = jnp.stack([_pad_mask(m) for m in enemy_right_raw], axis=0)
+        # Create right-facing masks by horizontally flipping the left masks
+        self.enemy_right_masks = jnp.flip(self.enemy_left_masks, axis=2)
         
         # Precompute flag mask data for recoloring without special-casing pink
         self.flag_base_mask = self.SHAPE_MASKS["pink_flag"]
@@ -1706,6 +1670,15 @@ class UpNDownRenderer(JAXGameRenderer):
         complete_size = int(sum(sizes))
         return sizes, complete_size
     
+    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
+        """Calculate the X position on a road given a Y coordinate and road segment."""
+        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
+        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
+        x1 = track_corners_x[road_segment]
+        x2 = track_corners_x[road_segment + 1]
+        t = jnp.where(y2 != y1, (y - y1) / (y2 - y1), 0.0)
+        return x1 + t * (x2 - x1)
+    
     def _find_palette_id(self, rgba: jnp.ndarray) -> int:
         """Return palette index for an RGBA color, falling back to first entry if missing."""
         color_rgb = rgba[:3]
@@ -1728,20 +1701,6 @@ class UpNDownRenderer(JAXGameRenderer):
         centered = (progress - 0.5) * 2.0
         return self.consts.JUMP_ARC_HEIGHT * (1.0 - centered * centered)
 
-    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
-        """Linear interpolation of x along the given road segment for y."""
-        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
-        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
-        x1 = track_corners_x[road_segment]
-        x2 = track_corners_x[road_segment + 1]
-        t = jax.lax.cond(
-            y2 != y1,
-            lambda _: (y - y1) / (y2 - y1),
-            lambda _: 0.0,
-            operand=None,
-        )
-        return x1 + t * (x2 - x1)
-
     def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[str]]:
         """Returns the asset manifest and ordered road files."""
         road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
@@ -1754,14 +1713,11 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
             {'name': 'road', 'type': 'group', 'files': roads},
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
+            # Only load left-facing enemy sprites; right-facing are created by flipping
             {'name': 'camero_left', 'type': 'single', 'file': 'enemy_cars/camero_left.npy'},
-            {'name': 'camero_right', 'type': 'single', 'file': 'enemy_cars/camero_right.npy'},
             {'name': 'flag_carrier_left', 'type': 'single', 'file': 'enemy_cars/flag_carrier_left.npy'},
-            {'name': 'flag_carrier_right', 'type': 'single', 'file': 'enemy_cars/flag_carrier_right.npy'},
             {'name': 'pick_up_truck_left', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_left.npy'},
-            {'name': 'pick_up_truck_right', 'type': 'single', 'file': 'enemy_cars/pick_up_truck_right.npy'},
             {'name': 'truck_left', 'type': 'single', 'file': 'enemy_cars/truck_left.npy'},
-            {'name': 'truck_right', 'type': 'single', 'file': 'enemy_cars/truck_right.npy'},
             {'name': 'wall_top', 'type': 'procedural', 'data': topBlockSprite},
             {'name': 'wall_bottom', 'type': 'procedural', 'data': bottomBlockSprite},
             {'name': 'all_flags_top', 'type': 'single', 'file': 'all_flags_top.npy'},
@@ -1828,9 +1784,10 @@ class UpNDownRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, total_segments, combine, raster)
 
         def select_enemy_mask(enemy_type: chex.Array, going_left: chex.Array):
+            """Select enemy mask: left masks are base, right masks are horizontally flipped."""
             left_mask = self.enemy_left_masks[enemy_type]
             right_mask = self.enemy_right_masks[enemy_type]
-            return jax.lax.cond(going_left, lambda _: left_mask, lambda _: right_mask, operand=None)
+            return jnp.where(going_left, left_mask, right_mask)
 
         def render_enemy(carry, enemy_idx):
             raster = carry
