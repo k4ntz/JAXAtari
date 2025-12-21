@@ -52,6 +52,7 @@ class MsPacmanConstants(NamedTuple):
     ghost_move_period: int = 6  # ghosts move every N frames
     player_move_period: int = 3  # pacman moves every N frames
     ghost_move_period: int = 2  # ghosts move every N frames
+    pellet_mask: Tuple[Tuple[int, ...], ...] = None  # Will be set below
     background_color: Tuple[int, int, int] = (0, 20, 100)
     wall_color: Tuple[int, int, int] = (200, 50, 50)
     blocked_color: Tuple[int, int, int] = (0, 20, 100)
@@ -71,70 +72,153 @@ class MsPacmanConstants(NamedTuple):
     
     maze_layout: Tuple[str, ...] = (
         "1111111111111111111111111111111111111111",
-"1000000000100000000000000000010000000001",
-"10222222201022222222222222220102222G2201",
-"1020000020102000000000000002010200000201",
-"1020111020102011111111111102010201110201",
-"1020111020102011111111111102010201110201",
-"1020111020102011111111111102010201110201",
-"1020000020002000000000000002000200000201",
-"1022222222222222222222222222222222222201",
-"1000200020000020000000000200000200020001",
-"1110201020111020111111110201110201020111",
-"1110201020111020111111110201110201020111",
-"1110201020111020111111110201110201020111",
-"0000201020000020000000000200000201020000",
-"2222201022222222222222222222222201022222",
-"0000201000000020000000000200000001020000",
-"1110201111111020111111110201111111020111",
-"1110201111111020100000010201111111020111",
-"1110201111111020100000010201111111020111",
-"0010200000000020100000010200000000020100",
-"0010222222222220100000010222222222220100",
-"0010200000000020100000010200000000020100",
-"1110201111111020100000010201111111020111",
-"1110201111111020111111110201111111020111",
-"1110201111111020111111110201111111020111",
-"0000201000000020000000000200000001020000",
-"2222201022222222222P22222222222201022222",
-"0000201020002000200000020002000201020000",
-"1110201020102010201111020102010201020111",
-"1110201020102010201111020102010201020111",
-"1110201020102010201111020102010201020111",
-"1000200020102010200000020102010200020001",
-"1022222220102010222222220102010222222201",
-"1020000020102010200000020102010200000201",
-"1020111020102000201111020002010201110201",
-"1020111020102222201111022222010201110201",
-"1020111020100000201111020000010201110201",
-"1020111020111110201111020111110201110201",
-"1020111020111110201111020111110201110201",
-"1020111020111110201111020111110201110201",
-"1020000020000000200000020000000200000201",
-"1022222222222222222222222222222222222201",
-"1000000000000000000000000000000000000001",
-"1111111111111111111111111111111111111111",
+        "1000000000100000000000000000010000000001",
+        "10222222201022222222222222220102222G2201",
+        "1020000020102000000000000002010200000201",
+        "1020111020102011111111111102010201110201",
+        "1020111020102011111111111102010201110201",
+        "1020111020102011111111111102010201110201",
+        "1020000020002000000000000002000200000201",
+        "1022222222222222222222222222222222222201",
+        "1000200020000020000000000200000200020001",
+        "1110201020111020111111110201110201020111",
+        "1110201020111020111111110201110201020111",
+        "1110201020111020111111110201110201020111",
+        "0000201020000020000000000200000201020000",
+        "2222201022222222222222222222222201022222",
+        "0000201000000020000000000200000001020000",
+        "1110201111111020111111110201111111020111",
+        "1110201111111020100000010201111111020111",
+        "1110201111111020100000010201111111020111",
+        "0010200000000020100000010200000000020100",
+        "0010222222222220100000010222222222220100",
+        "0010200000000020100000010200000000020100",
+        "1110201111111020100000010201111111020111",
+        "1110201111111020111111110201111111020111",
+        "1110201111111020111111110201111111020111",
+        "0000201000000020000000000200000001020000",
+        "2222201022222222222P22222222222201022222",
+        "0000201020002000200000020002000201020000",
+        "1110201020102010201111020102010201020111",
+        "1110201020102010201111020102010201020111",
+        "1110201020102010201111020102010201020111",
+        "1000200020102010200000020102010200020001",
+        "1022222220102010222222220102010222222201",
+        "1020000020102010200000020102010200000201",
+        "1020111020102000201111020002010201110201",
+        "1020111020102222201111022222010201110201",
+        "1020111020100000201111020000010201110201",
+        "1020111020111110201111020111110201110201",
+        "1020111020111110201111020111110201110201",
+        "1020111020111110201111020111110201110201",
+        "1020000020000000200000020000000200000201",
+        "1022222222222222222222222222222222222201",
+        "1000000000000000000000000000000000000001",
+        "1111111111111111111111111111111111111111",
     )
-    
-    pellet_mask: Tuple[Tuple[int, ...], ...] = (
-    (1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    (1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1),
+
+# Define pellet mask for evenly spaced dots in corridors
+pellet_mask: Tuple[Tuple[int, ...], ...] = (
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
+)
+
+
+# Create default constants instance with pellet mask
+DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
+    screen_width=160,
+    screen_height=210,
+    cell_size=4,
+    grid_width=40,
+    grid_height=44,
+    num_ghosts=2,
+    pellet_reward=1,
+    power_pellet_reward=5,
+    ghost_reward=10,
+    collision_penalty=-5,
+    frightened_duration=60,
+    initial_lives=3,
+    max_steps=2000,
+    ghost_spawn_delay=60,
+    ghost_move_period=6,
+    player_move_period=3,
+    background_color=(0, 20, 100),
+    wall_color=(200, 50, 50),
+    blocked_color=(0, 20, 100),
+    pellet_color=(200, 50, 50),
+    power_pellet_color=(255, 255, 255),
+    button_color=(255, 105, 180),
+    pacman_color=(255, 255, 0),
+    button_power_duration=40,
+    ghost_colors=(
+        (255, 0, 0),
+        (255, 184, 255),
+        (0, 255, 255),
+        (255, 184, 82),
+    ),
+    maze_layout=(
+        "1111111111111111111111111111111111111111",
+        "1000000000100000000000000000010000000001",
+        "10222222201022222222222222220102222G2201",
+        "1020000020102000000000000002010200000201",
+        "1020111020102011111111111102010201110201",
+        "1020111020102011111111111102010201110201",
+        "1020111020102011111111111102010201110201",
+        "1020000020002000000000000002000200000201",
+        "1022222222222222222222222222222222222201",
+        "1000200020000020000000000200000200020001",
+        "1110201020111020111111110201110201020111",
+        "1110201020111020111111110201110201020111",
+        "1110201020111020111111110201110201020111",
+        "0000201020000020000000000200000201020000",
+        "2222201022222222222222222222222201022222",
+        "0000201000000020000000000200000001020000",
+        "1110201111111020111111110201111111020111",
+        "1110201111111020100000010201111111020111",
+        "1110201111111020100000010201111111020111",
+        "0010200000000020100000010200000000020100",
+        "0010222222222220100000010222222222220100",
+        "0010200000000020100000010200000000020100",
+        "1110201111111020100000010201111111020111",
+        "1110201111111020111111110201111111020111",
+        "1110201111111020111111110201111111020111",
+        "0000201000000020000000000200000001020000",
+        "2222201022222222222P22222222222201022222",
+        "0000201020002000200000020002000201020000",
+        "1110201020102010201111020102010201020111",
+        "1110201020102010201111020102010201020111",
+        "1110201020102010201111020102010201020111",
+        "1000200020102010200000020102010200020001",
+        "1022222220102010222222220102010222222201",
+        "1020000020102010200000020102010200000201",
+        "1020111020102000201111020002010201110201",
+        "1020111020102222201111022222010201110201",
+        "1020111020100000201111020000010201110201",
+        "1020111020111110201111020111110201110201",
+        "1020111020111110201111020111110201110201",
+        "1020111020111110201111020111110201110201",
+        "1020000020000000200000020000000200000201",
+        "1022222222222222222222222222222222222201",
+        "1000000000000000000000000000000000000001",
+        "1111111111111111111111111111111111111111",
+    ),
+    pellet_mask=pellet_mask
 )
 
 
@@ -236,7 +320,7 @@ def _parse_layout(layout: Tuple[str, ...], expected_ghosts: int):
 
 class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInfo, MsPacmanConstants]):
     def __init__(self, consts: MsPacmanConstants = None, reward_funcs: list[callable] = None):
-        consts = consts or MsPacmanConstants()
+        consts = consts or DEFAULT_MSPACMAN_CONSTANTS
         super().__init__(consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -256,19 +340,17 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
         grid_h, grid_w = self.wall_grid.shape
 
-        # Override pellets with provided mask if any. If mask shape differs, repeat and crop to fit.
-        if self.consts.pellet_mask:
-            mask_arr = np.array(self.consts.pellet_mask, dtype=np.int32)
-            mh, mw = mask_arr.shape
-            rep_y = int(np.ceil(grid_h / mh))
-            rep_x = int(np.ceil(grid_w / mw))
-            expanded = np.kron(mask_arr, np.ones((rep_y, rep_x), dtype=np.int32))
-            expanded = expanded[:grid_h, :grid_w]
-            pellets = jnp.array(expanded, dtype=jnp.int32)
-        else:
-            # Default: pellets only on every other traversable tile (checkerboard) where wall_grid==0/2
-            checker = (jnp.add.outer(jnp.arange(grid_h), jnp.arange(grid_w)) % 2) == 0
-            pellets = jnp.where(jnp.logical_and(self.wall_grid == 2, checker), 1, 0)
+        # Generate pellets using maze layout '2' markers (already defined positions)
+        grid_h, grid_w = self.wall_grid.shape
+        pellets = jnp.zeros((grid_h, grid_w), dtype=jnp.int32)
+        
+        # Place pellets where maze_layout has '2' markers
+        for y, row in enumerate(self.consts.maze_layout):
+            for x, char in enumerate(row):
+                if char == '2':  # Pellet position in maze layout
+                    pellets = pellets.at[y, x].set(1)
+                elif char == 'G':  # Power pellet position
+                    pellets = pellets.at[y, x].set(2)
 
         # Thin out provided mask to every other tile as well
         #if self.consts.pellet_mask:
@@ -314,7 +396,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         state = MsPacmanState(
             pacman_x=self.pacman_spawn[0],
             pacman_y=self.pacman_spawn[1],
-            direction=jnp.array([0, 0], dtype=jnp.int32),
+            direction=jnp.array([-1, 0], dtype=jnp.int32),  # Face left initially
             ghost_positions=self.ghost_spawn_positions,
             pellets=self.initial_pellets,
             power_timer=jnp.array(0, dtype=jnp.int32),
@@ -405,7 +487,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         pacman_y = jax.lax.select(hit_without_power, self.pacman_spawn[1], pacman_y)
         ghost_positions = jax.lax.select(hit_without_power, self.ghost_spawn_positions, ghost_positions)
         power_timer = jax.lax.select(hit_without_power, jnp.array(0, dtype=jnp.int32), power_timer)
-        direction = jax.lax.select(hit_without_power, zero_dir, direction)
+        left_dir = jnp.array([-1, 0], dtype=jnp.int32)  # Face left when hit
+        direction = jax.lax.select(hit_without_power, left_dir, direction)
 
         time = state.time + 1
 
@@ -593,7 +676,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 class MsPacmanRenderer(JAXGameRenderer):
     def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, button_grid: jnp.ndarray = None,):
         super().__init__()
-        self.consts = consts or MsPacmanConstants()
+        self.consts = consts or DEFAULT_MSPACMAN_CONSTANTS
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
@@ -637,28 +720,58 @@ class MsPacmanRenderer(JAXGameRenderer):
             [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],  # 8
             [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],  # 9
         ], dtype=jnp.uint8)
-        self.background_image = self._load_freeway_background()
-        self.pac_sprite = self._load_car_sprite()
+        self.background_image = None
+        self.pacman_sprites = self._load_pacman_sprites()
+        self.ghost_sprites = self._load_ghost_sprites()
         self._base_grid_pixels = self._create_base_grid()
         self._base_canvas = self._create_base_canvas(self._base_grid_pixels)
 
-    def _load_freeway_background(self) -> jnp.ndarray | None:
-        """Load the Freeway background sprite as a quick visual test, if available."""
+    def _load_pacman_sprites(self) -> jnp.ndarray | None:
+        """Load Ms. Pac-Man sprites from the sprites directory."""
         try:
-            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "background.npy")
-            bg_rgba = np.load(path)
-            return jnp.asarray(bg_rgba, dtype=jnp.uint8)
+            sprite_dir = os.path.join(os.path.dirname(__file__), "sprites", "mspacman")
+            sprites = []
+            for i in range(4):
+                path = os.path.join(sprite_dir, f"pacman_{i}.npy")
+                sprite_rgba = np.load(path)
+                sprites.append(jnp.asarray(sprite_rgba, dtype=jnp.uint8))
+            return jnp.stack(sprites)  # Shape: (4, height, width, channels)
         except Exception:
             return None
 
-    def _load_car_sprite(self) -> jnp.ndarray | None:
-        """Load the Freeway red car sprite to use as MsPacman."""
+    def _load_ghost_sprites(self) -> jnp.ndarray | None:
+        """Load ghost sprites from the sprites directory."""
         try:
-            path = os.path.join(os.path.dirname(__file__), "sprites", "freeway", "car_red.npy")
-            car_rgba = np.load(path)
-            return jnp.asarray(car_rgba, dtype=jnp.uint8)
+            sprite_dir = os.path.join(os.path.dirname(__file__), "sprites", "mspacman")
+            # Order: blinky, pinky, inky, sue, blue, white
+            ghost_types = ["blinky", "pinky", "inky", "sue", "blue", "white"]
+            sprites = []
+            for ghost_type in ghost_types:
+                path = os.path.join(sprite_dir, f"ghost_{ghost_type}.npy")
+                sprite_rgba = np.load(path)
+                sprites.append(jnp.asarray(sprite_rgba, dtype=jnp.uint8))
+            return jnp.stack(sprites)  # Shape: (6, height, width, channels)
         except Exception:
             return None
+
+    def _rotate_sprite(self, sprite: jnp.ndarray, direction: int) -> jnp.ndarray:
+        """Rotate sprite based on direction: 0=left, 1=up, 2=right, 3=down"""
+        # JAX-compatible rotation using conditional logic
+        def rotate_left(): return sprite  # Base sprite faces left
+        def rotate_up(): return jnp.rot90(sprite, k=3)  # 270° clockwise
+        def rotate_right(): return jnp.fliplr(sprite)  # Flip horizontally instead of rotate
+        def rotate_down(): return jnp.rot90(sprite, k=1)  # 90° clockwise
+        
+        return jax.lax.cond(
+            direction == 0, rotate_left,
+            lambda: jax.lax.cond(
+                direction == 1, rotate_up,
+                lambda: jax.lax.cond(
+                    direction == 2, rotate_right,
+                    rotate_down
+                )
+            )
+        )
 
     def _create_base_grid(self) -> jnp.ndarray:
         """Pre-draw the static maze (background + walls) once."""
@@ -722,17 +835,22 @@ class MsPacmanRenderer(JAXGameRenderer):
         button_pixels = jnp.repeat(button_tiles, cell, axis=0)
         button_pixels = jnp.repeat(button_pixels, cell, axis=1)
 
-        row_idx = jnp.arange(grid_pixels.shape[0]) % cell
-        col_idx = jnp.arange(grid_pixels.shape[1]) % cell
+        # Create proper index arrays for the repeated grid
+        grid_h, grid_w = grid_pixels.shape[:2]
+        row_idx = jnp.arange(grid_h) % cell
+        col_idx = jnp.arange(grid_w) % cell
         row_idx = row_idx[:, None]
         col_idx = col_idx[None, :]
 
         pellet_half = jnp.maximum(cell // 6, 1)
         power_half = jnp.maximum(cell // 4, 2)
 
+        # Single dot pellet in center of cell (for 4x4 cell, center is at 1,1)
+        center_row = (cell - 1) // 2  # For cell=4, this gives 1
+        center_col = (cell - 1) // 2  # For cell=4, this gives 1
         pellet_center = jnp.logical_and(
-            jnp.abs(row_idx - cell // 2) < pellet_half,
-            jnp.abs(col_idx - cell // 2) < pellet_half,
+            row_idx == center_row,
+            col_idx == center_col,
         )[..., None]
         power_center = jnp.logical_and(
             jnp.abs(row_idx - cell // 2) < power_half,
@@ -803,38 +921,90 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         pac_px = self.offset_x + state.pacman_x * cell
         pac_py = self.offset_y + state.pacman_y * cell
-        if self.pac_sprite is not None:
-            sx = max((cell - self.pac_sprite.shape[1]) // 2, 0)
-            sy = max((cell - self.pac_sprite.shape[0]) // 2, 0)
-            canvas = self._alpha_blend(canvas, self.pac_sprite, pac_py + sy, pac_px + sx)
+        
+        # Draw Ms. Pac-Man with animated and directional sprite
+        if self.pacman_sprites is not None:
+            # Determine direction: 0=left, 1=up, 2=right, 3=down
+            dir_x, dir_y = state.direction[0], state.direction[1]
+            
+            # Map direction to rotation (base sprite faces left)
+            direction_idx = jnp.where(dir_x < 0, 0,  # left
+                            jnp.where(dir_y < 0, 1,  # up
+                            jnp.where(dir_x > 0, 2,  # right
+                            3)))  # down (default)
+            
+            # Animation frame based on time
+            anim_frame = (state.time // 4) % 4
+            
+            # Select sprite based on direction and animation
+            # We'll rotate sprites based on direction
+            base_sprite = self.pacman_sprites[anim_frame]
+            rotated_sprite = self._rotate_sprite(base_sprite, direction_idx)
+            
+            # Center sprite in cell
+            sx = (cell - rotated_sprite.shape[1]) // 2
+            sy = (cell - rotated_sprite.shape[0]) // 2
+            canvas = self._alpha_blend(canvas, rotated_sprite, pac_py + sy, pac_px + sx)
         else:
             pac_block = jnp.ones((cell, cell, 3), dtype=jnp.uint8) * self.pacman_color
             canvas = jax.lax.dynamic_update_slice(canvas, pac_block, (pac_py, pac_px, 0))
 
-        color_indices = jnp.mod(jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), self.ghost_colors.shape[0])
-        ghost_palette = self.ghost_colors[color_indices]
-        ghost_size = cell * 3
-        ghost_blocks = jnp.ones((self.consts.num_ghosts, ghost_size, ghost_size, 3), dtype=jnp.uint8) * ghost_palette[:, None, None, :]
         ghost_positions = state.ghost_positions
+        # Draw ghosts with proper sprites
+        if self.ghost_sprites is not None:
+            def draw_ghost_sprite(img, inputs):
+                idx, pos = inputs
+                # Use frightened state or normal ghost colors - use JAX-compatible indexing
+                frightened = state.power_timer > 0
+                transition_time = state.power_timer > 30
+                
+                # JAX-compatible sprite selection
+                normal_idx = idx % 4  # 0-3 for normal ghosts
+                blue_idx = jnp.array(4, dtype=jnp.int32)  # blue sprite
+                white_idx = jnp.array(5, dtype=jnp.int32)  # white sprite
+                
+                # Choose sprite based on frightened state
+                frightened_sprite = jnp.where(transition_time, blue_idx, white_idx)
+                sprite_idx = jnp.where(frightened, frightened_sprite, normal_idx)
+                
+                ghost_sprite = self.ghost_sprites[sprite_idx]  # Use JAX array indexing
+                gx = self.offset_x + pos[0] * cell
+                gy = self.offset_y + pos[1] * cell
+                # Center sprite in cell
+                sx = (cell - ghost_sprite.shape[1]) // 2
+                sy = (cell - ghost_sprite.shape[0]) // 2
+                return self._alpha_blend(img, ghost_sprite, gy + sy, gx + sx), None
+            
+            canvas, _ = jax.lax.scan(
+                draw_ghost_sprite,
+                canvas,
+                (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
+            )
+        else:
+            # Fallback to colored blocks if sprites not available
+            color_indices = jnp.mod(jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), self.ghost_colors.shape[0])
+            ghost_palette = self.ghost_colors[color_indices]
+            ghost_size = cell * 3
+            ghost_blocks = jnp.ones((self.consts.num_ghosts, ghost_size, ghost_size, 3), dtype=jnp.uint8) * ghost_palette[:, None, None, :]
 
-        def draw_ghost(img, inputs):
-            idx, pos = inputs
-            block = ghost_blocks[idx]
-            # Center larger ghost block on tile
-            gx = self.offset_x + pos[0] * cell - (ghost_size - cell) // 2
-            gy = self.offset_y + pos[1] * cell - (ghost_size - cell) // 2
-            max_x = img.shape[1] - ghost_size
-            max_y = img.shape[0] - ghost_size
-            gx = jnp.clip(gx, 0, max_x)
-            gy = jnp.clip(gy, 0, max_y)
-            img = jax.lax.dynamic_update_slice(img, block, (gy, gx, 0))
-            return img, None
+            def draw_ghost(img, inputs):
+                idx, pos = inputs
+                block = ghost_blocks[idx]
+                # Center larger ghost block on tile
+                gx = self.offset_x + pos[0] * cell - (ghost_size - cell) // 2
+                gy = self.offset_y + pos[1] * cell - (ghost_size - cell) // 2
+                max_x = img.shape[1] - ghost_size
+                max_y = img.shape[0] - ghost_size
+                gx = jnp.clip(gx, 0, max_x)
+                gy = jnp.clip(gy, 0, max_y)
+                img = jax.lax.dynamic_update_slice(img, block, (gy, gx, 0))
+                return img, None
 
-        canvas, _ = jax.lax.scan(
-            draw_ghost,
-            canvas,
-            (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
-        )
+            canvas, _ = jax.lax.scan(
+                draw_ghost,
+                canvas,
+                (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
+            )
 
         return canvas
 
