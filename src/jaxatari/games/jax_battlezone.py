@@ -651,7 +651,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             def player_spotted(tank):
 
                 def too_close(tank):
-                    return move_to_player(tank, -1)  # Enemy keeps 30 units distance to player
+                    return move_to_player(tank, 1)  # Enemy keeps 30 units distance to player
                 
                 def too_far(tank):
                     return move_to_player(tank, -1)
