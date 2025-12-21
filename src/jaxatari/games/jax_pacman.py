@@ -290,13 +290,18 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             "pacmanMaps", "maze1.txt"
         )
         
+        maze_file_pellet_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "pacmanMaps", "maze1_pellet.txt"
+        )
+        
         # Check if maze file exists, raise error if not found
         if not os.path.exists(maze_file_path):
             raise FileNotFoundError(f"Maze file not found: {maze_file_path}")
         
         # Initialize maze layout if not provided (load from file)
         if consts.MAZE_LAYOUT is None:
-            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_path))
+            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_pellet_path))
         else:
             self.consts = consts
         
