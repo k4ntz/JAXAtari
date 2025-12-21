@@ -17,7 +17,7 @@ from math import sqrt, cos, sin
 # Configuration: if STATIC_COORDS is True, transform enemy positions by undoing
 # the player's movement so displayed coordinates are in a static/world frame.
 # Tweak `MOVE_SPEED` and `ANGULAR_SPEED` to match the player's in-game movement.
-STATIC_COORDS = True
+STATIC_COORDS = False
 # linear movement per frame when holding UP/DOWN (units matching parsed X/Z)
 MOVE_SPEED = 0.25 - 0.00195308333
 TURN_MOVE_SPEED = 0.057674

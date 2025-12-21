@@ -134,7 +134,7 @@ class BattlezoneConstants(NamedTuple):
     LIFE_X_OFFSET:int = 8
     SCORE_POS_X:int = 89
     SCORE_POS_Y:int = 179
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.15
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1
     PLAYER_ROTATION_SPEED:float = 2*jnp.pi/536
     PLAYER_SPEED:float = 0.25
     PROJECTILE_SPEED:float = 0.5
@@ -142,9 +142,9 @@ class BattlezoneConstants(NamedTuple):
     FIRE_CD:int = 150 #todo change
     HITBOX_SIZE:float = 6.0
     DEATH_ANIM_LENGTH:int = 30
-    ENEMY_HITBOX_SIZE: float = 4.5
+    ENEMY_HITBOX_SIZE: float = 4.0
     ENEMY_SCORES:chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
-    ENEMY_DEATH_ANIM_LENGTH:int = 15
+    ENEMY_DEATH_ANIM_LENGTH:int = 30
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
@@ -158,6 +158,7 @@ class BattlezoneConstants(NamedTuple):
 
 
 class Projectile(NamedTuple):
+    """Class holding projectiles. properties are arrays."""
     x: chex.Array
     z: chex.Array
     orientation_angle: chex.Array
@@ -330,7 +331,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _single_projectile_step(self, projectile:Projectile) -> Projectile:
+    def _single_projectile_step(self, projectile: Projectile) -> Projectile:
+        """implements movement of projectiles"""
         dir_x = -jnp.sin(projectile.orientation_angle)
         dir_z = jnp.cos(projectile.orientation_angle)
         new_x = projectile.x - dir_x*self.consts.PROJECTILE_SPEED
@@ -341,7 +343,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             z=new_z,
         )
 
-    def _player_projectile_col_check(self, state:BattlezoneState):
+    def _player_projectile_col_check(self, state: BattlezoneState):
+        """"""
         hit_arr = (jax.vmap(self._player_projectile_collision_check, in_axes=(0, None))
                    (state.enemies, state.player_projectile))
         def _score_func(state1:BattlezoneState, in_tuple):
@@ -415,13 +418,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 float, bool, BattlezoneInfo]:
         previous_state = state
         def normal_step(state):
+            # update counters
             new_state = state._replace(step_counter=state.step_counter+1, cur_fire_cd=state.cur_fire_cd-1)
             new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
                                                                +self.consts.RADAR_ROTATION_SPEED)%360)
 
             #-------------------projectiles-------------
+            # move player projectile forwards
             new_player_projectile = self._single_projectile_step(state.player_projectile)
             new_state = new_state._replace(player_projectile=new_player_projectile)
+            # check whether player projectile hit an enemy
             new_state = self._player_projectile_col_check(new_state)
 
             new_enemy_projectiles = jax.vmap(self._single_projectile_step, 0)(state.enemy_projectiles)
@@ -512,11 +518,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                             (obj.orientation_angle-angle)%(2*jnp.pi))
 
 
-    def _player_projectile_collision_check(self, obj1:Enemy, obj2:Projectile):
+    def _player_projectile_collision_check(self, enemies: Enemy, player_projectiles: Projectile) -> bool:
+        """checks whether a player projectile hit an enemy. player_projectiles contains arrays of size 1"""
         s = self.consts.ENEMY_HITBOX_SIZE
-        distx = jnp.abs((obj1.x+s) - obj2.x) <= s
-        distz = jnp.abs((obj1.z+s) - obj2.z) <= s
-        return jnp.all(jnp.stack([distx, distz, obj1.active, obj2.active]))
+        distx = jnp.abs((enemies.x+s) - player_projectiles.x) <= s
+        distz = jnp.abs((enemies.z+s) - player_projectiles.z) <= s
+        return jnp.all(jnp.stack([distx, distz, enemies.active, player_projectiles.active]))
 
 
     def _enemy_projectile_collision_check(self, obj:Projectile):
@@ -718,11 +725,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         shoot_cond = jnp.all(jnp.array([enemy.enemy_type != EnemyType.SAUCER,
                                         enemy.shoot_cd <= 0,
-                                        jnp.abs(angle_diff)<=rot_speed,
-                                        enemy.distance<= 31.0,#todo change
+                                        jnp.abs(angle_diff) <= rot_speed,
+                                        enemy.distance <= 31.0, # TODO change
                                         enemy.active]))
 
-        new_enemy, new_projectile = jax.lax.cond(shoot_cond, shoot_projectile, lambda x : x,
+        new_enemy, new_projectile = jax.lax.cond(shoot_cond, shoot_projectile, lambda x: x,
                                                  (enemy, projectile))
         return (jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement), new_enemy),
                 new_projectile)
@@ -1095,6 +1102,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
 
     def render_single_enemy(self, raster, enemy:Enemy):
+
         def enemy_active(enemy):
             enemy_mask = self.get_enemy_mask(enemy)
             zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
@@ -1103,20 +1111,35 @@ class BattlezoneRenderer(JAXGameRenderer):
             x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
             return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+        
         def enemy_inactive(enemy):
+
             def render_death(enemy):
+                # choose frame of death animation based on death_anim_counter
                 n = enemy.death_anim_counter
-                index =jnp.where(n >= 12,0,jnp.where((n >= 6), 1, 2)) #if it works it works
+                index = jnp.where(
+                    n >= 0.8 * self.consts.ENEMY_DEATH_ANIM_LENGTH, 
+                    0, # index 0 for first 20% of the animation
+                    jnp.where(
+                        n >= 0.4 * self.consts.ENEMY_DEATH_ANIM_LENGTH, 
+                        1, # index 1 for second 40% of the animation
+                        2 # index 2 for last 40% of the animation
+                    )
+                ) # if it works it works
                 mask = self.enemy_explosion_mask[index]
+
+                # apply zoom based on distance
                 zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
                                self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
                 x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
                 return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+            
             def _pass(_):
                 return raster
 
+            # render death animation if death_anim_counter > 0, else render nothing
             return jax.lax.cond(enemy.death_anim_counter==0, _pass, render_death, enemy)
 
         return jax.lax.cond(enemy.active, enemy_active, enemy_inactive, enemy)
