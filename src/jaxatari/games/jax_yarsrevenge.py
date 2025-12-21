@@ -17,7 +17,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 class Direction(IntEnum):
     """
     Enum that encodes the 8 compass directions plus a special “center”
-    (no movement) value. The numeric values are used only for arithmetic
+    (no movement) value. The numeric values are used for arithmetic
     operations and also storing directions as integer.
     """
 
@@ -237,7 +237,17 @@ class YarsRevengeConstants(NamedTuple):
 
     # Animation timings
     QOTILE_DEATH_FRAMES = 223  # Animation duration on Qotile's Death
-    YAR_DEATH_FRAMES = 55  # Animation duration on Yar's Death
+    YAR_DEATH_FRAMES = 86  # Animation duration on Yar's Death
+    YAR_DEATH_TURN_FRAMES = 4  # Frame amount where yar rotates to up on death
+    YAR_DEATH_EXPLOSION_CUTOFFS = jnp.array(
+        [
+            40,
+            56,
+            72,
+            76,
+            80,
+        ]
+    )  # Frame amount cutoffs for explosion animation
 
     # Points
     SHIELD_CELL_DESTROY_POINTS = 69  # Destroying a cell with energy missile or cannon
@@ -1261,12 +1271,8 @@ class JaxYarsRevenge(
         )
 
         yar_death = new_state.game_state == YarsRevengeGameState.YAR_DEATH_ANIMATION
-        yar_death_end = jnp.logical_and(yar_death, new_state.lives <= 0)
-        yar_death_continue = jnp.logical_and(yar_death, new_state.lives > 0)
 
-        branch = jnp.select(
-            [qotile_death, yar_death_end, yar_death_continue], [0, 1, 2], default=3
-        )
+        branch = jnp.select([qotile_death, yar_death], [0, 1], default=2)
 
         return jax.lax.switch(
             branch,
@@ -1276,7 +1282,6 @@ class JaxYarsRevenge(
                         score=new_state.score, lives=new_state.lives
                     )
                 ),  # Advance to the next stage
-                lambda: self._construct_initial_state(0),  # No lives left, reset
                 lambda: self._construct_initial_state(new_state.stage)._replace(
                     score=new_state.score,
                     lives=new_state.lives,
@@ -1358,20 +1363,23 @@ class JaxYarsRevenge(
         state, action = info
         new_state = state
 
+        # Parse input action into flags
+        direction_flags, fire = self._parse_action_flags(action)
+
+        qotile_death = state.game_state == YarsRevengeGameState.QOTILE_DEATH_ANIMATION
+        yar_death = state.game_state == YarsRevengeGameState.YAR_DEATH_ANIMATION
+
         target_animation_frames = jnp.where(
-            state.game_state == YarsRevengeGameState.QOTILE_DEATH_ANIMATION,
+            qotile_death,
             self.consts.QOTILE_DEATH_FRAMES,
             jnp.where(
-                state.game_state == YarsRevengeGameState.YAR_DEATH_ANIMATION,
+                yar_death,
                 self.consts.YAR_DEATH_FRAMES,
                 0,
             ),
         )
 
-        # Parse input action into flags
-        direction_flags, fire = self._parse_action_flags(action)
-
-        # Finalise next state
+        # Calculate next state
         new_state = jax.lax.cond(
             state.game_state_timer >= target_animation_frames,
             lambda: self._finalize_next_state(new_state)._replace(
@@ -1380,6 +1388,18 @@ class JaxYarsRevenge(
             lambda: new_state._replace(
                 game_state_timer=state.game_state_timer + 1
             ),  # Increment the timer
+        )
+
+        # Yar animation on death
+        new_state = jax.lax.cond(
+            jnp.logical_and(
+                state.game_state_timer % self.consts.YAR_DEATH_TURN_FRAMES == 0,
+                jnp.logical_and(yar_death, state.yar.direction != Direction.UP),
+            ),
+            lambda: new_state._replace(
+                yar=state.yar._replace(direction=(state.yar.direction - 1) % 8)
+            ),  # Counter-clockwise rotation
+            lambda: new_state,
         )
 
         return new_state
@@ -1395,8 +1415,12 @@ class JaxYarsRevenge(
         # Parse input action into flags
         _, fire = self._parse_action_flags(action)
 
+        lives_left = state.lives > 0
+
         new_game_state = jnp.where(
-            fire, YarsRevengeGameState.PLAYING, YarsRevengeGameState.SCOREBOARD
+            jnp.logical_and(fire, lives_left),
+            YarsRevengeGameState.PLAYING,
+            YarsRevengeGameState.SCOREBOARD,
         )
         new_state = new_state._replace(game_state=new_game_state, game_state_timer=0)
 
@@ -1702,7 +1726,9 @@ class JaxYarsRevenge(
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state):
         """Returns if the game has finished, also when lives are ran out, or less than zero."""
-        return state.lives <= 0
+        return jnp.logical_and(
+            state.lives <= 0, state.game_state == YarsRevengeGameState.SCOREBOARD
+        )
 
 
 class YarsRevengeRenderer(JAXGameRenderer):
@@ -1789,6 +1815,17 @@ class YarsRevengeRenderer(JAXGameRenderer):
                     self.consts.NEUTRAL_ZONE_COLOR + (255,), dtype=jnp.uint8
                 ).reshape(1, 1, 4),
             },
+            {
+                "name": "yar_death",
+                "type": "group",
+                "files": [
+                    "yar_death/1.npy",
+                    "yar_death/2.npy",
+                    "yar_death/3.npy",
+                    "yar_death/4.npy",
+                    "yar_death/5.npy",
+                ],
+            },
             {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
         ]
 
@@ -1812,15 +1849,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_game_elements(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
-        """
-        Draws the game elements into the raster while playing the game.
-        Takes the state and a raster as tuple for input argument.
-        """
-
+    def _render_neutral_zone(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         state, raster = info
 
-        # Neutral zone overlay
         neutral_zone_mask = jnp.full(
             (self.consts.NEUTRAL_ZONE_SIZE[1], self.consts.NEUTRAL_ZONE_SIZE[0]),
             self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR],
@@ -1829,19 +1860,30 @@ class YarsRevengeRenderer(JAXGameRenderer):
             raster, state.neutral_zone.x, state.neutral_zone.y, neutral_zone_mask
         )
 
-        # Yar sprite, choose animation frame based on movement speed to render
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_yar(self, info: Tuple[YarsRevengeState, jnp.ndarray], alive=True):
+        state, raster = info
+
         yar_animation_duration = jax.lax.cond(
             state.yar_state == YarState.MOVING,
             lambda: self.consts.MOVING_YAR_MOVEMENT_FRAME,
             lambda: self.consts.STEADY_YAR_MOVEMENT_FRAME,
         )
+        yar_animate = jnp.where(alive, 2, 1)
         yar_sprite_idx = self.get_animation_idx(
-            state.step_counter, state.yar.direction, yar_animation_duration, 2
+            state.step_counter, state.yar.direction, yar_animation_duration, yar_animate
         )
         yar_mask = self.SHAPE_MASKS["yar"][yar_sprite_idx]
         raster = self.jr.render_at(raster, state.yar.x, state.yar.y, yar_mask)
 
-        # Energy shield
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_energy_shield(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
         raster = self.jr.render_grid_inverse(
             raster=raster,
             grid_state=state.energy_shield_state.astype(jnp.int32),
@@ -1855,7 +1897,12 @@ class YarsRevengeRenderer(JAXGameRenderer):
             ),
         )
 
-        # Destroyer sprite
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_destroyer(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
         destroyer_mask = jnp.ones(
             (self.consts.DESTROYER_SIZE[1], self.consts.DESTROYER_SIZE[0])
         )
@@ -1863,7 +1910,12 @@ class YarsRevengeRenderer(JAXGameRenderer):
             raster, state.destroyer.x, state.destroyer.y, destroyer_mask
         )
 
-        # Energy missile, only when it exists
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_energy_missile(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
         energy_missile_mask = jnp.ones(
             (self.consts.ENERGY_MISSILE_SIZE[1], self.consts.ENERGY_MISSILE_SIZE[0])
         )
@@ -1878,7 +1930,12 @@ class YarsRevengeRenderer(JAXGameRenderer):
             raster,
         )
 
-        # Cannon alternates between full and half sprite every frame
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_cannon(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
         cannon_mask = jnp.where(
             (state.step_counter // self.consts.CANNON_MOVEMENT_FRAME) % 2 == 0,
             jnp.ones((self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0])),
@@ -1902,7 +1959,12 @@ class YarsRevengeRenderer(JAXGameRenderer):
             raster,
         )
 
-        # Qotile and swirl, one sprite each (swirl has its own animation)
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_qotile_and_swirl(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
         qotile_mask = self.SHAPE_MASKS["qotile"]
         swirl_idx = self.get_animation_idx(
             state.step_counter, 0, self.consts.SWIRL_MOVEMENT_FRAME, 4
@@ -1914,6 +1976,74 @@ class YarsRevengeRenderer(JAXGameRenderer):
             self.jr.render_at(raster, state.swirl.x, state.swirl.y, swirl_mask),
             self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask),
         )
+
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_digits(self, raster, x, y, value):
+        digits_mask = self.jr.int_to_digits(value, max_digits=9)
+        num_digits = jnp.minimum(
+            jnp.maximum(1, jnp.ceil(jnp.log10(value + 1))).astype(jnp.int32),
+            self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+        start_index = self.consts.SCOREBOARD_MAX_DIGITS - num_digits
+        raster = self.jr.render_label_selective(
+            raster,
+            x,
+            y,
+            all_digits=digits_mask,
+            digit_id_masks=self.SHAPE_MASKS["digits"],
+            start_index=start_index,
+            num_to_render=num_digits,
+            spacing=12,
+            max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_yar_explosion(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
+        yar_death_sprite_idx = jnp.searchsorted(
+            self.consts.YAR_DEATH_EXPLOSION_CUTOFFS,
+            state.game_state_timer,
+            side="right",
+        )
+        yar_mask = self.SHAPE_MASKS["yar_death"][yar_death_sprite_idx]
+        raster = self.jr.render_at(raster, state.yar.x, state.yar.y, yar_mask)
+
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_game_elements(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the game elements into the raster while playing the game.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        # Neutral zone overlay
+        raster = self._render_neutral_zone((state, raster))
+
+        # Energy shield
+        raster = self._render_energy_shield((state, raster))
+
+        # Yar sprite, choose animation frame based on movement speed to render
+        raster = self._render_yar((state, raster))
+
+        # Destroyer sprite
+        raster = self._render_destroyer((state, raster))
+
+        # Energy missile, only when it exists
+        raster = self._render_energy_missile((state, raster))
+
+        # Cannon alternates between full and half sprite every frame
+        raster = self._render_cannon((state, raster))
+
+        # Qotile and swirl, one sprite each (swirl has its own animation)
+        raster = self._render_qotile_and_swirl((state, raster))
 
         return raster.astype(jnp.uint8)
 
@@ -1927,42 +2057,41 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         # Rendering the score digits
-        score_digits_mask = self.jr.int_to_digits(state.score, max_digits=9)
-        score_num_digits = jnp.minimum(
-            jnp.maximum(1, jnp.ceil(jnp.log10(state.score + 1))).astype(jnp.int32),
-            self.consts.SCOREBOARD_MAX_DIGITS,
-        )
-        score_start_index = self.consts.SCOREBOARD_MAX_DIGITS - score_num_digits
-        raster = self.jr.render_label_selective(
-            raster,
-            self.consts.SCOREBOARD_X,
-            self.consts.SCOREBOARD_Y,
-            all_digits=score_digits_mask,
-            digit_id_masks=self.SHAPE_MASKS["digits"],
-            start_index=score_start_index,
-            num_to_render=score_num_digits,
-            spacing=12,
-            max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
+        raster = self._render_digits(
+            raster, self.consts.SCOREBOARD_X, self.consts.SCOREBOARD_Y, state.score
         )
 
         # Rendering the lives
-        life_digits_mask = self.jr.int_to_digits(state.lives, max_digits=9)
-        life_num_digits = jnp.minimum(
-            jnp.maximum(1, jnp.ceil(jnp.log10(state.lives + 1))).astype(jnp.int32),
-            self.consts.SCOREBOARD_MAX_DIGITS,
+        raster = self._render_digits(
+            raster, self.consts.LIFE_X, self.consts.LIFE_Y, state.lives
         )
-        life_start_index = self.consts.SCOREBOARD_MAX_DIGITS - life_num_digits
-        raster = self.jr.render_label_selective(
-            raster,
-            self.consts.LIFE_X,
-            self.consts.LIFE_Y,
-            all_digits=life_digits_mask,
-            digit_id_masks=self.SHAPE_MASKS["digits"],
-            start_index=life_start_index,
-            num_to_render=life_num_digits,
-            spacing=12,
-            max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
+
+        return raster.astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_yar_death(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the relevant items into the raster on Yar's death.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        # Neutral zone overlay
+        raster = self._render_neutral_zone((state, raster))
+
+        # Energy shield
+        raster = self._render_energy_shield((state, raster))
+
+        # Yar sprite, choose animation frame based on movement speed to render
+        raster = jax.lax.cond(
+            state.game_state_timer < self.consts.YAR_DEATH_EXPLOSION_CUTOFFS[0],
+            lambda: self._render_yar((state, raster), alive=False),
+            lambda: self._render_yar_explosion((state, raster)),
         )
+
+        # Qotile and swirl, one sprite each (swirl has its own animation)
+        raster = self._render_qotile_and_swirl((state, raster))
 
         return raster.astype(jnp.uint8)
 
@@ -1980,7 +2109,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
             [
                 self._render_game_elements,
                 self._render_scoreboard,
-                self._render_game_elements,
+                self._render_yar_death,
                 self._render_game_elements,
             ],
             operand=(state, raster),
