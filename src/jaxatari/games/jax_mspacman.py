@@ -206,7 +206,7 @@ class MsPacmanConstants(NamedTuple):
     player_move_period: int = 3  # pacman moves every N frames
     ghost_move_period: int = 2  # ghosts move every N frames
     pellet_mask: Tuple[Tuple[int, ...], ...] = None  # Will be set below
-    background_color: Tuple[int, int, int] = (0, 20, 100)
+    background_color: Tuple[int, int, int] = (0, 0, 0)
     wall_color: Tuple[int, int, int] = (200, 50, 50)
     blocked_color: Tuple[int, int, int] = (0, 20, 100)
     pellet_color: Tuple[int, int, int] = (200, 50, 50)
@@ -311,7 +311,7 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
     ghost_spawn_delay=60,
     ghost_move_period=6,
     player_move_period=3,
-    background_color=(0, 20, 100),
+    background_color=(0, 0, 0),
     wall_color=(200, 50, 50),
     blocked_color=(0, 20, 100),
     pellet_color=(200, 50, 50),
@@ -1017,14 +1017,21 @@ class MsPacmanRenderer(JAXGameRenderer):
         cell = self.consts.cell_size
         wall_h, wall_w = self.wall_grid.shape
         base_shape = (wall_h, wall_w, 3)
-        soft_mask = jnp.logical_and(self.wall_grid == 1, self.pellet_template == -1)
-        wall_mask = jnp.logical_and(self.wall_grid == 1, jnp.logical_not(soft_mask))[..., None]
-        blocked_mask = soft_mask[..., None]  # 0-tiles marked with -1 render as path color
-        background_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.background_color
-        wall_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.wall_color
-        blocked_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.blocked_color
-        grid = jnp.where(wall_mask, wall_layer, background_layer)
-        grid = jnp.where(blocked_mask, blocked_layer, grid)
+        # Create masks for different maze elements
+        wall_mask = (self.wall_grid == 1)[..., None]  # Walls
+        corridor_mask = (self.wall_grid == 0)[..., None]  # Corridors (walkable paths)
+        soft_mask = jnp.logical_and(self.wall_grid == 1, self.pellet_template == -1)[..., None]  # Soft walls (blue walls)
+        
+        # Create layers
+        background_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.background_color  # Black background
+        corridor_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.blocked_color  # Blue corridors
+        wall_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.wall_color  # Red walls
+        soft_layer = jnp.ones(base_shape, dtype=jnp.uint8) * self.blocked_color  # Blue soft walls
+        
+        # Combine layers: start with background, add walls, then override soft walls with blue, then add corridors
+        grid = jnp.where(corridor_mask, corridor_layer, background_layer)  # Corridors are blue
+        grid = jnp.where(wall_mask, wall_layer, grid)  # Walls are red
+        grid = jnp.where(soft_mask, soft_layer, grid)  # Soft walls override to blue
         grid_pixels = jnp.repeat(grid, cell, axis=0)
         grid_pixels = jnp.repeat(grid_pixels, cell, axis=1)
         return grid_pixels
@@ -1275,15 +1282,54 @@ class MsPacmanRenderer(JAXGameRenderer):
                 (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
             )
 
-        # Draw lives display near score (top-left area)
+        # Draw lives display above the maze
         def draw_life_icon(canvas, idx):
-            # Position lives icons at top-left, below score area
-            life_x = 10 + idx * 20
-            life_y = 30
-            # Draw small Pac-Man icon for each life (only if idx < remaining lives)
-            life_color = jnp.where(idx < state.lives, jnp.array(self.consts.pacman_color, dtype=jnp.uint8), jnp.array([0, 0, 0], dtype=jnp.uint8))
-            life_block = jnp.ones((8, 8, 3), dtype=jnp.uint8) * life_color
-            canvas = jax.lax.dynamic_update_slice(canvas, life_block, (life_y, life_x, 0))
+            # Position lives icons closer together and more to the right
+            life_x = 80 + idx * 20  # More to the right, closer spacing
+            life_y = 5  # Top of screen above maze
+            
+            if self.pacman_sprites is not None:
+                # Use Ms. Pac-Man sprite for lives
+                life_sprite = self.pacman_sprites[0]  # Use first sprite (facing left)
+                # Keep full size for better visibility
+                
+                # Color based on whether life is available using JAX-compatible logic
+                def make_normal_sprite(_):
+                    return life_sprite[:, :, :3]  # Return RGB only
+                
+                def make_grey_sprite(_):
+                    # Create grey version by averaging RGB channels
+                    rgb_sprite = life_sprite[:, :, :3]
+                    grey_avg = jnp.mean(rgb_sprite, axis=2, keepdims=True)
+                    # Return grey RGB (same value in all 3 channels)
+                    return jnp.concatenate([grey_avg, grey_avg, grey_avg], axis=2).astype(jnp.uint8)
+                
+                colored_sprite = jax.lax.cond(
+                    idx < state.lives,
+                    make_normal_sprite,
+                    make_grey_sprite,
+                    None
+                )
+                
+                # Draw the sprite
+                canvas = jax.lax.dynamic_update_slice(canvas, colored_sprite, (life_y, life_x, 0))
+            else:
+                # Fallback to colored blocks if sprites not available
+                def make_life_color(_):
+                    return jnp.array(self.consts.pacman_color, dtype=jnp.uint8)
+                
+                def make_grey_color(_):
+                    return jnp.array([100, 100, 100], dtype=jnp.uint8)
+                
+                life_color = jax.lax.cond(
+                    idx < state.lives,
+                    make_life_color,
+                    make_grey_color,
+                    None
+                )
+                life_block = jnp.ones((8, 8, 3), dtype=jnp.uint8) * life_color
+                canvas = jax.lax.dynamic_update_slice(canvas, life_block, (life_y, life_x, 0))
+            
             return canvas, None
 
         # Draw up to 3 life icons (fixed maximum for JAX compatibility)
