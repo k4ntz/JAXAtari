@@ -12,6 +12,7 @@ import os
 from functools import partial
 from PIL import Image
 import numpy as np
+import jaxatari.spaces as spaces
 
 
 def _get_default_asset_config() -> tuple:
@@ -97,14 +98,14 @@ class TutankhamConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
     SPEED: int = 4
-    PIXEL_COLOR: Tuple[int, int, int] = (255, 255, 255)  # white
+    PIXEL_COLOR: chex.Array = jnp.array([255, 255, 255], dtype=jnp.int32)  # white
 
-    PLAYER_SIZE: Tuple[int, int] = (5, 10)
+    PLAYER_SIZE: chex.Array = jnp.array([5, 10], dtype=jnp.int32)
 
     PLAYER_LIVES: int = 3
 
     # Missile constants
-    BULLET_SIZE: Tuple[int, int] = (1, 2)
+    BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
     BULLET_SPEED: int = 8
     AMMO_SUPPLY: int = 900 # frames until ammo runs out
 
@@ -112,7 +113,7 @@ class TutankhamConstants(NamedTuple):
     LASER_FLASH_COOLDOWN: int = 60  # frames
 
     # Creature constants -------------------------------------
-    CREATURE_SIZE: Tuple[int, int] = (10, 10)
+    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
 
     INACTIVE: int = 0
     ACTIVE: int = 1
@@ -131,13 +132,13 @@ class TutankhamConstants(NamedTuple):
     MYSTERY: int = 10
     WEAPON: int = 11
 
-    CREATURE_SPEED: chex.Array = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])  # speed for each creature type
-    CREATURE_POINTS: chex.Array = np.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3])  # points for each creature type
+    CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=jnp.int32)  # speed for each creature type
+    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3], dtype=jnp.int32)  # points for each creature type
 
     MAX_CREATURES: int = 3 # max number of creatures on screen at once
 
     # Item constants
-    ITEM_SIZE: Tuple[int, int] = (5, 5)
+    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
 
     # Item Types
     KEY: int = 0
@@ -148,7 +149,7 @@ class TutankhamConstants(NamedTuple):
     CROWN_02: int = 5
 
     #KEY_
-    ITEM_POINTS: chex.Array = np.array([50, 100, 75, 150])  # points for each item type
+    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for each item type
 
     RESPAWN_CHECKPOINT_UPDATE_INTERVAL: int = 180  # frames between respawn checkpoint updates
 
@@ -371,8 +372,8 @@ class JaxTutankham(JaxEnvironment):
         tutankham_score = 0
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
-        bullet_state = np.array([0, 0, 0, False])
-        creature_states = np.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
@@ -398,30 +399,25 @@ class JaxTutankham(JaxEnvironment):
         return state, state #TODO: (EnvObs, EnvState)
 
     # Player Step
-    def player_step(
-            self,
-            player_x,
-            player_y,
-            action
-    ):
 
-        if action == Action.LEFT:
-            player_x -= self.consts.SPEED
-        elif action == Action.RIGHT:
-            player_x += self.consts.SPEED
-        elif action == Action.UP:
-            player_y -= self.consts.SPEED
-        elif action == Action.DOWN:
-            player_y += self.consts.SPEED
+    @partial(jax.jit, static_argnums=(0,))
+    def player_step(self, player_x, player_y, action):
+        speed = self.consts.SPEED
 
-        # Clip bounds
-        player_x = max(0, min(player_x, self.consts.WIDTH - 1))
-        player_y = max(0, min(player_y, self.consts.HEIGHT - 1))
+        dx = jnp.array([-speed, speed, 0, 0])
+        dy = jnp.array([0, 0, -speed, speed])
+
+        player_x = player_x + dx[action]
+        player_y = player_y + dy[action]
+
+        player_x = jnp.clip(player_x, 0, self.consts.WIDTH - 1)
+        player_y = jnp.clip(player_y, 0, self.consts.HEIGHT - 1)
 
         return player_x, player_y
 
 
     #Bullet Step
+    @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
 
         def get_rotation(action):
@@ -462,6 +458,7 @@ class JaxTutankham(JaxEnvironment):
         return new_bullet, amonition_timer
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
 
         laser_flash_cooldown = max(laser_flash_cooldown -1 , 0)
@@ -478,6 +475,7 @@ class JaxTutankham(JaxEnvironment):
         return creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn
 
     # creature step
+    @partial(jax.jit, static_argnums=(0,))
     def creature_step(self, creature_states, last_creature_spawn):
 
         def spawn_creature(creature_states, last_creature_spawn):
@@ -546,6 +544,7 @@ class JaxTutankham(JaxEnvironment):
         return new_creature_states, last_creature_spawn
 
     # score update based on creature deaths & item collections
+    @partial(jax.jit, static_argnums=(0,))
     def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states, laser_flash_cooldown):
 
         def detect_creature_deaths(prev_creature_states, new_creature_states):
@@ -575,6 +574,7 @@ class JaxTutankham(JaxEnvironment):
 
         return new_score
 
+    @partial(jax.jit, static_argnums=(0,))
     def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
         """Check collision between two single entities"""
         # Calculate edges for rectangle 1
@@ -602,6 +602,7 @@ class JaxTutankham(JaxEnvironment):
 
         return horizontal_overlap and vertical_overlap
 
+    @partial(jax.jit, static_argnums=(0,))
     def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
 
         # check bullet/creature collision
@@ -644,6 +645,7 @@ class JaxTutankham(JaxEnvironment):
         return bullet_state, creature_states, player_lives
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def respawn_player(self, player_x, player_y, checkpoint_x, checkpoint_y, prev_player_lives, current_player_lives, creature_states, bullet_state, last_creature_spawn, respawn_step_counter):
         # TODO: Implement hardcoded checkpoints instead of last checkpoint position
         if current_player_lives < prev_player_lives:
@@ -675,6 +677,7 @@ class JaxTutankham(JaxEnvironment):
     # -----------------------------
     # Step logic (pure Python)
     # -----------------------------
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TutankhamState, action: int):
 
         player_x = state.player_x
@@ -694,23 +697,23 @@ class JaxTutankham(JaxEnvironment):
 
         player_x, player_y = self.player_step(player_x, player_y, action)
 
-        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
+        "bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)"
 
-        creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)
+        "creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)"
 
         # laser flash step should go after creature step to immediately remove creatures
-        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
+        "creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)"
 
-        # temporary store previous previous lives and creature states for respawn & collision detection
-        prev_player_lives = player_lives
-        prev_creature_states = creature_states.copy()
+        # temporary store previous lives and creature states for respawn & collision detection
+        "prev_player_lives = player_lives"
+        "prev_creature_states = creature_states.copy()"
         # TODO: add ITEM collisions (+key collection) -> has_key update
-        bullet_state, creature_states, player_lives = self.resolve_collisions(player_x, player_y, creature_states, bullet_state, player_lives)
+        "bullet_state, creature_states, player_lives = self.resolve_collisions(player_x, player_y, creature_states, bullet_state, player_lives)"
 
         # TODO:Update score based on creature deaths & items collected
         # score_update() bekommt prev_creature_states & creature_states und prev_item_states & item_states
 
-        player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn = self.respawn_player(
+        """player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn = self.respawn_player(
             player_x, player_y,
             checkpoint_x, checkpoint_y,
             prev_player_lives, player_lives,
@@ -718,7 +721,7 @@ class JaxTutankham(JaxEnvironment):
             bullet_state,
             last_creature_spawn,
             respawn_step_counter
-        )
+        )"""
 
         state = TutankhamState(player_x=player_x,
                                player_y=player_y,
@@ -738,38 +741,40 @@ class JaxTutankham(JaxEnvironment):
 
         reward = 0.0
         done = self._get_done(state)
-        info = None
+        info = 0
 
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
-   ''' @partial(jax.jit, static_argnums=(0,))
-    def check_wall_collision(self, pos, size):
-        """Check collision between an entity and the wall"""
+        #@partial(jax.jit, static_argnums=(0,))
+        #def check_wall_collision(self, pos, size):
+        #"""Check collision between an entity and the wall"""####
 
         # Because the wall sprite is not at (0,0)
-        pos = jnp.array([pos[0], pos[1] - self.consts.WALL_Y_OFFSET])
+        #pos = jnp.array([pos[0], pos[1] - self.consts.WALL_Y_OFFSET])##
 
-        collision_top_left = self.consts.WALL[pos[1]][pos[0]]
-        collision_top_right = self.consts.WALL[pos[1]][pos[0] + size[0] - 1]
-        collision_bottom_left = self.consts.WALL[pos[1] + size[1] - 1][pos[0]]
-        collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
+        #collision_top_left = self.consts.WALL[pos[1]][pos[0]]
+        #collision_top_right = self.consts.WALL[pos[1]][pos[0] + size[0] - 1]
+        #collision_bottom_left = self.consts.WALL[pos[1] + size[1] - 1][pos[0]]
+        #collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
 
-        return jnp.any(
-            jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
-        # return False'''
+        #return jnp.any(
+        #    jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
+        # return False
 
     # -----------------------------
     # Rendering
     # -----------------------------
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     # -----------------------------
     # Action & Observation Space
     # -----------------------------
-    def action_space(self):
-        return Discrete(len(self.action_set))
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
 
     def observation_space(self):
         return Box(
@@ -779,9 +784,9 @@ class JaxTutankham(JaxEnvironment):
             dtype=np.int32,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
         if state.player_lives <= 0: # Game Over
             return True
         # TODO: beat final level condition
-
         return False
