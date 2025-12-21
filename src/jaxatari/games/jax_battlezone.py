@@ -624,7 +624,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards: int = 1) -> Enemy:  # Enemy towards player with -1 and away with 1
+        def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:  # Enemy towards player with -1 and away with 1
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
             return enemy._replace(x=enemy.x +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
@@ -671,12 +671,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
             def near_player(saucer):
                 saucer = saucer._replace(phase=0)
-                return move_to_player(saucer, -1)
+                return move_to_player(saucer, 1)
             def far_player(saucer):
 
                 def p0(saucer):
                     saucer = saucer._replace(dist_moved_temp=saucer.dist_moved_temp + speed)
-                    saucer = move_to_player(saucer, -1)
+                    saucer = move_to_player(saucer, 1)
 
                     def next_phase(saucer):
                         saucer = saucer._replace(dist_moved_temp=0.0)
