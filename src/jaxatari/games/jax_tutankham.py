@@ -21,64 +21,64 @@ def _get_default_asset_config() -> tuple:
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
     """
     # Define file lists for groups
-    #tombs = [f"tomb_{i + 1}.npy" for i in range(4)]
+    # tombs = [f"tomb_{i + 1}.npy" for i in range(4)]
 
     # Define the sprites
     config = (
         # Backgrounds (loaded as a group)
         # Note: The 'background' type is not used here, as the city map is the primary background.
         # We will treat 'tombs' as our base background sprites.
-        #{'name': 'tombs', 'type': 'group', 'files': tombs},
+        # {'name': 'tombs', 'type': 'group', 'files': tombs},
 
         # Roomparts
         {'name': 'room_floor', 'type': 'single', 'file': 'room_floor.npy'},
 
         # Player (loaded as single sprites for manual padding)
-        #{'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
+        # {'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
         {'name': 'player', 'type': 'single', 'file': 'player_idle.npy'},
         {'name': 'player_move_00 ', 'type': 'single', 'file': 'player_move_00.npy'},
         {'name': 'player_move_01 ', 'type': 'single', 'file': 'player_move_01.npy'},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
-        #{'name': 'bullet ', 'type': 'single', 'file': 'bullet.npy'},
+        {'name': 'bullet ', 'type': 'single', 'file': 'bullet_00.npy'},
 
         # Creatures (loaded as single sprites for manual padding)
-        #{'name': 'snake', 'type': 'single', 'file': 'snake.npy'},
-        #{'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
-        #{'name': 'bat', 'type': 'single', 'file': 'bat.npy'},
-        #{'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
-        #{'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
-        #{'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
-        #{'name': 'lion', 'type': 'single', 'file': 'lion.npy'},
-        #{'name': 'moth', 'type': 'single', 'file': 'moth.npy'},
-        #{'name': 'virus', 'type': 'single', 'file': 'virus.npy'},
-        #{'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
-        #{'name': 'mystery', 'type': 'single', 'file': 'mystery.npy'},
-        #{'name': 'weapon', 'type': 'single', 'file': 'weapon.npy'},
+        {'name': 'snake', 'type': 'single', 'file': 'creature_snake_00.npy'},
+        # {'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
+        # {'name': 'bat', 'type': 'single', 'file': 'bat.npy'},
+        # {'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
+        # {'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
+        # {'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
+        # {'name': 'lion', 'type': 'single', 'file': 'lion.npy'},
+        # {'name': 'moth', 'type': 'single', 'file': 'moth.npy'},
+        # {'name': 'virus', 'type': 'single', 'file': 'virus.npy'},
+        # {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
+        # {'name': 'mystery', 'type': 'single', 'file': 'mystery.npy'},
+        # {'name': 'weapon', 'type': 'single', 'file': 'weapon.npy'},
 
         # Treasures
-        #{'name': 'key', 'type': 'single', 'file': 'key.npy'},
-        #{'name': 'crown', 'type': 'single', 'file': 'crown.npy'},
-        #{'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
-        #{'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
-        #{'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
-        #{'name': 'emerald', 'type': 'single', 'file': 'emerald.npy'},
-        #{'name': 'goblet', 'type': 'single', 'file': 'goblet.npy'},
-        #{'name': 'bust', 'type': 'single', 'file': 'bust.npy'},
-        #{'name': 'trident', 'type': 'single', 'file': 'trident.npy'},
-        #{'name': 'herb', 'type': 'single', 'file': 'herb.npy'},
-        #{'name': 'diamond', 'type': 'single', 'file': 'diamond.npy'},
-        #{'name': 'candelabra', 'type': 'single', 'file': 'candelabra.npy'},
-        #{'name': 'amulet', 'type': 'single', 'file': 'amulet.npy'},
-        #{'name': 'fan', 'type': 'single', 'file': 'fan.npy'},
-        #{'name': 'crystal', 'type': 'single', 'file': 'crystal.npy'},
-        #{'name': 'zircon', 'type': 'single', 'file': 'zircon.npy'},
-        #{'name': 'dagger', 'type': 'single', 'file': 'dagger.npy'},
+        # {'name': 'key', 'type': 'single', 'file': 'key.npy'},
+        # {'name': 'crown', 'type': 'single', 'file': 'crown.npy'},
+        # {'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
+        # {'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
+        # {'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
+        # {'name': 'emerald', 'type': 'single', 'file': 'emerald.npy'},
+        # {'name': 'goblet', 'type': 'single', 'file': 'goblet.npy'},
+        # {'name': 'bust', 'type': 'single', 'file': 'bust.npy'},
+        # {'name': 'trident', 'type': 'single', 'file': 'trident.npy'},
+        # {'name': 'herb', 'type': 'single', 'file': 'herb.npy'},
+        # {'name': 'diamond', 'type': 'single', 'file': 'diamond.npy'},
+        # {'name': 'candelabra', 'type': 'single', 'file': 'candelabra.npy'},
+        # {'name': 'amulet', 'type': 'single', 'file': 'amulet.npy'},
+        # {'name': 'fan', 'type': 'single', 'file': 'fan.npy'},
+        # {'name': 'crystal', 'type': 'single', 'file': 'crystal.npy'},
+        # {'name': 'zircon', 'type': 'single', 'file': 'zircon.npy'},
+        # {'name': 'dagger', 'type': 'single', 'file': 'dagger.npy'},
 
         # UI
-        #{'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
-        #{'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
-        #{'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
-        #{'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
+        # {'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
+        # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
+        # {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
+        # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
         {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
     )
     return config
@@ -107,7 +107,7 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
     BULLET_SPEED: int = 8
-    AMMO_SUPPLY: int = 900 # frames until ammo runs out
+    AMMO_SUPPLY: int = 900  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
     LASER_FLASH_COOLDOWN: int = 60  # frames
@@ -132,10 +132,12 @@ class TutankhamConstants(NamedTuple):
     MYSTERY: int = 10
     WEAPON: int = 11
 
-    CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], dtype=jnp.int32)  # speed for each creature type
-    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3], dtype=jnp.int32)  # points for each creature type
+    CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+                                           dtype=jnp.int32)  # speed for each creature type
+    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
+                                            dtype=jnp.int32)  # points for each creature type
 
-    MAX_CREATURES: int = 3 # max number of creatures on screen at once
+    MAX_CREATURES: int = 3  # max number of creatures on screen at once
 
     # Item constants
     ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
@@ -148,11 +150,10 @@ class TutankhamConstants(NamedTuple):
     CHALICE: int = 4
     CROWN_02: int = 5
 
-    #KEY_
+    # KEY_
     ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for each item type
 
     RESPAWN_CHECKPOINT_UPDATE_INTERVAL: int = 180  # frames between respawn checkpoint updates
-
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -165,85 +166,29 @@ class TutankhamState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_lives: int
-    tutankham_score: int # current score
+    tutankham_score: int  # current score
 
-    checkpoint_x: int # respawn checkpoint x
+    checkpoint_x: int  # respawn checkpoint x
     checkpoint_y: int  # respawn checkpoint y
 
-    bullet_state: chex.Array #(, 4) array with (x, y, bullet_rotation, bullet_active)
-    laser_flash_count: int # number of laser flashes that can be fired
-    laser_flash_cooldown: int # cooldown timer for next laser flash
-    amonition_timer: int # if timer runs out, player can not fire again
+    bullet_state: chex.Array  # (, 4) array with (x, y, bullet_rotation, bullet_active)
+    laser_flash_count: int  # number of laser flashes that can be fired
+    laser_flash_cooldown: int  # cooldown timer for next laser flash
+    amonition_timer: int  # if timer runs out, player can not fire again
 
-    creature_states: chex.Array # (3, 5) array with (x, y, creature_type, active) for each creature
-    last_creature_spawn: int # time since last creature spawn
+    creature_states: chex.Array  # (3, 4) array with (x, y, creature_type, active) for each creature
+    last_creature_spawn: int  # time since last creature spawn
 
-    #item_states: chex.Array = None  # (N, 4) array with (x, y, item_type, collected) for each item (optional)
+    # item_states: chex.Array = None  # (N, 4) array with (x, y, item_type, collected) for each item (optional)
 
     respawn_step_counter: int  # counts the number of steps taken in the game
 
     has_key: bool  # whether the player has collected the key or not
 
 
-
 # ---------------------------------------------------------------------
 # Renderer (No JAX)
 # ---------------------------------------------------------------------
-class backupTutankhamRenderer(JAXGameRenderer):
-    def __init__(self):
-        super().__init__()
-        self.consts = TutankhamConstants()
-
-    def render(self, state: TutankhamState) -> np.ndarray:
-        frame = np.zeros(
-            (self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=np.uint8
-        )
-
-        x = min(max(state.player_x, 0), self.consts.WIDTH - 1)
-        y = min(max(state.player_y, 0), self.consts.HEIGHT - 1)
-        frame[y, x] = self.consts.PIXEL_COLOR
-
-        # -------------------------
-        # Draw bullets (1×1 pixels)
-        # -------------------------
-        bx, by, rot, active = state.bullet_state
-        if active:
-            # Clip
-            #if 0 <= bx < self.consts.WIDTH and 0 <= by < self.consts.HEIGHT:
-            frame[int(by), int(bx)] = self.consts.PIXEL_COLOR
-
-        # # -------------------------
-        # # Draw creatures (1×1 pixels)
-        # for i in range(self.consts.MAX_CREATURES):
-        #     cx, cy, creature_type, active = state.creature_states[i]
-        #     if active == self.consts.ACTIVE:
-        #         # Clip
-        #         if 0 <= cx < self.consts.WIDTH and 0 <= cy < self.consts.HEIGHT:
-        #             frame[int(cy), int(cx)] = self.consts.PIXEL_COLOR
-
-        cw, ch = self.consts.CREATURE_SIZE
-
-        for i in range(self.consts.MAX_CREATURES):
-            cx, cy, creature_type, active = state.creature_states[i]
-
-            if active == self.consts.ACTIVE:
-                # Rectangle bounds
-                x0 = int(cx)
-                y0 = int(cy)
-                x1 = x0 + cw
-                y1 = y0 + ch
-
-                # Clip to screen
-                x0 = max(0, x0)
-                y0 = max(0, y0)
-                x1 = min(self.consts.WIDTH, x1)
-                y1 = min(self.consts.HEIGHT, y1)
-
-                # Draw rectangle
-                frame[y0:y1, x0:x1] = self.consts.PIXEL_COLOR
-
-        return frame
-
 
 class TutankhamRenderer(JAXGameRenderer):
     def __init__(self, consts: TutankhamConstants = None):
@@ -270,7 +215,6 @@ class TutankhamRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
-
     # ---------------------------------------------------------
     # Main render() method
     # ---------------------------------------------------------
@@ -278,7 +222,7 @@ class TutankhamRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState):
         ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
-        #pseudo for no errors
+        # pseudo for no errors
         player_mask = 0
         camera_offset = 0
         not_vanishing = True
@@ -286,8 +230,6 @@ class TutankhamRenderer(JAXGameRenderer):
         ghost_frame = 0
         indices_to_update = 0
         new_color_ids = 0
-
-
 
         # 1. Start with the static blue background
         raster = self.jr.create_object_raster(self.BACKGROUND)
@@ -298,16 +240,8 @@ class TutankhamRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["room_floor"],
             flip_offset=ZERO_FLIP
         )
-        raster = self.jr.render_at(
-            raster,
-            state.player_x,
-            state.player_y,
-            #- camera_offset,
-            self.SHAPE_MASKS["player"],
-            flip_offset=ZERO_FLIP
-            #self.FLIP_OFFSETS['player_group'],
-        )
-        #raster = jax.lax.cond(
+
+        # raster = jax.lax.cond(
         #    floor_checks[0] & not_vanishing,
         #    lambda r: self.jr.render_at_clipped(
         #        r, state.ghost[0], state.ghost[1] - camera_offset,
@@ -316,20 +250,63 @@ class TutankhamRenderer(JAXGameRenderer):
         #    ),
         #    lambda r: r,
         #    raster
-        #)
+        # )
         # 2. Render Player
-        #player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
-        #player_mask = self.SHAPE_MASKS['player_group'][player_frame]
-        #raster = self.jr.render_at(
+        raster = self.jr.render_at(
+            raster,
+            state.player_x,
+            state.player_y,
+            # - camera_offset,
+            self.SHAPE_MASKS["player"],
+            flip_offset=ZERO_FLIP
+            # self.FLIP_OFFSETS['player_group'],
+        )
+        # player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
+        # player_mask = self.SHAPE_MASKS['player_group'][player_frame]
+        # raster = self.jr.render_at(
         #    raster, state.player[0], state.player[1] - camera_offset,
         #    player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
-        #)
+        # )
         # 2.5 Animations
         # 3. Render Walls
         # 4. Render Teleporter and Spawner
         # 5. Render Treasures
         # 6. Render Bullets
+        raster = jax.lax.cond(state.bullet_state[3],
+                              self.jr.render_at(
+                                  raster,
+                                  state.bullet_state[0],
+                                  state.bullet_state[1],
+                                  # - camera_offset,
+                                  self.SHAPE_MASKS["bullet"],
+                                  flip_offset=ZERO_FLIP
+                                  # self.FLIP_OFFSETS['player_group'],
+                              ))
         # 7. Render Enemies
+        creatures = jnp.stack([state.creature_states[0], state.creature_states[1]])
+        creature_names = ["snake", "scorpion", "bat", "turtle", "jackel", "condor", "lion", "moth", "virus", "monkey",
+                          "mystery", "weapon"]
+
+        def render_creature(i, r):
+            creature_pos = creatures[i]
+            active = creatures[i][3]
+            creature_type = creatures[i][2]
+
+            # Use the single uniform offset for the group
+            return jax.lax.cond(
+                active,
+                lambda r_in: self.jr.render_at_clipped(
+                    r_in, creature_pos[0], creature_pos[1],
+                    # - camera_offset,
+                    self.SHAPE_MASKS[creature_names[creature_type]],
+                    flip_offset=ZERO_FLIP  # self.ITEM_OFFSET  Use the single group offset
+                ),
+                lambda r_in: r_in,
+                r
+            )
+
+        raster = render_creature(0, 1)
+        raster = render_creature(1, 1)
         # 8. Render UI
         # 9. Final Palette Lookup
         return self.jr.render_from_palette(
@@ -377,31 +354,31 @@ class JaxTutankham(JaxEnvironment):
         tutankham_score = 0
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
-        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
+        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # TODO bullet state [3] is Flase still?
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        creature_states = jnp.array([[50, 50, 0, 0], [50, 100, 1, 0]], dtype=jnp.int32) # TODO delete
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
         respawn_step_counter = 0
         has_key = False
 
-
         state = TutankhamState(player_x=start_x,
-                                player_y=start_y,
-                                checkpoint_x=checkpoint_x,
-                                checkpoint_y=checkpoint_y,
-                                tutankham_score=tutankham_score,
-                                player_lives=player_lives,
-                                bullet_state=bullet_state,
-                                amonition_timer=amonition_timer,
-                                creature_states=creature_states,
-                                last_creature_spawn=last_creature_spawn,
-                                laser_flash_count=laser_flash_count,
-                                laser_flash_cooldown=laser_flash_cooldown,
-                                respawn_step_counter=respawn_step_counter,
-                                has_key=has_key
+                               player_y=start_y,
+                               checkpoint_x=checkpoint_x,
+                               checkpoint_y=checkpoint_y,
+                               tutankham_score=tutankham_score,
+                               player_lives=player_lives,
+                               bullet_state=bullet_state,
+                               amonition_timer=amonition_timer,
+                               creature_states=creature_states,
+                               last_creature_spawn=last_creature_spawn,
+                               laser_flash_count=laser_flash_count,
+                               laser_flash_cooldown=laser_flash_cooldown,
+                               respawn_step_counter=respawn_step_counter,
+                               has_key=has_key
                                )
-        return state, state #TODO: (EnvObs, EnvState)
+        return state, state  # TODO: (EnvObs, EnvState)
 
     # Player Step
 
@@ -420,8 +397,7 @@ class JaxTutankham(JaxEnvironment):
 
         return player_x, player_y
 
-
-    #Bullet Step
+    # Bullet Step
     @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
 
@@ -433,11 +409,9 @@ class JaxTutankham(JaxEnvironment):
         space = (
                 (action == Action.LEFTFIRE)
                 or (action == Action.RIGHTFIRE)
-            )
+        )
 
-
-        new_bullet = bullet_state.copy() #array with (x, y, bullet_rotation, bullet_active)
-
+        new_bullet = bullet_state.copy()  # array with (x, y, bullet_rotation, bullet_active)
 
         # --- update existing bullets ---
         if bullet_state[3]:
@@ -448,28 +422,23 @@ class JaxTutankham(JaxEnvironment):
             if not (0 <= bullet_x < self.consts.WIDTH):
                 new_bullet = [0, 0, 0, False]
 
-
         # --- firing logic ---
         bullet_rdy = not bullet_state[3]
-
 
         if space and bullet_rdy and amonition_timer > 0:
             new_bullet = np.array([player_x, player_y, get_rotation(action), True])
 
-
-        amonition_timer -= 1 # TODO: adjust amonition timer
-
+        amonition_timer -= 1  # TODO: adjust amonition timer
 
         return new_bullet, amonition_timer
-
 
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
 
-        laser_flash_cooldown = max(laser_flash_cooldown -1 , 0)
+        laser_flash_cooldown = max(laser_flash_cooldown - 1, 0)
         if action == Action.UPFIRE and laser_flash_count > 0 and laser_flash_cooldown == 0:
-            new_laser_flash_count = laser_flash_count - 1 # use one laser flash
-            new_laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN # reset cooldown
+            new_laser_flash_count = laser_flash_count - 1  # use one laser flash
+            new_laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN  # reset cooldown
             last_creature_spawn = 0  # reset creature spawn timer on laser flash use
 
             new_creature_states = creature_states.copy()
@@ -488,8 +457,8 @@ class JaxTutankham(JaxEnvironment):
 
             # Parameter # TODO: REMOVE HARDCODED VALUES
             MAX_ACTIVE = 3
-            GROWTH = 0.0003           # Chance steigt pro Sekunde um 5%
-            MAX_PROB = 0.8          # Deckelung (optional)
+            GROWTH = 0.0003  # Chance steigt pro Sekunde um 5%
+            MAX_PROB = 0.8  # Deckelung (optional)
 
             # 1) aktive Creatures zählen
             active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
@@ -512,7 +481,7 @@ class JaxTutankham(JaxEnvironment):
 
             for i in range(self.consts.MAX_CREATURES):
                 x, y, creature_type, active = creature_states[i]
-                if active == self.consts.INACTIVE: # TODO: find correct spawner x,y
+                if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
                     new_x = 0
                     new_y = np.random.randint(0, self.consts.HEIGHT)
                     new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
@@ -533,12 +502,9 @@ class JaxTutankham(JaxEnvironment):
 
                 # Deactivate if out of bounds
                 if x >= self.consts.WIDTH:
-                   active = self.consts.INACTIVE
+                    active = self.consts.INACTIVE
 
             return np.array([x, y, creature_type, active])
-
-
-
 
         creature_states, last_creature_spawn = spawn_creature(creature_states, last_creature_spawn)
         new_creature_states = creature_states.copy()
@@ -550,13 +516,14 @@ class JaxTutankham(JaxEnvironment):
 
     # score update based on creature deaths & item collections
     @partial(jax.jit, static_argnums=(0,))
-    def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states, laser_flash_cooldown):
+    def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states,
+                     laser_flash_cooldown):
 
         def detect_creature_deaths(prev_creature_states, new_creature_states):
             """Erkennt Todes-Events: active: 1 → 0."""
             old_active = prev_creature_states[:, 3] == 1.0
             new_active = new_creature_states[:, 3] == 1.0
-            died = jnp.logical_and(old_active, jnp.logical_not(new_active)) # TODO: translate to pure python
+            died = jnp.logical_and(old_active, jnp.logical_not(new_active))  # TODO: translate to pure python
             return died  # shape: (MAX_CREATURES,)
 
         new_score = score
@@ -596,13 +563,13 @@ class JaxTutankham(JaxEnvironment):
 
         # Check overlap
         horizontal_overlap = (
-            rect1_left < rect2_right and
-            rect1_right > rect2_left
+                rect1_left < rect2_right and
+                rect1_right > rect2_left
         )
 
         vertical_overlap = (
-            rect1_top < rect2_bottom and
-            rect1_bottom > rect2_top
+                rect1_top < rect2_bottom and
+                rect1_bottom > rect2_top
         )
 
         return horizontal_overlap and vertical_overlap
@@ -611,7 +578,7 @@ class JaxTutankham(JaxEnvironment):
     def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
 
         # check bullet/creature collision
-        if bullet_state[3]: #bullet is active
+        if bullet_state[3]:  # bullet is active
 
             for idx, creature in enumerate(creature_states):
                 creature_x, creature_y, creature_type, active = creature
@@ -625,10 +592,9 @@ class JaxTutankham(JaxEnvironment):
                     if collision:
                         # Deactivate bullet and creature
                         bullet_state = np.array([0, 0, 0, False])
-                        #TODO: kill creature logic (score etc)
+                        # TODO: kill creature logic (score etc)
                         creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE])
                         break  # Bullet can only hit one creature
-
 
         # check player/creature collision
         for idx, creature in enumerate(creature_states):
@@ -643,15 +609,16 @@ class JaxTutankham(JaxEnvironment):
                 if collision:
                     player_lives -= 1
                     # TODO: respawn player logic
-                    creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE]) # Deactivate creature
+                    creature_states[idx] = np.array(
+                        [creature_x, creature_y, creature_type, self.consts.INACTIVE])  # Deactivate creature
                     # Optionally, reset player position or apply other penalties
                     break  # Handle one collision at a time
 
         return bullet_state, creature_states, player_lives
 
-
     @partial(jax.jit, static_argnums=(0,))
-    def respawn_player(self, player_x, player_y, checkpoint_x, checkpoint_y, prev_player_lives, current_player_lives, creature_states, bullet_state, last_creature_spawn, respawn_step_counter):
+    def respawn_player(self, player_x, player_y, checkpoint_x, checkpoint_y, prev_player_lives, current_player_lives,
+                       creature_states, bullet_state, last_creature_spawn, respawn_step_counter):
         # TODO: Implement hardcoded checkpoints instead of last checkpoint position
         if current_player_lives < prev_player_lives:
             # Respawn player at checkpoint
@@ -671,9 +638,9 @@ class JaxTutankham(JaxEnvironment):
             respawn_step_counter = 0
 
         elif respawn_step_counter == self.consts.RESPAWN_CHECKPOINT_UPDATE_INTERVAL:
-                checkpoint_x = player_x
-                checkpoint_y = player_y
-                respawn_step_counter = 0
+            checkpoint_x = player_x
+            checkpoint_y = player_y
+            respawn_step_counter = 0
         else:
             respawn_step_counter += 1
 
@@ -751,19 +718,19 @@ class JaxTutankham(JaxEnvironment):
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
-        #@partial(jax.jit, static_argnums=(0,))
-        #def check_wall_collision(self, pos, size):
-        #"""Check collision between an entity and the wall"""####
+        # @partial(jax.jit, static_argnums=(0,))
+        # def check_wall_collision(self, pos, size):
+        # """Check collision between an entity and the wall"""####
 
         # Because the wall sprite is not at (0,0)
-        #pos = jnp.array([pos[0], pos[1] - self.consts.WALL_Y_OFFSET])##
+        # pos = jnp.array([pos[0], pos[1] - self.consts.WALL_Y_OFFSET])##
 
-        #collision_top_left = self.consts.WALL[pos[1]][pos[0]]
-        #collision_top_right = self.consts.WALL[pos[1]][pos[0] + size[0] - 1]
-        #collision_bottom_left = self.consts.WALL[pos[1] + size[1] - 1][pos[0]]
-        #collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
+        # collision_top_left = self.consts.WALL[pos[1]][pos[0]]
+        # collision_top_right = self.consts.WALL[pos[1]][pos[0] + size[0] - 1]
+        # collision_bottom_left = self.consts.WALL[pos[1] + size[1] - 1][pos[0]]
+        # collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
 
-        #return jnp.any(
+        # return jnp.any(
         #    jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
         # return False
 
@@ -779,7 +746,6 @@ class JaxTutankham(JaxEnvironment):
     # -----------------------------
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
-
 
     def observation_space(self):
         return Box(
