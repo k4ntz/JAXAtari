@@ -149,7 +149,7 @@ class BattlezoneConstants(NamedTuple):
 
     # --- game mechanics ---
     HITBOX_SIZE: float = 6.0  # player
-    ENEMY_HITBOX_SIZE: float = 4.0
+    ENEMY_HITBOX_SIZE: float = 9.0 #todo change
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
@@ -157,7 +157,7 @@ class BattlezoneConstants(NamedTuple):
         [0.6, 0.4],# 0.1, 0.0],   #7_000
         [0.5, 0.5]#, 0.2, 0.1]    #12_000
         ])
-    RADAR_MAX_SCAN_RADIUS: int = 70
+    RADAR_MAX_SCAN_RADIUS: int = 110  #todo change
 
     # --- timing ---
     FIRE_CD: int = 114  # player
@@ -168,7 +168,7 @@ class BattlezoneConstants(NamedTuple):
 
     # --- misc ---
     RADAR_ROTATION_SPEED: float = -0.05
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.1
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.05 #todo change
     ENEMY_SCORES: chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
 
 
@@ -376,8 +376,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             active=jnp.logical_and(projectile.active, projectile.time_to_live>0)
         )
 
-    def _player_projectile_col_check(self, state: BattlezoneState):
-        """"""
+    def _player_projectile_collision_step(self, state: BattlezoneState):
         hit_arr = (jax.vmap(self._player_projectile_collision_check, in_axes=(0, None))
                    (state.enemies, state.player_projectile))
         
@@ -466,7 +465,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_player_projectile = self._single_projectile_step(state.player_projectile)
             new_state = new_state._replace(player_projectile=new_player_projectile)
             # check whether player projectile hit an enemy
-            new_state = self._player_projectile_col_check(new_state)
+            new_state = self._player_projectile_collision_step(new_state)
 
             new_enemy_projectiles = jax.vmap(self._single_projectile_step, 0)(state.enemy_projectiles)
             new_state = new_state._replace(enemy_projectiles=new_enemy_projectiles)
