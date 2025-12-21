@@ -138,6 +138,8 @@ class JourneyEscapeState(NamedTuple):
 
     countdown: chex.Array
 
+    bg_frames: chex.Array
+
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
@@ -192,7 +194,8 @@ class JaxJourneyEscape(
             spawn_count=spawn_count,
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
-            countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32)
+            countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32),
+            bg_frames=jnp.array(0, dtype=jnp.int32),
         )
 
         return self._get_observation(state), state
@@ -201,6 +204,10 @@ class JaxJourneyEscape(
     def step(self, state: JourneyEscapeState, action: int) -> tuple[
         JourneyEscapeObservation, JourneyEscapeState, float, bool, JourneyEscapeInfo]:
         """Take a step in the game given an action"""
+
+        # ---BACKGROUND ANIMATION---
+        new_bg_frames = (state.bg_frames + 1) % 16
+        new_bg_frames = jnp.where(new_bg_frames >= 16, 0, new_bg_frames)
 
         # ---RAW PLAYER INPUT---
         # Compute vertical movement
@@ -572,7 +579,8 @@ class JaxJourneyEscape(
             spawn_count=new_spawn_count,
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
-            countdown=new_countdown.astype(jnp.int32)
+            countdown=new_countdown.astype(jnp.int32),
+            bg_frames=new_bg_frames.astype(jnp.int32)
         )
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
@@ -729,10 +737,18 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             color=COLOR_BLUE
         )
 
+        # Background (full wide, full height)
+        background_sprite = self._create_solid_block(
+            width=self.consts.screen_width,
+            height=self.consts.screen_height,
+            color=COLOR_BLACK
+        )
+
         # Add to manifest
         asset_config.append({'name': 'black_bar', 'type': 'procedural', 'data': side_bar_sprite})
         asset_config.append({'name': 'header', 'type': 'procedural', 'data': header_sprite})
         asset_config.append({'name': 'footer', 'type': 'procedural', 'data': footer_sprite})
+        asset_config.append({'name': 'background', 'type': 'procedural', 'data': background_sprite})
 
         # --- 2. LOAD ASSETS ---
         (
@@ -765,6 +781,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                 new_masks[name] = mask
 
         self.SHAPE_MASKS = new_masks
+        self.BACKGROUND = self.SHAPE_MASKS['background']
 
     def _create_solid_block(self, width: int, height: int, color: Tuple[int, int, int]) -> jnp.ndarray:
         """Creates a solid color sprite with full alpha."""
@@ -785,6 +802,19 @@ class JourneyEscapeRenderer(JAXGameRenderer):
 
         return [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {
+                'name': 'backgrounds', 'type': 'group', 
+                'files': [
+                    'background_0.npy',
+                    'background_1.npy',
+                    'background_2.npy',
+                    'background_1.npy',
+                    'background_2.npy',
+                    'background_3.npy',
+                    'background_2.npy',
+                    'background_1.npy',
+                ]
+            },
             {
                 'name': 'player', 'type': 'group',
                 'files': ['player_walk_front_0.npy', 'player_walk_front_1.npy',
@@ -814,6 +844,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Render Background
+        frame_idx = state.bg_frames//2
+        bg_mask = self.SHAPE_MASKS["backgrounds"][frame_idx]
+        raster = self.jr.render_at(raster, 0, 20 , bg_mask)
+
 
         # Select player sprite based on walking frames and direction
         use_idle = state.walking_frames < 4
