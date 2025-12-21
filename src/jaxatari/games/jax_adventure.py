@@ -150,13 +150,13 @@ class AdventureState(NamedTuple):
     step_counter: chex.Array
     #position player: x ,y ,tile, inventory
     player: chex.Array
-    #positions dragons: x, y ,tile ,state
+    #positions dragons: x, y ,tile ,state, counter
     dragon_yellow: chex.Array
     dragon_green: chex.Array
     #positions keys: x, y, tile
     key_yellow: chex.Array
     key_black: chex.Array
-    #gates: state
+    #gates: state, counter
     gate_yellow: chex.Array
     gate_black: chex.Array
     #position sword: x, y, tile
@@ -915,12 +915,49 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         castle_towers = jnp.logical_or(player_y >= castle_tower_height, jnp.logical_or(castle_towers_in, castle_towers_out))
 
         castle_base_out = jnp.logical_or(player_x<=castle_base_left, player_x>=castle_base_right)
-        castle_base_in = jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
+        castle_base_in_1 = jnp.logical_and(jnp.logical_and(player_y>= castle_tower_height, player_y <= castle_base_height),jnp.logical_and(player_x>=edge_left+8, player_x<=edge_right-10))
+        castle_base_in_2 = jnp.logical_and(player_y <= castle_tower_height, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
+        castle_base_in = jnp.logical_or(castle_base_in_1, castle_base_in_2)
         castle_base = jnp.logical_or(player_y >= castle_base_height, jnp.logical_or(castle_base_in, castle_base_out))
 
+        castle_walls = jnp.logical_and(castle_towers, castle_base)
+
+        ##logic implementation gate border
+
+        gate_yellow_x = self.consts.YELLOW_GATE_POS[0]
+        gate_yellow_y = self.consts.YELLOW_GATE_POS[1]
+        gate_yellow_open = state.gate_yellow[0]
+
+        gate_black_x = self.consts.BLACK_GATE_POS[0]
+        gate_black_y = self.consts.BLACK_GATE_POS[1]
+        gate_black_open = state.gate_black[0]
+
+        gate_yellow_not_block = jnp.logical_or(
+            jnp.logical_not(room == 0),
+            gate_yellow_open > 4
+        )
+
+        gate_black_not_block = jnp.logical_or(
+            jnp.logical_not(room == 11),
+            gate_black_open > 4
+        )
+
+        gates_not_blocking = jnp.logical_and(gate_yellow_not_block, gate_black_not_block)
+
+        castle_gate = jnp.logical_or(
+            gates_not_blocking,
+            jnp.logical_or(
+                jnp.logical_or(
+                player_x >= edge_right,
+                player_x <= edge_left
+            ),
+            player_y >= castle_base_height
+            )
+        )
+        
         castle_collision = jnp.logical_or(
             jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
-            jnp.logical_and(castle_towers, castle_base)
+            jnp.logical_and(castle_walls, castle_gate)
         )
 
         room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
@@ -1112,6 +1149,114 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,state.chalice[2],state.chalice[3],state.chalice)
                                   )
+        )
+    
+    def _gate_interaction(self, state: AdventureState) -> AdventureState:
+        gate_yellow_open = state.gate_yellow[0]
+        gate_black_open = state.gate_black[0]
+        gate_yellow_counter = state.gate_yellow[1]
+        gate_black_counter = state.gate_black[1]
+
+        room = state.player[2]
+        player_x = state.player[0]
+        player_y = state.player[1]
+
+        yellow_key_in_inventory = (state.player[3] == 1)
+        black_key_in_inventory = (state.player[3] == 2)
+
+        player_infront_yellow_gate = jnp.logical_and(
+            room == 0,
+            jnp.logical_and(
+                jnp.logical_and(
+                    player_x >= self.consts.PATH_VERTICAL_LEFT,
+                    player_x <= self.consts.PATH_VERTICAL_RIGHT
+                ),jnp.logical_and(
+                    player_y >= self.consts.CASTLE_BASE_CORNER_Y,
+                    player_y <= self.consts.CASTLE_BASE_CORNER_Y + 8
+                )
+            )
+        )
+
+        player_infront_black_gate = jnp.logical_and(
+            room == 11,
+            jnp.logical_and(
+                jnp.logical_and(
+                    player_x >= self.consts.PATH_VERTICAL_LEFT,
+                    player_x <= self.consts.PATH_VERTICAL_RIGHT
+                ),jnp.logical_and(
+                    player_y >= self.consts.CASTLE_BASE_CORNER_Y,
+                    player_y <= self.consts.CASTLE_BASE_CORNER_Y + 8
+                )
+            )
+        )
+
+
+        yellow_key_in_range = jnp.logical_and(yellow_key_in_inventory, player_infront_yellow_gate)
+        black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
+        
+        gate_opening_yellow = jnp.logical_or(jnp.logical_and(gate_yellow_open>0, gate_yellow_open<6), yellow_key_in_range)
+        gate_opening_black = jnp.logical_or(jnp.logical_and(gate_black_open>0, gate_black_open<6), black_key_in_range)
+
+        gate_render_yellow = False
+        gate_render_yellow = jax.lax.cond(
+            jnp.logical_and(gate_opening_yellow, gate_yellow_counter >= gate_yellow_open * 20),
+            lambda _: True,
+            lambda _: False,
+            operand = None
+        )
+
+        gate_yellow_counter = jax.lax.cond(
+            gate_render_yellow,
+            lambda op: op,
+            lambda op: op+1,
+            operand = gate_yellow_counter
+        )
+
+        gate_render_black = False
+        gate_render_black = jax.lax.cond(
+            jnp.logical_and(gate_opening_black, gate_black_counter >= gate_black_open * 20),
+            lambda _: True,
+            lambda _: False,
+            operand = None
+        )
+
+        gate_black_counter = jax.lax.cond(
+            gate_render_black,
+            lambda op: op,
+            lambda op: op+1,
+            operand = gate_black_counter
+        )
+
+        gate_yellow_open = jax.lax.cond(
+            gate_render_yellow,
+            lambda op: op + 1,
+            lambda op: op,
+            operand = gate_yellow_open
+        )
+
+        gate_black_open = jax.lax.cond(
+            gate_opening_black,
+            lambda op: op + 1,
+            lambda op: op,
+            operand = gate_black_open
+        )
+
+        new_gate_yellow = [gate_yellow_open, gate_yellow_counter]
+        new_gate_black = [gate_black_open, gate_black_counter]
+
+        return AdventureState(
+            step_counter=state.step_counter,
+            player = state.player,
+            dragon_yellow=state.dragon_yellow,
+            dragon_green=state.dragon_green,
+            key_yellow=state.key_yellow,
+            key_black=state.key_black,
+            gate_yellow=new_gate_yellow,
+            gate_black=new_gate_black,
+            sword=state.sword,
+            bridge=state.bridge,
+            magnet=state.magnet,
+            chalice=state.chalice
         )
     
     def _item_pickup(self, state: AdventureState) -> AdventureState:
@@ -1460,8 +1605,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                     self.consts.KEY_BLACK_SPAWN[1],
                                     self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
             #Gate: state
-            gate_yellow=jnp.array([0]).astype(jnp.int32),
-            gate_black=jnp.array([0]).astype(jnp.int32),
+            gate_yellow=jnp.array([0,0]).astype(jnp.int32),
+            gate_black=jnp.array([0,0]).astype(jnp.int32),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
@@ -1504,6 +1649,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         state = self._item_pickup(state)
         state = self._item_drop(state, action)
         state = self._dragon_step(state)
+        state = self._gate_interaction(state)
         state = self._magnet_step(state)
 
         done = self._get_done(state)
