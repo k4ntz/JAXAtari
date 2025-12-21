@@ -2883,6 +2883,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         dead = state.level.rejuvenator_dead
         frame = state.level.rejuvenator_frame
         lane = state.level.rejuvenator_lane
+        mothership_active = state.level.mothership_stage > 0
 
         key_spawn, key_lane = jax.random.split(key)
         
@@ -2890,6 +2891,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         spawn_roll = jax.random.uniform(key_spawn)
         should_spawn = jnp.logical_and.reduce(jnp.array([
             jnp.logical_not(active),
+            jnp.logical_not(mothership_active),
             spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB,
             state.level.white_ufo_left > 0
         ]))
@@ -2963,6 +2965,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         active = state.level.falling_rock_active
         lane = state.level.falling_rock_lane
         vel_y = state.level.falling_rock_vel_y
+        mothership_active = state.level.mothership_stage > 0
 
         key_spawn, key_lane = jax.random.split(key)
 
@@ -2972,6 +2975,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_level_2_plus,
             jnp.sum(active.astype(jnp.int32)) < self.consts.FALLING_ROCK_MAX,
+            jnp.logical_not(mothership_active),
             state.level.white_ufo_left > 0
         ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.FALLING_ROCK_SPAWN_PROB)
@@ -3031,6 +3035,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         timer = state.level.coin_timer
         side = state.level.coin_side
         spawn_count = state.level.coin_spawn_count
+        mothership_active = state.level.mothership_stage > 0
 
         key_spawn, key_side = jax.random.split(key)
 
@@ -3039,6 +3044,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_sector_4_plus,
             jnp.sum(active.astype(jnp.int32)) < self.consts.COIN_MAX,
+            jnp.logical_not(mothership_active),
             state.level.white_ufo_left > 0,
         ]))
         should_spawn = jnp.logical_and(can_spawn, jax.random.uniform(key_spawn) < self.consts.COIN_SPAWN_PROB)
@@ -3178,6 +3184,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         vel_y = state.level.lane_blocker_vel_y
         phase = state.level.lane_blocker_phase
         hold_timer = state.level.lane_blocker_timer
+        mothership_active = state.level.mothership_stage > 0
 
         key_spawn, key_lane = jax.random.split(key)
 
@@ -3187,6 +3194,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_level_10_plus,
             jnp.sum(active.astype(jnp.int32)) < self.consts.LANE_BLOCKER_MAX,
+            jnp.logical_not(mothership_active),
             state.level.white_ufo_left > 0
         ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.LANE_BLOCKER_SPAWN_PROB)
@@ -3548,6 +3556,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         state_id = level.bouncer_state
         timer = level.bouncer_timer
         active = level.bouncer_active
+        mothership_active = level.mothership_stage > 0
 
         def switching_logic(p, l_idx, s_idx, direction):
             is_odd = (s_idx % 2) != 0
@@ -3642,6 +3651,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             # Average every 5 seconds = 1/150 chance per step
             spawn_prob = 1.0 / 150.0
             should_spawn = (jax.random.uniform(key_spawn) < spawn_prob) & (state.sector >= self.consts.BOUNCER_START_LEVEL)
+            should_spawn = jnp.logical_and(should_spawn, jnp.logical_not(mothership_active))
 
             side_left = jax.random.uniform(key_side) < 0.5
             spawn_x = jnp.where(side_left, 5.0, 155.0)
@@ -3736,6 +3746,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         vel_y = state.level.kamikaze_vel_y[0]
         tracking = state.level.kamikaze_tracking[0]
         spawn_timer = state.level.kamikaze_spawn_timer[0]
+        mothership_active = state.level.mothership_stage > 0
 
         # Spawning logic: Sector 12 onwards, every 250 frames
         is_level_12_plus = state.sector >= self.consts.KAMIKAZE_START_SECTOR
@@ -3746,6 +3757,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                                 0)
         
         should_spawn = is_level_12_plus & jnp.logical_not(active) & (spawn_timer >= self.consts.KAMIKAZE_SPAWN_INTERVAL)
+        should_spawn = jnp.logical_and(should_spawn, jnp.logical_not(mothership_active))
         
         spawn_lane = jax.random.randint(key, (), 1, 6) # Inner lanes 1-5
         lanes_top_x = jnp.array(self.consts.TOP_OF_LANES, dtype=jnp.float32)
