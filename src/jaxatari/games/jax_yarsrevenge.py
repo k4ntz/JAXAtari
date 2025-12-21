@@ -153,6 +153,17 @@ class YarState(IntEnum):
     MOVING = 1
 
 
+class YarsRevengeGameState(IntEnum):
+    """
+    Allows to track the current game state for different rendering strategies.
+    """
+
+    PLAYING = 0
+    SCOREBOARD = 1
+    YAR_DEATH_ANIMATION = 2
+    QOTILE_DEATH_ANIMATION = 3
+
+
 class Entity(NamedTuple):
     """Simple rectangular entity with only position + size."""
 
@@ -224,6 +235,10 @@ class YarsRevengeConstants(NamedTuple):
     CANNON_MOVEMENT_FRAME = 8  # Animation change interval for cannon
     SWIRL_MOVEMENT_FRAME = 2  # Swirl sprite cycle
 
+    # Animation timings
+    QOTILE_DEATH_FRAMES = 223  # Animation duration on Qotile's Death
+    YAR_DEATH_FRAMES = 55  # Animation duration on Yar's Death
+
     # Points
     SHIELD_CELL_DESTROY_POINTS = 69  # Destroying a cell with energy missile or cannon
     SHIELD_CELL_DEVOUR_POINTS = 169  # Destroying the cell by devouring
@@ -234,6 +249,13 @@ class YarsRevengeConstants(NamedTuple):
     # Colour palette (RGB)
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
     NEUTRAL_ZONE_COLOR: Tuple[int, int, int] = (20, 20, 20)
+
+    # Scoreboard
+    SCOREBOARD_X = 20
+    SCOREBOARD_Y = 50
+    SCOREBOARD_MAX_DIGITS = 9
+    LIFE_X = 20
+    LIFE_Y = 75
 
     # Energy shield grid - each cell is `ENERGY_CELL_WIDTH` x
     # `ENERGY_CELL_HEIGHT`.
@@ -286,6 +308,10 @@ class YarsRevengeState(NamedTuple):
     # Generic counters / score
     step_counter: jnp.ndarray  # int32  current simulation frame
     score: jnp.ndarray  # int32  accumulated score
+
+    game_state: jnp.ndarray  # int32  YarsRevengeGameState
+    game_state_timer: jnp.ndarray  # int32  timing for animations
+
     lives: jnp.ndarray  # int32  remaining lives
     stage: jnp.ndarray  # int32  current game stage (0/1)
 
@@ -369,6 +395,8 @@ class JaxYarsRevenge(
         return YarsRevengeState(
             step_counter=jnp.array(0).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
+            game_state=jnp.array(YarsRevengeGameState.PLAYING).astype(jnp.int32),
+            game_state_timer=jnp.array(0).astype(jnp.int32),
             lives=jnp.array(self.consts.INITIAL_LIVES).astype(jnp.int32),
             stage=jnp.array(stage).astype(jnp.int32),
             yar=DirectionEntity(
@@ -545,10 +573,10 @@ class JaxYarsRevenge(
         new_x = jnp.clip(entity.x + delta_x, min_x, max_x - entity.w)
         new_y = entity.y + delta_y
 
-        new_y = jax.lax.cond(
+        new_y = jnp.where(
             wrap_y,
-            lambda: jnp.mod(new_y, jnp.asarray(max_y - entity.h)),
-            lambda: jnp.clip(new_y, min_y, max_y - entity.h),
+            jnp.mod(new_y, jnp.asarray(max_y - entity.h)),
+            jnp.clip(new_y, min_y, max_y - entity.h),
         )
         return new_x, new_y
 
@@ -1181,6 +1209,17 @@ class JaxYarsRevenge(
         # Stage advancement occurs only when the qotile (or swirl) hits the fired cannon
         game_advance = qotile_cannon | swirl_cannon
 
+        # New game state calculation
+        new_game_state = jnp.where(
+            life_lost,
+            YarsRevengeGameState.YAR_DEATH_ANIMATION,
+            jnp.where(
+                game_advance,
+                YarsRevengeGameState.QOTILE_DEATH_ANIMATION,
+                YarsRevengeGameState.PLAYING,
+            ),
+        )
+
         # Score is gained by destroying qotile, destroying a charging swirl and destroying mid-air swirl
         # None can happen at the same time, therefore use switch
         branch = jnp.where(
@@ -1202,15 +1241,10 @@ class JaxYarsRevenge(
             ],
         )
 
-        return (dict(lives=new_lives), life_lost, game_advance, score_gained)
+        return (dict(lives=new_lives, game_state=new_game_state), score_gained)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _finalize_next_state(
-        self,
-        new_state: YarsRevengeState,
-        life_lost: jnp.ndarray,
-        game_advance: jnp.ndarray,
-    ):
+    def _finalize_next_state(self, new_state: YarsRevengeState):
         """
         Branch the next state based on the outcome:
 
@@ -1222,21 +1256,25 @@ class JaxYarsRevenge(
         The new state is built by re-using `construct_initial_state`
         and replacing only the fields that must change.
         """
-        branch = jnp.where(
-            game_advance,
-            0,
-            jnp.where(
-                life_lost & (new_state.lives == 0),
-                1,
-                jnp.where(life_lost, 2, 3),
-            ),
+        qotile_death = (
+            new_state.game_state == YarsRevengeGameState.QOTILE_DEATH_ANIMATION
+        )
+
+        yar_death = new_state.game_state == YarsRevengeGameState.YAR_DEATH_ANIMATION
+        yar_death_end = jnp.logical_and(yar_death, new_state.lives <= 0)
+        yar_death_continue = jnp.logical_and(yar_death, new_state.lives > 0)
+
+        branch = jnp.select(
+            [qotile_death, yar_death_end, yar_death_continue], [0, 1, 2], default=3
         )
 
         return jax.lax.switch(
             branch,
             [
                 lambda: (
-                    self._construct_initial_state((new_state.stage + 1) % 2)
+                    self._construct_initial_state((new_state.stage + 1) % 2)._replace(
+                        score=new_state.score, lives=new_state.lives
+                    )
                 ),  # Advance to the next stage
                 lambda: self._construct_initial_state(0),  # No lives left, reset
                 lambda: self._construct_initial_state(new_state.stage)._replace(
@@ -1249,14 +1287,11 @@ class JaxYarsRevenge(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: YarsRevengeState, action: jnp.ndarray):
+    def _game_step(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         """
-        Full environment step, it calls all sub-steps in the correct order,
-        updates the immutable state and returns the observation, reward and
-        termination flag.  The returned observation is a `YarsRevengeObservation`
-        instance that contains everything the agent needs to decide on the
-        next action.
+        Calculates the next game state with the current state and action
         """
+        state, action = info
         new_state = state
 
         # Parse input action into flags
@@ -1304,20 +1339,93 @@ class JaxYarsRevenge(
         new_state = new_state._replace(**stage_specific_updates)
 
         # Game ending (lives and advancement)
-        life_updates, life_lost, game_advance, ending_score = (
-            self._game_ending_calculation(
-                state, yar_neutral, cannon_exists, cannon_fired
-            )
+        ending_updates, ending_score = self._game_ending_calculation(
+            state, yar_neutral, cannon_exists, cannon_fired
         )
-        new_state = new_state._replace(**life_updates)
+        new_state = new_state._replace(**ending_updates)
+
+        # Calculate the new score
+        total_score_gained = yar_score + cannon_score + em_score + ending_score
+        new_state = new_state._replace(score=state.score + total_score_gained)
+
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _animation_step(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Calculates the next state for the animation states.
+        """
+        state, action = info
+        new_state = state
+
+        target_animation_frames = jnp.where(
+            state.game_state == YarsRevengeGameState.QOTILE_DEATH_ANIMATION,
+            self.consts.QOTILE_DEATH_FRAMES,
+            jnp.where(
+                state.game_state == YarsRevengeGameState.YAR_DEATH_ANIMATION,
+                self.consts.YAR_DEATH_FRAMES,
+                0,
+            ),
+        )
+
+        # Parse input action into flags
+        direction_flags, fire = self._parse_action_flags(action)
 
         # Finalise next state
-        new_state = self._finalize_next_state(new_state, life_lost, game_advance)
+        new_state = jax.lax.cond(
+            state.game_state_timer >= target_animation_frames,
+            lambda: self._finalize_next_state(new_state)._replace(
+                game_state=YarsRevengeGameState.SCOREBOARD
+            ),  # Switch to new state
+            lambda: new_state._replace(
+                game_state_timer=state.game_state_timer + 1
+            ),  # Increment the timer
+        )
 
-        # Increment step counter and score
-        total_score_gained = yar_score + cannon_score + em_score + ending_score
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _scoreboard_step(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Calculates the next state inside the score board state.
+        """
+        state, action = info
+        new_state = state
+
+        # Parse input action into flags
+        _, fire = self._parse_action_flags(action)
+
+        new_game_state = jnp.where(
+            fire, YarsRevengeGameState.PLAYING, YarsRevengeGameState.SCOREBOARD
+        )
+        new_state = new_state._replace(game_state=new_game_state, game_state_timer=0)
+
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: YarsRevengeState, action: jnp.ndarray):
+        """
+        Full environment step, it calls all sub-steps in the correct order,
+        updates the immutable state and returns the observation, reward and
+        termination flag.  The returned observation is a `YarsRevengeObservation`
+        instance that contains everything the agent needs to decide on the
+        next action.
+        """
+
+        new_state = jax.lax.switch(
+            state.game_state,
+            [
+                self._game_step,
+                self._scoreboard_step,
+                self._animation_step,
+                self._animation_step,
+            ],
+            operand=(state, action),
+        )
+
+        # Increment the step counter
         new_state = new_state._replace(
-            step_counter=state.step_counter + 1, score=state.score + total_score_gained
+            step_counter=state.step_counter + 1,
         )
 
         # Observation / reward / done flag
@@ -1681,8 +1789,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
                     self.consts.NEUTRAL_ZONE_COLOR + (255,), dtype=jnp.uint8
                 ).reshape(1, 1, 4),
             },
+            {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
         ]
 
+    @partial(jax.jit, static_argnums=(0,))
     def get_animation_idx(
         self,
         step: jnp.ndarray,
@@ -1701,12 +1811,14 @@ class YarsRevengeRenderer(JAXGameRenderer):
             jnp.floor(step / duration).astype(jnp.int32) % group_item_count
         )
 
-    def render(self, state: YarsRevengeState):
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_game_elements(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         """
-        Render the complete frame by compositing all game elements onto a background raster.
+        Draws the game elements into the raster while playing the game.
+        Takes the state and a raster as tuple for input argument.
         """
-        # Start with an empty background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        state, raster = info
 
         # Neutral zone overlay
         neutral_zone_mask = jnp.full(
@@ -1801,6 +1913,77 @@ class YarsRevengeRenderer(JAXGameRenderer):
             state.swirl_exist,
             self.jr.render_at(raster, state.swirl.x, state.swirl.y, swirl_mask),
             self.jr.render_at(raster, state.qotile.x, state.qotile.y, qotile_mask),
+        )
+
+        return raster.astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_scoreboard(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the scoreboard into the raster.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        # Rendering the score digits
+        score_digits_mask = self.jr.int_to_digits(state.score, max_digits=9)
+        score_num_digits = jnp.minimum(
+            jnp.maximum(1, jnp.ceil(jnp.log10(state.score + 1))).astype(jnp.int32),
+            self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+        score_start_index = self.consts.SCOREBOARD_MAX_DIGITS - score_num_digits
+        raster = self.jr.render_label_selective(
+            raster,
+            self.consts.SCOREBOARD_X,
+            self.consts.SCOREBOARD_Y,
+            all_digits=score_digits_mask,
+            digit_id_masks=self.SHAPE_MASKS["digits"],
+            start_index=score_start_index,
+            num_to_render=score_num_digits,
+            spacing=12,
+            max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+
+        # Rendering the lives
+        life_digits_mask = self.jr.int_to_digits(state.lives, max_digits=9)
+        life_num_digits = jnp.minimum(
+            jnp.maximum(1, jnp.ceil(jnp.log10(state.lives + 1))).astype(jnp.int32),
+            self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+        life_start_index = self.consts.SCOREBOARD_MAX_DIGITS - life_num_digits
+        raster = self.jr.render_label_selective(
+            raster,
+            self.consts.LIFE_X,
+            self.consts.LIFE_Y,
+            all_digits=life_digits_mask,
+            digit_id_masks=self.SHAPE_MASKS["digits"],
+            start_index=life_start_index,
+            num_to_render=life_num_digits,
+            spacing=12,
+            max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
+        )
+
+        return raster.astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: YarsRevengeState):
+        """
+        Render the complete frame by compositing all game elements onto a background raster.
+        """
+        # Start with an empty background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Render strategy branching with game_state
+        raster = jax.lax.switch(
+            state.game_state,
+            [
+                self._render_game_elements,
+                self._render_scoreboard,
+                self._render_game_elements,
+                self._render_game_elements,
+            ],
+            operand=(state, raster),
         )
 
         # Convert the raster from indices to RGB values
