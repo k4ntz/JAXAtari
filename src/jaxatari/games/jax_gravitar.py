@@ -1843,6 +1843,12 @@ def _step_level_core(env_state: EnvState, action: int):
     enemy_bullets, hit_by_enemy_bullet = consume_ship_hits(ship_after_move, enemy_bullets, SHIP_RADIUS)
     ufo_bullets, hit_by_ufo_bullet = consume_ship_hits(ship_after_move, ufo_bullets, SHIP_RADIUS)
     hit_terr = terrain_hit(state_after_ufo, ship_after_move.x, ship_after_move.y, 2)
+    
+    # Check for collision with UFO (rammer) - use state BEFORE UFO update to detect collision
+    # (UFO may already be marked dead after update, but collision still happened)
+    ufo_before_update = state_after_spawn.ufo
+    hit_by_ufo = _circle_hit(ship_after_move.x, ship_after_move.y, SHIP_RADIUS, 
+                              ufo_before_update.x, ufo_before_update.y, UFO_HIT_RADIUS) & ufo_before_update.alive
 
     # --- 7. State Finalization ---
     # a) Initial check for ship death
@@ -1851,7 +1857,8 @@ def _step_level_core(env_state: EnvState, action: int):
         (hit_enemy_types == int(SpriteIdx.ENEMY_ORANGE)) | (hit_enemy_types == int(SpriteIdx.ENEMY_GREEN)))
     bullet_hit_kills = (hit_by_enemy_bullet | hit_by_ufo_bullet) & ~is_using_shield_tractor
     
-    dead = crashed_on_turret | bullet_hit_kills | hit_terr | timer_ran_out
+    # UFO collision is always fatal (shield doesn't protect against ramming)
+    dead = crashed_on_turret | bullet_hit_kills | hit_terr | timer_ran_out | hit_by_ufo
 
     # b) Special rules for the Reactor level 
     def check_reactor_hit(b: Bullets):
