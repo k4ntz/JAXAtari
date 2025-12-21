@@ -939,7 +939,24 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
 
-        return_bool = jnp.logical_and(base_rooms, castle_collision )# todo
+        walls_detected = jnp.logical_and(base_rooms, castle_collision )
+
+        #Check for Bridge negating wall
+        
+        bridgeX = state.bridge[0]
+        bridgeY = state.bridge[1]
+        bridgeTile =state.bridge[2]
+
+        bridgeOnSameTile = bridgeTile == room
+        bridgeInRange = jnp.logical_and(
+            jnp.logical_and(player_x >= bridgeX + 8, player_x <= bridgeX + 24),
+            jnp.logical_and(player_y >= bridgeY, player_y <= bridgeY + 48)
+        )
+
+        bridge_detected = jnp.logical_and(bridgeOnSameTile, bridgeInRange)
+
+
+        return_bool = jnp.logical_or(walls_detected, bridge_detected)
         
         return return_bool
 
