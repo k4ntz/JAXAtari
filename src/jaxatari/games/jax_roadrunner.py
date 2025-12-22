@@ -1098,9 +1098,9 @@ class JaxRoadRunner(
 
     def _check_truck_collisions_active(self, state: RoadRunnerState) -> RoadRunnerState:
         """Check collisions when truck is active."""
-        # Truck collision area (lower half, using TRUCK_COLLISION_OFFSET)
-        truck_collision_y = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
-        truck_collision_height = self.consts.TRUCK_SIZE[1] - self.consts.TRUCK_COLLISION_OFFSET
+        # Truck collision area for player (lower half, using TRUCK_COLLISION_OFFSET)
+        truck_collision_y_player = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
+        truck_collision_height_player = self.consts.TRUCK_SIZE[1] - self.consts.TRUCK_COLLISION_OFFSET
 
         # Player pickup area (lower portion)
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
@@ -1110,16 +1110,24 @@ class JaxRoadRunner(
         player_collision = _check_aabb_collision(
             state.player_x, player_pickup_y,
             self.consts.PLAYER_SIZE[0], pickup_height,
-            state.truck_x, truck_collision_y,
-            self.consts.TRUCK_SIZE[0], truck_collision_height,
+            state.truck_x, truck_collision_y_player,
+            self.consts.TRUCK_SIZE[0], truck_collision_height_player,
         )
 
-        # Check enemy-truck collision
+        # --- Enemy Collision Logic (Forgiving) ---
+        # 1. Use FULL truck height (ignore depth offset)
+        # 2. Add a buffer to the enemy hitbox to register "grazing" hits
+        hit_buffer = 4  # Pixels to expand enemy hitbox by on all sides
+
+        e_x = state.enemy_x - hit_buffer
+        e_y = state.enemy_y - hit_buffer
+        e_w = self.consts.ENEMY_SIZE[0] + (hit_buffer * 2)
+        e_h = self.consts.ENEMY_SIZE[1] + (hit_buffer * 2)
+
         enemy_collision = _check_aabb_collision(
-            state.enemy_x, state.enemy_y,
-            self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
-            state.truck_x, truck_collision_y,
-            self.consts.TRUCK_SIZE[0], truck_collision_height,
+            e_x, e_y, e_w, e_h,
+            state.truck_x, state.truck_y,
+            self.consts.TRUCK_SIZE[0], self.consts.TRUCK_SIZE[1],
         )
 
         # Handle player collision (triggers round reset)
@@ -1137,7 +1145,12 @@ class JaxRoadRunner(
             state,
         )
 
+        # Handle enemy collision
         def handle_enemy_collision(st: RoadRunnerState) -> RoadRunnerState:
+            # If enemy hit by truck:
+            # 1. Trigger flattened state for set duration
+            # 2. Add score immediately
+            # Only if not already flattened
             return jax.lax.cond(
                 st.enemy_flattened_timer == 0,
                 lambda s: s._replace(
