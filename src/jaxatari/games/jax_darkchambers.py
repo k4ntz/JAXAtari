@@ -48,10 +48,10 @@ def _get_default_asset_config():
 
 # Game configuration and constants
 
-GAME_H = 210
+GAME_H = 160
 GAME_W = 160
 WORLD_W = GAME_W * 2  # World is 2x viewport size
-WORLD_H = GAME_H * 2
+WORLD_H = 600  # Significantly taller world
 
 # --- Nav grid for enemy pathfinding ---
 CELL_SIZE = 8                      # size of one nav cell in pixels
@@ -127,7 +127,7 @@ DEATH_FREEZE_TICKS = 60
 
 # Spawner configuration
 SPAWNER_WIDTH = 14
-SPAWNER_HEIGHT = 14
+SPAWNER_HEIGHT = 28  # 2:1 aspect ratio (height = 2 * width, original width)
 SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
 SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
 
@@ -288,7 +288,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts or DarkChambersConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(GAME_H, GAME_W),
+            game_dimensions=(GAME_H, GAME_W),  # (height, width)
             channels=3
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
@@ -341,7 +341,11 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Override background with solid color based on BACKGROUND_COLOR constant
         bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
         if bg_color_id is not None:
-            self.BACKGROUND = jnp.full((self.consts.HEIGHT, self.consts.WIDTH), bg_color_id, dtype=jnp.uint8)
+            self.BACKGROUND = jnp.full((GAME_H, GAME_W), bg_color_id, dtype=jnp.uint8)
+
+        # Ensure background is always (160, 160) to avoid shape mismatch
+        if self.BACKGROUND.shape == (210, 160):
+            self.BACKGROUND = self.BACKGROUND[:160, :]
         
         # Print sprite sizes for debugging
         print("\n=== SPRITE SIZES ===")
@@ -436,10 +440,10 @@ class DarkChambersRenderer(JAXGameRenderer):
             else:
                 self.ENEMY_SCALED_MASKS[enemy_name] = None
         
+
         # Scale item sprites to 12×12 boxes for consistent rendering
         target_item_w = 12
         target_item_h = 12
-        
         self.ITEM_SCALED_MASKS = {}
         item_sprites = {
             "pot": "pot",          # ITEM_SHIELD (shield icon)
@@ -454,7 +458,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             "key": "key",         # ITEM_KEY
             "door": "door",       # ITEM_CAGE_DOOR
         }
-        
         for item_key, sprite_name in item_sprites.items():
             item_mask = self.SHAPE_MASKS.get(sprite_name)
             if item_mask is not None:
@@ -462,7 +465,15 @@ class DarkChambersRenderer(JAXGameRenderer):
                 print(f"Scaled {sprite_name} to {target_item_h}×{target_item_w}")
             else:
                 self.ITEM_SCALED_MASKS[item_key] = None
-        
+
+        # --- Spawner as skull: scale skull sprite to 14x28 for spawner (2:1 aspect, original width) ---
+        skull_mask = self.SHAPE_MASKS.get("skull")
+        if skull_mask is not None:
+            self.SPAWNER_SKULL_MASK = _scale_mask(skull_mask, SPAWNER_HEIGHT, SPAWNER_WIDTH)
+            print(f"Scaled skull sprite to {SPAWNER_WIDTH}x{SPAWNER_HEIGHT} for spawner (2:1 aspect, original width)")
+        else:
+            self.SPAWNER_SKULL_MASK = None
+
         # Grim Reaper has no sprite, will use colored box
         self.HEART_MASK_6 = None
         self.POISON_MASK_6 = None
@@ -557,124 +568,101 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Walls in world coordinates - format: [x, y, width, height]
         # Multiple levels with different layouts
         # Shape: (MAX_LEVELS, max_walls_per_level, 4)
-        # Define portal hole parameters (centered vertically)
-        portal_hole_height = 40  # Height of the wraparound hole
-        portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
-        portal_y_end = portal_y_start + portal_hole_height
+        # Define 3 portal holes per side (top, middle, bottom)
+        portal_hole_height = 40
+        portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+        portal_y_starts = [
+            portal_gap,
+            portal_gap * 2 + portal_hole_height,
+            portal_gap * 3 + portal_hole_height * 2
+        ]
+        portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
         
-        # Middle map (map_index=0) - original layout
-        middle_level_0_walls = jnp.array([
-            # Border - Top and Bottom
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            # Left wall - split into two parts with gap in middle
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Right wall - split into two parts with gap in middle
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Labyrinth structure - Level 0
-            [60, 81, 120, 6],
-            [200, 151, 80, 6],
-            [80, 201, 100, 6],
-            [40, 281, 140, 6],
-            [161, 300, 6, 80],
-        ], dtype=jnp.int32)
+        # Middle map (map_index=0) - original layout, adjusted for new portals and height
+        # Borders
+        border_top = [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
+        border_bottom = [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
+        # Left wall - 3 gaps for portals
+        left_walls = []
+        prev_end = 0
+        for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+            left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
+            prev_end = y_end
+        left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
+        # Right wall - 3 gaps for portals
+        right_walls = []
+        prev_end = 0
+        for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+            right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
+            prev_end = y_end
+        right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
+        # Labyrinth structure - Level 0 (adjusted for new height)
+        maze = [
+            [60, 100, 120, 6],
+            [200, 200, 80, 6],
+            [80, 300, 100, 6],
+            [40, 400, 140, 6],
+            [161, 500, 6, 80],
+        ]
+        middle_level_0_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + maze,
+            dtype=jnp.int32
+        )
         
-        # Left map (map_index=1) - vertical corridor pattern
-        left_level_0_walls = jnp.array([
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Vertical corridors
-            [80, 50, 6, 120],
-            [180, 100, 6, 130],
-            [40, 170, 100, 6],
-            [120, 250, 120, 6],
-            [230, 280, 6, 100],
-        ], dtype=jnp.int32)
+        # Left map (map_index=1) - vertical corridor pattern, adjusted for portals/height
+        left_level_0_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + [
+                [80, 80, 6, 200],
+                [180, 200, 6, 200],
+                [40, 300, 100, 6],
+                [120, 400, 120, 6],
+                [230, 480, 6, 100],
+            ], dtype=jnp.int32
+        )
         
-        # Right map (map_index=2) - horizontal chambers
-        right_level_0_walls = jnp.array([
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            # Horizontal chambers
-            [50, 80, 140, 6],
-            [140, 140, 6, 100],
-            [70, 220, 130, 6],
-            [50, 290, 110, 6],
-            [200, 320, 6, 70],
-        ], dtype=jnp.int32)
+        # Right map (map_index=2) - horizontal chambers, adjusted for portals/height
+        right_level_0_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + [
+                [50, 100, 140, 6],
+                [140, 200, 6, 200],
+                [70, 300, 130, 6],
+                [50, 400, 110, 6],
+                [200, 500, 6, 70],
+            ], dtype=jnp.int32
+        )
         
-        # Middle map level 1
-        middle_level_1_walls = jnp.array([
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [50, 101, 100, 6],
-            [180, 181, 100, 6],
-            [100, 251, 120, 6],
-            [60, 321, 100, 6],
-            [81, 340, 6, 60],
-        ], dtype=jnp.int32)
+        # Middle map level 1 (reuse portal wall logic)
+        middle_level_1_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + [
+                [50, 120, 100, 6],
+                [180, 220, 100, 6],
+                [100, 320, 120, 6],
+                [60, 420, 100, 6],
+                [81, 540, 6, 60],
+            ], dtype=jnp.int32
+        )
         
-        # Left map level 1 - alternating pattern
-        left_level_1_walls = jnp.array([
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [60, 70, 110, 6],
-            [70, 150, 6, 90],
-            [140, 210, 100, 6],
-            [190, 280, 6, 80],
-            [50, 340, 120, 6],
-        ], dtype=jnp.int32)
+        # Left map level 1 - alternating pattern (reuse portal wall logic)
+        left_level_1_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + [
+                [60, 90, 110, 6],
+                [70, 170, 6, 90],
+                [140, 250, 100, 6],
+                [190, 320, 6, 80],
+                [50, 440, 120, 6],
+            ], dtype=jnp.int32
+        )
         
-        # Right map level 1 - grid-like pattern
-        right_level_1_walls = jnp.array([
-            [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, 
-             self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS],
-            [0, 0, self.consts.WALL_THICKNESS, portal_y_start],
-            [0, portal_y_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, 
-             self.consts.WALL_THICKNESS, portal_y_start],
-            [self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_end, 
-             self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_end],
-            [80, 60, 120, 6],
-            [160, 130, 6, 90],
-            [40, 200, 130, 6],
-            [60, 270, 6, 90],
-            [170, 320, 90, 6],
-        ], dtype=jnp.int32)
+        # Right map level 1 - grid-like pattern (reuse portal wall logic)
+        right_level_1_walls = jnp.array(
+            [border_top, border_bottom] + left_walls + right_walls + [
+                [80, 110, 120, 6],
+                [160, 180, 6, 90],
+                [40, 300, 130, 6],
+                [60, 370, 6, 90],
+                [170, 420, 90, 6],
+            ], dtype=jnp.int32
+        )
 
         # --- Hard-coded 4×4 cages (interior in nav cells) ---
         self.CAGE_INTERIOR_CELLS = 4
@@ -1357,25 +1345,35 @@ class DarkChambersRenderer(JAXGameRenderer):
         for t in [4, 7, 9]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
-        # Spawners
+        # Spawners: render as large skulls (24x24)
         spawner_world_pos = state.spawner_positions.astype(jnp.int32)
         spawner_screen_pos = (spawner_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         spawner_active_mask = state.spawner_active == 1
-        masked_spawner_pos = jnp.where(
-            spawner_active_mask[:, None],
-            spawner_screen_pos,
-            off_screen
-        )
-        spawner_sizes = jnp.tile(
-            jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
-            (NUM_SPAWNERS, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=masked_spawner_pos,
-            sizes=spawner_sizes,
-            color_id=self.SPAWNER_ID
-        )
+        for i in range(NUM_SPAWNERS):
+            if self.SPAWNER_SKULL_MASK is not None:
+                object_raster = jax.lax.cond(
+                    spawner_active_mask[i],
+                    lambda r: self.jr.render_at_clipped(r, spawner_screen_pos[i, 0], spawner_screen_pos[i, 1], self.SPAWNER_SKULL_MASK),
+                    lambda r: r,
+                    object_raster
+                )
+        # (If no skull sprite, fallback to colored box)
+        if self.SPAWNER_SKULL_MASK is None:
+            masked_spawner_pos = jnp.where(
+                spawner_active_mask[:, None],
+                spawner_screen_pos,
+                off_screen
+            )
+            spawner_sizes = jnp.tile(
+                jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
+                (NUM_SPAWNERS, 1)
+            )
+            object_raster = self.jr.draw_rects(
+                object_raster,
+                positions=masked_spawner_pos,
+                sizes=spawner_sizes,
+                color_id=self.SPAWNER_ID
+            )
         
         # Health bar (5 boxes proportional to max health=31) top-left
         health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
@@ -1872,7 +1870,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         (spawner_positions, key), _ = jax.lax.scan(spawn_spawner, (spawner_positions_init, subkey), jnp.arange(NUM_SPAWNERS))
         
         spawner_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
-        spawner_active = jnp.zeros(NUM_SPAWNERS, dtype=jnp.int32)  # Disabled - no spawners placed
+        spawner_active = jnp.ones(NUM_SPAWNERS, dtype=jnp.int32)  # ENABLED: all spawners active
         key, subkey = jax.random.split(key)
         spawner_timers = jax.random.randint(
             subkey, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32
