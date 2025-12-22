@@ -53,6 +53,7 @@ class DefenderConstants(NamedTuple):
     SCORE_SCREEN_Y: int = 177
     SCORE_SCREEN_X: int = 57
     SCORE_MAX_DIGITS: int = 6
+    SCORE_MAX: int = 999999
     DIGIT_WIDTH: int = 7
     DIGIT_HEIGHT: int = 7
     DIGIT_PADDING: int = 1
@@ -269,8 +270,6 @@ class EntityPosition(NamedTuple):
 
 class DefenderObservation(NamedTuple):
     # Needs more implementation, work in progress
-    player: EntityPosition
-    bullet: EntityPosition
     score: jnp.ndarray
 
 
@@ -1029,6 +1028,8 @@ class JaxDefender(
 
         # Check for item threshold
         gain_items = new_score > old_score
+
+        score = jnp.clip(score, 0, self.consts.SCORE_MAX)
 
         space_ship_lives = state.space_ship_lives + 1
         smart_bombs = state.smart_bomb_amount + 1
@@ -2753,20 +2754,7 @@ class JaxDefender(
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        player = EntityPosition(
-            x=state.space_ship_x,
-            y=state.space_ship_y,
-            width=jnp.array(self.consts.SPACE_SHIP_WIDTH),
-            height=jnp.array(self.consts.SPACE_SHIP_HEIGHT),
-        )
-        bullet = EntityPosition(
-            x=state.bullet_x,
-            y=state.bullet_y,
-            width=jnp.array(self.consts.BULLET_WIDTH),
-            height=jnp.array(self.consts.BULLET_HEIGHT),
-        )
-
-        return DefenderObservation(player=player, bullet=bullet, score=state.score)
+        return DefenderObservation(score=state.score)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -2778,52 +2766,16 @@ class JaxDefender(
     def obs_to_flat_array(self, obs: DefenderObservation) -> jnp.ndarray:
         return jnp.concatenate(
             [
-                obs.player.x.flatten(),
-                obs.player.y.flatten(),
-                obs.player.height.flatten(),
-                obs.player.width.flatten(),
-                obs.bullet.x.flatten(),
-                obs.bullet.y.flatten(),
-                obs.bullet.height.flatten(),
-                obs.bullet.width.flatten(),
                 obs.score.flatten(),
             ]
         )
 
-    def observation_space(self) -> Space:
+    def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
             {
-                "player": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=-10,
-                            high=self.consts.WORLD_HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "y": spaces.Box(
-                            low=0,
-                            high=self.consts.WORLD_WIDTH,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "height": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                    }
+                "score": spaces.Box(
+                    low=0, high=self.consts.SCORE_MAX + 1, shape=(), dtype=jnp.int32
                 ),
-                "bullet": spaces.Dict(
-                    {
-                        "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                        "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                        "height": spaces.Box(
-                            low=0, high=210, shape=(), dtype=jnp.int32
-                        ),
-                    }
-                ),
-                "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             }
         )
 
