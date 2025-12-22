@@ -149,6 +149,8 @@ class DefenderConstants(NamedTuple):
     POD_DEATH_SCORE: int = 1000
     POD_MAX_AMOUNT: int = 3
     POD_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 3, 3, 3])
+    ENEMY_SPAWN_AROUND_MIN_RADIUS: float = 5.0
+    ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 25.0
 
     # Bomber
     BOMBER_Y_SPEED: float = -0.2
@@ -161,6 +163,8 @@ class DefenderConstants(NamedTuple):
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
+    SWARMERS_MAX_SPEED: float = 2.0
+    SWARMERS_Y_SPEED: float = 0.8
 
     # Mutant
     MUTANT_DEATH_SCORE: int = 150
@@ -1185,23 +1189,24 @@ class JaxDefender(
             enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state
         )
 
-        def pod_death(state: DefenderState) -> DefenderState:
+        def pod_death(state: DefenderState, index: int) -> DefenderState:
             key, subkey = jax.random.split(state.key)
             spawn_amount = jnp.round(
                 jax.random.uniform(subkey, minval=1, maxval=2)
             ).astype(jnp.int32)
+            x, y = self._get_enemy(state, index)[:2]
             state = jax.lax.fori_loop(
                 0,
                 spawn_amount,
-                lambda _, state: self._spawn_enemy_random_pos(
-                    state, self.consts.SWARMERS
+                lambda _, state: self._spawn_enemy_around_pos(
+                    state, x, y, self.consts.SWARMERS
                 ),
                 state,
             )
             return state._replace(key=key)
 
         state = jax.lax.cond(
-            enemy_type == self.consts.POD, lambda: pod_death(state), lambda: state
+            enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state
         )
 
         state = self._update_enemy(
@@ -1322,6 +1327,34 @@ class JaxDefender(
             minval=0,
             maxval=self.consts.WORLD_HEIGHT - self.consts.CITY_HEIGHT,
         )
+
+        state = self._spawn_enemy(state, game_x, game_y, e_type, 0.0, 0.0)
+
+        return state._replace(key=key)
+    
+    def _spawn_enemy_around_pos(
+        self, state: DefenderState, center_x: float, center_y: float, e_type: int
+    ) -> DefenderState:
+        # Spawn randomly around position within a radius
+        key = state.key
+        key, subkey_angle = jax.random.split(key)
+        key, subkey_radius = jax.random.split(key)
+
+        angle = jax.random.uniform(subkey_angle, minval=0.0, maxval=2 * jnp.pi)
+        radius = jax.random.uniform(
+            subkey_radius,
+            minval=self.consts.ENEMY_SPAWN_AROUND_MIN_RADIUS,
+            maxval=self.consts.ENEMY_SPAWN_AROUND_MAX_RADIUS,
+        )
+
+        offset_x = radius * jnp.cos(angle)
+        offset_y = radius * jnp.sin(angle)
+
+        game_x = center_x + offset_x
+        game_y = center_y + offset_y
+
+        # Wrap position
+        game_x, game_y = self._wrap_pos(game_x, game_y)
 
         state = self._spawn_enemy(state, game_x, game_y, e_type, 0.0, 0.0)
 
@@ -1923,35 +1956,60 @@ class JaxDefender(
         swarmer = state.enemy_states[index]
         x_pos = swarmer[0]
         y_pos = swarmer[1]
-        swarmer_direction_right = swarmer[3]
+        speed = swarmer[4]
+        swarmer_direction = swarmer[3]
         enemy_states = state.enemy_states
-
-        # Swarmers move opposite to spaceship direction
+        speed = speed + 0.05  # acceleration over time
+        # max speed
+        speed = jnp.clip(speed, a_min=-self.consts.SWARMERS_MAX_SPEED, a_max=self.consts.SWARMERS_MAX_SPEED)
+        speed_x = speed
+        # acceleration in x direction
         speed_x = jax.lax.cond(
-            state.space_ship_speed > 0,
-            lambda: self.consts.ENEMY_SPEED,  # Spaceship going right, swarmer goes right
-            lambda: -self.consts.ENEMY_SPEED,  # Spaceship going left, swarmer goes left
+            swarmer_direction == 1,
+            lambda s: s,
+            lambda s: -s,
+            operand=speed_x,
+        )
+        swarmer_direction = jax.lax.cond(
+            swarmer_direction == 0,
+            lambda _: jax.lax.cond(
+                x_pos < state.space_ship_x,
+                lambda _: 1.0,
+                lambda _: -1.0,
+                operand=None,
+            ),
+            lambda _: jax.lax.cond(
+                swarmer_direction == 3,
+                lambda _: jax.lax.cond(
+                    x_pos > state.space_ship_x + 100,
+                    lambda _: -1.0,
+                    lambda _: jax.lax.cond(
+                        x_pos < state.space_ship_x - 100,
+                        lambda _: 1.0,
+                        lambda _: swarmer_direction,
+                        operand=None,
+                    ),
+                    operand=None,
+                ),
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(x_pos < state.space_ship_x + 5, x_pos > state.space_ship_x - 5),
+                    lambda _: 0.0,
+                    lambda _: swarmer_direction,
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
         )
 
-        # Check if swarmer crossed the spaceship
-        crossed = jax.lax.cond(
-            swarmer_direction_right,
-            lambda: x_pos > state.space_ship_x,
-            lambda: x_pos < state.space_ship_x,
+
+        speed_x, speed_y = jax.lax.cond(
+            jnp.logical_or(swarmer_direction == 3, swarmer_direction == 0),
+            lambda: (0.0, self.consts.SWARMERS_Y_SPEED),
+            lambda: (speed_x, 0.0),
         )
 
-        # If crossed, set speed_x to 0
-        speed_x = jax.lax.cond(crossed, lambda: 0.0, lambda: speed_x)
-
-        # Update direction based on current movement
-        swarmer_direction_right = jax.lax.cond(
-            speed_x != 0,
-            lambda: jnp.where(speed_x > 0, 1.0, -1.0),
-            lambda: swarmer_direction_right,
-        )
-
-        # Fixed Y speed for swarmers
-        speed_y = self.consts.ENEMY_SPEED
+        speed = jnp.where(swarmer_direction == 0, 0.0, speed)
 
         x_pos, y_pos = self._move_and_wrap(
             x_pos,
@@ -1961,7 +2019,9 @@ class JaxDefender(
             speed_y,
         )
 
-        new_swarmer = [x_pos, y_pos, swarmer[2], swarmer_direction_right, swarmer[4]]
+
+        
+        new_swarmer = [x_pos, y_pos, swarmer[2], swarmer_direction, speed]
         new_enemy_states = enemy_states.at[index].set(new_swarmer)
         return state._replace(enemy_states=new_enemy_states)
 
