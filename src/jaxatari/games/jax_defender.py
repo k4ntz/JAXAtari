@@ -2101,7 +2101,7 @@ class JaxDefender(
             state = jax.lax.cond(
                 hit_ground,
                 lambda: self._update_human(
-                    state, index, 0.0, 0.0, float(self.consts.INACTIVE)
+                    state, index, 10 + index * (self.consts.WORLD_WIDTH / self.consts.HUMAN_LEVEL_AMOUNT[state.level]), self.consts.HUMAN_INIT_GAME_Y, self.consts.HUMAN_STATE_IDLE
                 ),
                 lambda: self._update_human(state, index, game_y=human_y),
             )
@@ -2140,8 +2140,7 @@ class JaxDefender(
             state = jax.lax.cond(
                 jnp.logical_or(is_in_city, is_overdue),
                 lambda: self._update_human(
-                    state, index, 0.0, 0.0, self.consts.INACTIVE
-                ),
+                    state, index, 10 + index * (self.consts.WORLD_WIDTH / self.consts.HUMAN_LEVEL_AMOUNT[state.level]), self.consts.HUMAN_INIT_GAME_Y, self.consts.HUMAN_STATE_IDLE),
                 lambda: self._update_human(
                     state, index, state.space_ship_x + 5, state.space_ship_y + 4
                 ),
