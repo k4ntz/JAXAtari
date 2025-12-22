@@ -233,6 +233,50 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def get_legal_actions(self, state: CrossbowState) -> chex.Array:
         return jnp.ones((self.num_actions,), dtype=bool)
 
+    def get_obs(self, state: CrossbowState) -> CrossbowObservation:
+        return self._get_observation(state)
+
+    def get_info(self, state: CrossbowState) -> CrossbowInfo:
+        return self._get_info(state)
+
+    def _get_env_reward(self, state: CrossbowState, new_state: CrossbowState) -> float:
+        return (new_state.score - state.score).astype(float)
+
+    def _get_done(self, state: CrossbowState) -> bool:
+        return jnp.logical_or(state.lives == 0, state.step_counter > 4000)
+
+    def _get_observation(self, state):
+        return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
+
+    def _get_info(self, state):
+        return CrossbowInfo(time=state.step_counter)
+
+    def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
+        return jnp.stack([
+            obs.cursor_x,
+            obs.cursor_y,
+            obs.friend_x,
+            obs.game_phase,
+            obs.lives,
+            obs.score
+        ], axis=-1).astype(jnp.int32)
+
+    def action_space(self):
+        return spaces.Discrete(18)
+
+    def observation_space(self):
+        return spaces.Dict({
+            "cursor_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
+            "cursor_y": spaces.Box(0, self.consts.HEIGHT, (), jnp.int32),
+            "friend_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
+            "game_phase": spaces.Discrete(8),
+            "lives": spaces.Box(0, self.consts.MAX_LIVES, (), jnp.int32),
+            "score": spaces.Box(0, 9999999, (), jnp.int32),
+        })
+
+    def image_space(self):
+        return spaces.Box(0, 255, (210, 160, 3), jnp.uint8)
+
     def _init_scatter_pixels(self, state: CrossbowState, rng_key: chex.PRNGKey) -> CrossbowState:
         rel_x, rel_y, base_dx, base_dy, colors = _get_initial_scatter_state(self.consts)
         num_pixels = self.consts.MAX_SCATTER_PIXELS
@@ -989,11 +1033,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
             rope_1_broken=jnp.array(False), rope_2_broken=jnp.array(False)
         )
-        return self._get_observation(state), state
+        return self.get_obs(state), state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CrossbowState, action: chex.Array):
-        prev_score = state.score
+        prev_state = state
         new_key, step_key = jax.random.split(state.key)
         state = self._cursor_step(state._replace(key=step_key), action)
         state = self._update_game_phase(state, action)
@@ -1016,7 +1060,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
-        return self._get_observation(state), state, (state.score - prev_score).astype(float), jnp.logical_or(game_over, state.step_counter > 4000), self._get_info(state)
+
+        reward = self._get_env_reward(prev_state, state)
+        done = self._get_done(state)
+
+        return self.get_obs(state), state, reward, done, self.get_info(state)
 
     def _get_observation(self, state): return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
     def _get_info(self, state): return CrossbowInfo(time=state.step_counter)
@@ -1142,18 +1190,18 @@ class CrossbowRenderer(JAXGameRenderer):
         # Enemies
 
         masks = [self.SHAPE_MASKS["enemy"], self.SHAPE_MASKS["scorpion"], self.SHAPE_MASKS["ant"], self.SHAPE_MASKS["vulture"], self.SHAPE_MASKS["spawn"], self.SHAPE_MASKS["lava_rock"],self.SHAPE_MASKS["falling_rock"],
-                  self.SHAPE_MASKS["resting_rock"],self.SHAPE_MASKS["monkey"],self.SHAPE_MASKS["coconut"],
-                  self.SHAPE_MASKS["voracious_plant"] 
-        ]
+                 self.SHAPE_MASKS["resting_rock"],self.SHAPE_MASKS["monkey"],self.SHAPE_MASKS["coconut"],
+                 self.SHAPE_MASKS["voracious_plant"]
+                 ]
 
-        
+
 
         def _draw_e(i, r):
             enemy_type = state.enemies_type[i]
             age = state.enemies_age[i]
             ex, ey = state.enemies_x[i].astype(jnp.int32), state.enemies_y[i].astype(jnp.int32)
             is_active = jnp.logical_and(state.enemies_active[i], is_gameplay)
-            
+
             is_arrow = enemy_type == EnemyType.ARROW
 
             # --- Arrow Logic ---
