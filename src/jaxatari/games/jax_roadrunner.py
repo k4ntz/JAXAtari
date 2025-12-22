@@ -1491,6 +1491,8 @@ class JaxRoadRunner(
             st = self._check_landmine_collisions(st)
             st = self._check_level_completion(st)
 
+            reward = (st.score - state.score).astype(jnp.float32)
+
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
             # Check if we should reset immediately (instant_death) OR if standard round end condition met (player reached end)
             should_reset = st.instant_death | (st.is_round_over & player_at_end)
@@ -1502,7 +1504,7 @@ class JaxRoadRunner(
             st = st._replace(step_counter=st.step_counter + 1)
             obs = self._get_observation(st)
             info = self._get_info(st)
-            return obs, st, 0.0, False, info
+            return obs, st, reward, False, info
 
         def _death_timer_branch(data):
              st, _ = data
@@ -1543,6 +1545,16 @@ class JaxRoadRunner(
         )
 
         return observation, state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: RoadRunnerState, state: RoadRunnerState) -> float:
+        diff = state.score - previous_state.score
+        # If score decreased (reset), we return 0.0.
+        return jax.lax.select(diff < 0, 0.0, diff.astype(jnp.float32))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: RoadRunnerState) -> bool:
+        return state.is_round_over & (state.lives == 0)
 
     def _game_over_reset(self, state: RoadRunnerState) -> RoadRunnerState:
         """Game Over: Restart from beginning."""
