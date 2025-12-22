@@ -98,11 +98,9 @@ FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, 
 FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
-PPX0 = 8
-PPX1 = 148
-PPY0 = 20
-PPY1 = 152
-POWER_PELLET_POSITIONS = [[PPX0, PPY0], [PPX1, PPY0], [PPX0, PPY1], [PPX1, PPY1]]
+POWER_PELLET_TILES = jnp.array([[1, 3], [36, 3], [1, 36], [36, 36]])
+POWER_PELLET_HITBOXES = jnp.array([[1, 3], [36, 3], [1, 36], [36, 36],
+                                   [1, 4], [36, 4], [1, 37], [36, 37]])
 INITIAL_GHOSTS_POSITIONS = jnp.array([[73, 54], [49, 78], [41, 78], [121, 78]])
 INITIAL_PACMAN_POSITION = jnp.array([75, 102])
 JAIL_POSITION = jnp.array([77, 70])
@@ -148,8 +146,8 @@ class LevelState(NamedTuple):
     collected_pellets: chex.Array   # Int - Number of collected pellets
     dofmaze: chex.Array             # Bool[x][y][4] - Precomputed degree of freedom maze layout
     pellets: chex.Array             # Bool[x][y] - 2D grid of 0 (empty) or 1 (pellet)
-    power_pellets: chex.Array       # Bool[4] - Indicates wheter the power pill is available
-    loaded: chex.Array              # Bool - Indicates whether the level is loaded
+    power_pellets: chex.Array       # Bool[4] - Indicates wheter the power pellet is available
+    loaded: chex.Array              # Int - 0: Not loaded, 1: loading, 2: loaded
 
 class GhostsState(NamedTuple):
     positions: chex.Array           # Tuple - (x, y)
@@ -194,7 +192,7 @@ class PacmanObservation(NamedTuple):
     fruit_action: chex.Array
     fruit_type: chex.Array
     pellets: chex.Array
-    power_pills: chex.Array
+    power_pellets: chex.Array
 
 class PacmanInfo(NamedTuple):
     level: chex.Array
@@ -261,7 +259,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             has_pellet,
             collected_pellets,
             power_pellets,
-            ate_power_pill,
+            ate_power_pellet,
             pellet_reward,
             level_id
         ) = self.player_step(state, action)
@@ -280,7 +278,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             new_lives,
             new_death_timer,
             ghosts_reward
-        ) = self.ghosts_step(state, ate_power_pill, key)
+        ) = self.ghosts_step(state, ate_power_pellet, key)
 
         # 5) Calculate reward, new score and flag score change digit-wise
         reward = pellet_reward + fruit_reward + ghosts_reward
@@ -301,7 +299,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                         dofmaze=state.level.dofmaze,
                         pellets=pellets,
                         power_pellets=power_pellets,
-                        loaded=jnp.array(True, dtype=jnp.bool_)
+                        loaded=jax.lax.cond(
+                            state.level.loaded < 2,
+                            lambda: state.level.loaded + 1,
+                            lambda: state.level.loaded
+                        )
                     ),
                     player = PlayerState(
                         position=player_position,
@@ -347,7 +349,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             fruit_action=state.fruit.position,
             fruit_type=state.fruit.type,
             pellets=state.level.pellets,
-            power_pills=state.level.power_pellets
+            power_pellets=state.level.power_pellets
         )
 
     @staticmethod
@@ -386,28 +388,38 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the players position and orientation based on his input and the current maze layout.
         """
+        # 1) Determine the last pressed action and check for validity
         action = last_pressed_action(action, state.player.action)
-        possible_directions = available_directions(state.player.position, state.level.dofmaze)
-        if action < 0 or action > len(ACTIONS) - 1: # Ignore illegal actions
-            action = Action.NOOP
-        if action != Action.NOOP and action != Action.FIRE and possible_directions[action - 2]:
-            new_action = action
-        else:
-            if state.player.action > 1 and stop_wall(state.player.position, state.level.dofmaze)[state.player.action - 2]: # check for wall collision
-                new_action = Action.NOOP
-            else:
-                new_action = state.player.action
+        action = jax.lax.cond(
+            (action < 0) | (action > len(ACTIONS) - 1),
+            lambda: Action.NOOP, # Ignore illegal actions
+            lambda: action
+        )
+        # 2) Determine the next action based on the available directions
+        available = available_directions(state.player.position, state.level.dofmaze)
+        new_action = jax.lax.cond(
+            (action != Action.NOOP) & (action != Action.FIRE) & available[action - 2],
+            lambda: action,
+            lambda: jax.lax.cond(
+                (state.player.action > 1) & stop_wall(state.player.position, state.level.dofmaze)[state.player.action - 2],
+                lambda: Action.NOOP,
+                lambda: state.player.action
+            )
+        )
+        # 3) Compute the next position 
         new_pos = state.player.position + ACTIONS[new_action]
         new_pos = new_pos.at[0].set(new_pos[0] % 160)
+        # 4) Update pellets based on the new player position
         (
             pellets,
             has_pellet,
             collected_pellets,
             power_pellets,
-            ate_power_pill,
+            ate_power_pellet,
             reward,
             level_id
         ) = JaxPacman.pellet_step(state, new_pos)
+        # 5) Return new player and pellet state
         return (
             new_pos,
             new_action,
@@ -415,7 +427,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             has_pellet,
             collected_pellets,
             power_pellets,
-            ate_power_pill,
+            ate_power_pellet,
             reward,
             level_id
         )
@@ -425,53 +437,76 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates pellets based on the players position and applies resulting score and mode changes.
         """
-        collected_pellets = state.level.collected_pellets
-        power_pellets = state.level.power_pellets
-        level_id = state.level.id
-        reward = 0
-        px, py = new_pacman_pos // 4
-        ate_power_pill = False
-
-        # 1) Check if a power pellet was eaten
-        if px == 1:
-            if (py == 3 or py == 4) and power_pellets[0]:
-                power_pellets = state.level.power_pellets.at[0].set(False)
-                ate_power_pill = True
-            elif (py == 36 or py == 37) and power_pellets[2]:
-                power_pellets = state.level.power_pellets.at[2].set(False)
-                ate_power_pill = True
-        elif px == 36:
-            if (py == 3 or py == 4) and power_pellets[1]:
-                power_pellets = state.level.power_pellets.at[1].set(False)
-                ate_power_pill = True
-            elif (py == 36 or py == 37) and power_pellets[3]:
-                power_pellets = state.level.power_pellets.at[3].set(False)
-                ate_power_pill = True
-
-        # 2) Check if a regular pellet was eaten
-        pellets = state.level.pellets
-        has_pellet = jnp.array(False)
-        x_offset = 5 if new_pacman_pos[0] < 75 else 1
-        if new_pacman_pos[0] % 8 == x_offset and new_pacman_pos[1] % 12 == 6: # Check for pellet consumption
-            x_pellets = (new_pacman_pos[0] - 2) // 8
-            y_pellets = (new_pacman_pos[1] + 4) // 12
-            if state.level.pellets[x_pellets, y_pellets]:
-                has_pellet = jnp.array(True)
-                pellets = state.level.pellets.at[x_pellets, y_pellets].set(False)
-
-        # 3) Process reward and check win condition
-        if has_pellet:
-            collected_pellets += 1
-            reward += PELLET_POINTS
-            if collected_pellets >= PELLETS_TO_COLLECT:
-                reward += LEVEL_COMPLETED_POINTS
-                level_id += 1
-        elif ate_power_pill:
-            reward += POWER_PELLET_POINTS
-        return pellets, has_pellet, collected_pellets, power_pellets, ate_power_pill, reward, level_id
+        def check_power_pellet(idx: chex.Array, power_pellets: chex.Array):
+            return jax.lax.cond(
+                idx < 0,
+                lambda: False,
+                lambda: power_pellets[idx % 4]
+            )
+        
+        def eat_power_pellet(idx: chex.Array, power_pellets: chex.Array):
+            return power_pellets.at[idx % 4].set(False)
+        
+        def check_pellet(pos: chex.Array):
+            x_offset = jax.lax.cond(pos[0] < 75, lambda: 5, lambda: 1)
+            return pos[0] % 8 == x_offset and pos[1] % 12 == 6
+            
+        def eat_pellet(pos: chex.Array, pellets: chex.Array):
+            tile = (pos[0] - 2) // 8, (pos[1] + 4) // 12
+            return jax.lax.cond(
+                pellets[tile],
+                lambda: (pellets.at[tile].set(False), True),
+                lambda: (pellets, False)
+            )
+        
+        # 1) Check if a regular pellet was eaten
+        pellets, has_pellet = jax.lax.cond(
+            check_pellet(new_pacman_pos),
+            lambda: eat_pellet(new_pacman_pos, state.level.pellets),
+            lambda: (state.level.pellets, False)
+        )
+        # 2) Check if a power pellet was eaten
+        power_pellet_hit = jnp.where(
+            jnp.all(jnp.round(new_pacman_pos / MsPacmanMaze.TILE_SCALE) == POWER_PELLET_HITBOXES, axis=1),
+            size=1,
+            fill_value=-1
+        )[0].item()
+        power_pellets, ate_power_pellet = jax.lax.cond(
+            check_power_pellet(power_pellet_hit, state.level.power_pellets),
+            lambda: (eat_power_pellet(power_pellet_hit, state.level.power_pellets), True),
+            lambda: (state.level.power_pellets, False)
+        )
+        # 3) Process regular pellet reward
+        collected_pellets, reward = jax.lax.cond(
+            has_pellet,
+            lambda: (state.level.collected_pellets + 1, PELLET_POINTS),
+            lambda: (state.level.collected_pellets, 0)
+        )
+        # 4) Process power pellet reward
+        reward = jax.lax.cond(
+            ate_power_pellet,
+            lambda: reward + POWER_PELLET_POINTS,
+            lambda: reward
+        )
+        # 5) Check win condition
+        level_id, reward = jax.lax.cond(
+            collected_pellets >= PELLETS_TO_COLLECT,
+            lambda: (state.level.id + 1, reward + LEVEL_COMPLETED_POINTS),
+            lambda: (state.level.id, reward)
+        )
+        # 6) Update pellet state
+        return (
+            pellets,
+            has_pellet,
+            collected_pellets,
+            power_pellets,
+            ate_power_pellet,
+            reward,
+            level_id
+        )
 
     @staticmethod
-    def ghosts_step(state: PacmanState, ate_power_pill: chex.Array, common_key: chex.Array
+    def ghosts_step(state: PacmanState, ate_power_pellet: chex.Array, common_key: chex.Array
                     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         """
         Updates all ghosts.
@@ -494,7 +529,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             # 2) Update ghost mode and timer
             if last_timer > 0:
                 new_timer = last_timer - 1
-            if ate_power_pill and mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
+            if ate_power_pellet and mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
                 mode = GhostMode.FRIGHTENED
                 new_timer = FRIGHTENED_DURATION
                 action = reverse_direction(action)
@@ -569,8 +604,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             jnp.array(new_modes),
             jnp.array(new_timers),
             state.player.position,
-            state.player.action,
-            ate_power_pill,
+            state.player.eaten_ghosts,
+            ate_power_pellet,
             state.lives)
 
         return (
@@ -586,13 +621,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
     @staticmethod
     def ghosts_collision(ghost_positions: chex.Array, ghost_actions: chex.Array, ghost_modes: chex.Array, ghost_timers: chex.Array,
-                                new_pacman_pos: chex.Array, eaten_ghosts: chex.Array, ate_power_pill: chex.Array, lives: chex.Array):
+                                new_pacman_pos: chex.Array, eaten_ghosts: chex.Array, ate_power_pellet: chex.Array, lives: chex.Array):
         """
         Updates the game state if a player-ghost collision occured.
         """
         deadly_collision = False
         reward = 0
-        if ate_power_pill:
+        if ate_power_pellet:
             eaten_ghosts = 0
         for i in range(4): 
             if detect_collision(new_pacman_pos, ghost_positions[i]):
@@ -695,7 +730,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
     def render(self, state: PacmanState):
         """Renders the current game state on screen."""
         # Render background for new game or level
-        if not state.level.loaded:
+        if state.level.loaded < 2:
             self.render_background(state.level.id, state.lives, state.score) # Render game over screen
         raster = self.SPRITE_BG
 
@@ -710,7 +745,8 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         for i in range(2):
             pel_n = 2*i + ((state.step_count & 0b1000) >> 3) # Alternate power pellet rendering
             if state.level.power_pellets[pel_n]:
-                pellet_x, pellet_y = POWER_PELLET_POSITIONS[pel_n]
+                pellet_x, pellet_y = ((POWER_PELLET_TILES[pel_n][0] + 1) * MsPacmanMaze.TILE_SCALE,
+                                      (POWER_PELLET_TILES[pel_n][1] + 2) * MsPacmanMaze.TILE_SCALE)
                 raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
         # Render pacman
         orientation = state.player.action - 2 # convert action to direction
@@ -1079,7 +1115,7 @@ def reset_level(level: chex.Array):
         dofmaze             = MsPacmanMaze.precompute_dof(maze), # Precompute degree of freedom maze layout
         pellets             = jnp.copy(MsPacmanMaze.BASE_PELLETS),
         power_pellets       = jnp.ones(4, dtype=jnp.bool_),
-        loaded              = jnp.array(False, dtype=jnp.bool_)
+        loaded              = jnp.array(0, dtype=jnp.uint8)
     )
 
 def reset_player():
