@@ -60,10 +60,10 @@ class RoadRunnerConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 10
     WALL_BOTTOM_Y: int = 194
     WALL_BOTTOM_HEIGHT: int = 16
-    ROAD_HEIGHT: int = 90
+    ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
-    ROAD_GAP_HEIGHT: int = 17
+    ROAD_GAP_HEIGHT: int = 14
     ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
     SPAWN_Y_RANDOM_OFFSET_MIN: int = -20
     SPAWN_Y_RANDOM_OFFSET_MAX: int = 20
