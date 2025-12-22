@@ -9,7 +9,6 @@ from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from pygame.examples.aliens import SCORE
 
 
 def _get_default_asset_config() -> tuple:
@@ -99,6 +98,8 @@ def _get_default_asset_config() -> tuple:
 
 # Game contents
 class KaboomConstants(NamedTuple):
+    EXPIRES_IN_VALUES: chex.Array = jnp.array([0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168])
+    ASSET_CONFIG: tuple = _get_default_asset_config()
     WIDTH: int = 160
     HEIGHT: int = 210
     BUCKET_SPEED_X: int = 5  # in px
@@ -110,7 +111,7 @@ class KaboomConstants(NamedTuple):
     BOMB_SIZE: tuple[int, int] = (5, 12)
     BACKGROUND_STATES: int = 32  # background flickers 16 times 2 frames each
     DEFAULT_STATE: int = -1
-    MAXIMUM_SCORE: int = 999_999
+    MAX_SCORE: int = 999_999
     BOMBS_COUNT_GROUPS = jnp.array([10, 20, 30, 40, 50, 75, 100,150])  # bombs count
     MAD_BOMBER_SPEED_GROUPS = jnp.array([1, 2, 2, 3, 3, 4, 4, 4])  # in px
     MAD_BOMBER_RANDOMNESS_NUMBERS = jnp.array([1, 1, 2, 2, 3, 3, 4, 4])  # just numbers
@@ -137,15 +138,13 @@ class KaboomConstants(NamedTuple):
     BUCKET_ONE_POS_Y: int = 148
     TOPLEFT_ALLOWED_POS_X: int = 18
     TOPLEFT_ALLOWED_POS_Y: int = 128
-    EXPIRES_IN_VALUES = jnp.array([i*12 for i in range(15)])
-    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # Agent's observation
 class KaboomObservation(NamedTuple):
     mad_bomber_pos: chex.Array  # tuple[int, int]
-    buckets_pos: chex.Array  # list[tuple[int, int]]
-    bombs: chex.Array  # list[tuple[tuple[int, int], int, int, int, int, int]]  # EntityPosition, bomb_fuse_anim_state, bomb_type, explode_state, explode_bucket_state, on_bucket_index, is_active, explodes_in
+    buckets_pos: chex.Array
+    bombs: chex.Array
     score: chex.Array
     lives: chex.Array
 
@@ -160,7 +159,7 @@ class KaboomState(NamedTuple):
     buckets_pos: chex.Array
     buckets_moving_state: chex.Array
     buckets_jitter_state: chex.Array
-    buckets_wereMovingRight: chex.Array
+    buckets_were_moving_right: chex.Array
     score: chex.Array
     lives: chex.Array
     level: chex.Array
@@ -203,8 +202,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                                    (self.consts.BUCKET_ONE_POS_X, self.consts.BUCKET_ONE_POS_Y, 1)], dtype=jnp.int32), # (x, y, is_active)
             buckets_jitter_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
             buckets_moving_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
-            buckets_wereMovingRight=jnp.array(False),
-            score=jnp.array(180000, dtype=jnp.int32),
+            buckets_were_moving_right=jnp.array(False),
+            score=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(3, dtype=jnp.int32),
             level=jnp.array(1, dtype=jnp.int32),
             bombs_dropped=jnp.array(0, dtype=jnp.int32),
@@ -220,6 +219,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         initial_obs = self._get_observation(state)
         return initial_obs, state
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KaboomState):
         obs = KaboomObservation(
             mad_bomber_pos=jnp.array((state.mad_bomber_pos_x, state.mad_bomber_pos_y), dtype=jnp.int32),
@@ -230,16 +230,13 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         )
         return obs
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_bucket_step(self, state, action, bucket_pos, buckets_moving_state,
-                           buckets_wereMovingRight, buckets_jitter_state,
+                           buckets_were_moving_right, buckets_jitter_state,
                            frames_counter, key):
 
-        # Skip if bombs exploding
-        def skip_update(_):
-            return bucket_pos, buckets_moving_state, buckets_wereMovingRight, buckets_jitter_state, frames_counter, key
-
         def do_update(operand):
-            buckets_pos, buckets_moving_state, buckets_wereMovingRight, buckets_jitter_state, frames_counter, key = operand
+            buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key = operand
             # Input + stickiness
             buckets_moving_state = jnp.where(
                 (action == Action.LEFT) | (action == Action.RIGHT),
@@ -249,19 +246,19 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             )
 
             # Update movement direction
-            buckets_wereMovingRight = jnp.where(action == Action.RIGHT, True,
-                                                jnp.where(action == Action.LEFT, False, buckets_wereMovingRight))
+            buckets_were_moving_right = jnp.where(action == Action.RIGHT, True,
+                                                jnp.where(action == Action.LEFT, False, buckets_were_moving_right))
 
             # Current speed
             cur_speed = jnp.where(
                 buckets_moving_state == self.consts.DEFAULT_STATE,
                 0,
-                (self.consts.BUCKET_SPEED_X * (buckets_moving_state / 5)) * jnp.where(buckets_wereMovingRight, 1, -1)
+                (self.consts.BUCKET_SPEED_X * (buckets_moving_state / 5)) * jnp.where(buckets_were_moving_right, 1, -1)
             ).astype(int)
 
             # Tentative new_x
             new_x = jnp.where(
-                buckets_wereMovingRight,
+                buckets_were_moving_right,
                 jnp.minimum(self.consts.TOPLEFT_ALLOWED_POS_Y, buckets_pos[0, 0] + cur_speed),
                 jnp.maximum(self.consts.TOPLEFT_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed)
             )
@@ -291,15 +288,17 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             buckets_jitter_state = jnp.where(buckets_jitter_state == 29, self.consts.DEFAULT_STATE, buckets_jitter_state)
 
             buckets_pos = buckets_pos.at[:, 0].set(new_x)
-            return buckets_pos, buckets_moving_state, buckets_wereMovingRight, buckets_jitter_state, frames_counter, key
+            return buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key
 
-        return jax.lax.cond(state.bombs_exploding, skip_update, do_update,
-                            (bucket_pos, buckets_moving_state, buckets_wereMovingRight, buckets_jitter_state,
+        return jax.lax.cond(state.bombs_exploding, lambda x: x, do_update,
+                            (bucket_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state,
                              frames_counter, key))
 
+    @partial(jax.jit, static_argnums=(0,))
     def get_group_index(self, level):
         return jax.lax.max(1, jax.lax.min(8, level)) - 1
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_bombs_step(self,
                           bombs,
                           buckets_pos,
@@ -525,6 +524,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         return jax.lax.cond(bombs_falling_and_exploding, update_bombs_func_true, lambda x: x,
                             (bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key))
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_background_step(self, bombs, buckets_pos, bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding,
                                level_finished, level_success, level, lives):
         X = 0
@@ -627,6 +627,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         # ------------------------------------------------------------
         return bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, level_finished, level_success, level, lives, buckets_pos
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_mad_bomber_step(self, mad_bomber_motion_counter, mad_bomber_pos_x, mad_bomber_going_left, level,
                                level_finished, bombs_dropped, key):
         group = self.get_group_index(level)
@@ -700,15 +701,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: KaboomState, action: chex.Array) -> Tuple[
         KaboomObservation, KaboomState, float, bool, KaboomInfo]:
-        # if state.lives <= 0:
-        #     return self._get_observation(state), state, 0, True, self._get_info(state)
-        #
-        # if state.score >= self.consts.MAXIMUM_SCORE:
-        #     return self._get_observation(state), state, 0, True, self._get_info(state)
-
-        buckets_pos, buckets_moving_state, buckets_wereMovingRight, buckets_jitter_state, frames_counter, key \
+        buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key \
             = self.update_bucket_step(state, action, state.buckets_pos, state.buckets_moving_state,
-                                      state.buckets_wereMovingRight, state.buckets_jitter_state, state.frames_counter,
+                                      state.buckets_were_moving_right, state.buckets_jitter_state, state.frames_counter,
                                       state.key)
 
         bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key \
@@ -735,7 +730,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             buckets_pos=buckets_pos,
             buckets_jitter_state=buckets_jitter_state,
             buckets_moving_state=buckets_moving_state,
-            buckets_wereMovingRight=buckets_wereMovingRight,
+            buckets_were_moving_right=buckets_were_moving_right,
             score=score,
             lives=lives,
             level=level,
@@ -755,6 +750,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
+        jax.debug.print("{}", observation)
+
         return observation, new_state, env_reward, done, info
 
     def render(self, state: KaboomState) -> jnp.ndarray:
@@ -762,6 +759,38 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict(
+            {
+                "mad_bomber_pos": spaces.Box(
+                    low=0, high=160, shape=(2,), dtype=jnp.int32
+                ),
+                "buckets_pos": spaces.Box(
+                    low=-1, high=210, shape=(3, 3), dtype=jnp.int32
+                ),
+                "bombs": spaces.Box(
+                    low=-1,
+                    high=210,
+                    shape=(15, 9),
+                    dtype=jnp.int32,
+                ),
+                "score": spaces.Box(
+                    low=0, high=1_000_000, shape=(), dtype=jnp.int32
+                ),
+                "lives": spaces.Box(
+                    low=0, high=3, shape=(), dtype=jnp.int32
+                ),
+            }
+        )
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: KaboomState) -> KaboomInfo:
@@ -791,6 +820,7 @@ class KaboomRenderer(JAXGameRenderer):
     def __init__(self, consts: KaboomConstants = None):
         super().__init__()
         self.consts = consts or KaboomConstants()
+        self.metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH)
         )
@@ -854,20 +884,6 @@ class KaboomRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KaboomState) -> chex.Array:
-        # # ------------------------------------------------------------
-        # # 1. Hintergrund auswählen (inkl. Flicker)
-        # # ------------------------------------------------------------
-        # bg_variant_idx = state.background_state % self.COLORED_BACKGROUNDS_STACKED.shape[0]
-        # bg_stack = self.COLORED_BACKGROUNDS_STACKED[bg_variant_idx]  # (3, H, W)
-        #
-        # # Falls kein Flicker → Originalbackground
-        # bg_stack = jax.lax.cond(
-        #     state.background_flickering,
-        #     lambda _: bg_stack,
-        #     lambda _: jnp.stack(self.BACKGROUNDS, axis=0),
-        #     operand=None
-        # )
-
         # Background_border
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
@@ -993,7 +1009,6 @@ class KaboomRenderer(JAXGameRenderer):
         def draw_bomb(i, r):
             bomb = state.bombs_states[i]
             is_active = bomb[7] != 0
-            #jax.lax.cond(is_active, lambda: jax.debug.print("{}", bomb), lambda: None)
 
             def draw_active(r2):
                 x = bomb[0].astype(int)
@@ -1044,7 +1059,6 @@ class KaboomRenderer(JAXGameRenderer):
         # Buckets
         def draw_bucket(i, r):
             bucket = state.buckets_pos[i]
-            jax.debug.print("{}", bucket)
             return jax.lax.cond(
                 bucket[2] != 0,
                 lambda r2: self.jr.render_at(r2, bucket[0], bucket[1], self.SHAPE_MASKS["bucket"]),
