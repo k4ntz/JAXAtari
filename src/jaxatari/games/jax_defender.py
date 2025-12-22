@@ -274,6 +274,9 @@ class EntityPosition(NamedTuple):
 
 class DefenderObservation(NamedTuple):
     # Needs more implementation, work in progress
+    space_ship_x: jnp.ndarray
+    space_ship_y: jnp.ndarray
+    space_ship_speed_x: jnp.ndarray
     score: jnp.ndarray
 
 
@@ -2813,7 +2816,7 @@ class JaxDefender(
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        return DefenderObservation(score=state.score)
+        return DefenderObservation(score=state.score, space_ship_speed_x=state.space_ship_speed_x, space_ship_x=state.space_ship_x, space_ship_y=state.space_ship_y)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
