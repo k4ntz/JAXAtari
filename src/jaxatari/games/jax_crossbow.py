@@ -989,7 +989,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
             rope_1_broken=jnp.array(False), rope_2_broken=jnp.array(False)
         )
-        return self.get_obs(state), state
+        return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CrossbowState, action: chex.Array):
@@ -1016,10 +1016,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
-        return self.get_obs(state), state, (state.score - prev_score).astype(float), jnp.logical_or(game_over, state.step_counter > 4000), self.get_info(state)
+        return self._get_observation(state), state, (state.score - prev_score).astype(float), jnp.logical_or(game_over, state.step_counter > 4000), self._get_info(state)
 
-    def get_obs(self, state): return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
-    def get_info(self, state): return CrossbowInfo(time=state.step_counter)
+    def _get_observation(self, state): return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
+    def _get_info(self, state): return CrossbowInfo(time=state.step_counter)
 
     def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
         return jnp.stack([
