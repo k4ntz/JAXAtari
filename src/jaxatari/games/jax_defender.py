@@ -272,16 +272,16 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
+
 class DefenderObservation(NamedTuple):
     # Needs more implementation, work in progress
-    space_ship_x: jnp.ndarray
-    space_ship_y: jnp.ndarray
-    space_ship_speed_x: jnp.ndarray
+    player: EntityPosition
     score: jnp.ndarray
+    lives: jnp.ndarray
 
 
 class DefenderInfo(NamedTuple):
-    time: jnp.ndarray
+    step_counter: jnp.ndarray
     score: jnp.ndarray
 
 
@@ -2808,15 +2808,28 @@ class JaxDefender(
             # Randomness
             key=key,
         )
-        observation = self._get_observation(initial_state)
+
         initial_state = self._start_level(initial_state, 0)
+        observation = self._get_observation(initial_state)
         return observation, initial_state
 
     def render(self, state: DefenderState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        return DefenderObservation(score=state.score, space_ship_speed_x=state.space_ship_speed, space_ship_x=state.space_ship_x, space_ship_y=state.space_ship_y)
+
+        player = EntityPosition(
+            x=jnp.asarray(state.space_ship_x, dtype=jnp.int32),
+            y=jnp.asarray(state.space_ship_y, dtype=jnp.int32),
+            width=jnp.asarray(self.consts.SPACE_SHIP_WIDTH, dtype=jnp.int32),
+            height=jnp.asarray(self.consts.SPACE_SHIP_HEIGHT, dtype=jnp.int32),
+        )
+
+        return DefenderObservation(
+            score=jnp.asarray(state.score, dtype=jnp.int32),
+            player=player,
+            lives=jnp.asarray(state.space_ship_lives, dtype=jnp.int32),
+        )
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -2829,6 +2842,13 @@ class JaxDefender(
         return jnp.concatenate(
             [
                 obs.score.flatten(),
+                jnp.concatenate([
+                    jnp.atleast_1d(obs.player.x),
+                    jnp.atleast_1d(obs.player.y),
+                    jnp.atleast_1d(obs.player.width),
+                    jnp.atleast_1d(obs.player.height),
+                ]),
+                obs.lives.flatten(),
             ]
         )
 
@@ -2838,12 +2858,24 @@ class JaxDefender(
                 "score": spaces.Box(
                     low=0, high=self.consts.SCORE_MAX + 1, shape=(), dtype=jnp.int32
                 ),
+                "player": spaces.Dict({
+                    "x": spaces.Box(low=0, high=160*256, shape=(), dtype=jnp.int32),
+                    "y": spaces.Box(low=0, high=210*256, shape=(), dtype=jnp.int32),
+                    "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                    "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                }),
+                "lives": spaces.Box(
+                    low=0,
+                    high=99,
+                    shape=(),
+                    dtype=jnp.int32
+                ),
             }
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: DefenderState) -> DefenderInfo:
-        return DefenderInfo(score=state.score, time=state.step_counter)
+        return DefenderInfo(score=state.score, step_counter=state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: DefenderState, state: DefenderState) -> float:
