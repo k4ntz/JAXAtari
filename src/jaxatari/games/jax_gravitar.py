@@ -1189,6 +1189,19 @@ def _update_saucer_seek(s: SaucerState, target_x, target_y, speed) -> SaucerStat
 
 
 @jax.jit
+def _update_saucer_horizontal(s: SaucerState, target_x, reactor_y, speed) -> SaucerState:
+    """Update saucer to move only horizontally at reactor height, following the ship's x position"""
+    # Move horizontally towards target_x
+    dx = target_x - s.x
+    # Determine direction: move left or right
+    vx = jnp.where(dx > 0, speed, -speed)
+    vx = jnp.where(jnp.abs(dx) < speed, 0.0, vx)  # Stop if close enough
+    
+    # Keep y fixed at reactor height
+    return s._replace(x=s.x + vx, y=reactor_y, vx=vx, vy=0.0)
+
+
+@jax.jit
 def _saucer_fire_one(sauc: SaucerState,
                      ship_x: jnp.ndarray,
                      ship_y: jnp.ndarray,
@@ -1207,6 +1220,39 @@ def _saucer_fire_one(sauc: SaucerState,
         )
 
         return _enforce_cap_keep_old(merged, cap=1)
+
+    return jax.lax.cond(can_fire, do_fire, lambda _: prev_enemy_bullets, operand=None)
+
+
+@jax.jit
+def _saucer_fire_random(sauc: SaucerState,
+                        prev_enemy_bullets: Bullets,
+                        mode_timer: jnp.ndarray,
+                        key: jnp.ndarray,
+                        ) -> Bullets:
+    """Saucer fires in random directions with max 2 bullets"""
+    can_fire = sauc.alive & ((mode_timer % SAUCER_FIRE_INTERVAL_FRAMES) == 0) \
+               & (_bullets_alive_count(prev_enemy_bullets) < jnp.int32(2))
+
+    def do_fire(_):
+        # Generate random angle (0 to 2*pi)
+        angle = jax.random.uniform(key, minval=0.0, maxval=2.0 * jnp.pi)
+        
+        # Calculate velocity components from random angle
+        vx = SAUCER_BULLET_SPEED * jnp.cos(angle)
+        vy = SAUCER_BULLET_SPEED * jnp.sin(angle)
+        
+        one = Bullets(
+            x=jnp.array([sauc.x], dtype=jnp.float32),
+            y=jnp.array([sauc.y], dtype=jnp.float32),
+            vx=jnp.array([vx], dtype=jnp.float32),
+            vy=jnp.array([vy], dtype=jnp.float32),
+            alive=jnp.array([True]),
+            sprite_idx=jnp.array([int(SpriteIdx.ENEMY_BULLET)], dtype=jnp.int32)
+        )
+        
+        merged = merge_bullets(prev_enemy_bullets, one, max_len=16)
+        return _enforce_cap_keep_old(merged, cap=2)
 
     return jax.lax.cond(can_fire, do_fire, lambda _: prev_enemy_bullets, operand=None)
 
@@ -1485,8 +1531,10 @@ def step_map(env_state: EnvState, action: int):
                           lambda: saucer)
     timer = jnp.where(should_spawn, 99999, timer)
 
-    saucer_after_move = jax.lax.cond(saucer.alive, lambda s: _update_saucer_seek(s, new_env.state.x, new_env.state.y,
-                                                                                 SAUCER_SPEED_MAP), lambda s: s,
+    # Saucer moves horizontally at reactor height, following ship's x position
+    saucer_after_move = jax.lax.cond(saucer.alive, 
+                                     lambda s: _update_saucer_horizontal(s, new_env.state.x, ry, SAUCER_SPEED_MAP), 
+                                     lambda s: s,
                                      operand=saucer)
     bullets_after_hit, hit_any_bullet = _bullets_hit_saucer(new_env.bullets, saucer_after_move)
 
@@ -1502,12 +1550,14 @@ def step_map(env_state: EnvState, action: int):
 
     mode_timer = jnp.where(new_env.mode == 0, new_env.mode_timer + 1, 0)
 
-    enemy_bullets = _saucer_fire_one(sauc_final, new_env.state.x, new_env.state.y, new_env.enemy_bullets, mode_timer)
+    # Saucer fires in random directions (360 degrees) with max 2 bullets
+    fire_key, new_main_key = jax.random.split(new_env.key)
+    enemy_bullets = _saucer_fire_random(sauc_final, new_env.enemy_bullets, mode_timer, fire_key)
     enemy_bullets = update_bullets(enemy_bullets)
 
     new_env = new_env._replace(
         bullets=bullets_after_hit, saucer=sauc_final, saucer_spawn_timer=timer,
-        enemy_bullets=enemy_bullets, mode_timer=mode_timer
+        enemy_bullets=enemy_bullets, mode_timer=mode_timer, key=new_main_key
     )
 
     # --- 4. Collision and State Finalization ---
@@ -1848,6 +1898,12 @@ def _step_level_core(env_state: EnvState, action: int):
     hit_by_ufo = _circle_hit(ship_after_move.x, ship_after_move.y, SHIP_RADIUS, 
                               ufo_before_update.x, ufo_before_update.y, UFO_HIT_RADIUS) & ufo_before_update.alive
 
+    # Check for collision with reactor destination core (fatal crash)
+    dx_reactor = ship_after_move.x - state_after_ufo.reactor_dest_x
+    dy_reactor = ship_after_move.y - state_after_ufo.reactor_dest_y
+    dist_sq_reactor = dx_reactor**2 + dy_reactor**2
+    hit_reactor_dest = is_in_reactor & state_after_ufo.reactor_dest_active & (dist_sq_reactor < (state_after_ufo.reactor_dest_radius + SHIP_RADIUS)**2)
+
     # --- 7. State Finalization ---
     # a) Initial check for ship death
     hit_enemy_types = jnp.where(hit_enemy_mask, enemies.sprite_idx, -1)
@@ -1855,8 +1911,8 @@ def _step_level_core(env_state: EnvState, action: int):
         (hit_enemy_types == int(SpriteIdx.ENEMY_ORANGE)) | (hit_enemy_types == int(SpriteIdx.ENEMY_GREEN)))
     bullet_hit_kills = hit_by_enemy_bullet & ~is_using_shield_tractor
     
-    # UFO collision is always fatal (shield doesn't protect against ramming)
-    dead = crashed_on_turret | bullet_hit_kills | hit_terr | timer_ran_out | hit_by_ufo
+    # UFO collision and reactor destination collision are always fatal (shield doesn't protect)
+    dead = crashed_on_turret | bullet_hit_kills | hit_terr | timer_ran_out | hit_by_ufo | hit_reactor_dest
 
     # b) Special rules for the Reactor level 
     def check_reactor_hit(b: Bullets):
@@ -2065,8 +2121,8 @@ def step_arena(env_state: EnvState, action: int):
 
     # --- 5. State Finalization ---
     # a) Is the Saucer dead?
-    # Death conditions: Hit by bullet OR collided with ship
-    saucer_is_hit = hit_saucer_by_bullet | hit_saucer_by_contact
+    # Death conditions: Hit by bullet ONLY (collision with ship doesn't destroy saucer)
+    saucer_is_hit = hit_saucer_by_bullet
     hp_after_hit = saucer_after_move.hp - jnp.where(saucer_is_hit, 1, 0)  # Simplified: 1 HP is lost per hit
     was_alive = saucer_after_move.alive
 
