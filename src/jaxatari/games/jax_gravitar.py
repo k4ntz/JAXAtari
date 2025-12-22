@@ -1639,7 +1639,8 @@ def _step_level_core(env_state: EnvState, action: int):
             ufo_bullets=create_empty_bullets_16(),
         )
 
-    can_spawn_ufo = (env_state.mode == 1) & (~env_state.ufo_used) & (env_state.terrain_bank_idx != 5)
+    # UFO spawns in planet levels (mode 1), but not in reactor (5) or Planet 2 (2)
+    can_spawn_ufo = (env_state.mode == 1) & (~env_state.ufo_used) & (env_state.terrain_bank_idx != 5) & (env_state.terrain_bank_idx != 2)
     state_after_spawn = jax.lax.cond(can_spawn_ufo, _spawn_ufo_once, lambda e: e, env_state)
 
     is_in_reactor = (env_state.current_level == 4)
