@@ -39,12 +39,12 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_move_00 ', 'type': 'single', 'file': 'player_move_00.npy'},
         {'name': 'player_move_01 ', 'type': 'single', 'file': 'player_move_01.npy'},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
-        {'name': 'bullet ', 'type': 'single', 'file': 'bullet_00.npy'},
+        {'name': 'bullet', 'type': 'single', 'file': 'bullet_00.npy'},
 
         # Creatures (loaded as single sprites for manual padding)
         {'name': 'snake', 'type': 'single', 'file': 'creature_snake_00.npy'},
-        # {'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
-        # {'name': 'bat', 'type': 'single', 'file': 'bat.npy'},
+        {'name': 'scorpion', 'type': 'single', 'file': 'creature_scorpion_00.npy'},
+        {'name': 'bat', 'type': 'single', 'file': 'creature_bat_00.npy'},
         # {'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
         # {'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
         # {'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
@@ -222,12 +222,6 @@ class TutankhamRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState):
         ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
-        # pseudo for no errors
-        player_mask = 0
-        camera_offset = 0
-        not_vanishing = True
-        floor_checks = [1]
-        ghost_frame = 0
         indices_to_update = 0
         new_color_ids = 0
 
@@ -261,6 +255,25 @@ class TutankhamRenderer(JAXGameRenderer):
             flip_offset=ZERO_FLIP
             # self.FLIP_OFFSETS['player_group'],
         )
+        #creatures
+        raster = self.jr.render_at(
+            raster,
+            state.creature_states[0][0],
+            state.creature_states[0][1],
+            # - camera_offset,
+            self.SHAPE_MASKS["snake"],
+            flip_offset=ZERO_FLIP
+            # self.FLIP_OFFSETS['player_group'],
+        )
+        raster = self.jr.render_at(
+            raster,
+            state.creature_states[1][0],
+            state.creature_states[1][1],
+            # - camera_offset,
+            self.SHAPE_MASKS["snake"],
+            flip_offset=ZERO_FLIP
+            # self.FLIP_OFFSETS['player_group'],
+        )
         # player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
         # player_mask = self.SHAPE_MASKS['player_group'][player_frame]
         # raster = self.jr.render_at(
@@ -272,41 +285,57 @@ class TutankhamRenderer(JAXGameRenderer):
         # 4. Render Teleporter and Spawner
         # 5. Render Treasures
         # 6. Render Bullets
-        raster = jax.lax.cond(state.bullet_state[3],
-                              self.jr.render_at(
-                                  raster,
+        raster = jax.lax.cond(state.bullet_state[3] == 1,
+                              lambda r: self.jr.render_at(
+                                  r,
                                   state.bullet_state[0],
                                   state.bullet_state[1],
                                   # - camera_offset,
                                   self.SHAPE_MASKS["bullet"],
                                   flip_offset=ZERO_FLIP
                                   # self.FLIP_OFFSETS['player_group'],
-                              ))
-        # 7. Render Enemies
+                              ),
+                              lambda r: r,
+                              raster)
+        """# 7. Render Enemies
         creatures = jnp.stack([state.creature_states[0], state.creature_states[1]])
-        creature_names = ["snake", "scorpion", "bat", "turtle", "jackel", "condor", "lion", "moth", "virus", "monkey",
-                          "mystery", "weapon"]
+        snake_mask = self.SHAPE_MASKS["snake"]
+        scorpion_mask = self.SHAPE_MASKS["scorpion"]
+        bat_mask = self.SHAPE_MASKS["bat"]
+        all_masks = (snake_mask, scorpion_mask, bat_mask)
 
         def render_creature(i, r):
             creature_pos = creatures[i]
             active = creatures[i][3]
             creature_type = creatures[i][2]
+            mask = jax.lax.switch(
+                creature_type,
+                [
+                    lambda: all_masks[0],
+                    lambda: all_masks[1],
+                    lambda: all_masks[2]
+                ]
+            )
 
             # Use the single uniform offset for the group
             return jax.lax.cond(
-                active,
+                active == 1,
                 lambda r_in: self.jr.render_at_clipped(
-                    r_in, creature_pos[0], creature_pos[1],
+                    r_in,
+                    creature_pos[0],
+                    creature_pos[1],
                     # - camera_offset,
-                    self.SHAPE_MASKS[creature_names[creature_type]],
+                    mask,
                     flip_offset=ZERO_FLIP  # self.ITEM_OFFSET  Use the single group offset
                 ),
                 lambda r_in: r_in,
                 r
             )
 
-        raster = render_creature(0, 1)
-        raster = render_creature(1, 1)
+        raster = render_creature(0, raster)
+        raster = render_creature(1, raster)"""
+
+
         # 8. Render UI
         # 9. Final Palette Lookup
         return self.jr.render_from_palette(
@@ -734,7 +763,7 @@ class JaxTutankham(JaxEnvironment):
 
         player_x, player_y = self.player_step(player_x, player_y, action)
 
-        "bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)"
+        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
         "creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)"
 
