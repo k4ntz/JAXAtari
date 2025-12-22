@@ -14,7 +14,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Space
 
 
-# -------------------- CONSTANTS --------------------
 
 class VideoChessConstants:
     # Piece encoding
@@ -65,7 +64,6 @@ class VideoChessConstants:
     )
 
 
-# -------------------- STATE / OBS / INFO --------------------
 
 class VideoChessState(NamedTuple):
     board: chex.Array          # (8,8) int32
@@ -93,15 +91,12 @@ class VideoChessInfo(NamedTuple):
     pass
 
 
-# -------------------- BOARD HANDLER (VERY MINIMAL RULES) --------------------
 
 class BoardHandler:
 
     @staticmethod
     def reset_board() -> jnp.ndarray:
-        """Standard chess start position, encoded with VideoChessConstants.
-        White (you) at the bottom, black (opponent, orange) at the top.
-        """
+        """Standard chess start position."""
         c = VideoChessConstants
         board = jnp.zeros((c.NUM_RANKS, c.NUM_FILES), dtype=jnp.int32)
 
@@ -170,12 +165,7 @@ class BoardHandler:
 
     @staticmethod
     def legal_moves_for_colour(board: jnp.ndarray, from_sq: chex.Array, colour: chex.Array) -> jnp.ndarray:
-        """Moves for a piece of the given colour.
-
-        Pawns follow normal pawn rules (no en passant). Knights move in L-shapes.
-        Bishops, rooks and queens slide with blocking. Kings move one step in any
-        direction. The result is a (56, 2) array padded with [-1, -1].
-        """
+        """Legal targets for `from_sq` for the given colour (padded to (56,2))."""
         c = VideoChessConstants
 
         row = from_sq[0]
@@ -187,9 +177,7 @@ class BoardHandler:
         def no_moves() -> jnp.ndarray:
             return jnp.full((56, 2), -1, dtype=jnp.int32)
 
-        # --------------------------------------------------------------
         # Helper for sliding pieces: one ray in a given direction
-        # --------------------------------------------------------------
         def ray_moves(dir_row: chex.Array, dir_col: chex.Array) -> jnp.ndarray:
             steps = jnp.arange(1, 8, dtype=jnp.int32)  # 1..7
 
@@ -198,7 +186,6 @@ class BoardHandler:
 
             inb = BoardHandler.in_bounds(r2, c2)
 
-            # Safe indexing: clip to board, then mask out of bounds
             safe_r2 = jnp.clip(r2, 0, c.NUM_RANKS - 1)
             safe_c2 = jnp.clip(c2, 0, c.NUM_FILES - 1)
             target_all = board[safe_r2, safe_c2]
@@ -207,8 +194,6 @@ class BoardHandler:
             same_colour = BoardHandler.is_same_colour(target, colour_scalar)
             any_piece = target != jnp.int32(c.EMPTY)
 
-            # Block after the first occupied square (friend or foe)
-            # We want "exclusive" prefix: for index i, look at any_piece[:i].
             cum = jnp.cumsum(any_piece.astype(jnp.int32))  # inclusive
             exclusive_cum = jnp.concatenate(
                 [jnp.array([0], dtype=jnp.int32), cum[:-1]],
@@ -219,7 +204,6 @@ class BoardHandler:
             legal = inb & (~blocked_before) & (~same_colour)
 
             coords = jnp.stack([r2, c2], axis=1)
-            # For illegal squares, fill with [-1, -1]
             coords_masked = jnp.where(
                 legal[:, None],
                 coords.astype(jnp.int32),
@@ -227,9 +211,7 @@ class BoardHandler:
             )
             return coords_masked  # (7, 2)
 
-        # --------------------------------------------------------------
         # Individual piece move generators
-        # --------------------------------------------------------------
         def pawn_moves() -> jnp.ndarray:
             # White pawns move "up" (towards smaller row), black "down".
             is_white_turn = (colour_scalar == jnp.int32(c.COLOUR_WHITE))
@@ -249,7 +231,6 @@ class BoardHandler:
 
             moves = []
 
-            # 1) One step forward (only if empty)
             f_row1 = row + fwd
             f_col = col
             inb1 = BoardHandler.in_bounds(f_row1, f_col)
@@ -267,7 +248,6 @@ class BoardHandler:
             )
             moves.append(move_f1)
 
-            # 2) Two steps forward from starting rank (both intermediate and target must be empty)
             f_row2 = row + fwd * jnp.int32(2)
             inb2 = BoardHandler.in_bounds(f_row2, f_col)
 
@@ -284,7 +264,6 @@ class BoardHandler:
             )
             moves.append(move_f2)
 
-            # 3) Capture diagonally forward-left
             cap_l_row = row + fwd
             cap_l_col = col - jnp.int32(1)
             inb_cap_l = BoardHandler.in_bounds(cap_l_row, cap_l_col)
@@ -302,7 +281,6 @@ class BoardHandler:
             )
             moves.append(move_cap_l)
 
-            # 4) Capture diagonally forward-right
             cap_r_row = row + fwd
             cap_r_col = col + jnp.int32(1)
             inb_cap_r = BoardHandler.in_bounds(cap_r_row, cap_r_col)
@@ -390,7 +368,6 @@ class BoardHandler:
             return jnp.concatenate([rays_cat, pad], axis=0)
 
         def queen_moves() -> jnp.ndarray:
-            # bishop + rook rays: 8 directions total -> 56 slots
             b = bishop_moves()[:28]  # (28,2)
             r = rook_moves()[:28]    # (28,2)
             return jnp.concatenate([b, r], axis=0)  # (56,2)
@@ -427,9 +404,7 @@ class BoardHandler:
             pad = jnp.full((56 - 8, 2), -1, dtype=jnp.int32)
             return jnp.concatenate([moves8, pad], axis=0)
 
-        # --------------------------------------------------------------
         # Dispatch by piece code
-        # --------------------------------------------------------------
         is_own = BoardHandler.is_same_colour(piece, colour_scalar)
 
         cW, cB = c, c  # shorthand
@@ -604,14 +579,13 @@ class BoardHandler:
         )
 
 
-# -------------------- ENVIRONMENT --------------------
 
 class JaxVideoChess(
     JaxEnvironment[VideoChessState, VideoChessObservation, VideoChessInfo, VideoChessConstants]
 ):
     @partial(jax.jit, static_argnums=(0,))
     def _update_game_over(self, state: VideoChessState) -> VideoChessState:
-        """Basic end-of-game handling (king captured / simple stalemate)."""
+        """End-of-game handling."""
         c = self.consts
         board = state.board
 
@@ -680,7 +654,6 @@ class JaxVideoChess(
         super().__init__(consts)
         self.renderer = VideoChessRenderer(self.consts)
 
-        # Allow 4-way + diagonal movement + FIRE + NOOP
         self.action_set = {
             Action.NOOP,
             Action.FIRE,
@@ -688,11 +661,7 @@ class JaxVideoChess(
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT,
         }
 
-        # ------------------------------------------------------------
-        # Optional bot hook
-        # ------------------------------------------------------------
-        # Default is 2-player mode (no bot). If enabled, the bot moves for BLACK
-        # right after WHITE completes a move.
+        # Optional bot hook (used by mods or local testing)
         self.bot_mode = bot_mode  # None | "random" | "mods"
 
         @partial(jax.jit, static_argnums=(0,))
@@ -732,12 +701,7 @@ class JaxVideoChess(
             self._bot_step = lambda s: _bot_noop(self, s)
     @partial(jax.jit, static_argnums=(0,))
     def _bot_random_move(self, state: VideoChessState) -> VideoChessState:
-        """One random move for the side to move.
-
-        Implementation detail: we sample uniformly from the set of *all legal moves*
-        (from_square, to_square) for `state.to_move`. This avoids "stalling" when a
-        naive random sampler keeps picking invalid targets.
-        """
+        """One random move for the side to move."""
         c = self.consts
 
         # Only act in normal play and only when nothing is selected.
@@ -800,12 +764,7 @@ class JaxVideoChess(
 
     @partial(jax.jit, static_argnums=(0,))
     def _enumerate_all_legal_moves(self, state: VideoChessState):
-        """Return (from_rep, to_flat, valid_flat) for the current `state.to_move`.
-
-        - from_rep: (64*56,2)
-        - to_flat:  (64*56,2)
-        - valid_flat: (64*56,) bool
-        """
+        """Enumerate all legal moves for `state.to_move` (flattened + mask)."""
         c = self.consts
 
         idx = jnp.arange(c.NUM_RANKS * c.NUM_FILES, dtype=jnp.int32)
@@ -824,11 +783,7 @@ class JaxVideoChess(
 
     @partial(jax.jit, static_argnums=(0,))
     def _bot_greedy_move(self, state: VideoChessState) -> VideoChessState:
-        """Greedy move for the side to move.
-
-        Heuristic: prefer captures with the highest captured material value.
-        If no capture exists, falls back to a random legal move.
-        """
+        """Greedy move: prefer high-value captures, else random."""
         c = self.consts
 
         can_act = (
@@ -908,7 +863,7 @@ class JaxVideoChess(
 
     @partial(jax.jit, static_argnums=(0,))
     def greedy_black_reply(self, prev_state: VideoChessState, new_state: VideoChessState) -> VideoChessState:
-        """If WHITE just completed a move, make exactly one GREEDY BLACK move."""
+        """Reply move for BLACK (greedy)."""
         c = self.consts
 
         player_just_moved = (
@@ -928,11 +883,7 @@ class JaxVideoChess(
 
     @partial(jax.jit, static_argnums=(0,))
     def random_black_reply(self, prev_state: VideoChessState, new_state: VideoChessState) -> VideoChessState:
-        """If WHITE just completed a move, make exactly one random BLACK move.
-
-        This is meant to be called from a *mod* (post-step plugin), so the main
-        logic stays here and the mod only delegates.
-        """
+        """Reply move for BLACK (random)."""
         c = self.consts
 
         player_just_moved = (
@@ -978,7 +929,6 @@ class JaxVideoChess(
             last_was_fire=jnp.array(False, dtype=jnp.bool_),
         )
 
-        # **DO NOT** call self._get_observation here – build it directly:
         obs = VideoChessObservation(
             board=state.board,
             cursor_pos=state.cursor_pos,
@@ -994,13 +944,11 @@ class JaxVideoChess(
     @partial(jax.jit, static_argnums=(0,))
     def _move_cursor_basic(self, state: VideoChessState, action: chex.Array) -> VideoChessState:
         """Move cursor one square in 8 directions based on Atari actions."""
-        # Direction flags
         up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
         down = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT)
         left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
         right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
 
-        # Compute deltas
         drow = jax.lax.cond(
             up,
             lambda: jnp.int32(-1),
@@ -1033,12 +981,7 @@ class JaxVideoChess(
     # ---- main step ----
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: VideoChessState, action: chex.Array):
-        """Step: FIRE and movement are edge-triggered (one effect per keypress).
-
-        - Movement actions: applied only if last_was_move is False.
-        - FIRE: applied only if last_was_fire is False.
-        This prevents a held FIRE from instantly re-selecting a moved piece.
-        """
+        """Step with edge-triggered input (held keys don’t repeat instantly)."""
         def run_phase(s):
             return jax.lax.switch(
                 s.game_phase,
@@ -1082,7 +1025,6 @@ class JaxVideoChess(
 
         new_state = fire_or_not(state)
 
-        # If WHITE just moved and it is now BLACK's turn, optionally let the bot play one move.
         player_just_moved = (
             (state.to_move == self.consts.COLOUR_WHITE)
             & (new_state.to_move == self.consts.COLOUR_BLACK)
@@ -1097,7 +1039,6 @@ class JaxVideoChess(
             new_state,
         )
 
-        # If NOOP, reset both last_was_move and last_was_fire (release input edge detection)
         def reset_flags(s):
             return s._replace(
                 last_was_move=jnp.array(False, dtype=jnp.bool_),
@@ -1111,12 +1052,10 @@ class JaxVideoChess(
             new_state,
         )
 
-        # Advance frame counter for animations
         new_state = new_state._replace(
             frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE
         )
 
-        # Countdown for last-move blinking
         new_state = new_state._replace(
             last_move_timer=jax.lax.max(
                 jnp.int32(0),
@@ -1124,7 +1063,6 @@ class JaxVideoChess(
             )
         )
 
-        # Check for basic end conditions (king captured or no black moves -> draw)
         new_state = self._update_game_over(new_state)
 
         done = self._get_done(new_state)
@@ -1143,7 +1081,6 @@ class JaxVideoChess(
         def select_piece(s: VideoChessState) -> VideoChessState:
             row, col = s.cursor_pos
             piece = s.board[row, col]
-            # A piece is selectable if it belongs to the side whose turn it is.
             is_own = BoardHandler.is_same_colour(piece, s.to_move)
             return jax.lax.cond(
                 is_own,
@@ -1172,7 +1109,6 @@ class JaxVideoChess(
         FIRE on the original square deselects.
         """
         def try_move(st: VideoChessState) -> VideoChessState:
-            # Legal moves for the currently selected piece of the side to move.
             legal_targets = BoardHandler.legal_moves_for_colour(
                 st.board,
                 st.selected_square,
@@ -1181,7 +1117,6 @@ class JaxVideoChess(
             is_legal = jnp.any(jnp.all(legal_targets == st.cursor_pos, axis=1))
 
             def do_move():
-                # Original and target squares
                 from_sq = st.selected_square
                 to_sq = st.cursor_pos
 
@@ -1190,11 +1125,8 @@ class JaxVideoChess(
                     board=new_board,
                     selected_square=jnp.array([-1, -1], dtype=jnp.int32),
                     game_phase=self.consts.PHASE_SELECT_PIECE,
-                    # Switch side to move after a successful move
                     to_move=jnp.int32(1) - jnp.int32(st.to_move),
-                    # After move, cursor jumps back to original square
                     cursor_pos=from_sq,
-                    # Remember where we just moved to, so that piece can blink
                     last_move_target=to_sq,
                     last_move_timer=jnp.int32(self.consts.LAST_MOVE_BLINK_FRAMES),
                 )
@@ -1308,7 +1240,6 @@ class JaxVideoChess(
     
 
 
-# -------------------- RENDERER (REUSE CHECKERS SPRITES) --------------------
 
 class VideoChessRenderer(JAXGameRenderer):
     def __init__(self, consts: VideoChessConstants = None):
@@ -1321,12 +1252,10 @@ class VideoChessRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # IMPORTANT: currently reusing the VideoCheckers sprite folder
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videochess"
 
         asset_config = list(self.consts.ASSET_CONFIG)
 
-        # simple 1x1 background colour (dark blue)
         background_sprite = jnp.array([[[0, 0, 170, 255]]], dtype=jnp.uint8)
         asset_config.insert(0, {"name": "background", "type": "background", "data": background_sprite})
 
@@ -1356,10 +1285,7 @@ class VideoChessRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _calculate_piece_grid(self, state: VideoChessState) -> jnp.ndarray:
-        """Return the piece grid, with optional blinking of the selected piece
-        when the cursor is still on its original square in the target phase,
-        and also blink the last moved-to piece while last_move_timer > 0.
-        """
+        """Piece grid with blinking for selection + last move."""
         grid = state.board
         c = self.consts
 
@@ -1409,15 +1335,7 @@ class VideoChessRenderer(JAXGameRenderer):
         return jax.lax.cond(last_active & has_last, blink_last, lambda gg: gg, grid_after_select)
     @partial(jax.jit, static_argnums=(0,))
     def _render_overlays(self, state: VideoChessState, raster: jnp.ndarray) -> jnp.ndarray:
-        """
-        Draw cursor and ghost-piece overlays on top of the already rendered pieces.
-        - In SELECT_PIECE phase: hovering over own piece -> blinking cursor on top.
-        - In SELECT_TARGET phase:
-          * If cursor is still on selected square: no cursor overlay; piece itself blinks.
-          * If cursor is on a different square than selected:
-              - Original selected square: cursor blinks on top.
-              - Cursor square: ghost of selected piece appears when blink_on; empty when blink_off.
-        """
+        """Draw cursor/ghost overlays on top of the board render."""
         c = self.consts
 
         # Blink pattern: fast, 50% duty cycle (3 frames on, 3 frames off at 30 FPS)
@@ -1593,10 +1511,7 @@ class VideoChessRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: VideoChessState) -> jnp.ndarray:
         raster = self.PRE_RENDERED_BOARD
-        # 1) Draw all pieces according to the board only
         piece_grid = self._calculate_piece_grid(state)
         raster = self._render_pieces_on_board(piece_grid, raster)
-        # 2) Draw cursor / ghost overlays on top
         raster = self._render_overlays(state, raster)
-        # 3) Convert from palette to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)
