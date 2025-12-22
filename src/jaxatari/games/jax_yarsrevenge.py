@@ -312,6 +312,8 @@ class YarsRevengeConstants(NamedTuple):
     NEUTRAL_ZONE_DATA = "TU Darmstadt"
     NEUTRAL_ZONE_DATA_SIZE = 254
 
+    RENDERER_RANDOM_COLORS_PER_N_ROW: int = 2
+
 
 class YarsRevengeState(NamedTuple):
     """
@@ -1804,6 +1806,14 @@ class YarsRevengeRenderer(JAXGameRenderer):
             // len(neutral_zone_data_list),
         )[: self.consts.NEUTRAL_ZONE_DATA_SIZE]
 
+        self.background_color = self.COLOR_TO_ID[(0, 0, 0)]
+
+        self.row_color_idx = (
+            jnp.arange(self.consts.HEIGHT)
+            // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
+        )
+        self.row_color_map = self.COLOR_TO_ID[(0, 1, 1)] + self.row_color_idx
+
     @partial(jax.jit, static_argnums=(0,))
     def _construct_neutral_zone_array(self, data: jnp.ndarray):
         data = data.astype(jnp.uint8)
@@ -1884,6 +1894,16 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 ],
             },
             {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
+        ] + [
+            # Randomized colors
+            {
+                "name": f"random_color_{i}",
+                "type": "procedural",
+                "data": jnp.array((i, 1, 1, 255), dtype=jnp.uint8).reshape(1, 1, 4),
+            }
+            for i in range(
+                self.consts.HEIGHT // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
+            )
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1906,23 +1926,22 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_neutral_zone(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
-        state, raster = info
-
+    def _calculate_neutral_zone_slice(self, state):
         interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - self.consts.NEUTRAL_ZONE_SIZE[1]
         begin = state.step_counter % (interval * 2)
         begin = jnp.where(begin <= interval, begin, (interval * 2) - begin)
 
         start_indices = jnp.array([begin])
         slice_sizes = (self.consts.NEUTRAL_ZONE_SIZE[1],)
+        return jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
 
-        neutral_zone_mask = self._construct_neutral_zone_array(
-            jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
-        )
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_neutral_zone(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        state, raster = info
+
+        neutral_zone_mask = self._construct_neutral_zone_array(self.neutral_zone_slice)
         neutral_zone_mask = jnp.where(
-            neutral_zone_mask == 1,
-            self.COLOR_TO_ID[self.consts.NEUTRAL_ZONE_COLOR],
-            neutral_zone_mask,
+            neutral_zone_mask == 1, self.row_color_map[:, None], self.background_color
         )
         neutral_zone_mask = jnp.repeat(neutral_zone_mask, repeats=4, axis=1)
 
@@ -2006,14 +2025,17 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def _render_cannon(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         state, raster = info
 
+        cannon_color_map_slice = jax.lax.dynamic_slice(
+            self.row_color_map, (state.cannon.y.astype(jnp.int32),), (self.consts.CANNON_SIZE[1],)
+        )
+        cannon_half_mask = jnp.repeat(cannon_color_map_slice[:, None], (self.consts.CANNON_SIZE[1] // 2), axis=1)
+
         cannon_mask = jnp.where(
             (state.step_counter // self.consts.CANNON_MOVEMENT_FRAME) % 2 == 0,
-            jnp.ones((self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0])),
+            jnp.concatenate([cannon_half_mask, cannon_half_mask], axis=1),
             jnp.concatenate(
                 [
-                    jnp.ones(
-                        (self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0] // 2)
-                    ),
+                    cannon_half_mask,
                     jnp.full(
                         (self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0] // 2),
                         self.jr.TRANSPARENT_ID,
