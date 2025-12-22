@@ -58,6 +58,7 @@ WINDOW_HEIGHT = 210
 
 SAUCER_SPAWN_DELAY_FRAMES = 60 * 3
 SAUCER_RESPAWN_DELAY_FRAMES = 180 * 3
+UFO_RESPAWN_DELAY_FRAMES = 180 * 2
 SAUCER_SPEED_MAP = jnp.float32(0.4) / WORLD_SCALE
 SAUCER_SPEED_ARENA = jnp.float32(0.4) / WORLD_SCALE
 SAUCER_RADIUS = jnp.float32(3.0)
@@ -354,7 +355,7 @@ class EnvState(NamedTuple):
     saucer_spawn_timer: jnp.ndarray  # Tracks if a saucer has spawned in the current level
 
     ufo: UFOState
-    ufo_used: jnp.ndarray  # bool, marks if a UFO has been spawned in this level
+    ufo_spawn_timer: jnp.ndarray  # int32, cooldown timer before UFO can spawn again
     ufo_home_x: jnp.ndarray  # f32
     ufo_home_y: jnp.ndarray  # f32
     ufo_bullets: Bullets
@@ -627,7 +628,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         map_return_y=jnp.float32(0.0),
         saucer_spawn_timer=jnp.int32(SAUCER_SPAWN_DELAY_FRAMES),
         ufo=make_empty_ufo(),
-        ufo_used=jnp.array(False),
+        ufo_spawn_timer=jnp.int32(0),
         ufo_home_x=jnp.float32(0.0),
         ufo_home_y=jnp.float32(0.0),
         ufo_bullets=create_empty_bullets_16(),
@@ -1632,15 +1633,15 @@ def _step_level_core(env_state: EnvState, action: int):
         safe_y = jnp.float32(highest_point_on_map) - 10.0
         final_y0 = jnp.clip(safe_y, HUD_HEIGHT + 20.0, H - 20.0)
 
-        # 4. Return the updated environment state (logic unchanged)
+        # 4. Return the updated environment state with spawn timer set to respawn delay
         return env._replace(
             ufo=UFOState(x=x0, y=final_y0, vx=vx, vy=0.0, hp=1, alive=True, death_timer=0),
-            ufo_used=True, ufo_home_x=x0, ufo_home_y=final_y0,
+            ufo_spawn_timer=UFO_RESPAWN_DELAY_FRAMES, ufo_home_x=x0, ufo_home_y=final_y0,
             ufo_bullets=create_empty_bullets_16(),
         )
 
-    # UFO spawns in planet levels (mode 1), but not in reactor (5) or Planet 2 (2)
-    can_spawn_ufo = (env_state.mode == 1) & (~env_state.ufo_used) & (env_state.terrain_bank_idx != 5) & (env_state.terrain_bank_idx != 2)
+    # UFO spawns in planet levels when timer is 0, but not in reactor (5) or Planet 2 (2)
+    can_spawn_ufo = (env_state.mode == 1) & (env_state.ufo_spawn_timer == 0) & (~env_state.ufo.alive) & (env_state.terrain_bank_idx != 5) & (env_state.terrain_bank_idx != 2)
     state_after_spawn = jax.lax.cond(can_spawn_ufo, _spawn_ufo_once, lambda e: e, env_state)
 
     is_in_reactor = (env_state.current_level == 4)
@@ -1927,7 +1928,8 @@ def _step_level_core(env_state: EnvState, action: int):
     final_fuel = jnp.maximum(0.0, fuel_after_actions)
     
     # e) The final Reset signal
-    all_enemies_gone = jnp.all(enemies.w == 0) & (~ufo.alive) & (ufo.death_timer == 0)
+    # UFO (rammer) doesn't count as an enemy that must be killed to win
+    all_enemies_gone = jnp.all(enemies.w == 0)
     
     # Planet level win: all enemies destroyed AND player exits through top
     # Remove has_meaningful_enemies check - if you can exit (exit_allowed was True), you should be able to leave
@@ -2264,8 +2266,14 @@ def _ufo_alive_step(e, ship, bullets):
 def _ufo_dead_step(e, ship, bullets):
     u = e.ufo
     u2 = u._replace(death_timer=jnp.maximum(u.death_timer - 1, 0))
+    # Tick down spawn timer when death animation is finished
+    new_spawn_timer = jnp.where(
+        u.death_timer == 0,
+        jnp.maximum(e.ufo_spawn_timer - 1, 0),
+        e.ufo_spawn_timer
+    )
     # Return the COMPLETE environment state
-    return e._replace(ufo=u2, ufo_bullets=create_empty_bullets_16(), bullets=bullets)
+    return e._replace(ufo=u2, ufo_spawn_timer=new_spawn_timer, ufo_bullets=create_empty_bullets_16(), bullets=bullets)
 
 
 @jax.jit
@@ -2716,7 +2724,7 @@ class JaxGravitar(JaxEnvironment):
             saucer_spawn_timer=jnp.int32(SAUCER_SPAWN_DELAY_FRAMES), 
             map_return_x=jnp.float32(0.0),
             map_return_y=jnp.float32(0.0),
-            ufo=make_empty_ufo(), ufo_used=jnp.array(False), 
+            ufo=make_empty_ufo(), ufo_spawn_timer=jnp.int32(0), 
             ufo_home_x=jnp.float32(0.0), 
             ufo_home_y=jnp.float32(0.0),
             ufo_bullets=create_empty_bullets_16(), 
@@ -2811,7 +2819,7 @@ class JaxGravitar(JaxEnvironment):
             reactor_dest_x=jnp.float32(95),
             reactor_dest_y=jnp.float32(114),
             mode_timer=jnp.int32(0), ufo=make_empty_ufo(),
-            ufo_used=jnp.array(False),
+            ufo_spawn_timer=jnp.int32(0),
             level_offset=jnp.array(level_offset, dtype=jnp.float32),
             reactor_timer=initial_timer.astype(jnp.int32),
             reactor_activated=jnp.array(False),
