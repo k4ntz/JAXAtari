@@ -167,7 +167,7 @@ class SpriteIdx(IntEnum):
 
 
 TERRANT_SCALE_OVERRIDES = {
-    SpriteIdx.TERRANT2: 0.8,
+    SpriteIdx.TERRANT2: 1,
 }
 
 LEVEL_LAYOUTS = {
@@ -181,11 +181,11 @@ LEVEL_LAYOUTS = {
     ],
     # Level 1 (Planet 2)
     1: [
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (93, 19)},
-        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (52, 77)},
-        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (8, 36)},
-        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (11, 60)},
-        {'type': SpriteIdx.FUEL_TANK, 'coords': (29, 0)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (92 + 32, 16)},
+        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (51 + 32, 78)},
+        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (8 + 32, 39)},
+        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (12 + 32, 58)},
+        {'type': SpriteIdx.FUEL_TANK, 'coords': (29 + 32, -1)},
     ],
     # Level 2 (Planet 3)
     2: [
@@ -209,7 +209,7 @@ LEVEL_LAYOUTS = {
 
 LEVEL_OFFSETS = {
     0: (0, 30),
-    1: (0, 30),
+    1: (0, 0),
     2: (0, 30),
     3: (0, 30),
     4: (0, 0),
@@ -1582,8 +1582,7 @@ def step_map(env_state: EnvState, action: int):
     obs = {'vector': obs_vector}  
 
     reward_saucer = jnp.where(just_died, jnp.float32(100.0), jnp.float32(0.0))
-    reward_penalty = jnp.where(start_crash & ~hit_obstacle, -10.0, 0.0)
-    reward = reward_saucer + reward_penalty
+    reward = reward_saucer
     info = {
         "crash": start_crash,
         "hit_by_bullet": hit_ship_by_bullet,
@@ -1593,7 +1592,7 @@ def step_map(env_state: EnvState, action: int):
             jnp.float32(0.0),  # reactor
             jnp.float32(0.0),  # ufo
             reward_saucer,  # saucer_kill
-            reward_penalty,  # penalty
+            jnp.float32(0.0),  # no penalty
         ], dtype=jnp.float32),
     }
 
@@ -1612,7 +1611,7 @@ def _step_level_core(env_state: EnvState, action: int):
         # 1. Determine UFO's spawn X coordinate and initial velocity
         # UFO should spawn OFF-SCREEN (outside visible area) and fly in
         is_born_on_left = (b == 2) | (b == 4)
-        x0 = jnp.where(is_born_on_left, -10.0, W + 10.0)  # Spawn outside visible area
+        x0 = jnp.where(is_born_on_left, -30.0, W + 30.0)  # Spawn outside visible area
         vx = jnp.where(is_born_on_left, 0.6 / WORLD_SCALE, -0.6 / WORLD_SCALE)
 
         # 2. Check for the safe altitude across the entire future path
@@ -1735,7 +1734,7 @@ def _step_level_core(env_state: EnvState, action: int):
     # Extract the updated state from the return value
     ufo = state_after_ufo.ufo
     bullets = state_after_ufo.bullets
-    ufo_bullets = state_after_ufo.ufo_bullets
+    # Note: ufo_bullets always empty since UFOs don't shoot
 
     # --- 4. Ground Enemy (Turret) Logic ---
     enemies = enemy_step(state_after_ufo.enemies, WINDOW_WIDTH)
@@ -1829,19 +1828,16 @@ def _step_level_core(env_state: EnvState, action: int):
     # --- 5. Advance All Bullets ---
     bullets = update_bullets(bullets)
     enemy_bullets = update_bullets(enemy_bullets)
-    ufo_bullets = update_bullets(ufo_bullets)
 
     # --- 6. Collision Detection ---
     bullets = _bullets_hit_terrain(state_after_ufo, bullets)
     enemy_bullets = _bullets_hit_terrain(state_after_ufo, enemy_bullets)
-    ufo_bullets = _bullets_hit_terrain(state_after_ufo, ufo_bullets)
     bullets, enemies = check_enemy_hit(bullets, enemies)
 
     hit_enemy_mask = check_ship_enemy_collisions(ship_after_move, enemies, SHIP_RADIUS)
     enemies = enemies._replace(death_timer=jnp.where(hit_enemy_mask, ENEMY_EXPLOSION_FRAMES, enemies.death_timer))
 
     enemy_bullets, hit_by_enemy_bullet = consume_ship_hits(ship_after_move, enemy_bullets, SHIP_RADIUS)
-    ufo_bullets, hit_by_ufo_bullet = consume_ship_hits(ship_after_move, ufo_bullets, SHIP_RADIUS)
     hit_terr = terrain_hit(state_after_ufo, ship_after_move.x, ship_after_move.y, 2)
     
     # Check for collision with UFO (rammer) - use state BEFORE UFO update to detect collision
@@ -1855,7 +1851,7 @@ def _step_level_core(env_state: EnvState, action: int):
     hit_enemy_types = jnp.where(hit_enemy_mask, enemies.sprite_idx, -1)
     crashed_on_turret = jnp.any(
         (hit_enemy_types == int(SpriteIdx.ENEMY_ORANGE)) | (hit_enemy_types == int(SpriteIdx.ENEMY_GREEN)))
-    bullet_hit_kills = (hit_by_enemy_bullet | hit_by_ufo_bullet) & ~is_using_shield_tractor
+    bullet_hit_kills = hit_by_enemy_bullet & ~is_using_shield_tractor
     
     # UFO collision is always fatal (shield doesn't protect against ramming)
     dead = crashed_on_turret | bullet_hit_kills | hit_terr | timer_ran_out | hit_by_ufo
@@ -1926,8 +1922,8 @@ def _step_level_core(env_state: EnvState, action: int):
     
     final_lives = lives_after_death + lives_gained_from_score
     
-    fuel_with_respawn = jnp.where(respawn_now, 10000.0, fuel_after_actions)
-    final_fuel = jnp.maximum(0.0, fuel_with_respawn)
+    # Don't reset fuel on respawn - keep current fuel level
+    final_fuel = jnp.maximum(0.0, fuel_after_actions)
     
     # e) The final Reset signal
     all_enemies_gone = jnp.all(enemies.w == 0) & (~ufo.alive) & (ufo.death_timer == 0)
@@ -1981,7 +1977,7 @@ def _step_level_core(env_state: EnvState, action: int):
     final_env_state = state_after_ufo._replace(
         state=state, bullets=bullets, cooldown=cooldown, enemies=enemies,
         enemy_bullets=enemy_bullets, fire_cooldown=fire_cooldown, key=key,
-        ufo=ufo, ufo_bullets=ufo_bullets,
+        ufo=ufo, ufo_bullets=create_empty_bullets_16(),
         fuel_tanks=new_fuel_tanks,
         fuel=final_fuel,
         shield_active=is_using_shield_tractor,
@@ -2003,7 +1999,7 @@ def _step_level_core(env_state: EnvState, action: int):
     reward = score_delta
     info = {
         "crash": start_crash,
-        "hit_by_bullet": hit_by_enemy_bullet | hit_by_ufo_bullet,
+        "hit_by_bullet": hit_by_enemy_bullet,
         "reactor_crash_exit": reset_from_reactor_crash,
         "all_rewards": all_rewards,
     }
@@ -2406,6 +2402,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     subkey_for_reset,
                     lives=lives_after_death,
                     score=current_state.score,
+                    fuel=current_state.fuel,
                     reactor_destroyed=current_state.reactor_destroyed,
                     planets_cleared_mask=current_state.planets_cleared_mask
                 )
@@ -2762,7 +2759,7 @@ class JaxGravitar(JaxEnvironment):
                 # Adjust x coordinate for terrant2's narrower width
                 adjusted_coord_x = jnp.where(is_terrant2, coord_x * 0.6, coord_x)  # 96/160 = 0.6
                 
-                x = ox + adjusted_coord_x * scale
+                x = ox + coord_x * scale
                 y = oy + coord_y * scale
                 is_tank = (obj_type == SpriteIdx.FUEL_TANK).astype(jnp.int32)
                 new_enemies = enemies_in._replace(x=enemies_in.x.at[e_idx_in].set(jnp.where(is_tank, -1.0, x)),
@@ -3132,7 +3129,7 @@ class GravitarRenderer(JAXGameRenderer):
         # Draw all types of bullets.
         frame = draw_bullets_fixed_sprite(state.bullets, int(SpriteIdx.SHIP_BULLET), frame)
         frame = draw_bullets_with_sprite_idx(state.enemy_bullets, frame)
-        frame = draw_bullets_with_sprite_idx(state.ufo_bullets, frame)
+        # UFOs don't shoot, no ufo_bullets to render
 
         # --- 5. Draw the ship ---
         ship_state = state.state
