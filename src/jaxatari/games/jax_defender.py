@@ -265,13 +265,23 @@ class DefenderState(NamedTuple):
     key: chex.Array
 
 
+class EntityPosition(NamedTuple):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
+
 class DefenderObservation(NamedTuple):
     # Needs more implementation, work in progress
-    score: chex.Array
+    player: EntityPosition
+    bullet: EntityPosition
+    score: jnp.ndarray
 
 
 class DefenderInfo(NamedTuple):
-    score: chex.Array
+    time: jnp.ndarray
+    score: jnp.ndarray
 
 
 # Helper class that gets implemented by renderer and game for shared functionality
@@ -2748,26 +2758,90 @@ class JaxDefender(
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        return DefenderObservation(score=state.score)
+        player = EntityPosition(
+            x=state.space_ship_x,
+            y=state.space_ship_y,
+            width=jnp.array(self.consts.SPACE_SHIP_WIDTH),
+            height=jnp.array(self.consts.SPACE_SHIP_HEIGHT),
+        )
+        bullet = EntityPosition(
+            x=state.bullet_x,
+            y=state.bullet_y,
+            width=jnp.array(self.consts.BULLET_WIDTH),
+            height=jnp.array(self.consts.BULLET_HEIGHT),
+        )
 
-    def action_space(self) -> Space:
+        return DefenderObservation(player=player, bullet=bullet, score=state.score)
+
+    def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: DefenderObservation) -> jnp.ndarray:
-        return super().obs_to_flat_array(obs)
+        return jnp.concatenate(
+            [
+                obs.player.x.flatten(),
+                obs.player.y.flatten(),
+                obs.player.height.flatten(),
+                obs.player.width.flatten(),
+                obs.bullet.x.flatten(),
+                obs.bullet.y.flatten(),
+                obs.bullet.height.flatten(),
+                obs.bullet.width.flatten(),
+                obs.score.flatten(),
+            ]
+        )
 
     def observation_space(self) -> Space:
-        return super().observation_space()
+        return spaces.Dict(
+            {
+                "player": spaces.Dicr(
+                    {
+                        "x": spaces.Box(
+                            low=-10,
+                            high=self.consts.WORLD_HEIGHT,
+                            shape=(),
+                            dtype=jnp.float32,
+                        ),
+                        "y": spaces.Box(
+                            low=0,
+                            high=self.consts.WORLD_WIDTH,
+                            shape=(),
+                            dtype=jnp.float32,
+                        ),
+                        "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "height": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
+                        ),
+                    }
+                ),
+                "bullet": spaces.Dicr(
+                    {
+                        "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                        "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                        "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                        "height": spaces.Box(
+                            low=0, high=210, shape=(), dtype=jnp.int32
+                        ),
+                    }
+                ),
+                "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            }
+        )
 
-    def _get_info(
-        self, state: DefenderState, all_rewards: jnp.array = None
-    ) -> DefenderInfo:
-        return DefenderInfo(score=state.score)
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: DefenderState) -> DefenderInfo:
+        return DefenderInfo(score=state.score, time=state.step_counter)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: DefenderState, state: DefenderState) -> float:
         reward = state.score - previous_state.score
         return reward
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: DefenderState) -> bool:
         is_done = jnp.logical_and(
             state.game_state == self.consts.GAME_STATE_GAMEOVER,
