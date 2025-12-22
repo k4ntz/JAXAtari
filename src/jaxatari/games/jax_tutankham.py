@@ -544,69 +544,70 @@ class JaxTutankham(JaxEnvironment):
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states, last_creature_spawn):
+    def creature_step(self, creature_states):
 
-        def spawn_creature(creature_states, last_creature_spawn):
-            # last_creature_spawn = vergangene Zeit (in Sekunden) seit letztem Frame
-
-            # Parameter # TODO: REMOVE HARDCODED VALUES
-            MAX_ACTIVE = 3
-            GROWTH = 0.0003  # Chance steigt pro Sekunde um 5%
-            MAX_PROB = 0.8  # Deckelung (optional)
-
-            # 1) aktive Creatures zählen
-            active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
-            if active_count >= MAX_ACTIVE:
-                return creature_states, last_creature_spawn  # nichts tun, Limit erreicht
-
-            # 2) Spawn-Timer erhöhen
-            last_creature_spawn += 1
-
-            # 3) Spawn-Chance berechnen
-            spawn_chance = last_creature_spawn * GROWTH
-            spawn_chance = min(spawn_chance, MAX_PROB)
-
-            # 4) treffen wir den Zufall?
-            if np.random.random() > spawn_chance:
-                return creature_states, last_creature_spawn  # nein → nichts machen
-
-            # 5) Ja → wir spawnen einen!
-            new_creature_states = creature_states.copy()
-
-            for i in range(self.consts.MAX_CREATURES):
-                x, y, creature_type, active = creature_states[i]
-                if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
-                    new_x = 0
-                    new_y = np.random.randint(0, self.consts.HEIGHT)
-                    new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
-                    new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
-
-                    # Timer zurücksetzen: Start von vorne
-                    last_creature_spawn = 0
-                    break
-
-            return new_creature_states, last_creature_spawn
-
+        # Update creature position if active
         def move_creature(creature_state):
             x, y, creature_type, active = creature_state
 
-            if active:
-                speed = self.consts.CREATURE_SPEED[int(creature_type)]
-                x += speed  # Move right for simplicity
+            speed = self.consts.CREATURE_SPEED[int(creature_type)]
 
-                # Deactivate if out of bounds
-                if x >= self.consts.WIDTH:
-                    active = self.consts.INACTIVE
+            x_new = x + speed * active # TODO: If creature active, Move right for simplicity
+            active_new = jnp.where(x_new >= self.consts.WIDTH, self.consts.INACTIVE, active) # Deactivate if out of bounds
 
-            return np.array([x, y, creature_type, active])
+            return jnp.array([x_new, y, creature_type, active_new], dtype=jnp.int32)
 
-        creature_states, last_creature_spawn = spawn_creature(creature_states, last_creature_spawn)
+
+        # iterate over creatures and move them
+        move_creature_vmapped = jax.vmap(move_creature)
+        new_creature_states = move_creature_vmapped(creature_states)
+
+        return new_creature_states
+
+    # creature spawner step
+    @partial(jax.jit, static_argnums=(0,))
+    def spawner_step(self, creature_states, last_creature_spawn):
+
+        # last_creature_spawn = vergangene Zeit (in Sekunden) seit letztem Frame
+
+        # Parameter # TODO: REMOVE HARDCODED VALUES
+        GROWTH = 0.0003  # Chance steigt pro Sekunde
+        MAX_PROB = 0.8  # Deckelung (optional)
+
+        # 1) aktive Creatures zählen
+        active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
+        if active_count >= self.consts.MAX_CREATURES:
+            return creature_states, last_creature_spawn  # nichts tun, Limit erreicht
+
+        # 2) Spawn-Timer erhöhen
+        last_creature_spawn += 1
+
+        # 3) Spawn-Chance berechnen
+        spawn_chance = last_creature_spawn * GROWTH
+        spawn_chance = min(spawn_chance, MAX_PROB)
+
+        # 4) treffen wir den Zufall?
+        if np.random.random() > spawn_chance:
+            return creature_states, last_creature_spawn  # nein → nichts machen
+
+        # 5) Ja → wir spawnen einen!
         new_creature_states = creature_states.copy()
 
         for i in range(self.consts.MAX_CREATURES):
-            new_creature_states[i] = move_creature(creature_states[i])
+            x, y, creature_type, active = creature_states[i]
+            if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
+                new_x = 0
+                new_y = np.random.randint(0, self.consts.HEIGHT)
+                new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
+                new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
+
+                # Timer zurücksetzen: Start von vorne
+                last_creature_spawn = 0
+                break
 
         return new_creature_states, last_creature_spawn
+
+
 
     # score update based on creature deaths & item collections
     @partial(jax.jit, static_argnums=(0,))
@@ -657,16 +658,16 @@ class JaxTutankham(JaxEnvironment):
 
         # Check overlap
         horizontal_overlap = (
-                rect1_left < rect2_right and
-                rect1_right > rect2_left
+        (rect1_left < rect2_right) &
+        (rect1_right > rect2_left)
         )
 
         vertical_overlap = (
-                rect1_top < rect2_bottom and
-                rect1_bottom > rect2_top
+            (rect1_top < rect2_bottom) &
+            (rect1_bottom > rect2_top)
         )
 
-        return horizontal_overlap and vertical_overlap
+        return horizontal_overlap & vertical_overlap
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
@@ -765,7 +766,9 @@ class JaxTutankham(JaxEnvironment):
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
-        "creature_states, last_creature_spawn = self.creature_step(creature_states, last_creature_spawn)"
+        creature_states = self.creature_step(creature_states)
+
+        #creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
 
         # laser flash step should go after creature step to immediately remove creatures
         "creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)"
