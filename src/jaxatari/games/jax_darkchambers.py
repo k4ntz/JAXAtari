@@ -2093,11 +2093,19 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             prop_x = jnp.clip(prop_x, 0, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
             prop_y = jnp.clip(prop_y, 0, self.consts.WORLD_HEIGHT - self.consts.PLAYER_HEIGHT)
             
-            # Check if player is in portal zone (vertically centered 40-pixel hole)
+            # Check if player is in ANY portal zone (top, middle, bottom)
             portal_hole_height = 40
-            portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
-            portal_y_end = portal_y_start + portal_hole_height
-            in_portal_zone = (prop_y >= portal_y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= portal_y_end)
+            portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+            portal_y_starts = [
+                portal_gap,
+                portal_gap * 2 + portal_hole_height,
+                portal_gap * 3 + portal_hole_height * 2
+            ]
+            portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
+            # Player is in portal zone if in any of the three
+            in_portal_zone = False
+            for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+                in_portal_zone = in_portal_zone | ((prop_y >= y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= y_end))
             
             # Cycle through maps: exit left → go left map, exit right → go right map
             # Middle(0) → Left(1) → Middle(0) → Right(2) → Middle(0)
