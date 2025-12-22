@@ -56,10 +56,6 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
-    WALL_TOP_Y: int = 24
-    WALL_TOP_HEIGHT: int = 10
-    WALL_BOTTOM_Y: int = 194
-    WALL_BOTTOM_HEIGHT: int = 16
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -70,7 +66,6 @@ class RoadRunnerConstants(NamedTuple):
     BACKGROUND_COLOR: Tuple[int, int, int] = (236, 168, 128)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
-    WALL_COLOR: Tuple[int, int, int] = (236, 236, 236)
     SEED_SPAWN_MIN_INTERVAL: int = 5
     SEED_SPAWN_MAX_INTERVAL: int = 20
     MAX_STREAK: int = 10
@@ -1959,12 +1954,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        wall_sprite_top = self._create_wall_sprite(self.consts.WALL_TOP_HEIGHT)
-        wall_sprite_bottom = self._create_wall_sprite(self.consts.WALL_BOTTOM_HEIGHT)
         road_sprite = self._create_road_sprite()
         life_sprite = self._create_life_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, wall_sprite_bottom, life_sprite
+            road_sprite, life_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -2013,13 +2006,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         return road_sprite
 
-    def _create_wall_sprite(self, height: int) -> jnp.ndarray:
-        wall_color_rgba = (*self.consts.WALL_COLOR, 255)
-        wall_shape = (height, self.consts.WIDTH, 4)
-        return jnp.tile(
-            jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1)
-        )
-
     def _create_seed_sprite(self) -> jnp.ndarray:
         seed_color_rgba = (0, 0, 255, 255)
         seed_shape = (self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1], 4)
@@ -2048,7 +2034,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def _get_asset_config(
         self,
         road_sprite: jnp.ndarray,
-        wall_sprite_bottom: jnp.ndarray,
         life_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
@@ -2062,7 +2047,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
             {"name": "enemy_run_over", "type": "single", "file": "enemy_run_over.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
-            {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "score_blank", "type": "single", "file": "score_10.npy"},
             {"name": "seed", "type": "single", "file": "birdseed.npy"},
