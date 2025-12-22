@@ -133,7 +133,7 @@ SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
 
 ENEMY_COLLISION_MARGIN = 1  # or 2 pixels if you want more slide room
 
-CHASE_RADIUS = 120          # pixels
+CHASE_RADIUS = 80          # pixels
 IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
 
 ORBIT_DIRS = jnp.array([
@@ -258,6 +258,7 @@ class DarkChambersState(NamedTuple):
     death_counter: chex.Array    # >0 means freeze frames remaining before respawn
     key: chex.PRNGKey
 
+    damage_cooldown: chex.Array
 
 class EntityPosition(NamedTuple):
     """Axis-aligned rectangle: top-left position and size."""
@@ -1653,6 +1654,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def __init__(self, consts: DarkChambersConstants = None):
         super().__init__(consts=consts or DarkChambersConstants())
         self.renderer = DarkChambersRenderer(self.consts)
+        w_eff = int(self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN)
+        h_eff = int(self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN)
+
+        r_x = max(0, (w_eff // 2) // CELL_SIZE)
+        r_y = max(0, (h_eff // 2) // CELL_SIZE)
+
+        self._wall_inflate_kh = 2 * r_y + 1
+        self._wall_inflate_kw = 2 * r_x + 1
 
     def _pos_to_cell(self, x, y):
         """Convert pixel coordinates to grid-cell indices (cy, cx)."""
@@ -1677,29 +1686,52 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         of shape (GRID_H, GRID_W) with distances in cells.
         """
         # Base wall grid from the level and current map
-        wall_grid = self.renderer.LEVEL_WALL_GRID[map_index, level]  # (GRID_H, GRID_W) bool
+        wall_grid = self.renderer.LEVEL_WALL_GRID[map_index, level]  # (H, W) bool
         H, W = wall_grid.shape
+
+        # --- Inflate walls for enemy clearance (STATIC kernel size, JIT-safe) ---
+        wall_i = wall_grid.astype(jnp.int32)
+
+        inflated_i = jax.lax.reduce_window(
+            wall_i,
+            init_value=0,
+            computation=jax.lax.max,
+            window_dimensions=(self._wall_inflate_kh, self._wall_inflate_kw),
+            window_strides=(1, 1),
+            padding="SAME",
+        )
+        wall_grid = inflated_i.astype(bool)
 
         # --- Enemy occupancy grid (treat alive enemies as walls) ---
         # Use enemy centers to map to nav cells
         centers_x = enemy_positions[:, 0] + self.consts.ENEMY_WIDTH // 2
         centers_y = enemy_positions[:, 1] + self.consts.ENEMY_HEIGHT // 2
 
-        enemy_cy, enemy_cx = self._pos_to_cell(centers_x, centers_y)  # can handle arrays
+        enemy_cy, enemy_cx = self._pos_to_cell(centers_x, centers_y)  # arrays
 
-        enemy_grid = jnp.zeros((H, W), dtype=bool)
-        enemy_grid = enemy_grid.at[enemy_cy, enemy_cx].set(enemy_active.astype(bool))
+        # clip indices for safe scatter
+        enemy_cy = jnp.clip(enemy_cy, 0, H - 1)
+        enemy_cx = jnp.clip(enemy_cx, 0, W - 1)
+
+        # scatter as int32 sum then >0 (handles duplicates cleanly)
+        enemy_grid_i = jnp.zeros((H, W), dtype=jnp.int32)
+        add_vals = enemy_active.astype(jnp.int32)
+        enemy_grid_i = enemy_grid_i.at[enemy_cy, enemy_cx].add(add_vals)
+        enemy_grid = enemy_grid_i > 0
 
         # Combined obstacle grid: walls OR enemies
         blocked = wall_grid | enemy_grid
 
-        # Distance init
+        # --- Distance init ---
         dist = jnp.full((H, W), BIG_DIST, dtype=jnp.int32)
 
-        # Player seed cell
+        # Player seed cell (use player center if you want, but keep your signature)
         py, px = self._pos_to_cell(player_x, player_y)
-        dist = dist.at[py, px].set(0)
+        py = jnp.clip(py, 0, H - 1)
+        px = jnp.clip(px, 0, W - 1)
 
+        # If player cell is blocked, still seed it (otherwise field becomes useless)
+        dist = dist.at[py, px].set(0)
         frontier = jnp.zeros((H, W), dtype=bool).at[py, px].set(True)
 
         def body(t, carry):
@@ -1707,16 +1739,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             def shift_frontier(f, dy, dx):
                 if dy == -1:
-                    f_n = jnp.pad(f[1:, :], ((0, 1), (0, 0)))
+                    return jnp.pad(f[1:, :], ((0, 1), (0, 0)))
                 elif dy == 1:
-                    f_n = jnp.pad(f[:-1, :], ((1, 0), (0, 0)))
+                    return jnp.pad(f[:-1, :], ((1, 0), (0, 0)))
                 elif dx == -1:
-                    f_n = jnp.pad(f[:, 1:], ((0, 0), (0, 1)))
+                    return jnp.pad(f[:, 1:], ((0, 0), (0, 1)))
                 else:  # dx == 1
-                    f_n = jnp.pad(f[:, :-1], ((0, 0), (1, 0)))
-                return f_n
+                    return jnp.pad(f[:, :-1], ((0, 0), (1, 0)))
 
-            # 4-neighbourhood
             dirs = ((-1, 0), (1, 0), (0, -1), (0, 1))
 
             new_frontier = jnp.zeros_like(frontier)
@@ -1724,16 +1754,16 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             for dy, dx in dirs:
                 f_n = shift_frontier(frontier, dy, dx)
-                # Only expand into non-blocked cells
                 cand = f_n & ~blocked & (dist > t + 1)
                 new_frontier = new_frontier | cand
                 new_dist = jnp.where(cand, t + 1, new_dist)
 
             return (new_dist, new_frontier)
 
-        max_steps = GRID_W + GRID_H  # enough to cross the map
+        max_steps = GRID_W + GRID_H
         dist, _ = jax.lax.fori_loop(0, max_steps, body, (dist, frontier))
         return dist
+
 
     
 
@@ -1965,6 +1995,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
             enemy_bullet_active=jnp.zeros(ENEMY_MAX_BULLETS, dtype=jnp.int32),
             health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+            damage_cooldown=jnp.array(0, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32),
             item_positions=item_positions,
             item_types=item_types,
@@ -2019,6 +2050,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     player_x=respawn_x,
                     player_y=respawn_y,
                     health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+                    damage_cooldown=jnp.array(0, dtype=jnp.int32),
                     bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
                     bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
                     enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
@@ -2051,6 +2083,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -self.consts.PLAYER_SPEED,
                    jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), self.consts.PLAYER_SPEED, 0))
             
+            # --- SLOW DOWN PLAYER MOVEMENT ---
+            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
+            player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
+
+            dx = jnp.where(player_move_tick, dx, 0)
+            dy = jnp.where(player_move_tick, dy, 0)
+
             prop_x = state.player_x + dx
             prop_y = state.player_y + dy
             
@@ -2383,29 +2422,50 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
                 # step vectors: 1 px per axis towards target center
                 step_vecs = jnp.sign(target_centers - enemy_center).astype(jnp.int32)
-            
+
+                # --- collision check for each candidate step ---
                 # --- collision check for each candidate step ---
                 def collides_with_wall(step_vec):
                     new_pos = pos + step_vec
-            
+
                     ex = new_pos[0] + ENEMY_COLLISION_MARGIN
                     ey = new_pos[1] + ENEMY_COLLISION_MARGIN
                     w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
                     h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
-            
+
                     wx = WALLS[:, 0]
                     wy = WALLS[:, 1]
                     ww = WALLS[:, 2]
                     wh = WALLS[:, 3]
-            
+
                     e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
                     e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
                     return jnp.any(e_overlap_x & e_overlap_y)
-            
-                collisions = jax.vmap(collides_with_wall)(step_vecs)  # (4,)
-            
-                # valid = in grid, no wall collision, and enemy is alive
-                valid = in_bounds & (~collisions) & (alive == 1)
+
+                # collision for the candidate steps (8 steps)
+                collisions = jax.vmap(collides_with_wall)(step_vecs)  # (8,)
+
+                # --- NEW: detect which wall side we're "touching" (1px probes) ---
+                blocked_right = collides_with_wall(jnp.array([ 1,  0], dtype=jnp.int32))
+                blocked_left  = collides_with_wall(jnp.array([-1,  0], dtype=jnp.int32))
+                blocked_down  = collides_with_wall(jnp.array([ 0,  1], dtype=jnp.int32))
+                blocked_up    = collides_with_wall(jnp.array([ 0, -1], dtype=jnp.int32))
+
+                # --- NEW: forbid diagonals that move into a blocked side ---
+                is_diag = (step_vecs[:, 0] != 0) & (step_vecs[:, 1] != 0)
+
+                into_blocked_side = (
+                    ((step_vecs[:, 0] > 0) & blocked_right) |
+                    ((step_vecs[:, 0] < 0) & blocked_left)  |
+                    ((step_vecs[:, 1] > 0) & blocked_down)  |
+                    ((step_vecs[:, 1] < 0) & blocked_up)
+                )
+
+                diag_forbidden = is_diag & into_blocked_side
+
+                # valid = in grid, full-step doesn't collide, diagonal isn't into-wall, and enemy alive
+                valid = in_bounds & (~collisions) & (~diag_forbidden) & (alive == 1)
+
             
                 # neighbours that are invalid get BIG_DIST so they won’t be chosen
                 dists_valid = jnp.where(valid, dists, BIG_DIST)
@@ -2435,6 +2495,18 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # --- choose chase vs idle ---
             final_step = jnp.where(chase_mask[:, None], chosen_step, idle_step)
+
+            # --- SLOW DOWN ENEMY MOVEMENT ---
+            ENEMY_MOVE_EVERY = 2   # 1 = normal, 2 = half speed, 3 = slower, etc.
+
+            enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
+
+            final_step = jnp.where(
+                enemy_move_tick,
+                final_step,
+                jnp.zeros_like(final_step),
+            )
+
             
             # Helper: check collision for a single enemy position (keep your existing function)
             def check_enemy_collision(enemy_pos):
@@ -2893,14 +2965,24 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 self.consts.GRIM_REAPER_DAMAGE
             ], dtype=jnp.int32)
             
-            # Sum damage from all contacted enemies
-            contact_damage = jnp.sum(
-                jnp.where(enemy_contacts, damage_by_type[new_enemy_types], 0)
+            cooldown0 = state.damage_cooldown
+            cooldown1 = jnp.maximum(cooldown0 - 1, 0)
+            can_take_damage = cooldown0 == 0
+
+            contact_damage_each = jnp.where(
+                enemy_contacts,
+                damage_by_type[new_enemy_types],
+                0
             )
-            # Apply shield damage reduction (50% if shield active)
+            raw_damage = jnp.max(contact_damage_each)  # take only the strongest single hit this tick
+            applied_damage = jnp.where(can_take_damage, raw_damage, 0)
+
+
+            HIT_COOLDOWN_TICKS = 8
+
             shield_multiplier = jnp.where(new_shield_active == 1, 0.5, 1.0)
-            reduced_damage = (contact_damage * shield_multiplier).astype(jnp.int32)
-            final_health = jnp.clip(new_health - reduced_damage, 0, self.consts.MAX_HEALTH)
+            reduced_damage = (applied_damage * shield_multiplier).astype(jnp.int32)
+
             
             # Enemy bullet damage to player only
             def enemy_bullet_hits_player(bpos):
@@ -2909,8 +2991,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 overlap_y = (by <= (new_y + self.consts.PLAYER_HEIGHT - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= new_y)
                 return overlap_x & overlap_y
             enemy_bullet_hits = jax.vmap(enemy_bullet_hits_player)(final_enemy_bullet_positions[:, :2]) & (final_enemy_bullet_active == 1)
-            enemy_bullet_damage = jnp.sum(enemy_bullet_hits.astype(jnp.int32))
-            final_health = jnp.clip(final_health - enemy_bullet_damage, 0, self.consts.MAX_HEALTH)
+            enemy_bullet_damage = enemy_bullet_hits.astype(jnp.int32).any().astype(jnp.int32)
+            applied_bullet_damage = jnp.where(can_take_damage, enemy_bullet_damage, 0)
+
+            final_damage = jnp.maximum(applied_damage, applied_bullet_damage)
+
+            final_health = jnp.clip(new_health - final_damage, 0, self.consts.MAX_HEALTH)
+
+            cooldown2 = jnp.where(
+                final_damage > 0,
+                HIT_COOLDOWN_TICKS,
+                cooldown1,
+            )
+
+
             final_enemy_bullet_active3 = final_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
             
             # Enemy spawning when crossing portals or changing levels
@@ -3454,6 +3548,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 enemy_bullet_positions=final_enemy_bullet_positions,
                 enemy_bullet_active=final_enemy_bullet_active3,
                 health=final_health_after,
+                damage_cooldown=cooldown2,
                 score=final_score,
                 item_positions=transition_item_positions,
                 item_types=transition_item_types,
@@ -3487,6 +3582,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         player_x=respawn_x2,
                         player_y=respawn_y2,
                         health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+                        damage_cooldown=jnp.array(0, dtype=jnp.int32),
                         bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
                         bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
                         enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
