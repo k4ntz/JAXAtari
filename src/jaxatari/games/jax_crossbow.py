@@ -226,6 +226,13 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def num_actions(self) -> int:
         return 18
 
+    @property
+    def max_episode_steps(self) -> int:
+        return 4000
+
+    def get_legal_actions(self, state: CrossbowState) -> chex.Array:
+        return jnp.ones((self.num_actions,), dtype=bool)
+
     def _init_scatter_pixels(self, state: CrossbowState, rng_key: chex.PRNGKey) -> CrossbowState:
         rel_x, rel_y, base_dx, base_dy, colors = _get_initial_scatter_state(self.consts)
         num_pixels = self.consts.MAX_SCATTER_PIXELS
@@ -1013,6 +1020,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _get_observation(self, state): return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
     def _get_info(self, state): return CrossbowInfo(time=state.step_counter)
+
     def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
         return jnp.stack([
             obs.cursor_x,
@@ -1022,6 +1030,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             obs.lives,
             obs.score
         ], axis=-1).astype(jnp.int32)
+
     def action_space(self): return spaces.Discrete(18)
     def observation_space(self):
         return spaces.Dict({
