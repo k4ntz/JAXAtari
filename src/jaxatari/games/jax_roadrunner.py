@@ -477,9 +477,15 @@ class RoadRunnerObservation(NamedTuple):
     ravine: EntityPosition
 
 
+class RoadRunnerInfo(NamedTuple):
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    step: jnp.ndarray
+
+
 # --- Main Environment Class ---
 class JaxRoadRunner(
-    JaxEnvironment[RoadRunnerState, RoadRunnerObservation, None, RoadRunnerConstants]
+    JaxEnvironment[RoadRunnerState, RoadRunnerObservation, RoadRunnerInfo, RoadRunnerConstants]
 ):
     def __init__(self, consts: RoadRunnerConstants = None):
         if consts is None:
@@ -1410,7 +1416,7 @@ class JaxRoadRunner(
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: RoadRunnerState, action: chex.Array
-    ) -> Tuple[RoadRunnerObservation, RoadRunnerState, float, bool, None]:
+    ) -> Tuple[RoadRunnerObservation, RoadRunnerState, float, bool, RoadRunnerInfo]:
         state = self._handle_level_transition(state)
         operand = (state, action)
 
@@ -1418,7 +1424,8 @@ class JaxRoadRunner(
             st, _ = data
             st = st._replace(step_counter=st.step_counter + 1)
             obs = self._get_observation(st)
-            return obs, st, 0.0, False, None
+            info = self._get_info(st)
+            return obs, st, 0.0, False, info
 
         def _gameplay_branch(data):
             st, act = data
@@ -1445,7 +1452,8 @@ class JaxRoadRunner(
 
             st = st._replace(step_counter=st.step_counter + 1)
             obs = self._get_observation(st)
-            return obs, st, 0.0, False, None
+            info = self._get_info(st)
+            return obs, st, 0.0, False, info
 
         def _death_timer_branch(data):
              st, _ = data
@@ -1466,7 +1474,8 @@ class JaxRoadRunner(
              )
 
              obs = self._get_observation(st)
-             return obs, st, 0.0, False, None
+             info = self._get_info(st)
+             return obs, st, 0.0, False, info
 
         # Check for death timer
         is_dying = state.death_timer > 0
@@ -1775,6 +1784,28 @@ class JaxRoadRunner(
              score=state.score, 
              ravine=ravine_obs
         )
+
+    def _get_info(self, state: RoadRunnerState) -> RoadRunnerInfo:
+        return RoadRunnerInfo(
+            score=state.score,
+            lives=state.lives,
+            step=state.step_counter
+        )
+
+    def obs_to_flat_array(self, obs: RoadRunnerObservation) -> jnp.ndarray:
+        """Convert observation to a flat array."""
+        player_arr = jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height])
+        enemy_arr = jnp.array([obs.enemy.x, obs.enemy.y, obs.enemy.width, obs.enemy.height])
+        ravine_arr = jnp.array([obs.ravine.x, obs.ravine.y, obs.ravine.width, obs.ravine.height])
+        score_arr = jnp.array([obs.score])
+
+        # Flatten and concatenate
+        return jnp.concatenate([
+            player_arr.reshape(-1),
+            enemy_arr.reshape(-1),
+            ravine_arr.reshape(-1),
+            score_arr.reshape(-1)
+        ]).astype(jnp.int32)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
