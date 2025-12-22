@@ -115,7 +115,7 @@ class AtariPlayer:
     """
 
     def __init__(self,
-                 game_name: str = "Tutankham",
+                 game_name: str = "Pong",
                  render_scale: int = 4,
                  screenshot_dir: str = None,
                  fps: int = 30):
@@ -470,7 +470,7 @@ class AtariPlayer:
 # --- Main Execution (Unchanged) ---
 def main():
     parser = argparse.ArgumentParser(description='Play Atari games using Gymnasium')
-    parser.add_argument('-g', '--game', type=str, default='Tutankham', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
+    parser.add_argument('-g', '--game', type=str, default='Pong', help='Name of the Atari game ROM (e.g., Pong, Breakout)')
     parser.add_argument('--scale', type=int, default=4, help='Scale factor for the display window')
     parser.add_argument('--fps', type=int, default=30, help='Target frames per second')
     parser.add_argument('--screenshot-dir', type=str, default=None, help='Directory to save screenshots as .npy files (optional)')
