@@ -2816,7 +2816,7 @@ class JaxDefender(
         return self.renderer.render(state)
 
     def _get_observation(self, state: DefenderState) -> DefenderObservation:
-        return DefenderObservation(score=state.score, space_ship_speed_x=state.space_ship_speed_x, space_ship_x=state.space_ship_x, space_ship_y=state.space_ship_y)
+        return DefenderObservation(score=state.score, space_ship_speed_x=state.space_ship_speed, space_ship_x=state.space_ship_x, space_ship_y=state.space_ship_y)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
