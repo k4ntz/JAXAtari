@@ -222,6 +222,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         self.renderer = CrossbowRenderer(self.consts)
         self.action_set = Action.get_all_values()
 
+    @property
+    def num_actions(self) -> int:
+        return 18
+
     def _init_scatter_pixels(self, state: CrossbowState, rng_key: chex.PRNGKey) -> CrossbowState:
         rel_x, rel_y, base_dx, base_dy, colors = _get_initial_scatter_state(self.consts)
         num_pixels = self.consts.MAX_SCATTER_PIXELS
@@ -282,33 +286,33 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _friend_step(self, state: CrossbowState) -> CrossbowState:
         is_dying = state.dying_timer > 0
-        
+
         is_bat = state.enemies_type == EnemyType.BAT
         is_bat_attacking = jnp.logical_and(is_bat, jnp.logical_or(state.enemies_dx != 0, state.enemies_dy != 0))
         fx, fy = state.friend_x, state.friend_y
         bat_on_x = jnp.logical_and(
-            state.enemies_x < fx + self.consts.FRIEND_SIZE[0], 
+            state.enemies_x < fx + self.consts.FRIEND_SIZE[0],
             state.enemies_x + self.consts.BAT_DIMENSIONS[0] > fx
         )
         bat_on_y = jnp.logical_and(
-            state.enemies_y < fy + 10, 
+            state.enemies_y < fy + 10,
             state.enemies_y + self.consts.BAT_DIMENSIONS[1] > fy - 5
         )
         bat_on_friend = jnp.any(jnp.logical_and(
             jnp.logical_and(bat_on_x, bat_on_y),
             jnp.logical_and(is_bat_attacking, state.enemies_active)
         ))
-        
+
         should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(bat_on_friend))
         new_x = state.friend_x + jnp.where(should_move & state.friend_active, 1, 0)
         reached_goal = new_x > self.consts.WIDTH
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
-        
+
         return state._replace(
             friend_x=final_x.astype(jnp.int32),
             friend_y=jnp.where(state.game_phase == GamePhase.CAVE_MAP, 100, 128).astype(jnp.int32)
         )
-    
+
     def _get_enemy_shape(self, enemies_type: chex.Array) -> Tuple[chex.Array, chex.Array]:
         is_bat = enemies_type == EnemyType.BAT
         is_stallactite = jnp.logical_or(
@@ -485,9 +489,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
 
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, 
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
                                 cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, 
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
                                 cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
@@ -498,7 +502,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         reward = jnp.sum(jnp.where(valid_kill, 100, 0))
 
         arrow_dy = jnp.where(is_castle_arrow, ARROW_FALL_SPEED, 0.0)
-        
+
         target_x = state.friend_x + 4.0
         target_y = state.friend_y + 13.0
         lava_center_x = state.enemies_x + 4.0
@@ -514,7 +518,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         current_enemy_count = jnp.sum(surviving_enemies)
         spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < 0.03
-        
+
         spawn_count = jnp.cumsum(spawn_chance & ~surviving_enemies)
         allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
         should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), jnp.logical_and(spawn_chance, allowed_spawns))
@@ -540,9 +544,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
 
         fx, fy = state.friend_x, state.friend_y
-        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], 
+        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
                                    final_x + self.consts.ENEMY_SIZE[0] > fx)
-        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1], 
+        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
                                    final_y + self.consts.ENEMY_SIZE[1] > fy)
         friend_hit = jnp.any(jnp.logical_and(jnp.logical_and(danger_x, danger_y), final_active))
         any_friend_hit = jnp.logical_and(jnp.logical_and(friend_hit, state.friend_active), jnp.logical_not(is_dying))
@@ -638,18 +642,18 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         is_bat = state.enemies_type == EnemyType.BAT
         is_falling_stal = state.enemies_type == EnemyType.STALACTITE_FALLING
-        
+
         is_bat_spawning = jnp.logical_and(is_bat, state.enemies_age < 48)
         is_bat_flying = jnp.logical_and(is_bat, state.enemies_age >= 48)
         is_bat_attacking = jnp.logical_and(is_bat, jnp.logical_or(state.enemies_dx != 0, state.enemies_dy != 0))
         is_bat_just_flying = jnp.logical_and(is_bat_flying, jnp.logical_not(is_bat_attacking))
-        
+
         attack_probs = jax.random.uniform(attack_key, shape=(self.consts.MAX_ENEMIES,))
         start_attacking = jnp.logical_and(
             jnp.logical_and(is_bat_just_flying, surviving_enemies),
             attack_probs < BAT_ATTACK_PROB
         )
-        
+
         target_x = state.friend_x + 4.0
         target_y = state.friend_y
         bat_center_x = state.enemies_x + 4.0
@@ -659,10 +663,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         dist = jnp.sqrt(delta_x**2 + delta_y**2) + 1e-5
         attack_dx = (delta_x / dist) * BAT_ATTACK_SPEED
         attack_dy = (delta_y / dist) * BAT_ATTACK_SPEED
-        
+
         new_dx = jnp.where(start_attacking, attack_dx, state.enemies_dx)
         new_dy = jnp.where(start_attacking, attack_dy, state.enemies_dy)
-        
+
         fx, fy = state.friend_x, state.friend_y
         bat_on_x = jnp.logical_and(ex < fx + self.consts.FRIEND_SIZE[0], ex + self.consts.BAT_DIMENSIONS[0] > fx)
         bat_on_y = jnp.logical_and(ey < fy + 10, ey + self.consts.BAT_DIMENSIONS[1] > fy - 5)
@@ -670,12 +674,12 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_and(bat_on_x, bat_on_y),
             jnp.logical_and(is_bat_attacking, surviving_enemies)
         )
-        
+
         bat_spawn_move = jnp.logical_and(is_bat_spawning, state.step_counter % 4 == 0)
         bat_fly_move = jnp.logical_and(is_bat_just_flying, state.step_counter % 2 == 0)
         bat_should_fly = jnp.logical_or(bat_spawn_move, bat_fly_move)
         bat_attack_move = jnp.logical_and(is_bat_attacking, jnp.logical_not(bat_on_friend))
-        
+
         dx = jnp.where(bat_should_fly, 1.0, 0.0)
         dx = jnp.where(bat_attack_move, new_dx, dx)
         dy = jnp.where(is_falling_stal, 1.0, 0.0)
@@ -695,7 +699,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + ew > fx)
         danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1] + DEPTH_TOLERANCE, final_y + eh > fy - 5)
         friend_hit = jnp.logical_and(jnp.logical_and(danger_x, danger_y), jnp.logical_and(surviving_enemies, state.friend_active))
-        
+
         stallactice_hit = jnp.logical_and(friend_hit, jnp.logical_not(is_bat))
         any_friend_hit = jnp.logical_and(
             jnp.logical_or(jnp.any(stallactice_hit), bat_kills_friend),
@@ -729,17 +733,17 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(should_spawn, spawn_x, final_x)
         final_y = jnp.where(should_spawn, spawn_y, final_y)
         final_types = jnp.where(should_spawn, new_types, state.enemies_type)
-        
+
         final_dx = jnp.where(should_spawn, 0.0, new_dx)
         final_dy = jnp.where(should_spawn, 0.0, new_dy)
         final_timer = jnp.where(should_spawn, 0, new_timer)
-        
+
         bat_exited = jnp.logical_and(
-            final_types == EnemyType.BAT, 
+            final_types == EnemyType.BAT,
             final_x > self.consts.WIDTH + self.consts.BAT_DIMENSIONS[0]
         )
         stal_exited = jnp.logical_and(
-            final_types == EnemyType.STALACTITE_FALLING, 
+            final_types == EnemyType.STALACTITE_FALLING,
             final_y >= self.consts.PLAY_AREA_HEIGHT
         )
         enemy_exited = jnp.logical_or(bat_exited, stal_exited)
@@ -765,145 +769,145 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
 
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
-    
+
     def _volcano_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-            rng, spawn_key, physics_key, scatter_key, floor_key = jax.random.split(state.key, 5)
-            MAX_CONCURRENT_ENEMIES: int = 1
-    
-            # --- Hit Detection ---
-            HIT_TOLERANCE = 8
-            cx, cy = state.cursor_x, state.cursor_y
-            ex, ey = state.enemies_x, state.enemies_y
-            hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                                       cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-            hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                                    cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)             
-            is_hit = jnp.logical_and(hit_x, hit_y)
-            valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
-            surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+        rng, spawn_key, physics_key, scatter_key, floor_key = jax.random.split(state.key, 5)
+        MAX_CONCURRENT_ENEMIES: int = 1
 
-    
-            # --- Movement ---
-            new_dx = state.enemies_dx
-            new_dy = state.enemies_dy
-    
-            # Falling rocks
-            gravity = 0.15
-            is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
-            new_dy = jnp.where(is_falling_rock, state.enemies_dy + gravity, state.enemies_dy)
-            new_y = state.enemies_y + new_dy
+        # --- Hit Detection ---
+        HIT_TOLERANCE = 8
+        cx, cy = state.cursor_x, state.cursor_y
+        ex, ey = state.enemies_x, state.enemies_y
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+                                cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+                                cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        is_hit = jnp.logical_and(hit_x, hit_y)
+        valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+        surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-    
-            # Lava moves horizontally
-            is_lava = state.enemies_type == EnemyType.BURNING_LAVA
-            lava_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
-            new_x = state.enemies_x + jnp.where(is_lava, lava_dx, state.enemies_dx)
-    
-            # Resting rocks stay static unless hit
-            new_x = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_x, new_x)
-            new_y = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_y, new_y)
-    
-            # --- Spawn Logic ---
-            current_enemy_count = jnp.sum(surviving_enemies)
-            spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.02
-            spawn_count = jnp.cumsum(spawn_chance & ~surviving_enemies)
-            allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
-            should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), jnp.logical_and(spawn_chance, allowed_spawns))
-    
-            spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 5, 8)  # Lava/Rock types
-            spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
-            is_ground_enemy = jnp.logical_or(spawn_type == EnemyType.BURNING_LAVA, spawn_type == EnemyType.RESTING_ROCK)
-            spawn_y = jnp.where(is_ground_enemy, float(self.consts.GROUND_Y_MIN), 0.0)
-    
-            final_x = jnp.where(should_spawn, spawn_x, new_x)
-            final_y = jnp.where(should_spawn, spawn_y, new_y)
-            final_active = jnp.logical_or(surviving_enemies, should_spawn)
-    
-            # --- Collision with friend ---
-            fx, fy = state.friend_x, state.friend_y
-            danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
-                                        final_x + self.consts.ENEMY_SIZE[0] > fx)
-            danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
-                                       final_y + self.consts.ENEMY_SIZE[1] > fy)
-            any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
-    
-            intermediate_state = state._replace(
-                            score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32),enemies_active=final_active,enemies_x=final_x,enemies_y=final_y,enemies_dx=new_dx,enemies_dy=new_dy,enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type),key=rng
-            )
 
-            return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
-    
+        # --- Movement ---
+        new_dx = state.enemies_dx
+        new_dy = state.enemies_dy
+
+        # Falling rocks
+        gravity = 0.15
+        is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
+        new_dy = jnp.where(is_falling_rock, state.enemies_dy + gravity, state.enemies_dy)
+        new_y = state.enemies_y + new_dy
+
+
+        # Lava moves horizontally
+        is_lava = state.enemies_type == EnemyType.BURNING_LAVA
+        lava_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
+        new_x = state.enemies_x + jnp.where(is_lava, lava_dx, state.enemies_dx)
+
+        # Resting rocks stay static unless hit
+        new_x = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_x, new_x)
+        new_y = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_y, new_y)
+
+        # --- Spawn Logic ---
+        current_enemy_count = jnp.sum(surviving_enemies)
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.02
+        spawn_count = jnp.cumsum(spawn_chance & ~surviving_enemies)
+        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), jnp.logical_and(spawn_chance, allowed_spawns))
+
+        spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 5, 8)  # Lava/Rock types
+        spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
+        is_ground_enemy = jnp.logical_or(spawn_type == EnemyType.BURNING_LAVA, spawn_type == EnemyType.RESTING_ROCK)
+        spawn_y = jnp.where(is_ground_enemy, float(self.consts.GROUND_Y_MIN), 0.0)
+
+        final_x = jnp.where(should_spawn, spawn_x, new_x)
+        final_y = jnp.where(should_spawn, spawn_y, new_y)
+        final_active = jnp.logical_or(surviving_enemies, should_spawn)
+
+        # --- Collision with friend ---
+        fx, fy = state.friend_x, state.friend_y
+        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
+                                   final_x + self.consts.ENEMY_SIZE[0] > fx)
+        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
+                                   final_y + self.consts.ENEMY_SIZE[1] > fy)
+        any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
+
+        intermediate_state = state._replace(
+            score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32),enemies_active=final_active,enemies_x=final_x,enemies_y=final_y,enemies_dx=new_dx,enemies_dy=new_dy,enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type),key=rng
+        )
+
+        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+
 
     def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-         rng, spawn_key, physics_key, scatter_key = jax.random.split(state.key, 4)
-         HIT_TOLERANCE = 8
-         MAX_CONCURRENT_ENEMIES = 5
-         cx, cy = state.cursor_x, state.cursor_y
-         ex, ey = state.enemies_x, state.enemies_y
-         hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                                  cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-                           
-         hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                                  cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
-                           
-         is_hit = jnp.logical_and(hit_x, hit_y)
-         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
-         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
-    
-         # --- Movement ---
-         new_dx = state.enemies_dx
-         new_dy = state.enemies_dy
-    
-         # Coconuts fall
-         is_coconut = state.enemies_type == EnemyType.COCONUT
-         gravity = 0.15
-         new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
-         new_y = state.enemies_y + new_dy
-    
-         # Monkeys move horizontally
-         is_monkey = state.enemies_type == EnemyType.MONKEY
-         monkey_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
-         new_x = state.enemies_x + jnp.where(is_monkey, monkey_dx, state.enemies_dx)
-    
+        rng, spawn_key, physics_key, scatter_key = jax.random.split(state.key, 4)
+        HIT_TOLERANCE = 8
+        MAX_CONCURRENT_ENEMIES = 5
+        cx, cy = state.cursor_x, state.cursor_y
+        ex, ey = state.enemies_x, state.enemies_y
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+                                cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+                                cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+
+        is_hit = jnp.logical_and(hit_x, hit_y)
+        valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+        surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+
+        # --- Movement ---
+        new_dx = state.enemies_dx
+        new_dy = state.enemies_dy
+
+        # Coconuts fall
+        is_coconut = state.enemies_type == EnemyType.COCONUT
+        gravity = 0.15
+        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+        new_y = state.enemies_y + new_dy
+
+        # Monkeys move horizontally
+        is_monkey = state.enemies_type == EnemyType.MONKEY
+        monkey_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
+        new_x = state.enemies_x + jnp.where(is_monkey, monkey_dx, state.enemies_dx)
+
         # Plants static
-         new_x = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_x, new_x)
-         new_y = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_y, new_y)
-    
-         current_enemy_count = jnp.sum(surviving_enemies)
-         spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.03
-         spawn_count = jnp.cumsum(spawn_chance & ~surviving_enemies)
-         allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
-         should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), jnp.logical_and(spawn_chance, allowed_spawns))
-    
-         spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 8, 11)  # Monkey/Coconut/Plant
-         spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
-         spawn_y = jnp.select(
-             [spawn_type == EnemyType.MONKEY, spawn_type == EnemyType.VORACIOUS_PLANT],
-             [50.0, float(self.consts.GROUND_Y_MIN)],
-             default=0.0
-         )
-    
-         final_x = jnp.where(should_spawn, spawn_x, new_x)
-         final_y = jnp.where(should_spawn, spawn_y, new_y)
-         final_active = jnp.logical_or(surviving_enemies, should_spawn)
-    
-         # --- Collision with friend ---
-         fx, fy = state.friend_x, state.friend_y
-         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
-                                    final_x + self.consts.ENEMY_SIZE[0] > fx)
-                               
-         danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
-                                     final_y + self.consts.ENEMY_SIZE[1] > fy)
-                              
-         any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
-    
-         intermediate_state = state._replace(
-             score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32), enemies_active=final_active, enemies_x=final_x,
-        enemies_y=final_y,  enemies_dx=new_dx, enemies_dy=new_dy,  enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type), key=rng
+        new_x = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_x, new_x)
+        new_y = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_y, new_y)
 
-         )
+        current_enemy_count = jnp.sum(surviving_enemies)
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.03
+        spawn_count = jnp.cumsum(spawn_chance & ~surviving_enemies)
+        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), jnp.logical_and(spawn_chance, allowed_spawns))
 
-         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+        spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 8, 11)  # Monkey/Coconut/Plant
+        spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
+        spawn_y = jnp.select(
+            [spawn_type == EnemyType.MONKEY, spawn_type == EnemyType.VORACIOUS_PLANT],
+            [50.0, float(self.consts.GROUND_Y_MIN)],
+            default=0.0
+        )
+
+        final_x = jnp.where(should_spawn, spawn_x, new_x)
+        final_y = jnp.where(should_spawn, spawn_y, new_y)
+        final_active = jnp.logical_or(surviving_enemies, should_spawn)
+
+        # --- Collision with friend ---
+        fx, fy = state.friend_x, state.friend_y
+        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
+                                   final_x + self.consts.ENEMY_SIZE[0] > fx)
+
+        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
+                                   final_y + self.consts.ENEMY_SIZE[1] > fy)
+
+        any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
+
+        intermediate_state = state._replace(
+            score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32), enemies_active=final_active, enemies_x=final_x,
+            enemies_y=final_y,  enemies_dx=new_dx, enemies_dy=new_dy,  enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type), key=rng
+
+        )
+
+        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
 
 
@@ -1002,7 +1006,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                 s
             )
 
- 
+
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
         return self._get_observation(state), state, (state.score - prev_score).astype(float), jnp.logical_or(game_over, state.step_counter > 4000), self._get_info(state)
@@ -1017,7 +1021,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             obs.game_phase,
             obs.lives,
             obs.score
-        ], axis=-1).astype(jnp.float32)
+        ], axis=-1).astype(jnp.int32)
     def action_space(self): return spaces.Discrete(18)
     def observation_space(self):
         return spaces.Dict({
