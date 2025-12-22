@@ -106,6 +106,26 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             shape=(210, 160, 3),
             dtype=jnp.uint8
         )
+    
+    def observation_space(self) -> spaces:
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            }),
+        })
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def obs_to_flat_array(self, obs: BasicMathObservation) -> jnp.ndarray:
+           return jnp.concatenate([
+               obs.pos.x.flatten(),
+               obs.pos.y.flatten(),
+               obs.pos.height.flatten(),
+               obs.pos.width.flatten(),
+            ]
+           )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BasicMathState, ) -> BasicMathState:
