@@ -104,6 +104,9 @@ class RoadRunnerConstants(NamedTuple):
     # Enemy approach slowdown/reversal multiplier (when player moves right)
     # Positive values slow down (0.5 = half speed), negative values reverse direction (-0.5 = move away at half speed)
     ENEMY_APPROACH_SLOWDOWN: float = -0.5     # Moves backwards at half speed when player approaches
+    # Enemy Flattened (Run Over) State
+    ENEMY_FLATTENED_DURATION: int = 120  # 2 seconds at 60 FPS
+    ENEMY_FLATTENED_SCORE: int = 1000
     # --- Decoration Type Constants ---
     DECO_CACTUS = 0
     DECO_SIGN_THIS_WAY = 1
@@ -462,6 +465,7 @@ class RoadRunnerState(NamedTuple):
     death_timer: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
+    enemy_flattened_timer: chex.Array  # Timer for enemy being run over
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -712,10 +716,23 @@ class JaxRoadRunner(
                 enemy_looks_right=True,
             )
 
+        def flattened_logic(st: RoadRunnerState) -> RoadRunnerState:
+            new_timer = st.enemy_flattened_timer - 1
+            # Update position only based on scrolling (stuck to road)
+            new_enemy_x = self._handle_scrolling(st, st.enemy_x)
+            new_enemy_x, new_enemy_y = self._check_enemy_bounds(st, new_enemy_x, st.enemy_y)
+
+            return st._replace(
+                enemy_x=new_enemy_x.astype(jnp.int32),
+                enemy_y=new_enemy_y.astype(jnp.int32),
+                enemy_is_moving=False,
+                enemy_flattened_timer=new_timer
+            )
+
         def normal_logic(st: RoadRunnerState) -> RoadRunnerState:
             # Calculate current speed phase based on scroll distance
-            total_cycle = (self.consts.ENEMY_SLOW_DURATION + 
-                           self.consts.ENEMY_FAST_DURATION + 
+            total_cycle = (self.consts.ENEMY_SLOW_DURATION +
+                           self.consts.ENEMY_FAST_DURATION +
                            self.consts.ENEMY_SAME_DURATION)
             
             cycle_progress = (st.scrolling_step_counter - st.enemy_speed_phase_start) % total_cycle
@@ -790,7 +807,17 @@ class JaxRoadRunner(
                 enemy_looks_right=enemy_looks_right,
             )
 
-        return jax.lax.cond(state.is_round_over, game_over_logic, normal_logic, state)
+        return jax.lax.cond(
+            state.is_round_over,
+            game_over_logic,
+            lambda st: jax.lax.cond(
+                st.enemy_flattened_timer > 0,
+                flattened_logic,
+                normal_logic,
+                st
+            ),
+            state
+        )
 
     def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
         # Check if the enemy and the player overlap
@@ -800,6 +827,9 @@ class JaxRoadRunner(
             state.enemy_x, state.enemy_y,
             self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
         )
+
+        # Don't trigger game over if enemy is flattened
+        collision = collision & (state.enemy_flattened_timer == 0)
 
         return jax.lax.cond(
             collision,
@@ -811,7 +841,6 @@ class JaxRoadRunner(
             lambda st: st,
             state,
         )
-
 
     def update_streak(self, state: RoadRunnerState, seed_idx: int, max_streak: int) -> RoadRunnerState:
         def restart_streak(state:RoadRunnerState) -> RoadRunnerState:
@@ -1069,9 +1098,9 @@ class JaxRoadRunner(
 
     def _check_truck_collisions_active(self, state: RoadRunnerState) -> RoadRunnerState:
         """Check collisions when truck is active."""
-        # Truck collision area (lower half, using TRUCK_COLLISION_OFFSET)
-        truck_collision_y = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
-        truck_collision_height = self.consts.TRUCK_SIZE[1] - self.consts.TRUCK_COLLISION_OFFSET
+        # Truck collision area for player (lower half, using TRUCK_COLLISION_OFFSET)
+        truck_collision_y_player = state.truck_y + self.consts.TRUCK_COLLISION_OFFSET
+        truck_collision_height_player = self.consts.TRUCK_SIZE[1] - self.consts.TRUCK_COLLISION_OFFSET
 
         # Player pickup area (lower portion)
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
@@ -1081,16 +1110,24 @@ class JaxRoadRunner(
         player_collision = _check_aabb_collision(
             state.player_x, player_pickup_y,
             self.consts.PLAYER_SIZE[0], pickup_height,
-            state.truck_x, truck_collision_y,
-            self.consts.TRUCK_SIZE[0], truck_collision_height,
+            state.truck_x, truck_collision_y_player,
+            self.consts.TRUCK_SIZE[0], truck_collision_height_player,
         )
 
-        # Check enemy-truck collision
+        # --- Enemy Collision Logic (Forgiving) ---
+        # 1. Use FULL truck height (ignore depth offset)
+        # 2. Add a buffer to the enemy hitbox to register "grazing" hits
+        hit_buffer = 4  # Pixels to expand enemy hitbox by on all sides
+
+        e_x = state.enemy_x - hit_buffer
+        e_y = state.enemy_y - hit_buffer
+        e_w = self.consts.ENEMY_SIZE[0] + (hit_buffer * 2)
+        e_h = self.consts.ENEMY_SIZE[1] + (hit_buffer * 2)
+
         enemy_collision = _check_aabb_collision(
-            state.enemy_x, state.enemy_y,
-            self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
-            state.truck_x, truck_collision_y,
-            self.consts.TRUCK_SIZE[0], truck_collision_height,
+            e_x, e_y, e_w, e_h,
+            state.truck_x, state.truck_y,
+            self.consts.TRUCK_SIZE[0], self.consts.TRUCK_SIZE[1],
         )
 
         # Handle player collision (triggers round reset)
@@ -1108,10 +1145,21 @@ class JaxRoadRunner(
             state,
         )
 
-        # Handle enemy collision (print debug message)
+        # Handle enemy collision
         def handle_enemy_collision(st: RoadRunnerState) -> RoadRunnerState:
-            jax.debug.print("Enemy hit by truck!")
-            return st
+            # If enemy hit by truck:
+            # 1. Trigger flattened state for set duration
+            # 2. Add score immediately
+            # Only if not already flattened
+            return jax.lax.cond(
+                st.enemy_flattened_timer == 0,
+                lambda s: s._replace(
+                    enemy_flattened_timer=jnp.array(self.consts.ENEMY_FLATTENED_DURATION, dtype=jnp.int32),
+                    score=s.score + self.consts.ENEMY_FLATTENED_SCORE
+                ),
+                lambda s: s,
+                st
+            )
 
         state_after_enemy = jax.lax.cond(
             enemy_collision,
@@ -1408,6 +1456,7 @@ class JaxRoadRunner(
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
+            enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -1536,6 +1585,7 @@ class JaxRoadRunner(
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
+            enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
         level_idx = self._get_level_index(reset_state)
         return self._initialize_spawn_timers(reset_state, level_idx)
@@ -1638,6 +1688,7 @@ class JaxRoadRunner(
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             instant_death=jnp.array(False, dtype=jnp.bool_),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
+            enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
 
     def _get_level_index(self, state: RoadRunnerState) -> jnp.ndarray:
@@ -1754,7 +1805,7 @@ class JaxRoadRunner(
             width=jnp.array(self.consts.ENEMY_SIZE[0]),
             height=jnp.array(self.consts.ENEMY_SIZE[1]),
         )
-        
+
         # Valid ravines have x >= 0 (strictly active in our logic, although we set to -1 when inactive)
         active_ravines_mask = state.ravines[:, 0] >= 0
 
@@ -1997,6 +2048,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy", "type": "single", "file": "enemy_stand.npy"},
             {"name": "enemy_run1", "type": "single", "file": "enemy_run1.npy"},
             {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
+            {"name": "enemy_run_over", "type": "single", "file": "enemy_run_over.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
@@ -2318,7 +2370,22 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 self.SHAPE_MASKS["enemy_run1"],
                 self.SHAPE_MASKS["enemy_run2"],
             )
-            return self.jr.render_at(c, state.enemy_x, state.enemy_y, enemy_mask)
+
+            flattened_mask = self.SHAPE_MASKS["enemy_run_over"]
+            # Apply flip to run-over sprite as well if needed
+            flattened_mask = jax.lax.cond(
+                state.enemy_looks_right,
+                lambda: jnp.fliplr(flattened_mask),
+                lambda: flattened_mask
+            )
+
+            final_mask = jax.lax.cond(
+                state.enemy_flattened_timer > 0,
+                lambda: flattened_mask,
+                lambda: enemy_mask
+            )
+
+            return self.jr.render_at(c, state.enemy_x, state.enemy_y, final_mask)
 
         # Render the enemy only if it is on screen
         # else return the canvas unchanged
