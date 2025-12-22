@@ -74,10 +74,9 @@ class BasicMathState(NamedTuple):
 
 class BasicMathObservation(NamedTuple):
     pos: EntityPosition
-    numArr: chex.Array
-    arrPos: chex.Array
-    problemNum1: chex.Array
-    problemNum2: chex.Array
+    numArr: jnp.ndarray
+    problemNum1: jnp.ndarray
+    problemNum2: jnp.ndarray
 
 class BasicMathInfo(NamedTuple):
     score: chex.Array
@@ -109,12 +108,15 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     
     def observation_space(self) -> spaces:
         return spaces.Dict({
-            "player": spaces.Dict({
+            "pos": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
+            "problemNum1": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+            "problemNum2": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+            "numArr": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
         })
     
     @partial(jax.jit, static_argnums=(0,))
@@ -147,7 +149,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return BasicMathObservation(
             pos,
             state.numArr, 
-            state.arrPos, 
             state.problemNum1, 
             state.problemNum2
         )
