@@ -2798,7 +2798,7 @@ class JaxDefender(
     def observation_space(self) -> Space:
         return spaces.Dict(
             {
-                "player": spaces.Dicr(
+                "player": spaces.Dict(
                     {
                         "x": spaces.Box(
                             low=-10,
@@ -2818,7 +2818,7 @@ class JaxDefender(
                         ),
                     }
                 ),
-                "bullet": spaces.Dicr(
+                "bullet": spaces.Dict(
                     {
                         "x": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
                         "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
