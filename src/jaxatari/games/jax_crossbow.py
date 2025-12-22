@@ -12,37 +12,37 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+
+# --- ASSETS ---
 def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {
-            'name': 'backgrounds', 'type': 'group',
-            'files': [
-                'backgrounds/start_screen.npy',
-                'backgrounds/get_ready.npy',
-                'backgrounds/desert_map.npy',
-                'backgrounds/cave_map.npy',
-                'backgrounds/forest_map.npy',
-                'backgrounds/map_4.npy',
-                'backgrounds/drawbridge_map.npy',
-                'backgrounds/map_6.npy'
-            ]
-        },
-        {
-            'name': 'friend', 'type': 'group',
-            'files': [
-                'friend/friend_walking_1.npy',
-                'friend/friend_walking_2.npy',
-                'friend/friend_walking_3.npy'
-            ]
-        },
+        {'name': 'backgrounds', 'type': 'group',
+         'files': [
+             'backgrounds/start_screen.npy',
+             'backgrounds/get_ready.npy',
+             'backgrounds/desert_map.npy',
+             'backgrounds/cave_map.npy',
+             'backgrounds/forest_map.npy',
+             'backgrounds/map_4.npy',
+             'backgrounds/castle_hall_map.npy',
+             'backgrounds/map_6.npy'
+         ]},
+        {'name': 'friend', 'type': 'group',
+         'files': ['friend/friend_walking_1.npy',
+                   'friend/friend_walking_2.npy',
+                   'friend/friend_walking_3.npy']},
         {'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
         {'name': 'ant', 'type': 'single', 'file': 'ant.npy'},
         {'name': 'vulture', 'type': 'single', 'file': 'vulture.npy'},
-        {
-            'name': 'snake', 'type': 'group',
-            'files': ['snake_1.npy', 'snake_2.npy']
-        },
+        {'name': 'spawn', 'type': 'single', 'file': 'spawn.npy'},
+        {'name': 'lava_rock', 'type': 'single', 'file': 'lava_rock.npy'},
+        {'name': 'falling_rock', 'type': 'single', 'file': 'falling_rock.npy'},
+        {'name': 'resting_rock', 'type': 'single', 'file': 'resting_rock.npy'},
+        {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
+        {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
+        {'name': 'voracious_plant', 'type': 'single', 'file': 'voracious_plant.npy'},
+        {'name': 'snake', 'type': 'group', 'files': ['snake_1.npy', 'snake_2.npy']},
         {'name': 'archer', 'type': 'single', 'file': 'archer.npy'},
         {'name': 'arrow', 'type': 'single', 'file': 'arrow.npy'},
         {'name': 'cursor', 'type': 'single', 'file': 'cursor.npy'},
@@ -51,38 +51,60 @@ def _get_default_asset_config() -> tuple:
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
-def _get_initial_scatter_state(consts):
+
+# --- SCATTER PIXELS ---
+def _get_initial_scatter_state(consts: 'CrossbowConstants'):
     num_pixels = consts.MAX_SCATTER_PIXELS
     rel_x = jnp.tile(jnp.arange(0, 8), 13)[:num_pixels]
     rel_y = jnp.repeat(jnp.arange(0, 27, 2), 8)[:num_pixels]
     colors = jnp.concatenate([jnp.full(32, 7), jnp.full(32, 5), jnp.full(36, 6)])[:num_pixels]
-    center_x = 4.0; center_y = 13.5
+    center_x, center_y = 4.0, 13.5
     base_dx = (rel_x - center_x) * 0.3
     base_dy = (rel_y - center_y) * 0.3
     return rel_x, rel_y, base_dx, base_dy, colors
 
+
+# --- GAME PHASES ---
 class GamePhase:
     START_SCREEN = 0
     GET_READY = 1
     DESERT_MAP = 2
     CAVE_MAP = 3
-    FOREST_MAP = 4
-    MAP_4 = 5
-    DRAWBRIDGE_MAP = 6
-    MAP_6 = 7
+    VOLCANO_MAP = 4
+    JUNGLE_MAP = 5
+    DRAWBRIDGE = 6
+    CASTLE_HALL = 7
 
+
+# --- ENEMIES ---
 class EnemyType:
     GENERIC = 0
     SCORPION = 1
     ANT = 2
     VULTURE = 3
-    SNAKE = 4
-    ARCHER = 5
-    ARROW = 6
+    SPAWN = 4
 
+    # Volcano
+    BURNING_LAVA = 5
+    FALLING_ROCK = 6
+    RESTING_ROCK = 7
+
+    # Jungle
+    MONKEY = 8
+    COCONUT = 9
+    VORACIOUS_PLANT = 10
+
+    # Original extra enemies
+    SNAKE = 11
+    ARCHER = 12
+    ARROW = 13
+
+
+# --- CONSTANTS ---
 class CrossbowConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
+
     CURSOR_SPEED: int = 2
     CURSOR_SIZE: Tuple[int, int] = (4, 4)
     FRIEND_SPEED: float = 0.5
@@ -90,21 +112,30 @@ class CrossbowConstants(NamedTuple):
     MAX_ENEMIES: int = 10
     MAX_LIVES: int = 3
     DYING_DURATION: int = 45
+
     GET_READY_DURATION: int = 180
     FADE_OUT_DURATION: int = 45
     FADE_IN_DURATION: int = 30
     MAX_SCATTER_PIXELS: int = 100
+
     FRIEND_SIZE: Tuple[int, int] = (8, 27)
     ENEMY_SIZE: Tuple[int, int] = (8, 8)
     SHOT_SIZE: Tuple[int, int] = (6, 6)
     PLAY_AREA_HEIGHT: int = 180
+
     GROUND_Y_MIN: int = 130
     GROUND_Y_MAX: int = 165
+
+    DEMON_MAP_CENTER_X: int = 80
+    DEMON_MAP_CENTER_Y: int = 90
+
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
     ROPE_1_POS: Tuple[int, int] = (110, 60)
     ROPE_2_POS: Tuple[int, int] = (110, 100)
 
+
+# --- STATE ---
 class CrossbowState(NamedTuple):
     cursor_x: chex.Array
     cursor_y: chex.Array
@@ -138,6 +169,8 @@ class CrossbowState(NamedTuple):
     rope_1_broken: chex.Array
     rope_2_broken: chex.Array
 
+
+# --- OBSERVATION & INFO ---
 class CrossbowObservation(NamedTuple):
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
@@ -146,8 +179,10 @@ class CrossbowObservation(NamedTuple):
     lives: jnp.ndarray
     score: jnp.ndarray
 
+
 class CrossbowInfo(NamedTuple):
     time: jnp.ndarray
+
 
 class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInfo, CrossbowConstants]):
     def __init__(self, consts: CrossbowConstants = None):
@@ -222,7 +257,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
         return state._replace(friend_x=final_x.astype(jnp.int32))
 
-    def _drawbridge_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
+    def _castle_hall_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
         rng, key_spawn_general, key_type_general, key_x_archer, key_y_archer, key_y_vulture, key_scatter = jax.random.split(state.key, 7)
         is_dying = state.dying_timer > 0
         HIT_TOLERANCE = 8
@@ -418,6 +453,135 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             key=rng
         )
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+    
+    def _volcano_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
+            rng, spawn_key, physics_key, scatter_key, floor_key = jax.random.split(state.key, 5)
+    
+            # --- Hit Detection ---
+            HIT_TOLERANCE = 8
+            cx, cy = state.cursor_x, state.cursor_y
+            ex, ey = state.enemies_x, state.enemies_y
+            hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+                                       cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+            hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+                                    cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)             
+            is_hit = jnp.logical_and(hit_x, hit_y)
+            valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+            surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+
+    
+            # --- Movement ---
+            new_dx = state.enemies_dx
+            new_dy = state.enemies_dy
+    
+            # Falling rocks
+            gravity = 0.15
+            is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
+            new_dy = jnp.where(is_falling_rock, state.enemies_dy + gravity, state.enemies_dy)
+            new_y = state.enemies_y + new_dy
+
+    
+            # Lava moves horizontally
+            is_lava = state.enemies_type == EnemyType.BURNING_LAVA
+            lava_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
+            new_x = state.enemies_x + jnp.where(is_lava, lava_dx, state.enemies_dx)
+    
+            # Resting rocks stay static unless hit
+            new_x = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_x, new_x)
+            new_y = jnp.where(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_y, new_y)
+    
+            # --- Spawn Logic ---
+            spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.02
+            should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), spawn_chance)
+    
+            spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 5, 8)  # Lava/Rock types
+            spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
+            spawn_y = jnp.where(spawn_type==EnemyType.BURNING_LAVA, self.consts.GROUND_Y_MIN, 0.0)
+    
+            final_x = jnp.where(should_spawn, spawn_x, new_x)
+            final_y = jnp.where(should_spawn, spawn_y, new_y)
+            final_active = jnp.logical_or(surviving_enemies, should_spawn)
+    
+            # --- Collision with friend ---
+            fx, fy = state.friend_x, state.friend_y
+            danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
+                                        final_x + self.consts.ENEMY_SIZE[0] > fx)
+            danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
+                                       final_y + self.consts.ENEMY_SIZE[1] > fy)
+            any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
+    
+            intermediate_state = state._replace(
+                            score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32),enemies_active=final_active,enemies_x=final_x,enemies_y=final_y,enemies_dx=new_dx,enemies_dy=new_dy,enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type),key=rng
+            )
+
+            return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+    
+
+    def _jungle_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
+         rng, spawn_key, physics_key, scatter_key = jax.random.split(state.key, 4)
+         HIT_TOLERANCE = 8
+         cx, cy = state.cursor_x, state.cursor_y
+         ex, ey = state.enemies_x, state.enemies_y
+         hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+                                  cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+                           
+         hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+                                  cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+                           
+         is_hit = jnp.logical_and(hit_x, hit_y)
+         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+    
+         # --- Movement ---
+         new_dx = state.enemies_dx
+         new_dy = state.enemies_dy
+    
+         # Coconuts fall
+         is_coconut = state.enemies_type == EnemyType.COCONUT
+         gravity = 0.15
+         new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+         new_y = state.enemies_y + new_dy
+    
+         # Monkeys move horizontally
+         is_monkey = state.enemies_type == EnemyType.MONKEY
+         monkey_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
+         new_x = state.enemies_x + jnp.where(is_monkey, monkey_dx, state.enemies_dx)
+    
+        # Plants static
+         new_x = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_x, new_x)
+         new_y = jnp.where(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_y, new_y)
+    
+         # --- Spawn ---
+         spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.03
+         should_spawn = jnp.logical_and(jnp.logical_not(surviving_enemies), spawn_chance)
+    
+         spawn_type = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 8, 11)  # Monkey/Coconut/Plant
+         spawn_x = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
+         spawn_y = jnp.where(spawn_type==EnemyType.MONKEY, 50, 0.0)
+    
+         final_x = jnp.where(should_spawn, spawn_x, new_x)
+         final_y = jnp.where(should_spawn, spawn_y, new_y)
+         final_active = jnp.logical_or(surviving_enemies, should_spawn)
+    
+         # --- Collision with friend ---
+         fx, fy = state.friend_x, state.friend_y
+         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
+                                    final_x + self.consts.ENEMY_SIZE[0] > fx)
+                               
+         danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
+                                     final_y + self.consts.ENEMY_SIZE[1] > fy)
+                              
+         any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
+    
+         intermediate_state = state._replace(
+             score=(state.score + jnp.sum(valid_kill) * 2).astype(jnp.int32), enemies_active=final_active, enemies_x=final_x,
+        enemies_y=final_y,  enemies_dx=new_dx, enemies_dy=new_dy,  enemies_type=jnp.where(should_spawn, spawn_type, state.enemies_type), key=rng
+
+         )
+
+         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
+
+
 
     def _generic_map_logic(self, state: CrossbowState, action: chex.Array) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, scatter_key = jax.random.split(state.key, 3)
@@ -459,7 +623,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_and(jnp.logical_and(cx >= 33, cx <= 48), jnp.logical_and(cy >= 125, cy <= 151)),
         ]
         trigger = jnp.logical_and(on_start, state.is_firing)
-        target = jnp.select(sel, [GamePhase.DESERT_MAP, GamePhase.CAVE_MAP, GamePhase.FOREST_MAP, GamePhase.MAP_4, GamePhase.DRAWBRIDGE_MAP, GamePhase.MAP_6], default=GamePhase.START_SCREEN)
+
+        target = jnp.select(sel, [GamePhase.DESERT_MAP, GamePhase.CAVE_MAP, GamePhase.VOLCANO_MAP, GamePhase.JUNGLE_MAP, GamePhase.DRAWBRIDGE, GamePhase.CASTLE_HALL], default=GamePhase.START_SCREEN)
+
         ready_done = jnp.logical_and(on_ready, state.get_ready_timer == 0)
         return state._replace(
             game_phase=jnp.where(jnp.logical_and(trigger, target != GamePhase.START_SCREEN), GamePhase.GET_READY, jnp.where(ready_done, state.selected_target_map, state.game_phase)).astype(jnp.int32),
@@ -498,9 +664,29 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         is_gameplay = state.game_phase >= GamePhase.DESERT_MAP
         state = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), lambda s: self._friend_step(s), lambda s: s, state)
         def _combat_router(s):
-            return jax.lax.cond(s.game_phase == GamePhase.DESERT_MAP, lambda _s: self._desert_map_logic(_s, action),
-                                lambda _s: jax.lax.cond(_s.game_phase == GamePhase.DRAWBRIDGE_MAP, lambda __s: self._drawbridge_map_logic(__s, action),
-                                                        lambda __s: self._generic_map_logic(__s, action), _s), s)
+             return jax.lax.cond(
+               s.game_phase == GamePhase.DESERT_MAP,
+               lambda _s: self._desert_map_logic(_s, action),
+               lambda _s: jax.lax.cond(
+                      _s.game_phase == GamePhase.DEMON_MAP,
+                      lambda __s: self._demon_map_logic(__s, action),
+                      lambda _s: jax.lax.cond(
+                            _s.game_phase == GamePhase.VOLCANO_MAP,
+                            lambda __s: self._volcano_map_logic(__s, action),
+                            lambda _s: jax.lax.cond(
+                              _s.game_phase == GamePhase.JUNGLE_MAP,
+                              lambda __s: self._jungle_map_logic(__s, action),
+                              lambda __s: self._generic_map_logic(__s, action),
+                               _s
+                ),
+                _s
+            ),
+            _s
+        ),
+        s
+    )
+
+ 
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
         return self._get_observation(state), state, (state.score - prev_score).astype(float), jnp.logical_or(game_over, state.step_counter > 4000), self._get_info(state)
@@ -579,7 +765,9 @@ class CrossbowRenderer(JAXGameRenderer):
                              lambda _r: self.jr.render_at(_r, self.consts.ROPE_2_POS[0], self.consts.ROPE_2_POS[1], rope_sprite),
                              lambda _r: _r, r)
             return r
-        raster = jax.lax.cond(state.game_phase == GamePhase.DRAWBRIDGE_MAP, _draw_ropes, lambda r: r, raster)
+        raster = jax.lax.cond(state.game_phase == GamePhase.CASTLE_HALL_MAP, _draw_ropes, lambda r: r, raster)
+
+
 
         # Scatter
         def _draw_px(i, r):
@@ -588,6 +776,14 @@ class CrossbowRenderer(JAXGameRenderer):
         raster = jax.lax.cond(is_dying, lambda r: jax.lax.fori_loop(0, 100, _draw_px, r), lambda r: r, raster)
 
         # Enemies
+
+        masks = [self.SHAPE_MASKS["enemy"], self.SHAPE_MASKS["scorpion"], self.SHAPE_MASKS["ant"], self.SHAPE_MASKS["vulture"], self.SHAPE_MASKS["spawn"], self.SHAPE_MASKS["lava_rock"],self.SHAPE_MASKS["falling_rock"],
+                  self.SHAPE_MASKS["resting_rock"],self.SHAPE_MASKS["monkey"],self.SHAPE_MASKS["coconut"],
+                  self.SHAPE_MASKS["voracious_plant"] 
+        ]
+
+        
+
         def _draw_e(i, r):
             is_arrow = state.enemies_type[i] == 6
 
@@ -612,13 +808,20 @@ class CrossbowRenderer(JAXGameRenderer):
                 is_arrow,
                 lambda: self.arrow_sprites[final_arrow_idx],
                 lambda: jax.lax.switch(state.enemies_type[i], [
-                    lambda: self.harmonized_enemy_masks[0], # 0: Generic
-                    lambda: self.harmonized_enemy_masks[1], # 1: Scorpion
-                    lambda: self.harmonized_enemy_masks[2], # 2: Ant
-                    lambda: self.harmonized_enemy_masks[3], # 3: Vulture
-                    lambda: self.snake_anim_masks[snake_frame_idx], # 4: SNAKE (Animated)
-                    lambda: self.harmonized_enemy_masks[4], # 5: Archer (Shifted index in list due to snake handling)
-                    lambda: self.harmonized_enemy_masks[5], # 6: Arrow (Fallback)
+                     lambda: self.harmonized_enemy_masks[0],  # 0: GENERIC
+                     lambda: self.harmonized_enemy_masks[1],  # 1: SCORPION
+                     lambda: self.harmonized_enemy_masks[2],  # 2: ANT
+                     lambda: self.harmonized_enemy_masks[3],  # 3: VULTURE
+                     lambda: self.harmonized_enemy_masks[4],  # 4: SPAWN
+                     lambda: self.harmonized_enemy_masks[5],  # 5: BURNING_LAVA
+                     lambda: self.harmonized_enemy_masks[6],  # 6: FALLING_ROCK
+                     lambda: self.harmonized_enemy_masks[7],  # 7: RESTING_ROCK
+                     lambda: self.harmonized_enemy_masks[8],  # 8: MONKEY
+                     lambda: self.harmonized_enemy_masks[9],  # 9: COCONUT
+                     lambda: self.harmonized_enemy_masks[10], # 10: VORACIOUS_PLANT
+                     lambda: self.snake_anim_masks[snake_frame_idx], # 11: SNAKE (animated)
+                     lambda: self.harmonized_enemy_masks[11], # 12: ARCHER
+                     lambda: self.harmonized_enemy_masks[12], # 13: ARROW (fallback)
                 ])
             )
 
