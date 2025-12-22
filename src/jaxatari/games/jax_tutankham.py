@@ -270,7 +270,7 @@ class TutankhamRenderer(JAXGameRenderer):
             state.creature_states[1][0],
             state.creature_states[1][1],
             # - camera_offset,
-            self.SHAPE_MASKS["snake"],
+            self.SHAPE_MASKS["bat"],
             flip_offset=ZERO_FLIP
             # self.FLIP_OFFSETS['player_group'],
         )
@@ -385,7 +385,7 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
         #creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-        creature_states = jnp.array([[50, 50, 0, 0], [50, 100, 1, 0]], dtype=jnp.int32) # TODO delete
+        creature_states = jnp.array([[50, 50, 0, 1], [50, 100, 1, 1]], dtype=jnp.int32) # TODO delete
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
@@ -550,12 +550,23 @@ class JaxTutankham(JaxEnvironment):
         def move_creature(creature_state):
             x, y, creature_type, active = creature_state
 
-            speed = self.consts.CREATURE_SPEED[int(creature_type)]
+            speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
 
             x_new = x + speed * active # TODO: If creature active, Move right for simplicity
-            active_new = jnp.where(x_new >= self.consts.WIDTH, self.consts.INACTIVE, active) # Deactivate if out of bounds
 
-            return jnp.array([x_new, y, creature_type, active_new], dtype=jnp.int32)
+            # Deactivate if out of bounds
+            active_new = jnp.where(
+                x_new >= self.consts.WIDTH,
+                self.consts.INACTIVE,
+                active
+            )
+
+            # If inactive, reset position to (0, 0)
+            x_new = x_new * active_new
+            y_new = y * active_new
+
+            return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
+            return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
 
 
         # iterate over creatures and move them
