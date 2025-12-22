@@ -1,6 +1,4 @@
 from jax import random as jrandom
-from jax._src.lax.slicing import _clamp_scatter_indices
-from jax._src.pjit import JitWrapped
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
@@ -14,12 +12,9 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import (
     JaxEnvironment,
     JAXAtariAction as Action,
-    EnvObs,
-    EnvState,
-    EnvInfo,
 )
 from jaxatari.spaces import Space
-from typing import Tuple, Any
+from typing import Tuple
 
 
 class DefenderConstants(NamedTuple):
