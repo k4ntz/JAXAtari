@@ -131,7 +131,7 @@ SPAWNER_HEIGHT = 14
 SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
 SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
 
-ENEMY_COLLISION_MARGIN = 1  # or 2 pixels if you want more slide room
+ENEMY_COLLISION_MARGIN = 1
 
 CHASE_RADIUS = 80          # pixels
 IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
@@ -1725,7 +1725,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # --- Distance init ---
         dist = jnp.full((H, W), BIG_DIST, dtype=jnp.int32)
 
-        # Player seed cell (use player center if you want, but keep your signature)
         py, px = self._pos_to_cell(player_x, player_y)
         py = jnp.clip(py, 0, H - 1)
         px = jnp.clip(px, 0, W - 1)
@@ -2508,7 +2507,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             )
 
             
-            # Helper: check collision for a single enemy position (keep your existing function)
             def check_enemy_collision(enemy_pos):
                 # shrink collision box by a small margin to allow sliding along walls
                 ex = enemy_pos[0] + ENEMY_COLLISION_MARGIN
@@ -2525,7 +2523,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
                 return jnp.any(e_overlap_x & e_overlap_y)
             
-            # Re-use your axis-separate movement logic
             def move_enemy(enemy_pos, step_vec):
                 cur = enemy_pos
             
@@ -2577,7 +2574,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 )
                 return pos_after
             
-            # move enemies using your existing collision-aware move_enemy()
             new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, final_step)
             
             def resolve_enemy_overlaps(cand_positions, prev_positions, active):
