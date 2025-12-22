@@ -95,7 +95,7 @@ def main():
             allow_conflicts=args.allow_conflicts
         )
         print(f"Successfully loaded registered game: '{args.game}'")
-    except (NotImplementedError, ImportError, TypeError) as e:
+    except (NotImplementedError, ImportError) as e:
         # 2. If not registered, try the dynamic path
         print(f"Game '{args.game}' not registered or import error ({e}). Trying dynamic load...")
         try:
