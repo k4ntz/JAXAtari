@@ -1,37 +1,42 @@
-import functools
-from typing import Any, Dict, Tuple, Union
+from jaxatari.modification import JaxAtariModController
+from jaxatari.games.mods.kangaroo_mod_plugins import (
+    NoMonkeyMod, NoFallingCoconutMod, PinChildMod, RenderDebugInfo, 
+    ReplaceChildWithMonkeyMod, ReplaceBellWithFlameMod, LethalFlameMod, 
+    SpawnAtSecondLevelMod, NoLaddersMod, CenterLaddersMod
+)
+# --- 3. The Registry ---
+KANGAROO_MOD_REGISTRY = {
+    "no_monkey": NoMonkeyMod,
+    "no_falling_coconut": NoFallingCoconutMod,
+    "pin_child": PinChildMod,
+    "render_debug_info": RenderDebugInfo,
+    "replace_child_with_monkey": ReplaceChildWithMonkeyMod,
+    "lethal_flame": LethalFlameMod,
+    "replace_bell_with_flame": ReplaceBellWithFlameMod,
+    "lethal_bell": ["lethal_flame", "replace_bell_with_flame"], # bundle into a modpack
+    "spawn_at_second_level": SpawnAtSecondLevelMod,
+    "no_ladders": NoLaddersMod,
+    "center_ladders": CenterLaddersMod,
+}
 
+class KangarooEnvMod(JaxAtariModController):
+    """
+    Game-specific (Group 1) Mod Controller for Kangaroo.
+    It inherits all logic from JaxAtariModController and defines
+    the REGISTRY.
+    """
 
-import chex
-import jax
-from jaxatari.games.jax_kangaroo import KangarooState
+    REGISTRY = KANGAROO_MOD_REGISTRY
 
-from jaxatari.wrappers import JaxatariWrapper
+    def __init__(self,
+                 env,
+                 mods_config: list = [],
+                 allow_conflicts: bool = False
+                 ):
 
-class DisableThreadsWrapper(JaxatariWrapper):
-    """Disable enemies in the environment."""
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def disable_enemies(self, state: KangarooState) -> KangarooState:
-        _, reset_state = self._env.reset()
-        new_level = state.level._replace(
-            falling_coco_position = reset_state.level.falling_coco_position,
-            falling_coco_dropping = reset_state.level.falling_coco_dropping,
-            falling_coco_counter = reset_state.level.falling_coco_counter,
-            falling_coco_skip_update = reset_state.level.falling_coco_skip_update,
-            monkey_states = reset_state.level.monkey_states,
-            monkey_positions = reset_state.level.monkey_positions,
-            monkey_throw_timers = reset_state.level.monkey_throw_timers,
-            coco_positions = reset_state.level.coco_positions,
-            coco_states = reset_state.level.coco_states,
+        super().__init__(
+            env=env,
+            mods_config=mods_config,
+            allow_conflicts=allow_conflicts,
+            registry=self.REGISTRY
         )
-        new_state = state._replace(
-            level = new_level, 
-        )
-        return new_state
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: KangarooState, action: Union[int, float]) -> Tuple[chex.Array, KangarooState, float, bool, Dict[Any, Any]]:
-        new_obs, state, reward, done, info = self._env.step(state, action)
-        new_state = self.disable_enemies(state)
-
-        return new_obs, new_state, reward, done, info

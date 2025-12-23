@@ -2,6 +2,7 @@ import pytest
 import sys
 import importlib.util
 import inspect
+import gc
 from pathlib import Path
 from jaxatari.environment import JaxEnvironment
 from jaxatari.wrappers import (
@@ -141,6 +142,11 @@ def load_game_environment(game_name: str) -> JaxEnvironment:
 # ==============================================================================
 # 3. PYTEST SHARED FIXTURES
 # ==============================================================================
+
+@pytest.fixture(autouse=True)
+def force_gc_between_tests():
+    yield
+    gc.collect()
 
 # This fixture is now just a placeholder; its values are injected by pytest_generate_tests.
 @pytest.fixture

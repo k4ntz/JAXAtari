@@ -15,7 +15,7 @@ try:
         normalize_observation_ocatari 
     )
 
-    from ppo_agent import (
+    from scripts.benchmarks.ppo_agent_old import (
         create_ppo_train_state,
         ActorCritic,
         TrainState

@@ -17,6 +17,46 @@ from jaxatari.games.kangaroo_levels import (
     Kangaroo_Level_3,
 )
 
+
+def get_default_asset_config() -> tuple:
+        # 1. Define the game-specific asset manifest in a clear, declarative way.
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {
+                'name': 'ape', 'type': 'group',
+                'files': ['ape_standing.npy', 'ape_climb_left.npy', 'ape_moving.npy', 'throwing_ape.npy', 'ape_climb_right.npy']
+            },
+            {
+                'name': 'kangaroo', 'type': 'group',
+                'files': ['kangaroo.npy', 'kangaroo_dead.npy', 'kangaroo_climb.npy', 'kangaroo_ducking.npy', 'kangaroo_jump.npy', 'kangaroo_boxing.npy', 'kangaroo_walk.npy', 'kangaroo_jump_high.npy']
+            },
+            {
+                'name': 'bell', 'type': 'group',
+                'files': ['bell.npy', 'ringing_bell.npy']
+            },
+            {
+                'name': 'fruit', 'type': 'group',
+                'files': ['strawberry.npy', 'tomato.npy', 'cherry.npy', 'pineapple.npy']
+            },
+            {
+                'name': 'child', 'type': 'group',
+                'files': ['child.npy', 'child_jump.npy']
+            },
+            {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
+            {'name': 'thrown_coconut', 'type': 'single', 'file': 'thrown_coconut.npy'},
+            {'name': 'lives', 'type': 'single', 'file': 'kangaroo_lives.npy'},
+            {
+                'name': 'score_digits', 'type': 'digits',
+                'pattern': 'score_{}.npy'
+            },
+            {
+                'name': 'time_digits', 'type': 'digits',
+                'pattern': 'time_{}.npy'
+            }
+        ]
+        return asset_config
+
+
 class KangarooConstants(NamedTuple):
     RESET: int = 18
     RENDER_SCALE_FACTOR: int = 4
@@ -66,6 +106,9 @@ class KangarooConstants(NamedTuple):
     LEVEL_1: LevelConstants = Kangaroo_Level_1
     LEVEL_2: LevelConstants = Kangaroo_Level_2
     LEVEL_3: LevelConstants = Kangaroo_Level_3
+    # sprites to enable asset overrides
+    ASSET_CONFIG: tuple = get_default_asset_config()
+
 
 # -------- Entity Classes --------
 class Entity(NamedTuple):
@@ -187,12 +230,8 @@ class KangarooInfo(NamedTuple):
 
 
 class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo, KangarooConstants]):
-    def __init__(self, consts: KangarooConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: KangarooConstants = None):
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -625,6 +664,37 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return jnp.where(has_platform_below, platform_y, jnp.array(1000))
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def _bell_step(self, state: KangarooState) -> Tuple[chex.Array, chex.Array]:
+        """Handles bell collision detection and timer management.
+        
+        Returns:
+            bell_timer: Updated bell timer value
+            respawn_timer_done: Boolean indicating if respawn timer has completed
+        """
+        bell_collision = self._entities_collide(
+            state.player.x,
+            state.player.y,
+            self.consts.PLAYER_WIDTH,
+            state.player.height,
+            state.level.bell_position[0],
+            state.level.bell_position[1],
+            self.consts.BELL_WIDTH,
+            self.consts.BELL_HEIGHT,
+        )
+        bell_active = ~jnp.any(state.level.fruit_stages == 3)
+
+        RESPAWN_AFTER_TICKS = 40
+
+        counter = state.level.bell_timer
+        counter_start = bell_collision & (counter == 0) & bell_active
+        counter = jnp.where(counter_start, 1, counter)
+        counter = jnp.where(counter > 0, counter + 1, counter)
+        counter = jnp.where(counter == RESPAWN_AFTER_TICKS + 1, 0, counter)
+        respawn_timer_done = counter == RESPAWN_AFTER_TICKS
+
+        return counter, respawn_timer_done
+
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _fruits_step(self, state: KangarooState) -> Tuple[chex.Array, chex.Array]:
         fruit_x = state.level.fruit_positions[:, 0]
         fruit_y = state.level.fruit_positions[:, 1]
@@ -652,26 +722,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
         new_score = jnp.sum(score_additions)
 
-        bell_collision = self._entities_collide(
-            state.player.x,
-            state.player.y,
-            self.consts.PLAYER_WIDTH,
-            state.player.height,
-            state.level.bell_position[0],
-            state.level.bell_position[1],
-            self.consts.BELL_WIDTH,
-            self.consts.BELL_HEIGHT,
-        )
-        bell_active = ~jnp.any(state.level.fruit_stages == 3)
-
-        RESPAWN_AFTER_TICKS = 40
-
-        counter = state.level.bell_timer
-        counter_start = bell_collision & (counter == 0) & bell_active
-        counter = jnp.where(counter_start, 1, counter)
-        counter = jnp.where(counter > 0, counter + 1, counter)
-        counter = jnp.where(counter == RESPAWN_AFTER_TICKS + 1, 0, counter)
-        respawn_timer_done = counter == RESPAWN_AFTER_TICKS
+        bell_timer, respawn_timer_done = self._bell_step(state)
 
         def get_new_stages(respawn_timer_done, active, stage):
             return jnp.where(
@@ -690,7 +741,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             lambda: new_activations,
         )
 
-        return new_score, activations, new_stages, counter
+        return new_score, activations, new_stages, bell_timer
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _child_step(self, state: KangarooState) -> Tuple[chex.Array]:
@@ -1261,6 +1312,18 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             new_falling_coco_counter,
             new_falling_coco_skip_update,
             score_addition,
+        )
+
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def _monkey_controller2(self, state: KangarooState, punching: chex.Array):
+        return (
+            state.level.monkey_states,       # new_monkey_states (all zeros)
+            state.level.monkey_positions,    # new_monkey_positions (all spawn coords/off-screen)
+            state.level.monkey_throw_timers, # new_monkey_throw_timers (all zeros)
+            jnp.zeros((), dtype=jnp.int32),  # score_addition (0)
+            state.level.coco_positions,      # new_coco_positions (all off-screen)
+            state.level.coco_states,         # new_coco_states (all zeros)
+            jnp.array(False),                # flip (should be False)
         )
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
@@ -1976,7 +2039,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    def __init__(self, consts=None):
+    def __init__(self, consts: KangarooConstants = None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
 
@@ -2014,45 +2077,31 @@ class KangarooRenderer(JAXGameRenderer):
         """Defines the asset manifest for Kangaroo and loads them via the utility function."""
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kangaroo"
 
-        # 1. Define the game-specific asset manifest in a clear, declarative way.
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {
-                'name': 'ape', 'type': 'group',
-                'files': ['ape_standing.npy', 'ape_climb_left.npy', 'ape_moving.npy', 'throwing_ape.npy', 'ape_climb_right.npy']
-            },
-            {
-                'name': 'kangaroo', 'type': 'group',
-                'files': ['kangaroo.npy', 'kangaroo_dead.npy', 'kangaroo_climb.npy', 'kangaroo_ducking.npy', 'kangaroo_jump.npy', 'kangaroo_boxing.npy', 'kangaroo_walk.npy', 'kangaroo_jump_high.npy']
-            },
-            {
-                'name': 'bell', 'type': 'group',
-                'files': ['bell.npy', 'ringing_bell.npy']
-            },
-            {
-                'name': 'fruit', 'type': 'group',
-                'files': ['strawberry.npy', 'tomato.npy', 'cherry.npy', 'pineapple.npy']
-            },
-            {
-                'name': 'child', 'type': 'group',
-                'files': ['child.npy', 'child_jump.npy']
-            },
-            {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
-            {'name': 'thrown_coconut', 'type': 'single', 'file': 'thrown_coconut.npy'},
-            {'name': 'lives', 'type': 'single', 'file': 'kangaroo_lives.npy'},
-            {
-                'name': 'score_digits', 'type': 'digits',
-                'pattern': 'score_{}.npy'
-            },
-            {
-                'name': 'time_digits', 'type': 'digits',
-                'pattern': 'time_{}.npy'
-            }
-        ]
-
         # 2. Make one call to the utility function. Done.
-        return self.jr.load_and_setup_assets(asset_config, sprite_path)
-        
+        return self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: KangarooState):
+        return raster
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_bell(self, raster: jnp.ndarray, state: KangarooState):
+        bell_anim_on = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
+                       ((state.level.bell_animation >= 128) & (state.level.bell_animation <= 143)) | \
+                       ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95)) | \
+                       ((state.level.bell_animation >= 32) & (state.level.bell_animation <= 47))
+        bell_idx = jax.lax.select(bell_anim_on, 1, 0) # 1 for ringing, 0 for still
+        bell_mask = self.SHAPE_MASKS["bell"][bell_idx]
+        flip_bell = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
+                    ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95))
+        should_draw_bell = (state.level.bell_position[0] != -1) & ~jnp.any(state.level.fruit_stages == 3)
+        bell_offset = self.FLIP_OFFSETS["bell"]
+        raster = jax.lax.cond(should_draw_bell,
+            lambda r: self.jr.render_at(r, state.level.bell_position[0].astype(int), state.level.bell_position[1].astype(int), bell_mask, flip_horizontal=flip_bell, flip_offset=bell_offset),
+            lambda r: r, raster)
+        return raster
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KangarooState) -> chex.Array:
         # --- 1. Initialize Raster ---
@@ -2087,19 +2136,7 @@ class KangarooRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, state.level.fruit_positions.shape[0], _draw_fruit, raster)
 
         # Bell
-        bell_anim_on = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
-                       ((state.level.bell_animation >= 128) & (state.level.bell_animation <= 143)) | \
-                       ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95)) | \
-                       ((state.level.bell_animation >= 32) & (state.level.bell_animation <= 47))
-        bell_idx = jax.lax.select(bell_anim_on, 1, 0) # 1 for ringing, 0 for still
-        bell_mask = self.SHAPE_MASKS["bell"][bell_idx]
-        flip_bell = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
-                    ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95))
-        should_draw_bell = (state.level.bell_position[0] != -1) & ~jnp.any(state.level.fruit_stages == 3)
-        bell_offset = self.FLIP_OFFSETS["bell"]
-        raster = jax.lax.cond(should_draw_bell,
-            lambda r: self.jr.render_at(r, state.level.bell_position[0].astype(int), state.level.bell_position[1].astype(int), bell_mask, flip_horizontal=flip_bell, flip_offset=bell_offset),
-            lambda r: r, raster)
+        raster = self._draw_bell(raster, state)
 
         # Monkeys (Apes)
         def _draw_monkey(i, current_raster):
@@ -2182,6 +2219,9 @@ class KangarooRenderer(JAXGameRenderer):
         # Timer
         timer_digits = self.jr.int_to_digits(jnp.maximum(state.level.timer.astype(int), 0), max_digits=4)
         raster = self.jr.render_label(raster, 80, 190, timer_digits, self.SHAPE_MASKS["time_digits"], spacing=4, max_digits=4)
+
+        # Hook for modifications
+        raster = self._render_hook_post_ui(raster, state)
 
         # --- 5. Final Palette Lookup ---
         return self.jr.render_from_palette(raster, self.PALETTE)

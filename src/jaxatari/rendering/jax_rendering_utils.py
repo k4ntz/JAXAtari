@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax
 from functools import partial
 import numpy as np
-from typing import Dict, Any, List, Tuple, NamedTuple
+from typing import Dict, Any, List, Optional, Tuple, NamedTuple
 from jax.scipy.ndimage import map_coordinates
 
 class RendererConfig(NamedTuple):
@@ -51,9 +51,21 @@ class JaxRenderingUtils:
             JAX array of shape (Height, Width, 4).
         """
         frame = jnp.load(fileName)
-        if frame.ndim != 3 or frame.shape[2] != 4:
+        if frame.ndim != 3:
             raise ValueError(
-                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels (RGBA)."
+                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."
+            )
+        
+        # Handle RGB (3 channels) by converting to RGBA
+        if frame.shape[2] == 3:
+            # Convert RGB to RGBA
+            # Pixels with (0,0,0) are treated as transparent (alpha=0), others are opaque (alpha=255)
+            is_transparent = (frame[:, :, 0] == 0) & (frame[:, :, 1] == 0) & (frame[:, :, 2] == 0)
+            alpha_channel = jnp.where(is_transparent, 0, 255).astype(frame.dtype)
+            frame = jnp.concatenate([frame, alpha_channel[:, :, None]], axis=2)
+        elif frame.shape[2] != 4:
+            raise ValueError(
+                f"Invalid frame format in {fileName}. Source .npy must have 3 channels (RGB) or 4 channels (RGBA)."
             )
 
         if transpose:
@@ -195,10 +207,7 @@ class JaxRenderingUtils:
                 constant_values=0
             )
             padded_sprites.append(padded_sprite)
-            
-            # --- THE FINAL, CRITICAL FIX ---
-            # The flip_offset for EACH sprite is its OWN padding amount,
-            # not the maximum padding of the group.
+
             flip_offset = jnp.array([pad_w, pad_h], dtype=jnp.int32)
             flip_offsets.append(flip_offset)
 
@@ -267,8 +276,9 @@ class JaxRenderingUtils:
                     for mask in shape_masks[name]:
                         # Calculate new dimensions based on scaling factors
                         original_h, original_w = mask.shape
-                        scaled_h = int(original_h * self.config.height_scaling)
-                        scaled_w = int(original_w * self.config.width_scaling)
+
+                        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
                         
                         scaled_mask = jax.image.resize(
                             mask, 
@@ -280,8 +290,9 @@ class JaxRenderingUtils:
                 else: # Single sprite
                     # Calculate new dimensions based on scaling factors
                     original_h, original_w = shape_masks[name].shape
-                    scaled_h = int(original_h * self.config.height_scaling)
-                    scaled_w = int(original_w * self.config.width_scaling)
+
+                    scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                    scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
                     
                     scaled_mask = jax.image.resize(
                         shape_masks[name], 
@@ -350,7 +361,10 @@ class JaxRenderingUtils:
             if asset_type == 'single':
                 if 'file' in asset:
                     path = os.path.join(base_path, asset['file'])
-                    raw_sprites_dict[name] = self.loadFrame(path)
+                    # Check for the 'transpose' flag from the config, default to False
+                    should_transpose = asset.get('transpose', False)
+                    # Pass the flag to loadFrame
+                    raw_sprites_dict[name] = self.loadFrame(path, transpose=should_transpose)
                 elif 'data' in asset:
                     raw_sprites_dict[name] = asset['data']
                 else:
@@ -828,9 +842,38 @@ class JaxRenderingUtils:
 
     # ========= Final rendering step: palette lookup ===========
     @partial(jax.jit, static_argnames=['self'])
-    def render_from_palette(self, object_raster: jnp.ndarray, palette: jnp.ndarray) -> jnp.ndarray:
-        """Generates the final image using a palette lookup."""
-        final_image = palette[object_raster]
+    def render_from_palette(self, 
+                            object_raster: jnp.ndarray, 
+                            base_palette: jnp.ndarray,
+                            indices_to_update: Optional[jnp.ndarray] = None,
+                            new_color_ids: Optional[jnp.ndarray] = None
+                           ) -> jnp.ndarray:
+        """
+        Generates the final image using a palette lookup.
+        
+        Optionally accepts dynamic updates to swap colors in the palette
+        for this frame only. Used for recoloring sprites.
+        """
+        
+        frame_palette = base_palette
+
+        def apply_updates(p):
+            # Get the actual RGB color values from the new IDs
+            new_colors = p[new_color_ids]
+            # Set those colors at the old indices
+            return p.at[indices_to_update].set(new_colors)
+
+        # Use lax.cond to make this JIT-friendly.
+        # This is a JAX-native "scatter update" (palette[indices] = colors).
+        frame_palette = jax.lax.cond(
+            (indices_to_update is not None) and (new_color_ids is not None),
+            apply_updates,
+            lambda p: p, # No updates
+            frame_palette
+        )
+
+        # The final lookup uses the dynamically created palette
+        final_image = frame_palette[object_raster]
 
         if self.config.channels == 1 and final_image.ndim == 2:
             final_image = final_image[..., None] # Ensure channel dim exists for grayscale
