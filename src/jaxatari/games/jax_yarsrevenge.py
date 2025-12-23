@@ -313,6 +313,10 @@ class YarsRevengeConstants(NamedTuple):
     NEUTRAL_ZONE_DATA_SIZE = 254
 
     RENDERER_RANDOM_COLORS_PER_N_ROW: int = 2
+    RENDERER_QOTILE_COLOR_HUE_VALUES = jnp.arange(0, 331, 30)
+    RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN = 0.2
+    RENDERER_QOTILE_BRIGHTNESS_STEP_END = 0.8
+    RENDERER_QOTILE_STEP_MOD = 100
 
 
 class YarsRevengeState(NamedTuple):
@@ -1812,7 +1816,8 @@ class YarsRevengeRenderer(JAXGameRenderer):
             jnp.arange(self.consts.HEIGHT)
             // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
         )
-        self.row_color_map = self.COLOR_TO_ID[(0, 1, 1)] + self.row_color_idx
+        self.initial_dynamic_color_id = self.COLOR_TO_ID[(0, 1, 1)]
+        self.row_color_map = self.initial_dynamic_color_id + self.row_color_idx
 
     @partial(jax.jit, static_argnums=(0,))
     def _construct_neutral_zone_array(self, data: jnp.ndarray):
@@ -2005,7 +2010,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def _render_energy_missile(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         state, raster = info
 
-        energy_missile_mask = jnp.ones(
+        energy_missile_mask = jnp.zeros(
             (self.consts.ENERGY_MISSILE_SIZE[1], self.consts.ENERGY_MISSILE_SIZE[0])
         )
         raster = jnp.where(
@@ -2026,9 +2031,13 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         cannon_color_map_slice = jax.lax.dynamic_slice(
-            self.row_color_map, (state.cannon.y.astype(jnp.int32),), (self.consts.CANNON_SIZE[1],)
+            self.row_color_map,
+            (state.cannon.y.astype(jnp.int32),),
+            (self.consts.CANNON_SIZE[1],),
         )
-        cannon_half_mask = jnp.repeat(cannon_color_map_slice[:, None], (self.consts.CANNON_SIZE[1] // 2), axis=1)
+        cannon_half_mask = jnp.repeat(
+            cannon_color_map_slice[:, None], (self.consts.CANNON_SIZE[1] // 2), axis=1
+        )
 
         cannon_mask = jnp.where(
             (state.step_counter // self.consts.CANNON_MOVEMENT_FRAME) % 2 == 0,
@@ -2205,12 +2214,68 @@ class YarsRevengeRenderer(JAXGameRenderer):
         return raster.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _hsv_to_rgb(self, h_deg: jnp.ndarray, s: jnp.ndarray, v: jnp.ndarray):
+        h_deg = jnp.atleast_1d(h_deg)
+        s = jnp.atleast_1d(s)
+        v = jnp.atleast_1d(v)
+
+        h_prime = (h_deg / 60.0) % 6
+        c = v * s
+        x = c * (1 - jnp.abs((h_prime % 2) - 1))
+        m = v - c
+
+        idx = jnp.floor(h_prime).astype(jnp.int32)
+
+        r0 = jnp.stack((c, x, jnp.zeros_like(c)), axis=-1)
+        r1 = jnp.stack((x, c, jnp.zeros_like(x)), axis=-1)
+        r2 = jnp.stack((jnp.zeros_like(c), c, x), axis=-1)
+        r3 = jnp.stack((jnp.zeros_like(c), x, c), axis=-1)
+        r4 = jnp.stack((x, jnp.zeros_like(x), c), axis=-1)
+        r5 = jnp.stack((c, jnp.zeros_like(c), x), axis=-1)
+
+        brs = jnp.stack([r0, r1, r2, r3, r4, r5], axis=1)
+
+        rgb = brs[jnp.arange(idx.size), idx] + m[..., None]
+
+        if rgb.shape[0] == 1:
+            return rgb[0]
+        return rgb
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _hb_to_rgb(self, h_deg: jnp.ndarray, brightness: jnp.ndarray):
+        h_deg = jnp.asarray(h_deg, dtype=jnp.float32)
+        brightness = jnp.asarray(brightness, dtype=jnp.float32)
+
+        saturation = jnp.ones_like(h_deg, dtype=jnp.float32)
+        value = jnp.ones_like(h_deg, dtype=jnp.float32)
+
+        rgb_full = self._hsv_to_rgb(h_deg, s=saturation, v=value)
+        rgb_scaled = rgb_full * brightness[..., None]
+
+        return (rgb_scaled * 255.0).astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _generate_random_colors(self, slice: jnp.ndarray):
+        val = slice
+
+        brightness_bits = (val >> 4) & 0b111  # Only the first three bits
+        hue_bits = val & 0b1111  # Only the last four bits
+
+        brightness_factor = brightness_bits.astype(jnp.float32) / 7.0
+        hue_angle_degree = (hue_bits.astype(jnp.float32) * 360.0) / 15.0
+
+        return self._hb_to_rgb(hue_angle_degree, brightness_factor)
+
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: YarsRevengeState):
         """
         Render the complete frame by compositing all game elements onto a background raster.
         """
         # Start with an empty background
         raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Calculate the neutral zone data slice to display
+        self.neutral_zone_slice = self._calculate_neutral_zone_slice(state)
 
         # Render strategy branching with game_state
         raster = jax.lax.switch(
@@ -2224,5 +2289,34 @@ class YarsRevengeRenderer(JAXGameRenderer):
             operand=(state, raster),
         )
 
+        # Copy palette for color manipulation
+        modified_palette = self.PALETTE
+
+        # Handle the (kind of) randomization of colors
+        replaced_colors = self._generate_random_colors(
+            self.row_color_idx
+            + self.neutral_zone_slice[
+                self.row_color_idx * self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
+            ]
+        )
+        modified_palette = modified_palette.at[self.row_color_map].set(replaced_colors)
+
+        # Handle Qotile color shift
+        used_hue_index = (
+            state.step_counter // self.consts.RENDERER_QOTILE_STEP_MOD
+        ) % self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES.shape[0]
+        brightness = (state.step_counter % self.consts.RENDERER_QOTILE_STEP_MOD) * (
+            (
+                self.consts.RENDERER_QOTILE_BRIGHTNESS_STEP_END
+                - self.consts.RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN
+            )
+            / self.consts.RENDERER_QOTILE_STEP_MOD
+        ) + self.consts.RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN
+        color = self._hb_to_rgb(
+            self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES[used_hue_index], brightness
+        )
+
+        modified_palette = modified_palette.at[1].set(color)
+
         # Convert the raster from indices to RGB values
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        return self.jr.render_from_palette(raster, modified_palette)
