@@ -124,7 +124,7 @@ class AtariPlayer:
 
         try:
             # Create Gymnasium ALE environment
-            self.env = gym.make(f"ALE/{game_name}-v5", render_mode="rgb_array", frameskip=1)
+            self.env = gym.make(f"ALE/{game_name}-v5", render_mode="rgb_array", frameskip=1, mode=5)
             # No need to get self.ale explicitly unless using direct ALE calls not in Gym wrapper
 
             # Reset environment to get initial observation
