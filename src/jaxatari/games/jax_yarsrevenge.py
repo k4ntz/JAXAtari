@@ -1388,17 +1388,6 @@ class JaxYarsRevenge(
             ),
         )
 
-        # Calculate next state
-        new_state = jax.lax.cond(
-            state.game_state_timer >= target_animation_frames,
-            lambda: self._finalize_next_state(new_state)._replace(
-                game_state=YarsRevengeGameState.SCOREBOARD
-            ),  # Switch to new state
-            lambda: new_state._replace(
-                game_state_timer=state.game_state_timer + 1
-            ),  # Increment the timer
-        )
-
         # Yar animation on death
         new_state = jax.lax.cond(
             jnp.logical_and(
@@ -1432,8 +1421,20 @@ class JaxYarsRevenge(
                     )[0].items()
                     if k != "energy_shield_state"
                 },
+                energy_shield_state=jnp.zeros((16, 8), dtype=jnp.int32),
             ),
             lambda: new_state,
+        )
+
+        # Calculate next state
+        new_state = jax.lax.cond(
+            state.game_state_timer >= target_animation_frames,
+            lambda: self._finalize_next_state(new_state)._replace(
+                game_state=YarsRevengeGameState.SCOREBOARD
+            ),  # Switch to new state
+            lambda: new_state._replace(
+                game_state_timer=state.game_state_timer + 1
+            ),  # Increment the timer
         )
 
         return new_state
@@ -1810,8 +1811,6 @@ class YarsRevengeRenderer(JAXGameRenderer):
             // len(neutral_zone_data_list),
         )[: self.consts.NEUTRAL_ZONE_DATA_SIZE]
 
-        self.background_color = self.COLOR_TO_ID[(0, 0, 0)]
-
         self.row_color_idx = (
             jnp.arange(self.consts.HEIGHT)
             // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
@@ -1946,7 +1945,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         neutral_zone_mask = self._construct_neutral_zone_array(self.neutral_zone_slice)
         neutral_zone_mask = jnp.where(
-            neutral_zone_mask == 1, self.row_color_map[:, None], self.background_color
+            neutral_zone_mask == 1, self.row_color_map[:, None], self.jr.TRANSPARENT_ID
         )
         neutral_zone_mask = jnp.repeat(neutral_zone_mask, repeats=4, axis=1)
 
@@ -2125,9 +2124,6 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         state, raster = info
 
-        # Neutral zone overlay
-        raster = self._render_neutral_zone((state, raster))
-
         # Energy shield
         raster = self._render_energy_shield((state, raster))
 
@@ -2145,6 +2141,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         # Qotile and swirl, one sprite each (swirl has its own animation)
         raster = self._render_qotile_and_swirl((state, raster))
+
+        # Neutral zone overlay
+        raster = self._render_neutral_zone((state, raster))
 
         return raster.astype(jnp.uint8)
 
@@ -2178,9 +2177,6 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         state, raster = info
 
-        # Neutral zone overlay
-        raster = self._render_neutral_zone((state, raster))
-
         # Energy shield
         raster = self._render_energy_shield((state, raster))
 
@@ -2194,6 +2190,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
         # Qotile and swirl, one sprite each (swirl has its own animation)
         raster = self._render_qotile_and_swirl((state, raster))
 
+        # Neutral zone overlay
+        raster = self._render_neutral_zone((state, raster))
+
         return raster.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2205,11 +2204,49 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         state, raster = info
 
+        # Calculate values for the animation
+        animation_step = jnp.minimum(state.game_state_timer, self.consts.HEIGHT)
+
+        half = animation_step // 2
+        row_idx = jnp.arange(self.consts.HEIGHT)
+        transparent = (row_idx < half) | (row_idx >= self.consts.HEIGHT - half)
+
+        # Render qotile color in background
+        qotile_color_mask = jnp.ones((self.consts.HEIGHT, self.consts.WIDTH))
+        qotile_color_mask = jnp.where(
+            transparent[:, None], self.jr.TRANSPARENT_ID, qotile_color_mask
+        )
+        raster = self.jr.render_at(
+            raster,
+            0,
+            0,
+            qotile_color_mask,
+        )
+
         # Render Yar
         raster = self._render_yar((state, raster))
 
         # Render energy missile
         raster = self._render_energy_missile((state, raster))
+
+        # Render the glitch effect on top
+        neutral_zone_mask = self._construct_neutral_zone_array(self.neutral_zone_slice)
+        neutral_zone_mask = jnp.where(
+            neutral_zone_mask == 1, self.row_color_map[:, None], self.jr.TRANSPARENT_ID
+        )
+        neutral_zone_mask = jnp.repeat(neutral_zone_mask, repeats=4, axis=1)
+        neutral_zone_mask = jnp.where(
+            transparent[:, None], self.jr.TRANSPARENT_ID, neutral_zone_mask
+        )
+        neutral_zone_mask = jnp.tile(
+            neutral_zone_mask, self.consts.WIDTH // neutral_zone_mask.shape[1] + 1
+        )[:, :160]
+        raster = self.jr.render_at(
+            raster,
+            0,
+            state.neutral_zone.y,
+            neutral_zone_mask,
+        )
 
         return raster.astype(jnp.uint8)
 
