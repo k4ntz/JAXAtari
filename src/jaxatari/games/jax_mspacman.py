@@ -93,8 +93,8 @@ ENJAILED_DURATION = 120 # in steps
 RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
 
 # FRUITS
-FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
-# FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100])
+# FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
+FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100])
 FRUIT_WANDER_DURATION = 20*8 # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
@@ -653,19 +653,28 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the fruits position, action and timer if one is currently active.
         """
+        # 1) Choose new direction based on last position, action and fruit timer
         allowed = get_allowed_directions(state.fruit.position, state.fruit.action, state.level.dofmaze)
-        if not allowed:
-            new_dir = state.fruit.action
-        if len(allowed) == 1:
-            new_dir = allowed[0]
-        elif state.fruit.timer == 0:
-            new_dir = pathfind(state.fruit.position, state.fruit.action, state.fruit.exit, allowed, key)
-        else:
-            new_dir = jax.random.choice(key, jnp.array(allowed))
-
-        new_timer = state.fruit.timer
-        if state.fruit.timer > 0:
-            new_timer -= 1
+        new_dir = jax.lax.cond(
+            not allowed,
+            lambda: state.fruit.action,
+            lambda: jax.lax.cond(
+                len(allowed) == 1,
+                lambda: allowed[0],
+                lambda: jax.lax.cond(
+                    state.fruit.timer == 0,
+                    lambda: pathfind(state.fruit.position, state.fruit.action, state.fruit.exit, allowed, key),
+                    lambda: jax.random.choice(key, jnp.array(allowed))
+                )
+            )
+        )
+        # 2) Decrement fruit timer if above zero
+        new_timer = jax.lax.cond(
+            state.fruit.timer > 0,
+            lambda: state.fruit.timer - 1,
+            lambda: state.fruit.timer
+        )
+        # 3) Compute the new position
         new_pos = jnp.array(state.fruit.position) + ACTIONS[new_dir]
         new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
         return new_pos, new_dir, new_timer
@@ -675,40 +684,52 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the fruit state if a fruit spawns, moves or is consumed.
         """
-        fruit_type = state.fruit.type
-        fruit_position = state.fruit.position
-        fruit_action = state.fruit.action
-        fruit_timer = state.fruit.timer
-        fruit_exit = state.fruit.exit
-        reward = 0
-        for threshold in FRUIT_SPAWN_THRESHOLDS:
-            if collected_pellets == threshold and state.fruit.type == FruitType.NONE: # Spawn fruit
-                fruit_type = get_level_fruit(state.level.id, key)
-                fruit_position, fruit_action = get_random_tunnel(state.level.id, key)
-                fruit_exit, _ = get_random_tunnel(state.level.id, key)
-        if state.fruit.type != FruitType.NONE:
-            if detect_collision(new_pacman_pos, state.fruit.position): # Consume fruit
-                reward = FRUIT_REWARDS[state.fruit.type]
-                fruit_type = FruitType.NONE
-                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
-            if state.fruit.timer == 0 and jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit)): # Remove fruit
-                fruit_type = FruitType.NONE
-                fruit_timer = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint8)
-            else:
-                fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state, key) # Move fruit
-        return FruitState(fruit_position, fruit_exit, fruit_type, fruit_action, fruit_timer), reward
+        def spawn_fruit():
+            fruit_type = get_level_fruit(state.level.id, key)
+            fruit_position, fruit_action = get_random_tunnel(state.level.id, key)
+            fruit_exit, _ = get_random_tunnel(state.level.id, key)
+            return FruitState(fruit_position, fruit_exit, fruit_type, fruit_action, FRUIT_WANDER_DURATION), 0
+        
+        def do_nothing():
+            return state.fruit, 0
+        
+        def consume_fruit():
+            return FruitState((0,0), (0,0), FruitType.NONE, Action.NOOP, FRUIT_WANDER_DURATION), FRUIT_REWARDS[state.fruit.type]
+        
+        def remove_fruit():
+            return FruitState((0,0), (0,0), FruitType.NONE, Action.NOOP, FRUIT_WANDER_DURATION), 0
+        
+        def move_fruit():
+            fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state, key)
+            return FruitState(fruit_position, state.fruit.exit, state.fruit.type, fruit_action, fruit_timer), 0
+        
+        new_fruit_state, reward = jax.lax.cond(
+            state.fruit.type == FruitType.NONE,
+            lambda: jax.lax.cond(
+                jnp.any(FRUIT_SPAWN_THRESHOLDS == collected_pellets),
+                spawn_fruit,
+                do_nothing
+            ),
+            lambda: jax.lax.cond(
+                detect_collision(new_pacman_pos, state.fruit.position), 
+                consume_fruit,
+                lambda: jax.lax.cond(
+                    state.fruit.timer == 0 and jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit)),
+                    remove_fruit,
+                    move_fruit
+                )    
+            )
+        )
+        return new_fruit_state, reward
 
     @staticmethod
     def flag_score_change(current_score: chex.Array, new_score: chex.Array):
         """
         Flags the score digits for rendering that changed during the current step.
         """
-        if new_score != current_score:
-            score_digits        = aj.int_to_digits(new_score, max_digits=MAX_SCORE_DIGITS)
-            state_score_digits  = aj.int_to_digits(current_score, max_digits=MAX_SCORE_DIGITS)
-            score_changed       = score_digits != state_score_digits
-        else:
-            score_changed       = jnp.array(False, dtype=jnp.bool_)
+        new_score_digits        = aj.int_to_digits(new_score, max_digits=MAX_SCORE_DIGITS)
+        current_score_digits    = aj.int_to_digits(current_score, max_digits=MAX_SCORE_DIGITS)
+        score_changed           = new_score_digits != current_score_digits
         return score_changed
 
 
