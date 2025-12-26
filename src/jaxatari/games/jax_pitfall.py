@@ -310,12 +310,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         time_left = state.time_left - timer_started.astype(jnp.int32)
         time_left = jnp.maximum(time_left, 0)
 
-        # --- Horizontal movement ---
-        speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
-        vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
-        vx = jnp.where(state.on_ladder, 0.0, vx)  # disable horizontal movement on ladder
-
-        # --- Setup ladder detection (used for both jump and ground clamping) ---
+        # --- Setup ladder detection ---
         ladder_x = jnp.asarray(consts.ladder_x, dtype=jnp.int32)
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
@@ -336,6 +331,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         
         on_upper_level = state.current_ground_y == upper_ground
         on_lower_level = state.current_ground_y == lower_ground
+
+        # Detect falling through hole: over ladder, on upper level, not on ground, not on ladder, and falling down
+        falling_through_hole = over_ladder & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
+
+        # --- Horizontal movement ---
+        speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
+        vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
+        vx = jnp.where(state.on_ladder, 0.0, vx)  # disable horizontal movement on ladder
+        vx = jnp.where(falling_through_hole, 0.0, vx)  # disable horizontal movement when falling through hole
 
         # --- Jump logic (prevent jumping when trying to enter ladder from below) ---
         trying_to_enter_ladder = near_ladder & on_lower_level & move_jump
