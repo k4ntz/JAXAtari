@@ -19,6 +19,9 @@ class PitfallState(NamedTuple):
     player_vx: chex.Array  # scalar
     player_vy: chex.Array  # scalar
     on_ground: chex.Array  # bool scalar
+    score: chex.Array
+    timer_started: chex.Array
+
 
     # Resources / game status
     time_left: chex.Array  # int scalar (e.g. 2000)
@@ -28,6 +31,7 @@ class PitfallState(NamedTuple):
     down_pressed: chex.Array
     on_ladder: chex.Array
     current_ground_y: chex.Array 
+
 
 class PitfallConstants(NamedTuple):
     screen_width: int = 160     # Atari 2600 horizontal resolution
@@ -41,10 +45,13 @@ class PitfallConstants(NamedTuple):
     jump_velocity: float = -7.8  # initial upward velocity
     gravity: float = 1.0       # downward accel each frame
 
-    initial_time: int = 2000    # Pitfall timer
+    fps: int = 30
+    initial_time_seconds: int = 1200  # 20 minutes
     max_lives: int = 3          # Pitfall lives
     ladder_x: int = 80
-    ladder_width: int = 8
+    ladder_width: int = 10
+    initial_score: int = 2000
+    use_discrete_4_actions: bool = False  # True for RL, False for manual Atari actions
 
 class PitfallObservation(NamedTuple):
     # for now, can just mirror some fields from state
@@ -52,6 +59,8 @@ class PitfallObservation(NamedTuple):
     player_y: chex.Array
     time_left: chex.Array
     lives_left: chex.Array
+    score: chex.Array
+    timer_started: chex.Array
 
 class PitfallInfo(NamedTuple):
     # extra logging. minimal for now
@@ -247,6 +256,23 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
     ) -> tuple[PitfallObservation, PitfallState, float, bool, PitfallInfo]:
         consts = self.consts
 
+        # --- Normalize action: support both Discrete(4) and full Atari action space ---
+        a = jnp.asarray(action, dtype=jnp.int32)
+
+        def map_a4(_):
+            return jnp.where(
+                a == 0, Action.NOOP,
+                jnp.where(a == 1, Action.LEFT,
+                jnp.where(a == 2, Action.RIGHT, Action.UP))
+            )
+
+        action = lax.cond(
+            jnp.asarray(consts.use_discrete_4_actions),
+            map_a4,
+            lambda _: a,
+            operand=None,
+        )
+
         # unpack
         x = state.player_x
         y = state.player_y
@@ -290,6 +316,13 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             (action == Action.UPLEFTFIRE) |
             (action == Action.UPRIGHTFIRE)
         )
+
+        # --- Timer logic: first input starts timer ---
+        has_input = action != Action.NOOP
+        timer_started = state.timer_started | has_input
+
+        # decrement time only after started
+        time_left = state.time_left - timer_started.astype(jnp.int32)
 
         # --- Horizontal movement ---
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
@@ -336,6 +369,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         y = y + vy
         x = x + vx
 
+        # --- Clamp x to screen bounds ---
+        player_w_f = jnp.asarray(4, dtype=jnp.float32)
+        x = jnp.clip(x, 0.0, jnp.asarray(consts.screen_width, dtype=jnp.float32) - player_w_f)
+
         # --- Clamp to ground & reset velocity on landing ---
         previous_ground = state.current_ground_y
         clamp_mask = ~state.on_ladder  # only clamp if NOT on ladder
@@ -346,6 +383,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         # Check if falling through to lower ground
         falling_to_lower = on_upper_level & over_ladder & (y >= lower_ground)
+
+        # --- Score handling ---
+        score = state.score
+        score = score + jnp.where(falling_to_lower, jnp.int32(-100), jnp.int32(0))
+        score = jnp.maximum(score, jnp.int32(0))
 
         # On LOWER ground → continuous ground (no hole).
         raw_on_ground_lower = (y >= previous_ground)
@@ -391,9 +433,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             current_ground_y=current_ground_y,
         )
 
-        # --- Time & done ---   
-        time_left = time_left - 1
-        done = time_left <= 0
+        done = (time_left <= 0) | (lives_left <= 0)
 
         # Build new state
         new_state = PitfallState(
@@ -402,6 +442,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             player_vx=vx,
             player_vy=vy,
             on_ground=on_ground,
+            score=score,
+            timer_started=timer_started,
             time_left=time_left,
             lives_left=lives_left,
             done=done,
@@ -422,7 +464,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             player_x=state.player_x,
             player_y=state.player_y,
             time_left=state.time_left,
-            lives_left=state.lives_left
+            lives_left=state.lives_left,
+            score=state.score,
+            timer_started=state.timer_started,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -439,7 +483,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PitfallState) -> bool:
-        return state.time_left <= 0
+        return (state.time_left <= 0) | (state.lives_left <= 0)
 
     def action_space(self) -> spaces.Discrete:
         # 0=NOOP, 1=LEFT, 2=RIGHT, 3=JUMP for example
@@ -469,12 +513,14 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             player_vx=jnp.array(0.0, dtype=jnp.float32),
             player_vy=jnp.array(0.0, dtype=jnp.float32),
             on_ground=jnp.array(True, dtype=jnp.bool_),
-            time_left=jnp.array(consts.initial_time, dtype=jnp.int32),
+            score=jnp.array(consts.initial_score, dtype=jnp.int32),
+            timer_started=jnp.array(False, dtype=jnp.bool_),
+            time_left=jnp.array(consts.initial_time_seconds * consts.fps, dtype=jnp.int32),
             lives_left=jnp.array(consts.max_lives, dtype=jnp.int32),
             done=jnp.array(False, dtype=jnp.bool_),
             down_pressed=jnp.array(False, dtype=jnp.bool_),
-            current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
+            current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
         )
         return state
     
@@ -494,6 +540,91 @@ class PitfallRenderer(JAXGameRenderer):
 
         frame = jnp.zeros((h, w, 3), dtype=jnp.uint8)
 
+        # --- tiny 3x5 digit font (10, 5, 3) ---
+        digit_font = jnp.array([
+            # 0
+            [[1,1,1],
+             [1,0,1],
+             [1,0,1],
+             [1,0,1],
+             [1,1,1]],
+            # 1
+            [[0,1,0],
+             [1,1,0],
+             [0,1,0],
+             [0,1,0],
+             [1,1,1]],
+            # 2
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [1,0,0],
+             [1,1,1]],
+            # 3
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 4
+            [[1,0,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [0,0,1]],
+            # 5
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 6
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 7
+            [[1,1,1],
+             [0,0,1],
+             [0,1,0],
+             [1,0,0],
+             [1,0,0]],
+            # 8
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 9
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+        ], dtype=jnp.uint8)
+
+        def int_to_digits(value: jnp.ndarray, width: int) -> jnp.ndarray:
+            value = jnp.maximum(value, 0)
+            digits = []
+            v = value
+            for _ in range(width):
+                digits.append(v % 10)
+                v = v // 10
+            return jnp.stack(digits[::-1]).astype(jnp.int32)
+
+        def draw_number(frame: jnp.ndarray, digits: jnp.ndarray, top: int, left: int, color: jnp.ndarray) -> jnp.ndarray:
+            digit_w = 3
+            digit_h = 5
+            spacing = 1
+
+            def draw_one(i, f):
+                glyph = digit_font[digits[i]]  # (5,3)
+                glyph_rgb = glyph[..., None] * color  # (5,3,3)
+                return lax.dynamic_update_slice(f, glyph_rgb, (top, left + i * (digit_w + spacing), 0))
+
+            return lax.fori_loop(0, digits.shape[0], draw_one, frame)
+
         # ----- static ground line -----
         ground = self.consts.ground_y
         underground = self.consts.underground_y
@@ -509,6 +640,44 @@ class PitfallRenderer(JAXGameRenderer):
         frame = frame.at[ladder_top:ladder_bottom,
                      ladder_x:ladder_x + ladder_w,
                      2].set(255)
+
+        # ----- HUD -----
+        # Layout: Score on top row (above timer), Lives + Timer on second row
+        score_row = 2
+        timer_row = 9  # below score (5 pixel height + 2 gap)
+
+        score_digits = int_to_digits(state.score.astype(jnp.int32), 4)  # 4 digits, no leading zero for typical scores
+        lives_digits = int_to_digits(state.lives_left.astype(jnp.int32), 1)
+
+        # Convert frames to MM:SS display (separate minutes and seconds)
+        fps = jnp.int32(self.consts.fps)
+        seconds_left = jnp.maximum(state.time_left // fps, 0).astype(jnp.int32)
+        mm = seconds_left // 60
+        ss = seconds_left % 60
+        mm_digits = int_to_digits(mm, 2)
+        ss_digits = int_to_digits(ss, 2)
+
+        score_color = jnp.array([40, 220, 40], dtype=jnp.uint8)
+        lives_color = jnp.array([240, 200, 40], dtype=jnp.uint8)
+        time_color = jnp.array([40, 200, 240], dtype=jnp.uint8)
+        colon_color = jnp.array([40, 200, 240], dtype=jnp.uint8)
+
+        # Timer: MM:SS with colon
+        timer_x = 20
+        
+        # Score positioned above timer
+        frame = draw_number(frame, score_digits, score_row, timer_x, score_color)
+
+        # Lives on left of timer row
+        frame = draw_number(frame, lives_digits, timer_row, 4, lives_color)
+
+        frame = draw_number(frame, mm_digits, timer_row, timer_x, time_color)
+        # Draw colon (two dots)
+        colon_x = timer_x + 2 * 4  # after 2 digits (each digit 3 wide + 1 spacing)
+        frame = frame.at[timer_row + 1, colon_x, :].set(colon_color)
+        frame = frame.at[timer_row + 3, colon_x, :].set(colon_color)
+        # Seconds after colon
+        frame = draw_number(frame, ss_digits, timer_row, colon_x + 2, time_color)
 
         # ----- dynamic player rect -----
         player_w, player_h = 4, 8
