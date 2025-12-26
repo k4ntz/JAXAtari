@@ -51,7 +51,6 @@ class PitfallConstants(NamedTuple):
     ladder_x: int = 80
     ladder_width: int = 10
     initial_score: int = 2000
-    use_discrete_4_actions: bool = False  # True for RL, False for manual Atari actions
 
 class PitfallObservation(NamedTuple):
     # for now, can just mirror some fields from state
@@ -256,22 +255,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
     ) -> tuple[PitfallObservation, PitfallState, float, bool, PitfallInfo]:
         consts = self.consts
 
-        # --- Normalize action: support both Discrete(4) and full Atari action space ---
-        a = jnp.asarray(action, dtype=jnp.int32)
-
-        def map_a4(_):
-            return jnp.where(
-                a == 0, Action.NOOP,
-                jnp.where(a == 1, Action.LEFT,
-                jnp.where(a == 2, Action.RIGHT, Action.UP))
-            )
-
-        action = lax.cond(
-            jnp.asarray(consts.use_discrete_4_actions),
-            map_a4,
-            lambda _: a,
-            operand=None,
-        )
+        # Action is already 0..17 (full Atari action space)
+        action = jnp.asarray(action, dtype=jnp.int32)
 
         # unpack
         x = state.player_x
@@ -321,8 +306,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         has_input = action != Action.NOOP
         timer_started = state.timer_started | has_input
 
-        # decrement time only after started
+        # decrement time only after started, clamp to 0
         time_left = state.time_left - timer_started.astype(jnp.int32)
+        time_left = jnp.maximum(time_left, 0)
 
         # --- Horizontal movement ---
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
@@ -486,8 +472,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         return (state.time_left <= 0) | (state.lives_left <= 0)
 
     def action_space(self) -> spaces.Discrete:
-        # 0=NOOP, 1=LEFT, 2=RIGHT, 3=JUMP for example
-        return spaces.Discrete(4)
+        # Full Atari action space: 0..17
+        return spaces.Discrete(18)
 
     def observation_space(self) -> spaces.Dict:
         # later we can make this more precise
