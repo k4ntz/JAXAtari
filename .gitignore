@@ -9,3 +9,7 @@ results/
 .DS_Store
 docs/build/
 
+# Reference material (not tracked)
+reference_material/*
+
+
