@@ -62,6 +62,11 @@ class BoxingConstants(NamedTuple):
     # Scoring
     MAX_SCORE: int = 100  # KO score
     
+    # Hit detection thresholds from spec
+    HIT_DISTANCE_HORIZONTAL: int = 29  # (8 * 3) + 5 pixels
+    HIT_DISTANCE_VERTICAL: int = 48    # H_BOXER
+    STUN_DURATION: int = 15            # Frames boxer is stunned after hit
+    
     # Colors from boxing.asm (NTSC palette approximations)
     # COLOR_LEFT_BOXER = BLACK + 12 = light gray/white
     # COLOR_RIGHT_BOXER = BLACK = black  
@@ -110,8 +115,10 @@ class BoxingState(NamedTuple):
     # Animation state - placeholder for future phases
     boxer_animation_values: chex.Array  # 8-element array
     
-    # Punch state - placeholder for future phases
+    # Punch state
     extended_arm_maximum: chex.Array  # 2-element array (one per boxer)
+    left_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
+    right_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
     
     # Game flow
     game_state: chex.Array  # 0 = active, 0xFF = game over
@@ -229,6 +236,8 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             
             # Punch state (not extended)
             extended_arm_maximum=jnp.zeros(2, dtype=jnp.int32),
+            left_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
+            right_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
             
             # Game active
             game_state=jnp.array(0, dtype=jnp.int32),
@@ -245,8 +254,14 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         Handle player movement based on joystick input.
         
         Phase 1: Simple directional movement with boundary clamping.
-        Movement is blocked if stunned (future phases).
+        Movement is blocked if stunned.
         """
+        # Check if player is stunned (hit_boxer_index == 0 means left boxer was hit)
+        is_stunned = jnp.logical_and(
+            state.hit_boxer_stun_timer > 0,
+            state.hit_boxer_index == 0
+        )
+        
         speed = self.consts.MOVE_SPEED
         
         # Decode directional input from action
@@ -271,21 +286,163 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         dx = jnp.where(right, speed, jnp.where(left, -speed, 0))
         dy = jnp.where(down, speed, jnp.where(up, -speed, 0))
         
-        # Apply movement with boundary clamping
-        new_x = jnp.clip(
-            state.left_boxer_x + dx,
-            self.consts.XMIN_BOXER,
-            self.consts.XMAX_BOXER
+        # Apply movement with boundary clamping (blocked if stunned)
+        new_x = jnp.where(
+            is_stunned,
+            state.left_boxer_x,
+            jnp.clip(
+                state.left_boxer_x + dx,
+                self.consts.XMIN_BOXER,
+                self.consts.XMAX_BOXER
+            )
         )
-        new_y = jnp.clip(
-            state.left_boxer_y + dy,
-            self.consts.YMIN,
-            self.consts.YMAX
+        new_y = jnp.where(
+            is_stunned,
+            state.left_boxer_y,
+            jnp.clip(
+                state.left_boxer_y + dy,
+                self.consts.YMIN,
+                self.consts.YMAX
+            )
         )
         
         return state._replace(
             left_boxer_x=new_x.astype(jnp.int32),
             left_boxer_y=new_y.astype(jnp.int32),
+        )
+    
+    def _punch_step(self, state: BoxingState, action: chex.Array) -> BoxingState:
+        """
+        Handle punch action.
+        
+        FIRE button (or any *FIRE combo) activates punch.
+        Punch is active for the frame when button is pressed.
+        """
+        # Check if FIRE is pressed (any action containing FIRE)
+        fire_pressed = jnp.isin(action, jnp.array([
+            Action.FIRE,
+            Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE,
+            Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
+        ]))
+        
+        punch_active = jnp.where(fire_pressed, 1, 0).astype(jnp.int32)
+        
+        return state._replace(
+            left_boxer_punch_active=punch_active,
+        )
+    
+    def _hit_detection_step(self, state: BoxingState) -> BoxingState:
+        """
+        Check if player's punch hits the opponent.
+        
+        Per spec:
+        - Horizontal distance <= 29 pixels
+        - Vertical distance < 48 pixels (H_BOXER)
+        - Punch must be active
+        """
+        # Calculate distances
+        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
+        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
+        
+        # Check if punch lands
+        in_horiz_range = horiz_dist <= self.consts.HIT_DISTANCE_HORIZONTAL
+        in_vert_range = vert_dist < self.consts.HIT_DISTANCE_VERTICAL
+        punch_active = state.left_boxer_punch_active > 0
+        
+        hit_landed = jnp.logical_and(
+            punch_active,
+            jnp.logical_and(in_horiz_range, in_vert_range)
+        )
+        
+        # Only register hit if opponent is not already stunned
+        opponent_not_stunned = jnp.logical_or(
+            state.hit_boxer_stun_timer == 0,
+            state.hit_boxer_index != 1  # 1 = right boxer
+        )
+        valid_hit = jnp.logical_and(hit_landed, opponent_not_stunned)
+        
+        # Increment score if hit (1 point per hit)
+        new_score = jnp.where(
+            valid_hit,
+            state.left_boxer_score + 1,
+            state.left_boxer_score
+        ).astype(jnp.int32)
+        
+        # Set stun timer for opponent (right boxer = index 1)
+        new_stun_timer = jnp.where(
+            valid_hit,
+            self.consts.STUN_DURATION,
+            state.hit_boxer_stun_timer
+        ).astype(jnp.int32)
+        
+        new_hit_index = jnp.where(
+            valid_hit,
+            1,  # Right boxer got hit
+            state.hit_boxer_index
+        ).astype(jnp.int32)
+        
+        return state._replace(
+            left_boxer_score=new_score,
+            hit_boxer_stun_timer=new_stun_timer,
+            hit_boxer_index=new_hit_index,
+        )
+    
+    def _timer_step(self, state: BoxingState) -> BoxingState:
+        """
+        Decrement the game clock.
+        
+        Clock counts down from 2:00 to 0:00 at 60 frames per second.
+        Game ends when timer reaches 0:00.
+        """
+        # Increment frame count
+        new_frame_count = state.frame_count + 1
+        
+        # Check if a second has passed (60 frames = 1 second for NTSC)
+        second_passed = new_frame_count >= self.consts.FRAMES_PER_SECOND
+        
+        # Reset frame count if second passed
+        new_frame_count = jnp.where(second_passed, 0, new_frame_count)
+        
+        # Decrement seconds if a second passed
+        new_seconds = jnp.where(
+            second_passed,
+            state.clock_seconds - 1,
+            state.clock_seconds
+        )
+        
+        # Handle seconds underflow (59 -> 0 -> wrap to 59, decrement minute)
+        seconds_underflow = jnp.logical_and(second_passed, state.clock_seconds == 0)
+        new_seconds = jnp.where(seconds_underflow, 59, new_seconds)
+        
+        # Decrement minutes on seconds underflow
+        new_minutes = jnp.where(
+            seconds_underflow,
+            state.clock_minutes - 1,
+            state.clock_minutes
+        )
+        
+        # Check for timer expired (would go below 0:00)
+        timer_expired = jnp.logical_and(
+            seconds_underflow,
+            state.clock_minutes == 0
+        )
+        
+        # Set game over if timer expired
+        new_game_state = jnp.where(
+            timer_expired,
+            0xFF,  # Game over
+            state.game_state
+        ).astype(jnp.int32)
+        
+        # Clamp values to valid ranges
+        new_minutes = jnp.maximum(new_minutes, 0).astype(jnp.int32)
+        new_seconds = jnp.clip(new_seconds, 0, 59).astype(jnp.int32)
+        
+        return state._replace(
+            frame_count=new_frame_count.astype(jnp.int32),
+            clock_seconds=new_seconds,
+            clock_minutes=new_minutes,
+            game_state=new_game_state,
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -300,6 +457,19 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         # Process player movement
         state = self._player_step(state, action)
+        
+        # Process punch
+        state = self._punch_step(state, action)
+        
+        # Check for hits
+        state = self._hit_detection_step(state)
+        
+        # Decrement stun timer
+        new_stun = jnp.maximum(state.hit_boxer_stun_timer - 1, 0).astype(jnp.int32)
+        state = state._replace(hit_boxer_stun_timer=new_stun)
+        
+        # Update game timer
+        state = self._timer_step(state)
         
         # Increment step counter
         state = state._replace(
@@ -423,12 +593,20 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         Game ends when:
         - Either boxer reaches 100 points (KO)
-        - Timer reaches 0:00 (not implemented in Phase 1)
+        - Timer reaches 0:00
+        - game_state set to 0xFF
         """
         ko_left = jnp.greater_equal(state.left_boxer_score, self.consts.MAX_SCORE)
         ko_right = jnp.greater_equal(state.right_boxer_score, self.consts.MAX_SCORE)
         game_over_flag = jnp.equal(state.game_state, 0xFF)
-        return jnp.logical_or(jnp.logical_or(ko_left, ko_right), game_over_flag)
+        timer_expired = jnp.logical_and(
+            state.clock_minutes == 0,
+            state.clock_seconds == 0
+        )
+        return jnp.logical_or(
+            jnp.logical_or(ko_left, ko_right),
+            jnp.logical_or(game_over_flag, timer_expired)
+        )
 
 
 # =============================================================================
@@ -473,6 +651,81 @@ class BoxingRenderer(JAXGameRenderer):
             opponent_color.reshape(1, 1, 3),
             (dot_size, dot_size, 1)
         )
+        
+        # Create punch sprite (wider rectangle for extended arm)
+        punch_width = dot_size + 8  # Extended arm
+        self.player_punch = jnp.tile(
+            dot_color.reshape(1, 1, 3),
+            (dot_size, punch_width, 1)
+        )
+        self.opponent_punch = jnp.tile(
+            opponent_color.reshape(1, 1, 3),
+            (dot_size, punch_width, 1)
+        )
+        self.punch_width = punch_width
+        
+        # Create simple digit sprites (5x3 pixels each) for score/timer display
+        # Using white color for visibility
+        text_color = jnp.array([236, 236, 236], dtype=jnp.uint8)
+        bg_for_text = jnp.array([0, 0, 0], dtype=jnp.uint8)  # Black background for contrast
+        
+        # Define 3x5 digit patterns (1 = text color, 0 = transparent/bg)
+        digit_patterns = {
+            0: jnp.array([[1,1,1], [1,0,1], [1,0,1], [1,0,1], [1,1,1]]),
+            1: jnp.array([[0,1,0], [1,1,0], [0,1,0], [0,1,0], [1,1,1]]),
+            2: jnp.array([[1,1,1], [0,0,1], [1,1,1], [1,0,0], [1,1,1]]),
+            3: jnp.array([[1,1,1], [0,0,1], [1,1,1], [0,0,1], [1,1,1]]),
+            4: jnp.array([[1,0,1], [1,0,1], [1,1,1], [0,0,1], [0,0,1]]),
+            5: jnp.array([[1,1,1], [1,0,0], [1,1,1], [0,0,1], [1,1,1]]),
+            6: jnp.array([[1,1,1], [1,0,0], [1,1,1], [1,0,1], [1,1,1]]),
+            7: jnp.array([[1,1,1], [0,0,1], [0,0,1], [0,0,1], [0,0,1]]),
+            8: jnp.array([[1,1,1], [1,0,1], [1,1,1], [1,0,1], [1,1,1]]),
+            9: jnp.array([[1,1,1], [1,0,1], [1,1,1], [0,0,1], [1,1,1]]),
+        }
+        
+        # Create digit sprites (5 rows, 3 cols, 3 channels)
+        self.digit_sprites = []
+        for i in range(10):
+            pattern = digit_patterns[i]
+            sprite = jnp.where(
+                pattern[:, :, None] == 1,
+                text_color,
+                bg_for_text
+            ).astype(jnp.uint8)
+            self.digit_sprites.append(sprite)
+        self.digit_sprites = jnp.stack(self.digit_sprites)  # Shape: (10, 5, 3, 3)
+        
+        # Colon sprite for timer (M:SS)
+        colon_pattern = jnp.array([[0], [1], [0], [1], [0]])
+        self.colon_sprite = jnp.where(
+            colon_pattern[:, :, None] == 1,
+            text_color,
+            bg_for_text
+        ).astype(jnp.uint8)  # Shape: (5, 1, 3)
+        
+        # Display positions
+        self.SCORE_Y = 5  # Top of screen
+        self.LEFT_SCORE_X = 20
+        self.RIGHT_SCORE_X = 130
+        self.TIMER_X = 70  # Center
+        self.DIGIT_WIDTH = 3
+        self.DIGIT_HEIGHT = 5
+        self.DIGIT_SPACING = 4  # Space between digits
+    
+    def _render_digit(self, image: jnp.ndarray, x: int, y: int, digit: jnp.ndarray) -> jnp.ndarray:
+        """Render a single digit at position (x, y)."""
+        x = jnp.clip(x, 0, self.consts.WIDTH - self.DIGIT_WIDTH).astype(jnp.int32)
+        y = jnp.clip(y, 0, self.consts.HEIGHT - self.DIGIT_HEIGHT).astype(jnp.int32)
+        sprite = self.digit_sprites[digit]
+        return jax.lax.dynamic_update_slice(image, sprite, (y, x, 0))
+    
+    def _render_two_digit_number(self, image: jnp.ndarray, x: int, y: int, number: jnp.ndarray) -> jnp.ndarray:
+        """Render a two-digit number (00-99) at position (x, y)."""
+        tens = (number // 10).astype(jnp.int32)
+        ones = (number % 10).astype(jnp.int32)
+        image = self._render_digit(image, x, y, tens)
+        image = self._render_digit(image, x + self.DIGIT_SPACING, y, ones)
+        return image
     
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BoxingState) -> jnp.ndarray:
@@ -480,20 +733,33 @@ class BoxingRenderer(JAXGameRenderer):
         # Start with background
         image = self.background.copy()
         
-        # Draw player dot (left boxer)
+        # Draw player (left boxer) - wider when punching
         dot_size = self.consts.PLAYER_DOT_SIZE
         x = state.left_boxer_x
         y = state.left_boxer_y
         
+        # Select sprite based on punch state
+        is_punching = state.left_boxer_punch_active > 0
+        sprite_width = jnp.where(is_punching, self.punch_width, dot_size)
+        
         # Clamp coordinates to valid range
-        x_start = jnp.clip(x, 0, self.consts.WIDTH - dot_size)
+        x_start = jnp.clip(x, 0, self.consts.WIDTH - sprite_width)
         y_start = jnp.clip(y, 0, self.consts.HEIGHT - dot_size)
         
-        # Use dynamic_update_slice to place the dot
-        image = jax.lax.dynamic_update_slice(
-            image,
-            self.player_dot,
-            (y_start.astype(jnp.int32), x_start.astype(jnp.int32), 0)
+        # Use conditional rendering based on punch state
+        image = jax.lax.cond(
+            is_punching,
+            lambda img: jax.lax.dynamic_update_slice(
+                img,
+                self.player_punch,
+                (y_start.astype(jnp.int32), x_start.astype(jnp.int32), 0)
+            ),
+            lambda img: jax.lax.dynamic_update_slice(
+                img,
+                self.player_dot,
+                (y_start.astype(jnp.int32), x_start.astype(jnp.int32), 0)
+            ),
+            image
         )
         
         # Draw opponent dot (right boxer) - visible but stationary for now
@@ -506,6 +772,40 @@ class BoxingRenderer(JAXGameRenderer):
             image,
             self.opponent_dot,
             (y2_start.astype(jnp.int32), x2_start.astype(jnp.int32), 0)
+        )
+        
+        # --- Render HUD (scores and timer) ---
+        
+        # Left boxer score (top left)
+        image = self._render_two_digit_number(
+            image, self.LEFT_SCORE_X, self.SCORE_Y,
+            jnp.clip(state.left_boxer_score, 0, 99)
+        )
+        
+        # Right boxer score (top right)
+        image = self._render_two_digit_number(
+            image, self.RIGHT_SCORE_X, self.SCORE_Y,
+            jnp.clip(state.right_boxer_score, 0, 99)
+        )
+        
+        # Timer (center top) - format M:SS
+        # Minutes (single digit)
+        image = self._render_digit(
+            image, self.TIMER_X, self.SCORE_Y,
+            jnp.clip(state.clock_minutes, 0, 9).astype(jnp.int32)
+        )
+        
+        # Colon
+        colon_x = self.TIMER_X + self.DIGIT_SPACING
+        image = jax.lax.dynamic_update_slice(
+            image, self.colon_sprite,
+            (self.SCORE_Y, colon_x, 0)
+        )
+        
+        # Seconds (two digits)
+        image = self._render_two_digit_number(
+            image, self.TIMER_X + self.DIGIT_SPACING + 2, self.SCORE_Y,
+            jnp.clip(state.clock_seconds, 0, 59)
         )
         
         return image.astype(jnp.uint8)
