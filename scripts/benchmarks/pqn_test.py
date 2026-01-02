@@ -2,81 +2,26 @@
 Adapted from https://github.com/mttga/purejaxql/blob/main/purejaxql/pqn_gymnax.py
 """
 
-import copy
 import os
-from struct import unpack
-import threading
 import time
 import jax
 import jax.numpy as jnp
-import numpy as np
 from functools import partial
 from typing import Any
 import os
-from typing import Dict, Union
 
 import chex
 import optax
 import flax.linen as nn
 from flax.training.train_state import TrainState
-import jaxatari.environment
-from jaxatari.environment import EnvState
 from jaxatari.wrappers import AtariWrapper, PixelObsWrapper, FlattenObservationWrapper, LogWrapper, ObjectCentricWrapper, NormalizeObservationWrapper
 import hydra
 from omegaconf import OmegaConf
 
-from safetensors.flax import save_file, load_file
-from flax.traverse_util import flatten_dict, unflatten_dict
-
 import jaxatari
 import wandb
 
-def video_callback(states, dones, renderer, mod=False):
-    """
-    Starting a new thread to render video so that it doesn't block training.
-    """
-    video_renderer(states, dones, renderer, mod)
-
-def video_renderer(states, dones, renderer, mod):
-    print("Rendering video...")
-    video_folder = f"{wandb.run.dir}/media/videos/"
-    os.makedirs(video_folder, exist_ok=True)
-
-    if hasattr(states, 'atari_state'):
-        states = states.atari_state
-    if hasattr(states, 'env_state'):
-        states = states.env_state
-
-    # num_states is where the first done is True
-    num_states = jnp.argmax(dones)
-    # or len of the first array of the states pytree
-    if num_states == 0:
-        num_states = len(states[-1])
-
-    # select every 4th frame (and only the first num_states)
-    states_reduced = jax.tree_util.tree_map(lambda x: x[:num_states], states)
-    rasters = jax.vmap(renderer.render)(states_reduced)
-    frames = np.array(rasters, dtype=np.uint8)
-    # shape currently is (N, W, H, 3)
-    # but should be (N, 3, W, H)
-    frames = np.transpose(frames, (0, 3, 1, 2))
-
-    fps = 30 
-    video = wandb.Video(frames, fps=fps, format="mp4")
-    name = "video"
-    if mod:
-        name = "video_mod"
-    # wandb.log({name: video}, step=wandb.run.step)
-    wandb.log({name: video})
-    print("Video done.")
-
-def save_params(params: Dict, filename: Union[str, os.PathLike]) -> None:
-    flattened_dict = flatten_dict(params, sep=',')
-    save_file(flattened_dict, filename)
-
-def load_params(filename:Union[str, os.PathLike]) -> Dict:
-    flattened_dict = load_file(filename)
-    return unflatten_dict(flattened_dict, sep=",")
+from train_utils import video_callback, load_params
 
 class CNN(nn.Module):
 
@@ -318,7 +263,7 @@ def make_test(config, save_params, batch_stats):
             infos, env_states, dones = output[0], output[1], output[2]
 
             if config.get("RECORD_VIDEO", False):
-                jax.debug.callback(video_callback, env_states, dones, renderer, mod=mod),
+                jax.debug.callback(video_callback, env_states, dones, 0, renderer, mod=mod),
 
             # return mean of done infos
             done_infos = jax.tree_util.tree_map(

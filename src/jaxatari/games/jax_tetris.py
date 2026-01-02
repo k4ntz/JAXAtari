@@ -14,6 +14,21 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 import numpy as np
 from jaxatari.renderers import JAXGameRenderer
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Tetris.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'board_overlay', 'type': 'single', 'file': 'board.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
+        {'name': 'banner_one', 'type': 'single', 'file': 'text_one.npy'},
+        {'name': 'banner_two', 'type': 'single', 'file': 'text_two.npy'},
+        {'name': 'banner_triple', 'type': 'single', 'file': 'text_triple.npy'},
+        {'name': 'banner_tetris', 'type': 'single', 'file': 'text_tetris.npy'},
+    )
+
 class TetrisConstants(NamedTuple):
     # logical grid (Board)
     BOARD_WIDTH: int = 10
@@ -91,6 +106,9 @@ class TetrisConstants(NamedTuple):
     ], dtype=jnp.int32)
     RESET: int = Action.DOWNLEFTFIRE  # keep a reserved reset action
 
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
+
 # ======================== State/Obs/Info =================
 class TetrisState(NamedTuple):
 
@@ -130,19 +148,17 @@ class TetrisInfo(NamedTuple):
     score: chex.Array
     cleared: chex.Array
     game_over: chex.Array
-    all_rewards: chex.Array
 
 # ======================= Environment =====================
 
 class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, TetrisConstants]):
-    def __init__(self, consts: TetrisConstants = None, reward_funcs: list[callable]=None, instant_drop: bool = False):
+    def __init__(self, consts: TetrisConstants = None):
         """ Initialize the JaxTetris environment"""
 
         consts = consts or TetrisConstants()
         super().__init__(consts)
         self.renderer = TetrisRenderer(self.consts)
-        self.instant_drop = instant_drop
-        self.reward_funcs = reward_funcs
+        self.instant_drop = False
 
     # ----- Helpers -----
     @partial(jax.jit, static_argnums=0)
@@ -327,7 +343,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
                         )
 
         reward = (lines_cleared > 0).astype(jnp.float32) * line_clear_score.astype(jnp.float32)
-        info = TetrisInfo(score=new_state.score, cleared=lines_cleared, game_over=game_over, all_rewards=jnp.zeros(1))
+        info = TetrisInfo(score=new_state.score, cleared=lines_cleared, game_over=game_over)
         return new_state, reward, game_over, info
 
     # ----- Spaces -----
@@ -490,14 +506,14 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
                 lambda ss: self._lock_spawn(ss, grid, tick_next, soft_points=jnp.int32(0)),
                 lambda ss: (ss._replace(pos=pos_v, tick=tick_next),
                             jnp.float32(0.0), jnp.bool_(False),
-                            TetrisInfo(score=ss.score, cleared=jnp.int32(0), game_over=ss.game_over, all_rewards=jnp.zeros(1))),
+                            TetrisInfo(score=ss.score, cleared=jnp.int32(0), game_over=ss.game_over)),
                 s
             )
 
         def do_env_reset(_):
             obs, st0 = self.reset(state.key)
             return st0, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st0.score, cleared=jnp.int32(0),
-                                                                       game_over=st0.game_over, all_rewards= jnp.zeros(1))
+                                                                       game_over=st0.game_over)
 
         state, _reward, done, info = lax.cond(
             do_reset, do_env_reset,
@@ -509,7 +525,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         def after_over(ss):
             obs2, st2 = self.reset(ss.key)
             return st2, jnp.float32(0.0), jnp.bool_(False), TetrisInfo(score=st2.score, cleared=jnp.int32(0),
-                                                                       game_over=jnp.bool_(False), all_rewards=jnp.zeros(1))
+                                                                       game_over=jnp.bool_(False))
 
         state, reward, done, info = lax.cond(state.game_over, after_over, lambda s: (s, _reward, done, info), state)
 
@@ -531,8 +547,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
-        all_rewards = self._get_all_reward(previous_state, state)
-        info = self._get_info(state, all_rewards)
+        info = self._get_info(state)
         return obs, state, reward, done, info
 
     # ----- Helpers used inside step -----
@@ -550,11 +565,11 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: TetrisState, all_rewards: chex.Array = None) -> TetrisInfo:
+    def _get_info(self, state: TetrisState) -> TetrisInfo:
         """
         Extract info (score, cleared lines, game over) from the state.
         """
-        return TetrisInfo(score=state.score, cleared=jnp.int32(0), game_over=state.game_over, all_rewards= all_rewards)
+        return TetrisInfo(score=state.score, cleared=jnp.int32(0), game_over=state.game_over)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: TetrisState, state: TetrisState) -> float:
@@ -564,16 +579,6 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         """
         cleared = state.score - previous_state.score
         return jnp.where(cleared > 0, cleared.astype(jnp.float32), jnp.float32(0.0))
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: TetrisState, state: TetrisState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
-
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TetrisState) -> bool:
@@ -607,47 +612,35 @@ class TetrisRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 1. Load all assets using the declarative pattern
-        asset_config = self._get_asset_config()
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 2. Create procedural assets using modded constants
+        # Procedurally generate 1x1 pixel sprites for each of the 22 row colors.
+        # This ensures they are all included in the final color palette.
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris"
-
+        for i in range(22):
+            # The file is loaded here to get the color, then converted to a procedural sprite.
+            color_rgba = self.jr.loadFrame(
+                f"{sprite_path}/height_colors/h_{i}.npy"
+            )[0, 0] # Get the color from the top-left pixel
+            final_asset_config.append({
+                'name': f'row_color_{i}',
+                'type': 'procedural',
+                'data': color_rgba.reshape(1, 1, 4)
+            })
+        
+        # 3. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-        # 2. Precompute the color map for the board grid
+        # 4. Precompute the color map for the board grid
         self.BOARD_COLOR_MAP = self._precompute_board_color_map()
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        # This list defines all sprites that need to be loaded from files.
-        config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'board_overlay', 'type': 'single', 'file': 'board.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score/score_{}.npy'},
-            {'name': 'banner_one', 'type': 'single', 'file': 'text_one.npy'},
-            {'name': 'banner_two', 'type': 'single', 'file': 'text_two.npy'},
-            {'name': 'banner_triple', 'type': 'single', 'file': 'text_triple.npy'},
-            {'name': 'banner_tetris', 'type': 'single', 'file': 'text_tetris.npy'},
-        ]
-
-        # Procedurally generate 1x1 pixel sprites for each of the 22 row colors.
-        # This ensures they are all included in the final color palette.
-        for i in range(22):
-            # The file is loaded here to get the color, then converted to a procedural sprite.
-            color_rgba = self.jr.loadFrame(
-                f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris/height_colors/h_{i}.npy"
-            )[0, 0] # Get the color from the top-left pixel
-            config.append({
-                'name': f'row_color_{i}',
-                'type': 'procedural',
-                'data': color_rgba.reshape(1, 1, 4)
-            })
-        return config
 
     def _precompute_board_color_map(self) -> jnp.ndarray:
         """Creates a lookup table mapping a row's object ID to its color ID."""

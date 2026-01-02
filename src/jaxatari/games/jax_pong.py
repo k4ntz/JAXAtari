@@ -1,6 +1,8 @@
+from jax._src.pjit import JitWrapped
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -9,6 +11,26 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+
+def _create_wall_sprite(consts: "PongConstants", height: int) -> jnp.ndarray:
+    wall_color_rgba = (*consts.SCORE_COLOR, 255)
+    wall_shape = (height, consts.WIDTH, 4)
+    return jnp.tile(jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1))
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Pong.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
+        {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+        {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
+        {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'},
+    )
+
 
 class PongConstants(NamedTuple):
     MAX_SPEED: int = 12
@@ -37,6 +59,8 @@ class PongConstants(NamedTuple):
     WALL_TOP_HEIGHT: int = 10
     WALL_BOTTOM_Y: int = 194
     WALL_BOTTOM_HEIGHT: int = 16
+    # sset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # immutable state container
@@ -54,6 +78,7 @@ class PongState(NamedTuple):
     step_counter: chex.Array
     acceleration_counter: chex.Array
     buffer: chex.Array
+    key: chex.PRNGKey
 
 
 class EntityPosition(NamedTuple):
@@ -73,17 +98,13 @@ class PongObservation(NamedTuple):
 
 class PongInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: chex.Array
 
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
-    def __init__(self, consts: PongConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: PongConstants = None):
         consts = consts or PongConstants()
         super().__init__(consts)
         self.renderer = PongRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -92,21 +113,19 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
         ]
-        self.obs_size = 3*4+1+1
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _player_step(self, state_player_y, state_player_speed, acceleration_counter, action: chex.Array):
+    def _player_step(self, state: PongState, action: chex.Array) -> PongState:
         up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
         down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
-        acceleration = self.consts.PLAYER_ACCELERATION[acceleration_counter]
+        acceleration = self.consts.PLAYER_ACCELERATION[state.acceleration_counter]
 
         touches_wall = jnp.logical_or(
-            state_player_y < self.consts.WALL_TOP_Y,
-            state_player_y + self.consts.PLAYER_SIZE[1] > self.consts.WALL_BOTTOM_Y,
+            state.player_y < self.consts.WALL_TOP_Y,
+            state.player_y + self.consts.PLAYER_SIZE[1] > self.consts.WALL_BOTTOM_Y,
         )
 
-        player_speed = state_player_speed
+        player_speed = state.player_speed
 
         player_speed = jax.lax.cond(
             jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
@@ -115,14 +134,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             operand=player_speed,
         )
 
-        direction_change_up = jnp.logical_and(up, state_player_speed > 0)
+        direction_change_up = jnp.logical_and(up, state.player_speed > 0)
         player_speed = jax.lax.cond(
             direction_change_up,
             lambda s: 0,
             lambda s: s,
             operand=player_speed,
         )
-        direction_change_down = jnp.logical_and(down, state_player_speed < 0)
+        direction_change_down = jnp.logical_and(down, state.player_speed < 0)
 
         player_speed = jax.lax.cond(
             direction_change_down,
@@ -136,7 +155,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             direction_change,
             lambda _: 0,
             lambda s: s,
-            operand=acceleration_counter,
+            operand=state.acceleration_counter,
         )
 
         player_speed = jax.lax.cond(
@@ -160,14 +179,46 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             operand=acceleration_counter,
         )
 
-        player_y = jnp.clip(
-            state_player_y + player_speed,
+        proposed_player_y = jnp.clip(
+            state.player_y + player_speed,
             self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - 10,
             self.consts.WALL_BOTTOM_Y - 4,
         )
-        return player_y, player_speed, new_acceleration_counter
 
-    def _ball_step(self, state: PongState, action):
+        # Match original timing/buffering behavior
+        new_player_y, new_player_speed, new_acc_counter = jax.lax.cond(
+            state.step_counter % 2 == 0,
+            lambda _: (proposed_player_y, player_speed, new_acceleration_counter),
+            lambda _: (state.player_y, state.player_speed, state.acceleration_counter),
+            operand=None,
+        )
+
+        buffer = jax.lax.cond(
+            jax.lax.eq(state.buffer, state.player_y),
+            lambda _: new_player_y,
+            lambda _: state.buffer,
+            operand=None,
+        )
+        final_player_y = state.buffer
+
+        return PongState(
+            player_y=final_player_y,
+            player_speed=new_player_speed,
+            ball_x=state.ball_x,
+            ball_y=state.ball_y,
+            enemy_y=state.enemy_y,
+            enemy_speed=state.enemy_speed,
+            ball_vel_x=state.ball_vel_x,
+            ball_vel_y=state.ball_vel_y,
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            acceleration_counter=new_acc_counter,
+            buffer=buffer,
+            key=state.key,
+        )
+
+    def _ball_step(self, state: PongState, action) -> PongState:
         ball_x = state.ball_x + state.ball_vel_x
         ball_y = state.ball_y + state.ball_vel_y
 
@@ -282,19 +333,135 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             ball_vel_x,
         )
 
-        return ball_x, ball_y, ball_vel_x, ball_vel_y
-
-    def _enemy_step(self, state, step_counter, ball_y, ball_speed_y):
-        should_move = step_counter % 8 != 0
-
-        direction = jnp.sign(ball_y - state.enemy_y)
-
-        new_y = state.enemy_y + (direction * self.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
-        return jax.lax.cond(
-            should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
+        return PongState(
+            player_y=state.player_y,
+            player_speed=state.player_speed,
+            ball_x=ball_x.astype(jnp.int32),
+            ball_y=ball_y.astype(jnp.int32),
+            enemy_y=state.enemy_y,
+            enemy_speed=state.enemy_speed,
+            ball_vel_x=ball_vel_x.astype(jnp.int32),
+            ball_vel_y=ball_vel_y.astype(jnp.int32),
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            acceleration_counter=state.acceleration_counter,
+            buffer=state.buffer,
+            key=state.key,
         )
 
+    def _enemy_step(self, state: PongState) -> PongState:
+        should_move = state.step_counter % 8 != 0
+
+        direction = jnp.sign(state.ball_y - state.enemy_y)
+
+        new_y = state.enemy_y + (direction * self.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
+        enemy_y = jax.lax.cond(
+            should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
+        )
+        return PongState(
+            player_y=state.player_y,
+            player_speed=state.player_speed,
+            ball_x=state.ball_x,
+            ball_y=state.ball_y,
+            enemy_y=enemy_y.astype(jnp.int32),
+            enemy_speed=state.enemy_speed,
+            ball_vel_x=state.ball_vel_x,
+            ball_vel_y=state.ball_vel_y,
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            acceleration_counter=state.acceleration_counter,
+            buffer=state.buffer,
+            key=state.key,
+        )
+
+    def _score_and_reset(self, state: PongState) -> PongState:
+        player_goal = state.ball_x < 4
+        enemy_goal = state.ball_x > 156
+        ball_reset = jnp.logical_or(enemy_goal, player_goal)
+
+        player_score = jax.lax.cond(
+            player_goal,
+            lambda s: s + 1,
+            lambda s: s,
+            operand=state.player_score,
+        )
+        enemy_score = jax.lax.cond(
+            enemy_goal,
+            lambda s: s + 1,
+            lambda s: s,
+            operand=state.enemy_score,
+        )
+
+        current_values = (
+            state.ball_x.astype(jnp.int32),
+            state.ball_y.astype(jnp.int32),
+            state.ball_vel_x.astype(jnp.int32),
+            state.ball_vel_y.astype(jnp.int32),
+        )
+        ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
+            ball_reset,
+            lambda x: self._reset_ball_after_goal((state, enemy_goal)),
+            lambda x: x,
+            operand=current_values,
+        )
+
+        step_counter = jax.lax.cond(
+            ball_reset,
+            lambda s: jnp.array(0),
+            lambda s: s + 1,
+            operand=state.step_counter,
+        )
+
+        enemy_y_final = jax.lax.cond(
+            ball_reset,
+            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
+            lambda s: state.enemy_y.astype(jnp.int32),
+            operand=None,
+        )
+
+        ball_x_final = jax.lax.cond(
+            step_counter < 60,
+            lambda s: self.consts.BALL_START_X.astype(jnp.int32),
+            lambda s: s,
+            operand=ball_x_final,
+        )
+        ball_y_final = jax.lax.cond(
+            step_counter < 60,
+            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
+            lambda s: s,
+            operand=ball_y_final,
+        )
+
+        return PongState(
+            player_y=state.player_y,
+            player_speed=state.player_speed,
+            ball_x=ball_x_final,
+            ball_y=ball_y_final,
+            enemy_y=enemy_y_final,
+            enemy_speed=state.enemy_speed,
+            ball_vel_x=ball_vel_x_final,
+            ball_vel_y=ball_vel_y_final,
+            player_score=player_score,
+            enemy_score=enemy_score,
+            step_counter=step_counter,
+            acceleration_counter=state.acceleration_counter,
+            buffer=state.buffer,
+            key=state.key,
+        )
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
+
     @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
+        previous_state = state
+        state = self._player_step(state, action)
+        state = self._enemy_step(state)
+        state = self._ball_step(state, action)
+        state = self._score_and_reset(state)
+
     def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         state, scored_right = state_and_goal
 
@@ -315,12 +482,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             ball_vel_y.astype(jnp.int32),
         )
 
-    def reset(self, key=None) -> Tuple[PongObservation, PongState]:
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PongObservation, PongState]:
+        # Split key for env reset if needed and for state storage
+        state_key, _step_key = jax.random.split(key)
         state = PongState(
             player_y=jnp.array(96).astype(jnp.int32),
             player_speed=jnp.array(0.0).astype(jnp.int32),
-            ball_x=jnp.array(78).astype(jnp.int32),
-            ball_y=jnp.array(115).astype(jnp.int32),
+            ball_x=self.consts.BALL_START_X.astype(jnp.int32),
+            ball_y=self.consts.BALL_START_Y.astype(jnp.int32),
             enemy_y=jnp.array(115).astype(jnp.int32),
             enemy_speed=jnp.array(0.0).astype(jnp.int32),
             ball_vel_x=self.consts.BALL_SPEED[0].astype(jnp.int32),
@@ -330,6 +499,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             step_counter=jnp.array(0).astype(jnp.int32),
             acceleration_counter=jnp.array(0).astype(jnp.int32),
             buffer=jnp.array(96).astype(jnp.int32),
+            key=state_key,
         )
         initial_obs = self._get_observation(state)
 
@@ -337,115 +507,45 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
-        new_player_y, player_speed_b, new_acceleration_counter = self._player_step(
-            state.player_y, state.player_speed, state.acceleration_counter, action
+        # Split step key from state and keep a new key for the next state
+        new_state_key, step_key = jax.random.split(state.key)
+        previous_state = state
+        # Make per-step key available to helpers that may read state.key
+        state = PongState(
+            player_y=state.player_y,
+            player_speed=state.player_speed,
+            ball_x=state.ball_x,
+            ball_y=state.ball_y,
+            enemy_y=state.enemy_y,
+            enemy_speed=state.enemy_speed,
+            ball_vel_x=state.ball_vel_x,
+            ball_vel_y=state.ball_vel_y,
+            player_score=state.player_score,
+            enemy_score=state.enemy_score,
+            step_counter=state.step_counter,
+            acceleration_counter=state.acceleration_counter,
+            buffer=state.buffer,
+            key=step_key,
         )
+        state = self._player_step(state, action)
+        state = self._enemy_step(state)
+        state = self._ball_step(state, action)
+        state = self._score_and_reset(state)
 
-        new_player_y, player_speed, new_acceleration_counter = jax.lax.cond(
-            state.step_counter % 2 == 0,
-            lambda _: (new_player_y, player_speed_b, new_acceleration_counter),
-            lambda _: (state.player_y, state.player_speed, state.acceleration_counter),
-            operand=None,
-        )
+        # Update state key to new_state_key for next step
+        state = state._replace(key=new_state_key)
 
-        buffer = jax.lax.cond(
-            jax.lax.eq(state.buffer, state.player_y),
-            lambda _: new_player_y,
-            lambda _: state.buffer,
-            operand=None,
-        )
-        player_y = state.buffer
+        done = self._get_done(state)
+        env_reward = self._get_reward(previous_state, state)
+        info = self._get_info(state)
+        observation = self._get_observation(state)
 
-        enemy_y = self._enemy_step(state, state.step_counter, state.ball_y, state.ball_y)
-
-        ball_x, ball_y, ball_vel_x, ball_vel_y = self._ball_step(state, action)
-
-        player_goal = ball_x < 4
-        enemy_goal = ball_x > 156
-        ball_reset = jnp.logical_or(enemy_goal, player_goal)
-
-        player_score = jax.lax.cond(
-            player_goal,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.player_score,
-        )
-        enemy_score = jax.lax.cond(
-            enemy_goal,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.enemy_score,
-        )
-
-        current_values = (
-            ball_x.astype(jnp.int32),
-            ball_y.astype(jnp.int32),
-            ball_vel_x.astype(jnp.int32),
-            ball_vel_y.astype(jnp.int32),
-        )
-        ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
-            ball_reset,
-            lambda x: self._reset_ball_after_goal((state, enemy_goal)),
-            lambda x: x,
-            operand=current_values,
-        )
-
-        step_counter = jax.lax.cond(
-            ball_reset,
-            lambda s: jnp.array(0),
-            lambda s: s + 1,
-            operand=state.step_counter,
-        )
-
-        enemy_y_final = jax.lax.cond(
-            ball_reset,
-            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
-            lambda s: enemy_y.astype(jnp.int32),
-            operand=None,
-        )
-
-        ball_x_final = jax.lax.cond(
-            step_counter < 60,
-            lambda s: self.consts.BALL_START_X.astype(jnp.int32),
-            lambda s: s,
-            operand=ball_x_final,
-        )
-        ball_y_final = jax.lax.cond(
-            step_counter < 60,
-            lambda s: self.consts.BALL_START_Y.astype(jnp.int32),
-            lambda s: s,
-            operand=ball_y_final,
-        )
-
-        new_state = PongState(
-            player_y=player_y,
-            player_speed=player_speed,
-            ball_x=ball_x_final,
-            ball_y=ball_y_final,
-            enemy_y=enemy_y_final,
-            enemy_speed=0,
-            ball_vel_x=ball_vel_x_final,
-            ball_vel_y=ball_vel_y_final,
-            player_score=player_score,
-            enemy_score=enemy_score,
-            step_counter=step_counter,
-            acceleration_counter=new_acceleration_counter,
-            buffer=buffer,
-        )
-
-        done = self._get_done(new_state)
-        env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
-        observation = self._get_observation(new_state)
-
-        return observation, new_state, env_reward, done, info
+        return observation, state, env_reward, done, info
 
 
     def render(self, state: PongState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PongState):
         player = EntityPosition(
             x=jnp.array(self.consts.PLAYER_X),
@@ -531,23 +631,14 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: PongState, all_rewards: chex.Array = None) -> PongInfo:
-        return PongInfo(time=state.step_counter, all_rewards=all_rewards)
+    def _get_info(self, state: PongState, ) -> PongInfo:
+        return PongInfo(time=state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: PongState, state: PongState):
         return (state.player_score - state.enemy_score) - (
             previous_state.player_score - previous_state.enemy_score
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: PongState, state: PongState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PongState) -> bool:
@@ -558,7 +649,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
 class PongRenderer(JAXGameRenderer):
     def __init__(self, consts: PongConstants = None):
-        super().__init__()
+        super().__init__(consts)
         self.consts = consts or PongConstants()
         self.config = render_utils.RendererConfig(
             game_dimensions=(210, 160),
@@ -566,45 +657,27 @@ class PongRenderer(JAXGameRenderer):
             #downscale=(84, 84)
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        # 1. Create any procedural assets first
-        wall_sprite = self._create_wall_sprite()
-        
-        # 2. Define the full asset manifest, mixing file-based and procedural assets
-        asset_config = self._get_asset_config(wall_sprite)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/pong"
 
-        # 3. Make a single call to the setup function
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 2. Create procedural assets using modded constants
+        wall_sprite_top = _create_wall_sprite(self.consts, self.consts.WALL_TOP_HEIGHT)
+        wall_sprite_bottom = _create_wall_sprite(self.consts, self.consts.WALL_BOTTOM_HEIGHT)
+
+        # 3. Append procedural assets
+        final_asset_config.append({'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top})
+        final_asset_config.append({'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom})
+
+        # 4. Bake assets once
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/pong"
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-
-    def _create_wall_sprite(self) -> jnp.ndarray:
-        """Procedurally creates an RGBA sprite for the top/bottom walls."""
-        # The wall color must match a color used elsewhere (e.g., the score)
-        # so it gets added to the palette correctly.
-        wall_color_rgba = (*self.consts.SCORE_COLOR, 255) # e.g., (236, 236, 236, 255)
-        
-        wall_shape = (self.consts.WALL_TOP_HEIGHT, self.consts.WIDTH, 4)
-        wall_sprite = jnp.tile(jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1))
-        return wall_sprite
-
-    def _get_asset_config(self, wall_sprite_data: jnp.ndarray) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        return [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
-            {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-            {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
-            {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'},
-            
-            # Add the procedurally created sprite to the manifest
-            {'name': 'wall', 'type': 'procedural', 'data': wall_sprite_data},
-        ]
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -623,9 +696,9 @@ class PongRenderer(JAXGameRenderer):
         score_color_tuple = self.consts.SCORE_COLOR # (236, 236, 236)
         score_id = self.COLOR_TO_ID[score_color_tuple]
 
-        # Draw walls (which are now a sprite)
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall"])
-        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall"])
+        # Draw walls (using separate sprites for top and bottom)
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall_top"])
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall_bottom"])
 
         # Stamp Score using the label utility
         player_digits = self.jr.int_to_digits(state.player_score, max_digits=2)

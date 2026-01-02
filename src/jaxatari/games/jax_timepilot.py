@@ -5,13 +5,14 @@ authors: Paula Troszt, Ernst Christian Böhringer, Aiman Sammy Rahlf
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
 import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.games.timepilot_levels import (
     LevelConstants,
@@ -21,6 +22,95 @@ from jaxatari.games.timepilot_levels import (
     TimePilot_Level_4,
     TimePilot_Level_5
 )
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for TimePilot.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # --- Define file lists for large groups ---
+    # 59 files: 5 levels * (8 pos + 2 death) + (8 transition + 1 transition death)
+    all_player_sprites_files = [
+        # L1
+        *(f'L1/L1_Player_Pos{i}.npy' for i in range(8)),
+        'L1/L1_Player_Death1.npy', 'L1/L1_Player_Death2.npy',
+        # L2
+        *(f'L2/L2_Player_Pos{i}.npy' for i in range(8)),
+        'L2/L2_Player_Death1.npy', 'L2/L2_Player_Death2.npy',
+        # L3
+        *(f'L3/L3_Player_Pos{i}.npy' for i in range(8)),
+        'L3/L3_Player_Death1.npy', 'L3/L3_Player_Death2.npy',
+        # L4
+        *(f'L4/L4_Player_Pos{i}.npy' for i in range(8)),
+        'L4/L4_Player_Death1.npy', 'L4/L4_Player_Death2.npy',
+        # L5
+        *(f'L5/L5_Player_Pos{i}.npy' for i in range(8)),
+        'L5/L5_Player_Death1.npy', 'L5/L5_Player_Death2.npy',
+        # Transition
+        *(f'L-All/TP_Player_Pos{i}.npy' for i in range(8)),
+        'L-All/TP_Player_Death.npy',
+    ]
+
+    # 75 files: 5 levels * 15 sprites (pos + death + boss)
+    all_enemy_sprites_files = [
+        # L1 (15 files)
+        *(f'L1/L1_Enemy_Pos{i}.npy' for i in range(8)),
+        'L1/L1_Enemy_Pos0.npy', 'L1/L1_Enemy_Pos1.npy', # 2 extra
+        'L1/L1_Enemy_Death.npy',
+        'L1/L1_Boss_Pos0.npy', 'L1/L1_Boss_Pos0.npy', # 2 boss_0
+        'L1/L1_Boss_Pos1.npy', 'L1/L1_Boss_Pos1.npy', # 2 boss_1
+        # L2 (15 files)
+        *(f'L2/L2_Enemy_Pos{i}.npy' for i in range(8)),
+        'L2/L2_Enemy_Pos0.npy', 'L2/L2_Enemy_Pos1.npy',
+        'L2/L2_Enemy_Death.npy',
+        'L2/L2_Boss_Pos0.npy', 'L2/L2_Boss_Pos0.npy',
+        'L2/L2_Boss_Pos1.npy', 'L2/L2_Boss_Pos1.npy',
+        # L3 (15 files)
+        *(f'L3/L3_Enemy_Pos{i}.npy' for i in ["01", "02", "11", "12", "21", "22", "31", "32", "41", "42"]),
+        'L3/L3_Enemy_Death.npy',
+        *(f'L3/L3_Boss_Pos{i}.npy' for i in ["01", "02", "11", "12"]),
+        # L4 (15 files)
+        *(f'L4/L4_Enemy_Pos{i}.npy' for i in range(8)),
+        'L4/L4_Enemy_Pos0.npy', 'L4/L4_Enemy_Pos1.npy',
+        'L4/L4_Enemy_Death.npy',
+        'L4/L4_Boss_Pos0.npy', 'L4/L4_Boss_Pos0.npy',
+        'L4/L4_Boss_Pos1.npy', 'L4/L4_Boss_Pos1.npy',
+        # L5 (15 files)
+        *(f'L5/L5_Enemy_Pos{j}.npy' for i in range(5) for j in range(2)), # 10 pos
+        'L5/L5_Enemy_Death.npy',
+        'L5/L5_Boss_Pos0.npy', 'L5/L5_Boss_Pos0.npy',
+        'L5/L5_Boss_Pos1.npy', 'L5/L5_Boss_Pos1.npy',
+    ]
+
+    return (
+        # Procedural background (empty black screen)
+        {'name': 'background', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
+        # Procedural pixel to ensure white is in the palette
+        {'name': 'white_pixel', 'type': 'procedural', 'data': jnp.array([[[255,255,255,255]]], dtype=jnp.uint8)},
+        # General Sprites (Single)
+        {'name': 'top_wall', 'type': 'single', 'file': 'L-All/Top.npy'},
+        {'name': 'bottom_wall', 'type': 'single', 'file': 'L-All/Bottom.npy'},
+        {'name': 'respawn_bottom_wall', 'type': 'single', 'file': 'L-All/Respawn_Bottom.npy'},
+        {'name': 'start_screen', 'type': 'single', 'file': 'L-All/First.npy'},
+        {'name': 'player_life', 'type': 'single', 'file': 'L-All/Player_Life.npy'},
+        {'name': 'black_line', 'type': 'single', 'file': 'L-All/BlackLine.npy'},
+        # General Sprites (Group)
+        {'name': 'transition_bar', 'type': 'group', 'files': ['L-All/TeleportBar.npy', 'L-All/TeleportBar2.npy']},
+        # General Sprites (Digits)
+        {'name': 'digits', 'type': 'digits', 'pattern': 'L-All/Digit{}.npy'},
+        # --- Level-Dependent Groups (for unified padding) ---
+        {'name': 'all_clouds', 'type': 'group', 'files': [f'L{i}/L{i}_Cloud.npy' for i in range(1, 6)]},
+        {'name': 'all_backgrounds', 'type': 'group', 'files': [f'L{i}/L{i}_Background.npy' for i in range(1, 6)]},
+        {'name': 'all_respawn_top_walls', 'type': 'group', 'files': [f'L{i}/L{i}_Top.npy' for i in range(1, 6)]},
+        {'name': 'all_player_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Player_Bullet.npy' for i in range(1, 6)]},
+        {'name': 'all_enemy_missiles', 'type': 'group', 'files': [f'L{i}/L{i}_Enemy_Bullet.npy' for i in range(1, 6)]},
+        {'name': 'all_enemy_remaining', 'type': 'group', 'files': [
+            item for i in range(1, 6) for item in (f'L{i}/L{i}_Enemy_Life.npy', f'L{i}/L{i}_Enemy_Death_Life.npy')
+        ]},
+        # Massive groups
+        {'name': 'all_player_sprites', 'type': 'group', 'files': all_player_sprites_files},
+        {'name': 'all_enemy_sprites', 'type': 'group', 'files': all_enemy_sprites_files},
+    )
 
 class TimePilotConstants(NamedTuple):
     # Constants for game environment
@@ -126,6 +216,9 @@ class TimePilotConstants(NamedTuple):
     LEVEL_4: LevelConstants = TimePilot_Level_4
     LEVEL_5: LevelConstants = TimePilot_Level_5
 
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
+
 # immutable state container
 class TimePilotState(NamedTuple):
 
@@ -177,16 +270,11 @@ class TimePilotInfo(NamedTuple):
     score: chex.Array
     lives: chex.Array
     enemies_remaining: chex.Array
-    all_rewards: chex.Array
 
 class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilotInfo, TimePilotConstants]):
-    def __init__(self, consts: TimePilotConstants|None = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: TimePilotConstants|None = None):
         consts = consts or TimePilotConstants()
         super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = jnp.array([
             Action.NOOP,
             Action.FIRE,
@@ -1134,8 +1222,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_rewards(state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
@@ -1318,22 +1405,13 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: TimePilotState, all_rewards: chex.Array = None) -> TimePilotInfo:
+    def _get_info(self, state: TimePilotState) -> TimePilotInfo:
         return TimePilotInfo(level=state.level, score=state.score, lives= state.lives, 
-                             enemies_remaining=state.enemies_remaining, all_rewards=all_rewards)
+                             enemies_remaining=state.enemies_remaining)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: TimePilotState, state: TimePilotState):
         return state.score - previous_state.score
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: TimePilotState, state: TimePilotState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TimePilotState) -> bool:
@@ -1344,174 +1422,122 @@ class TimePilotRenderer(JAXGameRenderer):
 
     def __init__(self, consts: TimePilotConstants|None = None):
         """
-        Initializes the renderer by loading sprites.
+        Initializes the renderer by loading and processing all assets.
         """
         super().__init__()
+
         self.consts = consts or TimePilotConstants()
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/timepilot"
-        self.sprites = self._load_sprites()
 
-    def _load_sprites(self) -> list[dict[str, Any]]:
-        """Loads all necessary sprites from .npy files."""
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # helper function to load a single sprite frame
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f'{name}.npy')
-            frame = jr.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
 
-        # level independent sprites
-        general_sprites: Dict[str, Any] = {}
+        # 3. Load, process, and set up all assets in one call
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND, # This will be our empty (black) raster
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
-        # decoration
-        general_sprites['top_wall'] = _load_sprite_frame('L-All/Top')
-        general_sprites['bottom_wall'] = _load_sprite_frame('L-All/Bottom')
-        general_sprites['respawn_bottom_wall'] = _load_sprite_frame('L-All/Respawn_Bottom')
-        general_sprites['start_screen'] = _load_sprite_frame('L-All/First')
-        general_sprites['transition_bar'], _ = jr.pad_to_match([_load_sprite_frame('L-All/TeleportBar'),
-                                                             _load_sprite_frame('L-All/TeleportBar2')])
+        # 4. Get specific color IDs we'll need for procedural drawing
+        self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.WHITE_ID = self.COLOR_TO_ID.get((255, 255, 255), 0)
 
-        # digits for score
-        digit_path = os.path.join(self.sprite_path, 'L-All/Digit{}.npy')
-        digit_sprites = jr.load_and_pad_digits(digit_path , num_chars=10)
-        general_sprites['digits'] = digit_sprites
+        # 5. Organize loaded masks/offsets into the nested structure
+        #    the render() function expects.
+        self._post_process_sprites()
 
-        # lives
-        general_sprites['player_life'] = _load_sprite_frame('L-All/Player_Life')
+    def _post_process_sprites(self):
+        """
+        Organizes the flat SHAPE_MASKS and FLIP_OFFSETS from setup
+        into the nested list[dict] structure that the render() method expects.
+        """
 
-        # enemy height indicator
-        general_sprites['black_line'] = _load_sprite_frame('L-All/BlackLine')
+        # --- General Sprites ---
+        self.general_sprites = {}
+        self.general_offsets = {}
 
-        # level dependent sprites
-        sprites = []
+        # Simple 1-to-1 mappings
+        simple_general_keys = [
+            'top_wall', 'bottom_wall', 'respawn_bottom_wall', 'start_screen',
+            'player_life', 'black_line', 'transition_bar', 'digits'
+        ]
+        for key in simple_general_keys:
+            self.general_sprites[key] = self.SHAPE_MASKS[key]
+            self.general_offsets[key] = self.FLIP_OFFSETS[key]
 
-        cloud_sprites = []
-        background_sprites = []
-        respawn_top_wall_sprites = []
-        player_sprites = []
-        enemy_sprites = []
-        player_missile_sprites = []
-        enemy_missile_sprites = []
-        enemy_remaining_sprites = []
+        # Sliced mappings
+        self.general_sprites['transition_player_pos'] = self.SHAPE_MASKS['all_player_sprites'][50:58]
+        self.general_sprites['transition_player_death'] = self.SHAPE_MASKS['all_player_sprites'][58]
+        self.general_offsets['transition_player_pos'] = self.FLIP_OFFSETS['all_player_sprites']
+        self.general_offsets['transition_player_death'] = self.FLIP_OFFSETS['all_player_sprites']
 
-        # append all level dependent sprites to their respective list
-        for level in ["L1", "L2", "L3", "L4", "L5"]:
+        # --- Level-Dependent Sprites ---
+        self.level_sprites = []
+        self.level_offsets = []
 
-            # cloud
-            cloud_sprites.append(_load_sprite_frame(f'{level}/{level}_Cloud'))
+        for i in range(5):
+            level_dict_masks = {}
+            level_dict_offsets = {}
 
-            # background and decoration
-            background_sprites.append(_load_sprite_frame(f'{level}/{level}_Background'))
-            respawn_top_wall_sprites.append(_load_sprite_frame(f'{level}/{level}_Top'))
+            # Simple group slices
+            level_dict_masks['cloud'] = self.SHAPE_MASKS['all_clouds'][i]
+            level_dict_offsets['cloud'] = self.FLIP_OFFSETS['all_clouds']
+            
+            level_dict_masks['background'] = self.SHAPE_MASKS['all_backgrounds'][i]
+            level_dict_offsets['background'] = self.FLIP_OFFSETS['all_backgrounds']
+            
+            level_dict_masks['respawn_top_wall'] = self.SHAPE_MASKS['all_respawn_top_walls'][i]
+            level_dict_offsets['respawn_top_wall'] = self.FLIP_OFFSETS['all_respawn_top_walls']
+            
+            level_dict_masks['player_missile'] = self.SHAPE_MASKS['all_player_missiles'][i]
+            level_dict_offsets['player_missile'] = self.FLIP_OFFSETS['all_player_missiles']
+            
+            level_dict_masks['enemy_missile'] = self.SHAPE_MASKS['all_enemy_missiles'][i]
+            level_dict_offsets['enemy_missile'] = self.FLIP_OFFSETS['all_enemy_missiles']
 
-            # living player
-            for i in range(8):
-                player_sprites.append(_load_sprite_frame(f'{level}/{level}_Player_Pos{i}'))
-            # player death animation
-            for i in range(2):
-                player_sprites.append(_load_sprite_frame(f'{level}/{level}_Player_Death{i+1}'))
+            # Complex group slices
+            level_dict_masks['player_pos'] = self.SHAPE_MASKS['all_player_sprites'][i*10 : i*10+8]
+            level_dict_masks['player_death'] = self.SHAPE_MASKS['all_player_sprites'][i*10+8 : (i+1)*10]
+            level_dict_offsets['player_pos'] = self.FLIP_OFFSETS['all_player_sprites']
+            level_dict_offsets['player_death'] = self.FLIP_OFFSETS['all_player_sprites']
 
-            # enemy
-            if level in ["L1", "L2", "L4"]:
-                for i in range(8):
-                    enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Pos{i}'))
-                for i in range(2): # some sprites are included multiple times to ensure equal array size for all levels
-                    enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Pos{i}'))
-            if level == "L3":
-                for i in ["01", "02", "11", "12", "21", "22", "31", "32", "41", "42"]:
-                    enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Pos{i}'))
-            if level == "L5":
-                for i in range(5): # some sprites are included multiple times to ensure equal array size for all levels
-                    for j in range(2):
-                        enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Pos{j}'))
+            level_dict_masks['enemy_pos'] = self.SHAPE_MASKS['all_enemy_sprites'][i*15 : i*15+10]
+            level_dict_masks['enemy_death'] = self.SHAPE_MASKS['all_enemy_sprites'][i*15+10]
+            level_dict_offsets['enemy_pos'] = self.FLIP_OFFSETS['all_enemy_sprites']
+            level_dict_offsets['enemy_death'] = self.FLIP_OFFSETS['all_enemy_sprites']
 
-            # enemy death animation
-            enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Death'))
+            # Boss sprites (4 per level)
+            boss_sprites = self.SHAPE_MASKS['all_enemy_sprites'][i*15+11 : i*15+15]
+            (
+                level_dict_masks['level_boss_left_right'],
+                level_dict_masks['level_boss_left_left'],
+                level_dict_masks['level_boss_right_left'],
+                level_dict_masks['level_boss_right_right']
+            ) = boss_sprites
+            level_dict_offsets['level_boss_left_right'] = self.FLIP_OFFSETS['all_enemy_sprites']
+            level_dict_offsets['level_boss_left_left'] = self.FLIP_OFFSETS['all_enemy_sprites']
+            level_dict_offsets['level_boss_right_left'] = self.FLIP_OFFSETS['all_enemy_sprites']
+            level_dict_offsets['level_boss_right_right'] = self.FLIP_OFFSETS['all_enemy_sprites']
 
-            # level boss
-            if level in ["L1", "L2", "L4", "L5"]:
-                enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Boss_Pos0')) # included twice to ensure equal array size
-                enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Boss_Pos0'))
-                enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Boss_Pos1')) # included twice to ensure equal array size
-                enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Boss_Pos1'))
-            if level == "L3":
-                for i in ["01", "02", "11", "12"]:
-                    enemy_sprites.append(_load_sprite_frame(f'{level}/{level}_Boss_Pos{i}'))
-
-            # missiles
-            player_missile_sprites.append(_load_sprite_frame(f'{level}/{level}_Player_Bullet'))
-            enemy_missile_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Bullet'))
-
-            # enemies remaining indicators
-            enemy_remaining_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Life'))
-            enemy_remaining_sprites.append(_load_sprite_frame(f'{level}/{level}_Enemy_Death_Life'))
-
-        # add player pos and death sprites for level transition
-        for i in range(8):
-            player_sprites.append(_load_sprite_frame(f'L-All/TP_Player_Pos{i}'))
-        player_sprites.append(_load_sprite_frame('L-All/TP_Player_Death'))
-                                                          
-        # pad all sprites since they have to be used interchangeably
-        # (and jax enforces same sizes)
-        cloud_sprites, _ = jr.pad_to_match(cloud_sprites)
-        background_sprites, _ = jr.pad_to_match(background_sprites)
-        respawn_top_wall_sprites, _ = jr.pad_to_match(respawn_top_wall_sprites)
-        player_sprites, _ = jr.pad_to_match(player_sprites)
-        enemy_sprites, _ = jr.pad_to_match(enemy_sprites)
-        player_missile_sprites, _ = jr.pad_to_match(player_missile_sprites)
-        enemy_missile_sprites, _ = jr.pad_to_match(enemy_missile_sprites)
-        enemy_remaining_sprites, _ = jr.pad_to_match(enemy_remaining_sprites)
-
-        # add sprites from padded lists to their respective level sprites dict
-        for i in range(0, 5):
-
-            level_sprites: Dict[str, Any] = {}
-
-            # cloud
-            level_sprites['cloud'] = cloud_sprites[i]
-
-            # decoration
-            level_sprites['background'] = background_sprites[i]
-            level_sprites['respawn_top_wall'] = respawn_top_wall_sprites[i]
-
-            # player
-            level_sprites['player_pos'] = player_sprites[i*10:i*10+8]
-            level_sprites['player_death'] = player_sprites[i*10+8:(i+1)*10]
-
-            # enemy
-            level_sprites['enemy_pos'] = enemy_sprites[i*15:i*15+10]
-            level_sprites['enemy_death'] = enemy_sprites[i*15+10]
-
-            # level boss
-            (level_sprites['level_boss_left_right'], level_sprites['level_boss_left_left'], 
-             level_sprites['level_boss_right_left'], level_sprites['level_boss_right_right']) = enemy_sprites[i*15+11:i*15+15]
-
-            # missiles  
-            level_sprites['player_missile'] = player_missile_sprites[i]
-            level_sprites['enemy_missile'] = enemy_missile_sprites[i]
-
-            # enemies remaining indicator
-            level_sprites['enemy_remaining'] = enemy_remaining_sprites[i*2]
-            level_sprites['enemy_remaining_brown'] = enemy_remaining_sprites[i*2+1]
-
-            sprites.append(level_sprites)
-
-        # player sprites for level transition
-        general_sprites['transition_player_pos'] = player_sprites[50:58]
-        general_sprites['transition_player_death'] = player_sprites[58]
-
-        sprites.insert(0, general_sprites)
-
-        # expand all sprites
-        for sprite_dict in sprites:
-            for key, value in sprite_dict.items():
-                if isinstance(value, (list, tuple)):
-                    sprite_dict[key] = jnp.array([jnp.expand_dims(sprite, axis=0) for sprite in value])
-                else:
-                    sprite_dict[key] = jnp.expand_dims(value, axis=0)
-
-        return sprites
+            # Enemy remaining indicators (2 per level)
+            level_dict_masks['enemy_remaining'] = self.SHAPE_MASKS['all_enemy_remaining'][i*2]
+            level_dict_masks['enemy_remaining_brown'] = self.SHAPE_MASKS['all_enemy_remaining'][i*2+1]
+            level_dict_offsets['enemy_remaining'] = self.FLIP_OFFSETS['all_enemy_remaining']
+            level_dict_offsets['enemy_remaining_brown'] = self.FLIP_OFFSETS['all_enemy_remaining']
+            
+            self.level_sprites.append(level_dict_masks)
+            self.level_offsets.append(level_dict_offsets)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TimePilotState) -> chex.Array:
@@ -1520,48 +1546,48 @@ class TimePilotRenderer(JAXGameRenderer):
 
         Args:
             state: A TimePilotState object containing the current game state.
-
         Returns:
             A JAX array representing the rendered frame.
         """
-        # empty raster
-        raster = jr.create_initial_frame(width=self.consts.WIDTH, height=self.consts.HEIGHT)
 
-        # get sprites according to current level (use sprites for preceding level during first half of level transition animation)
-        general_sprites = self.sprites[0]
-        level_sprites = jax.lax.cond(
+        # --- 1. Setup ---
+        # Start with the empty background raster (all BLACK_ID)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Get general sprites
+        general_sprites = self.general_sprites
+        general_offsets = self.general_offsets
+
+        # Get sprites for the current level
+        # (use sprites for preceding level during first half of level transition animation)
+        level_idx = state.level - 1
+        level_idx_prev = jnp.maximum(0, level_idx - 1)
+        
+        # Select correct index for level sprites
+        current_level_idx = jax.lax.cond(
             jnp.logical_and(state.next_level_transition, state.respawn_timer >= self.consts.TRANSITION_DELAY_SECOND_STAGE),
-            lambda: jax.lax.switch(
-                state.level - 1,
-                [
-                    lambda: self.sprites[5],
-                    lambda: self.sprites[1],
-                    lambda: self.sprites[2],
-                    lambda: self.sprites[3],
-                    lambda: self.sprites[4]
-                ]
-            ),
-            lambda: jax.lax.switch(
-                state.level - 1,
-                [
-                    lambda: self.sprites[1],
-                    lambda: self.sprites[2],
-                    lambda: self.sprites[3],
-                    lambda: self.sprites[4],
-                    lambda: self.sprites[5]
-                ]
-            )
+            lambda: jax.lax.switch(level_idx, [lambda: 4, lambda: 0, lambda: 1, lambda: 2, lambda: 3]), # Use prev level (5->4, 1->0, etc.)
+            lambda: jax.lax.switch(level_idx, [lambda: 0, lambda: 1, lambda: 2, lambda: 3, lambda: 4]), # Use current level
         )
 
-        # background
-        frame_bg = jr.get_sprite_frame(level_sprites['background'], 0)
-        raster = jr.render_at(raster, 0, self.consts.MIN_ENTITY_Y, frame_bg)
+        # Select the correct dictionary of SHAPE_MASKS and OFFSETS
+        level_sprites = jax.tree_util.tree_map(lambda *args: jnp.stack(args)[current_level_idx], *self.level_sprites)
+        level_offsets = jax.tree_util.tree_map(lambda *args: jnp.stack(args)[current_level_idx], *self.level_offsets)
 
-        # set player sprite
-        player_sprite = level_sprites['player_pos'][state.player_rotation]
-        # use death animation instead if player has just died
-        player_sprite = jax.lax.cond(
-            jnp.logical_and(
+        # --- 2. Render Background Elements ---
+        # Background texture (ground)
+        raster = self.jr.render_at(
+            raster, 0, self.consts.MIN_ENTITY_Y,
+            level_sprites['background'],
+            flip_offset=level_offsets['background']
+        )
+
+        # --- 3. Render Player ---
+        # Select player sprite mask based on state
+        player_sprite_mask = level_sprites['player_pos'][state.player_rotation]
+        
+        # Check death animation state
+        is_death_frame_1 = jnp.logical_and(
                 state.player_active <= 0,
                 jnp.logical_or(
                 jnp.isin(state.respawn_timer, jnp.array(range(317, 320))), 
@@ -1571,12 +1597,9 @@ class TimePilotRenderer(JAXGameRenderer):
                         jnp.isin(state.respawn_timer, jnp.array(range(285, 293)))), 
                     jnp.logical_or(
                         jnp.isin(state.respawn_timer, jnp.array(range(269, 277))), 
-                        jnp.isin(state.respawn_timer, jnp.array(range(256, 261))))))),
-            lambda: level_sprites['player_death'][0],
-            lambda: player_sprite
-        )
-        player_sprite = jax.lax.cond(
-            jnp.logical_and(
+                        jnp.isin(state.respawn_timer, jnp.array(range(256, 261)))))))
+        
+        is_death_frame_2 = jnp.logical_and(
                 state.player_active <= 0,
                 jnp.logical_or(
                     jnp.logical_or(
@@ -1584,259 +1607,278 @@ class TimePilotRenderer(JAXGameRenderer):
                         jnp.isin(state.respawn_timer, jnp.array(range(293, 301)))), 
                     jnp.logical_or(
                         jnp.isin(state.respawn_timer, jnp.array(range(277, 285))), 
-                        jnp.isin(state.respawn_timer, jnp.array(range(261, 269)))))),
-            lambda: level_sprites['player_death'][1],
-            lambda: player_sprite
+                        jnp.isin(state.respawn_timer, jnp.array(range(261, 269))))))
+
+        player_sprite_mask = jax.lax.cond(
+            is_death_frame_1, lambda: level_sprites['player_death'][0], lambda: player_sprite_mask
         )
-        # turn player white for transition of next level
-        player_sprite = jax.lax.cond(
-            jnp.logical_and(state.next_level_transition > 0, state.respawn_timer <= self.consts.TRANSITION_DELAY),
-            lambda: general_sprites['transition_player_pos'][state.player_rotation],
-            lambda: player_sprite
-        )
-        # use white death animation instead if player has just died
-        player_sprite = jax.lax.cond(
-            jnp.logical_and(
-                state.player_active <= 0,
-                jnp.logical_and(state.next_level_transition > 0, 
-                                state.respawn_timer <= self.consts.TRANSITION_DELAY)
-            ),
-            lambda: general_sprites['transition_player_death'],
-            lambda: player_sprite
+        player_sprite_mask = jax.lax.cond(
+            is_death_frame_2, lambda: level_sprites['player_death'][1], lambda: player_sprite_mask
         )
 
-        frame_player = jr.get_sprite_frame(player_sprite, state.step_counter)
-        # do not render player during first stage of player death animation
+        # Check for level transition (white player)
+        in_transition_anim = jnp.logical_and(state.next_level_transition > 0, state.respawn_timer <= self.consts.TRANSITION_DELAY)
+        
+        player_sprite_mask = jax.lax.cond(
+            in_transition_anim,
+            lambda: general_sprites['transition_player_pos'][state.player_rotation],
+            lambda: player_sprite_mask
+        )
+        player_sprite_mask = jax.lax.cond(
+            jnp.logical_and(state.player_active <= 0, in_transition_anim),
+            lambda: general_sprites['transition_player_death'],
+            lambda: player_sprite_mask
+        )
+
+        # Get the correct flip offset (all player sprites share one)
+        player_offset = level_offsets['player_pos'] # This is just self.FLIP_OFFSETS['all_player_sprites']
+
+        # Render player (conditionally)
         raster = jax.lax.cond(
             jnp.logical_or(state.respawn_timer < self.consts.TRANSITION_DELAY_SECOND_STAGE,
                            state.respawn_timer >= self.consts.TRANSITION_DELAY),
-            lambda: jr.render_at(raster, self.consts.PLAYER_X, self.consts.PLAYER_Y, frame_player), 
-            lambda: raster
+            lambda r: self.jr.render_at(r, self.consts.PLAYER_X, self.consts.PLAYER_Y, player_sprite_mask, flip_offset=player_offset), 
+            lambda r: r,
+            raster
         )
 
-        # set player missile sprite
-        frame_missile = jr.get_sprite_frame(level_sprites['player_missile'], state.step_counter)
-        # only render player missile if it is active
+        # --- 4. Render Player Missile ---
         raster = jax.lax.cond(
             state.player_missile_state[3] > 0,
-            lambda: jr.render_at(raster, state.player_missile_state[0], state.player_missile_state[1], frame_missile),
-            lambda: raster
+            lambda r: self.jr.render_at_clipped(
+                r, state.player_missile_state[0], state.player_missile_state[1],
+                level_sprites['player_missile'],
+                flip_offset=level_offsets['player_missile']
+            ),
+            lambda r: r,
+            raster
         )
 
-        # enemies
-        def get_plane_frame(i):
-            """
-            Get sprite and render offset for plane type enemies (levels 1, 2, 4)
-            """
-
-            # get enemy sprite
-            enemy_sprite = level_sprites['enemy_pos'][state.enemy_states[0][2]]
-            # use level boss sprite instead if enemy is level boss
-            enemy_sprite = jax.lax.cond(
+        # --- 5. Render Enemies ---
+        # Helper functions remain inside, they are JAX-pure
+        def get_plane_frame(i, current_level_sprites, current_level_offsets):
+            enemy_sprite_mask = current_level_sprites['enemy_pos'][state.enemy_states[0][2]]
+            enemy_sprite_mask = jax.lax.cond(
                 state.level_boss == i,
                 lambda: jax.lax.cond(
                     jnp.isin(state.enemy_states[i][2], jnp.array(range(1, 5))),
-                    lambda: level_sprites['level_boss_left_left'],
-                    lambda: level_sprites['level_boss_right_right']
+                    lambda: current_level_sprites['level_boss_left_left'],
+                    lambda: current_level_sprites['level_boss_right_right']
                 ),
-                lambda: enemy_sprite
+                lambda: enemy_sprite_mask
             )
-            # use death animation sprite instead if enemy has just died
-            enemy_sprite = jax.lax.cond(
+            enemy_sprite_mask = jax.lax.cond(
                 state.enemy_death_timers[i] > 0,
-                lambda: level_sprites['enemy_death'],
-                lambda: enemy_sprite
+                lambda: current_level_sprites['enemy_death'],
+                lambda: enemy_sprite_mask
             )
-
-            # return sprite and render offset of 0
-            return jr.get_sprite_frame(enemy_sprite, 0), (0, 0)
+            return enemy_sprite_mask, (0, 0)
         
-        def get_heli_frame(i):
-            """
-            Get sprite and render offset for heli/ufo type enemies (levels 3, 5)
-            """
-
-            # get indices of current animation frame as well as sprite according to rotation
+        def get_heli_frame(i, current_level_sprites, current_level_offsets):
             frame_idx = jnp.array((state.step_counter%8) >= 4, jnp.int32)
             sprite_idx = ((state.enemy_states[i][2]%2) + 1 + jnp.array(
                 state.enemy_states[i][2]>4, jnp.int32)*2)*jnp.array((state.enemy_states[i][2]%4)>0, jnp.int32)
-
-            # get render offset according to current level
+            
             render_offset = jax.lax.cond(
                 state.level == 5,
                 lambda: (0, 0),
                 lambda: (jnp.array(sprite_idx==0, jnp.int32)*frame_idx, 
                          (jnp.array(sprite_idx==4, jnp.int32)-jnp.array(sprite_idx==2, jnp.int32))*frame_idx)
             )
-
-            # get enemy sprite
-            enemy_sprite = level_sprites['enemy_pos'][2*sprite_idx + frame_idx]
-            # use level boss sprite instead if enemy is level boss
-            enemy_sprite, render_offset = jax.lax.cond(
+            
+            enemy_sprite_mask = current_level_sprites['enemy_pos'][2*sprite_idx + frame_idx]
+            
+            # Boss logic
+            boss_mask_A = jnp.array(current_level_sprites['level_boss_left_left']*frame_idx + 
+                                  current_level_sprites['level_boss_left_right']*(1-frame_idx), jnp.uint8)
+            boss_mask_B = jnp.array(current_level_sprites['level_boss_right_left']*frame_idx + 
+                                  current_level_sprites['level_boss_right_right']*(1-frame_idx), jnp.uint8)
+            enemy_sprite_mask, render_offset = jax.lax.cond(
                 state.level_boss == i,
                 lambda: (jax.lax.cond(
                     jnp.isin(state.enemy_states[i][2], jnp.array(range(1, 5))),
-                    lambda: jnp.array(level_sprites['level_boss_left_left']*frame_idx + 
-                                      level_sprites['level_boss_left_right']*(1-frame_idx), jnp.uint8),
-                    lambda: jnp.array(level_sprites['level_boss_right_left']*frame_idx + 
-                                      level_sprites['level_boss_right_right']*(1-frame_idx), jnp.uint8)
+                    lambda: boss_mask_A,
+                    lambda: boss_mask_B
                 ), (0, 0)),
-                lambda: (enemy_sprite, render_offset)
+                lambda: (enemy_sprite_mask, render_offset)
             )
-            # use death animation sprite instead if enemy has just died
-            enemy_sprite = jax.lax.cond(
+            enemy_sprite_mask = jax.lax.cond(
                 state.enemy_death_timers[i] > 0,
-                lambda: level_sprites['enemy_death'],
-                lambda: enemy_sprite
+                lambda: current_level_sprites['enemy_death'],
+                lambda: enemy_sprite_mask
             )
-
-            return jr.get_sprite_frame(enemy_sprite, 0), render_offset
+            return enemy_sprite_mask, render_offset
         
-        # use sprites for preceding level during first half of level transition animation
         level_to_use_sprites_from = state.level - jnp.logical_and(state.next_level_transition,
                                                                   state.respawn_timer >= self.consts.TRANSITION_DELAY_SECOND_STAGE).astype(jnp.int32)
-        
-        def render_enemy(i, raster):
-
-            # use plane or heli frame according to current level
-            frame, render_offset = jax.lax.cond(
+        def render_enemy(i, r):
+            # Select frame logic
+            frame_mask, render_offset_xy = jax.lax.cond(
                 jnp.logical_or(level_to_use_sprites_from == 3, level_to_use_sprites_from == 5),
-                lambda: get_heli_frame(i),
-                lambda: get_plane_frame(i)
+                lambda: get_heli_frame(i, level_sprites, level_offsets),
+                lambda: get_plane_frame(i, level_sprites, level_offsets)
             )
-
-            # get height indicator frame
-            hi_sprite = general_sprites['black_line']
-            hi_frame = jr.get_sprite_frame(hi_sprite, state.step_counter)
-            # get position of height indicator belonging to enemy
+            # All enemy sprites share the same padding/offset
+            flip_offset = level_offsets['enemy_pos']
+            # Height indicator
+            hi_mask = general_sprites['black_line']
+            hi_offset = general_offsets['black_line']
             hi_interval = (self.consts.MAX_ENTITY_Y - self.consts.MIN_ENTITY_Y)/9
             hi_rel_height = jnp.array((state.enemy_states[i][1] - self.consts.MIN_ENTITY_Y)/hi_interval, jnp.int32)
             hi_height = self.consts.MIN_ENTITY_Y + hi_rel_height*hi_interval
-
-            # render enemy
-            ret_raster = jr.render_at(raster, state.enemy_states[i][0] + render_offset[0],
-                                      state.enemy_states[i][1] + render_offset[1], frame)
-            # render height indicator
-            ret_raster = jr.render_at(ret_raster, 0, hi_height, hi_frame)
-            # do not render enemy or height indicator if enemy is inactive
+            # Render enemy
+            ret_raster = self.jr.render_at_clipped(
+                r, state.enemy_states[i][0] + render_offset_xy[0],
+                state.enemy_states[i][1] + render_offset_xy[1],
+                frame_mask, flip_offset=flip_offset
+            )
+            # Render height indicator
+            ret_raster = self.jr.render_at_clipped(ret_raster, 0, hi_height, hi_mask, flip_offset=hi_offset)
+            
             return jax.lax.cond(
                 jnp.logical_or(state.enemy_death_timers[i] > 0, state.enemy_states[i][3] > 0),
                 lambda: ret_raster,
-                lambda: raster
-                )
-
-        # render enemies
+                lambda: r
+            )
+        
         raster = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ENEMIES, render_enemy, raster)
 
-        # enemy missiles
-        frame_enemy_missile = jr.get_sprite_frame(level_sprites['enemy_missile'], state.step_counter)
-        # only render enemy missile if it is active
-        raster = jax.lax.fori_loop(
-            0,
-            self.consts.MAX_ENEMY_MISSILES,
-            lambda i, val: jax.lax.cond(
+        # --- 6. Render Enemy Missiles ---
+        missile_mask = level_sprites['enemy_missile']
+        missile_offset = level_offsets['enemy_missile']
+        def render_enemy_missile(i, r):
+            return jax.lax.cond(
                 state.enemy_missile_states[i][3] > 0,
-                lambda: jr.render_at(val, state.enemy_missile_states[i][0], state.enemy_missile_states[i][1], frame_enemy_missile),
-                lambda: val
+                lambda: self.jr.render_at_clipped(
+                    r, state.enemy_missile_states[i][0], state.enemy_missile_states[i][1],
+                    missile_mask, flip_offset=missile_offset
                 ),
-            raster)
+                lambda: r
+            )
+        raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, render_enemy_missile, raster)
 
-        # clouds
-        sprite = level_sprites['cloud']
-        frame = jr.get_sprite_frame(sprite, state.step_counter)
-        raster = jr.render_at(raster, state.cloud_positions[0][0], state.cloud_positions[0][1], frame, flip_horizontal=True)
-        raster = jr.render_at(raster, state.cloud_positions[1][0], state.cloud_positions[1][1], frame, flip_horizontal=True)
-        raster = jr.render_at(raster, state.cloud_positions[2][0], state.cloud_positions[2][1], frame, flip_horizontal=True)
-        raster = jr.render_at(raster, state.cloud_positions[3][0], state.cloud_positions[3][1], frame, flip_horizontal=True)
+        # --- 7. Render Clouds ---
+        cloud_mask = level_sprites['cloud']
+        cloud_offset = level_offsets['cloud']
+        def render_cloud(i, r):
+            return self.jr.render_at_clipped(
+                r, state.cloud_positions[i][0], state.cloud_positions[i][1],
+                cloud_mask, flip_horizontal=True, flip_offset=cloud_offset
+            )
+        raster = jax.lax.fori_loop(0, 4, render_cloud, raster)
 
-        # top and bottom wall
-        # top
-        black = jnp.array((0,0,0), dtype=jnp.uint8)
-        raster = raster.at[0:self.consts.BLACK_BORDER_TOP_HEIGHT, :, :].set(black)
-        frame_top_wall = jr.get_sprite_frame(general_sprites['top_wall'], state.step_counter)
-        raster = jr.render_at(raster, 0, self.consts.BLACK_BORDER_TOP_HEIGHT, frame_top_wall)
-        # bottom
-        white = jnp.array((255,255,255), dtype=jnp.uint8)
-        raster = raster.at[self.consts.MAX_ENTITY_Y + 1:self.consts.MAX_ENTITY_Y + 2, :, :].set(white)
-        raster = raster.at[self.consts.MAX_ENTITY_Y + self.consts.WALL_BOTTOM_HEIGHT:self.consts.MAX_ENTITY_Y + 
-                           1 + self.consts.WALL_BOTTOM_HEIGHT, :, :].set(white)
-        frame_bottom_wall = jr.get_sprite_frame(general_sprites['bottom_wall'], state.step_counter)
-        raster = jr.render_at(raster, 0, self.consts.MAX_ENTITY_Y + 2, frame_bottom_wall)
-        raster = raster.at[self.consts.MAX_ENTITY_Y + 1 + self.consts.WALL_BOTTOM_HEIGHT:self.consts.HEIGHT, :, :].set(black)
+        # --- 8. Render UI (Top/Bottom Walls) ---
+        # Draw black/white bars using draw_rects
+        raster = self.jr.draw_rects(raster, jnp.array([[0, 0]]), jnp.array([[160, self.consts.BLACK_BORDER_TOP_HEIGHT]]), self.BLACK_ID)
+        raster = self.jr.draw_rects(raster, jnp.array([[0, self.consts.MAX_ENTITY_Y + 1]]), jnp.array([[160, 1]]), self.WHITE_ID)
+        raster = self.jr.draw_rects(raster, jnp.array([[0, self.consts.MAX_ENTITY_Y + self.consts.WALL_BOTTOM_HEIGHT]]), jnp.array([[160, 1]]), self.WHITE_ID)
+        raster = self.jr.draw_rects(raster, jnp.array([[0, self.consts.MAX_ENTITY_Y + 1 + self.consts.WALL_BOTTOM_HEIGHT]]), jnp.array([[160, 210 - (self.consts.MAX_ENTITY_Y + 1 + self.consts.WALL_BOTTOM_HEIGHT)]]), self.BLACK_ID)
 
-        # score
-        digit_sprites = general_sprites.get('digits', None)
-        digits = jr.int_to_digits(state.score, max_digits = 6)
-        raster = jr.render_label_selective(raster, 57, 7, digits, digit_sprites[0], 0, 6, spacing = 8)
+        # Draw wall sprites
+        raster = self.jr.render_at(
+            raster, 0, self.consts.BLACK_BORDER_TOP_HEIGHT,
+            general_sprites['top_wall'], flip_offset=general_offsets['top_wall']
+        )
+        raster = self.jr.render_at(
+            raster, 0, self.consts.MAX_ENTITY_Y + 2,
+            general_sprites['bottom_wall'], flip_offset=general_offsets['bottom_wall']
+        )
         
-        # lives 
-        raster = jr.render_indicator(
+        # --- 9. Render UI (Score, Lives) ---
+        # Score
+        digit_masks = general_sprites['digits']
+        digits = self.jr.int_to_digits(state.score, max_digits = 6)
+        raster = self.jr.render_label_selective(raster, 57, 7, digits, digit_masks, 0, 6, spacing = 8, max_digits_to_render=6)
+        
+        # Lives 
+        raster = self.jr.render_indicator(
             raster, 88, 18, state.lives - 1, 
-            jr.get_sprite_frame(general_sprites['player_life'], state.step_counter), 
-            spacing=-8
+            general_sprites['player_life'], 
+            spacing=-8, max_value=5
         )
 
-        # use different top and bottom wall for respawn animation
-        frame_respawn_top_wall = jr.get_sprite_frame(level_sprites['respawn_top_wall'], state.step_counter)
-        frame_respawn_bottom_wall = jr.get_sprite_frame(general_sprites['respawn_bottom_wall'], state.step_counter)
+        # --- 10. Handle Respawn/Transition Overlays ---
+        # Respawn walls
+        respawn_top_wall_mask = level_sprites['respawn_top_wall']
+        respawn_top_wall_offset = level_offsets['respawn_top_wall']
+        respawn_bottom_wall_mask = general_sprites['respawn_bottom_wall']
+        respawn_bottom_wall_offset = general_offsets['respawn_bottom_wall']
+
+        def render_respawn_walls(r):
+            r_top = self.jr.render_at(r, 0, self.consts.BLACK_BORDER_TOP_HEIGHT, respawn_top_wall_mask, flip_offset=respawn_top_wall_offset)
+            r_bottom = self.jr.render_at(r_top, 0, self.consts.MAX_ENTITY_Y + 2, respawn_bottom_wall_mask, flip_offset=respawn_bottom_wall_offset)
+            return r_bottom
 
         raster = jax.lax.cond(
             jnp.logical_and(state.respawn_timer > 0, 
                             state.respawn_timer <= self.consts.TRANSITION_DELAY_SECOND_STAGE + self.consts.TRANSITION_DELAY_FIRST_STAGE),
-            lambda: jr.render_at(
-                jr.render_at(raster, 0, self.consts.MAX_ENTITY_Y + 2, frame_respawn_bottom_wall), 
-                0, self.consts.BLACK_BORDER_TOP_HEIGHT, frame_respawn_top_wall),
-            lambda: raster
+            render_respawn_walls,
+            lambda r: r,
+            raster
         )
 
-        # enemies remaining line (different color during respawn animation)
-        enemy_remaining_frame = jax.lax.cond(
+        # Enemies remaining line
+        enemy_remaining_mask = jax.lax.cond(
             jnp.logical_and(state.respawn_timer > 0, 
                             state.respawn_timer <= self.consts.TRANSITION_DELAY_SECOND_STAGE + self.consts.TRANSITION_DELAY_FIRST_STAGE),
-            lambda: jr.get_sprite_frame(level_sprites['enemy_remaining_brown'], state.step_counter),
-            lambda: jr.get_sprite_frame(level_sprites['enemy_remaining'], state.step_counter)
+            lambda: level_sprites['enemy_remaining_brown'],
+            lambda: level_sprites['enemy_remaining']
         )
+        enemy_remaining_offset = level_offsets['enemy_remaining'] # Offset is the same
 
-        # do not render enemies remaining during first stage of level transition
+        # Do not render enemies remaining during first stage of level transition
         render_enemies_remaining = jnp.logical_not(
             jnp.logical_and(state.next_level_transition > 0, 
                             state.respawn_timer >= self.consts.TRANSITION_DELAY_SECOND_STAGE))
+        
         raster = jax.lax.cond(
             jnp.logical_and(render_enemies_remaining, state.enemies_remaining > self.consts.ENEMY_KILLS_TO_ELIMINATE),
-            lambda: jr.render_at(raster, 72, 180, enemy_remaining_frame),
-            lambda: raster
+            lambda r: self.jr.render_at(r, 72, 180, enemy_remaining_mask, flip_offset=enemy_remaining_offset),
+            lambda r: r,
+            raster
         )
         raster = jax.lax.cond(
             jnp.logical_and(render_enemies_remaining, state.enemies_remaining > 0),
-            lambda: jr.render_at(raster, 80, 181, enemy_remaining_frame),
-            lambda: raster
+            lambda r: self.jr.render_at(r, 80, 181, enemy_remaining_mask, flip_offset=enemy_remaining_offset),
+            lambda r: r,
+            raster
         )
 
-        # next level transition animation
-        next_level_transition_raster = jr.render_at(raster, 0, self.consts.MIN_ENTITY_Y, frame_bg)
-        # flash bar behind player
-        next_level_transition_raster = jax.lax.cond(
-            state.respawn_timer % 8 > 3,
-            lambda: jr.render_at(next_level_transition_raster, 0, 103, 
-                                 jr.get_sprite_frame(general_sprites['transition_bar'][0], state.step_counter)),
-            lambda: jr.render_at(next_level_transition_raster, 0, 103, 
-                                 jr.get_sprite_frame(general_sprites['transition_bar'][1], state.step_counter))
-        )
-        next_level_transition_raster = jr.render_at(next_level_transition_raster, self.consts.PLAYER_X, 
-                                                    self.consts.PLAYER_Y, frame_player)
-        # use original rater outside of level transition
+        # Next level transition animation
+        def render_level_transition(r):
+            # Redraw background
+            r_bg = self.jr.render_at(r, 0, self.consts.MIN_ENTITY_Y, level_sprites['background'], flip_offset=level_offsets['background'])
+            
+            # Flash bar
+            bar_mask = jax.lax.cond(
+                state.respawn_timer % 8 > 3,
+                lambda: general_sprites['transition_bar'][0],
+                lambda: general_sprites['transition_bar'][1]
+            )
+            r_bar = self.jr.render_at(r_bg, 0, 103, bar_mask, flip_offset=general_offsets['transition_bar'])
+            
+            # Redraw (white) player on top
+            r_player = self.jr.render_at(r_bar, self.consts.PLAYER_X, self.consts.PLAYER_Y, player_sprite_mask, flip_offset=player_offset)
+            return r_player
+
         raster = jax.lax.cond(
             jnp.logical_and(state.next_level_transition, state.respawn_timer <= self.consts.TRANSITION_DELAY),
-            lambda: next_level_transition_raster,
-            lambda: raster,
+            render_level_transition,
+            lambda r: r,
+            raster,
         )
 
-        # render start screen at start of game
-        start_screen_frame = jr.get_sprite_frame(general_sprites['start_screen'], state.step_counter)
+        # --- 11. Render Start Screen ---
         raster = jax.lax.cond(
             state.step_counter < self.consts.START_SCREEN_DELAY,
-            lambda: jr.render_at(raster, 0, 0, start_screen_frame),
-            lambda: raster
+            lambda r: self.jr.render_at(
+                r, 0, 0,
+                general_sprites['start_screen'],
+                flip_offset=general_offsets['start_screen']
+            ),
+            lambda r: r,
+            raster
         )
 
-        return raster
+        # --- 12. Final Palette Lookup ---
+        return self.jr.render_from_palette(raster, self.PALETTE)

@@ -11,13 +11,65 @@ from typing import Tuple, NamedTuple, Callable
 import jax
 import jax.numpy as jnp
 import chex
-import pygame
-import jaxatari.rendering.jax_rendering_utils_legacy as jru
+import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState
 from jaxatari.renderers import JAXGameRenderer
 import time
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural black background (the sky)
+    background = jnp.zeros((210, 160, 4), dtype=jnp.uint8).at[:,:,3].set(255)
+    return {
+        'background': background,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for ChopperCommand.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Load all 160 background files (1.npy to 160.npy)
+    bg_scroll_files = [f'bg/{i}.npy' for i in range(1, 161)]
+    
+    # Player missile animation (missile_0.npy to missile_15.npy)
+    pl_missile_files = [f'player_missiles/missile_{i}.npy' for i in range(16)]
+    
+    # Minimap mountains (1.npy to 8.npy)
+    minimap_mountain_files = [f'minimap/mountains/{i}.npy' for i in range(1, 9)]
+    
+    return (
+        # Procedural black background (the sky)
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        # Define the group for all 160 background slices
+        {'name': 'background_scroll', 'type': 'group', 'files': bg_scroll_files},
+        
+        # --- Main Game Sprites ---
+        {'name': 'player_chopper', 'type': 'group', 'files': ['player_chopper/1.npy', 'player_chopper/2.npy']},
+        {'name': 'friendly_truck', 'type': 'group', 'files': ['friendly_truck/1.npy', 'friendly_truck/2.npy']},
+        {'name': 'enemy_jet', 'type': 'single', 'file': 'enemy_jet/normal.npy'},
+        {'name': 'enemy_heli', 'type': 'group', 'files': ['enemy_chopper/1.npy', 'enemy_chopper/2.npy']},
+        {'name': 'enemy_missile', 'type': 'single', 'file': 'bomb/1.npy'},
+        {'name': 'player_missile', 'type': 'group', 'files': pl_missile_files},
+        
+        # Death animations
+        {'name': 'player_death', 'type': 'group', 'files': ['player_chopper/death_1.npy', 'player_chopper/death_2.npy', 'player_chopper/death_3.npy']},
+        {'name': 'enemy_death', 'type': 'group', 'files': ['enemy_death/death_1.npy', 'enemy_death/death_2.npy', 'enemy_death/death_3.npy']},
+        # --- UI Sprites ---
+        {'name': 'digits', 'type': 'digits', 'pattern': 'score/{}.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'score/chopper.npy'},
+        # --- Minimap Sprites ---
+        {'name': 'minimap_bg', 'type': 'single', 'file': 'minimap/background.npy'},
+        {'name': 'minimap_mountains', 'type': 'group', 'files': minimap_mountain_files},
+        {'name': 'minimap_truck', 'type': 'single', 'file': 'minimap/truck.npy'},
+        {'name': 'minimap_enemy', 'type': 'single', 'file': 'minimap/enemy.npy'},
+        {'name': 'minimap_player', 'type': 'single', 'file': 'minimap/player.npy'},
+        {'name': 'minimap_logo', 'type': 'single', 'file': 'minimap/activision_logo.npy'},
+    )
 
 class ChopperCommandConstants:
     # Game Constants
@@ -171,6 +223,9 @@ class ChopperCommandConstants:
     ENABLE_PLAYER_COLLISION = True
     ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
 
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
+
 
 class ChopperCommandState(NamedTuple):
     player_x: chex.Array                    # x-coordinate of the player’s chopper in world space
@@ -221,170 +276,12 @@ class ChopperCommandObservation(NamedTuple):
 
 class ChopperCommandInfo(NamedTuple):
     step_counter: jnp.ndarray  # Current step count
-    all_rewards: jnp.ndarray  # All rewards for the current step
 
-# RENDER CONSTANTS
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Load sprites - no padding needed for background since it's already full size
-    pl_chopper1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/1.npy"))
-    pl_chopper2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/2.npy"))
-    friendly_truck1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/friendly_truck/1.npy"))
-    friendly_truck2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/friendly_truck/2.npy"))
-    enemy_jet = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_jet/normal.npy"))
-    enemy_chopper1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/1.npy"))
-    enemy_chopper2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_chopper/2.npy"))
-    enemy_bomb = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/bomb/1.npy"))
-
-    bg_sprites = []
-    for i in range(1, 161):
-        temp = jru.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/bg/{i}.npy"))
-        bg_sprites.append(temp)
-        bg_sprites[i - 1] = jnp.expand_dims(bg_sprites[i - 1], axis=0)
-
-    pl_missile_sprites_temp = []
-    for i in range(0, 16):
-        temp = jru.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/player_missiles/missile_{i}.npy"))
-        pl_missile_sprites_temp.append(temp)
-        pl_missile_sprites_temp[i] = jnp.expand_dims(pl_missile_sprites_temp[i], axis=0)
-
-    minimap_mountains_temp = []
-    for i in range(1, 9):
-        temp = jru.loadFrame(os.path.join(MODULE_DIR, f"sprites/choppercommand/minimap/mountains/{i}.npy"))
-        minimap_mountains_temp.append(temp)
-        minimap_mountains_temp[i - 1] = jnp.expand_dims(minimap_mountains_temp[i - 1], axis=0)
-
-    # Pad player helicopter sprites to match each other
-    pl_chopper_sprites, _ = jru.pad_to_match([pl_chopper1, pl_chopper2])
-
-    # Pad friendly truck sprites to match each other
-    friendly_truck_sprites, _ = jru.pad_to_match([friendly_truck1, friendly_truck2])
-
-    # Pad enemy jet sprites to match each other
-    enemy_jet_sprites = [enemy_jet]
-
-    # Pad enemy helicopter sprites to match each other
-    enemy_heli_sprites, _ = jru.pad_to_match([enemy_chopper1, enemy_chopper2])
-
-    # Pad player missile sprites to match each other
-    pl_missile_sprites = pl_missile_sprites_temp
-
-    # Pad enemy missile sprites to match each other
-    enemy_missile_sprites = [enemy_bomb]
-
-    # Background sprite (no padding needed)
-    SPRITE_BG = jnp.concatenate(bg_sprites, axis=0) # jnp.expand_dims(bg1, axis=0)
-
-    # Player helicopter sprites
-    SPRITE_PL_CHOPPER = jnp.concatenate(
-        [
-            jnp.repeat(pl_chopper_sprites[0][None], 3, axis=0),    # PLAYER_ROTOR_SPEED = 3
-            jnp.repeat(pl_chopper_sprites[1][None], 3, axis=0),    # PLAYER_ROTOR_SPEED = 3
-        ]
-    )
-
-    # Friendly truck sprites
-    SPRITE_FRIENDLY_TRUCK = jnp.concatenate(
-        [
-            jnp.repeat(friendly_truck_sprites[0][None], 4, axis=0),
-            jnp.repeat(friendly_truck_sprites[1][None], 4, axis=0),
-        ]
-    )
-
-    # Enemy jet sprite
-    SPRITE_ENEMY_JET = jnp.repeat(enemy_jet_sprites[0][None], 1, axis=0)
-
-    # Enemy helicopter sprites
-    SPRITE_ENEMY_CHOPPER = jnp.concatenate(
-        [
-            jnp.repeat(enemy_heli_sprites[0][None], 4, axis=0),
-            jnp.repeat(enemy_heli_sprites[1][None], 4, axis=0),
-        ]
-    )
-
-    DIGITS = jru.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/choppercommand/score/{}.npy"))
-    LIFE_INDICATOR = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/score/chopper.npy"))
-
-    #Death Sprites
-    PLAYER_DEATH_1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/death_1.npy"))
-    PLAYER_DEATH_2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/death_2.npy"))
-    PLAYER_DEATH_3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/player_chopper/death_3.npy"))
-
-    ENEMY_DEATH_1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_1.npy"))
-    ENEMY_DEATH_2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_2.npy"))
-    ENEMY_DEATH_3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/enemy_death/death_3.npy"))
-
-    # Player missile sprites
-    SPRITE_PL_MISSILE = jnp.concatenate(pl_missile_sprites, axis=0)
-
-    # Enemy missile sprites
-    SPRITE_ENEMY_MISSILE = jnp.repeat(enemy_missile_sprites[0][None], 1, axis=0)
-
-    #Everything having to do with the minimap
-    MINIMAP_BG = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/background.npy"))
-    MINIMAP_PLAYER = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/player.npy"))
-    MINIMAP_TRUCK = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/truck.npy"))
-    MINIMAP_ACTIVISION_LOGO = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/activision_logo.npy")) #delete if necessary
-    MINIMAP_ENEMY = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/choppercommand/minimap/enemy.npy"))
-    MINIMAP_MOUNTAINS = jnp.concatenate(minimap_mountains_temp, axis=0)
-
-
-    return (
-        SPRITE_BG,
-        SPRITE_PL_CHOPPER,
-        SPRITE_FRIENDLY_TRUCK,
-        SPRITE_ENEMY_JET,
-        SPRITE_ENEMY_CHOPPER,
-        SPRITE_PL_MISSILE,
-        SPRITE_ENEMY_MISSILE,
-        DIGITS,
-        LIFE_INDICATOR,
-        PLAYER_DEATH_1,
-        PLAYER_DEATH_2,
-        PLAYER_DEATH_3,
-        ENEMY_DEATH_1,
-        ENEMY_DEATH_2,
-        ENEMY_DEATH_3,
-        MINIMAP_BG,
-        MINIMAP_MOUNTAINS,
-        MINIMAP_PLAYER,
-        MINIMAP_TRUCK,
-        MINIMAP_ENEMY,
-        MINIMAP_ACTIVISION_LOGO, #delete if necessary
-    )
-
-# Load sprites once at module level
-(
-    SPRITE_BG,
-    SPRITE_PL_CHOPPER,
-    SPRITE_FRIENDLY_TRUCK,
-    SPRITE_ENEMY_JET,
-    SPRITE_ENEMY_HELI,
-    SPRITE_PL_MISSILE,
-    SPRITE_ENEMY_MISSILE,
-    DIGITS,
-    LIFE_INDICATOR,
-    PLAYER_DEATH_1,
-    PLAYER_DEATH_2,
-    PLAYER_DEATH_3,
-    ENEMY_CHOPPER_DEATH_1,
-    ENEMY_CHOPPER_DEATH_2,
-    ENEMY_CHOPPER_DEATH_3,
-    MINIMAP_BG,
-    MINIMAP_MOUNTAINS,
-    MINIMAP_PLAYER,
-    MINIMAP_TRUCK,
-    MINIMAP_ENEMY,
-    MINIMAP_ACTIVISION_LOGO, #delete if necessary
-) = load_sprites()
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
-    def __init__(self, consts: ChopperCommandConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: ChopperCommandConstants = None):
         consts = consts or ChopperCommandConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -405,7 +302,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
 
         self.obs_size = (
             6  # player: x,y,o,width,height,active
@@ -558,22 +454,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: ChopperCommandState, all_rewards: jnp.ndarray = None) -> ChopperCommandInfo:
+    def _get_info(self, state: ChopperCommandState) -> ChopperCommandInfo:
         return ChopperCommandInfo(
             step_counter=state.step_counter,
-            all_rewards=all_rewards,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: ChopperCommandState, state: ChopperCommandState):
         return state.score - previous_state.score
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: ChopperCommandState, state: ChopperCommandState) -> jnp.ndarray:
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
-        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: ChopperCommandState) -> bool:
@@ -1942,8 +1830,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
         done        = self._get_done(step_state)
         env_reward  = self._get_reward(prev, step_state)
-        all_rewards = self._get_all_rewards(prev, step_state)
-        info        = self._get_info(step_state, all_rewards)
+        info        = self._get_info(step_state)
 
         # Return matching your caller (obs, state, reward, done, info)
         return observation, step_state, env_reward, done, info
@@ -1953,62 +1840,113 @@ class ChopperCommandRenderer(JAXGameRenderer):
     def __init__(self, consts: ChopperCommandConstants = None):
         super().__init__()
         self.consts = consts or ChopperCommandConstants()
+        # Use a consistent sprite path based on the old load_sprites function
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+        self.sprite_path = os.path.join(MODULE_DIR, "sprites/choppercommand")
+        
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84,84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 3. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+        
+        # --- 4. Replicate Animation Stack Logic (from old load_sprites) ---
+        # Player Chopper (2 frames -> 6 frames)
+        pc_stack = self.SHAPE_MASKS['player_chopper']
+        self.SHAPE_MASKS['player_chopper'] = jnp.concatenate([
+            jnp.repeat(pc_stack[0][None], 3, axis=0),
+            jnp.repeat(pc_stack[1][None], 3, axis=0)
+        ])
+        
+        # Friendly Truck (2 frames -> 8 frames)
+        ft_stack = self.SHAPE_MASKS['friendly_truck']
+        self.SHAPE_MASKS['friendly_truck'] = jnp.concatenate([
+            jnp.repeat(ft_stack[0][None], 4, axis=0),
+            jnp.repeat(ft_stack[1][None], 4, axis=0)
+        ])
+        
+        # Enemy Heli (2 frames -> 8 frames)
+        eh_stack = self.SHAPE_MASKS['enemy_heli']
+        self.SHAPE_MASKS['enemy_heli'] = jnp.concatenate([
+            jnp.repeat(eh_stack[0][None], 4, axis=0),
+            jnp.repeat(eh_stack[1][None], 4, axis=0)
+        ])
+        
+        # --- 6. Store final sprite animation lengths ---
+        self.anim_len = {
+            'background_scroll': self.SHAPE_MASKS['background_scroll'].shape[0], # 160
+            'friendly_truck': self.SHAPE_MASKS['friendly_truck'].shape[0], # 8
+            'enemy_heli': self.SHAPE_MASKS['enemy_heli'].shape[0],       # 8
+            'player_chopper': self.SHAPE_MASKS['player_chopper'].shape[0], # 6
+            'player_missile': self.SHAPE_MASKS['player_missile'].shape[0], # 16
+            'minimap_mountains': self.SHAPE_MASKS['minimap_mountains'].shape[0], # 8
+        }
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        # Local position of player on screen
-        chopper_position = (self.consts.WIDTH // 2) + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING) - (self.consts.PLAYER_SIZE[0] // 2) # (WIDTH // 2) - 8 = Heli mittig platzieren, state.local_player_offset = ob Heli links oder rechts auf Bildschirm, state.player_velocity_x * DISTANCE_WHEN_FLYING = Bewegen von Heli richtung Mitte wenn er fliegt
-
-        # Bildschirmmitte relativ zur Scrollrichtung des Spielers
+    def render(self, state: ChopperCommandState) -> chex.Array:
+        # --- 1. Initialization ---
+        # Start with the static black sky
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        
+        # Calculate shared screen positions
+        chopper_position = (self.consts.WIDTH // 2) + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING) - (self.consts.PLAYER_SIZE[0] // 2)
         static_center_x_jet = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.JET_SIZE[0] // 2)
         static_center_x_chopper = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.CHOPPER_SIZE[0] // 2)
         static_center_x_truck = (self.consts.WIDTH // 2) + state.local_player_offset - (self.consts.TRUCK_SIZE[0] // 2)
 
-        #Initialisierung
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
+        # --- 2. Render Background Scroll (Reverted to original logic) ---
+        
+        # Calculate the index of the pre-shifted slice to draw
+        frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % self.consts.WIDTH), dtype=jnp.int32)
+        frame_idx = jnp.clip(frame_idx, 0, self.anim_len['background_scroll'] - 1)
+        
+        # Get the pre-shifted background mask from the stack
+        bg_mask = self.SHAPE_MASKS['background_scroll'][frame_idx]
+        
+        # Stamp the full-screen ground mask onto the black sky
+        raster = self.jr.render_at(
+            raster, 0, 0, 
+            bg_mask, 
+            flip_offset=self.FLIP_OFFSETS['background_scroll']
+        )
+        # --- End of Reverted Logic ---
 
-        # Render Background
-        frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % self.consts.WIDTH), dtype=jnp.int32) #local_player_offset = ob Heli links oder rechts auf Bildschirm ist, -state.player_x % WIDTH = Scrollen vom Hintergrund
-        frame_bg = jru.get_sprite_frame(SPRITE_BG, frame_idx)
-
-        raster = jru.render_at(raster, 0, 0, frame_bg)
-
-        frame_friendly_truck = jru.get_sprite_frame(SPRITE_FRIENDLY_TRUCK, state.step_counter)
-
+        # --- 3. Render Trucks ---
+        truck_anim_idx = state.step_counter % self.anim_len['friendly_truck'] # % 8
+        frame_friendly_truck = self.SHAPE_MASKS['friendly_truck'][truck_anim_idx]
+        truck_offset = self.FLIP_OFFSETS['friendly_truck']
+        
         def render_truck(i, raster_base):
             death_timer = state.truck_positions[i][3]
             direction = state.truck_positions[i][2]
-
-            #am Leben: direction != 0 UND death_timer > FRAMES_DEATH_ANIMATION_TRUCK
-            is_alive = jnp.logical_and(direction != 0,
-                                       death_timer > self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
-
-            #in der Todes-Animation: direction != 0 UND 0 < death_timer <= FRAMES_DEATH_ANIMATION_TRUCK
-            is_dying = jnp.logical_and(
-                direction != 0,
-                jnp.logical_and(death_timer <= self.consts.FRAMES_DEATH_ANIMATION_TRUCK,
-                                death_timer > 0)
-            )
-
-            #flicker-Phase (nur relevant wenn is_dying)
+            
+            is_alive = (direction != 0) & (death_timer > self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
+            is_dying = (direction != 0) & (death_timer <= self.consts.FRAMES_DEATH_ANIMATION_TRUCK) & (death_timer > 0)
             in_flicker_on = (death_timer % self.consts.TRUCK_FLICKER_RATE) < (self.consts.TRUCK_FLICKER_RATE // 2)
-
-            # Render-Logik: immer anzeigen, solange ALIVE oder (DYING & flicker_on)
-            should_render = jnp.logical_or(is_alive,
-                                           jnp.logical_and(is_dying,
-                                                           in_flicker_on))
-
+            should_render = is_alive | (is_dying & in_flicker_on)
             truck_screen_x = state.truck_positions[i][0] - state.player_x + static_center_x_truck
             truck_screen_y = state.truck_positions[i][1]
-
+            flip_h = (state.truck_positions[i][2] == -1)
+            
             return jax.lax.cond(
                 should_render,
-                lambda r: jru.render_at(
-                    r,
-                    truck_screen_x,
-                    truck_screen_y,
-                    frame_friendly_truck,
-                    flip_horizontal=(state.truck_positions[i][2] == -1),
+                lambda r: self.jr.render_at_clipped(
+                    r, truck_screen_x, truck_screen_y,
+                    frame_friendly_truck, flip_horizontal=flip_h, flip_offset=truck_offset
                 ),
                 lambda r: r,
                 raster_base,
@@ -2016,87 +1954,79 @@ class ChopperCommandRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_TRUCKS, render_truck, raster)
 
-        # -- JET Rendering --
-        frame_enemy_jet = jru.get_sprite_frame(SPRITE_ENEMY_JET, state.step_counter)
-
+        # --- 4. Render Enemy Jets ---
+        frame_enemy_jet = self.SHAPE_MASKS['enemy_jet'] # Single frame 
+        jet_offset = self.FLIP_OFFSETS['enemy_jet']
+        death_masks = self.SHAPE_MASKS['enemy_death']
+        death_offset = self.FLIP_OFFSETS['enemy_death']
+        
         def render_enemy_jet(i, raster_base):
             death_timer = state.jet_positions[i][3]
-
-            should_render = jnp.logical_and(state.jet_positions[i][2] != 0, death_timer > 0)
-
+            should_render = (state.jet_positions[i][2] != 0) & (death_timer > 0)
             jet_screen_x = state.jet_positions[i][0] - state.player_x + static_center_x_jet
             jet_screen_y = state.jet_positions[i][1]
-
+            flip_h = (state.jet_positions[i][2] == -1)
+            is_dying = death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY
             phase0 = death_timer > (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3
-            phase1 = jnp.logical_and(
-                death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3,
-                death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3
+            phase1 = (death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3) & \
+                     (death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3)
+            
+            death_sprite_mask = jnp.where(
+                phase0, death_masks[0],
+                jnp.where(phase1, death_masks[1], death_masks[2])
             )
-            death_sprite = jnp.where(
-                phase0, ENEMY_CHOPPER_DEATH_1,
-                jnp.where(phase1, ENEMY_CHOPPER_DEATH_2, ENEMY_CHOPPER_DEATH_3)
-            )
-
-            def render_true(r):
-                # je nach death_timer richtigen Sprite rendern
-                return jax.lax.cond(
-                    death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
-                    # Wenn in Death-Phase
-                    lambda rr: jru.render_at(
-                        rr, jet_screen_x, jet_screen_y - 2, death_sprite,
-                        flip_horizontal=(state.jet_positions[i][2] == -1)
-                    ),
-                    # Wenn jet lebt
-                    lambda rr: jru.render_at(
-                        rr, jet_screen_x, jet_screen_y, frame_enemy_jet,
-                        flip_horizontal=(state.jet_positions[i][2] == -1)
-                    ),
-                    raster_base
+            
+            def render_living(r):
+                return self.jr.render_at_clipped(
+                    r, jet_screen_x, jet_screen_y, frame_enemy_jet,
+                    flip_horizontal=flip_h, flip_offset=jet_offset
                 )
-
+            
+            def render_dying(r):
+                return self.jr.render_at_clipped(
+                    r, jet_screen_x, jet_screen_y - 2, death_sprite_mask,
+                    flip_horizontal=flip_h, flip_offset=death_offset
+                )
+            
             return jax.lax.cond(
                 should_render,
-                render_true,
+                lambda r: jax.lax.cond(is_dying, render_dying, render_living, r),
                 lambda r: r,
                 raster_base,
             )
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_JETS, render_enemy_jet, raster)
 
-        # -- CHOPPER Rendering --
-        frame_enemy_chopper = jru.get_sprite_frame(SPRITE_ENEMY_HELI, state.step_counter)
-
+        # --- 5. Render Enemy Choppers ---
+        chopper_anim_idx = state.step_counter % self.anim_len['enemy_heli'] # % 8
+        frame_enemy_chopper = self.SHAPE_MASKS['enemy_heli'][chopper_anim_idx]
+        chopper_offset = self.FLIP_OFFSETS['enemy_heli']
+        death_masks = self.SHAPE_MASKS['enemy_death']
+        death_offset = self.FLIP_OFFSETS['enemy_death']
+        
         def render_enemy_chopper(i, raster_base):
             death_timer = state.chopper_positions[i][3]
-
-            should_render = jnp.logical_and(state.chopper_positions[i][2] != 0, death_timer > 0)
-
+            should_render = (state.chopper_positions[i][2] != 0) & (death_timer > 0)
             chopper_screen_x = state.chopper_positions[i][0] - state.player_x + static_center_x_chopper
             chopper_screen_y = state.chopper_positions[i][1]
-
+            flip_h = (state.chopper_positions[i][2] == -1)
+            is_dying = death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY
             phase0 = death_timer > (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3
-            phase1 = jnp.logical_and(
-                death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3,
-                death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3
+            phase1 = (death_timer <= (2 * self.consts.FRAMES_DEATH_ANIMATION_ENEMY) // 3) & \
+                     (death_timer > self.consts.FRAMES_DEATH_ANIMATION_ENEMY // 3)
+            
+            death_sprite_mask = jnp.where(
+                phase0, death_masks[0],
+                jnp.where(phase1, death_masks[1], death_masks[2])
             )
-
-            death_sprite = jnp.where(
-                phase0, ENEMY_CHOPPER_DEATH_1,
-                jnp.where(phase1, ENEMY_CHOPPER_DEATH_2, ENEMY_CHOPPER_DEATH_3)
-            )
-
+            final_mask = jnp.where(is_dying, death_sprite_mask, frame_enemy_chopper)
+            final_offset = jnp.where(is_dying, death_offset, chopper_offset)
+            
             return jax.lax.cond(
                 should_render,
-                lambda r: jru.render_at(
-                    r,
-                    chopper_screen_x,
-                    chopper_screen_y,
-                    jnp.where(
-                        death_timer <= self.consts.FRAMES_DEATH_ANIMATION_ENEMY,
-                        death_sprite,
-                        frame_enemy_chopper
-                    ),
-                    flip_horizontal=(state.chopper_positions[i][2] == -1),
+                lambda r: self.jr.render_at_clipped(
+                    r, chopper_screen_x, chopper_screen_y, final_mask,
+                    flip_horizontal=flip_h, flip_offset=final_offset
                 ),
                 lambda r: r,
                 raster_base,
@@ -2104,18 +2034,19 @@ class ChopperCommandRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_CHOPPERS, render_enemy_chopper, raster)
 
-        # Render enemy missiles
-        frame_enemy_missile = jru.get_sprite_frame(SPRITE_ENEMY_MISSILE, state.step_counter)
-
+        # --- 6. Render Enemy Missiles ---
+        frame_enemy_missile = self.SHAPE_MASKS['enemy_missile'] # Single mask
+        missile_offset = self.FLIP_OFFSETS['enemy_missile']
+        
         def render_enemy_missile(i, raster_base):
             should_render = state.enemy_missile_positions[i][1] > 2
+            x_pos = state.enemy_missile_positions[i][0] - state.player_x + static_center_x_chopper
+            y_pos = state.enemy_missile_positions[i][1]
+            
             return jax.lax.cond(
                 should_render,
-                lambda r: jru.render_at(
-                    r,
-                    state.enemy_missile_positions[i][0] - state.player_x + static_center_x_chopper,
-                    state.enemy_missile_positions[i][1],
-                    frame_enemy_missile,
+                lambda r: self.jr.render_at_clipped(
+                    r, x_pos, y_pos, frame_enemy_missile, flip_offset=missile_offset
                 ),
                 lambda r: r,
                 raster_base,
@@ -2123,326 +2054,221 @@ class ChopperCommandRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMY_MISSILES, render_enemy_missile, raster)
 
-        #Render Scores
-        def trim_leading_zeros(digits: jnp.ndarray) -> jnp.ndarray:
-            is_zero = jnp.all(digits == 0)
-
-            # finde erste Stelle die nicht 0 ist
-            first_nonzero = jnp.argmax(digits != 0)
-
-            def on_nonzero():
-                # Maske: True ab erster gültiger Ziffer
-                mask = jnp.arange(digits.shape[0]) >= first_nonzero
-                return jnp.where(mask, digits, -1)
-
-            def on_zero():
-                return jnp.array([-1, -1, -1, -1, -1, 0], dtype=digits.dtype)
-
-            return jax.lax.cond(is_zero, on_zero, on_nonzero)
-
-        score_array = jru.int_to_digits(state.score, 6)
-        trimmed_digits = trim_leading_zeros(score_array)
-
-        # Nur gültige Digits rendern
-        def render_digit(raster, x_offset, digit):
-            return jax.lax.cond(
-                digit >= 0,
-                lambda d: jru.render_label(raster, x_offset, 2, jnp.array([d], dtype=jnp.int32), DIGITS, spacing=8),
-                lambda _: raster,
-                operand=digit
-            )
-
-        # Schrittweise rendern mit X-Verschiebung
-        def render_all_digits(raster, digits, spacing=8, x_start=16):
-            def body(i, rast):
-                return render_digit(rast, x_start + i * spacing, digits[i])
-
-            return jax.lax.fori_loop(0, digits.shape[0], body, raster)
-
-        raster = render_all_digits(raster, trimmed_digits)
-
-
-        # Render lives
-        raster = jru.render_indicator(
-            raster, 16, 10, state.lives-1, LIFE_INDICATOR, spacing=9
+        # --- 7. Render Score ---
+        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
+        
+        # Find first non-zero digit
+        is_zero = jnp.all(score_digits == 0)
+        first_nonzero = jnp.argmax(score_digits != 0)
+        start_idx = jax.lax.select(is_zero, 5, first_nonzero) # If 0, show last digit
+        num_to_render = 6 - start_idx
+        x_start = 16 + start_idx * 8 # 8 is spacing
+        raster = self.jr.render_label_selective(
+            raster, x_start, 2, score_digits, self.SHAPE_MASKS['digits'],
+            start_idx, num_to_render, spacing=8, max_digits_to_render=6
+        )
+        
+        # --- 8. Render Lives ---
+        raster = self.jr.render_indicator(
+            raster, 16, 10, state.lives - 1, 
+            self.SHAPE_MASKS['life_indicator'], 
+            spacing=9, max_value=5 # Assuming max 5 lives displayed
         )
 
-        # Render Player
-        frame_pl_heli = jru.get_sprite_frame(SPRITE_PL_CHOPPER, state.step_counter)
-
+        # --- 9. Render Player ---
+        player_anim_idx = state.step_counter % self.anim_len['player_chopper'] # % 6
+        frame_pl_heli = self.SHAPE_MASKS['player_chopper'][player_anim_idx]
+        player_offset = self.FLIP_OFFSETS['player_chopper']
         death_timer = state.pause_timer
-        should_render = jnp.logical_and(death_timer != 0, death_timer != 1)
-
-        # Schwellen berechnen
-        phase0_cutoff = jnp.array(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_0 * self.consts.DEATH_PAUSE_FRAMES).astype(jnp.int32)
-        phase1_cutoff = jnp.array(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_1 * self.consts.DEATH_PAUSE_FRAMES).astype(jnp.int32)
-
-        # Phasen bestimmen
+        should_render = (death_timer != 0) & (death_timer != 1)
+        phase0_cutoff = jnp.asarray(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_0 * self.consts.DEATH_PAUSE_FRAMES, dtype=jnp.int32)
+        phase1_cutoff = jnp.asarray(self.consts.PLAYER_FADE_OUT_START_THRESHOLD_1 * self.consts.DEATH_PAUSE_FRAMES, dtype=jnp.int32)
         phase0 = death_timer > phase0_cutoff
-        phase1 = jnp.logical_and(
-            death_timer <= phase0_cutoff,
-            death_timer > phase1_cutoff
-        )
-
-        # Entsprechenden Sprite wählen
+        phase1 = (death_timer <= phase0_cutoff) & (death_timer > phase1_cutoff)
+        player_death_masks = self.SHAPE_MASKS['player_death']
         death_sprite = jnp.where(
-            phase0, PLAYER_DEATH_1,
-            jnp.where(phase1, PLAYER_DEATH_2, PLAYER_DEATH_3)
+            phase0, player_death_masks[0],
+            jnp.where(phase1, player_death_masks[1], player_death_masks[2])
         )
-
-        all_enemies_dead = jnp.logical_and(jnp.all(state.jet_positions == 0), jnp.all(state.chopper_positions == 0))
-
-        # Cond. Rendern
+        death_sprite_offset = self.FLIP_OFFSETS['player_death']
+        all_enemies_dead = jnp.all(state.jet_positions == 0) & jnp.all(state.chopper_positions == 0)
+        is_alive = (death_timer > self.consts.DEATH_PAUSE_FRAMES) | all_enemies_dead
+        
+        final_player_mask = jnp.where(is_alive, frame_pl_heli, death_sprite)
+        final_player_offset = jnp.where(is_alive, player_offset, death_sprite_offset)
+        
         raster = jax.lax.cond(
             should_render,
-            lambda r: jru.render_at(
-                r,
-                chopper_position,
-                state.player_y,
-                jnp.where(
-                    jnp.logical_or(death_timer > self.consts.DEATH_PAUSE_FRAMES, all_enemies_dead),
-                    frame_pl_heli,
-                    death_sprite
-                ),
+            lambda r: self.jr.render_at(
+                r, chopper_position, state.player_y, final_player_mask,
                 flip_horizontal=(state.player_facing_direction == -1),
+                flip_offset=final_player_offset
             ),
             lambda r: r,
             raster,
         )
 
-        # Render player missiles
-        def render_single_missile(i, raster):
-            missile = state.player_missile_positions[i]  #Indexierung IN der Funktion
+        # --- 10. Render Player Missiles ---
+        missile_stack = self.SHAPE_MASKS['player_missile']
+        missile_stack_offset = self.FLIP_OFFSETS['player_missile']
+        
+        def render_single_missile(i, r):
+            missile = state.player_missile_positions[i]
             missile_active = missile[2] != 0
-
-
+            
             missile_screen_x = missile[0] - state.player_x + chopper_position
             missile_screen_y = missile[1]
-
-            def get_pl_missile_frame():
-                delta_curr_missile_spawn = jnp.abs(missile[0] - missile[3])
-                index = jnp.floor_divide(delta_curr_missile_spawn, self.consts.MISSILE_ANIMATION_SPEED)
-                index = jnp.clip(index, 0, 15)
-                return index.astype(jnp.int32)
-            frame_pl_missile = jru.get_sprite_frame(SPRITE_PL_MISSILE, get_pl_missile_frame())
-
-
+            delta_spawn = jnp.abs(missile[0] - missile[3])
+            frame_idx = jnp.floor_divide(delta_spawn, self.consts.MISSILE_ANIMATION_SPEED)
+            frame_idx = jnp.clip(frame_idx, 0, self.anim_len['player_missile'] - 1).astype(jnp.int32) # Clip to 15
+            frame_pl_missile = missile_stack[frame_idx]
+            
             return jax.lax.cond(
                 missile_active,
-                lambda r: jru.render_at(
-                    r,
-                    missile_screen_x,
-                    missile_screen_y,
+                lambda r_in: self.jr.render_at_clipped(
+                    r_in, missile_screen_x, missile_screen_y,
                     frame_pl_missile,
                     flip_horizontal=(missile[2] == -1),
+                    flip_offset=missile_stack_offset
                 ),
-                lambda r: r,
-                raster,
+                lambda r_in: r_in,
+                r,
             )
 
-        #Render all missiles (iterate over single missile function)
-        raster = jax.lax.fori_loop(
-            0,
-            state.player_missile_positions.shape[0],
-            render_single_missile,
-            raster,
-        )
+        raster = jax.lax.fori_loop(0, state.player_missile_positions.shape[0], render_single_missile, raster)
 
-        #Render minimap
+        # --- 11. Render Minimap ---
         raster = self.render_minimap(chopper_position, raster, state)
 
-        return raster
+        # --- 12. Final Palette Lookup ---
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
-    def render_minimap(self, chopper_position, raster, state):
+    @partial(jax.jit, static_argnums=(0,))
+    def render_minimap(self, chopper_position, raster, state: ChopperCommandState):
         # Render minimap background
-        raster = jru.render_at(
-            raster,
-            self.consts.MINIMAP_POSITION_X,
-            self.consts.MINIMAP_POSITION_Y,
-            MINIMAP_BG,
+        raster = self.jr.render_at(
+            raster, self.consts.MINIMAP_POSITION_X, self.consts.MINIMAP_POSITION_Y,
+            self.SHAPE_MASKS['minimap_bg'], flip_offset=self.FLIP_OFFSETS['minimap_bg']
         )
 
         # Render minimap mountains
-        def get_minimap_mountains_frame():
-            return jnp.asarray(((-state.player_x // (self.consts.DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
-
-        frame_minimap_mountains = jru.get_sprite_frame(MINIMAP_MOUNTAINS, get_minimap_mountains_frame())
-        raster = jru.render_at(
-            raster,
-            self.consts.MINIMAP_POSITION_X,
-            self.consts.MINIMAP_POSITION_Y + 3,
-            frame_minimap_mountains,
+        frame_idx = jnp.asarray(((-state.player_x // (self.consts.DOWNSCALING_FACTOR_WIDTH * 7)) % 8), dtype=jnp.int32)
+        frame_idx = jnp.clip(frame_idx, 0, self.anim_len['minimap_mountains'] - 1) # Clip to 7
+        frame_minimap_mountains = self.SHAPE_MASKS['minimap_mountains'][frame_idx]
+        raster = self.jr.render_at(
+            raster, self.consts.MINIMAP_POSITION_X, self.consts.MINIMAP_POSITION_Y + 3,
+            frame_minimap_mountains, flip_offset=self.FLIP_OFFSETS['minimap_mountains']
         )
 
         # Render trucks on minimap
+        minimap_truck_mask = self.SHAPE_MASKS['minimap_truck']
+        minimap_truck_offset = self.FLIP_OFFSETS['minimap_truck']
+        
         def render_trucks_minimap(i, raster_base):
             timing_clock = state.step_counter % self.consts.MINIMAP_RENDER_TRUCK_REFRESH_RATE
             update_trigger = timing_clock == 0
-
-            truck_world_x = state.truck_positions[6][0]
-
-            truck_world_x = jnp.where(update_trigger,
-                                      truck_world_x,
-                                      truck_world_x + (0.5 * timing_clock)
-                                      )
-
+            truck_world_x = state.truck_positions[i][0] # Use index i
+            truck_world_x = jnp.where(
+                update_trigger, truck_world_x,
+                truck_world_x + (0.5 * timing_clock)
+            )
+            
             weird_offset = 16
-            parent_x = weird_offset + (
-                    (truck_world_x - state.player_x + chopper_position)
-                        // self.consts.DOWNSCALING_FACTOR_WIDTH // 6
-            )
-
+            parent_x = weird_offset + ((truck_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
             minimap_x = 2 * i + parent_x
-
-            is_in_first_fleet = i < 3
-            is_in_second_fleet = jnp.logical_and(i >= 3, i <= 5)
-            is_in_third_fleet = jnp.logical_and(i >= 6, i <= 8)
-            is_in_fourth_fleet = jnp.logical_and(i >= 9, i <= 11)
-
             add = 11.5
-            add_to_first = jnp.where(is_in_first_fleet,
-                                     -3 * add,#-1 * add,
-                                     0)
-            add_to_second = jnp.where(is_in_second_fleet,
-                                      -2 * add,
-                                      0)
-
-            add_to_third = jnp.where(is_in_third_fleet,
-                                     -1 * add,
-                                     0)
-            add_to_fourth = jnp.where(is_in_fourth_fleet,
-                                      0 * add,
-                                      0)
-
-            minimap_x = minimap_x + add_to_first + add_to_second + add_to_third + add_to_fourth
-            minimap_x = jnp.mod(minimap_x, 6 * add)
-
+            is_in_first_fleet = i < 3
+            is_in_second_fleet = (i >= 3) & (i <= 5)
+            is_in_third_fleet = (i >= 6) & (i <= 8)
+            
+            add_to_fleet = jnp.where(is_in_first_fleet, -3 * add,
+                             jnp.where(is_in_second_fleet, -2 * add,
+                             jnp.where(is_in_third_fleet, -1 * add, 0.0)))
+            minimap_x = jnp.mod(minimap_x + add_to_fleet, 6 * add)
             minimap_y = (state.truck_positions[i][1] // self.consts.DOWNSCALING_FACTOR_HEIGHT)
-
-            should_render = jnp.logical_and(
-                state.truck_positions[i][3] != 0,
-                jnp.logical_and(minimap_x >= 0, minimap_x < self.consts.MINIMAP_WIDTH)
-            )
-
-            raster_base = jax.lax.cond(
+            
+            should_render = (state.truck_positions[i][3] != 0) & \
+                            (minimap_x >= 0) & (minimap_x < self.consts.MINIMAP_WIDTH)
+            return jax.lax.cond(
                 should_render,
-                lambda r: jru.render_at(
-                    r,
-                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                lambda r: self.jr.render_at(
+                    r, self.consts.MINIMAP_POSITION_X + minimap_x,
                     self.consts.MINIMAP_POSITION_Y + 1 + minimap_y,
-                    MINIMAP_TRUCK
+                    minimap_truck_mask, flip_offset=minimap_truck_offset
                 ),
                 lambda r: r,
                 raster_base,
             )
-            return raster_base
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_TRUCKS, render_trucks_minimap, raster)
 
         # Render jets on minimap
+        minimap_enemy_mask = self.SHAPE_MASKS['minimap_enemy']
+        minimap_enemy_offset = self.FLIP_OFFSETS['minimap_enemy']
+        
         def render_jets_minimap(i, raster_base):
             weird_offset = 16
             jet_world_x = state.jet_positions[i][0]
-            minimap_x = weird_offset + (
-                        (jet_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
-
+            minimap_x = weird_offset + ((jet_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
             is_alive = state.jet_positions[i][3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
-
-            should_render = jnp.logical_and(
-                is_alive,
-                jnp.logical_and(
-                    minimap_x >= 0,
-                    minimap_x < self.consts.MINIMAP_WIDTH - 1 # Minus one to account for jet sprite size (on minimap)
-                )
-            )
-
+            should_render = is_alive & (minimap_x >= 0) & (minimap_x < self.consts.MINIMAP_WIDTH - 1)
+            
             def do_render(r):
-                jet_world_x = state.jet_positions[i][0]
                 jet_world_y = state.jet_positions[i][1]
-
-                is_in_top_lane = jnp.logical_and(jet_world_y <= self.consts.ENEMY_LANE_6, jet_world_y >= self.consts.ENEMY_LANE_8)
-                is_in_middle_lane = jnp.logical_and(jet_world_y <= self.consts.ENEMY_LANE_3, jet_world_y >= self.consts.ENEMY_LANE_5)
-
-                lane_world_y = jnp.where(is_in_top_lane,
-                                         self.consts.ENEMY_LANE_7, jnp.where(is_in_middle_lane,
-                                                                 self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
-
-                # Downscaling
-                minimap_x = weird_offset + (
-                            (jet_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
+                is_in_top_lane = (jet_world_y <= self.consts.ENEMY_LANE_6) & (jet_world_y >= self.consts.ENEMY_LANE_8)
+                is_in_middle_lane = (jet_world_y <= self.consts.ENEMY_LANE_3) & (jet_world_y >= self.consts.ENEMY_LANE_5)
+                lane_world_y = jnp.where(is_in_top_lane, self.consts.ENEMY_LANE_7,
+                                 jnp.where(is_in_middle_lane, self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
                 minimap_y = (lane_world_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 1))
-
-                return jru.render_at(
-                    r,
-                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                return self.jr.render_at(
+                    r, self.consts.MINIMAP_POSITION_X + minimap_x,
                     self.consts.MINIMAP_POSITION_Y + 3 + minimap_y,
-                    MINIMAP_ENEMY
+                    minimap_enemy_mask, flip_offset=minimap_enemy_offset
                 )
-
+            
             return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_JETS, render_jets_minimap, raster)
 
-
         # Render choppers on minimap
         def render_choppers_minimap(i, raster_base):
             weird_offset = 16
-            chooper_world_x = state.chopper_positions[i][0]
-            minimap_x = weird_offset + (
-                        (chooper_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
-
+            chopper_world_x = state.chopper_positions[i][0]
+            minimap_x = weird_offset + ((chopper_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
             is_alive = state.chopper_positions[i][3] > self.consts.FRAMES_DEATH_ANIMATION_ENEMY
-
-            should_render = jnp.logical_and(
-                is_alive,
-                jnp.logical_and(
-                    minimap_x >= 0,
-                    minimap_x < self.consts.MINIMAP_WIDTH - 1 # Minus one to account for chopper sprite size (on minimap)
-                )
-            )
-
+            should_render = is_alive & (minimap_x >= 0) & (minimap_x < self.consts.MINIMAP_WIDTH - 1)
+            
             def do_render(r):
-                chopper_world_x = state.chopper_positions[i][0]
                 chopper_world_y = state.chopper_positions[i][1]
-
-                is_in_top_lane = jnp.logical_and(chopper_world_y <= self.consts.ENEMY_LANE_6, chopper_world_y >= self.consts.ENEMY_LANE_8)
-                is_in_middle_lane = jnp.logical_and(chopper_world_y <= self.consts.ENEMY_LANE_3, chopper_world_y >= self.consts.ENEMY_LANE_5)
-
-                lane_world_y = jnp.where(is_in_top_lane,
-                                         self.consts.ENEMY_LANE_7, jnp.where(is_in_middle_lane,
-                                                                 self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
-
-                # Downscaling
-                minimap_x = weird_offset + (
-                            (chopper_world_x - state.player_x + chopper_position) // self.consts.DOWNSCALING_FACTOR_WIDTH // 6)
+                is_in_top_lane = (chopper_world_y <= self.consts.ENEMY_LANE_6) & (chopper_world_y >= self.consts.ENEMY_LANE_8)
+                is_in_middle_lane = (chopper_world_y <= self.consts.ENEMY_LANE_3) & (chopper_world_y >= self.consts.ENEMY_LANE_5)
+                lane_world_y = jnp.where(is_in_top_lane, self.consts.ENEMY_LANE_7,
+                                 jnp.where(is_in_middle_lane, self.consts.ENEMY_LANE_4, self.consts.ENEMY_LANE_1))
                 minimap_y = (lane_world_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 1))
-
-                return jru.render_at(
-                    r,
-                    self.consts.MINIMAP_POSITION_X + minimap_x,
+                return self.jr.render_at(
+                    r, self.consts.MINIMAP_POSITION_X + minimap_x,
                     self.consts.MINIMAP_POSITION_Y + 3 + minimap_y,
-                    MINIMAP_ENEMY
+                    minimap_enemy_mask, flip_offset=minimap_enemy_offset
                 )
-
+            
             return jax.lax.cond(should_render, do_render, lambda r: r, raster_base)
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_CHOPPERS, render_choppers_minimap, raster)
 
-
         # Render player on minimap
-        raster = jru.render_at(
+        raster = self.jr.render_at(
             raster,
             self.consts.MINIMAP_POSITION_X + 16 + (chopper_position // (self.consts.DOWNSCALING_FACTOR_WIDTH * 7)),
             self.consts.MINIMAP_POSITION_Y + 6 + (state.player_y // (self.consts.DOWNSCALING_FACTOR_HEIGHT + 7)),
-            MINIMAP_PLAYER,
+            self.SHAPE_MASKS['minimap_player'], flip_offset=self.FLIP_OFFSETS['minimap_player']
         )
 
-        #Render activision logo
-        raster = jru.render_at(
+        # Render activision logo
+        raster = self.jr.render_at(
             raster,
             self.consts.MINIMAP_POSITION_X + (self.consts.MINIMAP_WIDTH - 32) // 2,
-            self.consts.HEIGHT_ONLY_PLAYING_FIELD - 7 - 1, #7 = Sprite Height 1=One pixel headroom
-            MINIMAP_ACTIVISION_LOGO,
+            self.consts.HEIGHT_ONLY_PLAYING_FIELD - 7 - 1,
+            self.SHAPE_MASKS['minimap_logo'], flip_offset=self.FLIP_OFFSETS['minimap_logo']
         )
 
         return raster

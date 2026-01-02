@@ -1,7 +1,8 @@
 """Jaxatari Wrappers"""
 
 import functools
-from typing import Any, Dict, Tuple, Union, Optional
+from typing import Any, Dict, Tuple, Union, Optional, Callable
+from dataclasses import is_dataclass, asdict
 
 import chex
 from flax import struct
@@ -21,6 +22,39 @@ class JaxatariWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
+    
+class MultiRewardWrapper(JaxatariWrapper):
+    """
+    Allows providing multiple reward functions to be computed at every step.
+    Apply this wrapper directly after the base environment, before any other wrappers.
+    """
+
+    def __init__(self, env, reward_funcs: list[Callable]):
+        super().__init__(env)
+        assert isinstance(reward_funcs, list) and len(reward_funcs) > 0, "reward_funcs must be a non-empty list of callables" 
+        self._reward_funcs = reward_funcs
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _get_all_rewards(self, previous_state: EnvState, state: EnvState) -> chex.Array:
+        """Compute multiple rewards based on the provided reward functions."""
+        if self._reward_funcs is None:
+            return jnp.zeros(1)
+        rewards = jnp.array(
+            [reward_func(previous_state, state) for reward_func in self._reward_funcs]
+        )
+        return rewards
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def step(self, state: EnvState, action: int) -> Tuple[chex.Array, EnvState, float, bool, Dict]: 
+        obs, new_state, reward, done, info = self._env.step(state, action)
+        all_rewards = self._get_all_rewards(state, new_state)
+        # Convert info to dict: handle NamedTuple (has _asdict) or dataclass (use asdict)
+        if hasattr(info, '_asdict'):
+            info = info._asdict()
+        elif is_dataclass(info):
+            info = asdict(info)
+        info["all_rewards"] = all_rewards
+        return obs, new_state, reward, done, info 
 
 @struct.dataclass
 class AtariState:
@@ -715,14 +749,17 @@ class MultiRewardLogState:
     returned_episode_lengths: int
 
 class MultiRewardLogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths for multiple rewards."""
+    """Log the episode returns and lengths for multiple rewards.
+    Make sure to apply MultiRewardWrapper to the core env when using this wrapper.
+    The final logs will be 'returned_episode_returns_0', ... for each reward function provided.
+    """
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey,
     ) -> Tuple[chex.Array, MultiRewardLogState]:
         obs, atari_state = self._env.reset(key)
-        # Dummy step to get info structure
+        # Dummy step to get info structure 
         _, _, _, _, dummy_info = self._env.step(atari_state, 0)
         rewards_shape_provider = dummy_info.get("all_rewards", jnp.zeros(1))
         episode_returns_init = jnp.zeros_like(rewards_shape_provider)

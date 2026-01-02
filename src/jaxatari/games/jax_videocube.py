@@ -17,12 +17,74 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
+import numpy as np  # Import numpy for precomputation
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as aj
+# Import the new rendering utils
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space, Discrete, Box, Dict
+
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for VideoCube.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # Helper lists for generating file paths
+    label_files = [f'label/label_{i}.npy' for i in range(1, 65)]
+    
+    score_digit_files = []
+    for i in range(1, 65):
+        for k in range(10):
+            score_digit_files.append(f'score/score_{k}/score_{k}_{i}.npy')
+    
+    player_anim_files = []
+    orientations = ["down_up", "right", "left"]
+    colors = ["red", "green", "blue", "orange", "purple", "white"]
+    for orientation in orientations:
+        for color in colors:
+            for i in range(1, 7):
+                player_anim_files.append(f'player_animation/{orientation}/{color}/{orientation}_{color}_{i}.npy')
+    horiz_anim_files = []
+    widths = [7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24]
+    for color in colors:
+        for width in widths:
+            horiz_anim_files.append(f'switch_sides_animation/left_right/tile_{color}_width_{width}.npy')
+    
+    vert_anim_files = []
+    heights = [15, 24, 30, 36, 41]
+    for color in colors:
+        for height in heights:
+            vert_anim_files.append(f'switch_sides_animation/up_down/tile_{color}_hight_{height}.npy')
+
+    return (
+        # Backgrounds
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'background_switch', 'type': 'single', 'file': 'background_switch_sides_vertically.npy'},
+        
+        # Tile colors (Indices 0-6 match game logic: R,G,B,O,P,W,Black)
+        {'name': 'tiles', 'type': 'group', 'files': [
+            'tile/tile_red.npy',
+            'tile/tile_green.npy',
+            'tile/tile_blue.npy',
+            'tile/tile_orange.npy',
+            'tile/tile_purple.npy',
+            'tile/tile_white.npy',
+            'tile/tile_black.npy'
+        ]},
+        
+        # Digits
+        {'name': 'cube_digits', 'type': 'digits', 'pattern': 'cube_digit/cube_digit_{}.npy'},
+        
+        # Groups of sprites
+        {'name': 'labels', 'type': 'group', 'files': label_files},
+        {'name': 'score_digits_all', 'type': 'group', 'files': score_digit_files},
+        {'name': 'player_anims', 'type': 'group', 'files': player_anim_files},
+        {'name': 'horiz_anims', 'type': 'group', 'files': horiz_anim_files},
+        {'name': 'vert_anims', 'type': 'group', 'files': vert_anim_files},
+    )
 
 
 class VideoCubeConstants(NamedTuple):
@@ -314,6 +376,8 @@ class VideoCubeConstants(NamedTuple):
         [69, 70, 71, 59, 47, 46, 45, 57, 58],
         [96, 97, 98, 86, 74, 73, 72, 84, 85]
     ])
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class MovementState(NamedTuple):
     is_moving_on_one_side: chex.Numeric
@@ -387,20 +451,15 @@ class VideoCubeObservation(NamedTuple):
 
 class VideoCubeInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: jnp.ndarray
 
 
 @jax.jit
-def get_player_position(cube_current_side, cube_orientation, player_pos, consts):
-    """ Computes from the global player position the position of the player on one side of the cube
-
-    :param cube_current_side: the number of the side the player is looking at
-    :param cube_orientation: the rotation of the current side
-    :param player_pos: the global player position
+def get_player_position_helper(cube_current_side, cube_orientation, player_pos, cube_sides):
+    """ Helper function for renderer to compute player position.
+    The main implementation is in JaxVideoCube.get_player_position.
     """
-
     # Get the current side of the cube as an array
-    current_side = consts.CUBE_SIDES[cube_current_side]
+    current_side = cube_sides[cube_current_side]
     # Shifts the array by cube_orientation
     rotated_array = jnp.roll(current_side[0:8], -cube_orientation * 2)
     # Organizes the output matrix correctly
@@ -493,20 +552,15 @@ def movement_controller(state: VideoCubeState):
 
 
 class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCubeInfo, VideoCubeConstants]):
-    def __init__(self, consts: VideoCubeConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: VideoCubeConstants = None):
         """ Initialisation of VideoCube Game
 
         :param consts: all constants needed for the game
-        :param reward_funcs: list of functions used to compute rewards
         """
-
-        super().__init__()
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.renderer = VideoCubeRenderer()
-        self.consts = consts or VideoCubeConstants()
+        consts = consts or VideoCubeConstants()
+        super().__init__(consts)
+        self.consts = consts
+        self.renderer = VideoCubeRenderer(self.consts)
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -643,8 +697,7 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
@@ -769,14 +822,30 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
         return previous_state.player_score - state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: VideoCubeState, state: VideoCubeState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state)
-             for reward_func in self.reward_funcs]
-        )
-        return rewards
+    def get_player_position(self, cube_current_side, cube_orientation, player_pos):
+        """ Computes from the global player position the position of the player on one side of the cube
+
+        :param cube_current_side: the number of the side the player is looking at
+        :param cube_orientation: the rotation of the current side
+        :param player_pos: the global player position
+        """
+        # Get the current side of the cube as an array
+        current_side = self.consts.CUBE_SIDES[cube_current_side]
+        # Shifts the array by cube_orientation
+        rotated_array = jnp.roll(current_side[0:8], -cube_orientation * 2)
+        # Organizes the output matrix correctly
+        result = jnp.array([
+            [rotated_array[0], rotated_array[1], rotated_array[2]],
+            [rotated_array[7], current_side[8], rotated_array[3]],
+            [rotated_array[6], rotated_array[5], rotated_array[4]],
+        ])
+        # Compute the position localy as x,y coordinate
+        flat_index = jnp.argmax(result == player_pos)
+        index = jnp.unravel_index(flat_index, result.shape)
+
+        x_coordinate = index[0].astype(jnp.int32)
+        y_coordinate = index[1].astype(jnp.int32)
+        return y_coordinate, x_coordinate
 
     def render(self, state: VideoCubeState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -812,13 +881,13 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             cube_current_view=get_view(state.cube, state.cube_current_side, state.cube_orientation, self.consts.GAME_VARIATION, state.movement_state.is_moving_between_two_sides),
             player_score=state.player_score.astype(jnp.int32),
             player_color=state.player_color.astype(jnp.int32),
-            player_x=get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)[0],
-            player_y=get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)[1]
+            player_x=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[0],
+            player_y=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[1]
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: VideoCubeState, all_rewards: jnp.ndarray = None) -> VideoCubeInfo:
-        return VideoCubeInfo(state.step_counter, all_rewards)
+    def _get_info(self, state: VideoCubeState) -> VideoCubeInfo:
+        return VideoCubeInfo(state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def is_side_solved(self, state, side_idx: chex.Numeric) -> bool:
@@ -839,300 +908,113 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
         return jnp.logical_or(all_sides_solved, state.player_score >= 100000)
 
 
-def load_sprites():
-    """ Loads all sprites required for Blackjack rendering """
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # Load sprites
-    background = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/background.npy"), transpose=False)
-    background_switch_sides_vertically = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/background_switch_sides_vertically.npy"), transpose=False)
-    tile_blue = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_blue.npy"), transpose=False)
-    tile_green = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_green.npy"), transpose=False)
-    tile_orange = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_orange.npy"), transpose=False)
-    tile_purple = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_purple.npy"), transpose=False)
-    tile_red = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_red.npy"), transpose=False)
-    tile_white = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_white.npy"), transpose=False)
-    tile_black = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/videocube/tile/tile_black.npy"), transpose=False)
-
-    # Convert all sprites to the expected format (add frame dimension)
-    SPRITE_BACKGROUND = aj.get_sprite_frame(jnp.expand_dims(background, axis=0), 0)
-    SPRITE_BACKGROUND_SWITCH_SIDES_VERTICALLY = aj.get_sprite_frame(jnp.expand_dims(background_switch_sides_vertically, axis=0), 0)
-    SPRITE_TILE_BLUE = aj.get_sprite_frame(jnp.expand_dims(tile_blue, axis=0), 0)
-    SPRITE_TILE_GREEN = aj.get_sprite_frame(jnp.expand_dims(tile_green, axis=0), 0)
-    SPRITE_TILE_ORANGE = aj.get_sprite_frame(jnp.expand_dims(tile_orange, axis=0), 0)
-    SPRITE_TILE_PURPLE = aj.get_sprite_frame(jnp.expand_dims(tile_purple, axis=0), 0)
-    SPRITE_TILE_RED = aj.get_sprite_frame(jnp.expand_dims(tile_red, axis=0), 0)
-    SPRITE_TILE_WHITE = aj.get_sprite_frame(jnp.expand_dims(tile_white, axis=0), 0)
-    SPRITE_TILE_BLACK = aj.get_sprite_frame(jnp.expand_dims(tile_black, axis=0), 0)
-
-    # Load digits for cube selection
-    CUBE_DIGIT_SPRITES = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/videocube/cube_digit/cube_digit_{}.npy"), num_chars=10)
-
-    # Load all Atari labels
-    atari_labels = []
-    for i in range(1, 65):
-        path = "".join(["sprites/videocube/label/label_", str(i), ".npy"])
-        frame = aj.loadFrame(os.path.join(MODULE_DIR, path), transpose=False)
-        sprite = jnp.expand_dims(frame, axis=0)
-        atari_labels.append(aj.get_sprite_frame(sprite, 0))
-    LABEL_SPRITES = jnp.array(atari_labels)
-
-    @partial(jax.jit, static_argnames=["color_index"])
-    def load_score_digits(color_index):
-        """ Modified version of atraJaxis load_and_pad_digits
-        :param color_index: Color of digit (1 - 64)
-        """
-
-        digits = []
-        max_width, max_height = 0, 0
-
-        # Load digits assuming loadFrame returns (H, W, C)
-        for k in range(0, 10):
-            # Load with transpose=True (default) assuming source is H, W, C
-            path_from_digits = "".join(["sprites/videocube/score/score_", str(k), "/score_", str(k), "_", str(color_index), ".npy"])
-            digit = aj.loadFrame(os.path.join(MODULE_DIR, path_from_digits), transpose=False)
-            max_width = max(max_width, digit.shape[1])  # Axis 1 is Width
-            max_height = max(max_height, digit.shape[0])  # Axis 0 is Height
-            digits.append(digit)
-
-        # Pad digits to max dimensions (H, W)
-        padded_digits = []
-        for digit in digits:
-            pad_w = max_width - digit.shape[1]  # Pad width (axis 1)
-            pad_h = max_height - digit.shape[0]  # Pad height (axis 0)
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-
-            # Padding order for HWC: ((pad_H_before, after), (pad_W_before, after), ...)
-            padded_digit = jnp.pad(
-                digit,
-                ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="constant",
-                constant_values=0,
-            )
-            padded_digits.append(padded_digit)
-
-        return jnp.array(padded_digits)
-
-    # Load all score digits
-    score_digits = []
-    for i in range(1, 65):
-        score_digits.append(load_score_digits(i))
-    SCORE_DIGIT_SPRITES = jnp.array(score_digits)
-
-    # Load all player animations
-    orientations = ["down_up", "right", "left"]
-    colors = ["red", "green", "blue", "orange", "purple", "white"]
-    player_animations = []
-    for orientation in orientations:
-        animations_orientation = []
-        for color in colors:
-            animations_color = []
-            for i in range(1, 7):
-                path = "".join(["sprites/videocube/player_animation/", orientation, "/", color, "/", orientation, "_", color, "_", str(i), ".npy"])
-                frame = aj.loadFrame(os.path.join(MODULE_DIR, path), transpose=False)
-                sprite = jnp.expand_dims(frame, axis=0)
-                animations_color.append(aj.get_sprite_frame(sprite, 0))
-            animations_orientation.append(jnp.array(animations_color))
-        player_animations.append(jnp.array(animations_orientation))
-    PLAYER_ANIMATIONS_SPRITES = jnp.array(player_animations)
-
-    # Load tiles with different width
-    widths = [7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24]
-    horizontal_animation = []
-    for color in colors:
-        tmp_array = []
-        for width in widths:
-            path = "".join(["sprites/videocube/switch_sides_animation/left_right/tile_", color, "_width_", str(width), ".npy"])
-            frame = aj.loadFrame(os.path.join(MODULE_DIR, path), transpose=False)
-            sprite = jnp.expand_dims(frame, axis=0)
-            tmp_array.append(aj.get_sprite_frame(sprite, 0))
-        horizontal_animation.append(jnp.array(tmp_array))
-    HORIZONTAL_ANIMATIONS_SPRITES = jnp.array(horizontal_animation)
-
-    # Load tiles with different heights
-    heights = [15, 24, 30, 36, 41]
-    vertical_animation = []
-    for color in colors:
-        tmp_array = []
-        for height in heights:
-            path = "".join(["sprites/videocube/switch_sides_animation/up_down/tile_", color, "_hight_", str(height), ".npy"])
-            frame = aj.loadFrame(os.path.join(MODULE_DIR, path), transpose=False)
-            sprite = jnp.expand_dims(frame, axis=0)
-            tmp_array.append(aj.get_sprite_frame(sprite, 0))
-        vertical_animation.append(jnp.array(tmp_array))
-    VERTICAL_ANIMATIONS_SPRITES = jnp.array(vertical_animation)
-
-    return (
-        SPRITE_BACKGROUND,
-        SPRITE_BACKGROUND_SWITCH_SIDES_VERTICALLY,
-        SPRITE_TILE_BLUE,
-        SPRITE_TILE_GREEN,
-        SPRITE_TILE_ORANGE,
-        SPRITE_TILE_PURPLE,
-        SPRITE_TILE_RED,
-        SPRITE_TILE_WHITE,
-        SPRITE_TILE_BLACK,
-        HORIZONTAL_ANIMATIONS_SPRITES,
-        VERTICAL_ANIMATIONS_SPRITES,
-        CUBE_DIGIT_SPRITES,
-        LABEL_SPRITES,
-        SCORE_DIGIT_SPRITES,
-        PLAYER_ANIMATIONS_SPRITES
-    )
 
 
 class VideoCubeRenderer(JAXGameRenderer):
     def __init__(self, consts: VideoCubeConstants = None):
         super().__init__()
         self.consts = consts or VideoCubeConstants()
+        
+        # 1. Configure the new renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocube"
+        
+        # 2. Asset manifest is now loaded from constants
+        # The large local 'asset_config' list has been removed.
+        # 3. Load all assets
         (
-            self.SPRITE_BACKGROUND,
-            self.SPRITE_BACKGROUND_SWITCH_SIDES_VERTICALLY,
-            self.SPRITE_TILE_BLUE,
-            self.SPRITE_TILE_GREEN,
-            self.SPRITE_TILE_ORANGE,
-            self.SPRITE_TILE_PURPLE,
-            self.SPRITE_TILE_RED,
-            self.SPRITE_TILE_WHITE,
-            self.SPRITE_TILE_BLACK,
-            self.HORIZONTAL_ANIMATIONS_SPRITES,
-            self.VERTICAL_ANIMATIONS_SPRITES,
-            self.CUBE_DIGIT_SPRITES,
-            self.LABEL_SPRITES,
-            self.SCORE_DIGIT_SPRITES,
-            self.PLAYER_ANIMATIONS_SPRITES
-        ) = load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), self.sprite_path)
 
-        # Position of every tile when rotating horizontally
+        # 4. Store animation helper arrays (unchanged game logic)
         self.TILE_POSITIONS_HORIZONTAL_ROTATION = jnp.array([
-            # Step 1
-            [
-                [[32, 28], [55, 28], [79, 28], [103, 28], [112, 28], [121, 28]],
-                [[32, 78], [55, 78], [79, 78], [103, 78], [112, 78], [121, 78]],
-                [[32, 128], [55, 128], [79, 128], [103, 128], [112, 128], [121, 128]]
-            ],
-            # Step 2
-            [
-                [[28, 28], [49, 28], [70, 28], [91, 28], [106, 28], [121, 28]],
-                [[28, 78], [49, 78], [70, 78], [91, 78], [106, 78], [121, 78]],
-                [[28, 128], [49, 128], [70, 128], [91, 128], [106, 128], [121, 128]]
-            ],
-            # Step 3
-            [
-                [[28, 28], [46, 28], [64, 28], [82, 28], [100, 28], [118, 28]],
-                [[28, 78], [46, 78], [64, 78], [82, 78], [100, 78], [118, 78]],
-                [[28, 128], [46, 128], [64, 128], [82, 128], [100, 128], [118, 128]]
-            ],
-            # Step 4
-            [
-                [[28, 28], [43, 28], [58, 28], [74, 28], [94, 28], [115, 28]],
-                [[28, 78], [43, 78], [58, 78], [74, 78], [94, 78], [115, 78]],
-                [[28, 128], [43, 128], [58, 128], [74, 128], [94, 128], [115, 128]]
-            ],
-            # Step 5
-            [
-                [[32, 28], [40, 28], [49, 28], [59, 28], [82, 28], [106, 28]],
-                [[32, 78], [40, 78], [49, 78], [59, 78], [82, 78], [106, 78]],
-                [[32, 128], [40, 128], [49, 128], [59, 128], [82, 128], [106, 128]],
-            ]
+            [[[32, 28], [55, 28], [79, 28], [103, 28], [112, 28], [121, 28]],
+             [[32, 78], [55, 78], [79, 78], [103, 78], [112, 78], [121, 78]],
+             [[32, 128], [55, 128], [79, 128], [103, 128], [112, 128], [121, 128]]],
+            [[[28, 28], [49, 28], [70, 28], [91, 28], [106, 28], [121, 28]],
+             [[28, 78], [49, 78], [70, 78], [91, 78], [106, 78], [121, 78]],
+             [[28, 128], [49, 128], [70, 128], [91, 128], [106, 128], [121, 128]]],
+            [[[28, 28], [46, 28], [64, 28], [82, 28], [100, 28], [118, 28]],
+             [[28, 78], [46, 78], [64, 78], [82, 78], [100, 78], [118, 78]],
+             [[28, 128], [46, 128], [64, 128], [82, 128], [100, 128], [118, 128]]],
+            [[[28, 28], [43, 28], [58, 28], [74, 28], [94, 28], [115, 28]],
+             [[28, 78], [43, 78], [58, 78], [74, 78], [94, 78], [115, 78]],
+             [[28, 128], [43, 128], [58, 128], [74, 128], [94, 128], [115, 128]]],
+            [[[32, 28], [40, 28], [49, 28], [59, 28], [82, 28], [106, 28]],
+             [[32, 78], [40, 78], [49, 78], [59, 78], [82, 78], [106, 78]],
+             [[32, 128], [40, 128], [49, 128], [59, 128], [82, 128], [106, 128]]]
         ])
 
-        # Position of every tile when rotating vertically
         self.TILE_POSITIONS_VERTICAL_ROTATION = jnp.array([
-            # Step 1
-            [
-                [[40, 14], [67, 14], [94, 12]],
-                [[40, 31], [67, 31], [94, 32]],
-                [[40, 48], [67, 48], [94, 48]],
-                [[40, 66], [67, 66], [94, 66]],
-                [[40, 109], [67, 109], [94, 109]],
-                [[40, 152], [67, 152], [94, 152]]
-            ],
-            # Step 2
-            [
-                [[40, 8], [67, 8], [94, 8]],
-                [[40, 34], [67, 34], [94, 34]],
-                [[40, 60], [67, 60], [94, 60]],
-                [[40, 87], [67, 87], [94, 87]],
-                [[40, 125], [67, 125], [94, 125]],
-                [[40, 163], [67, 163], [94, 163]]
-            ],
-            # Step 3
-            [
-                [[40, 8], [67, 8], [94, 8]],
-                [[40, 40], [67, 40], [94, 40]],
-                [[40, 72], [67, 72], [94, 72]],
-                [[40, 105], [67, 105], [94, 105]],
-                [[40, 137], [67, 137], [94, 137]],
-                [[40, 169], [67, 169], [94, 169]]
-            ],
-            # Step 4
-            [
-                [[40, 8], [67, 8], [94, 8]],
-                [[40, 46], [67, 46], [94, 46]],
-                [[40, 84], [67, 84], [94, 84]],
-                [[40, 123], [67, 123], [94, 123]],
-                [[40, 149], [67, 149], [94, 149]],
-                [[40, 175], [67, 175], [94, 175]]
-            ],
-            # Step 5
-            [
-                [[40, 14], [67, 14], [94, 14]],
-                [[40, 57], [67, 57], [94, 57]],
-                [[40, 100], [67, 100], [94, 100]],
-                [[40, 144], [67, 144], [94, 144]],
-                [[40, 161], [67, 161], [94, 161]],
-                [[40, 178], [67, 178], [94, 178]]
-            ]
+            [[[40, 14], [67, 14], [94, 12]],
+             [[40, 31], [67, 31], [94, 32]],
+             [[40, 48], [67, 48], [94, 48]],
+             [[40, 66], [67, 66], [94, 66]],
+             [[40, 109], [67, 109], [94, 109]],
+             [[40, 152], [67, 152], [94, 152]]],
+            [[[40, 8], [67, 8], [94, 8]],
+             [[40, 34], [67, 34], [94, 34]],
+             [[40, 60], [67, 60], [94, 60]],
+             [[40, 87], [67, 87], [94, 87]],
+             [[40, 125], [67, 125], [94, 125]],
+             [[40, 163], [67, 163], [94, 163]]],
+            [[[40, 8], [67, 8], [94, 8]],
+             [[40, 40], [67, 40], [94, 40]],
+             [[40, 72], [67, 72], [94, 72]],
+             [[40, 105], [67, 105], [94, 105]],
+             [[40, 137], [67, 137], [94, 137]],
+             [[40, 169], [67, 169], [94, 169]]],
+            [[[40, 8], [67, 8], [94, 8]],
+             [[40, 46], [67, 46], [94, 46]],
+             [[40, 84], [67, 84], [94, 84]],
+             [[40, 123], [67, 123], [94, 123]],
+             [[40, 149], [67, 149], [94, 149]],
+             [[40, 175], [67, 175], [94, 175]]],
+            [[[40, 14], [67, 14], [94, 14]],
+             [[40, 57], [67, 57], [94, 57]],
+             [[40, 100], [67, 100], [94, 100]],
+             [[40, 144], [67, 144], [94, 144]],
+             [[40, 161], [67, 161], [94, 161]],
+             [[40, 178], [67, 178], [94, 178]]]
         ])
 
-        # Position of every tile when not rotating
         self.TILE_POSITIONS = jnp.array([
             [[40, 28], [67, 28], [94, 28]],
             [[40, 78], [67, 78], [94, 78]],
-            [[40, 128], [67, 128], [94, 128]],
+            [[40, 128], [67, 128], [94, 128]]
         ])
 
-        # Widths of tiles when rotating horizontally
         self.WIDTHS = jnp.array([
-            # Step 1
             [23, 24, 23, 9, 9, 7],
-            # Step 2
             [21, 21, 20, 15, 15, 15],
-            # Step 3
             [18, 18, 17, 18, 18, 18],
-            # Step 4
             [15, 15, 15, 20, 21, 21],
-            # Step 5
             [8, 9, 9, 23, 24, 22]
         ])
 
-        # Heights of tiles when rotating vertically
         self.HEIGHTS = jnp.array([
-            # Step 1
             [15, 15, 15, 41, 41, 41],
-            # Step 2
             [24, 24, 24, 36, 36, 36],
-            # Step 3
             [30, 30, 30, 30, 30, 30],
-            # Step 4
             [36, 36, 36, 24, 24, 24],
-            # Step 5
             [41, 41, 41, 15, 15, 15]
         ])
 
-        # All possible positions of the player on one side of the cube
         self.PLAYER_POSITIONS = jnp.array([
-            # Positions when player is looking up or down
             [
                 [[46, 48], [73, 48], [100, 48]],
                 [[46, 98], [73, 98], [100, 98]],
                 [[46, 148], [73, 148], [100, 148]]
             ],
-            # Positions when player is looking left or right
             [
                 [[46, 44], [73, 44], [100, 44]],
                 [[46, 94], [73, 94], [100, 94]],
@@ -1140,29 +1022,43 @@ class VideoCubeRenderer(JAXGameRenderer):
             ]
         ])
 
-        # The movement of the player on one side relative to the start position
         self.PLAYER_MOVEMENT_ON_ONE_SIDE = jnp.array([
-            # Moving up
             [[0, -8], [0, -16], [0, -26], [0, -34], [0, -42], [0, -50]],
-            # Moving right
             [[7, 1], [10, 0], [16, 1], [18, 0], [25, 1], [27, 0]],
-            # Moving left
             [[-7, 1], [-10, 0], [-16, 1], [-18, 0], [-25, 1], [-27, 0]],
-            # Moving down
             [[0, 8], [0, 16], [0, 26], [0, 34], [0, 42], [0, 50]]
         ])
 
-        # The movement of the player between two sides relative to the start position
         self.PLAYER_MOVEMENT_BETWEEN_TWO_SIDES = jnp.array([
-            # Moving up
             [[0, 6], [0, 16], [0, 32], [0, 48], [0, 70], [0, 100]],
-            # Moving right
             [[-7, 0], [-17, 0], [-25, 0], [-35, 0], [-42, 0], [-54, 0]],
-            # Moving left
             [[12, 0], [19, 0], [29, 0], [37, 0], [47, 0], [54, 0]],
-            # Moving down
             [[0, -30], [0, -52], [0, -68], [0, -84], [0, -94], [0, -100]]
         ])
+
+        # 5. *** NEW: PRECOMPUTATION ***
+        # Create static numpy arrays for lookup
+        widths_np = np.array([7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24])
+        heights_np = np.array([15, 24, 30, 36, 41])
+        
+        # Create python-side hash maps for fast lookups
+        width_map = {val: idx for idx, val in enumerate(widths_np)}
+        height_map = {val: idx for idx, val in enumerate(heights_np)}
+        
+        # Use np.vectorize to apply the map to the static JAX arrays
+        static_widths_table = np.array(self.WIDTHS)
+        static_heights_table = np.array(self.HEIGHTS)
+        
+        lookup_w_np = np.vectorize(width_map.get)(static_widths_table)
+        lookup_h_np = np.vectorize(height_map.get)(static_heights_table)
+        
+        # Store the final precomputed lookup tables as JAX arrays
+        self.WIDTH_INDEX_LOOKUP = jnp.array(lookup_w_np, dtype=jnp.int32)
+        self.HEIGHT_INDEX_LOOKUP = jnp.array(lookup_h_np, dtype=jnp.int32)
+        
+        # 6. Store digit mask dimensions
+        self.SCORE_DIGIT_H = self.SHAPE_MASKS['score_digits_all'].shape[1]
+        self.SCORE_DIGIT_W = self.SHAPE_MASKS['score_digits_all'].shape[2]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: VideoCubeState):
@@ -1170,38 +1066,51 @@ class VideoCubeRenderer(JAXGameRenderer):
 
         :param state: the current game state
         """
-        # Create empty raster with CORRECT orientation for atraJaxis framework
-        # Note: For pygame, the raster is expected to be (width, height, channels)
-        # where width corresponds to the horizontal dimension of the screen
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
+        # Create empty raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Render background - (0, 0) is top-left corner
-        raster = aj.render_at(raster, 0, 0, jnp.where(jnp.logical_and(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN),
-                              state.movement_state.is_moving_between_two_sides == 1), self.SPRITE_BACKGROUND_SWITCH_SIDES_VERTICALLY, self.SPRITE_BACKGROUND))
+        # Render background
+        bg_mask = jnp.where(
+            jnp.logical_and(
+                jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN),
+                state.movement_state.is_moving_between_two_sides == 1
+            ),
+            self.SHAPE_MASKS['background_switch'],
+            self.BACKGROUND  # Use the ID mask of the background, not the sprite
+        )
+
+        # We must stamp the background *over* the default black
+        raster = self.jr.render_at(raster, 0, 0, bg_mask)
 
         # Render Atari label
-        # 1. Calculate the index for the label according to step_counter (the label color changes every 8 ticks)
-        label_index = jnp.floor(state.step_counter / 8).astype("int32") % 64
-        raster = jnp.where(jnp.logical_and(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN),
-                           state.movement_state.is_moving_between_two_sides == 1), raster, aj.render_at(raster, 55, 5, self.LABEL_SPRITES[label_index]))
+        # 1. Calculate the index for the label
+        label_index = jnp.floor(state.step_counter / 8).astype(jnp.int32) % 64
+        label_mask = self.SHAPE_MASKS['labels'][label_index]
+        
+        raster = jnp.where(
+            jnp.logical_and(
+                jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN),
+                state.movement_state.is_moving_between_two_sides == 1
+            ), 
+            raster, 
+            self.jr.render_at(raster, 55, 5, label_mask)
+        )
 
         # Render number of selected cube
-        # 1. Get digit array (always 2 digits)
-        selected_cube_digits = aj.int_to_digits(self.consts.SELECTED_CUBE, max_digits=2)
-
-        # 2. Determine parameters for selected cube rendering
+        selected_cube_digits = self.jr.int_to_digits(self.consts.SELECTED_CUBE, max_digits=2)
         is_selected_cube_single_digit = self.consts.SELECTED_CUBE < 10
-        selected_cube_start_index = jax.lax.select(is_selected_cube_single_digit, 1, 0)  # Start at index 1 if single, 0 if double
-        selected_cube_num_to_render = jax.lax.select(is_selected_cube_single_digit, 1, 2)  # Render 1 digit if single, 2 if double
+        selected_cube_start_index = jax.lax.select(is_selected_cube_single_digit, 1, 0)
+        selected_cube_num_to_render = jax.lax.select(is_selected_cube_single_digit, 1, 2)
 
-        # 3. Render selected cube number using the selective renderer
-        raster = aj.render_label_selective(raster, 96, 191, selected_cube_digits, self.CUBE_DIGIT_SPRITES,
-                                           selected_cube_start_index, selected_cube_num_to_render, spacing=5)
+        raster = self.jr.render_label_selective(
+            raster, 96, 191, selected_cube_digits, self.SHAPE_MASKS['cube_digits'],
+            selected_cube_start_index, selected_cube_num_to_render, 
+            spacing=5, # static value
+            max_digits_to_render=2 # static value
+        )
 
         # Render player_score
-        # 1. Get digit array (always 3 digits)
-        player_score_digits = aj.int_to_digits(state.player_score, max_digits=6)
-        # 2. Determine parameters for player score rendering
+        player_score_digits = self.jr.int_to_digits(state.player_score, max_digits=6)
         player_score_conditions = jnp.array([
             state.player_score < 10,
             jnp.logical_and(state.player_score >= 10, state.player_score < 100),
@@ -1210,177 +1119,203 @@ class VideoCubeRenderer(JAXGameRenderer):
             jnp.logical_and(state.player_score >= 10000, state.player_score < 100000),
             state.player_score >= 100000
         ], dtype=bool)
-        # Start at index 3 if single, 2 if double, 1 if triple, 0 if quadrupel
         player_score_start_index = jnp.select(player_score_conditions, jnp.array([5, 4, 3, 2, 1, 0]))
-        # Render 1 digit if single, 2 if double, 3 if triple, 4 if quadrupel
         player_score_num_to_render = jnp.select(player_score_conditions, jnp.array([1, 2, 3, 4, 5, 6]))
 
-        # 3. Render player score using the selective renderer
-        raster = aj.render_label_selective(raster, 95, 180, player_score_digits,
-                                           self.SCORE_DIGIT_SPRITES[label_index], player_score_start_index, player_score_num_to_render, spacing=10)
+        # Dynamically slice the correct set of 10 digit masks for the current label color
+        all_score_masks = self.SHAPE_MASKS['score_digits_all']
+        current_score_masks = jax.lax.dynamic_slice(
+            all_score_masks, 
+            (label_index * 10, 0, 0), 
+            (10, self.SCORE_DIGIT_H, self.SCORE_DIGIT_W)
+        )
+        
+        raster = self.jr.render_label_selective(
+            raster, 95, 180, player_score_digits,
+            current_score_masks, player_score_start_index, player_score_num_to_render, 
+            spacing=10, # static value
+            max_digits_to_render=6 # static value
+        )
 
-        @jax.jit
-        def get_index(value, array):
-            """ Calculate the index of the value in the given array
-
-            :param value: the given value of the index to find
-            :param array: the given array
-            """
-
-            index = jax.lax.fori_loop(
-                lower=0,
-                upper=array.size,
-                body_fun=lambda i, val: jnp.where(array[i] == value, i, val),
-                init_val=0
-            )
-            return index
-
+        # *** REMOVED get_index *** # It is no longer needed in the render function.
         last_view = get_view(state.cube, state.last_cube_current_side, state.last_cube_orientation, 0, state.movement_state.is_moving_between_two_sides)
 
         @jax.jit
         def tiles_move_on_one_side():
             """ Returns the raster containing the tiles in the correct colors """
-            tiles = jnp.array([
-                self.SPRITE_TILE_RED,
-                self.SPRITE_TILE_GREEN,
-                self.SPRITE_TILE_BLUE,
-                self.SPRITE_TILE_ORANGE,
-                self.SPRITE_TILE_PURPLE,
-                self.SPRITE_TILE_WHITE
-            ])
-
+            tile_masks = self.SHAPE_MASKS['tiles'] # Shape (7, H, W)
             result_raster = raster
-            result_raster = jax.lax.fori_loop(
-                lower=0,
-                upper=3,
-                body_fun=lambda i, val1: jax.lax.fori_loop(
-                    lower=0,
-                    upper=3,
-                    body_fun=lambda j, val2: aj.render_at(val2, self.TILE_POSITIONS[i][j][0], self.TILE_POSITIONS[i][j][1], jnp.where(self.consts.GAME_VARIATION == 1, self.SPRITE_TILE_BLACK, tiles[view[i][j]])),
-                    init_val=val1
-                ),
-                init_val=result_raster
-            )
+            def body_i(i, val1):
+                def body_j(j, val2):
+                    # Select the correct tile mask based on view
+                    color_index = view[i, j]
+                    mask = jax.lax.select(
+                        self.consts.GAME_VARIATION == 1,
+                        tile_masks[6], # Black tile
+                        tile_masks[color_index]
+                    )
+                    return self.jr.render_at(
+                        val2, 
+                        self.TILE_POSITIONS[i, j, 0], 
+                        self.TILE_POSITIONS[i, j, 1], 
+                        mask
+                    )
+                return jax.lax.fori_loop(0, 3, body_j, val1)
+            
+            result_raster = jax.lax.fori_loop(0, 3, body_i, result_raster)
             return result_raster
 
         @jax.jit
         def tiles_move_between_two_sides_vertically():
             """ Returns the raster containing the vertical rotation of the cube """
             result_raster = raster
-            heights = jnp.array([15, 24, 30, 36, 41])
-            # Array containing last_view and the current view
+            
             combined_view = jax.lax.cond(
                 pred=state.last_action == Action.UP,
                 true_fun=lambda: jnp.concat((view, last_view), axis=0),
                 false_fun=lambda: jnp.concat((last_view, view), axis=0),
             )
-            # Tells which step of the animation is needed
             counter = jax.lax.cond(
                 pred=state.last_action == Action.UP,
                 true_fun=lambda: state.movement_state.moving_counter - 1,
                 false_fun=lambda: 6 - state.movement_state.moving_counter - 1
             )
-            # Render the tiles
-            result_raster = jax.lax.fori_loop(
-                lower=0,
-                upper=6,
-                body_fun=lambda i, val1: jax.lax.fori_loop(
-                    lower=0,
-                    upper=3,
-                    body_fun=lambda j, val2: aj.render_at(
+            
+            def body_i(i, val1):
+                def body_j(j, val2):
+                    color_index = combined_view[i, j]
+                    
+                    # *** OPTIMIZATION ***
+                    # Directly look up the precomputed index instead of searching
+                    height_index = self.HEIGHT_INDEX_LOOKUP[counter, i]
+                    
+                    # flat_index = color_index * num_heights + height_index
+                    flat_index = color_index * 5 + height_index
+                    mask = self.SHAPE_MASKS['vert_anims'][flat_index]
+                    
+                    return self.jr.render_at(
                         val2,
-                        self.TILE_POSITIONS_VERTICAL_ROTATION[counter][i][j][0],
-                        self.TILE_POSITIONS_VERTICAL_ROTATION[counter][i][j][1],
-                        self.VERTICAL_ANIMATIONS_SPRITES[combined_view[i][j]][get_index(self.HEIGHTS[counter][i], heights)]),
-                    init_val=val1
-                ),
-                init_val=result_raster
-            )
+                        self.TILE_POSITIONS_VERTICAL_ROTATION[counter, i, j, 0],
+                        self.TILE_POSITIONS_VERTICAL_ROTATION[counter, i, j, 1],
+                        mask
+                    )
+                return jax.lax.fori_loop(0, 3, body_j, val1)
+            
+            result_raster = jax.lax.fori_loop(0, 6, body_i, result_raster)
             return result_raster
 
         @jax.jit
         def tiles_move_between_two_sides_horizontally():
             """ Returns the raster containing the horizontal rotation of the cube """
             result_raster = raster
-            widths = jnp.array([7, 8, 9, 15, 17, 18, 20, 21, 22, 23, 24])
-            # Array containing last_view and the current view
+            
             combined_view = jax.lax.cond(
                 pred=state.last_action == Action.RIGHT,
                 true_fun=lambda: jnp.hstack((last_view, view)),
                 false_fun=lambda: jnp.hstack((view, last_view)),
             )
-            # Tells which step of the animation is needed
             counter = jax.lax.cond(
                 pred=state.last_action == Action.RIGHT,
                 true_fun=lambda: state.movement_state.moving_counter - 1,
                 false_fun=lambda: 6 - state.movement_state.moving_counter - 1
             )
-            # Render the tiles
-            result_raster = jax.lax.fori_loop(
-                lower=0,
-                upper=3,
-                body_fun=lambda i, val1: jax.lax.fori_loop(
-                    lower=0,
-                    upper=6,
-                    body_fun=lambda j, val2: aj.render_at(
+            
+            def body_i(i, val1):
+                def body_j(j, val2):
+                    color_index = combined_view[i, j]
+                    # *** OPTIMIZATION ***
+                    # Directly look up the precomputed index instead of searching
+                    width_index = self.WIDTH_INDEX_LOOKUP[counter, j]
+                    
+                    # flat_index = color_index * num_widths + width_index
+                    flat_index = color_index * 11 + width_index
+                    mask = self.SHAPE_MASKS['horiz_anims'][flat_index]
+                    
+                    return self.jr.render_at(
                         val2,
-                        self.TILE_POSITIONS_HORIZONTAL_ROTATION[counter][i][j][0],
-                        self.TILE_POSITIONS_HORIZONTAL_ROTATION[counter][i][j][1],
-                        self.HORIZONTAL_ANIMATIONS_SPRITES[combined_view[i][j]][get_index(self.WIDTHS[counter][j], widths)]
-                    ),
-                    init_val=val1
-                ),
-                init_val=result_raster
-            )
+                        self.TILE_POSITIONS_HORIZONTAL_ROTATION[counter, i, j, 0],
+                        self.TILE_POSITIONS_HORIZONTAL_ROTATION[counter, i, j, 1],
+                        mask
+                    )
+                return jax.lax.fori_loop(0, 6, body_j, val1)
+            result_raster = jax.lax.fori_loop(0, 3, body_i, result_raster)
             return result_raster
 
         # Render the tiles of the cube
-        # 1. Get the current cube side in consideration of the rotation
         view = get_view(state.cube, state.cube_current_side, state.cube_orientation, 0, state.movement_state.is_moving_between_two_sides)
-        # 2. Differentiate between moving on one side and between two sides
         raster = jax.lax.cond(
             pred=jnp.logical_or(state.movement_state.is_moving_on_one_side, state.movement_state.moving_counter == 0),
-            # Move on one side
             true_fun=lambda: tiles_move_on_one_side(),
-            # Move between two sides
             false_fun=lambda: jax.lax.cond(
                 pred=jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN),
-                # Move vertically
                 true_fun=lambda: tiles_move_between_two_sides_vertically(),
-                # Move horizontally
                 false_fun=lambda: tiles_move_between_two_sides_horizontally()
             ),
         )
+        
         # Render player
-        player_position = get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts)
-        last_player_position = get_player_position(state.last_cube_current_side, state.last_cube_orientation, state.last_player_pos, self.consts)
+        player_position = get_player_position_helper(state.cube_current_side, state.cube_orientation, state.player_pos, self.consts.CUBE_SIDES)
+        last_player_position = get_player_position_helper(state.last_cube_current_side, state.last_cube_orientation, state.last_player_pos, self.consts.CUBE_SIDES)
         sprite_on_one_side_indices = jnp.array([0, 1, 2, 0])
-        # 1. Check if player can move
-        raster = jax.lax.cond(
-            pred=jnp.logical_and(state.can_move == 1, state.movement_state.moving_counter != 0),
-            true_fun=lambda: jax.lax.cond(
-                # Check if player is moving
-                pred=jnp.logical_or(state.movement_state.is_moving_on_one_side, state.movement_state.is_moving_between_two_sides),
-                true_fun=lambda: jax.lax.cond(
-                    # Check if player is moving on one side ore between two sides
-                    pred=state.movement_state.is_moving_on_one_side,
-                    true_fun=lambda: aj.render_at(raster,
-                                          self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][last_player_position[1]][last_player_position[0]][0] + self.PLAYER_MOVEMENT_ON_ONE_SIDE[state.last_action - 2][state.movement_state.moving_counter][0],
-                                          self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][last_player_position[1]][last_player_position[0]][1] + self.PLAYER_MOVEMENT_ON_ONE_SIDE[state.last_action - 2][state.movement_state.moving_counter][1],
-                                          self.PLAYER_ANIMATIONS_SPRITES[sprite_on_one_side_indices[state.last_action - 2]][state.player_color][state.movement_state.moving_counter]
-                                          ),
-                    false_fun=lambda: aj.render_at(raster,
-                                            self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][last_player_position[1]][last_player_position[0]][0] + self.PLAYER_MOVEMENT_BETWEEN_TWO_SIDES[state.last_action - 2][state.movement_state.moving_counter][0],
-                                            self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][last_player_position[1]][last_player_position[0]][1] + self.PLAYER_MOVEMENT_BETWEEN_TWO_SIDES[state.last_action - 2][state.movement_state.moving_counter][1],
-                                            self.PLAYER_ANIMATIONS_SPRITES[sprite_on_one_side_indices[state.last_action - 2]][state.player_color][state.movement_state.moving_counter]
-                                           )
-                ),
-                false_fun=lambda: raster
-            ),
-            false_fun=lambda: aj.render_at(raster,
-                                           self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][player_position[1]][player_position[0]][0],
-                                           self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1)][player_position[1]][player_position[0]][1],
-                                           self.PLAYER_ANIMATIONS_SPRITES[sprite_on_one_side_indices[state.last_action - 2]][state.player_color][5]),
+        
+        @jax.jit
+        def get_player_mask_and_pos():
+            # Check if player is moving
+            def moving_true():
+                # Check if player is moving on one side or between two sides
+                def move_on_one_side():
+                    orientation_index = sprite_on_one_side_indices[state.last_action - 2]
+                    color_index = state.player_color
+                    frame_index = state.movement_state.moving_counter
+                    # flat_index = orientation_index * (6*6) + color_index * 6 + frame_index
+                    flat_index = orientation_index * 36 + color_index * 6 + frame_index
+                    
+                    mask = self.SHAPE_MASKS['player_anims'][flat_index]
+                    pos_x = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), last_player_position[1], last_player_position[0], 0] + self.PLAYER_MOVEMENT_ON_ONE_SIDE[state.last_action - 2, frame_index, 0]
+                    pos_y = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), last_player_position[1], last_player_position[0], 1] + self.PLAYER_MOVEMENT_ON_ONE_SIDE[state.last_action - 2, frame_index, 1]
+                    return mask, pos_x, pos_y
+                def move_between_sides():
+                    orientation_index = sprite_on_one_side_indices[state.last_action - 2]
+                    color_index = state.player_color
+                    frame_index = state.movement_state.moving_counter
+                    # flat_index = orientation_index * (6*6) + color_index * 6 + frame_index
+                    flat_index = orientation_index * 36 + color_index * 6 + frame_index
+                    
+                    mask = self.SHAPE_MASKS['player_anims'][flat_index]
+                    pos_x = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), last_player_position[1], last_player_position[0], 0] + self.PLAYER_MOVEMENT_BETWEEN_TWO_SIDES[state.last_action - 2, frame_index, 0]
+                    pos_y = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), last_player_position[1], last_player_position[0], 1] + self.PLAYER_MOVEMENT_BETWEEN_TWO_SIDES[state.last_action - 2, frame_index, 1]
+                    return mask, pos_x, pos_y
+                return jax.lax.cond(
+                    state.movement_state.is_moving_on_one_side,
+                    move_on_one_side,
+                    move_between_sides
+                )
+            # Player is not moving (or anim is over), draw idle frame
+            def moving_false():
+                orientation_index = sprite_on_one_side_indices[state.last_action - 2]
+                color_index = state.player_color
+                frame_index = 5 # Idle frame
+                # flat_index = orientation_index * (6*6) + color_index * 6 + frame_index
+                flat_index = orientation_index * 36 + color_index * 6 + frame_index
+                
+                mask = self.SHAPE_MASKS['player_anims'][flat_index]
+                pos_x = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), player_position[1], player_position[0], 0]
+                pos_y = self.PLAYER_POSITIONS[jnp.where(jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN), 0, 1), player_position[1], player_position[0], 1]
+                return mask, pos_x, pos_y
+
+            return jax.lax.cond(
+                pred=jnp.logical_and(state.can_move == 1, state.movement_state.moving_counter != 0),
+                true_fun=moving_true,
+                false_fun=moving_false
+            )
+
+        player_mask, player_x, player_y = get_player_mask_and_pos()
+        raster = self.jr.render_at(
+            raster, 
+            player_x, 
+            player_y, 
+            player_mask, 
+            flip_offset=self.FLIP_OFFSETS['player_anims']
         )
 
-        return raster
+        return self.jr.render_from_palette(raster, self.PALETTE)

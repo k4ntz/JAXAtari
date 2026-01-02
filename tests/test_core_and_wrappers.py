@@ -8,6 +8,7 @@ from jaxatari.wrappers import (
     NormalizeObservationWrapper,
     ObjectCentricWrapper,
     PixelObsWrapper,
+    MultiRewardWrapper,
     AtariWrapper,
     PixelAndObjectCentricWrapper,
     LogWrapper,
@@ -197,7 +198,8 @@ def test_multi_reward_log_wrapper(raw_env):
     
     # Create environment with wrappers
     base_env = raw_env
-    env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(AtariWrapper(base_env)))
+    reward_funcs = [lambda state, prev_state: jnp.ones(1)]
+    env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(AtariWrapper(MultiRewardWrapper(base_env, reward_funcs))))
     
     # Get initial observation
     obs, state = env.reset(key)

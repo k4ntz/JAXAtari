@@ -1,15 +1,46 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Dict, Any, List, Optional
 
 import jax
 import jax.numpy as jnp
 import chex
+from jax.image import resize
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for SirLancelot.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Backgrounds are loaded and resized dynamically in renderer.
+    """
+    return (
+        # Backgrounds will be added dynamically (bg_outdoor, bg_castle)
+        {'name': 'player', 'type': 'group', 'files': ['SirLancelot_lvl1_neutral.npy', 'SirLancelot_lvl1_fly.npy']},
+        
+        {'name': 'beast_1', 'type': 'group', 'files': ['Beast_1_animation_1.npy', 'Beast_1_animation_2.npy']},
+        {'name': 'beast_2', 'type': 'group', 'files': ['Beast_2_animation_1.npy', 'Beast_2_animation_2.npy']},
+        {'name': 'beast_3', 'type': 'group', 'files': ['Beast_3_animation_1.npy', 'Beast_3_animation_2.npy']},
+        {'name': 'beast_4', 'type': 'group', 'files': ['Beast_4_animation_1.npy', 'Beast_4_animation_1.npy']},
+        
+        {'name': 'dragon', 'type': 'group', 'files': [
+            'Dragon_lvl2_Wing_Up.npy', 'Dragon_lvl2_wing_middle.npy',
+            'Dragon_lvl2_wing_down.npy', 'Dragon_lvl2_wing_middle.npy'
+        ]},
+        {'name': 'dragon_fire', 'type': 'group', 'files': [
+            'Dragon_lvl2_wing_up_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy',
+            'Dragon_lvl2_wing_down_fire.npy', 'Dragon_lvl2_wing_middle_fire.npy'
+        ]},
+        
+        {'name': 'fireball', 'type': 'group', 'files': ['Dragon_lvl2_fire_animation_1.npy', 'Dragon_lvl2_fire_animation_2.npy']},
+        
+        {'name': 'digits', 'type': 'digits', 'pattern': 'number_{}.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'Life.npy'},
+    )
 
 # -----------------------------------------------------------------------------
 # CONSTANTS
@@ -223,6 +254,8 @@ class SirLancelotConstants(NamedTuple):
 
     # Starting level
     START_LEVEL: int = 1  # Start at level 1
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # -----------------------------------------------------------------------------
@@ -339,7 +372,6 @@ class SirLancelotInfo(NamedTuple):
     time: jnp.ndarray
     level_complete: jnp.ndarray
     consecutive_kills: jnp.ndarray
-    all_rewards: jnp.ndarray
 
 
 # -----------------------------------------------------------------------------
@@ -365,14 +397,11 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         - Extra life every 100k points (up to max)
     """
     
-    def __init__(self, consts: SirLancelotConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: SirLancelotConstants = None):
         consts = consts or SirLancelotConstants()
         super().__init__(consts)
         self.action_set = Action.get_all_values()
         self.renderer = SirLancelotRenderer(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         
     def reset(self, key: jax.random.PRNGKey = None):
         """Reset the game to initial state.
@@ -852,9 +881,8 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         reward = new_state.score - state.score
         # Game ends on game over only (levels loop back after 8)
         done = new_state.game_over
-        all_rewards = self._get_all_rewards(state, new_state)
 
-        return self._get_observation(new_state), new_state, reward, done, self._get_info(new_state, all_rewards)
+        return self._get_observation(new_state), new_state, reward, done, self._get_info(new_state)
     
     def _advance_to_next_level(self, state: SirLancelotState) -> SirLancelotState:
         """Advance to the next level or loop back after level 8.
@@ -2517,12 +2545,11 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         )
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SirLancelotState, all_rewards: jnp.ndarray = None) -> SirLancelotInfo:
+    def _get_info(self, state: SirLancelotState) -> SirLancelotInfo:
         return SirLancelotInfo(
             time=state.time,
             level_complete=state.stage_complete,
             consecutive_kills=state.consecutive_quick_kills,
-            all_rewards=all_rewards
         )
     
     def _get_done(self, state: SirLancelotState) -> bool:
@@ -2530,13 +2557,6 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
     
     def _get_reward(self, previous_state: SirLancelotState, current_state: SirLancelotState) -> float:
         return (current_state.score - previous_state.score).astype(jnp.float32)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: SirLancelotState, current_state: SirLancelotState) -> jnp.ndarray:
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array([reward_func(previous_state, current_state) for reward_func in self.reward_funcs])
-        return rewards
 
     def render(self, state: SirLancelotState):
         """Render the current game state.
@@ -2652,372 +2672,263 @@ class SirLancelotRenderer(JAXGameRenderer):
     def __init__(self, consts: SirLancelotConstants = None):
         self.consts = consts or SirLancelotConstants()
         super().__init__(self.consts)
-        self._load_sprites()
-    
-    def _load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_path = os.path.join(MODULE_DIR, "sprites/sir_lancelot/")
         
-        # Load background and resize it using JAX image resize
-        bg_raw = jr.loadFrame(os.path.join(sprite_path, "Background_lvl1.npy"))
-        
-        # Force resize to exact screen dimensions using JAX's resize function
-        from jax import image
-        
-        # Resize from 159x249 to 160x210 using bilinear interpolation
-        bg_resized = image.resize(
-            bg_raw, 
-            (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, bg_raw.shape[2]), 
-            method='nearest'
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            channels=3,
+            #downscale=(84, 84)
         )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        # Convert back to uint8 if needed
-        if bg_raw.dtype == jnp.uint8:
-            bg_final = bg_resized.astype(jnp.uint8)
-        else:
-            bg_final = bg_resized
-            
-        self.SPRITE_BG = jnp.expand_dims(bg_final, axis=0)
+        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "sir_lancelot")
         
-        # Load player sprites
-        player_neutral = jr.loadFrame(os.path.join(sprite_path, "SirLancelot_lvl1_neutral.npy"))
-        player_fly = jr.loadFrame(os.path.join(sprite_path, "SirLancelot_lvl1_fly.npy"))
+        preprocessed_assets = self._load_and_preprocess_assets(sprite_path)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        # Pad to match sizes - returns (padded_sprites, offsets)
-        player_frames, player_offsets = jr.pad_to_match([player_neutral, player_fly])
-        self.SPRITE_PLAYER = jnp.stack(player_frames)
-        self.PLAYER_OFFSETS = jnp.stack(player_offsets)
+        # Add preprocessed backgrounds at the beginning
+        final_asset_config.insert(0, {'name': 'bg_outdoor', 'type': 'background', 'data': preprocessed_assets['bg_outdoor']})
+        final_asset_config.insert(1, {'name': 'bg_castle', 'type': 'single', 'data': preprocessed_assets['bg_castle']})
         
-        # Load all beast sprites for different levels
-        # Beast 1 - Level 1 (outdoor flying snakes)
-        beast1_1 = jr.loadFrame(os.path.join(sprite_path, "Beast_1_animation_1.npy"))
-        beast1_2 = jr.loadFrame(os.path.join(sprite_path, "Beast_1_animation_2.npy"))
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
-        # Beast 2 - Level 3 (castle beasts)
-        beast2_1 = jr.loadFrame(os.path.join(sprite_path, "Beast_2_animation_1.npy"))
-        beast2_2 = jr.loadFrame(os.path.join(sprite_path, "Beast_2_animation_2.npy"))
+        (
+            self.PRE_RENDERED_OUTDOOR,
+            self.PRE_RENDERED_CASTLE,
+            self.PRE_RENDERED_WAVE_RGB
+        ) = self._precompute_static_frames()
         
-        # Beast 3 - Level 5 (outdoor advanced)
-        beast3_1 = jr.loadFrame(os.path.join(sprite_path, "Beast_3_animation_1.npy"))
-        beast3_2 = jr.loadFrame(os.path.join(sprite_path, "Beast_3_animation_2.npy"))
+        self._cache_sprite_stacks()
+
+    def _load_and_preprocess_assets(self, sprite_path: str) -> dict:
+        target_shape = (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 4)
         
-        # Beast 4 - Level 7 (invisible beasts - only has one frame)
-        beast4_1 = jr.loadFrame(os.path.join(sprite_path, "Beast_4_animation_1.npy"))
+        bg_raw = jnp.load(os.path.join(sprite_path, "Background_lvl1.npy"))
+        bg_resized = resize(bg_raw, target_shape, method='nearest').astype(jnp.uint8)
         
-        # Pad all beast sprites together to ensure same shape
-        all_beast_sprites = [
-            beast1_1, beast1_2,  # Beast 1
-            beast2_1, beast2_2,  # Beast 2
-            beast3_1, beast3_2,  # Beast 3
-            beast4_1, beast4_1   # Beast 4 (duplicate)
+        bg2_raw = jnp.load(os.path.join(sprite_path, "Background_lvl2.npy"))
+        bg2_resized = resize(bg2_raw, target_shape, method='nearest').astype(jnp.uint8)
+        
+        return {
+            'bg_outdoor': bg_resized,
+            'bg_castle': bg2_resized,
+        }
+
+
+    def _precompute_static_frames(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        raster_outdoor = self.BACKGROUND
+        pre_rendered_outdoor = raster_outdoor
+        
+        raster_castle = self.SHAPE_MASKS['bg_castle']
+        pre_rendered_castle = raster_castle
+        
+        wave_raster_base = jnp.full_like(self.BACKGROUND, self.BACKGROUND[0,0])
+        pre_rendered_wave_rgb = self.jr.render_from_palette(wave_raster_base, self.PALETTE)
+        
+        return pre_rendered_outdoor, pre_rendered_castle, pre_rendered_wave_rgb
+
+    def _cache_sprite_stacks(self):
+        self.PLAYER_STACK = self.SHAPE_MASKS['player']
+        self.PLAYER_OFFSETS = self.FLIP_OFFSETS['player']
+        
+        beast_masks = [
+            self.SHAPE_MASKS['beast_1'],
+            self.SHAPE_MASKS['beast_2'],
+            self.SHAPE_MASKS['beast_3'],
+            self.SHAPE_MASKS['beast_4']
         ]
         
-        # Pad all to the same size
-        padded_beasts, beast_offsets = jr.pad_to_match(all_beast_sprites)
+        beast_offsets = [
+            self.FLIP_OFFSETS['beast_1'],
+            self.FLIP_OFFSETS['beast_2'],
+            self.FLIP_OFFSETS['beast_3'],
+            self.FLIP_OFFSETS['beast_4']
+        ]
         
-        # Store as separate sprite sets with same shape
-        self.SPRITE_BEAST_1 = jnp.stack(padded_beasts[0:2])
-        self.SPRITE_BEAST_2 = jnp.stack(padded_beasts[2:4])
-        self.SPRITE_BEAST_3 = jnp.stack(padded_beasts[4:6])
-        self.SPRITE_BEAST_4 = jnp.stack(padded_beasts[6:8])
+        max_h = max(m.shape[1] for m in beast_masks)
+        max_w = max(m.shape[2] for m in beast_masks)
         
-        self.BEAST_1_OFFSETS = jnp.stack(beast_offsets[0:2])
-        self.BEAST_2_OFFSETS = jnp.stack(beast_offsets[2:4])
-        self.BEAST_3_OFFSETS = jnp.stack(beast_offsets[4:6])
-        self.BEAST_4_OFFSETS = jnp.stack(beast_offsets[6:8])
+        padded_beast_masks = []
+        for mask in beast_masks:
+            h, w = mask.shape[1], mask.shape[2]
+            padded_mask = jnp.pad(
+                mask,
+                ((0, 0), (0, max_h - h), (0, max_w - w)),
+                mode="constant",
+                constant_values=self.jr.TRANSPARENT_ID
+            )
+            padded_beast_masks.append(padded_mask)
         
-        # Load digits
-        self.SPRITE_DIGITS = jr.load_and_pad_digits(
-            os.path.join(sprite_path, "number_{}.npy"),
-            num_chars=10
-        )
+        self.BEAST_STACKS = jnp.stack(padded_beast_masks)
+        self.BEAST_OFFSETS = jnp.stack(beast_offsets)
         
-        # Load life icon
-        life_icon = jr.loadFrame(os.path.join(sprite_path, "Life.npy"))
-        self.SPRITE_LIFE = jnp.expand_dims(life_icon, axis=0)
+        self.DRAGON_STACK = self.SHAPE_MASKS['dragon']
+        self.DRAGON_OFFSETS_STACK = self.FLIP_OFFSETS['dragon']
+        self.DRAGON_FIRE_STACK = self.SHAPE_MASKS['dragon_fire']
+        self.DRAGON_FIRE_OFFSETS_STACK = self.FLIP_OFFSETS['dragon_fire']
         
-        # Load castle background (used for all castle levels: 2, 4, 6, 8)
-        bg2_raw = jr.loadFrame(os.path.join(sprite_path, "Background_lvl2.npy"))
-        bg2_resized = image.resize(
-            bg2_raw, 
-            (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, bg2_raw.shape[2]), 
-            method='nearest'
-        )
-        bg2_final = bg2_resized.astype(jnp.uint8) if bg2_raw.dtype == jnp.uint8 else bg2_resized
-        self.SPRITE_BG_CASTLE = jnp.expand_dims(bg2_final, axis=0)
+        self.FIREBALL_STACK = self.SHAPE_MASKS['fireball']
+        self.FIREBALL_OFFSETS_STACK = self.FLIP_OFFSETS['fireball']
         
-        # Load dragon sprites - 4 wing positions (up, middle_up, down, middle_down)
-        # Note: These sprites have "lvl2" in the filename but are used for ALL dragon levels (2, 4, 6, 8)
-        dragon_wing_up = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_Wing_Up.npy"))
-        dragon_wing_middle = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_wing_middle.npy"))
-        dragon_wing_down = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_wing_down.npy"))
+        self.DRAGON_Y_ADJUSTMENTS = jnp.array([4, 0, 0, 0])
         
-        # Also load fire versions for each wing position
-        dragon_wing_up_fire = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_wing_up_fire.npy"))
-        dragon_wing_middle_fire = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_wing_middle_fire.npy"))
-        dragon_wing_down_fire = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_wing_down_fire.npy"))
-        
-        # Create dragon animation arrays
-        dragon_frames, dragon_offsets = jr.pad_to_match([
-            dragon_wing_up, dragon_wing_middle, dragon_wing_down, dragon_wing_middle
-        ])
-        self.SPRITE_DRAGON = jnp.stack(dragon_frames)
-        self.DRAGON_OFFSETS = jnp.stack(dragon_offsets)
-        
-        dragon_fire_frames, dragon_fire_offsets = jr.pad_to_match([
-            dragon_wing_up_fire, dragon_wing_middle_fire, dragon_wing_down_fire, dragon_wing_middle_fire
-        ])
-        self.SPRITE_DRAGON_FIRE = jnp.stack(dragon_fire_frames)
-        self.DRAGON_FIRE_OFFSETS = jnp.stack(dragon_fire_offsets)
-        
-        # Manual Y adjustments for each wing position to keep dragon stable
-        # wing_up needs to move up 3 pixels, others stay at base position
-        self.DRAGON_Y_ADJUSTMENTS = jnp.array([4, 0, 0, 0])  # [up, middle, down, middle]
-        
-        # Load fireball sprites
-        fireball_1 = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_fire_animation_1.npy"))
-        fireball_2 = jr.loadFrame(os.path.join(sprite_path, "Dragon_lvl2_fire_animation_2.npy"))
-        
-        fireball_frames, fireball_offsets = jr.pad_to_match([fireball_1, fireball_2])
-        self.SPRITE_FIREBALL = jnp.stack(fireball_frames)
-        self.FIREBALL_OFFSETS = jnp.stack(fireball_offsets)
-    
+        self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), self.BACKGROUND[0,0])
+
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: SirLancelotState):
-        # Create initial frame
-        raster = jr.create_initial_frame(
-            width=self.consts.SCREEN_WIDTH,
-            height=self.consts.SCREEN_HEIGHT
-        )
-        
-        # Choose background based on level
-        # Outdoor levels: 1, 3, 5, 7 (odd levels)
-        # Castle levels: 2, 4, 6 (even levels)
-        use_castle = state.level % 2 == 0  # Even levels use castle
-        
-        # Debug print to verify
-        # jax.debug.print("Level: {}, use_castle: {}", state.level, use_castle)
-        
-        bg_sprite = jax.lax.cond(
-            use_castle,
-            lambda _: self.SPRITE_BG_CASTLE,  # Castle background for even levels (2, 4, 6, 8)
-            lambda _: self.SPRITE_BG,       # Outdoor background for odd levels (1, 3, 5, 7)
-            None
-        )
-        
-        # Debug: Print which background is being used
-        # jax.debug.print("Level: {}, use_castle: {}, bg_sprite shape: {}", 
-        #                state.level, use_castle, bg_sprite.shape)
-        
-        bg_frame = jr.get_sprite_frame(bg_sprite, 0)
-        raster = jr.render_at(raster, 0, 0, bg_frame)
-        
-        # Render enemies
+    def _render_enemies(self, state: SirLancelotState, raster):
         def render_enemy(i, raster):
             active = state.enemies.active[i]
-            visible = jnp.logical_and(active, jnp.logical_not(state.enemies.is_invisible[i]))
+            visible = active & ~state.enemies.is_invisible[i]
             x = state.enemies.positions[i, 0].astype(jnp.int32)
             y = state.enemies.positions[i, 1].astype(jnp.int32)
             frame_idx = state.enemies.animation_frame[i]
             
-            # Choose sprite based on level
-            def get_beast_1():
-                return self.SPRITE_BEAST_1, self.BEAST_1_OFFSETS
-            def get_beast_2():
-                return self.SPRITE_BEAST_2, self.BEAST_2_OFFSETS
-            def get_beast_3():
-                return self.SPRITE_BEAST_3, self.BEAST_3_OFFSETS
-            def get_beast_4():
-                return self.SPRITE_BEAST_4, self.BEAST_4_OFFSETS
-                
-            beast_sprites, beast_offsets = jax.lax.switch(
-                (state.level - 1) // 2,  # 1->0, 3->1, 5->2, 7->3
-                [get_beast_1, get_beast_2, get_beast_3, get_beast_4]
-            )
+            level_idx = (state.level - 1) // 2
+            beast_sprites = self.BEAST_STACKS[level_idx]
+            beast_offset = self.BEAST_OFFSETS[level_idx]
             
-            # Get animation frame (0 or 1)
             anim_frame = frame_idx % 2
-            enemy_frame = jr.get_sprite_frame(beast_sprites, anim_frame)
-            enemy_offset = beast_offsets[anim_frame]
+            enemy_frame = beast_sprites[anim_frame]
             
-            # Flip enemy based on facing direction
-            # Level 3 beasts sprites are drawn facing left, so flip logic is inverted
             is_level_3 = state.level == 3
-            flip = jax.lax.cond(
+            flip = jax.lax.select(
                 is_level_3,
-                lambda: state.enemies.facing_left[i],  # Level 3: flip when facing left
-                lambda: jnp.logical_not(state.enemies.facing_left[i])  # Others: flip when facing right
-            )
-            
-            # Adjust offset when flipping
-            flip_offset_adjusted = jax.lax.cond(
-                flip,
-                lambda o: jnp.array([-o[0], o[1]]),
-                lambda o: o,
-                enemy_offset
+                state.enemies.facing_left[i],
+                ~state.enemies.facing_left[i]
             )
             
             return jax.lax.cond(
-                visible,  # Only render if active AND visible
-                lambda r: jr.render_at(r, x, y, enemy_frame, flip_horizontal=flip, flip_offset=flip_offset_adjusted),
+                visible,
+                lambda r: self.jr.render_at_clipped(r, x, y, enemy_frame, flip_horizontal=flip, flip_offset=beast_offset),
                 lambda r: r,
                 raster
             )
         
-        raster = jax.lax.fori_loop(0, self.consts.NUM_ENEMIES, render_enemy, raster)
+        return jax.lax.fori_loop(0, self.consts.NUM_ENEMIES, render_enemy, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_player(self, state: SirLancelotState, raster):
+        player_visible = (state.player.death_timer == 0) | (state.player.death_timer < self.consts.DEATH_ANIMATION_FRAMES)
         
-        # Render player if alive or dying
-        player_visible = jnp.logical_or(
-            state.player.death_timer == 0,
-            state.player.death_timer < self.consts.DEATH_ANIMATION_FRAMES
-        )
-        
-        def render_player(raster):
-            # Choose sprite based on flapping (shows flying animation)
-            # Show flying sprite when flapping
+        def draw_player(r):
             sprite_idx = jnp.where(state.player.is_flapping, 1, 0)
-            player_frame = jr.get_sprite_frame(self.SPRITE_PLAYER, sprite_idx)
-            player_offset = self.PLAYER_OFFSETS[sprite_idx]
+            player_frame = self.PLAYER_STACK[sprite_idx]
+            flip = ~state.player.facing_left
             
-            # Flip horizontally if facing right
-            flip = jnp.logical_not(state.player.facing_left)
-            
-            # When flipping, we need to negate the x component of offset
-            flip_offset_adjusted = jax.lax.cond(
-                flip,
-                lambda o: jnp.array([-o[0], o[1]]),
-                lambda o: o,
-                player_offset
-            )
-            
-            return jr.render_at(
-                raster,
+            return self.jr.render_at(
+                r,
                 state.player.x.astype(jnp.int32),
                 state.player.y.astype(jnp.int32),
                 player_frame,
                 flip_horizontal=flip,
-                flip_offset=flip_offset_adjusted
+                flip_offset=self.PLAYER_OFFSETS
             )
         
-        raster = jax.lax.cond(
-            player_visible,
-            render_player,
-            lambda r: r,
-            raster
-        )
-        
-        # Render castle-specific elements (dragon and fireballs for levels 2, 4, 6, 8)
-        def render_castle_elements(raster):
-            # Render dragon (present in all castle levels)
-            def render_dragon(r):
-                # Choose sprite based on whether dragon is shooting
-                # Show fire animation only when fireball was just spawned (first few frames)
-                is_shooting = jnp.logical_and(
-                    state.dragon.shoot_cooldown > (self.consts.FIREBALL_SHOOT_COOLDOWN - 20),
-                    jnp.any(state.fireballs.active)  # At least one fireball is active
-                )
-                dragon_sprites = jax.lax.cond(
-                    is_shooting,
-                    lambda _: self.SPRITE_DRAGON_FIRE,
-                    lambda _: self.SPRITE_DRAGON,
-                    None
-                )
-                dragon_offsets = jax.lax.cond(
-                    is_shooting,
-                    lambda _: self.DRAGON_FIRE_OFFSETS,
-                    lambda _: self.DRAGON_OFFSETS,
-                    None
-                )
-                
-                dragon_frame = jr.get_sprite_frame(dragon_sprites, state.dragon.wing_frame)
-                dragon_offset = dragon_offsets[state.dragon.wing_frame]
-                
-                # Flip dragon based on facing direction
-                flip = state.dragon.facing_left
-                
-                # When flipping, we need to negate the x component of offset
-                flip_offset_adjusted = jax.lax.cond(
-                    flip,
-                    lambda o: jnp.array([-o[0], o[1]]),
-                    lambda o: o,
-                    dragon_offset
-                )
-                
-                # Adjust Y position based on wing frame to keep bottom aligned
-                y_adjustment = self.DRAGON_Y_ADJUSTMENTS[state.dragon.wing_frame]
-                adjusted_y = self.consts.DRAGON_Y - y_adjustment
-                
-                return jr.render_at(
-                    r,
-                    state.dragon.x.astype(jnp.int32),
-                    adjusted_y.astype(jnp.int32),
-                    dragon_frame,
-                    flip_horizontal=flip,
-                    flip_offset=flip_offset_adjusted
-                )
+        return jax.lax.cond(player_visible, draw_player, lambda r: r, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_castle_elements(self, state: SirLancelotState, raster):
+        def render_dragon(r):
+            is_shooting = (state.dragon.shoot_cooldown > (self.consts.FIREBALL_SHOOT_COOLDOWN - 20)) & \
+                          jnp.any(state.fireballs.active)
             
-            raster_with_dragon = jax.lax.cond(
-                state.dragon.is_active,
-                render_dragon,
+            dragon_sprites = jax.lax.select(is_shooting, self.DRAGON_FIRE_STACK, self.DRAGON_STACK)
+            dragon_offset = jax.lax.select(is_shooting, self.DRAGON_FIRE_OFFSETS_STACK, self.DRAGON_OFFSETS_STACK)
+            
+            frame_idx = state.dragon.wing_frame
+            dragon_frame = dragon_sprites[frame_idx]
+            flip = state.dragon.facing_left
+            
+            y_adjustment = self.DRAGON_Y_ADJUSTMENTS[frame_idx]
+            adjusted_y = self.consts.DRAGON_Y - y_adjustment
+            
+            return self.jr.render_at_clipped(
+                r,
+                state.dragon.x.astype(jnp.int32),
+                adjusted_y.astype(jnp.int32),
+                dragon_frame,
+                flip_horizontal=flip,
+                flip_offset=dragon_offset
+            )
+        
+        raster_with_dragon = jax.lax.cond(state.dragon.is_active, render_dragon, lambda r: r, raster)
+        
+        def render_fireball(i, r):
+            x = state.fireballs.positions[i, 0].astype(jnp.int32)
+            y = state.fireballs.positions[i, 1].astype(jnp.int32)
+            frame_idx = state.fireballs.animation_frame[i]
+            
+            fireball_frame = self.FIREBALL_STACK[frame_idx]
+            
+            return jax.lax.cond(
+                state.fireballs.active[i],
+                lambda r: self.jr.render_at_clipped(r, x, y, fireball_frame, flip_offset=self.FIREBALL_OFFSETS_STACK),
                 lambda r: r,
-                raster
+                r
             )
-            
-            # Render fireballs
-            def render_fireball(i, r):
-                active = state.fireballs.active[i]
-                x = state.fireballs.positions[i, 0].astype(jnp.int32)
-                y = state.fireballs.positions[i, 1].astype(jnp.int32)
-                frame_idx = state.fireballs.animation_frame[i]
-                
-                fireball_frame = jr.get_sprite_frame(self.SPRITE_FIREBALL, frame_idx)
-                fireball_offset = self.FIREBALL_OFFSETS[frame_idx]
-                
-                return jax.lax.cond(
-                    active,
-                    lambda r: jr.render_at(r, x, y, fireball_frame, flip_offset=fireball_offset),
-                    lambda r: r,
-                    r
-                )
-            
-            return jax.lax.fori_loop(0, self.consts.MAX_FIREBALLS, render_fireball, raster_with_dragon)
         
-        # Only render castle elements if in castle stage (stage 2)
-        raster = jax.lax.cond(
-            state.stage == 2,
-            render_castle_elements,
-            lambda r: r,
-            raster
+        return jax.lax.fori_loop(0, self.consts.MAX_FIREBALLS, render_fireball, raster_with_dragon)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hud(self, state: SirLancelotState, raster):
+        raster = self.jr.render_bar(
+            raster, 0, 0, 
+            1.0, 1.0,
+            self.consts.SCREEN_WIDTH, self.consts.TOP_BLACK_BAR_HEIGHT, 
+            self.BLACK_ID, self.BLACK_ID
         )
-        
-        # 4. HUD -------------------------------------------------------------
-        # Black bar first (so later text sits on top of it)
-        raster = raster.at[0:self.consts.TOP_BLACK_BAR_HEIGHT, :, :].set(0)
     
-        # 4b. Numeric score – positioned at X=58, Y=200 
-        # Each digit is 6 wide x 9 tall, so we need to manually position each digit
-        score_digits = jr.int_to_digits(state.score, max_digits=6)
+        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         
-        def render_digit(i, raster):
-            digit_x = self.consts.SCORE_X + i * (6 + 2)  # 6 pixels wide + 2 pixels spacing
-            digit_frame = self.SPRITE_DIGITS[score_digits[i]]
-            return jr.render_at(raster, digit_x, self.consts.SCORE_Y, digit_frame)
+        def render_digit(i, r):
+            digit_x = self.consts.SCORE_X + i * (6 + 2)
+            digit_frame = self.SHAPE_MASKS['digits'][score_digits[i]]
+            return self.jr.render_at(r, digit_x, self.consts.SCORE_Y, digit_frame)
         
         raster = jax.lax.fori_loop(0, 6, render_digit, raster)
         
-        # 4c. Life icons – positioned at X=57, Y=204
-        # Each life is 7 wide x 10 tall with 1 pixel spacing between them
-        life_frame = jr.get_sprite_frame(self.SPRITE_LIFE, 0)
+        life_frame = self.SHAPE_MASKS['life']
+        num_lives = jnp.minimum(state.lives, self.consts.MAX_LIVES)
         
-        def render_life(i, raster):
-            life_x = self.consts.LIVES_X + i * (7 + 1)  # 7 pixels wide + 1 pixel spacing
-            return jax.lax.cond(
-                i < state.lives,
-                lambda r: jr.render_at(r, life_x, self.consts.LIVES_Y, life_frame),
-                lambda r: r,
-                raster
-            )
-        
-        raster = jax.lax.fori_loop(0, self.consts.MAX_LIVES, render_life, raster)
+        raster = self.jr.render_indicator(
+            raster, 
+            self.consts.LIVES_X, self.consts.LIVES_Y,
+            num_lives,
+            life_frame,
+            spacing=(7 + 1),
+            max_value=self.consts.MAX_LIVES
+        )
         
         return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_game(self, state: SirLancelotState):
+        use_castle = state.level % 2 == 0
+        raster = jax.lax.cond(
+            use_castle,
+            lambda: self.PRE_RENDERED_CASTLE,
+            lambda: self.PRE_RENDERED_OUTDOOR
+        )
+        
+        raster = self._render_enemies(state, raster)
+        raster = self._render_player(state, raster)
+        
+        raster = jax.lax.cond(
+            state.stage == 2,
+            lambda r: self._render_castle_elements(state, r),
+            lambda r: r,
+            raster
+        )
+        
+        raster = self._render_hud(state, raster)
+        
+        return self.jr.render_from_palette(raster, self.PALETTE)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: SirLancelotState):
+        return self._render_game(state)

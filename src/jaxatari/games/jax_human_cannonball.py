@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass, field
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
@@ -7,11 +8,41 @@ import chex
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Constants for the game environment
-class HumanCannonballConstants(NamedTuple):
+
+def _get_default_asset_config() -> tuple:
+    """
+    Declarative sprite manifest for Human Cannonball renderer.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'top_banner', 'type': 'single', 'file': 'top_banner.npy'},
+        {'name': 'cannon', 'type': 'group', 'files': [
+            'cannon_high_aim.npy',
+            'cannon_medium_aim.npy',
+            'cannon_low_aim.npy',
+        ]},
+        {'name': 'human', 'type': 'group', 'files': [
+            'human_up.npy',
+            'human_straight.npy',
+            'human_down.npy',
+            'human_ground.npy',
+        ]},
+        {'name': 'water_tower', 'type': 'group', 'files': [
+            'water_tower.npy',
+            'water_tower_overlap.npy',
+            'water_tower_overlap_top.npy',
+            'water_tower_human1.npy',
+            'water_tower_human2.npy',
+        ]},
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/score_{}.npy'},
+    )
+
+
+@dataclass(frozen=True)
+class HumanCannonballConstants:
     WIDTH: int = 160
     HEIGHT: int = 210
 
@@ -43,9 +74,15 @@ class HumanCannonballConstants(NamedTuple):
     ANGLE_BUFFER: int = 16   # Only update the angle if the action is held for this many steps
 
     # Starting positions of the human
-    HUMAN_START_LOW: chex.Array = jnp.array([84.0, 128.0], dtype=jnp.float32)
-    HUMAN_START_MED: chex.Array = jnp.array([84.0, 121.0], dtype=jnp.float32)
-    HUMAN_START_HIGH: chex.Array = jnp.array([80.0, 118.0], dtype=jnp.float32)
+    HUMAN_START_LOW: chex.Array = field(
+        default_factory=lambda: jnp.array([84.0, 128.0], dtype=jnp.float32)
+    )
+    HUMAN_START_MED: chex.Array = field(
+        default_factory=lambda: jnp.array([84.0, 121.0], dtype=jnp.float32)
+    )
+    HUMAN_START_HIGH: chex.Array = field(
+        default_factory=lambda: jnp.array([80.0, 118.0], dtype=jnp.float32)
+    )
 
     # Top left corner of the low-aiming cannon
     CANNON_X: int = 68
@@ -80,6 +117,9 @@ class HumanCannonballConstants(NamedTuple):
     # Animation constants
     ANIMATION_MISS_LENGTH: int = 128
     ANIMATION_HIT_LENGTH: int = 248
+
+    # Asset config
+    ASSET_CONFIG: tuple = field(default_factory=_get_default_asset_config)
 
 # Immutable state container
 class HumanCannonballState(NamedTuple):
@@ -121,90 +161,12 @@ class HumanCannonballObservation(NamedTuple):
 
 class HumanCannonballInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: chex.Array
-
-def load_sprites():
-    """Load all sprites required for HumanCannonball rendering."""
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # Load the sprites
-    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/background.npy"))
-    cannon_high = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/cannon_high_aim.npy"))
-    cannon_med = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/cannon_medium_aim.npy"))
-    cannon_low = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/cannon_low_aim.npy"))
-    human_up = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_up.npy"))
-    human_straight = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_straight.npy"))
-    human_down = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_down.npy"))
-    human_ground = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/human_ground.npy"))
-    water_tower = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower.npy"))
-    water_tower_human_right = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human1.npy"))
-    water_tower_human_left = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_human2.npy"))
-    water_tower_overlap = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_overlap.npy"))
-    water_tower_overlap_top = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/water_tower_overlap_top.npy"))
-    top_banner = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/human_cannonball/top_banner.npy"))
-
-    # Pad cannon sprites to match each other
-    cannon_sprites, cannon_offsets = jr.pad_to_match([cannon_high, cannon_med, cannon_low])
-    cannon_offsets = jnp.array(cannon_offsets)
-
-    # Pad human sprites to match each other
-    human_sprites, human_offsets = jr.pad_to_match([human_up, human_straight, human_down, human_ground])
-    human_offsets = jnp.array(human_offsets)
-
-    # Pad water tower sprites to match each other
-    water_tower_sprites, water_tower_offsets = jr.pad_to_match([water_tower, water_tower_overlap, water_tower_overlap_top, water_tower_human_right, water_tower_human_left])
-    water_tower_offsets = jnp.array(water_tower_offsets)
-
-    # Background sprite
-    SPRITE_BG = jnp.expand_dims(bg, axis=0)
-    TOP_BANNER = jnp.expand_dims(top_banner, axis=0)
-
-    # Cannon sprites
-    SPRITE_CANNON = jnp.stack(cannon_sprites, axis=0)
-
-    # Human sprites
-    SPRITE_HUMAN = jnp.stack(human_sprites, axis=0)
-
-    # Water tower sprites
-    SPRITE_WATER_TOWER = jnp.stack(water_tower_sprites, axis=0)
-
-    # Digits sprites
-    DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/human_cannonball/digits/score_{}.npy"))
-
-    return (
-        SPRITE_BG,
-        TOP_BANNER,
-        SPRITE_CANNON,
-        SPRITE_HUMAN,
-        SPRITE_WATER_TOWER,
-        DIGITS,
-        cannon_offsets,
-        human_offsets,
-        water_tower_offsets
-    )
-
-# Load sprites once at module level
-(
-        SPRITE_BG,
-        TOP_BANNER,
-        SPRITE_CANNON,
-        SPRITE_HUMAN,
-        SPRITE_WATER_TOWER,
-        DIGITS,
-        CANNON_OFFSETS,
-        HUMAN_OFFSETS,
-        WATER_TOWER_OFFSETS
-    ) = load_sprites()
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
-    def __init__(self, consts: HumanCannonballConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: HumanCannonballConstants = None):
         consts = consts or HumanCannonballConstants()
         super().__init__(consts)
         self.renderer = HumanCannonballRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.frame_stack_size = 4
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -665,8 +627,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
@@ -814,23 +775,14 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: HumanCannonballState, all_rewards: chex.Array = None) -> HumanCannonballInfo:
-        return HumanCannonballInfo(time=state.step_counter, all_rewards=all_rewards)
+    def _get_info(self, state: HumanCannonballState) -> HumanCannonballInfo:
+        return HumanCannonballInfo(time=state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: HumanCannonballState, state: HumanCannonballState):
         return (state.score - state.misses) - (
                 previous_state.score - previous_state.misses
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: HumanCannonballState, state: HumanCannonballState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
 
     @partial(jax.jit,  static_argnums=(0,))
     def _get_done(
@@ -842,199 +794,221 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         )
 
 class HumanCannonballRenderer(JAXGameRenderer):
-    """JAX-based HumanCannonball game renderer, optimized with JIT compilation."""
+    """Render Human Cannonball using the modern render_utils pipeline."""
+
     def __init__(self, consts: HumanCannonballConstants = None):
         super().__init__()
         self.consts = consts or HumanCannonballConstants()
+        self.sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/human_cannonball")
+        self.ru_config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        asset_config = list(self.consts.ASSET_CONFIG)
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+
+        self.CANNON_STACK = self.SHAPE_MASKS.get('cannon')
+        self.HUMAN_STACK = self.SHAPE_MASKS.get('human')
+        self.WATER_TOWER_STACK = self.SHAPE_MASKS.get('water_tower')
+        self.TOP_BANNER_MASK = self.SHAPE_MASKS.get('top_banner')
+        self.DIGITS_MASK = self.SHAPE_MASKS.get('digits')
+
+    @staticmethod
+    def _round_to_int(value: chex.Array) -> chex.Array:
+        return jnp.round(value).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        """
-        Renders the current game state using JAX operations.
+    def render(self, state: HumanCannonballState) -> jnp.ndarray:
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        Args:
-            state: A HumanCannonballState object containing the current game state.
+        # Render top banner overlay
+        if self.TOP_BANNER_MASK is not None:
+            raster = self.jr.render_at(
+                raster,
+                0,
+                0,
+                self.TOP_BANNER_MASK,
+                flip_offset=self.FLIP_OFFSETS.get('top_banner', jnp.array([0, 0])),
+            )
 
-        Returns:
-            A JAX array representing the rendered frame.
-        """
-        raster = jr.create_initial_frame(self.consts.WIDTH, self.consts.HEIGHT)
+        # Cannon selection based on firing angle
+        cond_high = state.angle < self.consts.ANGLE_HIGH_THRESHOLD
+        cond_low = state.angle < self.consts.ANGLE_LOW_THRESHOLD
+        cannon_idx = jnp.where(cond_low, 2, jnp.where(cond_high, 1, 0)).astype(jnp.int32)
+        cannon_offset = jnp.where(cond_low, 0, jnp.where(cond_high, 5, 8)).astype(jnp.int32)
+        cannon_y = jnp.array(self.consts.CANNON_Y, dtype=jnp.int32) - cannon_offset
+        if self.CANNON_STACK is not None:
+            raster = self.jr.render_at(
+                raster,
+                jnp.array(self.consts.CANNON_X, dtype=jnp.int32),
+                cannon_y,
+                self.CANNON_STACK[cannon_idx],
+                flip_offset=self.FLIP_OFFSETS.get('cannon', jnp.array([0, 0])),
+            )
 
-        # Render the background
-        frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
+        # Background water tower top (always index 2)
+        if self.WATER_TOWER_STACK is not None:
+            tower_top = self.WATER_TOWER_STACK[2]
+            raster = self.jr.render_at(
+                raster,
+                self._round_to_int(state.water_tower_x) - 13,
+                jnp.array(self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT - 6, jnp.int32),
+                tower_top,
+                flip_offset=self.FLIP_OFFSETS.get('water_tower', jnp.array([0, 0])),
+            )
 
-        # Render the cannon
-        # 1. Determine which sprite to load
-        cannon_sprite_idx, cannon_offset = jax.lax.cond(
-            state.angle < self.consts.ANGLE_HIGH_THRESHOLD, # If angle under HIGH_THRESHOLD
-            lambda _: (1, 5),    # Render med sprite
-            lambda _: (0, 8),    # Else, render high sprite
-            operand=None
-        )
-
-        cannon_sprite_idx, cannon_offset = jax.lax.cond(
-            state.angle < self.consts.ANGLE_LOW_THRESHOLD,  # If angle under LOW_THRESHOLD
-            lambda _: (2,0),  # Render low sprite
-            lambda _: (cannon_sprite_idx, cannon_offset),  # Else, keep the sprite
-            operand=None
-        )
-
-        # 2. Render the cannon sprite
-        frame_cannon = jr.get_sprite_frame(SPRITE_CANNON, cannon_sprite_idx)
-        raster = jr.render_at(raster, self.consts.CANNON_X, self.consts.CANNON_Y - cannon_offset, frame_cannon)
-
-        # Load in the water tower before the human so it is rendered behind the human
-        frame_water_tower_top = jr.get_sprite_frame(SPRITE_WATER_TOWER, 2)
-        raster = jr.render_at(raster,
-                              state.water_tower_x - 13,
-                              self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT- 6,
-                              frame_water_tower_top)
-
-        # Render the human
-        # 1. Determine which sprite to load
+        # Human sprite selection
         flying_angle_rad = jnp.arctan2(-state.human_y_vel, state.human_x_vel)
         flying_angle = jnp.rad2deg(flying_angle_rad)
-
-        # Threshold to determine the sprite based on the flying angle
         FLYING_ANGLE_THRESHOLD = 35
 
-        human_offset_x = 0
+        cond_up = flying_angle > FLYING_ANGLE_THRESHOLD
+        cond_down = jnp.logical_or(flying_angle < -FLYING_ANGLE_THRESHOLD, state.tower_wall_hit)
+        human_idx = jnp.where(cond_up, 0, 1)
+        human_offset_y = jnp.where(cond_up, 3, 0)
+        human_idx = jnp.where(cond_down, 2, human_idx)
+        human_offset_y = jnp.where(cond_down, 2, human_offset_y)
+        human_offset_x = jnp.array(0, jnp.int32)
 
-        human_sprite_idx, human_offset_y = jax.lax.cond(
-            flying_angle > FLYING_ANGLE_THRESHOLD,  # If ascension angle is > 45 degrees
-            lambda _: (0,3),   # Use up sprite
-            lambda _: (1,0),   # Else, use straight sprite
-            operand=None
+        miss_animation = jnp.logical_and(
+            state.animation_running,
+            state.human_y > (self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] - 1),
+        )
+        hit_animation = jnp.logical_and(
+            state.animation_running,
+            state.human_y < (self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] + 1),
+        )
+        human_idx = jnp.where(miss_animation, 3, human_idx)
+        human_offset_x = jnp.where(miss_animation, 2, human_offset_x)
+        human_offset_y = jnp.where(miss_animation, 6, human_offset_y)
+
+        human_overlap = jnp.logical_and(
+            hit_animation,
+            state.animation_counter > (self.consts.ANIMATION_HIT_LENGTH - 10),
         )
 
-        human_sprite_idx, human_offset_y = jax.lax.cond(
-            jnp.logical_or( # If ascension angle is < -45 degrees or the tower has been hit
-                flying_angle < -FLYING_ANGLE_THRESHOLD,
-                state.tower_wall_hit
-            ),
-            lambda _: (2,2),  # Use down sprite
-            lambda _: (human_sprite_idx, human_offset_y),  # Else, keep the sprite
-            operand=None
-        )
+        if self.HUMAN_STACK is not None:
+            human_x = self._round_to_int(state.human_x) - human_offset_x
+            human_y = self._round_to_int(state.human_y) - human_offset_y
+            raster = jax.lax.cond(
+                jnp.logical_and(
+                    state.human_launched,
+                    jnp.logical_or(~hit_animation, human_overlap),
+                ),
+                lambda r: self.jr.render_at(
+                    r,
+                    human_x,
+                    human_y,
+                    self.HUMAN_STACK[human_idx],
+                    flip_offset=self.FLIP_OFFSETS.get('human', jnp.array([0, 0])),
+                ),
+                lambda r: r,
+                raster,
+            )
 
-        # Determine if there is an animation running
-        miss_animation = jnp.logical_and(   # Miss animation when human is on the ground while the animation is running
-                state.animation_running,
-                jnp.less(self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] - 1, state.human_y)
-        )
+        # Water tower selection (foreground)
+        def tower_selection():
+            idx = jnp.array(0, jnp.int32)
+            off_x = jnp.array(0, jnp.int32)
+            off_y = jnp.array(0, jnp.int32)
 
-        hit_animation = jnp.logical_and(    # Hit animation when human is in the air while the animation is running
-                state.animation_running,
-                jnp.greater(self.consts.GROUND_LEVEL - self.consts.HUMAN_SIZE[1] + 1, state.human_y)
-        )
+            idx = jnp.where(hit_animation, 1, idx)
+            off_x = jnp.where(hit_animation, 13, off_x)
+            off_y = jnp.where(hit_animation, 7, off_y)
 
-        human_sprite_idx, human_offset_x, human_offset_y = jax.lax.cond(
-            miss_animation,  # If human is on the ground
-            lambda _: (3, 2, 6),  # Use ground sprite
-            lambda _: (human_sprite_idx, human_offset_x, human_offset_y),  # Else, keep the sprite
-            operand=None
-        )
+            cond_phase1 = jnp.logical_and(
+                hit_animation,
+                jnp.logical_and(
+                    state.animation_counter < (self.consts.ANIMATION_HIT_LENGTH / 2),
+                    state.animation_counter > (self.consts.ANIMATION_HIT_LENGTH / 2 - 36),
+                ),
+            )
+            idx = jnp.where(cond_phase1, 3, idx)
+            off_x = jnp.where(cond_phase1, 0, off_x)
+            off_y = jnp.where(cond_phase1, 4, off_y)
 
-        # Render the human for the first 10 frames of the hit animation to let him dive into the water
-        human_overlap = jnp.logical_and(hit_animation,
-                                        jnp.greater(state.animation_counter, self.consts.ANIMATION_HIT_LENGTH - 10))
+            cond_phase2 = jnp.logical_and(
+                hit_animation,
+                jnp.logical_and(
+                    state.animation_counter < (self.consts.ANIMATION_HIT_LENGTH / 2 - 36),
+                    state.animation_counter > (self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39),
+                ),
+            )
+            idx = jnp.where(cond_phase2, 4, idx)
 
-        # 2. Render the human sprite
-        frame_human = jr.get_sprite_frame(SPRITE_HUMAN, human_sprite_idx)
-        raster = jax.lax.cond(  # Only render when launched and there is no hit animation going on
-            jnp.logical_and(state.human_launched, jnp.logical_or(jnp.logical_not(hit_animation), human_overlap)),
-            lambda r: jr.render_at(r, state.human_x - human_offset_x, state.human_y - human_offset_y, frame_human),
-            lambda r: r,
-            operand=raster
-        )
+            cond_phase3 = jnp.logical_and(
+                hit_animation,
+                state.animation_counter <= (self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39),
+            )
+            idx = jnp.where(cond_phase3, 3, idx)
 
-        # Render the water tower
-        # 1. Determine whether to load the overlap sprite
-        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
-            jnp.logical_not(hit_animation),  # If there is no hit animation going on
-            lambda _: (0, 0, 0),  # Use normal sprite
-            lambda _: (1, 13, 7),  # Else, use overlap sprite
-            operand=None
-        )
+            return idx, off_x, off_y
 
-        # Hit animation
-        # The first half of the animation, the human is underwater and the overlap sprite is used
+        tower_idx, tower_off_x, tower_off_y = tower_selection()
+        if self.WATER_TOWER_STACK is not None:
+            raster = self.jr.render_at(
+                raster,
+                self._round_to_int(state.water_tower_x) - tower_off_x,
+                jnp.array(self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1, jnp.int32) - tower_off_y,
+                self.WATER_TOWER_STACK[tower_idx],
+                flip_offset=self.FLIP_OFFSETS.get('water_tower', jnp.array([0, 0])),
+            )
 
-        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
-            jnp.logical_and(hit_animation,      # For the first 36 frames of the second half of the animation
-                            jnp.logical_and(
-                                jnp.less(state.animation_counter,
-                                         self.consts.ANIMATION_HIT_LENGTH / 2),
-                                jnp.greater(state.animation_counter,
-                                            self.consts.ANIMATION_HIT_LENGTH / 2 - 36)
-                            )
-            ),
-            lambda _: (3, 0, 4),  # Use water tower human right sprite
-            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, leave unchanged
-            operand=None
-        )
+        # Render HUD digits
+        if self.DIGITS_MASK is not None:
+            score_digits = self.jr.int_to_digits(state.score, max_digits=1)
+            misses_digits = self.jr.int_to_digits(state.misses, max_digits=1)
+            mph_digits = self.jr.int_to_digits(state.mph_values, max_digits=2)
+            angle_digits = self.jr.int_to_digits(state.angle, max_digits=2)
+            spacing = self.consts.MPH_ANGLE_X[1] - self.consts.MPH_ANGLE_X[0]
 
-        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
-            jnp.logical_and(hit_animation,  # For the next 39 frames of the second half of the animation
-                            jnp.logical_and(
-                                jnp.less(state.animation_counter,
-                                         self.consts.ANIMATION_HIT_LENGTH / 2 - 36),
-                                jnp.greater(state.animation_counter,
-                                            self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39)
-                            )
-                            ),
-            lambda _: (4, 0, 4),  # Use water tower human left sprite
-            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, leave unchanged
-            operand=None
-        )
+            raster = self.jr.render_label_selective(
+                raster,
+                jnp.array(self.consts.SCORE_X, jnp.int32),
+                jnp.array(self.consts.SCORE_MISS_Y, jnp.int32),
+                score_digits,
+                self.DIGITS_MASK,
+                0,
+                1,
+            )
+            raster = self.jr.render_label_selective(
+                raster,
+                jnp.array(self.consts.MISS_X, jnp.int32),
+                jnp.array(self.consts.SCORE_MISS_Y, jnp.int32),
+                misses_digits,
+                self.DIGITS_MASK,
+                0,
+                1,
+            )
+            raster = self.jr.render_label_selective(
+                raster,
+                jnp.array(self.consts.MPH_ANGLE_X[0], jnp.int32),
+                jnp.array(self.consts.MPH_Y, jnp.int32),
+                mph_digits,
+                self.DIGITS_MASK,
+                0,
+                2,
+                spacing=spacing,
+            )
+            raster = self.jr.render_label_selective(
+                raster,
+                jnp.array(self.consts.MPH_ANGLE_X[0], jnp.int32),
+                jnp.array(self.consts.ANGLE_Y, jnp.int32),
+                angle_digits,
+                self.DIGITS_MASK,
+                0,
+                2,
+                spacing=spacing,
+            )
 
-        water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y = jax.lax.cond(
-            jnp.logical_and(hit_animation,  # For the rest of the animation
-                            jnp.less(state.animation_counter,
-                                     self.consts.ANIMATION_HIT_LENGTH / 2 - 36 - 39),
-                            ),
-            lambda _: (3, 0, 4),  # Use water tower human right sprite
-            lambda _: (water_tower_sprite_idx, water_tower_offset_x, water_tower_offset_y),  # Else, leave unchanged
-            operand=None
-        )
-
-        # 2. Render the water tower
-        frame_water_tower = jr.get_sprite_frame(SPRITE_WATER_TOWER, water_tower_sprite_idx)
-        raster = jr.render_at(raster,
-                              state.water_tower_x - water_tower_offset_x,
-                              self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1 - water_tower_offset_y,
-                              frame_water_tower)
-
-        # Render backround banner that overlaps the human when shot too high
-        frame_banner = jr.get_sprite_frame(TOP_BANNER, 0)
-        raster = jr.render_at(raster, 0, 0, frame_banner)
-
-        # Get the score and misses
-        score_digits = jr.int_to_digits(state.score, max_digits=1)
-        misses_digits = jr.int_to_digits(state.misses, max_digits=1)
-
-        # Get the mph and angle
-        mph_digits = jr.int_to_digits(state.mph_values, max_digits=2)
-        angle_digits = jr.int_to_digits(state.angle, max_digits=2)
-
-        # Render the score
-        raster = jr.render_label_selective(raster, self.consts.SCORE_X, self.consts.SCORE_MISS_Y, score_digits, DIGITS,
-                                           0, 1)
-
-        # Render the misses
-        raster = jr.render_label_selective(raster, self.consts.MISS_X, self.consts.SCORE_MISS_Y, misses_digits, DIGITS,
-                                           0, 1)
-
-        # Render the mph
-        raster = jr.render_label_selective(raster, self.consts.MPH_ANGLE_X[0], self.consts.MPH_Y, mph_digits, DIGITS,
-                                           0, 2, spacing= self.consts.MPH_ANGLE_X[1] - self.consts.MPH_ANGLE_X[0])
-
-        # Render the angle
-        raster = jr.render_label_selective(raster, self.consts.MPH_ANGLE_X[0], self.consts.ANGLE_Y, angle_digits, DIGITS,
-                                           0, 2, spacing=self.consts.MPH_ANGLE_X[1] - self.consts.MPH_ANGLE_X[0])
-
-        return raster
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
 
 if __name__ == "__main__":

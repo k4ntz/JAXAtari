@@ -5,15 +5,113 @@ import jax
 import jax.numpy as jnp
 import chex
 import jaxatari.spaces as spaces
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Space
 
-from jaxatari.rendering.jax_rendering_utils_legacy import pad_to_match
-
 
 # Phoenix Game by: Florian Schmidt, Finn Keller
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create a black background (210x160)
+    # We must add at least one pixel with alpha > 0
+    # so the color (0,0,0) is added to the palette.
+    bg_data = jnp.zeros((210, 160, 4), dtype=jnp.uint8)
+    bg_data = bg_data.at[0, 0, 3].set(255) # Add one black, opaque pixel
+    
+    return {
+        'background': bg_data
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Phoenix.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    return (
+        # --- Background & Field ---
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'floor', 'type': 'single', 'file': 'floor.npy'},
+        
+        # --- UI ---
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator.npy'},
+        
+        # --- Player ---
+        # This group's order must match the logic in render()
+        # 0: idle, 1: death_1, 2: death_2, 3: death_3, 4: move
+        {'name': 'player', 'type': 'group', 'files': [
+            'player/player.npy', 
+            'player/player_death_1.npy', 
+            'player/player_death_2.npy', 
+            'player/player_death_3.npy', 
+            'player/player_move.npy'
+        ]},
+        {'name': 'player_ability', 'type': 'single', 'file': 'ability.npy'},
+        
+        # --- Projectiles ---
+        {'name': 'player_projectile', 'type': 'single', 'file': 'projectiles/player_projectile.npy'},
+        {'name': 'enemy_projectile', 'type': 'single', 'file': 'projectiles/enemy_projectile.npy'},
+        
+        # --- Phoenix ---
+        # This group's order must match the logic in render()
+        # 0: phoenix_1, 1: phoenix_2, 2: attack, 3: death_1, 4: death_2
+        {'name': 'phoenix', 'type': 'group', 'files': [
+            'enemy_phoenix/enemy_phoenix.npy',
+            'enemy_phoenix/enemy_phoenix_2.npy',
+            'enemy_phoenix/enemy_phoenix_attack.npy',
+            'enemy_phoenix/enemy_phoenix_death_1.npy',
+            'enemy_phoenix/enemy_phoenix_death_2.npy'
+        ]},
+        
+        # --- Bat Blue ---
+        # 0: main, 1: death_1, 2: death_2, 3: death_3
+        {'name': 'bat_blue_body', 'type': 'group', 'files': [
+            'enemy_bats/bats_blue/bat_blue_main.npy',
+            'enemy_bats/bats_blue/bat_blue_death_1.npy',
+            'enemy_bats/bats_blue/bat_blue_death_2.npy',
+            'enemy_bats/bats_blue/bat_blue_death_3.npy'
+        ]},
+        # 0: left_mid, 1: right_mid, 2: left_up, 3: right_up, ...
+        {'name': 'bat_blue_wings', 'type': 'group', 'files': [
+            'enemy_bats/bats_blue/bat_blue_left_wing_middle.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_middle.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_up.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_up.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_down.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_down.npy',
+            'enemy_bats/bats_blue/bat_blue_left_wing_down_2.npy',
+            'enemy_bats/bats_blue/bat_blue_right_wing_down_2.npy'
+        ]},
+        
+        # --- Bat Red ---
+        {'name': 'bat_red_body', 'type': 'group', 'files': [
+            'enemy_bats/bats_red/bat_red_main.npy',
+            'enemy_bats/bats_red/bat_red_death_1.npy',
+            'enemy_bats/bats_red/bat_red_death_2.npy',
+            'enemy_bats/bats_red/bat_red_death_3.npy'
+        ]},
+        {'name': 'bat_red_wings', 'type': 'group', 'files': [
+            'enemy_bats/bats_red/bat_red_left_wing_middle.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_middle.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_up.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_up.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_down.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_down.npy',
+            'enemy_bats/bats_red/bat_red_left_wing_down_2.npy',
+            'enemy_bats/bats_red/bat_red_right_wing_down_2.npy'
+        ]},
+
+        # --- Boss ---
+        {'name': 'boss', 'type': 'single', 'file': 'boss/boss.npy'},
+        {'name': 'boss_block_red', 'type': 'single', 'file': 'boss/red_block.npy'},
+        {'name': 'boss_block_blue', 'type': 'single', 'file': 'boss/blue_block.npy'},
+        {'name': 'boss_block_green', 'type': 'single', 'file': 'boss/green_block.npy'},
+    )
+
 # new Constant class
 class PhoenixConstants(NamedTuple):
     """Game constants for Phoenix."""
@@ -166,6 +264,8 @@ class PhoenixConstants(NamedTuple):
 
         ]
     )
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 # === GAME STATE ===
 class PhoenixState(NamedTuple):
@@ -221,7 +321,6 @@ class PhoenixObservation(NamedTuple):
 
 class PhoenixInfo(NamedTuple):
     step_counter: jnp.ndarray
-    all_rewards: jnp.ndarray
 
 class CarryState(NamedTuple):
     score: chex.Array
@@ -231,13 +330,10 @@ class EntityPosition(NamedTuple):## not sure
     y: chex.Array
 
 class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, None]):
-    def __init__(self, consts: PhoenixConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: PhoenixConstants = None):
         consts = consts or PhoenixConstants()
         super().__init__(consts)
         self.renderer = PhoenixRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.step_counter = 0
         self.action_set = [
             Action.NOOP,
@@ -271,19 +367,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: PhoenixState, state: PhoenixState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: PhoenixState, all_rewards: chex.Array = None) -> PhoenixInfo:
+    def _get_info(self, state: PhoenixState) -> PhoenixInfo:
         return PhoenixInfo(
             step_counter=state.step_counter,
-            all_rewards=all_rewards
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -521,6 +607,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             horizontal_direction_enemies=new_direction.astype(jnp.float32),
             enemies_y=new_enemies_y.astype(jnp.float32),
             vertical_direction_enemies=state.vertical_direction_enemies.astype(jnp.float32),
+            blue_blocks=state.blue_blocks.astype(jnp.float32),
+            red_blocks=state.red_blocks.astype(jnp.float32),
+            green_blocks=state.green_blocks.astype(jnp.float32),
             phoenix_do_attack=new_phoenix_do_attack,
             phoenix_attack_target_y=new_phoenix_attack_target_y.astype(jnp.float32),
             phoenix_original_y=new_phoenix_original_y.astype(jnp.float32),
@@ -641,6 +730,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             enemies_y=new_enemies_y.astype(jnp.float32),
             horizontal_direction_enemies=new_directions.astype(jnp.float32),
             projectile_y=new_proj_y,
+            blue_blocks=state.blue_blocks.astype(jnp.float32),
+            red_blocks=state.red_blocks.astype(jnp.float32),
+            green_blocks=state.green_blocks.astype(jnp.float32),
             bat_wings= new_bat_wings,
             bat_wing_regen_timer=new_regen_timer,
             bat_y_cooldown=new_y_cooldown.astype(jnp.int32)
@@ -741,9 +833,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         state = state._replace(
             enemies_y=new_enemy_y.astype(jnp.float32),
-            blue_blocks=new_blue_blocks.astype(jnp.int32),
-            red_blocks=new_red_blocks.astype(jnp.int32),
-            green_blocks=new_green_blocks.astype(jnp.int32),
+            blue_blocks=new_blue_blocks.astype(jnp.float32),
+            red_blocks=new_red_blocks.astype(jnp.float32),
+            green_blocks=new_green_blocks.astype(jnp.float32),
             projectile_x=projectile_x.astype(jnp.int32),
             projectile_y=projectile_y.astype(jnp.int32),
             enemies_x = state.enemies_x.astype(jnp.float32),
@@ -792,9 +884,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_moving=jnp.array(False, dtype = jnp.bool), # Player moving status, bool
 
             # Initialierung der Blockpositionen
-            blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.int32),
-            red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.int32),
-            green_blocks = self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.int32),
+            blue_blocks=self.consts.BLUE_BLOCK_POSITIONS.astype(jnp.float32),
+            red_blocks=self.consts.RED_BLOCK_POSITIONS.astype(jnp.float32),
+            green_blocks = self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.float32),
         )
 
         initial_obs = self._get_observation(return_state)
@@ -1114,9 +1206,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_respawn_timer = player_respawn_timer,
             level = level,
             vertical_direction_enemies=new_vertical_direction_enemies,
-            blue_blocks=blue_blocks.astype(jnp.int32),
-            red_blocks=red_blocks.astype(jnp.int32),
-            green_blocks=green_blocks.astype(jnp.int32),
+            blue_blocks=blue_blocks.astype(jnp.float32),
+            red_blocks=red_blocks.astype(jnp.float32),
+            green_blocks=green_blocks.astype(jnp.float32),
             invincibility=state.invincibility,
             invincibility_timer=state.invincibility_timer,
             bat_wings=new_bat_wings,
@@ -1142,779 +1234,314 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         observation = self._get_observation(return_state)
         env_reward = jnp.where(enemy_hit_detected, 1.0, 0.0)
         done = self._get_done(return_state)
-        all_rewards = self._get_all_rewards(state, return_state)
-        info = self._get_info(return_state, all_rewards)
+        info = self._get_info(return_state)
         return observation, return_state, env_reward, done, info
 
     def render(self, state:PhoenixState) -> jnp.ndarray:
         return self.renderer.render(state)
+
 from jaxatari.renderers import JAXGameRenderer
 
 class PhoenixRenderer(JAXGameRenderer):
     def __init__(self, consts: PhoenixConstants = None):
         super().__init__()
         self.consts = consts or PhoenixConstants()
-        (
-            # --- FIELD SPRITES ---
-            self.BG_SPRITE,
-            self.SPRITE_FLOOR,
-            # --- UI SPRITES ---
-            self.DIGITS,
-            self.LIFE_INDICATOR,
-            # --- PLAYER SPRITES ---
-            self.SPRITE_PLAYER,
-            self.SPRITE_PLAYER_DEATH_1,
-            self.SPRITE_PLAYER_DEATH_2,
-            self.SPRITE_PLAYER_DEATH_3,
-            self.SPRITE_PLAYER_MOVE,
-            self.SPRITE_PLAYER_ABILITY,
-            # --- PROJECTILE SPRITES ---
-            self.SPRITE_PLAYER_PROJECTILE,
-            self.SPRITE_ENEMY_PROJECTILE,
-            # --- PHOENIX SPRITES ---
-            self.SPRITE_PHOENIX_1,
-            self.SPRITE_PHOENIX_2,
-            self.SPRITE_PHOENIX_ATTACK,
-            self.SPRITE_PHOENIX_DEATH_1,
-            self.SPRITE_PHOENIX_DEATH_2,
-            # --- BAT BLUE SPRITES ---
-            self.SPRITE_BAT_BLUE_MAIN,
-            self.SPRITE_BAT_BLUE_LEFT_WING_MIDDLE,
-            self.SPRITE_BAT_BLUE_RIGHT_WING_MIDDLE,
-            self.SPRITE_BAT_BLUE_LEFT_WING_UP,
-            self.SPRITE_BAT_BLUE_RIGHT_WING_UP,
-            self.SPRITE_BAT_BLUE_LEFT_WING_DOWN,
-            self.SPRITE_BAT_BLUE_RIGHT_WING_DOWN,
-            self.SPRITE_BAT_BLUE_LEFT_WING_DOWN_2,
-            self.SPRITE_BAT_BLUE_RIGHT_WING_DOWN_2,
-            self.SPRITE_BAT_BLUE_DEATH_1,
-            self.SPRITE_BAT_BLUE_DEATH_2,
-            self.SPRITE_BAT_BLUE_DEATH_3,
-            # --- BAT RED SPRITES ---
-            self.SPRITE_BAT_RED_MAIN,
-            self.SPRITE_BAT_RED_LEFT_WING_MIDDLE,
-            self.SPRITE_BAT_RED_RIGHT_WING_MIDDLE,
-            self.SPRITE_BAT_RED_LEFT_WING_UP,
-            self.SPRITE_BAT_RED_RIGHT_WING_UP,
-            self.SPRITE_BAT_RED_LEFT_WING_DOWN,
-            self.SPRITE_BAT_RED_RIGHT_WING_DOWN,
-            self.SPRITE_BAT_RED_LEFT_WING_DOWN_2,
-            self.SPRITE_BAT_RED_RIGHT_WING_DOWN_2,
-            self.SPRITE_BAT_RED_DEATH_1,
-            self.SPRITE_BAT_RED_DEATH_2,
-            self.SPRITE_BAT_RED_DEATH_3,
-            # --- OLD BAT SPRITES -- TODO: remove
-            self.SPRITE_MAIN_BAT_1,
-            self.SPRITE_LEFT_WING_BAT_1,
-            self.SPRITE_RIGHT_WING_BAT_1,
-            self.SPRITE_MAIN_BAT_2,
-            self.SPRITE_LEFT_WING_BAT_2,
-            self.SPRITE_RIGHT_WING_BAT_2,
-            # --- BOSS SPRITES ---
-            self.SPRITE_BOSS,
-            self.SPRITE_RED_BLOCK,
-            self.SPRITE_BLUE_BLOCK,
-            self.SPRITE_GREEN_BLOCK,
-
-        ) = self.load_sprites()
-    def load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-        # Load individual sprite frames
-        # --- LOAD PLAYER SPRITES ---
-        player_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player/player.npy"))
-        player_move_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player/player_move.npy"))
-        player_death_1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player/player_death_1.npy"))
-        player_death_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player/player_death_2.npy")) # TODO Testen ob konkatinieren der zusammengehören Sprites zu einem funktioniert
-        player_ability = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/ability.npy"))
-        player_death_3_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/player/player_death_3.npy"))
-        # --- LOAD FIELD SPRITES ---
-        bg_sprites = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/pong/background.npy"))
-        floor_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/floor.npy"))
-        # --- LOAD PROJECTILE SPRITES ---
-        player_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/projectiles/player_projectile.npy"))
-        enemy_projectile = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/projectiles/enemy_projectile.npy"))
-        # --- LOAD PHOENIX SPRITES ---
-        enemy_phoenix_1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix/enemy_phoenix.npy"))
-        enemy_phoenix_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix/enemy_phoenix_2.npy"))
-        enemy_phoenix_attack = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix/enemy_phoenix_attack.npy"))
-        enemy_phoenix_death_sprite_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix/enemy_phoenix_death_1.npy"))
-        enemy_phoenix_death_sprite_2 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_phoenix/enemy_phoenix_death_2.npy"))
-        # --- LOAD BLUE BATS SPRITES ---
-        bat_blue_main_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_main.npy"))
-        bat_blue_left_wing_middle_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_left_wing_middle.npy"))
-        bat_blue_right_wing_middle_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_right_wing_middle.npy"))
-        bat_blue_left_wing_up_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_left_wing_up.npy"))
-        bat_blue_right_wing_up_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_right_wing_up.npy"))
-        bat_blue_left_wing_down_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_left_wing_down.npy"))
-        bat_blue_right_wing_down_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_right_wing_down.npy"))
-        bat_blue_left_wing_down_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_left_wing_down_2.npy"))
-        bat_blue_right_wing_down_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_right_wing_down_2.npy"))
-        bat_blue_death_1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_death_1.npy"))
-        bat_blue_death_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_death_2.npy"))
-        bat_blue_death_3_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_blue/bat_blue_death_3.npy"))
-        # --- LOAD RED BATS SPRITES ---
-        bat_red_main_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_main.npy"))
-        bat_red_left_wing_middle_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_left_wing_middle.npy"))
-        bat_red_right_wing_middle_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_right_wing_middle.npy"))
-        bat_red_left_wing_up_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_left_wing_up.npy"))
-        bat_red_right_wing_up_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_right_wing_up.npy"))
-        bat_red_left_wing_down_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_left_wing_down.npy"))
-        bat_red_right_wing_down_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_right_wing_down.npy"))
-        bat_red_left_wing_down_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_left_wing_down_2.npy"))
-        bat_red_right_wing_down_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_right_wing_down_2.npy"))
-        bat_red_death_1_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_death_1.npy"))
-        bat_red_death_2_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_death_2.npy"))
-        bat_red_death_3_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_red/bat_red_death_3.npy"))
-
-        # --- OLD BAT SPRITES --- TODO: Remove
-        main_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_1_main.npy"))
-        left_wing_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_1_wing_left.npy"))
-        right_wing_bat_1 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_1_wing_right.npy"))
-        main_bat_2 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_2_main.npy"))
-        left_wing_bat_2 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_2_wing_left.npy"))
-        right_wing_bat_2 = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/enemy_bats/bats_2_wing_right.npy"))
-
-        # --- LOAD BOSS SPRITES ---
-        boss_sprite = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss/boss.npy"))
-        boss_block_red = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss/red_block.npy"))
-        boss_block_blue = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss/blue_block.npy"))
-        boss_block_green = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/boss/green_block.npy"))
-        # --- PADDED ANIMATION SPRITES ---
-        phoenix_sprites_to_pad = [enemy_phoenix_1_sprite, enemy_phoenix_2_sprite, enemy_phoenix_attack, enemy_phoenix_death_sprite_1, enemy_phoenix_death_sprite_2]
-        padded_phoenix_sprites, _ = pad_to_match(phoenix_sprites_to_pad)
-        enemy_phoenix_1_sprite, enemy_phoenix_2_sprite, enemy_phoenix_attack, enemy_phoenix_death_sprite_1, enemy_phoenix_death_sprite_2 = padded_phoenix_sprites
-
-        player_sprites_to_pad = [player_sprite, player_death_1_sprite, player_death_2_sprite, player_death_3_sprite, player_move_sprite]
-        padded_player_sprites, _ = pad_to_match(player_sprites_to_pad)
-        player_sprite, player_death_1_sprite, player_death_2_sprite, player_death_3_sprite, player_move_sprite = padded_player_sprites
-
-        bat_blue_wing_sprites_to_pad = [
-            bat_blue_left_wing_middle_sprite, bat_blue_right_wing_middle_sprite,
-            bat_blue_left_wing_up_sprite, bat_blue_right_wing_up_sprite,
-            bat_blue_left_wing_down_sprite, bat_blue_right_wing_down_sprite,
-            bat_blue_left_wing_down_2_sprite, bat_blue_right_wing_down_2_sprite
-        ]
-        padded_bat_blue_wings, _ = pad_to_match(bat_blue_wing_sprites_to_pad)
-        bat_blue_left_wing_middle_sprite, bat_blue_right_wing_middle_sprite, bat_blue_left_wing_up_sprite, bat_blue_right_wing_up_sprite, bat_blue_left_wing_down_sprite, bat_blue_right_wing_down_sprite, bat_blue_left_wing_down_2_sprite, bat_blue_right_wing_down_2_sprite = padded_bat_blue_wings
-
-        bat_blue_sprites_to_pad = [bat_blue_main_sprite, bat_blue_death_1_sprite, bat_blue_death_2_sprite, bat_blue_death_3_sprite]
-        padded_bat_blue_sprites, _ = pad_to_match(bat_blue_sprites_to_pad)
-        bat_blue_main_sprite, bat_blue_death_1_sprite, bat_blue_death_2_sprite, bat_blue_death_3_sprite = padded_bat_blue_sprites
-
-        bat_red_wing_sprites_to_pad = [
-            bat_red_left_wing_middle_sprite, bat_red_right_wing_middle_sprite,
-            bat_red_left_wing_up_sprite, bat_red_right_wing_up_sprite,
-            bat_red_left_wing_down_sprite, bat_red_right_wing_down_sprite,
-            bat_red_left_wing_down_2_sprite, bat_red_right_wing_down_2_sprite
-        ]
-        padded_bat_red_wings, _ = pad_to_match(bat_red_wing_sprites_to_pad)
-        bat_red_left_wing_middle_sprite, bat_red_right_wing_middle_sprite, bat_red_left_wing_up_sprite, bat_red_right_wing_up_sprite, bat_red_left_wing_down_sprite, bat_red_right_wing_down_sprite, bat_red_left_wing_down_2_sprite, bat_red_right_wing_down_2_sprite = padded_bat_red_wings
-
-        bat_red_wing_sprites_to_pad = [bat_red_main_sprite, bat_red_death_1_sprite, bat_red_death_2_sprite, bat_red_death_3_sprite]
-        padded_bat_red_sprites, _ = pad_to_match(bat_red_wing_sprites_to_pad)
-        bat_red_main_sprite, bat_red_death_1_sprite, bat_red_death_2_sprite, bat_red_death_3_sprite = padded_bat_red_sprites
-
-        # --- PLAYER SPRITES ---
-        SPRITE_PLAYER = jnp.expand_dims(player_sprite, axis=0)
-        SPRITE_PLAYER_DEATH_1 = jnp.expand_dims(player_death_1_sprite, axis=0)
-        SPRITE_PLAYER_DEATH_2 = jnp.expand_dims(player_death_2_sprite, axis=0)
-        SPRITE_PLAYER_DEATH_3 = jnp.expand_dims(player_death_3_sprite, axis=0)
-        SPRITE_PLAYER_MOVE = jnp.expand_dims(player_move_sprite, axis=0)
-        SPRITE_PLAYER_ABILITY = jnp.expand_dims(player_ability, axis=0)
-        # --- FIELD SPRITES ---
-        BG_SPRITE = jnp.expand_dims(np.zeros_like(bg_sprites), axis=0)
-        SPRITE_FLOOR = jnp.expand_dims(floor_sprite, axis=0)
-        # --- UI SPRITES ---
-        DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/phoenix/digits/{}.npy"))
-        LIFE_INDICATOR = jr.loadFrame(os.path.join(MODULE_DIR, "./sprites/phoenix/life_indicator.npy"))
-        # --- PROJECTILE SPRITES ---
-        SPRITE_PLAYER_PROJECTILE = jnp.expand_dims(player_projectile, axis=0)
-        SPRITE_ENEMY_PROJECTILE = jnp.expand_dims(enemy_projectile, axis=0)
-        # --- PHOENIX SPRITES ---
-        SPRITE_PHOENIX_1 = jnp.expand_dims(enemy_phoenix_1_sprite, axis=0)
-        SPRITE_PHOENIX_2 = jnp.expand_dims(enemy_phoenix_2_sprite, axis=0)
-        SPRITE_PHOENIX_ATTACK = jnp.expand_dims(enemy_phoenix_attack, axis=0)
-        SPRITE_PHOENIX_DEATH_1 = jnp.expand_dims(enemy_phoenix_death_sprite_1, axis=0)
-        SPRITE_PHOENIX_DEATH_2 = jnp.expand_dims(enemy_phoenix_death_sprite_2, axis=0)
-        # --- BAT BLUE SPRITES ---
-        SPRITE_BAT_BLUE_MAIN = jnp.expand_dims(bat_blue_main_sprite, axis=0)
-        SPRITE_BAT_BLUE_LEFT_WING_MIDDLE = jnp.expand_dims(bat_blue_left_wing_middle_sprite, axis=0)
-        SPRITE_BAT_BLUE_RIGHT_WING_MIDDLE = jnp.expand_dims(bat_blue_right_wing_middle_sprite, axis=0)
-        SPRITE_BAT_BLUE_LEFT_WING_UP = jnp.expand_dims(bat_blue_left_wing_up_sprite, axis=0)
-        SPRITE_BAT_BLUE_RIGHT_WING_UP = jnp.expand_dims(bat_blue_right_wing_up_sprite, axis=0)
-        SPRITE_BAT_BLUE_LEFT_WING_DOWN = jnp.expand_dims(bat_blue_left_wing_down_sprite, axis=0)
-        SPRITE_BAT_BLUE_RIGHT_WING_DOWN = jnp.expand_dims(bat_blue_right_wing_down_sprite, axis=0)
-        SPRITE_BAT_BLUE_LEFT_WING_DOWN_2 = jnp.expand_dims(bat_blue_left_wing_down_2_sprite, axis=0)
-        SPRITE_BAT_BLUE_RIGHT_WING_DOWN_2 = jnp.expand_dims(bat_blue_right_wing_down_2_sprite, axis=0)
-        SPRITE_BAT_BLUE_DEATH_1 = jnp.expand_dims(bat_blue_death_1_sprite, axis=0)
-        SPRITE_BAT_BLUE_DEATH_2 = jnp.expand_dims(bat_blue_death_2_sprite, axis=0)
-        SPRITE_BAT_BLUE_DEATH_3 = jnp.expand_dims(bat_blue_death_3_sprite, axis=0)
-        # --- BAT RED SPRITES ---
-        SPRITE_BAT_RED_MAIN = jnp.expand_dims(bat_red_main_sprite, axis=0)
-        SPRITE_BAT_RED_LEFT_WING_MIDDLE = jnp.expand_dims(bat_red_left_wing_middle_sprite, axis=0)
-        SPRITE_BAT_RED_RIGHT_WING_MIDDLE = jnp.expand_dims(bat_red_right_wing_middle_sprite, axis=0)
-        SPRITE_BAT_RED_LEFT_WING_UP = jnp.expand_dims(bat_red_left_wing_up_sprite, axis=0)
-        SPRITE_BAT_RED_RIGHT_WING_UP = jnp.expand_dims(bat_red_right_wing_up_sprite, axis=0)
-        SPRITE_BAT_RED_LEFT_WING_DOWN = jnp.expand_dims(bat_red_left_wing_down_sprite, axis=0)
-        SPRITE_BAT_RED_RIGHT_WING_DOWN = jnp.expand_dims(bat_red_right_wing_down_sprite, axis=0)
-        SPRITE_BAT_RED_LEFT_WING_DOWN_2 = jnp.expand_dims(bat_red_left_wing_down_2_sprite, axis=0)
-        SPRITE_BAT_RED_RIGHT_WING_DOWN_2 = jnp.expand_dims(bat_red_right_wing_down_2_sprite, axis=0)
-        SPRITE_BAT_RED_DEATH_1 = jnp.expand_dims(bat_red_death_1_sprite, axis=0)
-        SPRITE_BAT_RED_DEATH_2 = jnp.expand_dims(bat_red_death_2_sprite, axis=0)
-        SPRITE_BAT_RED_DEATH_3 = jnp.expand_dims(bat_red_death_3_sprite, axis=0)
-
-        # --- OLD BATS SPRITES ---
-        SPRITE_MAIN_BAT_1 = jnp.expand_dims(main_bat_1, axis=0)
-        SPRITE_LEFT_WING_BAT_1 = jnp.expand_dims(left_wing_bat_1, axis=0)
-        SPRITE_RIGHT_WING_BAT_1 = jnp.expand_dims(right_wing_bat_1, axis=0)
-        SPRITE_MAIN_BAT_2 = jnp.expand_dims(main_bat_2, axis=0)
-        SPRITE_LEFT_WING_BAT_2 = jnp.expand_dims(left_wing_bat_2, axis=0)
-        SPRITE_RIGHT_WING_BAT_2 = jnp.expand_dims(right_wing_bat_2, axis=0)
-        # --- BOSS SPRITES ---
-        SPRITE_BOSS = jnp.expand_dims(boss_sprite, axis=0)
-        SPRITE_BLUE_BLOCK = boss_block_blue
-        SPRITE_RED_BLOCK = boss_block_red
-        SPRITE_GREEN_BLOCK = boss_block_green
-
-        return (
-            # --- FIELD SPRITES ---
-            BG_SPRITE,
-            SPRITE_FLOOR,
-            # --- UI SPRITES ---
-            DIGITS,
-            LIFE_INDICATOR,
-            # --- PLAYER SPRITES ---
-            SPRITE_PLAYER,
-            SPRITE_PLAYER_DEATH_1,
-            SPRITE_PLAYER_DEATH_2,
-            SPRITE_PLAYER_DEATH_3,
-            SPRITE_PLAYER_MOVE,
-            SPRITE_PLAYER_ABILITY,
-            # --- PROJECTILE SPRITES ---
-            SPRITE_PLAYER_PROJECTILE,
-            SPRITE_ENEMY_PROJECTILE,
-            # --- PHOENIX SPRITES ---
-            SPRITE_PHOENIX_1,
-            SPRITE_PHOENIX_2,
-            SPRITE_PHOENIX_ATTACK,
-            SPRITE_PHOENIX_DEATH_1,
-            SPRITE_PHOENIX_DEATH_2,
-            # --- BAT BLUE SPRITES ---
-            SPRITE_BAT_BLUE_MAIN,
-            SPRITE_BAT_BLUE_LEFT_WING_MIDDLE,
-            SPRITE_BAT_BLUE_RIGHT_WING_MIDDLE,
-            SPRITE_BAT_BLUE_LEFT_WING_UP,
-            SPRITE_BAT_BLUE_RIGHT_WING_UP,
-            SPRITE_BAT_BLUE_LEFT_WING_DOWN,
-            SPRITE_BAT_BLUE_RIGHT_WING_DOWN,
-            SPRITE_BAT_BLUE_LEFT_WING_DOWN_2,
-            SPRITE_BAT_BLUE_RIGHT_WING_DOWN_2,
-            SPRITE_BAT_BLUE_DEATH_1,
-            SPRITE_BAT_BLUE_DEATH_2,
-            SPRITE_BAT_BLUE_DEATH_3,
-            # --- BAT RED SPRITES ---
-            SPRITE_BAT_RED_MAIN,
-            SPRITE_BAT_RED_LEFT_WING_MIDDLE,
-            SPRITE_BAT_RED_RIGHT_WING_MIDDLE,
-            SPRITE_BAT_RED_LEFT_WING_UP,
-            SPRITE_BAT_RED_RIGHT_WING_UP,
-            SPRITE_BAT_RED_LEFT_WING_DOWN,
-            SPRITE_BAT_RED_RIGHT_WING_DOWN,
-            SPRITE_BAT_RED_LEFT_WING_DOWN_2,
-            SPRITE_BAT_RED_RIGHT_WING_DOWN_2,
-            SPRITE_BAT_RED_DEATH_1,
-            SPRITE_BAT_RED_DEATH_2,
-            SPRITE_BAT_RED_DEATH_3,
-            # --- OLD BAT SPRITES --- # TODO remove
-            SPRITE_MAIN_BAT_1,
-            SPRITE_LEFT_WING_BAT_1,
-            SPRITE_RIGHT_WING_BAT_1,
-            SPRITE_MAIN_BAT_2,
-            SPRITE_LEFT_WING_BAT_2,
-            SPRITE_RIGHT_WING_BAT_2,
-            # --- BOSS SPRITES ---
-            SPRITE_BOSS,
-            SPRITE_RED_BLOCK,
-            SPRITE_BLUE_BLOCK,
-            SPRITE_GREEN_BLOCK,
-
+        
+        # 1. Configure the renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=3,
+            #downscale=(84, 84),
         )
-
-    # load sprites on module layer
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # 2. Define sprite path
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/phoenix"
+        
+        # 3. Use asset config from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 4. Load all assets, create palette, and generate ID masks in one call
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jr.create_initial_frame(width=160, height=210)
+        # Start with the background raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # Render background
-        frame_bg = jr.get_sprite_frame(self.BG_SPRITE, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
+        # Render common elements
+        raster = self._render_common(state, raster)
 
-        # Render floor
-        frame_floor = jr.get_sprite_frame(self.SPRITE_FLOOR, 0)
-        raster = jr.render_at(raster, 0, 185, frame_floor)
-
-        # Render player
-        frame_player = jr.get_sprite_frame(self.SPRITE_PLAYER, 0)
-        frame_player_death_1 = jr.get_sprite_frame(self.SPRITE_PLAYER_DEATH_1, 0)
-        frame_player_death_2 = jr.get_sprite_frame(self.SPRITE_PLAYER_DEATH_2, 0)
-        frame_player_death_3 = jr.get_sprite_frame(self.SPRITE_PLAYER_DEATH_3, 0)
-        frame_player_move = jr.get_sprite_frame(self.SPRITE_PLAYER_MOVE, 0)
-        frame_player_ability = jr.get_sprite_frame(self.SPRITE_PLAYER_ABILITY, 0)
-        #raster = jr.render_at(raster, state.player_x, state.player_y, frame_player)
-
-        # Render projectiles
-        frame_projectile = jr.get_sprite_frame(self.SPRITE_PLAYER_PROJECTILE, 0)
-        frame_enemy_projectile = jr.get_sprite_frame(self.SPRITE_ENEMY_PROJECTILE, 0)
-
-        # Render enemy phoenix
-        frame_phoenix_1 = jr.get_sprite_frame(self.SPRITE_PHOENIX_1, 0)
-        frame_phoenix_2 = jr.get_sprite_frame(self.SPRITE_PHOENIX_2, 0)
-        frame_phoenix_attack = jr.get_sprite_frame(self.SPRITE_PHOENIX_ATTACK, 0)
-        frame_phoenix_death_1 = jr.get_sprite_frame(self.SPRITE_PHOENIX_DEATH_1, 0)
-        frame_phoenix_death_2 = jr.get_sprite_frame(self.SPRITE_PHOENIX_DEATH_2, 0)
-
-        # Render enemy bats --- OLD --- TODO: remove
-        frame_main_bat = jr.get_sprite_frame(self.SPRITE_MAIN_BAT_1, 0)
-        frame_left_wing_bat_1 = jr.get_sprite_frame(self.SPRITE_LEFT_WING_BAT_1, 0)
-        frame_right_wing_bat_1 = jr.get_sprite_frame(self.SPRITE_RIGHT_WING_BAT_1, 0)
-        frame_main_bat_2 = jr.get_sprite_frame(self.SPRITE_MAIN_BAT_2, 0)
-        frame_left_wing_bat_2 = jr.get_sprite_frame(self.SPRITE_LEFT_WING_BAT_2, 0)
-        frame_right_wing_bat_2 = jr.get_sprite_frame(self.SPRITE_RIGHT_WING_BAT_2, 0)
-
-        # Render enemy bats blue
-        frame_bat_blue_main = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_MAIN, 0)
-        frame_bat_blue_left_wing_middle = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_LEFT_WING_MIDDLE, 0)
-        frame_bat_blue_right_wing_middle = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_RIGHT_WING_MIDDLE, 0)
-        frame_bat_blue_left_wing_up = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_LEFT_WING_UP, 0)
-        frame_bat_blue_right_wing_up = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_RIGHT_WING_UP, 0)
-        frame_bat_blue_left_wing_down = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_LEFT_WING_DOWN, 0)
-        frame_bat_blue_right_wing_down = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_RIGHT_WING_DOWN, 0)
-        frame_bat_blue_left_wing_down_2 = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_LEFT_WING_DOWN_2, 0)
-        frame_bat_blue_right_wing_down_2 = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_RIGHT_WING_DOWN_2, 0)
-        frame_bat_blue_death_1 = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_DEATH_1, 0)
-        frame_bat_blue_death_2 = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_DEATH_2, 0)
-        frame_bat_blue_death_3 = jr.get_sprite_frame(self.SPRITE_BAT_BLUE_DEATH_3, 0)
-
-        # Render enemy bats red
-        frame_bat_red_main = jr.get_sprite_frame(self.SPRITE_BAT_RED_MAIN, 0)
-        frame_bat_red_left_wing_middle = jr.get_sprite_frame(self.SPRITE_BAT_RED_LEFT_WING_MIDDLE, 0)
-        frame_bat_red_right_wing_middle = jr.get_sprite_frame(self.SPRITE_BAT_RED_RIGHT_WING_MIDDLE, 0)
-        frame_bat_red_left_wing_up = jr.get_sprite_frame(self.SPRITE_BAT_RED_LEFT_WING_UP, 0)
-        frame_bat_red_right_wing_up = jr.get_sprite_frame(self.SPRITE_BAT_RED_RIGHT_WING_UP, 0)
-        frame_bat_red_left_wing_down = jr.get_sprite_frame(self.SPRITE_BAT_RED_LEFT_WING_DOWN, 0)
-        frame_bat_red_right_wing_down = jr.get_sprite_frame(self.SPRITE_BAT_RED_RIGHT_WING_DOWN, 0)
-        frame_bat_red_left_wing_down_2 = jr.get_sprite_frame(self.SPRITE_BAT_RED_LEFT_WING_DOWN_2, 0)
-        frame_bat_red_right_wing_down_2 = jr.get_sprite_frame(self.SPRITE_BAT_RED_RIGHT_WING_DOWN_2, 0)
-        frame_bat_red_death_1 = jr.get_sprite_frame(self.SPRITE_BAT_RED_DEATH_1, 0)
-        frame_bat_red_death_2 = jr.get_sprite_frame(self.SPRITE_BAT_RED_DEATH_2, 0)
-        frame_bat_red_death_3 = jr.get_sprite_frame(self.SPRITE_BAT_RED_DEATH_3, 0)
-
-        # Render boss
-        frame_boss = jr.get_sprite_frame(self.SPRITE_BOSS, 0)
-
-        player_death_sprite_duration = self.consts.PLAYER_DEATH_DURATION // 3  # Duration for each player death sprite frame
-
-        # Render player death animation
-        def pick_player_death_sprite():
-            return jax.lax.cond(
-                state.player_death_timer >= 2 * player_death_sprite_duration,
-                lambda: frame_player_death_1,
-                lambda: jax.lax.cond(
-                    state.player_death_timer >= player_death_sprite_duration,
-                    lambda: frame_player_death_2,
-                    lambda: frame_player_death_3
-                )
-            )
-
-        def pick_player_alive_sprite():
-            anim_toggle = (((state.step_counter // self.consts.PLAYER_ANIMATION_SPEED) % 2) == 0)
-            return jax.lax.cond(
-                state.invincibility,  # Fähigkeit aktiv -> immer Move-Sprite
-                lambda: frame_player_move,
-                lambda: jax.lax.cond(
-                    state.player_moving & anim_toggle,
-                    lambda: frame_player_move,
-                    lambda: frame_player
-                )
-            )
-
-        frame_player_used = jax.lax.cond(
-            state.player_dying,
-            pick_player_death_sprite,
-            pick_player_alive_sprite
+        # Dispatch to level-specific renderers
+        level_idx = (state.level - 1) % 5
+        raster = jax.lax.cond(
+            (level_idx == 0) | (level_idx == 1),
+            lambda r: self._render_phoenix_level(state, r),
+            lambda r: r,
+            raster
         )
+        raster = jax.lax.cond(
+            level_idx == 2,
+            lambda r: self._render_bat_level(state, r, True),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            level_idx == 3,
+            lambda r: self._render_bat_level(state, r, False),
+            lambda r: r,
+            raster
+        )
+        raster = jax.lax.cond(
+            level_idx == 4,
+            lambda r: self._render_boss_level(state, r),
+            lambda r: r,
+            raster
+        )
+
+        # UI on top
+        raster = self._render_ui(state, raster)
+
+        # Final palette lookup
+        return self.jr.render_from_palette(raster, self.PALETTE)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_common(self, state, raster):
+        raster = self.jr.render_at(raster, 0, 185, self.SHAPE_MASKS['floor'])
+
+        player_death_sprite_duration = self.consts.PLAYER_DEATH_DURATION // 3
+        death_idx = jax.lax.select(
+            state.player_death_timer >= 2 * player_death_sprite_duration,
+            1,
+            jax.lax.select(state.player_death_timer >= player_death_sprite_duration, 2, 3)
+        )
+        anim_toggle = (((state.step_counter // self.consts.PLAYER_ANIMATION_SPEED) % 2) == 0)
+        alive_idx = jax.lax.select(
+            state.invincibility,
+            4,
+            jax.lax.select(state.player_moving & anim_toggle, 4, 0)
+        )
+        player_frame_index = jax.lax.select(state.player_dying, death_idx, alive_idx)
+        player_mask = self.SHAPE_MASKS["player"][player_frame_index]
+        player_flip_offset = self.FLIP_OFFSETS["player"]
+
+        def draw_player(r):
+            return self.jr.render_at(r, state.player_x, state.player_y, player_mask, flip_offset=player_flip_offset)
 
         raster = jax.lax.cond(
             jnp.logical_or(state.player_dying, state.player_respawn_timer <= 0),
-            lambda r: jr.render_at(r, state.player_x, state.player_y, frame_player_used),
-            lambda r: r,
-            operand=raster
+            draw_player, lambda r: r, raster
         )
 
+        def render_player_projectile(r):
+            return self.jr.render_at_clipped(r, state.projectile_x, state.projectile_y, self.SHAPE_MASKS['player_projectile'])
 
-        # Phoenix attack rendering logic
+        raster = jax.lax.cond(
+            state.projectile_x > -1, render_player_projectile, lambda r: r, raster
+        )
+
+        def render_ability(r):
+            ability_mask = self.SHAPE_MASKS['player_ability']
+            player_mask_local = self.SHAPE_MASKS["player"][player_frame_index]
+            ah, aw = ability_mask.shape
+            ph, pw = player_mask_local.shape
+            ax = state.player_x + (pw - aw) // 2
+            ay = state.player_y + (ph - ah) // 2
+            return self.jr.render_at(r, ax, ay, ability_mask)
+
+        ability_visible = state.invincibility & ((state.step_counter % 4) == 0)
+        raster = jax.lax.cond(ability_visible, render_ability, lambda r: r, raster)
+
+        def render_enemy_projectile(i, current_raster):
+            x, y = state.enemy_projectile_x[i], state.enemy_projectile_y[i]
+            return jax.lax.cond(
+                y > -1,
+                lambda r: self.jr.render_at_clipped(r, x, y, self.SHAPE_MASKS['enemy_projectile']),
+                lambda r: r,
+                current_raster
+            )
+
+        raster = jax.lax.fori_loop(0, state.enemy_projectile_x.shape[0], render_enemy_projectile, raster)
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_phoenix_level(self, state, raster):
         tol = 0.5
         going_down = state.phoenix_do_attack & (state.enemies_y < state.phoenix_attack_target_y - tol)
         going_up = state.phoenix_do_attack & (state.enemies_y > state.phoenix_attack_target_y + tol)
         returning_moving = state.phoenix_returning & (jnp.abs(state.enemies_y - state.phoenix_original_y) > tol)
         is_moving_vert = going_down | going_up | returning_moving
 
-        # Phoenix death rendering logic
-        death_flags = state.phoenix_dying
-        death_phase = (state.phoenix_death_timer <= self.consts.ENEMY_DEATH_DURATION // 2).astype(jnp.int32)  # 0 for first half, 1 for second half
+        phoenix_death_flags = state.phoenix_dying
+        phoenix_death_phase = (state.phoenix_death_timer <= self.consts.ENEMY_DEATH_DURATION // 2).astype(jnp.int32)
+        anim_toggle = ((state.step_counter // self.consts.ENEMY_ANIMATION_SPEED) % 2) == 0
+        phoenix_flip_offset = self.FLIP_OFFSETS['phoenix']
 
+        def render_single_phoenix(i, current_raster):
+            x, y = state.enemies_x[i], state.enemies_y[i]
+            is_active = (x > -1) & (y < self.consts.HEIGHT + 10)
 
-        def render_enemy(raster, input):
-            enemy_pos, wings, moving_vert, enemy_dying, enemy_phase = input
-            x, y = enemy_pos
-            anim_toggle = ((state.step_counter // self.consts.ENEMY_ANIMATION_SPEED) % 2) == 0  # toggle every 32 steps
+            def draw_enemy(r):
+                death_idx = jax.lax.select(phoenix_death_phase[i] == 0, 3, 4)
+                alive_idx = jax.lax.select(is_moving_vert[i], 2, jax.lax.select(anim_toggle, 0, 1))
+                frame_idx = jax.lax.select(phoenix_death_flags[i], death_idx, alive_idx)
+                mask = self.SHAPE_MASKS['phoenix'][frame_idx]
+                return self.jr.render_at(r, x, y, mask, flip_offset=phoenix_flip_offset)
 
-            def pick_phoenix_death_sprite():
-                return jax.lax.cond(
-                    enemy_phase == 0,
-                    lambda: frame_phoenix_death_1,
-                    lambda: frame_phoenix_death_2
-                )
+            return jax.lax.cond(is_active, draw_enemy, lambda r: r, current_raster)
 
-            def pick_phoenix_alive_sprite():
-                return jax.lax.cond(
-                    moving_vert,
-                    lambda: frame_phoenix_attack,
-                    lambda: jax.lax.cond(
-                        anim_toggle,
-                        lambda: frame_phoenix_1,
-                        lambda: frame_phoenix_2
-                    )
-                )
+        return jax.lax.fori_loop(0, state.enemies_x.shape[0], render_single_phoenix, raster)
 
-            def render_level1(r):
-                #phoenix_anim = jax.lax.select(anim_toggle, frame_phoenix_1, frame_phoenix_2)
-                #phoenix_frame = jax.lax.select(moving_vert, frame_phoenix_attack, phoenix_anim)
-                phoenix_frame = jax.lax.cond(
-                    enemy_dying,
-                    pick_phoenix_death_sprite,
-                    pick_phoenix_alive_sprite
-                )
-                return jr.render_at(r, x, y, phoenix_frame)
-                #return jr.render_at(r, x, y, frame_phoenix_1) # OLD OLD OLD
+    @partial(jax.jit, static_argnums=(0, 3))
+    def _render_bat_level(self, state, raster, is_blue_level: bool):
+        bat_death_seg = jnp.maximum(1, self.consts.ENEMY_DEATH_DURATION // 3)
+        body_masks = self.SHAPE_MASKS['bat_blue_body'] if is_blue_level else self.SHAPE_MASKS['bat_red_body']
+        body_offsets = self.FLIP_OFFSETS['bat_blue_body'] if is_blue_level else self.FLIP_OFFSETS['bat_red_body']
+        wing_masks = self.SHAPE_MASKS['bat_blue_wings'] if is_blue_level else self.SHAPE_MASKS['bat_red_wings']
+        wing_offsets = self.FLIP_OFFSETS['bat_blue_wings'] if is_blue_level else self.FLIP_OFFSETS['bat_red_wings']
+        left_wing_mask = wing_masks[0]
+        right_wing_mask = wing_masks[1]
 
-            def render_level2(r):
-                #phoenix_anim = jax.lax.select(anim_toggle, frame_phoenix_1, frame_phoenix_2)
-                #phoenix_frame = jax.lax.select(moving_vert, frame_phoenix_attack, phoenix_anim)
-                phoenix_frame = jax.lax.cond(
-                    enemy_dying,
-                    pick_phoenix_death_sprite,
-                    pick_phoenix_alive_sprite
-                )
-                return jr.render_at(r, x, y, phoenix_frame)
-                #return jr.render_at(r, x, y, frame_phoenix_1) # OLD OLD OLD
-            def render_level3(r):
-                r = jr.render_at(r, x, y, frame_main_bat)
-
-                def no_wings(r):
-                    return r
-
-                def left_wing_only(r):
-                    return jr.render_at(r, x - 5, y+2, frame_left_wing_bat_1)
-
-                def right_wing_only(r):
-                    return jr.render_at(r, x + 4, y+2, frame_right_wing_bat_1)
-
-                def both_wings(r):
-                    r = jr.render_at(r, x - 5, y+2, frame_left_wing_bat_1)
-                    r = jr.render_at(r, x + 4, y+2, frame_right_wing_bat_1)
-                    return r
-                wing_idx = wings + 1
-                r = jax.lax.switch(
-                    wing_idx,
-                    [
-                        left_wing_only,  # 0: no wings
-                        no_wings,  # 1: left wing only
-                        right_wing_only,  # 2: right wing only
-                        both_wings,  # 3: both wings
-                    ], r
-                )
-                return r
-            def render_level4(r):
-                r = jr.render_at(r, x, y, frame_main_bat_2)
-
-                def no_wings(r):
-                    return r
-
-                def left_wing_only(r):
-                    return jr.render_at(r, x - 5, y + 2, frame_left_wing_bat_2)
-
-                def right_wing_only(r):
-                    return jr.render_at(r, x + 5, y + 2, frame_right_wing_bat_2)
-
-                def both_wings(r):
-                    r = jr.render_at(r, x - 5, y + 2, frame_left_wing_bat_2)
-                    r = jr.render_at(r, x + 5, y + 2, frame_right_wing_bat_2)
-                    return r
-
-                wing_idx = wings + 1
-                r = jax.lax.switch(
-                    wing_idx,
-                    [
-                        left_wing_only,  # 0: no wings
-                        no_wings,  # 1: left wing only
-                        right_wing_only,  # 2: right wing only
-                        both_wings,  # 3: both wings
-                    ], r
-                )
-                return r
-            def render_level5(r):
-                return jr.render_at(r, x, y, frame_boss)
-
-            def render_if_active(r):
-                return jax.lax.switch(
-                    state.level - 1,
-                    [
-                        render_level1,
-                        render_level2,
-                        render_level3,
-                        render_level4,
-                        render_level5,
-                    ],
-                    r
-                )
-
-            raster = jax.lax.cond(x > -1, render_if_active, lambda r: r, raster)
-
-            return raster, None
-
-        # Update the raster
-        enemy_positions = jnp.stack((state.enemies_x, state.enemies_y), axis=1)
-        wings_array = jnp.full((enemy_positions.shape[0],), state.bat_wings)
-        moving_flags = is_moving_vert
-        death_flags = jnp.full((enemy_positions.shape[0],), death_flags)
-        death_phase = jnp.full((enemy_positions.shape[0],), death_phase)
-        inputs = (enemy_positions, wings_array, moving_flags, death_flags, death_phase)
-        def draw_phoenix(rr):
-            return jax.lax.scan(render_enemy, rr, inputs)[0]
-
-        # Render player projectiles
-        def render_player_projectile(r):
-            return jr.render_at(r, state.projectile_x, state.projectile_y, frame_projectile)
-
-        raster = jax.lax.cond(
-            state.projectile_x > -1,
-            render_player_projectile,
-            lambda r: r,
-            raster
-        )
-
-        # Render enemy bats
-        is_blue_level = (state.level % 5) == 3
-        is_red_level = (state.level % 5) == 4
-        is_bat_level = is_blue_level | is_red_level
-
-        raster = jax.lax.cond(jnp.logical_not(is_bat_level), draw_phoenix, lambda rr: rr, raster)
-
-        seg = jnp.maximum(1, self.consts.ENEMY_DEATH_DURATION // 3)
-
-        def pick_death_frame(t: jnp.int32):
-            def blue():
-                return jax.lax.cond(
-                    t > 2 * seg,
-                    lambda: frame_bat_blue_death_1,
-                    lambda: jax.lax.cond(
-                        t > seg,
-                        lambda: frame_bat_blue_death_2,
-                        lambda: frame_bat_blue_death_3
-                    )
-                )
-
-            def red():
-                return jax.lax.cond(
-                    t > 2 * seg,
-                    lambda: frame_bat_red_death_1,
-                    lambda: jax.lax.cond(
-                        t > seg,
-                        lambda: frame_bat_red_death_2,
-                        lambda: frame_bat_red_death_3
-                    )
-                )
-
-            return jax.lax.cond(is_blue_level, blue, red)
-
-        def pick_alive_body():
-            return jax.lax.cond(is_blue_level, lambda: frame_bat_blue_main, lambda: frame_bat_red_main)
-
-        def pick_middle_wings():
-            def blue():
-                return frame_bat_blue_left_wing_middle, frame_bat_blue_right_wing_middle
-
-            def red():
-                return frame_bat_red_left_wing_middle, frame_bat_red_right_wing_middle
-
-            return jax.lax.cond(is_blue_level, blue, red)
-
-        def body(i, r):
+        def render_single_bat(i, current_raster):
             x = state.enemies_x[i].astype(jnp.int32)
             y = state.enemies_y[i].astype(jnp.int32)
-            active = (x > -1) & (y < self.consts.HEIGHT + 10) & is_bat_level
-            dying = state.bat_dying[i] & is_bat_level
-            t = state.bat_death_timer[i].astype(jnp.int32)
-
-            def draw_death(rr):
-                # Death-Sprite zentriert auf den Körper-Anker ausrichten
-                frame = pick_death_frame(t)
-                body_frame = pick_alive_body()
-                bh, bw = body_frame.shape[:2]
-                dh, dw = frame.shape[:2]
-                ox = x + (bw - dw) // 2 - 5
-                oy = y + (bh - dh) // 2
-                return jr.render_at(rr, ox, oy, frame)
-
-            def draw_alive(rr):
-                # Körper
-                rr = jr.render_at(rr, x, y, pick_alive_body())
-
-                # Flügel (mittlere) mit korrekt horizontalem Versatz und vertikal +1px
-                left_frame, right_frame = pick_middle_wings()
-                wing_state = state.bat_wings[i].astype(jnp.int32)
-                draw_left = (wing_state == 2) | (wing_state == -1)
-                draw_right = (wing_state == 2) | (wing_state == 1)
-
-                x_left = x - self.consts.WING_WIDTH
-                x_right = x + self.consts.ENEMY_WIDTH - 1  # rechter Flügel 1px weiter links
-                y_wings = y + 2  # beide Flügel 1px tiefer
-
-                rr = jax.lax.cond(
-                    draw_left,
-                    lambda r2: jr.render_at(r2, x_left, y_wings, left_frame),
-                    lambda r2: r2,
-                    rr
-                )
-                rr = jax.lax.cond(
-                    draw_right,
-                    lambda r2: jr.render_at(r2, x_right, y_wings, right_frame),
-                    lambda r2: r2,
-                    rr
-                )
-                return rr
+            is_active = (x > -1) & (y < self.consts.HEIGHT + 10)
+            is_dying = state.bat_dying[i]
 
             def draw_one(rr):
-                return jax.lax.cond(dying, draw_death, draw_alive, rr)
+                def draw_death(r):
+                    death_timer = state.bat_death_timer[i].astype(jnp.int32)
+                    death_idx = jax.lax.select(
+                        death_timer > 2 * bat_death_seg, 1,
+                        jax.lax.select(death_timer > bat_death_seg, 2, 3)
+                    )
+                    death_mask = body_masks[death_idx]
+                    bh, bw = body_masks[0].shape
+                    dh, dw = death_mask.shape
+                    ox = x + (bw - dw) // 2 - 5
+                    oy = y + (bh - dh) // 2
+                    return self.jr.render_at(r, ox, oy, death_mask, flip_offset=body_offsets)
 
-            return jax.lax.cond(active, draw_one, lambda rr: rr, r)
+                def draw_alive(r):
+                    r_new = self.jr.render_at(r, x, y, body_masks[0], flip_offset=body_offsets)
+                    wing_state = state.bat_wings[i].astype(jnp.int32)
+                    draw_left = (wing_state == 2) | (wing_state == -1)
+                    draw_right = (wing_state == 2) | (wing_state == 1)
+                    x_left = x - self.consts.WING_WIDTH
+                    x_right = x + self.consts.ENEMY_WIDTH - 1
+                    y_wings = y + 2
+                    r_new = jax.lax.cond(
+                        draw_left,
+                        lambda r2: self.jr.render_at(r2, x_left, y_wings, left_wing_mask, flip_offset=wing_offsets),
+                        lambda r2: r2,
+                        r_new
+                    )
+                    r_new = jax.lax.cond(
+                        draw_right,
+                        lambda r2: self.jr.render_at(r2, x_right, y_wings, right_wing_mask, flip_offset=wing_offsets),
+                        lambda r2: r2,
+                        r_new
+                    )
+                    return r_new
 
-        raster = jax.lax.fori_loop(0, state.enemies_x.shape[0], body, raster)
+                return jax.lax.cond(is_dying, draw_death, draw_alive, rr)
 
-        def render_ability(r):
-            ah, aw = frame_player_ability.shape[:2]
-            ph, pw = frame_player_used.shape[:2]
-            ax = state.player_x + (pw - aw) // 2
-            ay = state.player_y + (ph - ah) // 2
-            return jr.render_at(r, ax, ay, frame_player_ability)
+            return jax.lax.cond(is_active, draw_one, lambda rr: rr, current_raster)
 
-        ability_visible = state.invincibility & ((state.step_counter % 4) == 0) # Zeige ability nur jeden vierten Frame
+        return jax.lax.fori_loop(0, state.enemies_x.shape[0], render_single_bat, raster)
 
-        raster = jax.lax.cond(
-            ability_visible,
-            render_ability,
-            lambda r: r,
-            raster
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_boss_level(self, state, raster):
+        boss_mask = self.SHAPE_MASKS['boss']
+        boss_flip_offset = self.FLIP_OFFSETS['boss']
+
+        def render_single_boss(i, current_raster):
+            x, y = state.enemies_x[i], state.enemies_y[i]
+            is_active = (x > -1) & (y < self.consts.HEIGHT + 10)
+            return jax.lax.cond(
+                is_active,
+                lambda r: self.jr.render_at(r, x, y, boss_mask, flip_offset=boss_flip_offset),
+                lambda r: r,
+                current_raster
+            )
+
+        raster = jax.lax.fori_loop(0, state.enemies_x.shape[0], render_single_boss, raster)
+
+        # Efficient grid-based block rendering using inverse mapping (like Breakout)
+        grid_rows = (self.consts.HEIGHT + self.consts.BLOCK_HEIGHT - 1) // self.consts.BLOCK_HEIGHT
+        grid_cols = (self.consts.WIDTH + self.consts.BLOCK_WIDTH - 1) // self.consts.BLOCK_WIDTH
+        object_id_grid = jnp.zeros((grid_rows, grid_cols), dtype=jnp.int32)
+
+        def positions_to_grid_ids(obj_grid, positions, obj_id):
+            pos = positions[:, 0:2].astype(jnp.int32)
+            valid = (pos[:, 0] >= 0) & (pos[:, 1] >= 0)
+            pos = jnp.where(valid[:, None], pos, -1)
+            cols = jnp.clip(pos[:, 0] // self.consts.BLOCK_WIDTH, 0, grid_cols - 1)
+            rows = jnp.clip(pos[:, 1] // self.consts.BLOCK_HEIGHT, 0, grid_rows - 1)
+            rows = jnp.where(valid, rows, 0)
+            cols = jnp.where(valid, cols, 0)
+            return obj_grid.at[rows, cols].set(
+                jnp.where(valid, jnp.int32(obj_id), obj_grid[rows, cols])
+            )
+
+        object_id_grid = positions_to_grid_ids(object_id_grid, state.blue_blocks, 1)
+        object_id_grid = positions_to_grid_ids(object_id_grid, state.red_blocks, 2)
+        object_id_grid = positions_to_grid_ids(object_id_grid, state.green_blocks, 3)
+
+        blue_color_id = jnp.asarray(self.SHAPE_MASKS['boss_block_blue'][0, 0], dtype=jnp.uint8)
+        red_color_id = jnp.asarray(self.SHAPE_MASKS['boss_block_red'][0, 0], dtype=jnp.uint8)
+        green_color_id = jnp.asarray(self.SHAPE_MASKS['boss_block_green'][0, 0], dtype=jnp.uint8)
+        # ID 0 is background/no block; we won't paint over raster in that case
+        color_map = jnp.array([self.BACKGROUND[0, 0], blue_color_id, red_color_id, green_color_id], dtype=jnp.uint8)
+
+        raster = self.jr.render_grid_inverse(
+            raster,
+            grid_state=object_id_grid,
+            grid_origin=(0, 0),
+            cell_size=(self.consts.BLOCK_WIDTH, self.consts.BLOCK_HEIGHT),
+            color_map=color_map,
         )
-        def render_enemy_projectile(raster, projectile_pos):
-            x, y = projectile_pos
-            return jax.lax.cond(
-                y > -1,
-                lambda r: jr.render_at(r, x, y, frame_enemy_projectile),
-                lambda r: r,
-                raster
-            ), None
-        def render_boss_block_blue(raster, block_pos):
-            x,y = block_pos
-            return jax.lax.cond(
-                state.level% 5 == 0,
-                lambda r: jr.render_at(r, x, y, self.SPRITE_BLUE_BLOCK),
-                lambda r:r,
-                raster
-            ), None
-        def render_boss_block_red(raster, block_pos):
-            x,y = block_pos
-            return jax.lax.cond(
-                state.level% 5 == 0,
-                lambda r: jr.render_at(r, x, y, self.SPRITE_RED_BLOCK),
-                lambda r:r,
-                raster
-            ), None
 
-        def render_boss_block_green(raster, block_pos):
-            x, y = block_pos
-            return jax.lax.cond(
-                state.level % 5 == 0,
-                lambda r: jr.render_at(r, x, y, self.SPRITE_GREEN_BLOCK),
-                lambda r: r,
-                raster
-            ), None
+        return raster
 
-        blue_block_positions = state.blue_blocks
-        raster, _ = jax.lax.scan(render_boss_block_blue, raster, blue_block_positions)
-        red_block_positions = state.red_blocks
-        raster, _ = jax.lax.scan(render_boss_block_red, raster, red_block_positions)
-        green_block_positions = state.green_blocks
-        raster, _ = jax.lax.scan(render_boss_block_green, raster, green_block_positions)
-        enemy_proj_positions = jnp.stack((state.enemy_projectile_x, state.enemy_projectile_y), axis=1)
-        raster, _ = jax.lax.scan(render_enemy_projectile, raster, enemy_proj_positions)
-
-        # render score
-        #score_array = jr.int_to_digits(state.score, max_digits=5)  # 5 for now
-        #raster = jr.render_label(raster, 60, 10, score_array, self.DIGITS, spacing=8)
-        # render lives
-        #lives_value = jnp.sum(jr.int_to_digits(state.lives, max_digits=2))
-        #raster = jr.render_indicator(raster, 70, 20, lives_value, self.LIFE_INDICATOR, spacing=4)
-
-        # --- Score: wächst nach links, rechte Kante konstant ---
-        max_digits = jnp.int32(5)
-        spacing = jnp.int32(8)
-        digit_w = jnp.int32(self.DIGITS[0].shape[1])
-
-        # Fixes 5er-Feld horizontal zentrieren (Score selbst NICHT neu zentrieren)
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ui(self, state, raster):
+        max_digits = 5
+        spacing = 8
+        score_y = 10
+        digit_masks = self.SHAPE_MASKS['digits']
+        digit_w = digit_masks[0].shape[1]
+        score_digits = self.jr.int_to_digits(state.score, max_digits=max_digits)
+        has_nonzero = jnp.any(score_digits != 0)
+        first_idx = jnp.where(has_nonzero, jnp.argmax(score_digits != 0), max_digits - 1)
+        num_to_render = jnp.where(has_nonzero, max_digits - first_idx, 1)
+        start_index = first_idx
         field_total_w = max_digits * spacing
         base_left = (self.consts.WIDTH - field_total_w) // 2
-        y = jnp.int32(10)
-
-        score = jnp.clip(state.score.astype(jnp.int32), 0, 99999)
-        places = jnp.array([10000, 1000, 100, 10, 1], dtype=jnp.int32)
-        digits = (score // places) % 10
-
-        has_nonzero = jnp.any(digits != 0)
-        first_idx = jnp.where(has_nonzero, jnp.argmax(digits != 0), 4)  # bei 0: nur letzte Stelle sichtbar
-        count = jnp.where(has_nonzero, 5 - first_idx, 1)
-
-        # Feste rechte Kante des Score-Feldes
-        score_right = base_left + (max_digits - 1) * spacing + digit_w
-
-        def body(i, rr):
-            d = digits[i].astype(jnp.int32)
-            visible = i >= first_idx
-            x = base_left + i * spacing
-
-            def draw(r):
-                sprite = self.DIGITS[d]
-                return jr.render_at(r, x, y, sprite)
-
-            return jax.lax.cond(visible, draw, lambda r: r, rr)
-
-        raster = jax.lax.fori_loop(0, 5, body, raster)
-
-        # --- Leben: rechts am festen Score-Ende ausrichten ---
-        life_w = jnp.int32(self.LIFE_INDICATOR.shape[1])
-        life_spacing = jnp.int32(4)
+        score_x = base_left + first_idx * spacing
+        raster = self.jr.render_label_selective(
+            raster, score_x, score_y,
+            score_digits, digit_masks,
+            start_index, num_to_render,
+            spacing=spacing, max_digits_to_render=max_digits
+        )
+        life_mask = self.SHAPE_MASKS['life_indicator']
+        life_w = life_mask.shape[1]
+        life_spacing = 4
+        lives_y = 20
         lives_count = jnp.clip(state.lives.astype(jnp.int32), 0, 99)
-
-        total_lives_w = jnp.where(lives_count > 0, (lives_count - 1) * life_spacing + life_w, 0)
-        lives_x = score_right - total_lives_w
-        lives_y = jnp.int32(20)
-
-        def draw_lives(r):
-            return jr.render_indicator(r, lives_x, lives_y, lives_count, self.LIFE_INDICATOR, spacing=life_spacing)
-
-        raster = jax.lax.cond(lives_count > 0, draw_lives, lambda r: r, raster)
-
+        score_right_edge = base_left + (max_digits - 1) * spacing + digit_w
+        total_lives_width = jnp.where(lives_count > 0, (lives_count - 1) * life_spacing + life_w, 0)
+        lives_x = score_right_edge - total_lives_width
+        raster = self.jr.render_indicator(
+            raster, lives_x, lives_y,
+            lives_count, life_mask,
+            spacing=life_spacing, max_value=99
+        )
         return raster
