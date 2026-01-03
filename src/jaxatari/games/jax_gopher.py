@@ -24,23 +24,31 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'player', 'type': 'group', 'files': ['farmer_default.npy', 'farmer_shovel_middle.npy', 'farmer_shovel_top.npy']},
-        # {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
-        # {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-        # {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
-        # {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'}
+        {'name': 'gopher', 'type': 'group', 'files': ['gopher_walk_left_legsclose.npy', 'gopher_walk_left_legsopen.npy', 'gopher_walk_right_legsclosed.npy', 'gopher_walk_right_legsopen.npy']},
+        {'name': 'carrot', 'type': 'single', 'file': 'carrot.npy'},
+        {'name': 'hole_tile_dug', 'type': 'digits', 'pattern': 'hole_tile_dug.npy'},
+        {'name': 'tunnel_tile_dug', 'type': 'digits', 'pattern': 'tunnel_tile_dug.npy'}
     )
 
 
 class GopherConstants(NamedTuple):
-    # Frame size(gamesize, width = 168)
-    BLOCK_SIZE: int = 4
+    """
+    Top screen - top river: 0-145
+    Top river - top ground: 146-160
+    top ground - top tunnel: 161-182
+    Carrots size: (27, 8)
+    Hole width: 8
+    """
+
+
+    # Frame size(gamesize)
+    BLOCK_SIZE: int = 5
     WIDTH: int = 160                                   
     HEIGHT: int = 210
     
 
     # Element size
-    SKY_HEIGHT: int = 84
-    RIVER_HEIGHT: int = 12
+   
     GROUND_HEIGHT: int = 24
     NUM_COLUMNS: int = 42
     NUM_ROWS: int = 30
@@ -56,7 +64,7 @@ class GopherConstants(NamedTuple):
     GOPHER_SIZE: Tuple[int, int] = (8, 8)
     CARROT_SIZE: Tuple[int, int] = (7, 15)
     SEED_SIZE: Tuple[int, int] = (1, 1)
-    GROUND_TOP_Y: int = SKY_HEIGHT + RIVER_HEIGHT             # 84 + 12 = 96
+    
     GROUND_REPAIR_AMOUNT: int = 1
     BLOCK_PIXEL_HEIGHT: int = BLOCK_SIZE                      # each layer is 4px
     COLUMN_HEIGHT_PX: int = (MAX_DEPTH + 1) * BLOCK_SIZE      # 6 x 4 = 24
@@ -78,20 +86,20 @@ class GopherConstants(NamedTuple):
     
     # Initial set up
     NUM_CARROT: int = 3
-    CARROT_POSITION: Tuple[int, int, int] = (68, 84, 100)
+    CARROT_POSITION: Tuple[int, int, int] = (60, 76, 92)       # (60,151), (76, 151), (92,151)
     PLAYER_SPEED: int = 1
     GOPHER_SPEED1: int = 1                                      # smart gopher speed
     GOPHER_SPEED2: int = 2                                      # very smart gopher speed
     PLAYER_START_X: int = 80
-    PLAYER_START_Y: int = 60
+    PLAYER_START_Y: int = 96
     GOPHER_START_X: int = 160
-    GOPHER_START_Y: int = 108
+    GOPHER_START_Y: int = 182
     # CARROT_DEPTH: int = 4
 
     # Rules
     TUNNEL_REPAIR_AMOUNT: int = 4
     MAX_GOPHERS: int = 1
-    HOLE_POSITION: List = {20, 36, 72, 116, 132, 148}
+    HOLE_POSITION: List = {12, 28, 44, 108, 124, 140}
     TUNNEL_POSITION: List = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 
                              40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 
                              80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 
@@ -111,22 +119,27 @@ class GopherState(NamedTuple):
     # player_y: chex.Array  
     player_speed:chex.Array 
 
+    bonk_timer: chex.Array                    # Current frame of animation: default->middle: 3 frames, middle -> top: 3 frames, top -> default: 5 frames
+
     # Gopher position and movement
-    # gopher_position: chex.Array            
-    # gopher_direction_x: chex.Array            # -1 left, +1 right
+    gopher_position: chex.Array            
+    gopher_direction_x: chex.Array            # -1 left, +1 right
     # gopher_direction_y:chex.Array           # 1 for going down, -1 for going up
     # gopher_up:chex.Array                    # 1 for pop up, 0 for in ground
     # gopher_running:chex.Array               # 1 for running to steal, 0 for normal
-    # gopher_state:chex.Array                 # shape [:] 0:pop up, 1: running to carrots, 2:in tunnel, 3:in hole, 
+    
     # gopher_bonked:chex.Array                # 0 for not bonked, 1 for bonked
-    # hole_state: chex.Array                  # shape [6:3] 3 layers for each hole (3 ground layers), one layer is horizontally two blocks, count from bottom to up: 0, 1, 2
+    # hole_state: chex.Array                  # shape [6:3] each hole has 3 layers(3 ground layers), one layer is horizontally two blocks, count from bottom to up: 0, 1, 2
     # tunnel_state:chex.Array                 # shape [42:] 42 entries for tunnel, one entry is vertically two blocks
     # #carrots_depth: chex.Array              # depth of carrots at each x, -1 = none
     # gopher_animation_idx: chex.Array        # 0 for running, 1 for pop up face
+    gopher_move_x_timer: chex.Array
+    #gopher_timer: chex.Array
+    #gopher_action: chex.Array
     
     # # Carrots info
     # carrots_left: chex.Array                # number of remaining carrots
-    # carrots_present: chex.Array             # 1: carrot in hole, 0: carrot not in hole
+    carrots_present: chex.Array             # 1: carrot in hole, 0: carrot not in hole
     
     # # Duck info
     # duck_position: chex.Array
@@ -141,22 +154,13 @@ class GopherState(NamedTuple):
     
     # shovel_timer: int = 0
     
-    key:chex.Array                         # handle randomness
+    key: chex.Array                         # handle randomness
     frame_count: int = 0
 
-# player_position: chex.Array             # farmer horizontal position
-#     gopher_position: chex.Array            # each gopher:(x, y)
-#     gopher_direction: chex.Array            # -1 left, +1 right
-#     y_tunnel_1_state: chex.Array            # y tunnels are counted from left to right 
-#     y_tunnel_2_state: chex.Array            # each y tunnel consists of 3 blocks in y- 
-#     y_tunnel_3_state: chex.Array            # direction. Hence the array contains   
-#     y_tunnel_4_state: chex.Array            # 3 values
-#     y_tunnel_5_state: chex.Array          
-#     y_tunnel_6_state: chex.Array         
-#     x_tunnel_state: chex.Array              # contains 42 values
-#     carrot_counter: chex.Array              
-#     highscore: chex.Array                   # player score 
-#     # TODO DUCK info 
+
+    #     carrot_counter: chex.Array              
+    #     highscore: chex.Array                   # player score 
+    #     # TODO DUCK info 
 
 
 
@@ -185,6 +189,11 @@ class GopherObservation(NamedTuple):
     
 class GopherInfo(NamedTuple):
     difficulty_level: jnp.ndarray
+    time:jnp.ndarray
+
+
+
+
 
 
 # ==========================================================================================
@@ -212,66 +221,34 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
         right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
 
-        touches_wall = jnp.logical_or(
-            state.player_x < self.consts.LEFT_WALL,
-            state.player_x + self.consts.PLAYER_SIZE[0] > self.consts.RIGHT_WALL,
-        )
+        # Set base speed:
+        new_speed = jax.lax.select(left, -2.0, jax.lax.select(right, 2.0, 0.0))
 
-        player_speed = state.player_speed
-        
-        # Not pressing, speed become 0
-        player_speed = jax.lax.cond(
-            jnp.logical_or(jnp.logical_not(jnp.logical_or(left, right)), touches_wall),
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
-        )
+        # Check collisions
+        touch_left_wall = state.player_x <= self.consts.LEFT_WALL
+        touch_right_wall = state.player_x + self.consts.PLAYER_SIZE[0] >= self.consts.RIGHT_WALL
 
-        # Change direction to left
-        direction_change_left = jnp.logical_and(left, state.player_speed > 0)
-        player_speed = jax.lax.cond(
-            direction_change_left,
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
-        )
-        
-        # Change direction to right
-        direction_change_right = jnp.logical_and(right, state.player_speed < 0)
-        player_speed = jax.lax.cond(
-            direction_change_right,
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
+        # Stop if walking into wall
+        final_speed = jax.lax.cond(
+            jnp.logical_or(jnp.logical_and(left, touch_left_wall), jnp.logical_and(right, touch_right_wall)),
+            lambda _: 0.0,
+            lambda _: new_speed,
+            operand = None
         )
        
-        # Move left
-        player_speed = jax.lax.cond(
-            left,
-            lambda s: -s,
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        # Move right
-        player_speed = jax.lax.cond(
-            right,
-            lambda s: s,
-            lambda s: s,
-            operand=player_speed,
-        )
         # Clamp the movement in frame
         proposed_player_x = jnp.clip(
-            state.player_x + player_speed,
+            state.player_x + final_speed,
             self.consts.LEFT_WALL,
             self.consts.RIGHT_WALL - self.consts.PLAYER_SIZE[0],
         )
 
         
-        state = state._replace(
-            player_x = proposed_player_x, 
-            new_player_speed = player_speed
-        )
+        
+
+
+        
+        
         
 
         '''
@@ -343,41 +320,65 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             carrots_present = new_carrots_present , 
             seed_caught = new_seed_caught,
         )
-        
+        '''
 
         # 2.Bonk 
-        gopher_x_middle = state.gopher_position[0] + self.consts.GOPHER_SIZE[0]/2
 
-        overlap_bonk_x = jnp.logical_and(
-            player_left < gopher_x_middle,
-            player_right > gopher_x_middle,
+        fire_pressed = jnp.logical_or(action == Action.FIRE, action == Action.DOWNFIRE)
+        
+        # Start timer if fire is pressed, otherwise if timer > 0, keep incrementing until 9
+        is_bonking = state.bonk_timer > 0
+
+        def increment_timer(t):
+            '''
+            Increse player bonk movement timer
+            '''
+            return jax.lax.select(t >= 8, 0 , t + 1)
+        
+        new_bonk_timer = jax.lax.cond(
+            jnp.logical_or(fire_pressed, is_bonking),
+            increment_timer,
+            lambda t: 0,
+            operand = state.bonk_timer
         )
 
-        # bonk half: when gopher is half out
-        bonk_half = jnp.all(jnp.array([
-           action == Action.DOWNFIRE,
-           overlap_bonk_x,
-           state.gopher_state == 0,
-        ]))
+
+        
+
+        # gopher_x_middle = state.gopher_position[0] + self.consts.GOPHER_SIZE[0]/2
+
+        # overlap_bonk_x = jnp.logical_and(
+        #     player_left < gopher_x_middle,
+        #     player_right > gopher_x_middle,
+        # )
+
+        # # bonk half: when gopher is half out
+        # bonk_half = jnp.all(jnp.array([
+        #    action == Action.DOWNFIRE,
+        #    overlap_bonk_x,
+        #    state.gopher_state == 0,
+        # ]))
 
 
-        # Bonk running: when gopher is running to the carrots
-        bonk_running = jnp.all(jnp.array([
-           action == Action.DOWNFIRE,
-           overlap_bonk_x,
-           state.gopher_state == 1,
-        ]))
+        # # Bonk running: when gopher is running to the carrots
+        # bonk_running = jnp.all(jnp.array([
+        #    action == Action.DOWNFIRE,
+        #    overlap_bonk_x,
+        #    state.gopher_state == 1,
+        # ]))
 
-        gopher_bonked_cond = jnp.logical_or(bonk_half, bonk_running)
+        # gopher_bonked_cond = jnp.logical_or(bonk_half, bonk_running)
 
-        gopher_bonk = jax.lax.cond(
-            gopher_bonked_cond, 
-            lambda _: 1,
-            lambda _: 0,
-            operand = None
-        )
+        # gopher_bonk = jax.lax.cond(
+        #     gopher_bonked_cond, 
+        #     lambda _: 1,
+        #     lambda _: 0,
+        #     operand = None
+        # )
 
-        state = state._replace(gopher_bonked = gopher_bonk)
+        # state = state._replace(gopher_bonked = gopher_bonk)
+        
+        '''
         # 3.Repair Tunnel
         # Check if player is standing above hole, and get the hole index
         matches_hole = player_x_middle == jnp.array(self.consts.HOLE_POSITION)
@@ -446,27 +447,36 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             tunnel_state = new_tunnel_state)
         
         '''
-    
-    
-        
-    
-    
-   
+        return state._replace(
+            player_x = proposed_player_x, 
+            player_speed = final_speed,
+            bonk_timer = new_bonk_timer
 
-    ''' 
+        )
+    
+
+
+
+
+
+    
+    
+
+    
     def _gopher_move_x(self, state: GopherState, consts:GopherConstants) -> GopherState:
         new_x = state.gopher_position[0] + state.gopher_direction_x * consts.GOPHER_SPEED1
-        hits_left_wall = new_x < consts.LEFT_WALL
-        hits_right_wall = (new_x + consts.GOPHER_SIZE[0]) > consts.RIGHT_WALL
-
-        # Handle wraparound situation
-        final_x = jnp.select(
-            [hits_left_wall, hits_right_wall],
-            [consts.RIGHT_WALL - consts.GOPHER_SIZE[0], consts.LEFT_WALL],
-            default=new_x
-        )
-        return state._replace(gopher_position = state.gopher_position.at[0].set(final_x))
+        
+        # Handle wraparoud 
+        play_width = consts.RIGHT_WALL - consts.LEFT_WALL
+        final_x = (new_x - consts.LEFT_WALL) % play_width + consts.LEFT_WALL
+        new_timer = state.gopher_move_x_timer + 1
+        
+        return state._replace(
+            gopher_position = state.gopher_position.at[0].set(final_x),
+            gopher_move_x_timer  = new_timer                  
+            )
     
+    ''' 
     def _gopher_move_y(self, state: GopherState, consts:GopherConstants) -> GopherState:
         new_y = state.gopher_position[0] + state.gopher_direction_y * consts.GOPHER_SPEED1
         return state._replace(gopher_position = state.gopher_position.at[0].set(new_y))
@@ -897,22 +907,26 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         state = GopherState(
             player_x=jnp.array(84, dtype=jnp.int32), # Start in the middle
             player_speed=jnp.array(0.0),
-            # gopher_position=jnp.array([20.0, 150.0]),
+            gopher_position=jnp.array([150.0, 150.0]),
+            gopher_direction_x=jnp.array(-1, dtype=jnp.int32),
             # gopher_state=jnp.array(0),
-            
+            bonk_timer=jnp.array(0, dtype=jnp.int32),
+            gopher_move_x_timer=jnp.array(0, dtype=jnp.int32),
+            carrots_present = jnp.array([1, 1, 1]),
             key=key,
             frame_count=jnp.array(0),
             
             
         )
         
-        # In JAX environments, the first observation is usually the first frame
+
         obs = self.render(state)
         return obs, state
 
     def step(self, state: GopherState, action: chex.Array) -> tuple[chex.Array, GopherState, jnp.ndarray, jnp.ndarray, dict]:
-        # 1. Update player
+        # 1. Update player and gopher
         state = self._player_step(state, action)
+        state = self._gopher_move_x(state, self.consts)
         
         # 2. Update frame count (for timing things later)
         state = state._replace(frame_count=state.frame_count + 1)
@@ -923,10 +937,21 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         # 4. Return standard JAX environment tuple
         reward = jnp.array(0.0)
         done = jnp.array(False)
-        return obs, state, reward, done, {}
+        info = self._get_info(state)
+        return obs, state, reward, done, info
     
     def render(self, state: GopherState) -> jnp.ndarray:
         return self.renderer.render(state)
+    
+    def action_space(self):
+        """Return the action space"""
+        return spaces.Discrete(4)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: GopherState, ) -> GopherInfo:
+        return GopherInfo(time=state.frame_count, difficulty_level=jnp.array(1, dtype=jnp.int32))
+
+
 
 class GopherRenderer(JAXGameRenderer):
     def __init__(self, consts: GopherConstants = None):
@@ -954,12 +979,53 @@ class GopherRenderer(JAXGameRenderer):
     #def _load_and_prepare_assets(self):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:GopherState):
+        
+        # *****Background*****
         raster = self.jr.create_object_raster(self.BACKGROUND)
+        
 
-        player_mask = self.SHAPE_MASKS["player"][0]
+        # *****Carrot*****
+        carrot_position = jnp.array(self.consts.CARROT_POSITION)
+        carrot_mask = self.SHAPE_MASKS["carrot"]
+        print(self.SHAPE_MASKS['carrot'].shape)
+        def draw_one_carrot(i, current_raster):
+            is_active = state.carrots_present[i] == 1
+            x = carrot_position[i]
+            y = 151
+            
+            return jax.lax.cond(
+                is_active,
+                lambda r: self.jr.render_at(r, jnp.int32(x), jnp.int32(y), carrot_mask),
+                lambda r: r,
+                operand = current_raster
+            )
+        
+        raster = jax.lax.fori_loop(0, 3, draw_one_carrot, raster)
+        
+        # *****Player*****
+        # Determine which sprite to show
+        # 0-1: Default(0), 2-3: middle(1), 4-7: top(2), 8: Default(0)
+        player_sprite_idx = jax.lax.select(
+            state.bonk_timer < 2, 0, 
+            jax.lax.select(state.bonk_timer < 4, 1,
+            jax.lax.select(state.bonk_timer < 8, 2, 0)
+            )
+        )
+        player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
         print(self.SHAPE_MASKS['player'].shape)
         print(self.BACKGROUND.shape)
         raster = self.jr.render_at(raster, jnp.int32(state.player_x), jnp.int32(self.consts.PLAYER_START_Y), player_mask)
+
+        # *****Tunnel dig block*****
+        # def render_tunnels(state: GopherState, raster):
+        #     tunnel_mask = 
+        # *****Hole dig block***** 
+        
+        # *****Gopher*****
+        # Walk
+        gopher_leg_idx = (state.gopher_move_x_timer // 4) % 2
+        gopher_mask = self.SHAPE_MASKS["gopher"][gopher_leg_idx]
+        raster = self.jr.render_at(raster, jnp.int32(state.gopher_position[0]), jnp.int32(self.consts.GOPHER_START_Y), gopher_mask)
         
         return self.jr.render_from_palette(raster, self.PALETTE)
     
