@@ -14,6 +14,7 @@ from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.wrappers import (
     AtariWrapper,
+    MultiRewardWrapper,
     PixelObsWrapper,
     ObjectCentricWrapper,
     PixelAndObjectCentricWrapper,
@@ -705,9 +706,9 @@ class TestAdvancedWrapperFeatures:
         key = jax.random.PRNGKey(0)
         
         # Create environment with MultiRewardLogWrapper
-        base_env = AtariWrapper(raw_env)
+        reward_funcs = [lambda state, prev_state: jnp.ones(1)]
+        base_env = AtariWrapper(MultiRewardWrapper(raw_env, reward_funcs))
         env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(base_env))
-        
         # Reset and check initial state
         obs, state = env.reset(key)
         assert state.episode_returns_env == 0.0, "Initial episode returns env should be 0"

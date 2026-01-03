@@ -1,1 +1,1 @@
-from jaxatari.core import make, make_renderer, list_available_games, list_available_mods, modify
+from jaxatari.core import make, make_renderer, list_available_games

@@ -11,6 +11,24 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Seaquest.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'bg/1.npy'},
+        {'name': 'player_sub', 'type': 'group', 'files': ['player_sub/1.npy', 'player_sub/2.npy', 'player_sub/3.npy']},
+        {'name': 'diver', 'type': 'group', 'files': ['diver/1.npy', 'diver/2.npy']},
+        {'name': 'shark_base', 'type': 'group', 'files': ['shark/1.npy', 'shark/2.npy']},
+        {'name': 'enemy_sub', 'type': 'group', 'files': ['enemy_sub/1.npy', 'enemy_sub/2.npy', 'enemy_sub/3.npy']},
+        {'name': 'player_torp', 'type': 'single', 'file': 'player_torp/1.npy'},
+        {'name': 'enemy_torp', 'type': 'single', 'file': 'enemy_torp/1.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator/1.npy'},
+        {'name': 'diver_indicator', 'type': 'single', 'file': 'diver_indicator/1.npy'},
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+    )
+
 
 class SeaquestConstants(NamedTuple):
     # Colors
@@ -70,6 +88,9 @@ class SeaquestConstants(NamedTuple):
 
     # First wave directions from original code
     FIRST_WAVE_DIRS = jnp.array([False, False, False, True])
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class SpawnState(NamedTuple):
     difficulty: chex.Array  # Current difficulty level (0-7)
@@ -157,7 +178,6 @@ class SeaquestInfo(NamedTuple):
     difficulty: jnp.ndarray  # Current difficulty level
     successful_rescues: jnp.ndarray  # Number of successful rescues
     step_counter: jnp.ndarray  # Current step count
-    all_rewards: jnp.ndarray  # All rewards for the current step
 
 
 class CarryState(NamedTuple):
@@ -2000,12 +2020,9 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         return jnp.minimum(base_points + additional_points, max_points)
 
 
-    def __init__(self, consts: SeaquestConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: SeaquestConstants = None):
         consts = consts or SeaquestConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -2026,7 +2043,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
         self.renderer = SeaquestRenderer(self.consts)
 
@@ -2213,24 +2229,16 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: SeaquestState, all_rewards: jnp.ndarray = None) -> SeaquestInfo:
+    def _get_info(self, state: SeaquestState) -> SeaquestInfo:
         return SeaquestInfo(
             successful_rescues=state.successful_rescues,
             difficulty=state.spawn_state.difficulty,
             step_counter=state.step_counter,
-            all_rewards=all_rewards,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SeaquestState, state: SeaquestState):
         return state.score - previous_state.score
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: SeaquestState, state: SeaquestState) -> jnp.ndarray:
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
-        return rewards
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SeaquestState) -> bool:
@@ -2653,8 +2661,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
         done = self._get_done(return_state)
         env_reward = self._get_reward(previous_state, return_state)
-        all_rewards = self._get_all_rewards(previous_state, return_state)
-        info = self._get_info(return_state, all_rewards)
+        info = self._get_info(return_state)
 
         # Choose between death animation and normal game step
         return observation, return_state, env_reward, done, info
@@ -2670,17 +2677,26 @@ class SeaquestRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 2. Create procedural assets using modded constants
         procedural_sprites = self._create_procedural_sprites()
-        asset_config = self._get_asset_config(procedural_sprites)
+        
+        # 3. Append procedural assets
+        for name, data in procedural_sprites.items():
+            final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
+        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/seaquest"
 
+        # 4. Load all assets, create palette, and generate ID masks
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
         self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
 
@@ -2694,24 +2710,6 @@ class SeaquestRenderer(JAXGameRenderer):
         rgba_oxy = jnp.array(list(self.consts.OXYGEN_BAR_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_color'] = rgba_oxy
         return procedural_sprites
-
-    def _get_asset_config(self, procedural_sprites: dict) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        config = [
-            {'name': 'background', 'type': 'background', 'file': 'bg/1.npy'},
-            {'name': 'player_sub', 'type': 'group', 'files': ['player_sub/1.npy', 'player_sub/2.npy', 'player_sub/3.npy']},
-            {'name': 'diver', 'type': 'group', 'files': ['diver/1.npy', 'diver/2.npy']},
-            {'name': 'shark_base', 'type': 'group', 'files': ['shark/1.npy', 'shark/2.npy']},
-            {'name': 'enemy_sub', 'type': 'group', 'files': ['enemy_sub/1.npy', 'enemy_sub/2.npy', 'enemy_sub/3.npy']},
-            {'name': 'player_torp', 'type': 'single', 'file': 'player_torp/1.npy'},
-            {'name': 'enemy_torp', 'type': 'single', 'file': 'enemy_torp/1.npy'},
-            {'name': 'life_indicator', 'type': 'single', 'file': 'life_indicator/1.npy'},
-            {'name': 'diver_indicator', 'type': 'single', 'file': 'diver_indicator/1.npy'},
-            {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
-        ]
-        for name, data in procedural_sprites.items():
-            config.append({'name': name, 'type': 'procedural', 'data': data})
-        return config
 
     def _precompute_shark_color_map(self) -> jnp.ndarray:
         """Creates a lookup table mapping difficulty (0-7) to a shark color ID."""
