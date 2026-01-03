@@ -750,8 +750,6 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
-        jax.debug.print("{}", observation)
-
         return observation, new_state, env_reward, done, info
 
     def render(self, state: KaboomState) -> jnp.ndarray:
