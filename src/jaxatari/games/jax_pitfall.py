@@ -13,6 +13,8 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
 class PitfallState(NamedTuple):
+    screen_id: chex.Array
+
     # Player position & motion
     player_x: chex.Array   # scalar, e.g. jnp.array(10.0)
     player_y: chex.Array   # scalar
@@ -52,6 +54,8 @@ class PitfallConstants(NamedTuple):
     ladder_width: int = 10
     initial_score: int = 2000
 
+
+
 class PitfallObservation(NamedTuple):
     # for now, can just mirror some fields from state
     player_x: chex.Array
@@ -75,8 +79,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         super().__init__(consts)
         # Store constants on self (the env instance)
         self.consts = consts
-
-        self.renderer = PitfallRenderer(self.consts)
+        self.num_screens = 3
+        self.ladder_xpos_by_screen = jnp.array([80, 40, 120], dtype=jnp.int32)
+        self.renderer = PitfallRenderer(self.consts, self.ladder_xpos_by_screen)
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
@@ -108,7 +113,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         consts = self.consts
 
         # ----- ladder horizontal span -----
-        ladder_x = jnp.asarray(consts.ladder_x, dtype=jnp.int32)
+        ladder_x = self.ladder_xpos_by_screen[state.screen_id]
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)  # matches renderer
 
@@ -311,7 +316,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         time_left = jnp.maximum(time_left, 0)
 
         # --- Setup ladder detection ---
-        ladder_x = jnp.asarray(consts.ladder_x, dtype=jnp.int32)
+        ladder_x = self.ladder_xpos_by_screen[state.screen_id]
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
 
@@ -358,6 +363,41 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         # --- Integrate position ---
         y = y + vy
         x = x + vx
+
+        # --- Screen transition (insert BEFORE clamping x) ---
+        x_after_move = x
+
+        screen_width_px = jnp.asarray(consts.screen_width, dtype=jnp.float32)
+        player_width_px = jnp.asarray(4.0, dtype=jnp.float32)
+
+        left_edge = 0.0
+        right_edge_for_left_of_player = screen_width_px - player_width_px
+
+        exited_left  = x_after_move < left_edge
+        exited_right = x_after_move > right_edge_for_left_of_player
+
+        current_screen = state.screen_id
+
+        screen_if_left_exit  = current_screen - 1
+        screen_if_right_exit = current_screen + 1
+
+        new_screen_id = jnp.where(
+            exited_left,
+            screen_if_left_exit,
+            jnp.where(exited_right, screen_if_right_exit, current_screen)
+        )
+
+        num_screens = jnp.asarray(self.num_screens, dtype=jnp.int32)
+        new_screen_id = jnp.mod(new_screen_id, num_screens)
+
+        x_if_left_exit  = right_edge_for_left_of_player   # appear at right edge
+        x_if_right_exit = left_edge                       # appear at left edge
+
+        x = jnp.where(
+            exited_left,
+            x_if_left_exit,
+            jnp.where(exited_right, x_if_right_exit, x_after_move)
+        )
 
         # --- Clamp x to screen bounds ---
         player_w_f = jnp.asarray(4, dtype=jnp.float32)
@@ -440,6 +480,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             down_pressed=down_pressed,
             on_ladder=on_ladder,
             current_ground_y=current_ground_y,
+            screen_id=new_screen_id
         )
 
         obs = self._get_observation(new_state)
@@ -511,6 +552,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             down_pressed=jnp.array(False, dtype=jnp.bool_),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
+            screen_id=jnp.array(0, dtype=jnp.int32),
         )
         return state
     
@@ -519,9 +561,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 class PitfallRenderer(JAXGameRenderer):
     """Very simple renderer: black background, green ground, white player block."""
 
-    def __init__(self, consts: PitfallConstants | None = None):
+    def __init__(self, consts: PitfallConstants | None = None, ladder_xpos_by_screen=None):
         super().__init__()
         self.consts = consts or PitfallConstants()
+        self.ladder_xpos_by_screen = ladder_xpos_by_screen
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
@@ -621,15 +664,23 @@ class PitfallRenderer(JAXGameRenderer):
         frame = frame.at[ground:ground + 2, :, 1].set(200)  # green band
         frame = frame.at[underground:underground + 2, :, 1].set(120)
 
-        ladder_x = self.consts.ladder_x
-        ladder_w = self.consts.ladder_width
+        ladder_x = self.ladder_xpos_by_screen[state.screen_id].astype(jnp.int32)
+        ladder_w = jnp.asarray(self.consts.ladder_width, dtype=jnp.int32)
 
-        ladder_top = ground - 1
-        ladder_bottom = underground + 1
+        ladder_top = jnp.asarray(ground - 1, dtype=jnp.int32)
+        ladder_bottom = jnp.asarray(underground + 1, dtype=jnp.int32)
 
-        frame = frame.at[ladder_top:ladder_bottom,
-                     ladder_x:ladder_x + ladder_w,
-                     2].set(255)
+        ladder_h = ladder_bottom - ladder_top  # dynamic is OK as a value, but we need fixed shape
+        # BUT ladder_h here is actually constant in your game (since ground/underground are constants).
+        # So compute it as a Python int for a static shape:
+        ladder_h_static = int((self.consts.underground_y + 1) - (self.consts.ground_y - 1))
+
+        # Build a ladder patch (all zeros, blue channel = 255)
+        ladder_patch = jnp.zeros((ladder_h_static, self.consts.ladder_width, 3), dtype=jnp.uint8)
+        ladder_patch = ladder_patch.at[:, :, 2].set(255)
+
+        # Paste ladder patch at dynamic x position
+        frame = lax.dynamic_update_slice(frame, ladder_patch, (ladder_top, ladder_x, 0))
 
         # ----- HUD -----
         # Layout: Score on top row (above timer), Lives + Timer on second row
