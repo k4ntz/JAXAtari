@@ -642,7 +642,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_enemy = enemy._replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
             return new_enemy, projectile._replace(
                 orientation_angle=perfect_angle,
-                x = enemy.x+self.consts.ENEMY_HITBOX_SIZE,
+                x = enemy.x+self.consts.ENEMY_HITBOX_SIZE/2,
                 z = enemy.z,
                 active=True,
                 time_to_live=jnp.array(self.consts.PROJECTILE_TTL, dtype=jnp.int32)
