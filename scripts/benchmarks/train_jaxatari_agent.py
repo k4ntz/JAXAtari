@@ -10,7 +10,7 @@ import numpy as np
 from typing import Dict, Any, Tuple, List, Callable
 from collections import deque
 from tqdm import tqdm
-from ppo_agent import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch 
+from scripts.benchmarks.ppo_agent_old import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch 
 import pygame
 from functools import partial
 
