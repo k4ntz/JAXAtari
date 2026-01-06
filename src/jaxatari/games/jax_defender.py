@@ -873,24 +873,16 @@ class JaxDefender(
             lambda: state,
         )
 
-        def spawn_on_random_position_not_on_screen(state: DefenderState, e_type: int) -> DefenderState:
+        state = state._replace(killed_landers=state.killed_landers + 1)
+        def handle_lander_kill(state: DefenderState) -> DefenderState:
             state = state._replace(killed_landers=state.killed_landers + 1)
-            random_x, random_y, new_key = self.get_random_position_not_on_screen(
-                state,
-                self.consts.ENEMY_WIDTH,
-                self.consts.ENEMY_HEIGHT,
-                state.key,
-            )
-            state = self._spawn_enemy(
-                state, random_x, random_y, e_type, 0, 0
-            )
-
-            return state._replace(key=new_key)
+            state = self._spawn_on_random_position_not_on_screen(state, self.consts.LANDER)
+            return state
 
         state = jax.lax.cond(
             jnp.logical_and(jnp.logical_and(is_index, enemy_type == self.consts.LANDER),
                              self.consts.LANDER_AMOUNT[jnp.remainder(state.level, 5)] - self.consts.MAX_LANDER_AMOUNT > state.killed_landers),
-            lambda: spawn_on_random_position_not_on_screen(state, self.consts.LANDER),
+            lambda: handle_lander_kill(state),
             lambda: state,
         )
 
@@ -909,8 +901,20 @@ class JaxDefender(
         # TODO Add score
         return state
     
+    def _spawn_on_random_position_not_on_screen(self, state: DefenderState, e_type: int) -> DefenderState:
+        random_x, random_y, new_key = self._get_random_position_not_on_screen(
+            state,
+            self.consts.ENEMY_WIDTH,
+            self.consts.ENEMY_HEIGHT,
+            state.key,
+        )
+        state = self._spawn_enemy(
+            state, random_x, random_y, e_type, 0, 0
+        )
 
-    def get_random_position_not_on_screen(
+        return state._replace(key=new_key)
+
+    def _get_random_position_not_on_screen(
         self, state: DefenderState, width: int, height: int, key: chex.Array
     ) -> Tuple[float, float, chex.Array]:
         def body_fn(carry):
@@ -1305,7 +1309,6 @@ class JaxDefender(
             def lander_reached_top(
                 human_index: int,
             ) -> Tuple[float, float, float, float]:
-                # Mark human as rescued
                 human = human_states[human_index]
                 human_x = human[0]
                 human_y = human[1]
@@ -1899,7 +1902,7 @@ class JaxDefender(
         initial_state = DefenderState(
             # Game
             step_counter=jnp.array(0).astype(jnp.int32),
-            level=jnp.array(1).astype(jnp.int32),
+            level=jnp.array(0).astype(jnp.int32),
             # Camera
             camera_offset=jnp.array(self.consts.INITIAL_CAMERA_OFFSET).astype(
                 jnp.int32
