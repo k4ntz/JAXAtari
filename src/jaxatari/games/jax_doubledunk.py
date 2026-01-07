@@ -47,17 +47,17 @@ class DunkConstants:
     BALL_SIZE: Tuple[int, int] = (3,3)
     JUMP_STRENGTH: int = 5
     PLAYER_MAX_SPEED: int = 2
-    PLAYER_Y_MIN: int = 10
-    PLAYER_Y_MAX: int = 130
-    PLAYER_X_MIN: int  = 0
-    PLAYER_X_MAX: int = 145
+    PLAYER_Y_MIN: int = 57
+    PLAYER_Y_MAX: int = 160
+    PLAYER_X_MIN: int  = 3
+    PLAYER_X_MAX: int = 142
     PLAYER_WIDTH: int = 10                         
     PLAYER_HEIGHT: int = 30
     PLAYER_BARRIER: int = 10  
-    BASKET_POSITION: Tuple[int,int] = (80,10)
+    BASKET_POSITION: Tuple[int,int] = (80,35)
     GRAVITY: int = 1
     AREA_3_POINT: Tuple[int,int,int] = (25, 135, 90) # (x_min, x_max, y_arc_connect) - needs a proper function to check if a point is in the 3-point area
-    MAX_SCORE: int = 10
+    MAX_SCORE: int = 24
     DUNK_RADIUS: int = 18
     INSIDE_RADIUS: int = 50
     BLOCK_RADIUS: int = 14
@@ -282,15 +282,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         is_p2_holder = (holder == PlayerID.PLAYER2_INSIDE) | (holder == PlayerID.PLAYER2_OUTSIDE)
         
-        p1_out_y = jax.lax.select(is_p2_holder, jnp.array(105, dtype=jnp.int32), jnp.array(115, dtype=jnp.int32))
-        p2_out_y = jax.lax.select(is_p2_holder, jnp.array(115, dtype=jnp.int32), jnp.array(105, dtype=jnp.int32))
+        p1_out_y = jax.lax.select(is_p2_holder, jnp.array(145, dtype=jnp.int32), jnp.array(155, dtype=jnp.int32))
+        p2_out_y = jax.lax.select(is_p2_holder, jnp.array(155, dtype=jnp.int32), jnp.array(145, dtype=jnp.int32))
 
         return DunkGameState(
-            player1_inside=PlayerState(id=1, x=100, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player1_inside=PlayerState(id=1, x=100, y=70, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
             player1_outside=PlayerState(id=2, x=75, y=p1_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            player2_inside=PlayerState(id=3, x=50, y=50, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player2_inside=PlayerState(id=3, x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
             player2_outside=PlayerState(id=4, x=75, y=p2_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            ball=BallState(x=50.0, y=110.0, vel_x=0.0, vel_y=0.0, holder=holder, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0, missed_shot=False),
+            ball=BallState(x=75.0, y=150.0, vel_x=0.0, vel_y=0.0, holder=holder, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0, missed_shot=False),
             scores=GameScores(
                 player=jnp.array(0, dtype=jnp.int32),
                 enemy=jnp.array(0, dtype=jnp.int32)
@@ -346,8 +346,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         updated_y = player.y + vel_y
         new_x = jax.lax.clamp(constants.PLAYER_X_MIN, updated_x, constants.PLAYER_X_MAX)
         new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, updated_y, constants.PLAYER_Y_MAX)
-        touched_bound = (updated_x <= constants.PLAYER_X_MIN) | (updated_x >= constants.PLAYER_X_MAX) | \
-                        (updated_y <= constants.PLAYER_Y_MIN) | (updated_y >= constants.PLAYER_Y_MAX)
+        touched_bound = (updated_x <= constants.PLAYER_X_MIN) | (updated_x >= constants.PLAYER_X_MAX) | (updated_y <= constants.PLAYER_Y_MIN)
 
         # Clearance Check: Check if player is "inside". If not, they have cleared the ball.
         # Inside Zone definition based on scoring logic:
@@ -1062,7 +1061,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             # --- Score Updates ---
             new_player_score = s.scores.player + points * is_p1_scorer
             new_enemy_score = s.scores.enemy + points * (1 - is_p1_scorer)
-
+            
             # --- Reset Game State ---
             # Give ball to the team that got scored on
             new_ball_holder = jax.lax.select(is_p1_scorer, PlayerID.PLAYER2_OUTSIDE, PlayerID.PLAYER1_OUTSIDE)
@@ -1379,7 +1378,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         final_state = jax.lax.cond(
             state.game_mode == GameMode.IN_PLAY,
             run_game_step,
-            lambda s: s, # If not in play, do nothing
+            lambda s: s.replace(step_counter=s.step_counter + 1), 
             state
         )
 
@@ -1423,26 +1422,38 @@ class DunkRenderer(JAXGameRenderer):
         # --- UPDATED ASSET CONFIGURATION ---
         asset_config = [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            
+            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+
             # Team 1 (Player) - Blue/Black
-            {'name': 'player_light', 'type': 'group', 'files': [f'player_light_{i}.npy' for i in range(10)]},
-            {'name': 'player_dark', 'type': 'group', 'files': [f'player_dark_{i}.npy' for i in range(10)]},
-            {'name': 'player_light_no_ball', 'type': 'single', 'file': 'player_light_no_ball.npy'},
-            {'name': 'player_dark_no_ball', 'type': 'single', 'file': 'player_dark_no_ball.npy'},
+            {'name': 'player_inside_1', 'type': 'single', 'file': 'player_inside_1.npy'},
+            {'name': 'player_inside_guard', 'type': 'single', 'file': 'player_inside_guard.npy'},
+            {'name': 'player_inside_jump', 'type': 'single', 'file': 'player_inside_jump.npy'},
+            {'name': 'player_outside_1', 'type': 'single', 'file': 'player_outside_1.npy'},
+            {'name': 'player_outside_guard', 'type': 'single', 'file': 'player_outside_guard.npy'},
+            {'name': 'player_outside_jump', 'type': 'single', 'file': 'player_outside_jump.npy'},
 
             # Team 2 (Enemy) - Red/White
-            {'name': 'enemy_light', 'type': 'group', 'files': [f'enemy_light_{i}.npy' for i in range(10)]},
-            {'name': 'enemy_dark', 'type': 'group', 'files': [f'enemy_dark_{i}.npy' for i in range(10)]},
-            {'name': 'enemy_light_no_ball', 'type': 'single', 'file': 'enemy_light_no_ball.npy'},
-            {'name': 'enemy_dark_no_ball', 'type': 'single', 'file': 'enemy_dark_no_ball.npy'},
+            {'name': 'enemy_inside_1', 'type': 'single', 'file': 'enemy_inside_1.npy'},
+            {'name': 'enemy_inside_guard', 'type': 'single', 'file': 'enemy_inside_guard.npy'},
+            {'name': 'enemy_inside_jump', 'type': 'single', 'file': 'enemy_inside_jump.npy'},
+            {'name': 'enemy_outside_1', 'type': 'single', 'file': 'enemy_outside_1.npy'},
+            {'name': 'enemy_outside_guard', 'type': 'single', 'file': 'enemy_outside_guard.npy'},
+            {'name': 'enemy_outside_jump', 'type': 'single', 'file': 'enemy_outside_jump.npy'},
 
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-            {'name': 'player_arrow', 'type': 'single', 'file': 'player_arrow.npy'},
-            {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy', 'files': [f'score_{i}.npy' for i in range(21)]},
-            {'name': 'play_selection', 'type': 'single', 'file': 'play_selection.npy'},
+            # Indicators
+            {'name': 'player_off', 'type': 'single', 'file': 'player_off.npy'},
+            {'name': 'player_def', 'type': 'single', 'file': 'player_def.npy'},
+            {'name': 'enemy_off', 'type': 'single', 'file': 'enemy_off.npy'},
+            {'name': 'enemy_def', 'type': 'single', 'file': 'enemy_def.npy'},
+
+            {'name': 'player_score', 'type': 'digits', 'pattern': 'player_score_{}.npy', 'files': [f'player_score_{i}.npy' for i in range(10)]},
+            {'name': 'enemy_score', 'type': 'digits', 'pattern': 'enemy_score_{}.npy', 'files': [f'enemy_score_{i}.npy' for i in range(10)]},
+            {'name': 'goal_24p', 'type': 'single', 'file': 'goal_24p.npy'},
+
             {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
             {'name': 'out_of_bounds', 'type': 'single', 'file': 'out_of_bounds.npy'},
             {'name': 'clearance', 'type': 'single', 'file': 'clearance.npy'},
+            {'name': 'turnover', 'type': 'single', 'file': 'turnover.npy'},
         ]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
@@ -1459,6 +1470,15 @@ class DunkRenderer(JAXGameRenderer):
     def render(self, state: DunkGameState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
+        # Identify ball holder
+        ball_holder = state.ball.holder
+        
+        # Clearance Logic Check (needed early for status indicators)
+        p1_needs_clearance = (
+            ((ball_holder == PlayerID.PLAYER1_INSIDE) & state.player1_inside.clearance_needed) |
+            ((ball_holder == PlayerID.PLAYER1_OUTSIDE) & state.player1_outside.clearance_needed)
+        )
+
         # --- Prepare player data for sorting ---
         # 0: P1 Inside, 1: P1 Outside, 2: P2 Inside, 3: P2 Outside
         all_players_x = jnp.array([
@@ -1473,19 +1493,18 @@ class DunkRenderer(JAXGameRenderer):
             state.player1_inside.z, state.player1_outside.z,
             state.player2_inside.z, state.player2_outside.z,
         ])
-        all_players_anim_frame = jnp.array([
-            state.player1_inside.animation_frame, state.player1_outside.animation_frame,
-            state.player2_inside.animation_frame, state.player2_outside.animation_frame,
-        ])
 
         # Identify ball holder
         ball_holder = state.ball.holder
-        has_ball = jnp.array([
-            ball_holder == PlayerID.PLAYER1_INSIDE,
-            ball_holder == PlayerID.PLAYER1_OUTSIDE,
-            ball_holder == PlayerID.PLAYER2_INSIDE,
-            ball_holder == PlayerID.PLAYER2_OUTSIDE,
-        ])
+        
+        # Determine Possession/Defense Role
+        ball_holder_is_p1 = (ball_holder == PlayerID.PLAYER1_INSIDE) | (ball_holder == PlayerID.PLAYER1_OUTSIDE)
+        ball_holder_is_p2 = (ball_holder == PlayerID.PLAYER2_INSIDE) | (ball_holder == PlayerID.PLAYER2_OUTSIDE)
+        
+        # P1 Team (0, 1) defends if P2 has ball
+        # P2 Team (2, 3) defends if P1 has ball
+        p1_defending = ball_holder_is_p2
+        p2_defending = ball_holder_is_p1
 
         # --- Render players by visual Y position ---
         visual_ys = jnp.maximum(0, all_players_y - all_players_z)
@@ -1496,215 +1515,205 @@ class DunkRenderer(JAXGameRenderer):
 
             x = all_players_x[player_idx]
             visual_y = visual_ys[player_idx]
-            anim_frame = all_players_anim_frame[player_idx]
-            p_has_ball = has_ball[player_idx]
+            z = all_players_z[player_idx]
+            
+            is_jumping = z > 0
+            
+            # Select Sprite Mask
+            # 0: P1 Inside, 1: P1 Outside, 2: P2 Inside, 3: P2 Outside
+            
+            def get_p1_inside_mask():
+                return jax.lax.select(
+                    is_jumping, self.SHAPE_MASKS['player_inside_jump'],
+                    jax.lax.select(p1_defending, self.SHAPE_MASKS['player_inside_guard'], self.SHAPE_MASKS['player_inside_1'])
+                )
+            
+            def get_p1_outside_mask():
+                return jax.lax.select(
+                    is_jumping, self.SHAPE_MASKS['player_outside_jump'],
+                    jax.lax.select(p1_defending, self.SHAPE_MASKS['player_outside_guard'], self.SHAPE_MASKS['player_outside_1'])
+                )
+                
+            def get_p2_inside_mask():
+                return jax.lax.select(
+                    is_jumping, self.SHAPE_MASKS['enemy_inside_jump'],
+                    jax.lax.select(p2_defending, self.SHAPE_MASKS['enemy_inside_guard'], self.SHAPE_MASKS['enemy_inside_1'])
+                )
 
-            # --- Select Masks based on Player Index ---
-            # 0: P1 Inside (Dark)
-            # 1: P1 Outside (Light)
-            # 2: P2 Inside (Dark)
-            # 3: P2 Outside (Light)
+            def get_p2_outside_mask():
+                return jax.lax.select(
+                    is_jumping, self.SHAPE_MASKS['enemy_outside_jump'],
+                    jax.lax.select(p2_defending, self.SHAPE_MASKS['enemy_outside_guard'], self.SHAPE_MASKS['enemy_outside_1'])
+                )
 
-            # Retrieve all possible masks for this specific animation frame
-            p_dark_ball = self.SHAPE_MASKS['player_dark'][anim_frame]
-            p_light_ball = self.SHAPE_MASKS['player_light'][anim_frame]
-            e_dark_ball = self.SHAPE_MASKS['enemy_dark'][anim_frame]
-            e_light_ball = self.SHAPE_MASKS['enemy_light'][anim_frame]
-
-            # Retrieve all possible masks for no ball
-            p_dark_no = self.SHAPE_MASKS['player_dark_no_ball']
-            p_light_no = self.SHAPE_MASKS['player_light_no_ball']
-            e_dark_no = self.SHAPE_MASKS['enemy_dark_no_ball']
-            e_light_no = self.SHAPE_MASKS['enemy_light_no_ball']
-
-            # Use jax.lax.switch to pick the correct sprite set based on player_idx
-            mask_with_ball = jax.lax.switch(
+            final_mask = jax.lax.switch(
                 player_idx,
-                [
-                    lambda: p_dark_ball,  # 0: P1 Inside
-                    lambda: p_light_ball, # 1: P1 Outside
-                    lambda: e_dark_ball,  # 2: P2 Inside
-                    lambda: e_light_ball  # 3: P2 Outside
-                ]
+                [get_p1_inside_mask, get_p1_outside_mask, get_p2_inside_mask, get_p2_outside_mask]
             )
-
-            mask_no_ball = jax.lax.switch(
-                player_idx,
-                [
-                    lambda: p_dark_no,    # 0: P1 Inside
-                    lambda: p_light_no,   # 1: P1 Outside
-                    lambda: e_dark_no,    # 2: P2 Inside
-                    lambda: e_light_no    # 3: P2 Outside
-                ]
-            )
-
-            final_mask = jax.lax.select(p_has_ball, mask_with_ball, mask_no_ball)
 
             return self.jr.render_at(current_raster, x, visual_y, final_mask)
 
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
 
-        # --- Render Controlled Player Arrow ---        
-        def render_arrow_body(current_raster):
-            controlled_x = all_players_x[state.controlled_player_id - 1]
-            controlled_visual_y = visual_ys[state.controlled_player_id - 1]
-            arrow_mask = self.SHAPE_MASKS['player_arrow']
-            arrow_height = arrow_mask.shape[0]
+        # --- Render Status Indicators (OFF/DEF) ---
+        def render_status_indicators(current_raster):
+            # Determine complex possession including ball in flight
+            # If no one holds the ball, check shooter or receiver
             
-            arrow_y = controlled_visual_y - arrow_height
-            player_width = 10 
-            arrow_width = arrow_mask.shape[1]
-            arrow_x = controlled_x + (player_width // 2) - (arrow_width // 2) + 2
+            p1_active = ball_holder_is_p1 | (
+                (ball_holder == PlayerID.NONE) & (
+                    (state.ball.shooter == PlayerID.PLAYER1_INSIDE) | (state.ball.shooter == PlayerID.PLAYER1_OUTSIDE) |
+                    (state.ball.receiver == PlayerID.PLAYER1_INSIDE) | (state.ball.receiver == PlayerID.PLAYER1_OUTSIDE)
+                )
+            )
+            
+            p2_active = ball_holder_is_p2 | (
+                (ball_holder == PlayerID.NONE) & (
+                    (state.ball.shooter == PlayerID.PLAYER2_INSIDE) | (state.ball.shooter == PlayerID.PLAYER2_OUTSIDE) |
+                    (state.ball.receiver == PlayerID.PLAYER2_INSIDE) | (state.ball.receiver == PlayerID.PLAYER2_OUTSIDE)
+                )
+            )
+            
+            # Logic: If P2 is active, P1 is DEF. Otherwise P1 is OFF.
+            # This defaults to P1 OFF if both are false (start of game).
+            p1_is_off = ~p2_active
+            p2_is_off = ~p1_is_off # Complementary
+            
+            p1_mask = jax.lax.select(p1_is_off, self.SHAPE_MASKS['player_off'], self.SHAPE_MASKS['player_def'])
+            p2_mask = jax.lax.select(p2_is_off, self.SHAPE_MASKS['enemy_off'], self.SHAPE_MASKS['enemy_def'])
+            
+            # Positions (Bottom of screen)
+            y_pos = 185
+            p1_x = 40
+            p2_x = 100
+            
+            should_blink = (state.game_mode == GameMode.PLAY_SELECTION)
+            is_penalty = (state.game_mode == GameMode.TRAVEL_PENALTY) | (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY) | (state.game_mode == GameMode.CLEARANCE_PENALTY)
+            # Added ~p1_needs_clearance to hide indicators during clearance warning
+            is_visible = (~is_penalty) & (~p1_needs_clearance) & (~should_blink | ((state.step_counter // 8) % 2 == 0))
 
-            return self.jr.render_at(current_raster, arrow_x, arrow_y, arrow_mask)
+            current_raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(r, p1_x, y_pos, p1_mask),
+                lambda r: r,
+                current_raster
+            )
+            current_raster = jax.lax.cond(
+                is_visible,
+                lambda r: self.jr.render_at(r, p2_x, y_pos, p2_mask),
+                lambda r: r,
+                current_raster
+            )
+            
+            return current_raster
 
-        raster = jax.lax.cond(
-            state.controlled_player_id != PlayerID.NONE,
-            render_arrow_body,
-            lambda r: r,
-            raster
-        )
+        raster = render_status_indicators(raster)
         
-        # --- Render Ball if in flight ---
-        ball_in_flight = (state.ball.holder == PlayerID.NONE)
+        # --- Render Ball ---
+        # Always render ball (even if held, to ensure visibility with new sprites)
         ball_mask = self.SHAPE_MASKS['ball']
 
         def render_ball_body(current_raster):
+            holder_idx = jnp.clip(state.ball.holder - 1, 0, 3)
+            holder_z = all_players_z[holder_idx]
+            z_offset = jax.lax.select(state.ball.holder == PlayerID.NONE, 0, holder_z)
+
             ball_x = jnp.round(state.ball.x).astype(jnp.int32)
-            ball_y = jnp.round(state.ball.y).astype(jnp.int32)
+            ball_y = jnp.round(state.ball.y - z_offset).astype(jnp.int32)
             return self.jr.render_at(current_raster, ball_x, ball_y, ball_mask)
 
-        raster = jax.lax.cond(
-            ball_in_flight,
-            render_ball_body,
-            lambda r: r,
-            raster
-        )
+        raster = render_ball_body(raster)
 
         # --- Render Scores ---
         player_score_digits = self.jr.int_to_digits(state.scores.player, 2)
         enemy_score_digits = self.jr.int_to_digits(state.scores.enemy, 2)
-        player_score_x = 65
-        enemy_score_x = player_score_x+24 
+        player_score_x = 40 
+        enemy_score_x = 110 
         score_y = 10
 
-        raster = self.jr.render_label_selective(raster, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
-        raster = self.jr.render_label_selective(raster, enemy_score_x, score_y, enemy_score_digits, self.SHAPE_MASKS['score'], 0, 2, spacing=4)
+        raster = jax.lax.cond(
+            state.scores.player < 10,
+            lambda r: self.jr.render_label_selective(r, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['player_score'], 1, 1, spacing=6),
+            lambda r: self.jr.render_label_selective(r, player_score_x, score_y, player_score_digits, self.SHAPE_MASKS['player_score'], 0, 2, spacing=6),
+            raster
+        )
+
+        raster = jax.lax.cond(
+            state.scores.enemy < 10,
+            lambda r: self.jr.render_label_selective(r, enemy_score_x, score_y, enemy_score_digits, self.SHAPE_MASKS['enemy_score'], 1, 1, spacing=6),
+            lambda r: self.jr.render_label_selective(r, enemy_score_x, score_y, enemy_score_digits, self.SHAPE_MASKS['enemy_score'], 0, 2, spacing=6),
+            raster
+        )
+        # Render the '24PTS' graphic under the player score
+        raster = self.jr.render_at(raster, player_score_x - 6, score_y + 10, self.SHAPE_MASKS['goal_24p'])
 
         # First, always convert the base raster to an image
         final_image = self.jr.render_from_palette(raster, self.PALETTE)
 
-        def apply_play_selection_overlay(image):
-            # 1. Apply shadow to the whole image
-            shadow_color = jnp.array([0, 0, 0], dtype=jnp.uint8) # Black
-            opacity = 0.25
-            shadowed_image = (image * (1 - opacity) + shadow_color * opacity).astype(jnp.uint8)
+        def apply_penalty_overlay(image, mask_name, timer):
+            def render_mask(name):
+                # Stamp the penalty text at the bottom
+                mask = self.SHAPE_MASKS[name]
+                
+                # Convert text mask to RGB
+                text_sprite_rgb = self.PALETTE[mask]
+                
+                # Create alpha mask for the text
+                text_alpha_mask = (mask != self.jr.TRANSPARENT_ID)[..., None]
 
-            # 2. Stamp the text on top of the shadowed image
-            play_selection_mask = self.SHAPE_MASKS['play_selection']
-            
-            # Convert text mask to RGB
-            text_sprite_rgb = self.PALETTE[play_selection_mask]
-            
-            # Create alpha mask for the text
-            text_alpha_mask = (play_selection_mask != self.jr.TRANSPARENT_ID)[..., None]
+                # Position the text at the bottom
+                text_x = (self.consts.WINDOW_WIDTH - mask.shape[1]) // 2
+                text_y = 185
 
-            # Position the text
-            text_x = (self.consts.WINDOW_WIDTH - play_selection_mask.shape[1]) // 2
-            text_y = (self.consts.WINDOW_HEIGHT - play_selection_mask.shape[0]) // 2 - 15
+                # Get the slice from the image
+                image_slice = jax.lax.dynamic_slice(
+                    image,
+                    (text_y, text_x, 0),
+                    (mask.shape[0], mask.shape[1], 3)
+                )
 
-            # Get the slice from the shadowed image
-            image_slice = jax.lax.dynamic_slice(
-                shadowed_image,
-                (text_y, text_x, 0),
-                (play_selection_mask.shape[0], play_selection_mask.shape[1], 3)
+                # Blend the text onto the slice
+                combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
+
+                # Update the image with the blended slice
+                return jax.lax.dynamic_update_slice(
+                    image,
+                    combined_slice,
+                    (text_y, text_x, 0)
+                )
+
+            return jax.lax.cond(
+                timer > 30,
+                lambda: render_mask(mask_name),
+                lambda: render_mask('turnover')
             )
 
-            # Blend the text onto the slice
-            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
-
-            # Update the image with the blended slice
-            return jax.lax.dynamic_update_slice(
-                shadowed_image,
-                combined_slice,
-                (text_y, text_x, 0)
-            )
-
-        def apply_penalty_overlay(image, mask_name):
-            # Stamp the penalty text at the bottom
-            mask = self.SHAPE_MASKS[mask_name]
-            
-            # Convert text mask to RGB
-            text_sprite_rgb = self.PALETTE[mask]
-            
-            # Create alpha mask for the text
-            text_alpha_mask = (mask != self.jr.TRANSPARENT_ID)[..., None]
-
-            # Position the text at the bottom
-            text_x = (self.consts.WINDOW_WIDTH - mask.shape[1]) // 2
-            text_y = self.consts.WINDOW_HEIGHT - mask.shape[0] - 25
-
-            # Get the slice from the image
-            image_slice = jax.lax.dynamic_slice(
-                image,
-                (text_y, text_x, 0),
-                (mask.shape[0], mask.shape[1], 3)
-            )
-
-            # Blend the text onto the slice
-            combined_slice = jnp.where(text_alpha_mask, text_sprite_rgb, image_slice)
-
-            # Update the image with the blended slice
-            return jax.lax.dynamic_update_slice(
-                image,
-                combined_slice,
-                (text_y, text_x, 0)
-            )
-
-        final_image = jax.lax.cond(
-            state.game_mode == GameMode.PLAY_SELECTION,
-            apply_play_selection_overlay,
-            lambda x: x, 
-            final_image
-        )
-
-        # Blinking logic for penalties
-        # We use the timer to toggle visibility: visible if (timer // 8) % 2 == 0
-        
-        is_travel_visible = (state.game_mode == GameMode.TRAVEL_PENALTY) & ((state.timers.travel // 8) % 2 == 0)
-        final_image = jax.lax.cond(
-            is_travel_visible,
-            lambda x: apply_penalty_overlay(x, 'travel'),
-            lambda x: x, 
-            final_image
-        )
-
-        is_oob_visible = (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY) & ((state.timers.out_of_bounds // 8) % 2 == 0)
-        final_image = jax.lax.cond(
-            is_oob_visible,
-            lambda x: apply_penalty_overlay(x, 'out_of_bounds'),
-            lambda x: x, 
-            final_image
-        )
-
-        # Clearance Logic:
-        # 1. Static if P1 has ball and needs clearance (warning)
-        # 2. Blinking if Penalty triggered
+        # Priority: TRAVEL > OUT OF BOUNDS > CLEARANCE
+        is_travel_mode = (state.game_mode == GameMode.TRAVEL_PENALTY)
+        is_oob_mode = (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY)
         
         ball_holder = state.ball.holder
         p1_needs_clearance = (
             ((ball_holder == PlayerID.PLAYER1_INSIDE) & state.player1_inside.clearance_needed) |
             ((ball_holder == PlayerID.PLAYER1_OUTSIDE) & state.player1_outside.clearance_needed)
         )
-        
-        is_clearance_static = p1_needs_clearance & (state.game_mode != GameMode.CLEARANCE_PENALTY)
-        is_clearance_blinking = (state.game_mode == GameMode.CLEARANCE_PENALTY) & ((state.timers.clearance // 8) % 2 == 0)
-        
-        is_clearance_visible = is_clearance_static | is_clearance_blinking
+        is_clearance_mode = (state.game_mode == GameMode.CLEARANCE_PENALTY)
+        effective_clearance_timer = jax.lax.select(is_clearance_mode, state.timers.clearance, 60)
+        should_show_clearance = p1_needs_clearance | is_clearance_mode
 
         return jax.lax.cond(
-            is_clearance_visible,
-            lambda x: apply_penalty_overlay(x, 'clearance'),
-            lambda x: x, 
+            is_travel_mode,
+            lambda x: apply_penalty_overlay(x, 'travel', state.timers.travel),
+            lambda x: jax.lax.cond(
+                is_oob_mode,
+                lambda xx: apply_penalty_overlay(xx, 'out_of_bounds', state.timers.out_of_bounds),
+                lambda xx: jax.lax.cond(
+                    should_show_clearance,
+                    lambda xxx: apply_penalty_overlay(xxx, 'clearance', effective_clearance_timer),
+                    lambda xxx: xxx,
+                    xx
+                ),
+                x
+            ),
             final_image
         )
