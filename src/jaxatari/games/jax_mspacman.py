@@ -312,9 +312,9 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
     ghost_move_period=6,
     player_move_period=3,
     background_color=(0, 0, 0),
-    wall_color=(200, 50, 50),
-    blocked_color=(0, 20, 100),
-    pellet_color=(200, 50, 50),
+    wall_color=(228, 111, 111),
+    blocked_color=(0, 28, 136),
+    pellet_color=(228, 111, 111),
     power_pellet_color=(255, 255, 255),
     button_color=(255, 105, 180),
     pacman_color=(255, 255, 0),
@@ -328,7 +328,7 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
     maze_layout=(
         "1111111111111111111111111111111111111111",
         "1000000000100000000000000000010000000001",
-        "10222222201022222222222222220102222G2201",
+        "1022222220102222222222222222010222222201",
         "1020000020102000000000000002010200000201",
         "1020111020102011111111111102010201110201",
         "1020111020102011111111111102010201110201",
@@ -340,7 +340,7 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
         "1110201020111020111111110201110201020111",
         "1110201020111020111111110201110201020111",
         "0000201020000020000000000200000201020000",
-        "2222201022222222222222222222222201022222",
+        "2222201022222222222G22222222222201022222",
         "0000201000000020000000000200000001020000",
         "1110201111111020111111110201111111020111",
         "1110201111111020100000010201111111020111",
@@ -374,6 +374,10 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
     pellet_mask=pellet_mask
 )
 
+
+# Define the game board's Y-offset and the UI's Y-offset
+GAME_BOARD_OFFSET_Y = 0
+UI_OFFSET_Y = 176 # Based on 44 rows * 4 cell_size = 176 pixels
 
 class MsPacmanState(NamedTuple):
     pacman_x: chex.Array
@@ -736,7 +740,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         # Transition to game over phase when lives run out
         game_phase = jnp.where(lives <= 0, jnp.array(2, dtype=jnp.int32), jnp.array(1, dtype=jnp.int32))
         game_over_waiting = jnp.where(lives <= 0, jnp.array(0, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
-
+        
         new_state = MsPacmanState(
             pacman_x=pacman_x,
             pacman_y=pacman_y,
@@ -935,6 +939,8 @@ class MsPacmanRenderer(JAXGameRenderer):
         grid_px_h = grid_h * self.consts.cell_size
         self.offset_x = max((self.consts.screen_width - grid_px_w) // 2, 0)
         self.offset_y = max((self.consts.screen_height - grid_px_h) // 2, 0)
+        self.offset_x = max((self.consts.screen_width - grid_px_w) // 2, 0) # Center horizontally
+        self.offset_y = GAME_BOARD_OFFSET_Y # Place game board at the top
 
         self.background_color = jnp.asarray(self.consts.background_color, dtype=jnp.uint8)
         self.wall_color = jnp.asarray(self.consts.wall_color, dtype=jnp.uint8)
@@ -944,7 +950,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         self.button_color = jnp.asarray(self.consts.button_color, dtype=jnp.uint8)
         self.pacman_color = jnp.asarray(self.consts.pacman_color, dtype=jnp.uint8)
         self.ghost_colors = jnp.asarray(self.consts.ghost_colors, dtype=jnp.uint8)
-        self.score_color = jnp.array([255, 255, 255], dtype=jnp.uint8)
+        self.score_color = jnp.array([165, 121, 50], dtype=jnp.uint8)
         self.score_bar_color = jnp.array([0, 0, 0], dtype=jnp.uint8)
         # 3x5 pixel font for digits 0-9
         self.digit_patterns = jnp.array([
@@ -1170,30 +1176,60 @@ class MsPacmanRenderer(JAXGameRenderer):
             )
             return digits
 
-        def _draw_digits(img, digits, scale=2, pad=2):
+        # 1. Berechne wie viele Ziffern wir brauchen (als Tracer)
+        num_digits = jnp.where(state.score == 0, 1, 
+                            jnp.floor(jnp.log10(jnp.maximum(state.score, 1))).astype(jnp.int32) + 1)
+
+        def _draw_digits(img, all_digits, num_digits, scale=2, pad=2):
             pat = self.digit_patterns
             dh, dw = pat.shape[1] * scale, pat.shape[2] * scale
-            bar_h = dh + pad * 2
-            bar_w = min(img.shape[1], pad * 2 + digits.shape[0] * (dw + 1))
-            # Draw bar
-            img = img.at[0:bar_h, 0:bar_w, :].set(self.score_bar_color)
+            bar_h = dh + pad * 2 + 10
+            
+            # Wir definieren eine maximale Breite für 6 Stellen
+            # So bleibt die x-Position für JAX berechenbar
+            max_bar_w = pad * 2 + 6 * (dw + 1)
+            right_margin = 10
+            
+            # Startpunkt für die RECHTSBÜNDIGE Ausrichtung (fest für 6 Stellen)
+            full_start_x = img.shape[1] - max_bar_w - right_margin
+            start_y = img.shape[0] - bar_h
 
             def place_digit(carry, idx):
                 img = carry
-                digit = digits[idx]
-                pattern = pat[digit]
-                scaled = jnp.kron(pattern, jnp.ones((scale, scale), dtype=jnp.uint8))
-                block = scaled[:, :, None] * self.score_color
-                x = pad + idx * (dw + 1)
-                y = pad
-                img = jax.lax.dynamic_update_slice(img, block, (y, x, 0))
+                # Prüfe: Ist dieser Index Teil der "echten" Zahl? 
+                # (Beispiel: bei Score 70 sind nur die letzten zwei Indizes 4 und 5 sichtbar)
+                is_visible = idx >= (6 - num_digits)
+                
+                def draw_op(canvas):
+                    digit = all_digits[idx]
+                    pattern = pat[digit]
+                    scaled = jnp.kron(pattern, jnp.ones((scale, scale), dtype=jnp.uint8))
+                    block = scaled[:, :, None] * self.score_color
+                    
+                    # Berechne x-Position
+                    x = full_start_x + pad + idx * (dw + 1) - 40
+                    y = start_y + pad
+                    
+                    # Hintergrund-Block für diese einzelne Ziffer zeichnen
+                    bg_block = jnp.ones((dh + 10, dw + 1, 3), dtype=jnp.uint8) * self.score_bar_color
+                    canvas = jax.lax.dynamic_update_slice(canvas, bg_block, (start_y, x, 0))
+                    
+                    # Ziffer darauf zeichnen
+                    canvas = jax.lax.dynamic_update_slice(canvas, block, (y, x, 0))
+                    return canvas
+
+                # Nur zeichnen, wenn is_visible True ist, sonst img unverändert lassen
+                img = jax.lax.cond(is_visible, draw_op, lambda c: c, img)
                 return img, None
 
-            img, _ = jax.lax.scan(place_digit, img, jnp.arange(digits.shape[0]))
+            # Wir scannen immer über alle 6 möglichen Stellen
+            img, _ = jax.lax.scan(place_digit, img, jnp.arange(6))
             return img
 
-        digits = _score_to_digits(state.score, max_digits=6)
-        canvas = _draw_digits(canvas, digits, scale=2, pad=2)
+        # Aufruf
+        all_digits = _score_to_digits(state.score, max_digits=6)
+        canvas = _draw_digits(canvas, all_digits, num_digits, scale=2, pad=2)
+                
 
         pac_px = self.offset_x + state.pacman_x * cell
         pac_py = self.offset_y + state.pacman_y * cell
@@ -1282,55 +1318,58 @@ class MsPacmanRenderer(JAXGameRenderer):
                 (jnp.arange(self.consts.num_ghosts, dtype=jnp.int32), ghost_positions),
             )
 
-        # Draw lives display above the maze
+            # Draw lives display at the bottom of the screen
         def draw_life_icon(canvas, idx):
-            # Position lives icons closer together and more to the right
-            life_x = 80 + idx * 20  # More to the right, closer spacing
-            life_y = 5  # Top of screen above maze
-            
-            if self.pacman_sprites is not None:
-                # Use Ms. Pac-Man sprite for lives
-                life_sprite = self.pacman_sprites[0]  # Use first sprite (facing left)
-                # Keep full size for better visibility
+                # Position lives icons closer together and more to the right
+                life_x = 10 + idx * 20  # Horizontal bleibt gleich
                 
-                # Color based on whether life is available using JAX-compatible logic
-                def make_normal_sprite(_):
-                    return life_sprite[:, :, :3]  # Return RGB only
+                # --- ÄNDERUNG: y-Koordinate auf den unteren Rand setzen ---
+                # Wir nehmen die Gesamthöhe des Bildes minus die Größe des Icons (ca. 16-20 Pixel) 
+                # und ziehen einen kleinen Puffer ab, damit es nicht direkt am Rand klebt.
+                icon_height = 16 if self.pacman_sprites is not None else 8
+                life_y = canvas.shape[0] - icon_height - 17  # 5 Pixel Abstand zum unteren Rand
                 
-                def make_grey_sprite(_):
-                    # Create grey version by averaging RGB channels
-                    rgb_sprite = life_sprite[:, :, :3]
-                    grey_avg = jnp.mean(rgb_sprite, axis=2, keepdims=True)
-                    # Return grey RGB (same value in all 3 channels)
-                    return jnp.concatenate([grey_avg, grey_avg, grey_avg], axis=2).astype(jnp.uint8)
+                if self.pacman_sprites is not None:
+                    # Use Ms. Pac-Man sprite for lives
+                    raw_sprite = self.pacman_sprites[0] 
+                        
+                    life_sprite = jnp.flip(raw_sprite, axis=1)   
+                                     
+                    def make_normal_sprite(_):
+                        return life_sprite[:, :, :3]  # Return RGB only
+                    
+                    def make_grey_sprite(_):
+                        rgb_sprite = life_sprite[:, :, :3]
+                        grey_avg = jnp.mean(rgb_sprite, axis=2, keepdims=True)
+                        return jnp.concatenate([grey_avg, grey_avg, grey_avg], axis=2).astype(jnp.uint8)
+                    
+                    colored_sprite = jax.lax.cond(
+                        idx < state.lives,
+                        make_normal_sprite,
+                        make_grey_sprite,
+                        None
+                    )
+                    
+                    # Draw the sprite at the new bottom position
+                    canvas = jax.lax.dynamic_update_slice(canvas, colored_sprite, (life_y, life_x, 0))
+                else:
+                    # Fallback to colored blocks
+                    def make_life_color(_):
+                        return jnp.array(self.consts.pacman_color, dtype=jnp.uint8)
+                    
+                    def make_grey_color(_):
+                        return jnp.array([100, 100, 100], dtype=jnp.uint8)
+                    
+                    life_color = jax.lax.cond(
+                        idx < state.lives,
+                        make_life_color,
+                        make_grey_color,
+                        None
+                    )
+                    life_block = jnp.ones((8, 8, 3), dtype=jnp.uint8) * life_color
+                    canvas = jax.lax.dynamic_update_slice(canvas, life_block, (life_y, life_x, 0))
                 
-                colored_sprite = jax.lax.cond(
-                    idx < state.lives,
-                    make_normal_sprite,
-                    make_grey_sprite,
-                    None
-                )
-                
-                # Draw the sprite
-                canvas = jax.lax.dynamic_update_slice(canvas, colored_sprite, (life_y, life_x, 0))
-            else:
-                # Fallback to colored blocks if sprites not available
-                def make_life_color(_):
-                    return jnp.array(self.consts.pacman_color, dtype=jnp.uint8)
-                
-                def make_grey_color(_):
-                    return jnp.array([100, 100, 100], dtype=jnp.uint8)
-                
-                life_color = jax.lax.cond(
-                    idx < state.lives,
-                    make_life_color,
-                    make_grey_color,
-                    None
-                )
-                life_block = jnp.ones((8, 8, 3), dtype=jnp.uint8) * life_color
-                canvas = jax.lax.dynamic_update_slice(canvas, life_block, (life_y, life_x, 0))
-            
-            return canvas, None
+                return canvas, None
 
         # Draw up to 3 life icons (fixed maximum for JAX compatibility)
         canvas, _ = jax.lax.scan(
