@@ -205,7 +205,6 @@ class MsPacmanConstants(NamedTuple):
     ghost_move_period: int = 6  # ghosts move every N frames
     player_move_period: int = 3  # pacman moves every N frames
     ghost_move_period: int = 2  # ghosts move every N frames
-    pellet_mask: Tuple[Tuple[int, ...], ...] = None  # Will be set below
     background_color: Tuple[int, int, int] = (0, 0, 0)
     wall_color: Tuple[int, int, int] = (200, 50, 50)
     blocked_color: Tuple[int, int, int] = (0, 20, 100)
@@ -220,77 +219,10 @@ class MsPacmanConstants(NamedTuple):
         (0, 255, 255),
         (255, 128, 0),
     )
+    maze_layout: Tuple[str, ...] = ()
     
     
-    
-    maze_layout: Tuple[str, ...] = (
-        "1111111111111111111111111111111111111111",
-        "1000000000100000000000000000010000000001",
-        "10222222201022222222222222220102222G2201",
-        "1020000020102000000000000002010200000201",
-        "1020111020102011111111111102010201110201",
-        "1020111020102011111111111102010201110201",
-        "1020111020102011111111111102010201110201",
-        "1020000020002000000000000002000200000201",
-        "1022222222222222222222222222222222222201",
-        "1000200020000020000000000200000200020001",
-        "1110201020111020111111110201110201020111",
-        "1110201020111020111111110201110201020111",
-        "1110201020111020111111110201110201020111",
-        "0000201020000020000000000200000201020000",
-        "2222201022222222222222222222222201022222",
-        "0000201000000020000000000200000001020000",
-        "1110201111111020111111110201111111020111",
-        "1110201111111020100000010201111111020111",
-        "1110201111111020100000010201111111020111",
-        "0010200000000020100000010200000000020100",
-        "0010222222222220100000010222222222220100",
-        "0010200000000020100000010200000000020100",
-        "1110201111111020100000010201111111020111",
-        "1110201111111020111111110201111111020111",
-        "1110201111111020111111110201111111020111",
-        "0000201000000020000000000200000001020000",
-        "2222201022222222222P22222222222201022222",
-        "0000201020002000200000020002000201020000",
-        "1110201020102010201111020102010201020111",
-        "1110201020102010201111020102010201020111",
-        "1110201020102010201111020102010201020111",
-        "1000200020102010200000020102010200020001",
-        "1022222220102010222222220102010222222201",
-        "1020000020102010200000020102010200000201",
-        "1020111020102000201111020002010201110201",
-        "1020111020102222201111022222010201110201",
-        "1020111020100000201111020000010201110201",
-        "1020111020111110201111020111110201110201",
-        "1020111020111110201111020111110201110201",
-        "1020111020111110201111020111110201110201",
-        "1020000020000000200000020000000200000201",
-        "1022222222222222222222222222222222222201",
-        "1000000000000000000000000000000000000001",
-        "1111111111111111111111111111111111111111",
-    )
 
-# Define pellet mask for evenly spaced dots in corridors
-pellet_mask: Tuple[Tuple[int, ...], ...] = (
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    (0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1),
-)
 
 
 # Create default constants instance with pellet mask
@@ -364,15 +296,13 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
         "1020111020102323201111023232010201110201",
         "1030111030100000301111030000010301110301",
         "1030111030111110301111030111110301110301",
-        "1030111020111110201111020111110201110301",
-        "10S0111030111110301111030111110301110S01",
+        "10S0111020111110201111020111110201110S01",
+        "1030111030111110301111030111110301110301",
         "1030000030000000300000030000000300000301",
         "1023232323232323232332323232323232323201",
         "1000000000000000000000000000000000000001",
         "1111111111111111111111111111111111111111",
-
     ),
-    pellet_mask=pellet_mask
 )
 # Define the game board's Y-offset and the UI's Y-offset
 GAME_BOARD_OFFSET_Y = 0
@@ -500,8 +430,6 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
         # Preserve visual template (contains -1 markers for blocked-but-path-colored tiles)
         pellet_template = self.initial_pellets
-
-        grid_h, grid_w = self.wall_grid.shape
 
         # Generate pellets using maze layout '2' markers (already defined positions)
         grid_h, grid_w = self.wall_grid.shape
@@ -1128,29 +1056,25 @@ class MsPacmanRenderer(JAXGameRenderer):
         row_idx = row_idx[:, None]
         col_idx = col_idx[None, :]
 
-        pellet_half = jnp.maximum(cell // 6, 1)
-        power_half = jnp.maximum(cell // 4, 2)
-
-        # Single dot pellet in center of cell (for 4x4 cell, center is at 1,1)
-        center_row = (cell - 1) // 2  # For cell=4, this gives 1
-        center_col = (cell - 1) // 2  # For cell=4, this gives 1
-        pellet_center = jnp.logical_and(
-            row_idx == center_row,
-            col_idx == center_col,
-        )[..., None]
-        power_center = jnp.logical_and(
-            jnp.abs(row_idx - cell // 2) < power_half,
-            jnp.abs(col_idx - cell // 2) < power_half,
+        # Normales Pellet: Horizontaler Balken (2 Pixel hoch, volle Breite)
+        pellet_shape = jnp.logical_and(
+            jnp.logical_and(row_idx >= 1, row_idx <= 2), 
+            jnp.logical_and(col_idx >= 0, col_idx <= 3)
         )[..., None]
 
-        pellet_pixels = jnp.logical_and(pellet_pixels, pellet_center)
-        power_pixels = jnp.logical_and(power_pixels, power_center)
+        # Power Pellet: Großer Block (füllt fast die ganze 4x4 Zelle)
+        power_shape = jnp.logical_and(
+            jnp.logical_and(row_idx >= 0, row_idx <= 3),
+            jnp.logical_and(col_idx >= 0, col_idx <= 3)
+        )[..., None]
+
+        pellet_pixels = jnp.logical_and(pellet_pixels, pellet_shape)
+        power_pixels = jnp.logical_and(power_pixels, power_shape)
+        
+       # Ein einfacher 2x2 Block in der Mitte für die Buttons
         button_center = jnp.logical_and(
-            jnp.abs(row_idx - cell // 2) < power_half,
-            jnp.logical_or(
-                jnp.abs(row_idx - cell // 4) < power_half // 2,
-                jnp.abs(col_idx - cell // 4) < power_half // 2,
-            ),
+            jnp.logical_and(row_idx >= 1, row_idx <= 2),
+            jnp.logical_and(col_idx >= 1, col_idx <= 2)
         )[..., None]
         button_pixels = jnp.logical_and(button_pixels, button_center)
 
@@ -1384,85 +1308,3 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         return canvas
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import time
-import pygame
-import jax
-import jax.random as jr
-from jaxatari.games.jax_mspacman import JaxMsPacman
-from jaxatari.environment import JAXAtariAction as Action
-
-UPSCALE = 4
-FPS = 8
-
-def main():
-    pygame.init()
-    env = JaxMsPacman()
-    render = jax.jit(env.render)
-    step = jax.jit(env.step)
-
-    obs, state = env.reset()
-    frame = render(state)
-    h, w = frame.shape[:2]
-    window = pygame.display.set_mode((w * UPSCALE, h * UPSCALE))
-    clock = pygame.time.Clock()
-
-    rng = jr.PRNGKey(0)
-    running = True
-    action = Action.NOOP
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
-            action = Action.UP
-        elif keys[pygame.K_DOWN]:
-            action = Action.DOWN
-        elif keys[pygame.K_LEFT]:
-            action = Action.LEFT
-        elif keys[pygame.K_RIGHT]:
-            action = Action.RIGHT
-        else:
-            action = Action.NOOP
-
-        obs, state, reward, done, info = step(state, action)
-        if done:
-            obs, state = env.reset()
-
-        frame = render(state)
-        surf = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
-        surf = pygame.transform.scale(surf, (w * UPSCALE, h * UPSCALE))
-        window.blit(surf, (0, 0))
-        pygame.display.flip()
-        clock.tick(FPS)
-
-    pygame.quit()
-
-if __name__ == "__main__":
-    main()
