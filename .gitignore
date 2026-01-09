@@ -1,6 +1,8 @@
 env
 *__pycache__*
 
+.tutankham
+.jax_venv
 .venv
 .vscode
 .idea
