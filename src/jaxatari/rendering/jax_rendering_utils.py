@@ -1031,7 +1031,7 @@ class JaxRenderingUtils:
         pos_scaled = jnp.round(positions * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         size_scaled = jnp.round(sizes * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         rung_scaled = int(max(1, round(rung_height * height_scale)))
-        space_scaled = int(max(1, round(space_height * height_scale)))
+        space_scaled = int(max(0, round(space_height * height_scale)))
         
         def _create_single_ladder_mask(pos, size):
             should_draw = pos[0] != -1

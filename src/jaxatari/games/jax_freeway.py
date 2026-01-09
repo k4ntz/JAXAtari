@@ -96,10 +96,21 @@ class FreewayConstants(NamedTuple):
         0, 0, -2, -2, 3
     )
     # This list defines the period and direction for each lane's pattern
-    car_update = CAR_UPDATE
+    CAR_UPDATES: List[int] = [
+        -5,  # Lane 0
+        -4,  # Lane 1
+        -3,  # Lane 2
+        -2,  # Lane 3
+        -1,  # Lane 4
+        1,   # Lane 5
+        2,   # Lane 6
+        3,   # Lane 7
+        4,   # Lane 8
+        5,   # Lane 9
+    ]
     # Per-lane initial phase offsets in pixels to align with ALE (applied to x at reset)
     # Lanes 0-4 move left; lanes 5-9 move right
-    lane_phase_offset = [
+    lane_phase_offset: List[int] = [
         5,  # lane 0 (+5 px)
         5,  # lane 1
         5,  # lane 2
@@ -232,7 +243,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         cars = cars.at[:, 0].add(phase)
 
         # Initialize per-lane cadence counters using configured phase offsets
-        periods0 = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        periods0 = jnp.abs(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
         phases0 = jnp.array(self.consts.cadence_phase_offset, dtype=jnp.int32) % periods0
 
         state = FreewayState(
@@ -280,9 +291,9 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             self.consts.bottom_border + self.consts.chicken_height - 1,
         ).astype(jnp.int32)
 
-        # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATE
-        periods = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
-        signs = jnp.sign(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATES
+        periods = jnp.abs(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
+        signs = jnp.sign(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
         # Per-lane cadence counters: move when the counter reaches period-1, then keep advancing
         should_move_mask = (state.lane_time == (periods - 1))
         delta_x = jnp.where(should_move_mask, signs, 0).astype(jnp.int32)
