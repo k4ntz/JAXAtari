@@ -30,7 +30,7 @@ class StopAllCarsMod(JaxAtariPostStepModPlugin):
         return new_state._replace(cars=new_cars)
 
 
-class AlwaysStopAllCarsMod(JaxAtariPostStepModPlugin):
+class StaticCarsMod(JaxAtariPostStepModPlugin):
     """Stops all cars after spawning"""
     
     @partial(jax.jit, static_argnums=(0,))
@@ -43,26 +43,38 @@ class AlwaysStopAllCarsMod(JaxAtariPostStepModPlugin):
         # Always keep the previous cars' x positions
         return new_state._replace(cars=prev_state.cars)
 
-
-class SpeedModeMod(JaxAtariInternalModPlugin):
+class HallOfFameMod(JaxAtariInternalModPlugin):
     """
-    Doubles the speed of all cars by making them "teleport" twice as far
+    Spawns the cars to make a "hall of fame" formation.
+    """
+    constants_overrides = {
+        "lane_phase_offset": [
+            -101, -101, -101, -101, -101, 
+            35, 35, 35, 35, 35
+            ]
+    }
+
+class SlowCarsMod(JaxAtariInternalModPlugin):
+    """
+    Halves the speed of all cars by making them move twice as far
     on each update, via multiplying their update step by 2.
-    This is done by overriding the `car_update` constant.
+    This is done by overriding the `CAR_UPDATES` constant.
     """
-    @staticmethod
-    def double_update_arr(arr):
-        arr = jnp.array(arr)
-        # Multiply each timing by 2
-        return [int(x * 2) for x in arr]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        base_update = self._env.consts.car_update
-        update_list = list(base_update)
-        self.constants_overrides = {
-            "car_update": SpeedModeMod.double_update_arr(update_list)
-        }
+    constants_overrides = {
+        "CAR_UPDATES": 
+        [
+            -10,  # Lane 0
+            -8,   # Lane 1
+            -6,   # Lane 2
+            -4,   # Lane 3
+            -2,   # Lane 4
+            2,    # Lane 5
+            4,    # Lane 6
+            6,    # Lane 7
+            8,    # Lane 8
+            10,   # Lane 9
+        ]
+    }
 
 
 class BlackCarsMod(JaxAtariInternalModPlugin):
@@ -82,6 +94,25 @@ class BlackCarsMod(JaxAtariInternalModPlugin):
             (0, 0, 0),  # Lane 7 - black
             (0, 0, 0),  # Lane 8 - black
             (0, 0, 0),  # Lane 9 - black
+        ]
+    }
+
+class InvertSpeed(JaxAtariInternalModPlugin):
+    """Inverts the speed of all cars by overriding CAR_UPDATES constant"""
+    
+    # Override CAR_UPDATES to invert the directions of all cars
+    constants_overrides = {
+        "CAR_UPDATES": [
+            5,  # Lane 0
+            4,  # Lane 1
+            3,  # Lane 2
+            2,  # Lane 3
+            1,  # Lane 4
+            -1,   # Lane 5
+            -2,   # Lane 6
+            -3,   # Lane 7
+            -4,   # Lane 8
+            -5,   # Lane 9
         ]
     }
 
