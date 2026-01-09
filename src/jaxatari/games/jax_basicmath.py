@@ -41,6 +41,8 @@ class BasicMathConstants(NamedTuple):
     SCREEN_WIDTH: int = 160 * SCALINGFACTOR
     SCREEN_HEIGHT: int = 210 * SCALINGFACTOR
 
+    GAMEMODE: int = 6
+
     COLOR_CODES = [
         [(18, 46, 137), (113, 115, 25)],
         [(143, 114, 41), (63, 1, 106)],
@@ -158,16 +160,16 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return jnp.greater_equal(state.numberProb, 10)
 
     
-    def _generate_problem(self, state: BasicMathState, gameMode) -> BasicMathState:
+    def _generate_problem(self, state: BasicMathState, gameMode: int) -> BasicMathState:
         key, k1 = jax.random.split(state.key)
         key, k2 = jax.random.split(key)
 
         x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
 
         y = jax.lax.cond(
-            gameMode != 3,
-            lambda _: jax.random.randint(k2, shape=(), minval=1, maxval=10),
+            jnp.logical_or(gameMode == 1, gameMode == 3),
             lambda s: jax.random.randint(k2, shape=(), minval=1, maxval=s),
+            lambda _: jax.random.randint(k2, shape=(), minval=1, maxval=10),
             operand=x
         )
 
@@ -186,7 +188,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return val_a, val_b
     
-    def _evaluate_issue(self, state: BasicMathState, gameMode) -> BasicMathState:
+    def _evaluate_issue(self, state: BasicMathState, gameMode: int) -> BasicMathState:
         ops = [
             lambda a, b: (a + b, 0),
             lambda a, b: (a - b, 0),
@@ -341,9 +343,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return obs, state
     
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: BasicMathState, action: chex.Array, gameMode: int = 5) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
+    def step(self, state: BasicMathState, action: chex.Array) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
         previous_state = state
 
+        gameMode = self.consts.GAMEMODE
         chosenGameMode = (gameMode - 1) % 4
         act = state.step_counter % 2 == 0
         is_fire = action == Action.FIRE
@@ -385,10 +388,11 @@ class BasicMathRenderer(JAXGameRenderer):
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
+        self.chosenGamemode = (self.consts.GAMEMODE - 1) % 4
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
 
-        wall_sprite = _create_background_sprite(self.consts, 0)
+        wall_sprite = _create_background_sprite(self.consts, self.chosenGamemode)
 
         final_asset_config.append({'name': 'background', 'type': 'background', 'data': wall_sprite},)
 
@@ -416,7 +420,7 @@ class BasicMathRenderer(JAXGameRenderer):
         symbol = self.SHAPE_MASKS["symbols"]
         raster = self.jr.render_at(raster, 35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
-        raster = self.jr.render_at(raster, *self.consts.symbol, symbol[0])
+        raster = self.jr.render_at(raster, *self.consts.symbol, symbol[self.chosenGamemode])
         digit_masks = self._stack_num_masks()
 
         digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=1)
