@@ -41,7 +41,7 @@ class BasicMathConstants(NamedTuple):
     SCREEN_WIDTH: int = 160 * SCALINGFACTOR
     SCREEN_HEIGHT: int = 210 * SCALINGFACTOR
 
-    GAMEMODE: int = 6
+    GAMEMODE: int = 5
 
     COLOR_CODES = [
         [(18, 46, 137), (113, 115, 25)],
