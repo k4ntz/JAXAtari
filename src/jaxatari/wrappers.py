@@ -2,6 +2,7 @@
 
 import functools
 from typing import Any, Dict, Tuple, Union, Optional, Callable
+from dataclasses import is_dataclass, asdict
 
 import chex
 from flax import struct
@@ -47,7 +48,11 @@ class MultiRewardWrapper(JaxatariWrapper):
     def step(self, state: EnvState, action: int) -> Tuple[chex.Array, EnvState, float, bool, Dict]: 
         obs, new_state, reward, done, info = self._env.step(state, action)
         all_rewards = self._get_all_rewards(state, new_state)
-        info = info._asdict() if hasattr(info, '_asdict') else info
+        # Convert info to dict: handle NamedTuple (has _asdict) or dataclass (use asdict)
+        if hasattr(info, '_asdict'):
+            info = info._asdict()
+        elif is_dataclass(info):
+            info = asdict(info)
         info["all_rewards"] = all_rewards
         return obs, new_state, reward, done, info 
 

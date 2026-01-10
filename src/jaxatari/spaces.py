@@ -18,6 +18,7 @@
 import collections
 from collections.abc import Sequence
 from typing import Optional, Tuple, Union, Any
+from dataclasses import is_dataclass, asdict
 
 import jax
 from jax.tree_util import register_pytree_node
@@ -208,6 +209,9 @@ class Dict(Space):
         # Handle named tuples by converting to dict
         if hasattr(x, '_asdict'):
             x = x._asdict()
+        # Handle dataclasses (including chex.dataclass) by converting to dict
+        elif is_dataclass(x):
+            x = asdict(x)
         
         if not isinstance(x, dict) or self.spaces.keys() != x.keys():
             return jnp.asarray(False)
