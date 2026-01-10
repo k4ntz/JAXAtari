@@ -36,6 +36,7 @@ class LevelConfig(NamedTuple):
     spawn_landmines: bool = False
     landmine_spawn_config: Optional[Tuple[int, int]] = None
     future_entity_types: Dict[str, Any] = {}
+    render_road_stripes: bool = True
 
 
 # --- Constants ---
@@ -77,7 +78,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MIN_INTERVAL: int = 120
     TRUCK_SPAWN_MAX_INTERVAL: int = 240
     LEVEL_TRANSITION_DURATION: int = 30
-    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 1500
+    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
     STARTING_LIVES: int = 3
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     SIDE_MARGIN: int = 8
@@ -208,6 +209,7 @@ RoadRunner_Level_2 = LevelConfig(
         _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
     ),
+    render_road_stripes=False,
 )
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
@@ -239,12 +241,16 @@ def _build_road_section_arrays(
         consts.ROAD_HEIGHT,
     ]
     for cfg in levels:
+        # Determine pattern style based on render_road_stripes
+        # 0 = Default (Stripes), 1 = No Stripes
+        pattern_style_override = 0 if cfg.render_road_stripes else 1
+        
         rows = [
             [
                 section.scroll_start,
                 section.scroll_end,
                 section.road_width,
-                section.road_pattern_style,
+                pattern_style_override,
                 section.road_top,
                 section.road_height,
             ]
@@ -1954,10 +1960,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        road_sprite = self._create_road_sprite()
+        road_sprite = self._create_road_sprite(stripes=True)
+        road_no_stripes_sprite = self._create_road_sprite(stripes=False)
         life_sprite = self._create_life_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, life_sprite
+            road_sprite, road_no_stripes_sprite, life_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -1975,7 +1982,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._road_section_counts,
         ) = _build_road_section_arrays(self.consts.levels, self.consts)
 
-    def _create_road_sprite(self) -> jnp.ndarray:
+    def _create_road_sprite(self, stripes: bool = True) -> jnp.ndarray:
         ROAD_HEIGHT = self.consts.ROAD_HEIGHT
         WIDTH = self.consts.WIDTH
         DASH_LENGTH = self.consts.ROAD_DASH_LENGTH
@@ -1998,11 +2005,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
         is_marking = is_marking_col & is_marking_row & is_not_last_row
 
         # Use jnp.where to create the sprite from the pattern
-        road_sprite = jnp.where(
-            is_marking[:, :, jnp.newaxis],
-            marking_color_rgba,
-            road_color_rgba,
-        )
+        if stripes:
+             road_sprite = jnp.where(
+                is_marking[:, :, jnp.newaxis],
+                marking_color_rgba,
+                road_color_rgba,
+            )
+        else:
+             road_sprite = jnp.tile(road_color_rgba, (ROAD_HEIGHT, SCROLL_WIDTH, 1))
 
         return road_sprite
 
@@ -2034,6 +2044,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def _get_asset_config(
         self,
         road_sprite: jnp.ndarray,
+        road_no_stripes_sprite: jnp.ndarray,
         life_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
@@ -2047,6 +2058,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
             {"name": "enemy_run_over", "type": "single", "file": "enemy_run_over.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
+            {"name": "road_no_stripes", "type": "procedural", "data": road_no_stripes_sprite},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "score_blank", "type": "single", "file": "score_10.npy"},
             {"name": "seed", "type": "single", "file": "birdseed.npy"},
@@ -2300,8 +2312,15 @@ class RoadRunnerRenderer(JAXGameRenderer):
             src_x = scroll_offset + left_padding
             src_y = section.road_top
             
+            
+            road_mask = jax.lax.cond(
+                 section.road_pattern_style == 1,
+                 lambda: self.SHAPE_MASKS["road_no_stripes"],
+                 lambda: self.SHAPE_MASKS["road"]
+            )
+
             road_slice = jax.lax.dynamic_slice(
-                self.SHAPE_MASKS["road"],
+                road_mask,
                 (src_y, src_x),
                 (h, w)
             )
