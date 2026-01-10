@@ -43,7 +43,7 @@ class MiniatureGolfConstants(NamedTuple):
     PLAYER_COLOR: Tuple[int, int, int] = (66, 72, 200)
     OBSTACLE_COLOR: Tuple[int, int, int] = (214, 92, 92)
     OBSTACLE_MIN_X: chex.Array = jnp.array([1, 1, 1, 55, 69, 67, 78, 26, 1])               # special case level 8:
-    OBSTACLE_MAX_X: chex.Array = jnp.array([35, 107, 35, 103, 69, 67, 78, 26, 109])        # barrier y counts down
+    OBSTACLE_MAX_X: chex.Array = jnp.array([35, 148, 35, 103, 69, 67, 78, 26, 109])        # barrier y counts down
     OBSTACLE_MIN_Y: chex.Array = jnp.array([121, 121, 99, 47, 87, 27, 57, 0, 121])      # from 255 to 0
     OBSTACLE_MAX_Y: chex.Array = jnp.array([121, 121, 99, 47, 163, 185, 177, 255, 121])      # wrapping back to 255
     HOLE_COLOR: Tuple[int, int, int] = (66, 72, 200)
@@ -427,7 +427,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         player_x_without_fire = jnp.clip(state.player_x + player_x_inc - player_x_dec, 1, self.consts.WIDTH - self.consts.PLAYER_SIZE[0] - 1)
         player_y_without_fire = jnp.clip(state.player_y + player_y_inc - player_y_dec, self.consts.PLAYER_MIN_Y, self.consts.PLAYER_MAX_Y)
         player_x_new = jnp.where(fire, state.ball_x, player_x_without_fire)
-        player_y_new = jnp.where(fire, state.ball_y, player_y_without_fire)
+        player_y_new = jnp.where(fire, state.ball_y - 4, player_y_without_fire)
 
         return MiniatureGolfState(
             player_x=player_x_new,
@@ -575,14 +575,12 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             self.consts.OBSTACLE_MIN_Y[4],
             self.consts.OBSTACLE_MIN_Y[5],
             self.consts.OBSTACLE_MIN_Y[6],
-            self.consts.OBSTACLE_MIN_Y[7],
+            self.consts.OBSTACLE_MIN_Y[7] + 221,  # special case
             self.consts.OBSTACLE_MIN_Y[8],
         )
         obstacle_y_new = jnp.where(player_goal, obstacle_y_new, state.obstacle_y)
 
         obstacle_dir_new = jnp.where(player_goal, 0, state.obstacle_dir)
-
-        shot_count_new = state.shot_count
 
         wall_layout_new = jax.lax.select_n(
             level_new,
@@ -611,6 +609,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             self.consts.PAR_VALUES[8],
         )
         right_number_new = jnp.where(player_goal, right_number_new, state.right_number)
+        shot_count_new = jnp.where(player_goal, level_new + 1, state.shot_count)
 
         return MiniatureGolfState(
             player_x=player_x_new,
@@ -710,7 +709,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         obstacle_dir_new = jnp.where(flip_direction, 1 - state.obstacle_dir, state.obstacle_dir)
 
         # handle special case of level 8
-        obstacle_y_new = jnp.where(state.level == 7, jnp.mod(state.obstacle_y + 1, 256), obstacle_y_new)
+        obstacle_y_new = jnp.where(state.level == 7, jnp.mod(state.obstacle_y + 2, 256), obstacle_y_new)
         obstacle_dir_new = jnp.where(state.level == 7, jnp.array(0), obstacle_dir_new)
 
         # handle ball - obstacle collision
@@ -1016,7 +1015,7 @@ class MiniatureGolfRenderer(JAXGameRenderer):
         # (i.e. with the ID mapping)
 
         # Stamp Score using the label utility
-        shot_count_to_render = jnp.clip(state.shot_count, min=1)  # the game starts with 0 shots, but displays 1
+        shot_count_to_render = jnp.mod(jnp.clip(state.shot_count, min=1), 100)
         left_digits = self.jr.int_to_digits(shot_count_to_render, max_digits=2)
         right_digits = self.jr.int_to_digits(state.right_number, max_digits=2)
 
