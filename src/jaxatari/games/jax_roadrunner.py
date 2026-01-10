@@ -45,7 +45,7 @@ class RoadRunnerConstants(NamedTuple):
     PLAYER_MOVE_SPEED: int = 3
     PLAYER_ANIMATION_SPEED: int = 2
     # If the players x coordinate would be below this value after applying movement, we move everything one to the right to simulate movement.
-    X_SCROLL_THRESHOLD: int = 50
+    X_SCROLL_THRESHOLD: int = 70
     ENEMY_MOVE_SPEED: int = 2
     ENEMY_REACTION_DELAY: int = 6
     PLAYER_START_X: int = 70
