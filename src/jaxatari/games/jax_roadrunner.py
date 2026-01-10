@@ -56,6 +56,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
+    PLAYER_ROAD_TOP_OFFSET: int = 20
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -63,7 +64,6 @@ class RoadRunnerConstants(NamedTuple):
     ROAD_PATTERN_WIDTH: int = ROAD_DASH_LENGTH * 4
     SPAWN_Y_RANDOM_OFFSET_MIN: int = -20
     SPAWN_Y_RANDOM_OFFSET_MAX: int = 20
-    BACKGROUND_COLOR: Tuple[int, int, int] = (236, 168, 128)
     PLAYER_COLOR: Tuple[int, int, int] = (92, 186, 92)
     ENEMY_COLOR: Tuple[int, int, int] = (213, 130, 74)
     SEED_SPAWN_MIN_INTERVAL: int = 5
@@ -73,9 +73,9 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SIZE: Tuple[int, int] = (15, 15)
     TRUCK_COLLISION_OFFSET: int = TRUCK_SIZE[1] // 2  # Bottom half of truck height
     TRUCK_COLOR: Tuple[int, int, int] = (255, 0, 0)
-    TRUCK_SPEED: int = 3
-    TRUCK_SPAWN_MIN_INTERVAL: int = 30
-    TRUCK_SPAWN_MAX_INTERVAL: int = 80
+    TRUCK_SPEED: int = 2
+    TRUCK_SPAWN_MIN_INTERVAL: int = 120
+    TRUCK_SPAWN_MAX_INTERVAL: int = 240
     LEVEL_TRANSITION_DURATION: int = 30
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 1500
     STARTING_LIVES: int = 3
@@ -589,7 +589,7 @@ class JaxRoadRunner(
         self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array
     ) -> tuple[chex.Array, chex.Array]:
         road_top, road_bottom, _ = self._get_road_bounds(state)
-        min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
+        min_y = road_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
         max_y = road_bottom - self.consts.PLAYER_SIZE[1]
         checked_y = jnp.clip(y_pos, min_y, max_y)
         checked_x = jnp.clip(
@@ -2241,58 +2241,82 @@ class RoadRunnerRenderer(JAXGameRenderer):
             lambda: mask,
         )
 
+    def _get_unique_road_dims(self) -> Tuple[list, list]:
+        """
+        Extract unique (height, width) pairs from level configurations.
+        Returns tuple of (heights, widths) lists.
+        """
+        dims = set()
+        for level in self.consts.levels:
+            for section in level.road_sections:
+                dims.add((int(section.road_height), int(section.road_width)))
+        
+        # If no dims found (empty levels?), default to base consts
+        if not dims:
+            dims.add((int(self.consts.ROAD_HEIGHT), int(self.consts.WIDTH)))
+            
+        sorted_dims = sorted(list(dims))
+        heights = [d[0] for d in sorted_dims]
+        widths = [d[1] for d in sorted_dims]
+        return heights, widths
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         canvas = self.jr.create_object_raster(self.BACKGROUND)
 
         # --- Animate Road ---
         PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
-
-        # Calculate the horizontal offset for scrolling
-        offset = PATTERN_WIDTH - (
-            (state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED)
-            % PATTERN_WIDTH
-        )
-
-        # Slice the wide road mask to get the current frame's view
-        road_mask = jax.lax.dynamic_slice(
-            self.SHAPE_MASKS["road"],
-            (0, offset),
-            (self.consts.ROAD_HEIGHT, self.consts.WIDTH),
-        )
         section = self._get_render_section(state)
-        desired_width = jnp.clip(section.road_width, 1, self.consts.WIDTH)
-        left_padding = jnp.clip(
-            (self.consts.WIDTH - desired_width) // 2, 0, self.consts.WIDTH
-        )
-        right_boundary = jnp.clip(left_padding + desired_width, 0, self.consts.WIDTH)
-        x_coords = jnp.arange(self.consts.WIDTH)
-        column_mask = (x_coords >= left_padding) & (x_coords < right_boundary)
-        mask_height, mask_width = road_mask.shape
-        column_mask = column_mask[jnp.newaxis, :]
-        column_mask = jnp.broadcast_to(column_mask, (mask_height, mask_width))
-        background_value = jnp.array(
-            self.COLOR_TO_ID.get(
-                self.consts.BACKGROUND_COLOR, 0
-            ),
-            dtype=road_mask.dtype,
-        )
-        road_mask = jnp.where(column_mask, road_mask, background_value)
+        
+        # Calculate unique dimensions for branching
+        unique_heights_list, unique_widths_list = self._get_unique_road_dims()
+        unique_heights = jnp.array(unique_heights_list, dtype=jnp.int32)
+        unique_widths = jnp.array(unique_widths_list, dtype=jnp.int32)
+        num_configs = len(unique_heights_list)
 
-        desired_height = jnp.clip(section.road_height, 1, self.consts.ROAD_HEIGHT)
-        top_within_sprite = jnp.clip(
-            section.road_top, 0, self.consts.ROAD_HEIGHT - desired_height
-        )
-        row_indices = jnp.arange(self.consts.ROAD_HEIGHT)
-        row_mask = (row_indices >= top_within_sprite) & (
-            row_indices < top_within_sprite + desired_height
-        )
-        row_mask = row_mask[:, jnp.newaxis]
-        row_mask = jnp.broadcast_to(row_mask, (mask_height, mask_width))
-        road_mask = jnp.where(row_mask, road_mask, background_value)
+        # Find the index of the current configuration
+        # Matches against both height and width
+        matches = (unique_heights == section.road_height) & (unique_widths == section.road_width)
+        config_idx = jnp.argmax(matches)
 
-        # Render the sliced road portion
-        canvas = self.jr.render_at(canvas, 0, self.consts.ROAD_TOP_Y, road_mask)
+        def _render_road_branch(idx, _canvas):
+            # Static dimensions for this branch
+            h = unique_heights_list[idx]
+            w = unique_widths_list[idx]
+            
+            # Calculate metrics
+            desired_width = jnp.clip(w, 1, self.consts.WIDTH)
+            left_padding = (self.consts.WIDTH - desired_width) // 2
+            
+            # Scroll offset
+            scroll_offset = PATTERN_WIDTH - (
+                (state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED)
+                % PATTERN_WIDTH
+            )
+            
+            # Source slicing
+            # X: offset + left_padding (to matching screen position)
+            # Y: section.road_top (which row of texture to use)
+            src_x = scroll_offset + left_padding
+            src_y = section.road_top
+            
+            road_slice = jax.lax.dynamic_slice(
+                self.SHAPE_MASKS["road"],
+                (src_y, src_x),
+                (h, w)
+            )
+            
+            # Destination
+            dest_x = left_padding
+            dest_y = self.consts.ROAD_TOP_Y + section.road_top
+            
+            return self.jr.render_at(_canvas, dest_x, dest_y, road_slice)
+
+        # Create branches for switch
+        branches = [partial(_render_road_branch, i) for i in range(num_configs)]
+        
+        # Execute the correct branch
+        canvas = jax.lax.switch(config_idx, branches, canvas)
 
         # Render Ravines
         canvas = self._render_ravines(canvas, state.ravines)
