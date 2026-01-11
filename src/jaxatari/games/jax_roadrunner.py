@@ -1981,6 +1981,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._road_section_data,
             self._road_section_counts,
         ) = _build_road_section_arrays(self.consts.levels, self.consts)
+        
+        # Pre-calculate unique road dimensions for rendering optimization
+        unique_heights_list, unique_widths_list = self._get_unique_road_dims()
+        self._unique_heights_list = unique_heights_list
+        self._unique_widths_list = unique_widths_list
+        # Convert to JAX arrays for runtime matching
+        self._unique_heights_arr = jnp.array(unique_heights_list, dtype=jnp.int32)
+        self._unique_widths_arr = jnp.array(unique_widths_list, dtype=jnp.int32)
 
     def _create_road_sprite(self, stripes: bool = True) -> jnp.ndarray:
         ROAD_HEIGHT = self.consts.ROAD_HEIGHT
@@ -2280,21 +2288,20 @@ class RoadRunnerRenderer(JAXGameRenderer):
         PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
         section = self._get_render_section(state)
         
-        # Calculate unique dimensions for branching
-        unique_heights_list, unique_widths_list = self._get_unique_road_dims()
-        unique_heights = jnp.array(unique_heights_list, dtype=jnp.int32)
-        unique_widths = jnp.array(unique_widths_list, dtype=jnp.int32)
-        num_configs = len(unique_heights_list)
+        section = self._get_render_section(state)
+        
+        # Use pre-calculated unique dimensions
+        num_configs = len(self._unique_heights_list)
 
         # Find the index of the current configuration
         # Matches against both height and width
-        matches = (unique_heights == section.road_height) & (unique_widths == section.road_width)
+        matches = (self._unique_heights_arr == section.road_height) & (self._unique_widths_arr == section.road_width)
         config_idx = jnp.argmax(matches)
 
         def _render_road_branch(idx, _canvas):
             # Static dimensions for this branch
-            h = unique_heights_list[idx]
-            w = unique_widths_list[idx]
+            h = self._unique_heights_list[idx]
+            w = self._unique_widths_list[idx]
             
             # Calculate metrics
             desired_width = jnp.clip(w, 1, self.consts.WIDTH)
