@@ -43,7 +43,7 @@ class PitfallConstants(NamedTuple):
     player_start_x: int = 20    # where Harry starts (left side)
     player_start_y: int = 130  # same as ground_y (standing on ground)
 
-    player_speed: float = 3.5  # pixels per frame horizontally
+    player_speed: float = 3.0  # pixels per frame horizontally
     jump_velocity: float = -7.8  # initial upward velocity
     gravity: float = 1.0       # downward accel each frame
 
@@ -54,6 +54,10 @@ class PitfallConstants(NamedTuple):
     ladder_width: int = 10
     initial_score: int = 2000
     tunnel_wall_width: int = 8
+
+    # Side holes beside ladder (underground)
+    hole_width: int = 20            # px
+    hole_gap_from_ladder: int = 24   # px gap from ladder edge
 
 
 
@@ -153,6 +157,18 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         self.wall_side_by_screen  = jnp.array(_wall_side)
         self.wall_x_by_screen     = jnp.array(_wall_x_px)
 
+        hole_screens = [
+            1, 5, 16, 20, 23, 26, 34, 40, 56, 64, 88, 93, 101, 107, 112, 125, 129,
+            134, 141, 153, 168, 172, 181, 188
+        ]
+
+        _has_side_hole = _np.zeros((N,), dtype=_np.bool_)
+        for sid in hole_screens:
+            if 0 <= sid < N:
+                _has_side_hole[sid] = True
+
+        self.has_side_hole_by_screen = jnp.array(_has_side_hole)
+
         ladder_x_px = int(round(140 * W / 300.0))
         ladder_x_px = max(0, min(W - consts.ladder_width, ladder_x_px))
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
@@ -165,6 +181,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             self.wall_side_by_screen,
             self.wall_x_by_screen,
             self.ladder_x_px,
+            self.has_side_hole_by_screen,
         )
 
 
@@ -356,6 +373,46 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             wall_side=wall_side,
         )
 
+    def _side_hole_info(
+        self,
+        screen_id: chex.Array,
+        player_center_x: chex.Array,  # int32
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+        """
+        Two side holes beside the ladder (symmetric about ladder):
+          left hole ends gap px left of ladder
+          right hole starts gap px right of ladder
+
+        Returns:
+          has_side_hole (bool),
+          over_side_hole (bool),
+          left_x (int32),
+          right_x (int32),
+          hole_w (int32)
+        """
+        sid = jnp.mod(screen_id, jnp.int32(self.num_screens))
+        has_side_hole = self.has_side_hole_by_screen[sid]
+
+        W = jnp.int32(self.consts.screen_width)
+        ladder_x = self.ladder_x_px.astype(jnp.int32)
+        ladder_w = jnp.int32(self.consts.ladder_width)
+
+        hole_w = jnp.int32(self.consts.hole_width)
+        gap = jnp.int32(self.consts.hole_gap_from_ladder)
+
+        left_x = ladder_x - gap - hole_w
+        right_x = ladder_x + ladder_w + gap
+
+        max_start = jnp.maximum(W - hole_w, jnp.int32(0))
+        left_x = jnp.clip(left_x, 0, max_start)
+        right_x = jnp.clip(right_x, 0, max_start)
+
+        in_left = (player_center_x >= left_x) & (player_center_x < (left_x + hole_w))
+        in_right = (player_center_x >= right_x) & (player_center_x < (right_x + hole_w))
+
+        over_side_hole = has_side_hole & (in_left | in_right)
+        return has_side_hole, over_side_hole, left_x, right_x, hole_w
+
     def step(
         self,
         state: PitfallState,
@@ -435,6 +492,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         near_ladder = has_ladder & overlap_left & overlap_right
         over_ladder = has_ladder & (player_center >= ladder_x) & (player_center < ladder_right)
 
+        # side holes beside ladder (addition)
+        has_side_hole, over_side_hole, hole_left_x, hole_right_x, hole_w = self._side_hole_info(
+            screen_id=state.screen_id,
+            player_center_x=player_center.astype(jnp.int32),
+        )
+
+        # IMPORTANT: ladder hole behavior stays; we just add side holes
+        over_any_hole = over_ladder | over_side_hole
+
         # --- Ground level definitions ---
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
@@ -443,7 +509,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         on_lower_level = state.current_ground_y == lower_ground
 
         # Detect falling through hole: over ladder, on upper level, not on ground, not on ladder, and falling down
-        falling_through_hole = over_ladder & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
+        falling_through_hole = over_any_hole & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
 
         # --- Horizontal movement ---
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
@@ -537,10 +603,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         # --- Check for ground collision with fallthrough detection ---
         # On UPPER ground → ladder behaves as a hole (no ground under ladder).
-        raw_on_ground_upper = (y >= previous_ground) & (~over_ladder)
+        raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
 
         # Check if falling through to lower ground
-        falling_to_lower = on_upper_level & over_ladder & (y >= lower_ground)
+        falling_to_lower = on_upper_level & over_any_hole & (y >= lower_ground)
 
         # --- Score handling ---
         score = state.score
@@ -689,7 +755,16 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 class PitfallRenderer(JAXGameRenderer):
     """Very simple renderer: black background, green ground, white player block."""
 
-    def __init__(self, consts, has_ladder_by_screen, has_wall_by_screen, wall_side_by_screen, wall_x_by_screen, ladder_x_px):
+    def __init__(
+        self,
+        consts,
+        has_ladder_by_screen,
+        has_wall_by_screen,
+        wall_side_by_screen,
+        wall_x_by_screen,
+        ladder_x_px,
+        has_side_hole_by_screen,
+    ):
         super().__init__()
         self.consts = consts or PitfallConstants()
         self.has_ladder_by_screen = has_ladder_by_screen
@@ -697,6 +772,7 @@ class PitfallRenderer(JAXGameRenderer):
         self.wall_side_by_screen = wall_side_by_screen
         self.wall_x_by_screen = wall_x_by_screen
         self.ladder_x_px = ladder_x_px
+        self.has_side_hole_by_screen = has_side_hole_by_screen
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
@@ -820,9 +896,66 @@ class PitfallRenderer(JAXGameRenderer):
             frame,
         )
 
+        # ----- side holes (visual) -----
+        # Render holes as black rectangles and also "carve" the upper ground band.
+        has_side_hole = self.has_side_hole_by_screen[sid]
+
+        ladder_w_static = int(self.consts.ladder_width)
+        hole_w_static = int(self.consts.hole_width)
+        gap_static = int(self.consts.hole_gap_from_ladder)
+
+        W_static = int(self.consts.screen_width)
+        max_start_static = max(0, W_static - hole_w_static)
+
+        left_x = jnp.clip(
+            ladder_x - jnp.int32(gap_static) - jnp.int32(hole_w_static),
+            0,
+            jnp.int32(max_start_static),
+        )
+        right_x = jnp.clip(
+            ladder_x + jnp.int32(ladder_w_static) + jnp.int32(gap_static),
+            0,
+            jnp.int32(max_start_static),
+        )
+
+        # Carve openings in the upper ground band so holes are visible as gaps.
+        ground_band_h = 2
+        ground_top = jnp.asarray(ground, dtype=jnp.int32)
+        ladder_clear = jnp.zeros((ground_band_h, ladder_w_static, 3), dtype=jnp.uint8)
+        hole_clear = jnp.zeros((ground_band_h, hole_w_static, 3), dtype=jnp.uint8)
+
+        frame = lax.cond(
+            has_ladder,
+            lambda f: lax.dynamic_update_slice(f, ladder_clear, (ground_top, ladder_x, 0)),
+            lambda f: f,
+            frame,
+        )
+
+        def clear_side_openings(f):
+            f = lax.dynamic_update_slice(f, hole_clear, (ground_top, left_x, 0))
+            f = lax.dynamic_update_slice(f, hole_clear, (ground_top, right_x, 0))
+            return f
+
+        frame = lax.cond(has_side_hole, clear_side_openings, lambda f: f, frame)
+
+        # Draw black shafts for side holes (background is already black; this also overwrites any later drawings)
+        hole_top_py = int(self.consts.ground_y)
+        hole_bottom_py = int(self.consts.underground_y)
+        hole_h_static = max(1, hole_bottom_py - hole_top_py)
+        hole_top = jnp.int32(hole_top_py)
+
+        hole_patch = jnp.zeros((hole_h_static, hole_w_static, 3), dtype=jnp.uint8)
+
+        def draw_side_holes(f):
+            f = lax.dynamic_update_slice(f, hole_patch, (hole_top, left_x, 0))
+            f = lax.dynamic_update_slice(f, hole_patch, (hole_top, right_x, 0))
+            return f
+
+        frame = lax.cond(has_side_hole, draw_side_holes, lambda f: f, frame)
+
         # Wall uses static Python ints for shapes to avoid JAX concretization
-        top_pad = 2
-        bot_pad = 2
+        top_pad = 0
+        bot_pad = 0
         wall_top_py = int(self.consts.ground_y + top_pad)
         wall_bottom_py = int(self.consts.underground_y - bot_pad)
         wall_h_static = max(0, wall_bottom_py - wall_top_py)
