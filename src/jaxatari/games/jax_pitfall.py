@@ -30,6 +30,9 @@ class PitfallState(NamedTuple):
     lives_left: chex.Array # int scalar (e.g. 3, even if not used yet)
     done: chex.Array       # bool scalar
 
+    # Damage invulnerability (e.g., after fireplace hit)
+    hurt_cooldown: chex.Array  # int32 scalar (frames)
+
     down_pressed: chex.Array
     on_ladder: chex.Array
     current_ground_y: chex.Array 
@@ -64,6 +67,13 @@ class PitfallConstants(NamedTuple):
     wood_w: int = 11               # log diameter in px (circle radius ~ wood_w//2)
     wood_h: int = 11               # log diameter in px
     wood_y_offset: int = 0         # fine-tune vertical placement relative to ground
+
+    # Fireplace hazard (upper ground)
+    fire_w: int = 7
+    fire_h: int = 7
+    fire_y_offset: int = 0
+    fire_hurt_cooldown_frames: int = 30  # ~1s at 30fps
+    fire_respawn_y_offset: int = 20      # respawn above ground so gravity drops player
 
 
 
@@ -210,6 +220,22 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         self.stationary_wood_count_by_screen = jnp.array(_stationary_wood_count, dtype=jnp.int32)
         self.stationary_wood_x_by_screen = jnp.array(_stationary_wood_x, dtype=jnp.int32)
 
+        # ------------------------------------------------------------
+        # Fireplace hazard: fixed-shape, JIT-safe per-screen tables
+        # ------------------------------------------------------------
+        fireplace_screens = [14, 42, 45, 50, 56, 65, 68, 73, 91, 94, 101, 106, 117, 140, 147, 153, 160, 179, 187]
+        FIRE_X_CENTER = 132
+
+        _has_fireplace = _np.zeros((N,), dtype=_np.bool_)
+        _fireplace_x_center = _np.zeros((N,), dtype=_np.int32)
+        for sid in fireplace_screens:
+            if 0 <= sid < N:
+                _has_fireplace[sid] = True
+                _fireplace_x_center[sid] = _np.int32(FIRE_X_CENTER)
+
+        self.has_fireplace_by_screen = jnp.array(_has_fireplace)
+        self.fireplace_x_center_by_screen = jnp.array(_fireplace_x_center, dtype=jnp.int32)
+
         ladder_x_px = int(round(140 * W / 300.0))
         ladder_x_px = max(0, min(W - consts.ladder_width, ladder_x_px))
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
@@ -226,6 +252,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             self.has_stationary_wood_by_screen,
             self.stationary_wood_count_by_screen,
             self.stationary_wood_x_by_screen,
+            self.has_fireplace_by_screen,
+            self.fireplace_x_center_by_screen,
         )
 
 
@@ -474,6 +502,21 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         xs = self.stationary_wood_x_by_screen[sid]
         return has_wood, count, xs
 
+    def _fireplace_info(
+        self,
+        screen_id: chex.Array,
+    ) -> tuple[chex.Array, chex.Array]:
+        """Fixed-shape per-screen lookup for fireplace hazard.
+
+        Returns:
+          has_fireplace (bool),
+          x_center (int32)
+        """
+        sid = jnp.mod(screen_id, jnp.int32(self.num_screens))
+        has_fireplace = self.has_fireplace_by_screen[sid]
+        x_center = self.fireplace_x_center_by_screen[sid]
+        return has_fireplace, x_center
+
     def step(
         self,
         state: PitfallState,
@@ -492,6 +535,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         on_ground = state.on_ground
         time_left = state.time_left
         lives_left = state.lives_left
+        hurt_cooldown = state.hurt_cooldown
 
         # --- Action parsing ---
         down_action = (
@@ -755,6 +799,49 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         score = jnp.where(touching_wood, score - drain, score)
         score = jnp.maximum(score, jnp.int32(0))
 
+        # --- Fireplace hazard: lose life + respawn (with hurt cooldown) ---
+        has_fireplace, fire_x_center = self._fireplace_info(new_screen_id)
+
+        fire_w = jnp.int32(consts.fire_w)
+        fire_h = jnp.int32(consts.fire_h)
+        fire_top = jnp.int32(consts.ground_y - consts.fire_h + consts.fire_y_offset)
+        fire_y0 = fire_top
+        fire_y1 = fire_top + fire_h
+
+        screen_w_i = jnp.int32(consts.screen_width)
+        max_fire_start = jnp.maximum(screen_w_i - fire_w, jnp.int32(0))
+        fire_left = jnp.clip(fire_x_center - (fire_w // jnp.int32(2)), 0, max_fire_start)
+        fire_right = fire_left + fire_w
+
+        overlap_fire = (x1 > fire_left) & (x0 < fire_right) & (y1 > fire_y0) & (y0 < fire_y1)
+        can_hurt = hurt_cooldown == jnp.int32(0)
+        hit_fire = has_fireplace & overlap_fire & can_hurt
+
+        lives_left = jnp.where(hit_fire, lives_left - jnp.int32(1), lives_left)
+        lives_left = jnp.maximum(lives_left, jnp.int32(0))
+
+        respawn_x = jnp.asarray(consts.player_start_x, dtype=jnp.float32)
+        respawn_y = jnp.asarray(consts.player_start_y - consts.fire_respawn_y_offset, dtype=jnp.float32)
+
+        x = jnp.where(hit_fire, respawn_x, x)
+        y = jnp.where(hit_fire, respawn_y, y)
+        vx = jnp.where(hit_fire, jnp.asarray(0.0, dtype=jnp.float32), vx)
+        vy = jnp.where(hit_fire, jnp.asarray(0.0, dtype=jnp.float32), vy)
+        on_ground = jnp.where(hit_fire, jnp.array(False, dtype=jnp.bool_), on_ground)
+        on_ladder = jnp.where(hit_fire, jnp.array(False, dtype=jnp.bool_), on_ladder)
+        current_ground_y = jnp.where(
+            hit_fire,
+            jnp.asarray(consts.ground_y, dtype=jnp.float32),
+            current_ground_y,
+        )
+
+        next_hurt_cooldown = jnp.maximum(hurt_cooldown - jnp.int32(1), jnp.int32(0))
+        next_hurt_cooldown = jnp.where(
+            hit_fire,
+            jnp.int32(consts.fire_hurt_cooldown_frames),
+            next_hurt_cooldown,
+        )
+
         done = (time_left <= 0) | (lives_left <= 0)
 
         # Build new state
@@ -769,6 +856,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             time_left=time_left,
             lives_left=lives_left,
             done=done,
+            hurt_cooldown=next_hurt_cooldown,
             down_pressed=down_pressed,
             on_ladder=on_ladder,
             current_ground_y=current_ground_y,
@@ -841,6 +929,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             time_left=jnp.array(consts.initial_time_seconds * consts.fps, dtype=jnp.int32),
             lives_left=jnp.array(consts.max_lives, dtype=jnp.int32),
             done=jnp.array(False, dtype=jnp.bool_),
+            hurt_cooldown=jnp.array(0, dtype=jnp.int32),
             down_pressed=jnp.array(False, dtype=jnp.bool_),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
@@ -865,6 +954,8 @@ class PitfallRenderer(JAXGameRenderer):
         has_stationary_wood_by_screen,
         stationary_wood_count_by_screen,
         stationary_wood_x_by_screen,
+        has_fireplace_by_screen,
+        fireplace_x_center_by_screen,
     ):
         super().__init__()
         self.consts = consts or PitfallConstants()
@@ -877,6 +968,8 @@ class PitfallRenderer(JAXGameRenderer):
         self.has_stationary_wood_by_screen = has_stationary_wood_by_screen
         self.stationary_wood_count_by_screen = stationary_wood_count_by_screen
         self.stationary_wood_x_by_screen = stationary_wood_x_by_screen
+        self.has_fireplace_by_screen = has_fireplace_by_screen
+        self.fireplace_x_center_by_screen = fireplace_x_center_by_screen
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
@@ -1105,6 +1198,34 @@ class PitfallRenderer(JAXGameRenderer):
             return lax.fori_loop(0, 3, draw_one, f)
 
         frame = lax.cond(has_wood, draw_wood_logs, lambda f: f, frame)
+
+        # ----- fireplace (visual) -----
+        has_fireplace = self.has_fireplace_by_screen[sid]
+        fire_x_center = self.fireplace_x_center_by_screen[sid]
+
+        fire_w_static = int(self.consts.fire_w)
+        fire_h_static = int(self.consts.fire_h)
+        fire_top_py = int(self.consts.ground_y - self.consts.fire_h + self.consts.fire_y_offset)
+        fire_top = jnp.int32(fire_top_py)
+
+        max_fire_start_static = max(0, W_static - fire_w_static)
+        half_fire_w_static = fire_w_static // 2
+        fire_left = jnp.clip(
+            fire_x_center - jnp.int32(half_fire_w_static),
+            0,
+            jnp.int32(max_fire_start_static),
+        )
+
+        fire_patch = jnp.zeros((fire_h_static, fire_w_static, 3), dtype=jnp.uint8)
+        fire_patch = fire_patch.at[:, :, 0].set(255)
+        fire_patch = fire_patch.at[:, :, 1].set(120)
+
+        frame = lax.cond(
+            has_fireplace,
+            lambda f: lax.dynamic_update_slice(f, fire_patch, (fire_top, fire_left, 0)),
+            lambda f: f,
+            frame,
+        )
 
         # Wall uses static Python ints for shapes to avoid JAX concretization
         top_pad = 0
