@@ -59,6 +59,12 @@ class PitfallConstants(NamedTuple):
     hole_width: int = 20            # px
     hole_gap_from_ladder: int = 24   # px gap from ladder edge
 
+    # Stationary wood logs (upper ground hazard)
+    wood_drain_per_frame: int = 2  # score points drained each frame while touching any log
+    wood_w: int = 11               # log diameter in px (circle radius ~ wood_w//2)
+    wood_h: int = 11               # log diameter in px
+    wood_y_offset: int = 0         # fine-tune vertical placement relative to ground
+
 
 
 class PitfallObservation(NamedTuple):
@@ -169,6 +175,41 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         self.has_side_hole_by_screen = jnp.array(_has_side_hole)
 
+        # ------------------------------------------------------------
+        # Stationary wood logs: fixed-shape, JIT-safe per-screen tables
+        # ------------------------------------------------------------
+        stationary_wood_screens = [
+            0, 7, 15, 25, 29, 38, 40, 48, 66, 74, 76, 80, 82, 86, 92,
+            102, 107, 111, 115, 120, 127, 129, 134, 136, 141, 145, 154, 161, 163, 167,
+            171, 173, 175, 180, 188, 190, 192
+        ]
+
+        stationary_wood_3log_screens = {
+            25, 38, 40, 48, 66, 74, 76, 80, 92, 115, 129, 134, 141, 171, 173, 175, 180, 188, 190, 192
+        }
+
+        # Two templates in 160px space (CENTER x positions)
+        WOOD_X_1 = (124, 0, 0)
+        WOOD_X_3 = (20, 124, 157)
+
+        _has_stationary_wood = _np.zeros((N,), dtype=_np.bool_)
+        _stationary_wood_count = _np.zeros((N,), dtype=_np.int32)
+        _stationary_wood_x = _np.zeros((N, 3), dtype=_np.int32)
+
+        for sid in stationary_wood_screens:
+            if 0 <= sid < N:
+                _has_stationary_wood[sid] = True
+                if sid in stationary_wood_3log_screens:
+                    _stationary_wood_count[sid] = 3
+                    _stationary_wood_x[sid, :] = _np.asarray(WOOD_X_3, dtype=_np.int32)
+                else:
+                    _stationary_wood_count[sid] = 1
+                    _stationary_wood_x[sid, :] = _np.asarray(WOOD_X_1, dtype=_np.int32)
+
+        self.has_stationary_wood_by_screen = jnp.array(_has_stationary_wood)
+        self.stationary_wood_count_by_screen = jnp.array(_stationary_wood_count, dtype=jnp.int32)
+        self.stationary_wood_x_by_screen = jnp.array(_stationary_wood_x, dtype=jnp.int32)
+
         ladder_x_px = int(round(140 * W / 300.0))
         ladder_x_px = max(0, min(W - consts.ladder_width, ladder_x_px))
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
@@ -182,6 +223,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             self.wall_x_by_screen,
             self.ladder_x_px,
             self.has_side_hole_by_screen,
+            self.has_stationary_wood_by_screen,
+            self.stationary_wood_count_by_screen,
+            self.stationary_wood_x_by_screen,
         )
 
 
@@ -412,6 +456,23 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         over_side_hole = has_side_hole & (in_left | in_right)
         return has_side_hole, over_side_hole, left_x, right_x, hole_w
+
+    def _stationary_wood_info(
+        self,
+        screen_id: chex.Array,
+    ) -> tuple[chex.Array, chex.Array, chex.Array]:
+        """Fixed-shape per-screen lookup for stationary wood logs.
+
+        Returns:
+          has_wood (bool),
+          count (int32) in {0,1,3},
+          xs (int32[3]) log x positions (unused slots may be 0)
+        """
+        sid = jnp.mod(screen_id, jnp.int32(self.num_screens))
+        has_wood = self.has_stationary_wood_by_screen[sid]
+        count = self.stationary_wood_count_by_screen[sid]
+        xs = self.stationary_wood_x_by_screen[sid]
+        return has_wood, count, xs
 
     def step(
         self,
@@ -657,6 +718,43 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             current_ground_y=current_ground_y,
         )
 
+        # --- Stationary wood contact: per-frame score drain (JIT-safe) ---
+        # Use the *post-transition* screen id so hazards match where the player ends up.
+        has_wood, wood_count, wood_xs = self._stationary_wood_info(new_screen_id)
+
+        player_w_i = jnp.int32(4)
+        player_h_i = jnp.int32(8)
+        x0 = x.astype(jnp.int32)
+        x1 = x0 + player_w_i
+
+        player_bottom = y.astype(jnp.int32)
+        y1 = player_bottom + jnp.int32(1)
+        y0 = player_bottom - player_h_i + jnp.int32(1)
+
+        wood_w = jnp.int32(consts.wood_w)
+        wood_h = jnp.int32(consts.wood_h)
+        wood_top = jnp.int32(consts.ground_y - consts.wood_h + consts.wood_y_offset)
+        wood_y0 = wood_top
+        wood_y1 = wood_top + wood_h
+
+        overlap_y = (y1 > wood_y0) & (y0 < wood_y1)
+        active = jnp.arange(3, dtype=jnp.int32) < wood_count
+        screen_w_i = jnp.int32(consts.screen_width)
+        max_start = jnp.maximum(screen_w_i - wood_w, jnp.int32(0))
+        half_w = wood_w // jnp.int32(2)
+
+        # Treat wood_xs as CENTER positions and convert to left edge for AABB
+        wx0 = jnp.clip(wood_xs.astype(jnp.int32) - half_w, 0, max_start)
+        wx1 = wx0 + wood_w
+        overlap_x = (x1 > wx0) & (x0 < wx1)
+
+        touching_any = jnp.any(active & overlap_x & overlap_y)
+        touching_wood = has_wood & touching_any
+
+        drain = jnp.int32(consts.wood_drain_per_frame)
+        score = jnp.where(touching_wood, score - drain, score)
+        score = jnp.maximum(score, jnp.int32(0))
+
         done = (time_left <= 0) | (lives_left <= 0)
 
         # Build new state
@@ -764,6 +862,9 @@ class PitfallRenderer(JAXGameRenderer):
         wall_x_by_screen,
         ladder_x_px,
         has_side_hole_by_screen,
+        has_stationary_wood_by_screen,
+        stationary_wood_count_by_screen,
+        stationary_wood_x_by_screen,
     ):
         super().__init__()
         self.consts = consts or PitfallConstants()
@@ -773,6 +874,9 @@ class PitfallRenderer(JAXGameRenderer):
         self.wall_x_by_screen = wall_x_by_screen
         self.ladder_x_px = ladder_x_px
         self.has_side_hole_by_screen = has_side_hole_by_screen
+        self.has_stationary_wood_by_screen = has_stationary_wood_by_screen
+        self.stationary_wood_count_by_screen = stationary_wood_count_by_screen
+        self.stationary_wood_x_by_screen = stationary_wood_x_by_screen
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
@@ -952,6 +1056,55 @@ class PitfallRenderer(JAXGameRenderer):
             return f
 
         frame = lax.cond(has_side_hole, draw_side_holes, lambda f: f, frame)
+
+        # ----- stationary wood logs (visual) -----
+        has_wood = self.has_stationary_wood_by_screen[sid]
+        wood_count = self.stationary_wood_count_by_screen[sid]
+        wood_xs = self.stationary_wood_x_by_screen[sid]
+
+        wood_w_static = int(self.consts.wood_w)
+        wood_h_static = int(self.consts.wood_h)
+        wood_top_py = int(self.consts.ground_y - self.consts.wood_h + self.consts.wood_y_offset)
+        wood_top = jnp.int32(wood_top_py)
+        wood_color = jnp.array([110, 70, 25], dtype=jnp.uint8)
+
+        # Circular/elliptical log mask (keeps background outside the circle)
+        yy = jnp.arange(wood_h_static, dtype=jnp.float32)[:, None]
+        xx = jnp.arange(wood_w_static, dtype=jnp.float32)[None, :]
+        cx = (jnp.float32(wood_w_static) - 1.0) / 2.0
+        cy = (jnp.float32(wood_h_static) - 1.0) / 2.0
+        r = jnp.minimum(cx, cy)
+        circle = ((xx - cx) ** 2 + (yy - cy) ** 2) <= (r ** 2)
+        circle3 = circle[..., None]
+
+        max_wood_start_static = max(0, W_static - wood_w_static)
+        half_w_static = wood_w_static // 2
+
+        def draw_wood_logs(f):
+            def draw_one(i, ff):
+                active_i = jnp.int32(i) < wood_count
+                # Treat wood_xs as CENTER positions and convert to left edge for drawing
+                x_left = jnp.clip(wood_xs[i] - jnp.int32(half_w_static), 0, jnp.int32(max_wood_start_static))
+
+                def draw_at(fff):
+                    existing = lax.dynamic_slice(
+                        fff,
+                        (wood_top, x_left, 0),
+                        (wood_h_static, wood_w_static, 3),
+                    )
+                    painted = jnp.where(circle3, wood_color, existing)
+                    return lax.dynamic_update_slice(fff, painted, (wood_top, x_left, 0))
+
+                return lax.cond(
+                    active_i,
+                    draw_at,
+                    lambda fff: fff,
+                    ff,
+                )
+
+            return lax.fori_loop(0, 3, draw_one, f)
+
+        frame = lax.cond(has_wood, draw_wood_logs, lambda f: f, frame)
 
         # Wall uses static Python ints for shapes to avoid JAX concretization
         top_pad = 0
