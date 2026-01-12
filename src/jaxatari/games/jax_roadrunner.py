@@ -229,7 +229,8 @@ RoadRunner_Level_3 = LevelConfig(
         ),
     ),
     spawn_seeds=True,
-    spawn_trucks=False,
+    spawn_trucks=True,
+    spawn_landmines=True,
     seed_spawn_config=(
         _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
@@ -238,9 +239,13 @@ RoadRunner_Level_3 = LevelConfig(
         _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
     ),
+    landmine_spawn_config=(
+        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
+    ),
     # Dynamic road height: alternates between 70 and 50 pixels
     dynamic_road_heights=(70, 50),
-    dynamic_road_interval=100,
+    dynamic_road_interval=400,
     dynamic_road_transition_length=10,
 )
 
@@ -1066,7 +1071,8 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, _ = self._get_road_bounds_at_x(state, jnp.array(0, dtype=jnp.int32))
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         if self._level_count > 0:
@@ -1150,7 +1156,10 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, road_height_at_spawn = self._get_road_bounds_at_x(
+            state, jnp.array(0, dtype=jnp.int32)
+        )
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         if self._level_count > 0:
@@ -1178,10 +1187,15 @@ class JaxRoadRunner(
 
         # Prepare for spawning: split RNG and check conditions
         rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        
+        # Trucks only spawn if the road is wide enough (>= 70)
+        road_wide_enough = road_height_at_spawn >= 70
+
         should_spawn = (
             (updated_truck_x < 0)  # No truck currently active
             & (state.step_counter >= state.next_truck_spawn_step)
             & spawn_trucks_enabled
+            & road_wide_enough
         )
 
         def _spawn(st: RoadRunnerState) -> RoadRunnerState:
@@ -1433,7 +1447,8 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, _ = self._get_road_bounds_at_x(state, jnp.array(0, dtype=jnp.int32))
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         
@@ -1972,6 +1987,61 @@ class JaxRoadRunner(
         
         # Center the road vertically within the road area when height changes
         # This keeps the road centered as height changes, similar to _centered_top
+        height_diff = self.consts.ROAD_HEIGHT - road_height
+        section_top = height_diff // 2
+        
+        road_top = self.consts.ROAD_TOP_Y + section_top
+        road_bottom = road_top + road_height
+        return road_top, road_bottom, road_height
+
+    def _get_road_bounds_at_x(
+        self, state: RoadRunnerState, x: jnp.ndarray
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Get road bounds at a specific screen X coordinate.
+        Useful for checking spawn validity (e.g., at x=0).
+        """
+        section = self._get_current_road_section(state)
+        
+        # Check if dynamic road heights are enabled for this level
+        level_idx = self._get_level_index(state)
+        
+        if self._level_count > 0:
+            dynamic_enabled = self._dynamic_road_enabled[level_idx]
+            heights = self._dynamic_road_heights[level_idx]
+            interval = self._dynamic_road_intervals[level_idx]
+            trans_len = self._dynamic_road_transition_lengths[level_idx]
+            
+            # Map screen X to world X conceptually used for road generation
+            # Rendering: world_scroll + (road_width - 1 - col_idx)
+            # col_idx corresponds to x.
+            static_road_width = self.consts.WIDTH - 2 * self.consts.SIDE_MARGIN
+            
+            # Note: Spawning usually happens at x=0 (left side).
+            # If x=0, world_x is larger (further ahead in scroll).
+            # world_x = scroll + width - 1 - x
+            
+            world_x = (
+                state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED 
+                + (static_road_width - 1 - x)
+            )
+            
+            dynamic_height, _, _ = _get_dynamic_road_height(
+                world_x,
+                heights[0],
+                heights[1],
+                interval,
+                trans_len,
+            )
+            
+            # Use dynamic height if enabled, otherwise use section height
+            base_road_height = jnp.where(dynamic_enabled, dynamic_height, section.road_height)
+        else:
+            base_road_height = section.road_height
+        
+        road_height = jnp.clip(base_road_height, 1, self.consts.ROAD_HEIGHT)
+        
+        # Center the road vertically
         height_diff = self.consts.ROAD_HEIGHT - road_height
         section_top = height_diff // 2
         
