@@ -10,6 +10,10 @@ TODO
     3)  [x] Performance improvements
     4)  [ ] JIT compatibility
 
+    BUgs:
+    1)  [ ] Fix type cast warning
+    2)  [ ] Fix frightened ghosts death loop in the lower left corner
+
     Optional:
     a)  [ ] Correct speed
     b)  [ ] Pacman death animation
@@ -509,87 +513,162 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
     def ghosts_step(state: PacmanState, ate_power_pellet: chex.Array, common_key: chex.Array
                     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         """
-        Updates all ghosts.
-        'key' can be a PRNGKey or None for deterministic behaviour.
+        Updates all ghosts and checks for collisions with the player.
         """
-        new_positions = []
-        new_actions = []
-        new_modes = []
-        new_timers = []
+        def ghost_step(ghost_index: int, new_ghost_states: Tuple):
+            new_mode, new_action, new_timer, skip = update_ghost_mode(
+                state.ghosts.modes[ghost_index],
+                state.ghosts.actions[ghost_index],
+                state.ghosts.timers[ghost_index],
+                ate_power_pellet
+            )
 
-        # 1) Iterate over all ghosts
-        for i in range(len(state.ghosts.types)):
-            position    = state.ghosts.positions[i]
-            action      = state.ghosts.actions[i]
-            mode        = state.ghosts.modes[i]
-            last_timer  = state.ghosts.timers[i]
-            new_timer   = state.ghosts.timers[i]
-            skip        = False
+            new_action = update_ghost_action(
+                state.ghosts.types[ghost_index],
+                new_mode,
+                new_action,
+                state.ghosts.positions[ghost_index],
+                state.ghosts.keys[ghost_index],
+                skip
+            )
 
-            # 2) Update ghost mode and timer
-            if last_timer > 0:
-                new_timer = last_timer - 1
-            if ate_power_pellet and mode not in [GhostMode.ENJAILED, GhostMode.RETURNING]:
-                mode = GhostMode.FRIGHTENED
-                new_timer = FRIGHTENED_DURATION
-                action = reverse_direction(action)
-                skip = True
-            elif new_timer == 0 and last_timer > 0:
-                match mode:
-                    case GhostMode.CHASE:
-                        mode = GhostMode.SCATTER
-                        new_timer = SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET)
-                        action = reverse_direction(action)
-                        skip = True
-                    case GhostMode.SCATTER:
-                        mode = GhostMode.CHASE
-                        new_timer = CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET)
-                        action = reverse_direction(action)
-                        skip = True
-                    case GhostMode.ENJAILED:
-                        mode = GhostMode.RETURNING
-                        new_timer = RETURN_DURATION
-                        action = Action.UP
-                        skip = True
-                    case GhostMode.FRIGHTENED:
-                        mode = GhostMode.BLINKING
-                        new_timer = BLINKING_DURATION
-                    case GhostMode.BLINKING | GhostMode.RETURNING | GhostMode.RANDOM:
-                        mode = GhostMode.CHASE
-                        new_timer = CHASE_DURATION
+            new_position = state.ghosts.positions[ghost_index] + ACTIONS[new_action]
+            new_position = new_position.at[0].set(new_position[0] % 160)
 
-            # 3) Update ghost action
-            if skip or mode == GhostMode.ENJAILED or mode == GhostMode.RETURNING:
-                pass
-            else:
-                # Choose new direction
-                allowed = get_allowed_directions(position, action, state.level.dofmaze)
-                if not allowed: # If no direction is allowed - continue forward
-                    pass
-                elif len(allowed) == 1: # If only one allowed direction - take it
-                    action = allowed[0]
-                elif mode == GhostMode.FRIGHTENED or mode == GhostMode.BLINKING or mode == GhostMode.RANDOM or mode == GhostMode.RETURNING:
-                    action = jax.random.choice(state.ghosts.keys[i], jnp.array(allowed))
-                else:
-                    if mode == GhostMode.CHASE:
-                        chase_target = get_chase_target(state.ghosts.types[i], position, state.ghosts.positions[GhostType.BLINKY],
-                                                        state.player.position, state.player.action)
-                    else: # If not CHASE, mode must be SCATTER at this point
-                        chase_target = SCATTER_TARGETS[state.ghosts.types[i]]
-                    action = pathfind(position, action, chase_target, allowed, state.ghosts.keys[i])
+            new_modes       = new_ghost_states[0].at[ghost_index].set(new_mode)
+            new_actions     = new_ghost_states[1].at[ghost_index].set(new_action)
+            new_positions   = new_ghost_states[2].at[ghost_index].set(new_position)
+            new_timers      = new_ghost_states[3].at[ghost_index].set(new_timer)
+            return (new_modes, new_actions, new_positions, new_timers)
 
-            # 4) Update ghost position
-            position = position + ACTIONS[action]
-            position = position.at[0].set(position[0] % 160) # wrap horizontally
+        def update_ghost_mode(mode, action, timer, ate_power_pellet):
+            new_timer = jax.lax.cond(
+                timer > 0,
+                lambda: timer - 1,
+                lambda: timer
+            )
+            return jax.lax.cond(
+                ate_power_pellet and mode not in [GhostMode.ENJAILED, GhostMode.RETURNING],
+                lambda: (
+                    GhostMode.FRIGHTENED,
+                    reverse_direction(action),
+                    FRIGHTENED_DURATION,
+                    True
+                ),
+                lambda: jax.lax.cond(
+                    timer > 0 and new_timer == 0,
+                    lambda: jax.lax.switch(
+                        mode,
+                        (
+                            start_first_chase,  # 0: RANDOM
+                            start_scatter,      # 1: CHASE
+                            start_chase,        # 2: SCATTER
+                            start_blinking,     # 3: FRIGHTENED
+                            start_first_chase,  # 4: BLINKING
+                            start_first_chase,  # 5: RETURNING
+                            start_returning     # 6: ENJAILED
+                        ),
+                        action
+                    ),
+                    lambda: (
+                        mode,
+                        action,
+                        new_timer,
+                        False
+                    )
+                )
+            )
+        
+        def update_ghost_action(type, mode, action, position, key, skip):
+            return jax.lax.cond(
+                skip or mode == GhostMode.ENJAILED or mode == GhostMode.RETURNING,
+                lambda: action,
+                lambda: choose_direction(type, mode, action, position, key)
+            )
 
-            # 5) Save new ghost state
-            new_positions.append(position)
-            new_actions.append(action)
-            new_modes.append(mode)
-            new_timers.append(new_timer)
+        def choose_direction(type, mode, action, position, key):
+            allowed = get_allowed_directions(position, action, state.level.dofmaze)
+            return jax.lax.cond(
+                not allowed,
+                lambda: action,
+                lambda: jax.lax.cond(
+                    len(allowed) == 1,
+                    lambda: allowed[0],
+                    lambda: jax.lax.cond(
+                        mode == GhostMode.FRIGHTENED or mode == GhostMode.BLINKING or mode == GhostMode.RANDOM or mode == GhostMode.RETURNING,
+                        lambda: jax.random.choice(key, jnp.array(allowed)),
+                        lambda: pathfind_target(type, mode, action, position, allowed, key)
+                    )
+                )
+            )
+        
+        def pathfind_target(type, mode, action, position, allowed, key):
+            chase_target = jax.lax.cond(
+                mode == GhostMode.CHASE,
+                lambda: get_chase_target(type, position, state.ghosts.positions[GhostType.BLINKY], state.player.position, state.player.action),
+                lambda: SCATTER_TARGETS[type]
+            )
+            return pathfind(position, action, chase_target, allowed, key)
 
-        # 6) Check for player collision
-        (
+        def start_scatter(action): # succeeds chase mode
+            return (
+                GhostMode.SCATTER,
+                reverse_direction(action),
+                SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET),
+                True
+            )
+        
+        def start_chase(action): # succeeds scatter mode
+            return (
+                GhostMode.CHASE,
+                reverse_direction(action),
+                CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET),
+                True
+            )
+        
+        def start_returning(action): # succeeds enjailed mode
+            return (
+                GhostMode.RETURNING,
+                Action.UP,
+                RETURN_DURATION,
+                True
+            )
+        
+        def start_blinking(action): # succeeds frightened mode
+            return (
+                GhostMode.BLINKING,
+                action,
+                BLINKING_DURATION,
+                False
+            )
+        
+        def start_first_chase(action): # succeeds blinking, returning and random mode
+            return (
+                GhostMode.CHASE,
+                action,
+                CHASE_DURATION,
+                False
+            )
+        
+        ghost_count = len(state.ghosts.types)
+        modes       = jnp.zeros(ghost_count, dtype=jnp.uint8)
+        actions     = jnp.zeros(ghost_count, dtype=jnp.uint8)
+        positions   = jnp.zeros((ghost_count, 2), dtype=jnp.int32)
+        timers      = jnp.zeros(ghost_count, dtype=jnp.int32)
+
+        ( # Iterate over all ghosts and update their mode, action, position and timer
+            new_modes,
+            new_actions,
+            new_positions,
+            new_timers
+        ) = jax.lax.fori_loop(
+            0,
+            ghost_count,
+            ghost_step,
+            (modes, actions, positions, timers)
+        )
+        
+        ( # Check for player collision
             new_positions,
             new_actions,
             new_modes,
@@ -625,27 +704,97 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the game state if a player-ghost collision occured.
         """
-        deadly_collision = False
-        reward = 0
-        if ate_power_pellet:
-            eaten_ghosts = 0
-        for i in range(4): 
-            if detect_collision(new_pacman_pos, ghost_positions[i]):
-                if ghost_modes[i] == GhostMode.FRIGHTENED or ghost_modes[i] == GhostMode.BLINKING:  # If are frighted
-                    # Ghost eaten
-                    reward = EAT_GHOSTS_BASE_POINTS * (2 ** eaten_ghosts)
-                    ghost_positions = ghost_positions.at[i].set(JAIL_POSITION)  # Reset eaten ghost position
-                    ghost_actions = ghost_actions.at[i].set(Action.NOOP)  # Reset eaten ghost action
-                    ghost_modes = ghost_modes.at[i].set(GhostMode.ENJAILED.value)
-                    ghost_timers = ghost_timers.at[i].set(ENJAILED_DURATION)
-                    eaten_ghosts = eaten_ghosts + 1
-                else:
-                    deadly_collision = True  # Collision with an already eaten and respawned ghost           
-        else:
-            deadly_collision = jnp.any(jnp.all(abs(new_pacman_pos - ghost_positions) < 8, axis=1))
+        class GhostStates(NamedTuple):
+            pacman_position: chex.Array
+            reward: chex.Array
+            ghost_positions: chex.Array
+            ghost_actions: chex.Array
+            ghost_modes: chex.Array
+            ghost_timers: chex.Array
+            eaten_ghosts: chex.Array
+            deadly_collision: chex.Array
+
+        def handle_ghost_eaten(ghost_index: int, ghost_states: GhostStates):
+            reward = EAT_GHOSTS_BASE_POINTS * (2 ** ghost_states.eaten_ghosts)
+            ghost_positions = ghost_states.ghost_positions.at[ghost_index].set(JAIL_POSITION)  # Reset eaten ghost position
+            ghost_actions = ghost_states.ghost_actions.at[ghost_index].set(Action.NOOP)  # Reset eaten ghost action
+            ghost_modes = ghost_states.ghost_modes.at[ghost_index].set(GhostMode.ENJAILED.value)
+            ghost_timers = ghost_states.ghost_timers.at[ghost_index].set(ENJAILED_DURATION)
+            eaten_ghosts = ghost_states.eaten_ghosts + 1
+            return GhostStates(
+                ghost_states.pacman_position,
+                reward,
+                ghost_positions,
+                ghost_actions,
+                ghost_modes,
+                ghost_timers,
+                eaten_ghosts,
+                False,
+            )
+
+        def handle_ghost_collision(ghost_index: int, ghost_states: GhostStates):
+            return jax.lax.cond(
+                detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index]),
+                lambda: jax.lax.cond(
+                    ghost_states.ghost_modes[ghost_index] == GhostMode.FRIGHTENED or ghost_states.ghost_modes[ghost_index] == GhostMode.BLINKING,
+                    lambda: handle_ghost_eaten(ghost_index, ghost_states),
+                    lambda: GhostStates(
+                        ghost_states.pacman_position,
+                        ghost_states.reward,
+                        ghost_states.ghost_positions,
+                        ghost_states.ghost_actions,
+                        ghost_states.ghost_modes,
+                        ghost_states.ghost_timers,
+                        ghost_states.eaten_ghosts,
+                        True
+                    )
+                ),
+                lambda: ghost_states
+            )
+
+        new_eaten_ghosts = jax.lax.cond(
+            ate_power_pellet,
+            lambda: 0,
+            lambda: eaten_ghosts
+        )
+
+        (
+            _,
+            reward,
+            new_ghost_positions,
+            new_ghost_actions,
+            new_ghost_modes,
+            new_ghost_timers,
+            new_eaten_ghosts,
+            deadly_collision
+        ) = jax.lax.fori_loop(
+            0,
+            len(ghost_positions),
+            handle_ghost_collision,
+            GhostStates(
+                new_pacman_pos,
+                0,
+                ghost_positions,
+                ghost_actions,
+                ghost_modes,
+                ghost_timers,
+                new_eaten_ghosts,
+                False
+            )
+        )
+
         new_lives = lives - jnp.where(deadly_collision, 1, 0)
         new_death_timer = jnp.where(deadly_collision, RESET_TIMER, 0)
-        return ghost_positions, ghost_actions, ghost_modes, ghost_timers, eaten_ghosts, new_lives, new_death_timer, reward
+        return (
+            new_ghost_positions,
+            new_ghost_actions,
+            new_ghost_modes,
+            new_ghost_timers,
+            new_eaten_ghosts,
+            new_lives,
+            new_death_timer,
+            reward
+        )
 
     @staticmethod
     def fruit_move(state: PacmanState, key: chex.Array
