@@ -30,6 +30,7 @@ GAME_MODULES = {
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
+    "miniature_golf": "jaxatari.games.jax_miniature_golf",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
@@ -60,6 +61,7 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "miniature_golf": "jaxatari.games.mods.miniature_golf_mods.MiniatureGolfEnvMod",
 }
 
 
