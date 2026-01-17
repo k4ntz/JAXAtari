@@ -604,65 +604,54 @@ class DarkChambersRenderer(JAXGameRenderer):
             [40, 400, 140, 6],
             [161, 500, 6, 80],
         ]
-        middle_level_0_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + maze,
-            dtype=jnp.int32
-        )
+        # Note: DO NOT include border_top, border_bottom, left_walls, right_walls here
+        # Those are now in BOUNDARY_WALLS and will be concatenated separately
+        middle_level_0_walls = jnp.array(maze, dtype=jnp.int32)
         
         # Left map (map_index=1) - vertical corridor pattern, adjusted for portals/height
-        left_level_0_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + [
-                [80, 80, 6, 200],
-                [180, 200, 6, 200],
-                [40, 300, 100, 6],
-                [120, 400, 120, 6],
-                [230, 480, 6, 100],
-            ], dtype=jnp.int32
-        )
+        left_level_0_walls = jnp.array([
+            [80, 80, 6, 200],
+            [180, 200, 6, 200],
+            [40, 300, 100, 6],
+            [120, 400, 120, 6],
+            [230, 480, 6, 100],
+        ], dtype=jnp.int32)
         
         # Right map (map_index=2) - horizontal chambers, adjusted for portals/height
-        right_level_0_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + [
-                [50, 100, 140, 6],
-                [140, 200, 6, 200],
-                [70, 300, 130, 6],
-                [50, 400, 110, 6],
-                [200, 500, 6, 70],
-            ], dtype=jnp.int32
-        )
+        right_level_0_walls = jnp.array([
+            [50, 100, 140, 6],
+            [140, 200, 6, 200],
+            [70, 300, 130, 6],
+            [50, 400, 110, 6],
+            [200, 500, 6, 70],
+        ], dtype=jnp.int32)
         
         # Middle map level 1 (reuse portal wall logic)
-        middle_level_1_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + [
-                [50, 120, 100, 6],
-                [180, 220, 100, 6],
-                [100, 320, 120, 6],
-                [60, 420, 100, 6],
-                [81, 540, 6, 60],
-            ], dtype=jnp.int32
-        )
+        middle_level_1_walls = jnp.array([
+            [50, 120, 100, 6],
+            [180, 220, 100, 6],
+            [100, 320, 120, 6],
+            [60, 420, 100, 6],
+            [81, 540, 6, 60],
+        ], dtype=jnp.int32)
         
         # Left map level 1 - alternating pattern (reuse portal wall logic)
-        left_level_1_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + [
-                [60, 90, 110, 6],
-                [70, 170, 6, 90],
-                [140, 250, 100, 6],
-                [190, 320, 6, 80],
-                [50, 440, 120, 6],
-            ], dtype=jnp.int32
-        )
+        left_level_1_walls = jnp.array([
+            [60, 90, 110, 6],
+            [70, 170, 6, 90],
+            [140, 250, 100, 6],
+            [190, 320, 6, 80],
+            [50, 440, 120, 6],
+        ], dtype=jnp.int32)
         
         # Right map level 1 - grid-like pattern (reuse portal wall logic)
-        right_level_1_walls = jnp.array(
-            [border_top, border_bottom] + left_walls + right_walls + [
-                [80, 110, 120, 6],
-                [160, 180, 6, 90],
-                [40, 300, 130, 6],
-                [60, 370, 6, 90],
-                [170, 420, 90, 6],
-            ], dtype=jnp.int32
-        )
+        right_level_1_walls = jnp.array([
+            [80, 110, 120, 6],
+            [160, 180, 6, 90],
+            [40, 300, 130, 6],
+            [60, 370, 6, 90],
+            [170, 420, 90, 6],
+        ], dtype=jnp.int32)
 
         # --- Hard-coded 4×4 cages (interior in nav cells) ---
         self.CAGE_INTERIOR_CELLS = 4
@@ -734,13 +723,11 @@ class DarkChambersRenderer(JAXGameRenderer):
 
         # Create additional levels by offsetting and varying walls
         def offset_walls(base, dx, dy):
-            # Preserve border walls and portal gaps (first 6 entries) and offset only interior labyrinth walls
-            borders = base[:6]
-            interior = base[6:]
-            xy = interior[:, 0:2] + jnp.array([dx, dy])
-            wh = interior[:, 2:4]
-            interior_off = jnp.concatenate([xy, wh], axis=1)
-            return jnp.concatenate([borders, interior_off], axis=0)
+            # Offset all interior labyrinth walls by (dx, dy)
+            # (Border/portal walls now come from BOUNDARY_WALLS only)
+            xy = base[:, 0:2] + jnp.array([dx, dy])
+            wh = base[:, 2:4]
+            return jnp.concatenate([xy, wh], axis=1)
 
         def offset_pos(pos, dx, dy):
             return pos + jnp.array([dx, dy], dtype=jnp.int32)
@@ -893,9 +880,35 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Default to middle map level 0 for compatibility
         self.WALLS = middle_level_0_walls
 
+        def build_boundary_walls():
+            portal_hole_height = 40
+            portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+            portal_y_starts = jnp.array([
+                portal_gap,
+                portal_gap * 2 + portal_hole_height,
+                portal_gap * 3 + portal_hole_height * 2
+            ], dtype=jnp.int32)
+            portal_y_ends = portal_y_starts + portal_hole_height
+
+            bt = jnp.array([0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS], dtype=jnp.int32)
+            bb = jnp.array([0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS], dtype=jnp.int32)
+            lw1 = jnp.array([0, 0, self.consts.WALL_THICKNESS, portal_y_starts[0]], dtype=jnp.int32)
+            lw2 = jnp.array([0, portal_y_ends[0], self.consts.WALL_THICKNESS, portal_y_starts[1] - portal_y_ends[0]], dtype=jnp.int32)
+            lw3 = jnp.array([0, portal_y_ends[1], self.consts.WALL_THICKNESS, portal_y_starts[2] - portal_y_ends[1]], dtype=jnp.int32)
+            lw4 = jnp.array([0, portal_y_ends[2], self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_ends[2]], dtype=jnp.int32)
+            rw1 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, self.consts.WALL_THICKNESS, portal_y_starts[0]], dtype=jnp.int32)
+            rw2 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[0], self.consts.WALL_THICKNESS, portal_y_starts[1] - portal_y_ends[0]], dtype=jnp.int32)
+            rw3 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[1], self.consts.WALL_THICKNESS, portal_y_starts[2] - portal_y_ends[1]], dtype=jnp.int32)
+            rw4 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[2], self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_ends[2]], dtype=jnp.int32)
+            return jnp.stack([bt, bb, lw1, lw2, lw3, lw4, rw1, rw2, rw3, rw4], axis=0)
+
+        # Shared boundary walls (with portal gaps) for rendering and collision
+        self.BOUNDARY_WALLS = build_boundary_walls()
+
         # --- Navigation grid: mark nav cells that are blocked by walls ---
         def make_occupancy(walls):
             # walls: (num_walls, 4) = [x, y, w, h]
+            walls = jnp.concatenate([walls, self.BOUNDARY_WALLS], axis=0)
             xs = jnp.arange(GRID_W) * CELL_SIZE
             ys = jnp.arange(GRID_H) * CELL_SIZE
             cx, cy = jnp.meshgrid(xs, ys)   # shape (GRID_H, GRID_W)
@@ -1004,6 +1017,17 @@ class DarkChambersRenderer(JAXGameRenderer):
             object_raster, 
             positions=wall_positions, 
             sizes=wall_sizes, 
+            color_id=self.WALL_ID
+        )
+
+        # Reinforce map borders every frame (with portal gaps) so edges never disappear
+        boundary_walls = self.BOUNDARY_WALLS
+        boundary_positions = (boundary_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        boundary_sizes = boundary_walls[:, 2:4]
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=boundary_positions,
+            sizes=boundary_sizes,
             color_id=self.WALL_ID
         )
 
@@ -1233,6 +1257,17 @@ class DarkChambersRenderer(JAXGameRenderer):
             # ITEM_POISON = 2 -> skull sprite
             is_poison = (item_type == ITEM_POISON) & is_active
             skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
+            # Draw a visible box under/for poison so it isn't invisible on dark backgrounds
+            poison_size = self.ITEM_TYPE_SIZES[ITEM_POISON]
+            poison_sizes = jnp.array([poison_size], dtype=jnp.int32)
+            poison_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+            poison_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_POISON - 1]
+            raster = jax.lax.cond(
+                is_poison,
+                lambda r: self.jr.draw_rects(r, positions=poison_pos, sizes=poison_sizes, color_id=poison_color),
+                lambda r: r,
+                raster
+            )
             raster = jax.lax.cond(
                 is_poison & (skull_sprite is not None),
                 lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
@@ -1243,6 +1278,17 @@ class DarkChambersRenderer(JAXGameRenderer):
             # ITEM_TRAP = 3 -> trapdoor sprite
             is_trap = (item_type == ITEM_TRAP) & is_active
             trapdoor_sprite = self.ITEM_SCALED_MASKS.get("trapdoor")
+            # Draw a visible box under/for traps so they aren't invisible on dark backgrounds
+            trap_size = self.ITEM_TYPE_SIZES[ITEM_TRAP]
+            trap_sizes = jnp.array([trap_size], dtype=jnp.int32)
+            trap_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+            trap_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_TRAP - 1]
+            raster = jax.lax.cond(
+                is_trap,
+                lambda r: self.jr.draw_rects(r, positions=trap_pos, sizes=trap_sizes, color_id=trap_color),
+                lambda r: r,
+                raster
+            )
             raster = jax.lax.cond(
                 is_trap & (trapdoor_sprite is not None),
                 lambda r: self.jr.render_at_clipped(r, item_x, item_y, trapdoor_sprite),
@@ -1768,8 +1814,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[DarkChambersObservation, DarkChambersState]:
         """Reset the environment and return the initial observation and state."""
         
-        # Use middle map (0), level 0 walls for initial spawn
-        WALLS = self.renderer.LEVEL_WALLS[0, 0]
+        # Use middle map (0), level 0 walls for initial spawn (plus boundaries)
+        WALLS = jnp.concatenate([
+            self.renderer.LEVEL_WALLS[0, 0],
+            self.renderer.BOUNDARY_WALLS,
+        ], axis=0)
         
         def check_wall_overlap(pos_x, pos_y, width, height):
             """Check if a rectangle overlaps with any wall."""
@@ -2132,8 +2181,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             prop_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
             prop_x = jnp.where(should_wrap_left, 2, prop_x)
             
-            # Wall collision check - use walls for current map and level
-            WALLS = self.renderer.LEVEL_WALLS[new_map_index, state.current_level]
+            # Wall collision check - include boundary walls (with portal gaps)
+            WALLS = jnp.concatenate(
+                [
+                    self.renderer.LEVEL_WALLS[new_map_index, state.current_level],
+                    self.renderer.BOUNDARY_WALLS,
+                ],
+                axis=0,
+            )
             
             def collides(px, py):
                 wx = WALLS[:, 0]
@@ -3045,8 +3100,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 key, subkey = jax.random.split(key)
                 spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
                 
-                # Get current level and map walls for collision checking
-                WALLS = self.renderer.LEVEL_WALLS[state.map_index, state.current_level]
+                # Get current level and map walls for collision checking (include boundaries)
+                WALLS = jnp.concatenate(
+                    [
+                        self.renderer.LEVEL_WALLS[state.map_index, state.current_level],
+                        self.renderer.BOUNDARY_WALLS,
+                    ],
+                    axis=0,
+                )
                 
                 # Try to find valid spawn position (not on walls)
                 # We'll try multiple random positions and use the first valid one
