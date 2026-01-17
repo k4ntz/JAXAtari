@@ -1581,8 +1581,8 @@ class DunkRenderer(JAXGameRenderer):
         ball_holder = state.ball.holder
         
         # Determine Possession/Defense Role
-        ball_holder_is_p1 = (ball_holder == PlayerID.PLAYER1_INSIDE), (ball_holder == PlayerID.PLAYER1_OUTSIDE)
-        ball_holder_is_p2 = (ball_holder == PlayerID.PLAYER2_INSIDE), (ball_holder == PlayerID.PLAYER2_OUTSIDE)
+        ball_holder_is_p1 = (ball_holder == PlayerID.PLAYER1_INSIDE) | (ball_holder == PlayerID.PLAYER1_OUTSIDE)
+        ball_holder_is_p2 = (ball_holder == PlayerID.PLAYER2_INSIDE) | (ball_holder == PlayerID.PLAYER2_OUTSIDE)
         
         # P1 Team (0, 1) defends if P2 has ball
         # P2 Team (2, 3) defends if P1 has ball
