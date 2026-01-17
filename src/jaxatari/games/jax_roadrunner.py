@@ -268,6 +268,8 @@ def _build_road_section_arrays(
         return 0, jnp.array([], dtype=jnp.int32).reshape(0, 0, 6), jnp.array([], dtype=jnp.int32)
 
     max_road_sections = max(len(cfg.road_sections) for cfg in levels)
+
+
     road_sections_data = []
     road_section_counts = []
     default_section = [
@@ -306,6 +308,32 @@ def _build_road_section_arrays(
         jnp.array(road_sections_data, dtype=jnp.int32),
         jnp.array(road_section_counts, dtype=jnp.int32),
     )
+
+
+def _build_dynamic_road_config_arrays(
+    levels: Tuple[LevelConfig, ...]
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    enabled = jnp.array(
+        [cfg.dynamic_road_heights is not None for cfg in levels],
+        dtype=jnp.bool_
+    ) if levels else jnp.array([], dtype=jnp.bool_)
+    
+    heights = jnp.array(
+        [cfg.dynamic_road_heights if cfg.dynamic_road_heights else (70, 70) for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.zeros((0, 2), dtype=jnp.int32)
+    
+    intervals = jnp.array(
+        [cfg.dynamic_road_interval for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+    
+    transition_lengths = jnp.array(
+        [cfg.dynamic_road_transition_length for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+
+    return enabled, heights, intervals, transition_lengths
 
 
 def _build_spawn_interval_array(
@@ -704,27 +732,12 @@ class JaxRoadRunner(
             self._road_section_counts,
         ) = _build_road_section_arrays(levels, self.consts)
 
-        # Build dynamic road height config arrays
-        # Each level can optionally have dynamic road heights
-        self._dynamic_road_enabled = jnp.array(
-            [cfg.dynamic_road_heights is not None for cfg in levels],
-            dtype=jnp.bool_
-        ) if levels else jnp.array([], dtype=jnp.bool_)
-        
-        self._dynamic_road_heights = jnp.array(
-            [cfg.dynamic_road_heights if cfg.dynamic_road_heights else (70, 70) for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.zeros((0, 2), dtype=jnp.int32)
-        
-        self._dynamic_road_intervals = jnp.array(
-            [cfg.dynamic_road_interval for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.array([], dtype=jnp.int32)
-        
-        self._dynamic_road_transition_lengths = jnp.array(
-            [cfg.dynamic_road_transition_length for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.array([], dtype=jnp.int32)
+        (
+            self._dynamic_road_enabled,
+            self._dynamic_road_heights,
+            self._dynamic_road_intervals,
+            self._dynamic_road_transition_lengths
+        ) = _build_dynamic_road_config_arrays(levels)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Handles user input to determine player velocity and jump action."""
@@ -2232,25 +2245,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
         
         # Build dynamic road height config arrays for renderer
         levels = self.consts.levels
-        self._dynamic_road_enabled = jnp.array(
-            [cfg.dynamic_road_heights is not None for cfg in levels],
-            dtype=jnp.bool_
-        ) if levels else jnp.array([], dtype=jnp.bool_)
-        
-        self._dynamic_road_heights = jnp.array(
-            [cfg.dynamic_road_heights if cfg.dynamic_road_heights else (70, 70) for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.zeros((0, 2), dtype=jnp.int32)
-        
-        self._dynamic_road_intervals = jnp.array(
-            [cfg.dynamic_road_interval for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.array([], dtype=jnp.int32)
-        
-        self._dynamic_road_transition_lengths = jnp.array(
-            [cfg.dynamic_road_transition_length for cfg in levels],
-            dtype=jnp.int32
-        ) if levels else jnp.array([], dtype=jnp.int32)
+        (
+            self._dynamic_road_enabled,
+            self._dynamic_road_heights,
+            self._dynamic_road_intervals,
+            self._dynamic_road_transition_lengths
+        ) = _build_dynamic_road_config_arrays(levels)
         
         # Pre-calculate unique road dimensions for rendering optimization
         unique_heights_list, unique_widths_list = self._get_unique_road_dims()
