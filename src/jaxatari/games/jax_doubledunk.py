@@ -30,13 +30,19 @@ class GameMode(IntEnum):
 class OffensiveAction(IntEnum):
     PASS = 0
     JUMPSHOOT = 1
+    MOVE_TO_POST = 2
 
 class DefensiveStrategy(IntEnum):
     LANE_DEFENSE = 0
     TIGHT_DEFENSE = 1
 
-PICK_AND_ROLL = jnp.array([OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
-GIVE_AND_GO = jnp.array([OffensiveAction.PASS, OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
+# Strategies based on Manual
+# Note: "Jump" and "Shoot" are often combined or sequential. 
+# We use JUMPSHOOT to represent the phase where shooting is the goal.
+PICK_AND_ROLL = jnp.array([OffensiveAction.MOVE_TO_POST, OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
+GIVE_AND_GO = jnp.array([OffensiveAction.MOVE_TO_POST, OffensiveAction.PASS, OffensiveAction.PASS, OffensiveAction.JUMPSHOOT])
+PICK_PLAY = jnp.array([OffensiveAction.MOVE_TO_POST, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
+MR_INSIDE_SHOOTS = jnp.array([OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
 MR_OUTSIDE_SHOOTS = jnp.array([OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
 
 @chex.dataclass(frozen=True)
@@ -118,6 +124,7 @@ class GameStrategy:
     defense_pattern: chex.Array
     offense_step: chex.Array
     last_enemy_actions: chex.Array
+    play_direction: chex.Array # -1: Left, 1: Right, 0: Center
 
 @chex.dataclass(frozen=True)
 class DunkGameState:
@@ -306,7 +313,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 offense_pattern=GIVE_AND_GO,
                 defense_pattern=DefensiveStrategy.LANE_DEFENSE,
                 offense_step=0,
-                last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP])
+                last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
+                play_direction=0
             ),
             step_counter=0,
             acceleration_counter=0,
@@ -613,6 +621,24 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_p1_inside_teammate_ai = ~is_p1_inside_controlled
         is_p1_outside_teammate_ai = ~is_p1_outside_controlled
 
+        # Move to Post Logic (Active if PREVIOUS step was MOVE_TO_POST)
+        # The manual says "First press: Move to post". This implies the behavior lasts UNTIL the next press.
+        prev_step = state.strategy.offense_step - 1
+        prev_action_was_move = (prev_step >= 0) & (state.strategy.offense_pattern[prev_step] == OffensiveAction.MOVE_TO_POST)
+        
+        # Determine Post Position based on chosen direction
+        # Left Post: 40, Right Post: 120, Center: 80 (y=60)
+        play_dir = state.strategy.play_direction
+        post_x = jax.lax.select(play_dir == -1, 40, jax.lax.select(play_dir == 1, 120, 80))
+        post_y = 60
+        
+        p1_inside_dist_to_post = jnp.sqrt((state.player1_inside.x - post_x)**2 + (state.player1_inside.y - post_y)**2)
+        p1_at_post = p1_inside_dist_to_post < 5
+        
+        # If we are in the "Move to Post" phase, override random movement until we arrive
+        should_move_to_post = prev_action_was_move & ~p1_at_post
+        p1_move_to_post_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, post_x, post_y)
+
         # Random/Heuristic Offensive Moves (Existing logic)
         random_teammate_move_idx = random.randint(teammate_action_key, shape=(), minval=0, maxval=8)
         random_teammate_move_action = movement_actions[random_teammate_move_idx]
@@ -641,7 +667,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 jax.lax.select(
                     p2_has_ball, 
                     p1_in_def_action, 
-                    jax.lax.select(p1_is_far, p1_return_to_basket_action, p1_off_action)
+                    jax.lax.select(
+                        should_move_to_post,
+                        p1_move_to_post_action,
+                        jax.lax.select(p1_is_far, p1_return_to_basket_action, p1_off_action)
+                    )
                 )
             ),
             p1_inside_action
@@ -944,18 +974,43 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return player.replace(vel_z=new_vel_z, triggered_clearance=triggered_clearance), did_jump
 
     def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey, chex.Array]:
-        """Handles offensive actions: passing and shooting."""
+        """Handles offensive actions: passing, shooting, and move commands."""
+        
+        # Check current action type
+        current_step_action = state.strategy.offense_pattern[state.strategy.offense_step]
+        is_move_step = (current_step_action == OffensiveAction.MOVE_TO_POST)
+        
+        # Check trigger for move step (Any Fire press by holder's team)
+        ball_holder = state.ball.holder
+        holder_idx = jnp.clip(ball_holder - 1, 0, 3) # 0..3
+        
+        # Map actions to simple array
+        actions_arr = jnp.array(actions)
+        holder_action = jax.lax.select(
+            (ball_holder != PlayerID.NONE),
+            actions_arr[holder_idx],
+            Action.NOOP
+        )
+        
+        is_fire_pressed = jnp.any(jnp.asarray(holder_action) == jnp.asarray(list(_PASS_ACTIONS)))
+        
+        move_inc = jax.lax.select(
+            is_move_step & is_fire_pressed & (state.timers.offense_cooldown == 0),
+            1,
+            0
+        )
+        
         # Passing
         ball_state_after_pass, pass_inc, did_pass = self._handle_passing(state, actions)
         state = state.replace(ball=ball_state_after_pass)
-        state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_pass, 6, state.timers.offense_cooldown)))
+        state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_pass | (move_inc > 0), 6, state.timers.offense_cooldown)))
 
         # Shooting
         ball_state_after_shot, key, shot_inc, did_shoot = self._handle_shooting(state, actions, key)
         state = state.replace(ball=ball_state_after_shot)
         state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_shoot, 6, state.timers.offense_cooldown)))
 
-        step_increment = pass_inc + shot_inc
+        step_increment = pass_inc + shot_inc + move_inc
         return state, key, step_increment
 
     def _handle_defense_actions(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
@@ -1191,7 +1246,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         random_defensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=2) # 0, 1
         enemy_defensive_strategy = random_defensive_idx
 
-        def start_game(s, selected_off, selected_def):
+        def start_game(s, selected_off, selected_def, direction):
             # When a strategy is selected, we reset the game to its initial state
             # but keep the selected strategy and switch to IN_PLAY mode.
             # We also keep the current key.
@@ -1200,7 +1255,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                     offense_pattern=selected_off,
                     defense_pattern=selected_def,
                     offense_step=0,
-                    last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP])
+                    last_enemy_actions=jnp.array([Action.NOOP, Action.NOOP]),
+                    play_direction=direction
                 ),
                 game_mode=GameMode.IN_PLAY,
                 key=key
@@ -1209,35 +1265,78 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_up = (action == Action.UPFIRE)
         is_down = (action == Action.DOWNFIRE)
         is_right = (action == Action.RIGHTFIRE)
+        is_left = (action == Action.LEFTFIRE)
+        is_up_left = (action == Action.UPLEFTFIRE)
+        is_up_right = (action == Action.UPRIGHTFIRE)
+        is_down_left = (action == Action.DOWNLEFTFIRE)
+        is_down_right = (action == Action.DOWNRIGHTFIRE)
 
         # Case 1: P1 Has Ball (User chooses Offense, Enemy chooses Defense)
-        # User choices: UP=PICK_AND_ROLL, DOWN=GIVE_AND_GO, RIGHT=MR_OUTSIDE_SHOOTS
-        off_p1 = jax.lax.select(is_up, PICK_AND_ROLL, 
-                   jax.lax.select(is_down, GIVE_AND_GO, 
-                     jax.lax.select(is_right, MR_OUTSIDE_SHOOTS, state.strategy.offense_pattern)))
+        # Mappings aligned with manual:
+        # TOP (UP)          = MR_INSIDE_SHOOTS
+        # BOTTOM (DOWN)     = MR_OUTSIDE_SHOOTS
+        # L/R               = GIVE_AND_GO
+        # UPPER L/R         = PICK_AND_ROLL
+        # LOWER L/R         = PICK_PLAY
         
-        valid_input_p1_off = is_up | is_down | is_right
+        off_p1 = jax.lax.select(
+            is_up, MR_INSIDE_SHOOTS, 
+            jax.lax.select(
+                is_down, MR_OUTSIDE_SHOOTS, 
+                jax.lax.select(
+                    is_left | is_right, GIVE_AND_GO,
+                    jax.lax.select(
+                        is_up_left | is_up_right, PICK_AND_ROLL,
+                        jax.lax.select(
+                            is_down_left | is_down_right, PICK_PLAY,
+                            state.strategy.offense_pattern
+                        )
+                    )
+                )
+            )
+        )
+        
+        # Determine Play Direction (-1: Left, 1: Right, 0: Center)
+        # Left variants: LEFT, UP_LEFT, DOWN_LEFT
+        # Right variants: RIGHT, UP_RIGHT, DOWN_RIGHT
+        play_dir_p1 = jax.lax.select(
+            is_left | is_up_left | is_down_left, -1,
+            jax.lax.select(
+                is_right | is_up_right | is_down_right, 1,
+                0 # UP and DOWN are center
+            )
+        )
+        
+        valid_input_p1_off = is_up | is_down | is_right | is_left | is_up_left | is_up_right | is_down_left | is_down_right
         
         state_p1_ball = jax.lax.cond(
             valid_input_p1_off,
-            lambda s: start_game(s, off_p1, enemy_defensive_strategy),
+            lambda s: start_game(s, off_p1, enemy_defensive_strategy, play_dir_p1),
             lambda s: s,
             state
         )
 
         # Case 2: P2 Has Ball (Enemy chooses Offense, User chooses Defense)
-        # User choices: UP=LANE_DEFENSE, DOWN=TIGHT_DEFENSE, RIGHT=LANE_DEFENSE (Default)
-        def_p1 = jax.lax.select(is_up, DefensiveStrategy.LANE_DEFENSE,
-                   jax.lax.select(is_down, DefensiveStrategy.TIGHT_DEFENSE, 
-                     jax.lax.select(is_right, DefensiveStrategy.LANE_DEFENSE, state.strategy.defense_pattern)))
+        def_p1 = jax.lax.select(
+            is_up | is_down_left | is_down_right, DefensiveStrategy.LANE_DEFENSE,
+            jax.lax.select(
+                is_down | is_left | is_right | is_up_left | is_up_right, DefensiveStrategy.TIGHT_DEFENSE, 
+                state.strategy.defense_pattern
+            )
+        )
         
-        valid_input_p1_def = is_up | is_down # Right maps to something or ignored? Let's include Right as default/LANE for now or strict?
+        # Enemy picks a direction (Randomly)
+        enemy_play_dir = random.randint(strat_key, shape=(), minval=-1, maxval=2) # -1, 0, 1 (Actually randint maxval is exclusive? No, JAX is usually exclusive for high. Wait. randint minval (inclusive), maxval (exclusive). So -1 to 2 gives -1, 0, 1.)
+        # Need to check jax.random.randint docs or convention. 
+        # Usually [minval, maxval). So -1 to 2 -> -1, 0, 1. Correct.
+        
+        valid_input_p1_def = valid_input_p1_off
         # Prompt says: "whoever has the ball (User or enemy) must choose an offensive strategy and the other team chooses a defensive strategy"
         # I'll stick to Up/Down for defense as I only have 2 defensive strategies.
 
         state_p2_ball = jax.lax.cond(
              valid_input_p1_def,
-             lambda s: start_game(s, enemy_offensive_strategy, def_p1),
+             lambda s: start_game(s, enemy_offensive_strategy, def_p1, enemy_play_dir),
              lambda s: s,
              state
         )
