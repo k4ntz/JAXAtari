@@ -2603,65 +2603,22 @@ class RoadRunnerRenderer(JAXGameRenderer):
             # For dynamic roads, render per-column based on world position
             def render_dynamic_road(c):
                 """Render road with per-column height calculation using vectorized masking."""
-                # Constants for cycle calculation
-                # Multiply by PLAYER_MOVE_SPEED to match road marking scroll speed
-                world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
-
-                cycle_length = interval * 2
-                half_trans = trans_len // 2
-                
-                trans_a_to_b_start = interval - half_trans
-                trans_a_to_b_end = interval + half_trans
-                trans_b_to_a_start = cycle_length - half_trans
-                
-                # Create column indices array [0, 1, 2, ..., static_road_width-1]
-                col_indices = jnp.arange(static_road_width, dtype=jnp.int32)
-                
                 # Calculate world x for each column
                 # Invert: rightmost column (high index) should be at current scroll position
                 # Leftmost column should show older (higher scroll) positions
                 # This makes transitions move LEFT as player scrolls RIGHT
+                world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
+                col_indices = jnp.arange(static_road_width, dtype=jnp.int32)
                 world_x = world_scroll + (static_road_width - 1 - col_indices)
 
-                
-                # Calculate position in cycle for each column
-                pos_in_cycle = world_x % cycle_length
-                
-                # Determine zone for each column (with wrap-around handling for B→A)
-                # Zone A: [half_trans, trans_a_to_b_start)
-                # Transition A→B: [trans_a_to_b_start, trans_a_to_b_end)
-                # Zone B: [trans_a_to_b_end, trans_b_to_a_start)
-                # Transition B→A: [trans_b_to_a_start, cycle_length) OR [0, half_trans)
-                in_zone_a = (pos_in_cycle >= half_trans) & (pos_in_cycle < trans_a_to_b_start)
-                in_trans_a_to_b = (pos_in_cycle >= trans_a_to_b_start) & (pos_in_cycle < trans_a_to_b_end)
-                in_zone_b = (pos_in_cycle >= trans_a_to_b_end) & (pos_in_cycle < trans_b_to_a_start)
-                # B→A wraps around at cycle boundary
-                in_trans_b_to_a = (pos_in_cycle >= trans_b_to_a_start) | (pos_in_cycle < half_trans)
-                
-                # Calculate transition progress for each column
-                trans_a_to_b_progress = (pos_in_cycle - trans_a_to_b_start) / trans_len
-                
-                # B→A progress with wrap-around handling
-                trans_b_to_a_progress = jnp.where(
-                    pos_in_cycle >= trans_b_to_a_start,
-                    (pos_in_cycle - trans_b_to_a_start) / trans_len,
-                    (pos_in_cycle + half_trans) / trans_len
+                dynamic_height, _, _ = _get_dynamic_road_height(
+                    world_x,
+                    height_a,
+                    height_b,
+                    interval,
+                    trans_len,
                 )
-                
-                # Calculate height for each column
-                col_heights = jnp.where(
-                    in_zone_a, 
-                    jnp.float32(height_a),
-                    jnp.where(
-                        in_zone_b, 
-                        jnp.float32(height_b),
-                        jnp.where(
-                            in_trans_a_to_b,
-                            jnp.float32(height_a) + (height_b - height_a) * trans_a_to_b_progress,
-                            jnp.float32(height_b) + (height_a - height_b) * trans_b_to_a_progress
-                        )
-                    )
-                ).astype(jnp.int32)
+                col_heights = dynamic_height.astype(jnp.int32)
 
                 
                 col_heights = jnp.clip(col_heights, 1, self.consts.ROAD_HEIGHT)
