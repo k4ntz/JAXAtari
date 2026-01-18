@@ -16,6 +16,142 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 SEED = 0xC4
 
 
+HUD_FONT_16 = jnp.array(
+    [
+        # 0
+        [[1, 1, 1],
+         [1, 0, 1],
+         [1, 0, 1],
+         [1, 0, 1],
+         [1, 1, 1]],
+        # 1
+        [[0, 1, 0],
+         [1, 1, 0],
+         [0, 1, 0],
+         [0, 1, 0],
+         [1, 1, 1]],
+        # 2
+        [[1, 1, 1],
+         [0, 0, 1],
+         [1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1]],
+        # 3
+        [[1, 1, 1],
+         [0, 0, 1],
+         [1, 1, 1],
+         [0, 0, 1],
+         [1, 1, 1]],
+        # 4
+        [[1, 0, 1],
+         [1, 0, 1],
+         [1, 1, 1],
+         [0, 0, 1],
+         [0, 0, 1]],
+        # 5
+        [[1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1],
+         [0, 0, 1],
+         [1, 1, 1]],
+        # 6
+        [[1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1],
+         [1, 0, 1],
+         [1, 1, 1]],
+        # 7
+        [[1, 1, 1],
+         [0, 0, 1],
+         [0, 0, 1],
+         [0, 0, 1],
+         [0, 0, 1]],
+        # 8
+        [[1, 1, 1],
+         [1, 0, 1],
+         [1, 1, 1],
+         [1, 0, 1],
+         [1, 1, 1]],
+        # 9
+        [[1, 1, 1],
+         [1, 0, 1],
+         [1, 1, 1],
+         [0, 0, 1],
+         [1, 1, 1]],
+        # A
+        [[1, 1, 1],
+         [1, 0, 1],
+         [1, 1, 1],
+         [1, 0, 1],
+         [1, 0, 1]],
+        # B
+        [[1, 1, 0],
+         [1, 0, 1],
+         [1, 1, 0],
+         [1, 0, 1],
+         [1, 1, 0]],
+        # C
+        [[1, 1, 1],
+         [1, 0, 0],
+         [1, 0, 0],
+         [1, 0, 0],
+         [1, 1, 1]],
+        # D
+        [[1, 1, 0],
+         [1, 0, 1],
+         [1, 0, 1],
+         [1, 0, 1],
+         [1, 1, 0]],
+        # E
+        [[1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1]],
+        # F
+        [[1, 1, 1],
+         [1, 0, 0],
+         [1, 1, 1],
+         [1, 0, 0],
+         [1, 0, 0]],
+    ],
+    dtype=jnp.uint8,
+)
+
+
+def _get_default_pitfall_asset_config() -> tuple:
+    """Default declarative asset manifest for Pitfall."""
+    return (
+        {'name': 'background', 'type': 'background'},
+        {
+            'name': 'harry_idle',
+            'type': 'group',
+            'files': ['harryidle1.npy'],
+        },
+        {
+            'name': 'harry_run',
+            'type': 'group',
+            'files': [
+                'harryrunning1.npy',
+                'harryrunning2.npy',
+                'harryrunning3.npy',
+                'harryrunning4.npy',
+                'harryrunning5.npy',
+            ],
+        },
+        {
+            'name': 'harry_climb',
+            'type': 'group',
+            'files': ['harryclimb1.npy', 'harryclimb2.npy'],
+        },
+        {
+            'name': 'harry_jump',
+            'type': 'group',
+            'files': ['harryjumping1.npy', 'harryjumping2.npy'],
+        },
+    )
+
+
 def pit_code_u8(room_byte: jnp.ndarray) -> jnp.ndarray:
     """Bits 3..5 (uint8 0..7)."""
     return (room_byte.astype(jnp.uint8) >> jnp.uint8(3)) & jnp.uint8(0x7)
@@ -181,8 +317,8 @@ class PitfallConstants(NamedTuple):
     tunnel_wall_width: int = 8
 
     # Side holes beside ladder (underground)
-    hole_width: int = 20            # px
-    hole_gap_from_ladder: int = 20   # px gap from ladder edge
+    hole_width: int = 17            # px
+    hole_gap_from_ladder: int = 26   # px gap from ladder edge
 
     # Stationary wood logs (upper ground hazard)
     wood_drain_per_frame: int = 2  # score points drained each frame while touching any log
@@ -201,6 +337,11 @@ class PitfallConstants(NamedTuple):
     snake_w: int = 12
     snake_h: int = 6
     snake_hurt_cooldown_frames: int = 30
+
+    # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
+    harry_y_tune: int = 0
+
+    ASSET_CONFIG: tuple = _get_default_pitfall_asset_config()
 
 
 
@@ -894,7 +1035,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
     
 
 class PitfallRenderer(JAXGameRenderer):
-    """Very simple renderer: black background, green ground, white player block."""
+    """Pitfall renderer using the shared raster+palette pipeline."""
 
     def __init__(
         self,
@@ -909,398 +1050,351 @@ class PitfallRenderer(JAXGameRenderer):
         self.left_wall_x_px = left_wall_x_px
         self.right_wall_x_px = right_wall_x_px
 
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sprites', 'pitfall')
+        asset_config = list(self.consts.ASSET_CONFIG)
+
+        h = int(self.consts.screen_height)
+        w = int(self.consts.screen_width)
+
+        bg = jnp.zeros((h, w, 4), dtype=jnp.uint8)
+        bg = bg.at[:, :, 3].set(255)
+        ground = int(self.consts.ground_y)
+        underground = int(self.consts.underground_y)
+        bg = bg.at[ground:ground + 2, :, 1].set(200)
+        bg = bg.at[underground:underground + 2, :, 1].set(120)
+
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'data': bg},
+            *[a for a in asset_config if a.get('type') != 'background'],
+        ]
+
+        def _color_swatch(rgb: tuple[int, int, int]) -> jnp.ndarray:
+            return jnp.array([rgb[0], rgb[1], rgb[2], 255], dtype=jnp.uint8).reshape(1, 1, 4)
+
+        asset_config.extend(
+            [
+                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((0, 0, 255))},
+                {'name': 'color_wall', 'type': 'procedural', 'data': _color_swatch((180, 40, 0))},
+                {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
+                {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
+                {'name': 'color_snake', 'type': 'procedural', 'data': _color_swatch((20, 200, 0))},
+                {'name': 'color_hole', 'type': 'procedural', 'data': _color_swatch((0, 0, 0))},
+            ]
+        )
+
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        self.LADDER_ID = self.SHAPE_MASKS['color_ladder'][0, 0].astype(self.BACKGROUND.dtype)
+        self.WALL_ID = self.SHAPE_MASKS['color_wall'][0, 0].astype(self.BACKGROUND.dtype)
+        self.WOOD_ID = self.SHAPE_MASKS['color_wood'][0, 0].astype(self.BACKGROUND.dtype)
+        self.FIRE_ID = self.SHAPE_MASKS['color_fire'][0, 0].astype(self.BACKGROUND.dtype)
+        self.SNAKE_ID = self.SHAPE_MASKS['color_snake'][0, 0].astype(self.BACKGROUND.dtype)
+        self.HOLE_ID = self.SHAPE_MASKS['color_hole'][0, 0].astype(self.BACKGROUND.dtype)
+
+        def _ensure_3d(mask_stack: jnp.ndarray) -> jnp.ndarray:
+            return mask_stack[None, :, :] if mask_stack.ndim == 2 else mask_stack
+
+        def _pad_to(mask_stack: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
+            mask_stack = _ensure_3d(mask_stack)
+            pad_h = max(0, target_h - int(mask_stack.shape[1]))
+            pad_w = max(0, target_w - int(mask_stack.shape[2]))
+            return jnp.pad(
+                mask_stack,
+                ((0, 0), (0, pad_h), (0, pad_w)),
+                mode='constant',
+                constant_values=int(self.jr.TRANSPARENT_ID),
+            )
+
+        harry_idle = _ensure_3d(self.SHAPE_MASKS['harry_idle'])
+        harry_run = _ensure_3d(self.SHAPE_MASKS['harry_run'])
+        harry_climb = _ensure_3d(self.SHAPE_MASKS['harry_climb'])
+        harry_jump = _ensure_3d(self.SHAPE_MASKS['harry_jump'])
+
+        max_h = max(int(harry_idle.shape[1]), int(harry_run.shape[1]), int(harry_climb.shape[1]), int(harry_jump.shape[1]))
+        max_w = max(int(harry_idle.shape[2]), int(harry_run.shape[2]), int(harry_climb.shape[2]), int(harry_jump.shape[2]))
+
+        def _pad_and_offset(name: str, masks: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+            masks_3d = _ensure_3d(masks)
+            extra_pad_w = jnp.int32(max_w - int(masks_3d.shape[2]))
+            extra_pad_h = jnp.int32(max_h - int(masks_3d.shape[1]))
+            base_offset = self.FLIP_OFFSETS.get(name, jnp.array([0, 0], dtype=jnp.int32))
+            return _pad_to(masks_3d, max_h, max_w), base_offset + jnp.array([extra_pad_w, extra_pad_h], dtype=jnp.int32)
+
+        self.HARRY_IDLE_MASKS, self.HARRY_IDLE_FLIP_OFFSET = _pad_and_offset('harry_idle', harry_idle)
+        self.HARRY_RUN_MASKS, self.HARRY_RUN_FLIP_OFFSET = _pad_and_offset('harry_run', harry_run)
+        self.HARRY_CLIMB_MASKS, self.HARRY_CLIMB_FLIP_OFFSET = _pad_and_offset('harry_climb', harry_climb)
+        self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
-        h = self.consts.screen_height
-        w = self.consts.screen_width
-
-        frame = jnp.zeros((h, w, 3), dtype=jnp.uint8)
-
-        digit_font = jnp.array([
-            [[1,1,1],
-             [1,0,1],
-             [1,0,1],
-             [1,0,1],
-             [1,1,1]],
-            [[0,1,0],
-             [1,1,0],
-             [0,1,0],
-             [0,1,0],
-             [1,1,1]],
-            [[1,1,1],
-             [0,0,1],
-             [1,1,1],
-             [1,0,0],
-             [1,1,1]],
-            [[1,1,1],
-             [0,0,1],
-             [1,1,1],
-             [0,0,1],
-             [1,1,1]],
-            [[1,0,1],
-             [1,0,1],
-             [1,1,1],
-             [0,0,1],
-             [0,0,1]],
-            [[1,1,1],
-             [1,0,0],
-             [1,1,1],
-             [0,0,1],
-             [1,1,1]],
-            [[1,1,1],
-             [1,0,0],
-             [1,1,1],
-             [1,0,1],
-             [1,1,1]],
-            [[1,1,1],
-             [0,0,1],
-             [0,1,0],
-             [1,0,0],
-             [1,0,0]],
-            [[1,1,1],
-             [1,0,1],
-             [1,1,1],
-             [1,0,1],
-             [1,1,1]],
-            [[1,1,1],
-             [1,0,1],
-             [1,1,1],
-             [0,0,1],
-             [1,1,1]],
-              [[1,1,1],
-               [1,0,1],
-               [1,1,1],
-               [1,0,1],
-               [1,0,1]],
-              [[1,1,0],
-               [1,0,1],
-               [1,1,0],
-               [1,0,1],
-               [1,1,0]],
-              [[1,1,1],
-               [1,0,0],
-               [1,0,0],
-               [1,0,0],
-               [1,1,1]],
-              [[1,1,0],
-               [1,0,1],
-               [1,0,1],
-               [1,0,1],
-               [1,1,0]],
-              [[1,1,1],
-               [1,0,0],
-               [1,1,1],
-               [1,0,0],
-               [1,1,1]],
-              [[1,1,1],
-               [1,0,0],
-               [1,1,1],
-               [1,0,0],
-               [1,0,0]],
-        ], dtype=jnp.uint8)
-
-        def int_to_digits(value: jnp.ndarray, width: int) -> jnp.ndarray:
-            value = jnp.maximum(value, 0)
-            digits = []
-            v = value
-            for _ in range(width):
-                digits.append(v % 10)
-                v = v // 10
-            return jnp.stack(digits[::-1]).astype(jnp.int32)
-
-        def u8_to_hex2(value_u8: jnp.ndarray) -> jnp.ndarray:
-            v = value_u8.astype(jnp.uint8)
-            hi = (v >> jnp.uint8(4)) & jnp.uint8(0xF)
-            lo = v & jnp.uint8(0xF)
-            return jnp.stack([hi.astype(jnp.int32), lo.astype(jnp.int32)])
-
-        def draw_number(frame: jnp.ndarray, digits: jnp.ndarray, top: int, left: int, color: jnp.ndarray) -> jnp.ndarray:
-            digit_w = 3
-            digit_h = 5
-            spacing = 1
-
-            def draw_one(i, f):
-                glyph = digit_font[digits[i]]  # (5,3)
-                glyph_rgb = glyph[..., None] * color  # (5,3,3)
-                return lax.dynamic_update_slice(f, glyph_rgb, (top, left + i * (digit_w + spacing), 0))
-
-            return lax.fori_loop(0, digits.shape[0], draw_one, frame)
-
-        ground = self.consts.ground_y
-        underground = self.consts.underground_y
-        frame = frame.at[ground:ground + 2, :, 1].set(200)
-        frame = frame.at[underground:underground + 2, :, 1].set(120)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
         rb = state.room_byte.astype(jnp.uint8)
         pt = pit_code_u8(rb)
-        obj = obj_code_u8(rb)
 
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
-        has_side_hole = pt == jnp.uint8(1)
         has_wall = has_ladder
 
+        # ---- Holes (black cutouts) ----
+        has_side_holes = pt == jnp.uint8(1)
+
+        ladder_x = self.ladder_x_px.astype(jnp.int32)
+        ladder_w = jnp.int32(self.consts.ladder_width)
+
+        hole_w = jnp.int32(self.consts.hole_width)
+        gap = jnp.int32(self.consts.hole_gap_from_ladder)
+
+        W = jnp.int32(self.consts.screen_width)
+        max_start = jnp.maximum(W - hole_w, jnp.int32(0))
+
+        left_x = jnp.clip(ladder_x - gap - hole_w, 0, max_start)
+        right_x = jnp.clip(ladder_x + ladder_w + gap, 0, max_start)
+
+        hole_top = jnp.int32(int(self.consts.ground_y))
+        hole_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
+
+        ladder_hole_pos = jnp.where(
+            has_ladder,
+            jnp.array([ladder_x, hole_top], dtype=jnp.int32),
+            jnp.array([-1, -1], dtype=jnp.int32),
+        )
+        ladder_hole_size = jnp.array([ladder_w, hole_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, ladder_hole_pos[None, :], ladder_hole_size[None, :], int(self.HOLE_ID))
+
+        left_pos = jnp.where(
+            has_side_holes,
+            jnp.array([left_x, hole_top], dtype=jnp.int32),
+            jnp.array([-1, -1], dtype=jnp.int32),
+        )
+        right_pos = jnp.where(
+            has_side_holes,
+            jnp.array([right_x, hole_top], dtype=jnp.int32),
+            jnp.array([-1, -1], dtype=jnp.int32),
+        )
+        hole_size = jnp.array([hole_w, hole_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, left_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
+        raster = self.jr.draw_rects(raster, right_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
+
         wall_side_bit = wall_side_u8(rb)
-        wall_side = jnp.where(
-            has_wall,
-            jnp.where(wall_side_bit == jnp.uint8(1), jnp.int32(1), jnp.int32(-1)),
-            jnp.int32(0),
-        )
-        wall_x = jnp.where(wall_side_bit == jnp.uint8(1), self.right_wall_x_px, self.left_wall_x_px)
+        wall_x = jnp.where(wall_side_bit == jnp.uint8(1), self.right_wall_x_px, self.left_wall_x_px).astype(jnp.int32)
 
-        ladder_x = self.ladder_x_px
+        ladder_x = self.ladder_x_px.astype(jnp.int32)
+        ladder_top = jnp.int32(int(self.consts.ground_y) - 1)
+        ladder_h = jnp.int32(int(self.consts.underground_y + 1) - int(self.consts.ground_y - 1))
 
-        ladder_top = jnp.asarray(ground - 1, dtype=jnp.int32)
-        ladder_bottom = jnp.asarray(underground + 1, dtype=jnp.int32)
+        ladder_pos = jnp.where(has_ladder, jnp.array([ladder_x, ladder_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        ladder_size = jnp.array([jnp.int32(self.consts.ladder_width), ladder_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, ladder_pos[None, :], ladder_size[None, :], int(self.LADDER_ID))
 
-        ladder_h = ladder_bottom - ladder_top  # dynamic is OK as a value, but we need fixed shape
-        ladder_h_static = int((self.consts.underground_y + 1) - (self.consts.ground_y - 1))
+        wall_top = jnp.int32(int(self.consts.ground_y))
+        wall_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
+        wall_pos = jnp.where(has_wall, jnp.array([wall_x, wall_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        wall_size = jnp.array([jnp.int32(self.consts.tunnel_wall_width), wall_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, wall_pos[None, :], wall_size[None, :], int(self.WALL_ID))
 
-        ladder_patch = jnp.zeros((ladder_h_static, self.consts.ladder_width, 3), dtype=jnp.uint8)
-        ladder_patch = ladder_patch.at[:, :, 2].set(255)
-
-        frame = lax.cond(
-            has_ladder,
-            lambda f: lax.dynamic_update_slice(f, ladder_patch, (ladder_top, ladder_x, 0)),
-            lambda f: f,
-            frame,
-        )
-
-        ladder_w_static = int(self.consts.ladder_width)
-        hole_w_static = int(self.consts.hole_width)
-        gap_static = int(self.consts.hole_gap_from_ladder)
-
-        W_static = int(self.consts.screen_width)
-        max_start_static = max(0, W_static - hole_w_static)
-
-        left_x = jnp.clip(
-            ladder_x - jnp.int32(gap_static) - jnp.int32(hole_w_static),
-            0,
-            jnp.int32(max_start_static),
-        )
-        right_x = jnp.clip(
-            ladder_x + jnp.int32(ladder_w_static) + jnp.int32(gap_static),
-            0,
-            jnp.int32(max_start_static),
-        )
-
-        ground_band_h = 2
-        ground_top = jnp.asarray(ground, dtype=jnp.int32)
-        ladder_clear = jnp.zeros((ground_band_h, ladder_w_static, 3), dtype=jnp.uint8)
-        hole_clear = jnp.zeros((ground_band_h, hole_w_static, 3), dtype=jnp.uint8)
-
-        frame = lax.cond(
-            has_ladder,
-            lambda f: lax.dynamic_update_slice(f, ladder_clear, (ground_top, ladder_x, 0)),
-            lambda f: f,
-            frame,
-        )
-
-        def clear_side_openings(f):
-            f = lax.dynamic_update_slice(f, hole_clear, (ground_top, left_x, 0))
-            f = lax.dynamic_update_slice(f, hole_clear, (ground_top, right_x, 0))
-            return f
-
-        frame = lax.cond(has_side_hole, clear_side_openings, lambda f: f, frame)
-
-        hole_top_py = int(self.consts.ground_y)
-        hole_bottom_py = int(self.consts.underground_y)
-        hole_h_static = max(1, hole_bottom_py - hole_top_py)
-        hole_top = jnp.int32(hole_top_py)
-
-        hole_patch = jnp.zeros((hole_h_static, hole_w_static, 3), dtype=jnp.uint8)
-
-        def draw_side_holes(f):
-            f = lax.dynamic_update_slice(f, hole_patch, (hole_top, left_x, 0))
-            f = lax.dynamic_update_slice(f, hole_patch, (hole_top, right_x, 0))
-            return f
-
-        frame = lax.cond(has_side_hole, draw_side_holes, lambda f: f, frame)
-
-        has_wood, logs_are_rolling, wood_count, wood_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
+        has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
 
         total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
         frames_elapsed = jnp.maximum(total_frames - state.time_left.astype(jnp.int32), jnp.int32(0))
         frames_elapsed = frames_elapsed * state.timer_started.astype(jnp.int32)
 
-        screen_w_i = jnp.int32(self.consts.screen_width)
+        W = jnp.int32(self.consts.screen_width)
         speed = jnp.int32(1)
         direction = jnp.int32(-1)
-        dx = jnp.mod(frames_elapsed * speed * direction, screen_w_i)
-        moving_centers = jnp.mod(wood_xs + dx, screen_w_i)
-        log_centers = jnp.where(logs_are_rolling, moving_centers, wood_xs)
+        dx = jnp.mod(frames_elapsed * speed * direction, W)
+        moving_centers = jnp.mod(log_xs + dx, W)
+        log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
 
-        wood_w_static = int(self.consts.wood_w)
+        wood_w = jnp.int32(self.consts.wood_w)
+        wood_h = jnp.int32(self.consts.wood_h)
+        wood_top_static = int(self.consts.ground_y - self.consts.wood_h + self.consts.wood_y_offset)
+        wood_top = jnp.int32(wood_top_static)
+
         wood_h_static = int(self.consts.wood_h)
-        wood_top_py = int(self.consts.ground_y - self.consts.wood_h + self.consts.wood_y_offset)
-        wood_top = jnp.int32(wood_top_py)
-        wood_color = jnp.array([110, 70, 25], dtype=jnp.uint8)
+        W_static = int(self.consts.screen_width)
 
-        y_idx = jnp.arange(wood_h_static, dtype=jnp.float32)[:, None]      # (H,1)
-        x_idx = jnp.arange(W_static, dtype=jnp.float32)[None, :]           # (1,W)
+        y_idx = jnp.arange(wood_h_static, dtype=jnp.float32)[:, None]
+        x_idx = jnp.arange(W_static, dtype=jnp.float32)[None, :]
         cy = (jnp.float32(wood_h_static) - 1.0) / 2.0
-        r = (jnp.minimum(jnp.float32(wood_w_static), jnp.float32(wood_h_static)) - 1.0) / 2.0
+        r = (jnp.minimum(jnp.float32(self.consts.wood_w), jnp.float32(self.consts.wood_h)) - 1.0) / 2.0
 
-        def draw_one_log_region(region: jnp.ndarray, center_x: jnp.ndarray) -> jnp.ndarray:
+        def _draw_one_log_region(region: jnp.ndarray, center_x: jnp.ndarray) -> jnp.ndarray:
             cx = center_x.astype(jnp.float32)
-            dx = jnp.abs(x_idx - cx)
-            dx = jnp.minimum(dx, jnp.float32(W_static) - dx)
-            dy = jnp.abs(y_idx - cy)
-            mask = (dx * dx + dy * dy) <= (r * r)
-            return jnp.where(mask[..., None], wood_color, region)
+            ddx = jnp.abs(x_idx - cx)
+            ddx = jnp.minimum(ddx, jnp.float32(W_static) - ddx)
+            ddy = jnp.abs(y_idx - cy)
+            mask = (ddx * ddx + ddy * ddy) <= (r * r)
+            return jnp.where(mask, self.WOOD_ID, region)
 
-        def draw_wood_logs(f: jnp.ndarray) -> jnp.ndarray:
-            region = lax.dynamic_slice(f, (wood_top, 0, 0), (wood_h_static, W_static, 3))
+        def _draw_logs(r: jnp.ndarray) -> jnp.ndarray:
+            region = lax.dynamic_slice(r, (wood_top, 0), (wood_h_static, W_static))
 
-            def apply_logs(i, reg):
-                active_i = jnp.int32(i) < wood_count
-                cx = log_centers[i]
+            def body(i, reg):
+                active_i = jnp.int32(i) < log_count
                 return lax.cond(
                     active_i,
-                    lambda r_in: draw_one_log_region(r_in, cx),
-                    lambda r_in: r_in,
+                    lambda rr: _draw_one_log_region(rr, log_centers[i]),
+                    lambda rr: rr,
                     reg,
                 )
 
-            region = lax.fori_loop(0, 3, apply_logs, region)
-            return lax.dynamic_update_slice(f, region, (wood_top, 0, 0))
+            region = lax.fori_loop(0, 3, body, region)
+            return lax.dynamic_update_slice(r, region, (wood_top, 0))
 
-        frame = lax.cond(has_wood, draw_wood_logs, lambda f: f, frame)
+        raster = lax.cond(has_logs, _draw_logs, lambda r: r, raster)
 
         fire_x_center = jnp.int32(132)
+        fire_w = jnp.int32(self.consts.fire_w)
+        fire_h = jnp.int32(self.consts.fire_h)
+        fire_top = jnp.int32(int(self.consts.ground_y - self.consts.fire_h + self.consts.fire_y_offset))
+        fire_left = jnp.mod(fire_x_center - (fire_w // jnp.int32(2)), W)
+        fire_pos = jnp.where(has_fireplace, jnp.array([fire_left, fire_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        fire_size = jnp.array([fire_w, fire_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, fire_pos[None, :], fire_size[None, :], int(self.FIRE_ID))
 
-        fire_w_static = int(self.consts.fire_w)
-        fire_h_static = int(self.consts.fire_h)
-        fire_top_py = int(self.consts.ground_y - self.consts.fire_h + self.consts.fire_y_offset)
-        fire_top = jnp.int32(fire_top_py)
-
-        max_fire_start_static = max(0, W_static - fire_w_static)
-        half_fire_w_static = fire_w_static // 2
-        fire_left = jnp.clip(
-            fire_x_center - jnp.int32(half_fire_w_static),
-            0,
-            jnp.int32(max_fire_start_static),
-        )
-
-        fire_patch = jnp.zeros((fire_h_static, fire_w_static, 3), dtype=jnp.uint8)
-        fire_patch = fire_patch.at[:, :, 0].set(255)
-        fire_patch = fire_patch.at[:, :, 1].set(120)
-
-        frame = lax.cond(
-            has_fireplace,
-            lambda f: lax.dynamic_update_slice(f, fire_patch, (fire_top, fire_left, 0)),
-            lambda f: f,
-            frame,
-        )
-
-        snake_count = has_snake.astype(jnp.int32)
         snake_x_center = jnp.int32(134)
+        snake_w = jnp.int32(self.consts.snake_w)
+        snake_h = jnp.int32(self.consts.snake_h)
+        snake_top = jnp.int32(int(self.consts.ground_y - self.consts.snake_h))
+        snake_left = jnp.mod(snake_x_center - (snake_w // jnp.int32(2)), W)
+        snake_pos = jnp.where(has_snake, jnp.array([snake_left, snake_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        snake_size = jnp.array([snake_w, snake_h], dtype=jnp.int32)
+        raster = self.jr.draw_rects(raster, snake_pos[None, :], snake_size[None, :], int(self.SNAKE_ID))
 
-        snake_w_static = int(self.consts.snake_w)
-        snake_h_static = int(self.consts.snake_h)
-        snake_top_py = int(self.consts.ground_y - self.consts.snake_h)
-        snake_top = jnp.int32(snake_top_py)
+        moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
+        flip = state.player_vx < jnp.asarray(0.0, dtype=jnp.float32)
 
-        max_snake_start_static = max(0, W_static - snake_w_static)
-        half_snake_w_static = snake_w_static // 2
-        snake_left = jnp.clip(
-            snake_x_center - jnp.int32(half_snake_w_static),
-            0,
-            jnp.int32(max_snake_start_static),
+        run_idx = jnp.mod(frames_elapsed // jnp.int32(3), jnp.int32(5)).astype(jnp.int32)
+        climb_idx = jnp.mod(frames_elapsed // jnp.int32(8), jnp.int32(2)).astype(jnp.int32)
+        jump_idx = jnp.where(state.player_vy < jnp.asarray(0.0, dtype=jnp.float32), jnp.int32(0), jnp.int32(1))
+
+        def _use_climb(_):
+            return self.HARRY_CLIMB_MASKS[climb_idx], self.HARRY_CLIMB_FLIP_OFFSET
+
+        def _use_jump(_):
+            return self.HARRY_JUMP_MASKS[jump_idx], self.HARRY_JUMP_FLIP_OFFSET
+
+        def _use_run(_):
+            return self.HARRY_RUN_MASKS[run_idx], self.HARRY_RUN_FLIP_OFFSET
+
+        def _use_idle(_):
+            return self.HARRY_IDLE_MASKS[jnp.int32(0)], self.HARRY_IDLE_FLIP_OFFSET
+
+        def _non_ladder(_):
+            return lax.cond(
+                ~state.on_ground,
+                _use_jump,
+                lambda __: lax.cond(moving, _use_run, _use_idle, None),
+                None,
+            )
+
+        harry_mask, flip_offset = lax.cond(state.on_ladder, _use_climb, _non_ladder, None)
+
+        harry_h = jnp.int32(harry_mask.shape[0])
+        y_top = state.player_y.astype(jnp.int32) - harry_h + jnp.int32(1)
+        y_top = y_top + jnp.int32(int(self.consts.harry_y_tune))
+
+        raster = self.jr.render_at_clipped(
+            raster,
+            state.player_x.astype(jnp.int32),
+            y_top,
+            harry_mask,
+            flip_horizontal=flip,
+            flip_offset=flip_offset,
         )
 
-        snake_patch = jnp.zeros((snake_h_static, snake_w_static, 3), dtype=jnp.uint8)
-        snake_patch = snake_patch.at[:, :, 1].set(200)
-        snake_patch = snake_patch.at[:, :, 0].set(20)
+        frame = self.jr.render_from_palette(raster, self.PALETTE)
 
-        draw_snake = has_snake & (snake_count > jnp.int32(0))
-        frame = lax.cond(
-            draw_snake,
-            lambda f: lax.dynamic_update_slice(f, snake_patch, (snake_top, snake_left, 0)),
-            lambda f: f,
-            frame,
-        )
+        font = HUD_FONT_16
 
-        # Wall uses static Python ints for shapes to avoid JAX concretization
-        top_pad = 0
-        bot_pad = 0
-        wall_top_py = int(self.consts.ground_y + top_pad)
-        wall_bottom_py = int(self.consts.underground_y - bot_pad)
-        wall_h_static = max(0, wall_bottom_py - wall_top_py)
-        wall_w_static = int(self.consts.tunnel_wall_width)
+        def _draw_digits(
+            f: jnp.ndarray,
+            digits: jnp.ndarray,
+            top: int,
+            left: int,
+            spacing: int,
+            color: jnp.ndarray,
+        ) -> jnp.ndarray:
+            top_i32 = jnp.int32(top)
+            left0_i32 = jnp.int32(left)
+            spacing_i32 = jnp.int32(spacing)
 
-        wall_top = jnp.int32(wall_top_py)
+            color_u8 = color.astype(jnp.uint8)
 
-        wall_patch = jnp.zeros((wall_h_static, wall_w_static, 3), dtype=jnp.uint8)
-        wall_patch = wall_patch.at[:, :, 0].set(180)
-        wall_patch = wall_patch.at[:, :, 1].set(40)
+            def body(i, frame_in):
+                d = digits[i].astype(jnp.int32)
+                glyph = font[d].astype(jnp.bool_)
+                start = (top_i32, left0_i32 + jnp.int32(i) * spacing_i32, jnp.int32(0))
+                region = lax.dynamic_slice(frame_in, start, (5, 3, 3))
+                new_region = jnp.where(glyph[:, :, None], color_u8[None, None, :], region)
+                return lax.dynamic_update_slice(frame_in, new_region, start)
 
-        frame = lax.cond(
-            has_wall,
-            lambda f: lax.dynamic_update_slice(f, wall_patch, (wall_top, wall_x, 0)),
-            lambda f: f,
-            frame,
-        )
+            return lax.fori_loop(0, digits.shape[0], body, f)
 
-        score_row = 2
-        timer_row = 9
-
-        score_digits = int_to_digits(state.score.astype(jnp.int32), 4)
-        lives_digits = int_to_digits(state.lives_left.astype(jnp.int32), 1)
-
-        fps = jnp.int32(self.consts.fps)
-        seconds_left = jnp.maximum(state.time_left // fps, 0).astype(jnp.int32)
-        mm = seconds_left // 60
-        ss = seconds_left % 60
-        mm_digits = int_to_digits(mm, 2)
-        ss_digits = int_to_digits(ss, 2)
+        digit_spacing = 4
 
         score_color = jnp.array([40, 220, 40], dtype=jnp.uint8)
         lives_color = jnp.array([240, 200, 40], dtype=jnp.uint8)
         time_color = jnp.array([40, 200, 240], dtype=jnp.uint8)
-        colon_color = jnp.array([40, 200, 240], dtype=jnp.uint8)
+        debug_color = jnp.array([180, 180, 180], dtype=jnp.uint8)
 
+        score_row = 2
+        timer_row = 9
         timer_x = 20
-        
-        frame = draw_number(frame, score_digits, score_row, timer_x, score_color)
 
-        frame = draw_number(frame, lives_digits, timer_row, 4, lives_color)
+        score_digits = self.jr.int_to_digits(state.score.astype(jnp.int32), max_digits=4)
+        lives_digits = self.jr.int_to_digits(state.lives_left.astype(jnp.int32), max_digits=1)
+        screen_digits = self.jr.int_to_digits(state.screen_id.astype(jnp.int32), max_digits=3)
 
-        frame = draw_number(frame, mm_digits, timer_row, timer_x, time_color)
-        colon_x = timer_x + 2 * 4
-        frame = frame.at[timer_row + 1, colon_x, :].set(colon_color)
-        frame = frame.at[timer_row + 3, colon_x, :].set(colon_color)
-        frame = draw_number(frame, ss_digits, timer_row, colon_x + 2, time_color)
+        time_seconds = state.time_left.astype(jnp.int32) // jnp.int32(self.consts.fps)
+        minutes = time_seconds // jnp.int32(60)
+        seconds = time_seconds - minutes * jnp.int32(60)
+        mm_digits = self.jr.int_to_digits(minutes, max_digits=2)
+        ss_digits = self.jr.int_to_digits(seconds, max_digits=2)
 
-        screen_digits = int_to_digits(state.screen_id.astype(jnp.int32), 3)
-        frame = draw_number(frame, screen_digits, score_row, 120, jnp.array([200, 200, 200], dtype=jnp.uint8))
+        rb_u8 = state.room_byte.astype(jnp.uint8)
+        rb_hi = ((rb_u8 >> jnp.uint8(4)) & jnp.uint8(0xF)).astype(jnp.int32)
+        rb_lo = (rb_u8 & jnp.uint8(0xF)).astype(jnp.int32)
+        rb_hex = jnp.stack([rb_hi, rb_lo]).astype(jnp.int32)
 
-        rb_hex = u8_to_hex2(rb)
-        debug_color = jnp.array([200, 200, 200], dtype=jnp.uint8)
-        frame = draw_number(frame, rb_hex, score_row, 90, debug_color)
-        frame = draw_number(frame, pt.astype(jnp.int32)[None], timer_row, 90, debug_color)
-        frame = draw_number(frame, obj.astype(jnp.int32)[None], timer_row, 98, debug_color)
-        frame = draw_number(frame, wall_side_bit.astype(jnp.int32)[None], timer_row, 106, debug_color)
+        pit_d = pit_code_u8(rb_u8).astype(jnp.int32)
+        obj_d = obj_code_u8(rb_u8).astype(jnp.int32)
+        wall_d = wall_side_u8(rb_u8).astype(jnp.int32)
+        pit_digits = self.jr.int_to_digits(pit_d, max_digits=1)
+        obj_digits = self.jr.int_to_digits(obj_d, max_digits=1)
+        wall_digits = self.jr.int_to_digits(wall_d, max_digits=1)
 
-        player_w, player_h = 4, 8
+        # Old layout:
+        # score at (2, 20); lives at (9, 4); time at (9, 20)
+        # screen_id at (2, 120); room_byte hex at (2, 90)
+        # pit/obj/wall at (9, 90/98/106)
 
-        x = jnp.clip(state.player_x.astype(jnp.int32), 0, w - player_w)
+        frame = _draw_digits(frame, score_digits, score_row, timer_x, digit_spacing, score_color)
+        frame = _draw_digits(frame, lives_digits, timer_row, 4, digit_spacing, lives_color)
 
-        bottom = jnp.clip(state.player_y.astype(jnp.int32), 0, h - 1)
+        frame = _draw_digits(frame, mm_digits, timer_row, timer_x, digit_spacing, time_color)
+        colon_x = timer_x + 2 * digit_spacing - 1
+        frame = frame.at[timer_row + 1, colon_x, :].set(time_color)
+        frame = frame.at[timer_row + 3, colon_x, :].set(time_color)
+        frame = _draw_digits(frame, ss_digits, timer_row, timer_x + 2 * digit_spacing + 2, digit_spacing, time_color)
 
-        top = jnp.clip(bottom - player_h + 1, 0, h - player_h)
+        frame = _draw_digits(frame, screen_digits, score_row, 120, digit_spacing, debug_color)
+        frame = _draw_digits(frame, rb_hex, score_row, 90, digit_spacing, debug_color)
 
-        color = jnp.array([255, 255, 255], dtype=jnp.uint8)
-        rect = jnp.ones((player_h, player_w, 3), dtype=jnp.uint8) * color
-
-        frame = lax.dynamic_update_slice(frame, rect, (top, x, 0))
-        def add_down_banner(f):
-            return f.at[0:5, :, 0].set(255)
-
-        frame = lax.cond(
-            state.down_pressed,
-            add_down_banner,
-            lambda f: f,
-            frame,
-        )
+        frame = _draw_digits(frame, pit_digits, timer_row, 90, digit_spacing, debug_color)
+        frame = _draw_digits(frame, obj_digits, timer_row, 98, digit_spacing, debug_color)
+        frame = _draw_digits(frame, wall_digits, timer_row, 106, digit_spacing, debug_color)
 
         return frame
