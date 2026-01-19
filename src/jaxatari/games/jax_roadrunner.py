@@ -37,6 +37,10 @@ class LevelConfig(NamedTuple):
     landmine_spawn_config: Optional[Tuple[int, int]] = None
     future_entity_types: Dict[str, Any] = {}
     render_road_stripes: bool = True
+    # Dynamic road height configuration (for alternating heights)
+    dynamic_road_heights: Optional[Tuple[int, int]] = None  # (height_a, height_b)
+    dynamic_road_interval: int = 400  # scroll distance between height switches
+    dynamic_road_transition_length: int = 10  # transition zone length in scroll units
 
 
 # --- Constants ---
@@ -78,7 +82,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MIN_INTERVAL: int = 120
     TRUCK_SPAWN_MAX_INTERVAL: int = 240
     LEVEL_TRANSITION_DURATION: int = 30
-    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 1500
+    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
     STARTING_LIVES: int = 3
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     SIDE_MARGIN: int = 8
@@ -212,9 +216,43 @@ RoadRunner_Level_2 = LevelConfig(
     render_road_stripes=False,
 )
 
+RoadRunner_Level_3 = LevelConfig(
+    level_number=3,
+    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    road_sections=(
+        RoadSectionConfig(
+            scroll_start=0,
+            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
+            road_top=0,
+            road_height=70,  # Base height (will be modulated by dynamic_road_heights)
+        ),
+    ),
+    spawn_seeds=True,
+    spawn_trucks=True,
+    spawn_landmines=True,
+    seed_spawn_config=(
+        _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
+    ),
+    truck_spawn_config=(
+        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
+    ),
+    landmine_spawn_config=(
+        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
+    ),
+    # Dynamic road height: alternates between 70 and 50 pixels
+    dynamic_road_heights=(70, 50),
+    dynamic_road_interval=400,
+    dynamic_road_transition_length=10,
+)
+
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
     RoadRunner_Level_1,
     RoadRunner_Level_2,
+    RoadRunner_Level_3,
 )
 
 
@@ -230,6 +268,8 @@ def _build_road_section_arrays(
         return 0, jnp.array([], dtype=jnp.int32).reshape(0, 0, 6), jnp.array([], dtype=jnp.int32)
 
     max_road_sections = max(len(cfg.road_sections) for cfg in levels)
+
+
     road_sections_data = []
     road_section_counts = []
     default_section = [
@@ -268,6 +308,32 @@ def _build_road_section_arrays(
         jnp.array(road_sections_data, dtype=jnp.int32),
         jnp.array(road_section_counts, dtype=jnp.int32),
     )
+
+
+def _build_dynamic_road_config_arrays(
+    levels: Tuple[LevelConfig, ...]
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    enabled = jnp.array(
+        [cfg.dynamic_road_heights is not None for cfg in levels],
+        dtype=jnp.bool_
+    ) if levels else jnp.array([], dtype=jnp.bool_)
+    
+    heights = jnp.array(
+        [cfg.dynamic_road_heights if cfg.dynamic_road_heights else (70, 70) for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.zeros((0, 2), dtype=jnp.int32)
+    
+    intervals = jnp.array(
+        [cfg.dynamic_road_interval for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+    
+    transition_lengths = jnp.array(
+        [cfg.dynamic_road_transition_length for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+
+    return enabled, heights, intervals, transition_lengths
 
 
 def _build_spawn_interval_array(
@@ -426,6 +492,90 @@ def _get_road_section_for_scroll(
     )
 
 
+def _get_dynamic_road_height(
+    scroll_pos: chex.Array,
+    height_a: int,
+    height_b: int,
+    interval: int,
+    transition_length: int,
+) -> Tuple[chex.Array, chex.Array, chex.Array]:
+    """
+    Calculate road height at a given scroll position with transition zones.
+    
+    The road height alternates between height_a and height_b every `interval` scroll units.
+    Transitions between heights are smooth over `transition_length` scroll units.
+    
+    Args:
+        scroll_pos: Current scroll position
+        height_a: First height value
+        height_b: Second height value
+        interval: Scroll distance between height switches
+        transition_length: Length of transition zone in scroll units
+    
+    Returns:
+        (current_height, is_in_transition, transition_progress)
+        - current_height: The road height at this position (int32)
+        - is_in_transition: Boolean, True if in a transition zone
+        - transition_progress: 0.0-1.0 progress through transition (only valid if is_in_transition)
+    """
+    cycle_length = interval * 2  # Full A→B→A cycle
+    pos_in_cycle = scroll_pos % cycle_length
+    
+    # Transition zones are centered at interval and cycle_length (0)
+    # Zone A: [half_trans, interval - half_trans)
+    # Transition A→B: [interval - half_trans, interval + half_trans)
+    # Zone B: [interval + half_trans, cycle_length - half_trans)
+    # Transition B→A: [cycle_length - half_trans, cycle_length) AND [0, half_trans)
+    
+    half_trans = transition_length // 2
+    
+    trans_a_to_b_start = interval - half_trans
+    trans_a_to_b_end = interval + half_trans
+    trans_b_to_a_start = cycle_length - half_trans
+    
+    # Zone A: past B→A transition end, before A→B transition start
+    in_zone_a = (pos_in_cycle >= half_trans) & (pos_in_cycle < trans_a_to_b_start)
+    in_trans_a_to_b = (pos_in_cycle >= trans_a_to_b_start) & (pos_in_cycle < trans_a_to_b_end)
+    in_zone_b = (pos_in_cycle >= trans_a_to_b_end) & (pos_in_cycle < trans_b_to_a_start)
+    # B→A transition wraps around: [trans_b_to_a_start, cycle_length) OR [0, half_trans)
+    in_trans_b_to_a = (pos_in_cycle >= trans_b_to_a_start) | (pos_in_cycle < half_trans)
+    
+    # Calculate transition progress for interpolation
+    trans_a_to_b_progress = (pos_in_cycle - trans_a_to_b_start) / transition_length
+    
+    # B→A progress needs special handling for wrap-around
+    # First half of B→A: [trans_b_to_a_start, cycle_length) -> progress 0 to 0.5
+    # Second half of B→A: [0, half_trans) -> progress 0.5 to 1.0
+    trans_b_to_a_progress = jnp.where(
+        pos_in_cycle >= trans_b_to_a_start,
+        (pos_in_cycle - trans_b_to_a_start) / transition_length,
+        (pos_in_cycle + half_trans) / transition_length
+    )
+    
+    # Calculate heights with interpolation in transition zones
+    height = jnp.where(
+        in_zone_a, 
+        jnp.float32(height_a),
+        jnp.where(
+            in_zone_b, 
+            jnp.float32(height_b),
+            jnp.where(
+                in_trans_a_to_b,
+                # Interpolate A→B
+                jnp.float32(height_a) + (height_b - height_a) * trans_a_to_b_progress,
+                # Interpolate B→A
+                jnp.float32(height_b) + (height_a - height_b) * trans_b_to_a_progress
+            )
+        )
+    )
+    
+    is_transition = in_trans_a_to_b | in_trans_b_to_a
+    transition_progress = jnp.where(in_trans_a_to_b, trans_a_to_b_progress, trans_b_to_a_progress)
+    
+    return height.astype(jnp.int32), is_transition, transition_progress
+
+
+
 # --- State and Observation ---
 class RoadRunnerState(NamedTuple):
     player_x: chex.Array
@@ -581,6 +731,13 @@ class JaxRoadRunner(
             self._road_section_data,
             self._road_section_counts,
         ) = _build_road_section_arrays(levels, self.consts)
+
+        (
+            self._dynamic_road_enabled,
+            self._dynamic_road_heights,
+            self._dynamic_road_intervals,
+            self._dynamic_road_transition_lengths
+        ) = _build_dynamic_road_config_arrays(levels)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Handles user input to determine player velocity and jump action."""
@@ -927,7 +1084,8 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, _ = self._get_road_bounds_at_x(state, jnp.array(0, dtype=jnp.int32))
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         if self._level_count > 0:
@@ -1011,7 +1169,10 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, road_height_at_spawn = self._get_road_bounds_at_x(
+            state, jnp.array(0, dtype=jnp.int32)
+        )
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         if self._level_count > 0:
@@ -1039,10 +1200,15 @@ class JaxRoadRunner(
 
         # Prepare for spawning: split RNG and check conditions
         rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        
+        # Trucks only spawn if the road is wide enough (>= 70)
+        road_wide_enough = road_height_at_spawn >= 70
+
         should_spawn = (
             (updated_truck_x < 0)  # No truck currently active
             & (state.step_counter >= state.next_truck_spawn_step)
             & spawn_trucks_enabled
+            & road_wide_enough
         )
 
         def _spawn(st: RoadRunnerState) -> RoadRunnerState:
@@ -1294,7 +1460,8 @@ class JaxRoadRunner(
         """
         consts = self.consts
         level_idx = self._get_level_index(state)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
+        # Use bounds at x=0 for spawning
+        road_top, road_bottom, _ = self._get_road_bounds_at_x(state, jnp.array(0, dtype=jnp.int32))
         road_top = road_top.astype(jnp.int32)
         road_bottom = road_bottom.astype(jnp.int32)
         
@@ -1795,12 +1962,106 @@ class JaxRoadRunner(
 
     def _get_road_bounds(self, state: RoadRunnerState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         section = self._get_current_road_section(state)
-        road_height = jnp.clip(section.road_height, 1, self.consts.ROAD_HEIGHT)
-        max_top = self.consts.ROAD_HEIGHT - road_height
-        section_top = jnp.clip(section.road_top, 0, max_top)
+        
+        # Check if dynamic road heights are enabled for this level
+        level_idx = self._get_level_index(state)
+        
+        if self._level_count > 0:
+            dynamic_enabled = self._dynamic_road_enabled[level_idx]
+            heights = self._dynamic_road_heights[level_idx]
+            interval = self._dynamic_road_intervals[level_idx]
+            trans_len = self._dynamic_road_transition_lengths[level_idx]
+            
+            # Get dynamic height if enabled
+            # Use scroll_pos * PLAYER_MOVE_SPEED to match rendering speed
+            # Add road width offset to match rendering inversion
+            # Rendering uses: world_scroll + (road_width - 1 - col_idx)
+            # For collision, use the center of the road (player position)
+            static_road_width = self.consts.WIDTH - 2 * self.consts.SIDE_MARGIN
+            player_road_offset = static_road_width // 2  # Player is roughly at center
+            collision_world_x = (
+                state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED 
+                + (static_road_width - 1 - player_road_offset)
+            )
+            dynamic_height, _, _ = _get_dynamic_road_height(
+                collision_world_x,
+                heights[0],
+                heights[1],
+                interval,
+                trans_len,
+            )
+            
+            # Use dynamic height if enabled, otherwise use section height
+            base_road_height = jnp.where(dynamic_enabled, dynamic_height, section.road_height)
+        else:
+            base_road_height = section.road_height
+        
+        road_height = jnp.clip(base_road_height, 1, self.consts.ROAD_HEIGHT)
+        
+        # Center the road vertically within the road area when height changes
+        # This keeps the road centered as height changes, similar to _centered_top
+        height_diff = self.consts.ROAD_HEIGHT - road_height
+        section_top = height_diff // 2
+        
         road_top = self.consts.ROAD_TOP_Y + section_top
         road_bottom = road_top + road_height
         return road_top, road_bottom, road_height
+
+    def _get_road_bounds_at_x(
+        self, state: RoadRunnerState, x: jnp.ndarray
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Get road bounds at a specific screen X coordinate.
+        Useful for checking spawn validity (e.g., at x=0).
+        """
+        section = self._get_current_road_section(state)
+        
+        # Check if dynamic road heights are enabled for this level
+        level_idx = self._get_level_index(state)
+        
+        if self._level_count > 0:
+            dynamic_enabled = self._dynamic_road_enabled[level_idx]
+            heights = self._dynamic_road_heights[level_idx]
+            interval = self._dynamic_road_intervals[level_idx]
+            trans_len = self._dynamic_road_transition_lengths[level_idx]
+            
+            # Map screen X to world X conceptually used for road generation
+            # Rendering: world_scroll + (road_width - 1 - col_idx)
+            # col_idx corresponds to x.
+            static_road_width = self.consts.WIDTH - 2 * self.consts.SIDE_MARGIN
+            
+            # Note: Spawning usually happens at x=0 (left side).
+            # If x=0, world_x is larger (further ahead in scroll).
+            # world_x = scroll + width - 1 - x
+            
+            world_x = (
+                state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED 
+                + (static_road_width - 1 - x)
+            )
+            
+            dynamic_height, _, _ = _get_dynamic_road_height(
+                world_x,
+                heights[0],
+                heights[1],
+                interval,
+                trans_len,
+            )
+            
+            # Use dynamic height if enabled, otherwise use section height
+            base_road_height = jnp.where(dynamic_enabled, dynamic_height, section.road_height)
+        else:
+            base_road_height = section.road_height
+        
+        road_height = jnp.clip(base_road_height, 1, self.consts.ROAD_HEIGHT)
+        
+        # Center the road vertically
+        height_diff = self.consts.ROAD_HEIGHT - road_height
+        section_top = height_diff // 2
+        
+        road_top = self.consts.ROAD_TOP_Y + section_top
+        road_bottom = road_top + road_height
+        return road_top, road_bottom, road_height
+
 
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -1982,6 +2243,15 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._road_section_counts,
         ) = _build_road_section_arrays(self.consts.levels, self.consts)
         
+        # Build dynamic road height config arrays for renderer
+        levels = self.consts.levels
+        (
+            self._dynamic_road_enabled,
+            self._dynamic_road_heights,
+            self._dynamic_road_intervals,
+            self._dynamic_road_transition_lengths
+        ) = _build_dynamic_road_config_arrays(levels)
+        
         # Pre-calculate unique road dimensions for rendering optimization
         unique_heights_list, unique_widths_list = self._get_unique_road_dims()
         self._unique_heights_list = unique_heights_list
@@ -1989,6 +2259,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Convert to JAX arrays for runtime matching
         self._unique_heights_arr = jnp.array(unique_heights_list, dtype=jnp.int32)
         self._unique_widths_arr = jnp.array(unique_widths_list, dtype=jnp.int32)
+
 
     def _create_road_sprite(self, stripes: bool = True) -> jnp.ndarray:
         ROAD_HEIGHT = self.consts.ROAD_HEIGHT
@@ -2264,12 +2535,25 @@ class RoadRunnerRenderer(JAXGameRenderer):
     def _get_unique_road_dims(self) -> Tuple[list, list]:
         """
         Extract unique (height, width) pairs from level configurations.
+        Includes both static road section heights and dynamic road heights.
         Returns tuple of (heights, widths) lists.
         """
         dims = set()
         for level in self.consts.levels:
+            # Get width from road sections (common width for the level)
             for section in level.road_sections:
                 dims.add((int(section.road_height), int(section.road_width)))
+            
+            # Add dynamic road heights if enabled
+            if level.dynamic_road_heights is not None:
+                height_a, height_b = level.dynamic_road_heights
+                # Use the same width as the first section
+                if level.road_sections:
+                    width = level.road_sections[0].road_width
+                else:
+                    width = self.consts.WIDTH - 2 * self.consts.SIDE_MARGIN
+                dims.add((int(height_a), int(width)))
+                dims.add((int(height_b), int(width)))
         
         # If no dims found (empty levels?), default to base consts
         if not dims:
@@ -2288,61 +2572,145 @@ class RoadRunnerRenderer(JAXGameRenderer):
         PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
         section = self._get_render_section(state)
         
-        section = self._get_render_section(state)
+        # Check if dynamic road heights are enabled for this level
+        level_idx = jnp.clip(state.current_level, 0, max(self._level_count - 1, 0)).astype(jnp.int32)
         
-        # Use pre-calculated unique dimensions
-        num_configs = len(self._unique_heights_list)
+        # Use static road width from constants (all levels use same width)
+        static_road_width = self.consts.WIDTH - 2 * self.consts.SIDE_MARGIN
+        left_padding = self.consts.SIDE_MARGIN
+        
+        # Select the appropriate road mask based on pattern style
+        road_mask = jax.lax.cond(
+            section.road_pattern_style == 1,
+            lambda: self.SHAPE_MASKS["road_no_stripes"],
+            lambda: self.SHAPE_MASKS["road"]
+        )
+        
+        # Scroll offset for road pattern animation
+        scroll_offset = PATTERN_WIDTH - (
+            (state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED)
+            % PATTERN_WIDTH
+        )
+        
+        if self._level_count > 0:
+            dynamic_enabled = self._dynamic_road_enabled[level_idx]
+            heights_config = self._dynamic_road_heights[level_idx]
+            height_a = heights_config[0]
+            height_b = heights_config[1]
+            interval = self._dynamic_road_intervals[level_idx]
+            trans_len = self._dynamic_road_transition_lengths[level_idx]
+            
+            # For dynamic roads, render per-column based on world position
+            def render_dynamic_road(c):
+                """Render road with per-column height calculation using vectorized masking."""
+                # Calculate world x for each column
+                # Invert: rightmost column (high index) should be at current scroll position
+                # Leftmost column should show older (higher scroll) positions
+                # This makes transitions move LEFT as player scrolls RIGHT
+                world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
+                col_indices = jnp.arange(static_road_width, dtype=jnp.int32)
+                world_x = world_scroll + (static_road_width - 1 - col_indices)
 
-        # Find the index of the current configuration
-        # Matches against both height and width
-        matches = (self._unique_heights_arr == section.road_height) & (self._unique_widths_arr == section.road_width)
-        config_idx = jnp.argmax(matches)
+                dynamic_height, _, _ = _get_dynamic_road_height(
+                    world_x,
+                    height_a,
+                    height_b,
+                    interval,
+                    trans_len,
+                )
+                col_heights = dynamic_height.astype(jnp.int32)
 
-        def _render_road_branch(idx, _canvas):
-            # Static dimensions for this branch
-            h = self._unique_heights_list[idx]
-            w = self._unique_widths_list[idx]
+                
+                col_heights = jnp.clip(col_heights, 1, self.consts.ROAD_HEIGHT)
+                
+                # Calculate vertical offsets for centering (per column)
+                height_diffs = self.consts.ROAD_HEIGHT - col_heights
+                road_top_offsets = height_diffs // 2
+                
+                # Max height for slicing (use full road height)
+                max_height = self.consts.ROAD_HEIGHT
+                
+                # Slice road at max height
+                src_x = scroll_offset + left_padding
+                road_slice = jax.lax.dynamic_slice(
+                    road_mask,
+                    (0, src_x),
+                    (max_height, static_road_width)
+                )
+                
+                # Create row indices for the road slice
+                row_indices = jnp.arange(max_height, dtype=jnp.int32)
+                
+                # Broadcasting: road_top_offsets is (static_road_width,), row_indices is (max_height,)
+                # Create 2D mask: (max_height, static_road_width)
+                # For each column, show pixels where row >= top_offset AND row < top_offset + height
+                row_grid = row_indices[:, None]  # (max_height, 1)
+                top_grid = road_top_offsets[None, :]  # (1, static_road_width)
+                height_grid = col_heights[None, :]  # (1, static_road_width)
+                
+                # Pixel is visible if: row >= top_offset AND row < top_offset + height
+                visible_mask = (row_grid >= top_grid) & (row_grid < top_grid + height_grid)
+                
+                # Apply mask by setting non-visible pixels to TRANSPARENT_ID
+                # road_slice is a 2D palette ID mask (max_height, static_road_width)
+                masked_slice = jnp.where(
+                    visible_mask,
+                    road_slice,
+                    self.jr.TRANSPARENT_ID
+                )
+                
+                # Render the masked road at the base Y position
+                dest_x = left_padding
+                dest_y = self.consts.ROAD_TOP_Y
+                
+                return self.jr.render_at(c, dest_x, dest_y, masked_slice)
             
-            # Calculate metrics
-            desired_width = jnp.clip(w, 1, self.consts.WIDTH)
-            left_padding = (self.consts.WIDTH - desired_width) // 2
+            def render_static_road(c):
+                """Render road with single uniform height using max-height slicing."""
+                current_road_height = jnp.clip(section.road_height, 1, self.consts.ROAD_HEIGHT)
+                height_diff = self.consts.ROAD_HEIGHT - current_road_height
+                centered_road_top = height_diff // 2
+                
+                max_height = self.consts.ROAD_HEIGHT
+                src_x = scroll_offset + left_padding
+                
+                # Slice at max height
+                road_slice = jax.lax.dynamic_slice(
+                    road_mask,
+                    (0, src_x),
+                    (max_height, static_road_width)
+                )
+                
+                # Create visibility mask for centered road
+                row_indices = jnp.arange(max_height, dtype=jnp.int32)
+                visible_mask = (row_indices >= centered_road_top) & (row_indices < centered_road_top + current_road_height)
+                
+                # Apply mask - broadcast to 2D
+                masked_slice = jnp.where(
+                    visible_mask[:, None],
+                    road_slice,
+                    self.jr.TRANSPARENT_ID
+                )
+                
+                dest_x = left_padding
+                dest_y = self.consts.ROAD_TOP_Y
+                
+                return self.jr.render_at(c, dest_x, dest_y, masked_slice)
             
-            # Scroll offset
-            scroll_offset = PATTERN_WIDTH - (
-                (state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED)
-                % PATTERN_WIDTH
-            )
-            
-            # Source slicing
-            # X: offset + left_padding (to matching screen position)
-            # Y: section.road_top (which row of texture to use)
+            # Choose rendering path based on whether dynamic heights are enabled
+            canvas = jax.lax.cond(dynamic_enabled, render_dynamic_road, render_static_road, canvas)
+        else:
+            # No levels configured, use default full-height road
+            max_height = self.consts.ROAD_HEIGHT
             src_x = scroll_offset + left_padding
-            src_y = section.road_top
-            
-            
-            road_mask = jax.lax.cond(
-                 section.road_pattern_style == 1,
-                 lambda: self.SHAPE_MASKS["road_no_stripes"],
-                 lambda: self.SHAPE_MASKS["road"]
-            )
-
             road_slice = jax.lax.dynamic_slice(
                 road_mask,
-                (src_y, src_x),
-                (h, w)
+                (0, src_x),
+                (max_height, static_road_width)
             )
             
-            # Destination
-            dest_x = left_padding
-            dest_y = self.consts.ROAD_TOP_Y + section.road_top
-            
-            return self.jr.render_at(_canvas, dest_x, dest_y, road_slice)
+            canvas = self.jr.render_at(canvas, left_padding, self.consts.ROAD_TOP_Y, road_slice)
 
-        # Create branches for switch
-        branches = [partial(_render_road_branch, i) for i in range(num_configs)]
-        
-        # Execute the correct branch
-        canvas = jax.lax.switch(config_idx, branches, canvas)
 
         # Render Ravines
         canvas = self._render_ravines(canvas, state.ravines)
