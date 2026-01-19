@@ -366,6 +366,7 @@ class EnvState(NamedTuple):
     reactor_timer: jnp.ndarray 
     reactor_activated: jnp.ndarray 
     exit_allowed: jnp.ndarray  # bool, whether ship can exit through top of level
+    prev_action: jnp.ndarray  # int32, previous action taken
 
 # ========== Init Function ==========
 
@@ -636,20 +637,25 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         reactor_destroyed=jnp.array(False),
         planets_cleared_mask=jnp.zeros(7, dtype=bool),
         exit_allowed=jnp.array(False),
+        prev_action=jnp.int32(0),
     )
 
 
 @jax.jit
 def make_level_start_state(level_id: int) -> ShipState:
     START_Y = jnp.float32(30.0)
+    REACTOR_START_Y = jnp.float32(60.0)  # Lower spawn point for reactor
 
     x = jnp.array(WINDOW_WIDTH / 2, dtype=jnp.float32)
     y = jnp.array(START_Y, dtype=jnp.float32)
 
-    angle = jnp.array(-jnp.pi / 2, dtype=jnp.float32)
+    angle = jnp.array(-jnp.pi / 2, dtype=jnp.float32)  # Pointing up for normal levels
+    angle_down = jnp.array(jnp.pi / 2, dtype=jnp.float32)  # Pointing down for reactor
 
     is_reactor = (jnp.asarray(level_id, dtype=jnp.int32) == 4)
     x = jnp.where(is_reactor, x - 60.0, x)
+    y = jnp.where(is_reactor, REACTOR_START_Y, y)
+    angle = jnp.where(is_reactor, angle_down, angle)
 
     return ShipState(x=x, y=y, vx=jnp.float32(0.0), vy=jnp.float32(0.0), angle=angle, is_thrusting=jnp.array(False))
 
@@ -660,8 +666,8 @@ def update_bullets(bullets: Bullets) -> Bullets:
     new_x = bullets.x + bullets.vx
     new_y = bullets.y + bullets.vy
 
-    valid_x = (new_x >= 0) & (new_x <= WINDOW_WIDTH)
-    valid_y = (new_y >= HUD_HEIGHT) & (new_y <= WINDOW_HEIGHT)
+    valid_x = (new_x >= 0) & (new_x < WINDOW_WIDTH)
+    valid_y = (new_y >= HUD_HEIGHT) & (new_y < WINDOW_HEIGHT)
     valid = valid_x & valid_y & bullets.alive
 
     return Bullets(
@@ -1111,30 +1117,47 @@ def ship_step(state: ShipState,
     )
 
     # --- 5. Position and Boundary Collision ---
-    # a. Use the current frame's velocity to calculate the next frame's position
+    window_width, window_height = window_size
+    
+    # Define boundaries to prevent sprite overflow
+    # Left/right use wider margins (8.0) to prevent rendering overflow
+    # Top/bottom use smaller margins (ship radius)
+    HORIZONTAL_MARGIN = 8.0
+    VERTICAL_MARGIN = SHIP_RADIUS
+    min_x = HORIZONTAL_MARGIN
+    max_x = window_width - HORIZONTAL_MARGIN
+    min_y_base = hud_height + VERTICAL_MARGIN
+    max_y = window_height - VERTICAL_MARGIN
+    
+    # Calculate next position
     next_x = state.x + vx
     next_y = state.y + vy
-
-    ship_half_size = SHIP_RADIUS
-    window_width, window_height = window_size
-
-    # b. Use the next frame's position to predict if a collision will occur
-    hit_left = next_x < ship_half_size
-    hit_right = next_x > window_width - ship_half_size
-
-    # Top boundary: only enforce if exit is not allowed
-    hit_top = (next_y < hud_height + ship_half_size) & (~allow_exit_top)
-    hit_bottom = next_y > window_height - ship_half_size
-
-    # c. Based on the prediction, calculate the velocity for the *next* frame
-    final_vx = jnp.where(hit_left | hit_right, -vx * bounce_damping, vx)
-    final_vy = jnp.where(hit_top | hit_bottom, -vy * bounce_damping, vy)
-
-    # d. Force the next frame's position to be within boundaries using clip
-    final_x = jnp.clip(next_x, ship_half_size, window_width - ship_half_size)
-    # Top boundary: only clip if exit is not allowed
-    min_y = jnp.where(allow_exit_top, jnp.float32(-100.0), hud_height + ship_half_size)
-    final_y = jnp.clip(next_y, min_y, window_height - ship_half_size)
+    
+    # Check if next position would cross boundaries
+    will_hit_left = next_x < min_x
+    will_hit_right = next_x > max_x
+    # Top boundary: only enforce when exit is NOT allowed
+    will_hit_top = (next_y < min_y_base) & (~allow_exit_top)
+    # Bottom boundary: always enforced
+    will_hit_bottom = next_y > max_y
+    
+    # For bouncing: reverse velocity and apply damping when hitting boundary
+    # This creates an "energy field" bounce effect
+    bounced_vx = jnp.where(will_hit_left | will_hit_right, -vx * bounce_damping, vx)
+    bounced_vy = jnp.where(will_hit_top | will_hit_bottom, -vy * bounce_damping, vy)
+    
+    # Calculate final position: if we would hit a boundary, clamp to the boundary
+    # and use the bounced velocity for next frame
+    clamped_x = jnp.clip(next_x, min_x, max_x)
+    # For Y: when exit is allowed, don't clamp the top; otherwise enforce min_y_base
+    min_y_effective = jnp.where(allow_exit_top, jnp.float32(-1000.0), min_y_base)
+    clamped_y = jnp.clip(next_y, min_y_effective, max_y)
+    
+    # Use bounced velocities if we hit something, otherwise keep original velocities
+    final_vx = bounced_vx
+    final_vy = bounced_vy
+    final_x = clamped_x
+    final_y = clamped_y
 
     # e. Normalize the angle (remains unchanged)
     normalized_angle = (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
@@ -1500,7 +1523,13 @@ def step_map(env_state: EnvState, action: int):
     fuel_consumed += jnp.where(is_using_shield_tractor, FUEL_CONSUME_SHIELD_TRACTOR, 0.0)
     new_fuel = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
     
-    can_fire = jnp.isin(action, jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])) & (env_state.cooldown == 0) & (
+    # Detect fire button press (not hold) - only fire on transition from not-pressed to pressed
+    fire_actions = jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])
+    is_fire_pressed = jnp.isin(action, fire_actions)
+    was_fire_pressed = jnp.isin(env_state.prev_action, fire_actions)
+    fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
+    
+    can_fire = fire_just_pressed & (env_state.cooldown == 0) & (
                 _bullets_alive_count(env_state.bullets) < 2)
 
     bullets = jax.lax.cond(
@@ -1514,7 +1543,7 @@ def step_map(env_state: EnvState, action: int):
     cooldown = jnp.where(can_fire, PLAYER_FIRE_COOLDOWN_FRAMES, jnp.maximum(env_state.cooldown - 1, 0))
 
     # Initialize a temporary `env_state` for subsequent chained updates
-    new_env = env_state._replace(state=ship_after_move, bullets=bullets, cooldown=cooldown, fuel=new_fuel)
+    new_env = env_state._replace(state=ship_after_move, bullets=bullets, cooldown=cooldown, fuel=new_fuel, prev_action=action)
 
     # --- 3. Saucer Logic ---
     saucer = new_env.saucer
@@ -1714,7 +1743,14 @@ def _step_level_core(env_state: EnvState, action: int):
     actual_action = jnp.where(was_crashing, NOOP, action)
 
     ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx, allow_exit_top)
-    can_fire_player = jnp.isin(action, jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])) & (
+    
+    # Detect fire button press (not hold) - only fire on transition from not-pressed to pressed
+    fire_actions = jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])
+    is_fire_pressed = jnp.isin(action, fire_actions)
+    was_fire_pressed = jnp.isin(state_after_spawn.prev_action, fire_actions)
+    fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
+    
+    can_fire_player = fire_just_pressed & (
                 state_after_spawn.cooldown == 0) & (_bullets_alive_count(state_after_spawn.bullets) < 2)
 
     bullets = jax.lax.cond(
@@ -1990,8 +2026,11 @@ def _step_level_core(env_state: EnvState, action: int):
     # Planet level win: all enemies destroyed AND player exits through top
     # Remove has_meaningful_enemies check - if you can exit (exit_allowed was True), you should be able to leave
     reset_level_win = all_enemies_gone & (~is_in_reactor) & exited_top
+    
+    # Reactor early exit: allow leaving reactor without destroying it (no rewards)
+    reset_reactor_early_exit = is_in_reactor & (~new_reactor_activated) & exited_top
 
-    reset = reset_level_win | win_reactor | reset_from_reactor_crash
+    reset = reset_level_win | win_reactor | reset_from_reactor_crash | reset_reactor_early_exit
 
     # f) Is the game over?
     game_over = (death_event & (final_lives <= 0)) 
@@ -2030,8 +2069,10 @@ def _step_level_core(env_state: EnvState, action: int):
         state_after_ufo.planets_cleared_mask
     )
 
-    # Update exit_allowed flag for next frame: reactor activated OR all enemies destroyed
-    new_exit_allowed = new_reactor_activated | (all_enemies_gone & (~is_in_reactor))
+    # Update exit_allowed flag for next frame:
+    # - Reactor level: always allowed (can exit early or after destroying reactor)
+    # - Other levels: only after all enemies destroyed
+    new_exit_allowed = is_in_reactor | new_reactor_activated | (all_enemies_gone & (~is_in_reactor))
 
     final_env_state = state_after_ufo._replace(
         state=state, bullets=bullets, cooldown=cooldown, enemies=enemies,
@@ -2050,6 +2091,7 @@ def _step_level_core(env_state: EnvState, action: int):
         planets_cleared_mask=cleared_mask_next,
         mode_timer=state_after_ufo.mode_timer + 1,
         exit_allowed=new_exit_allowed,
+        prev_action=action,
     )
 
     obs_vector = jnp.array([state.x, state.y, state.vx, state.vy, state.angle])
@@ -2081,7 +2123,13 @@ def step_arena(env_state: EnvState, action: int):
     actual_action = jnp.where(is_crashing, NOOP, action)
     ship_after_move = ship_step(ship, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx)
 
-    can_fire = jnp.isin(action, jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])) & (env_state.cooldown == 0) & (
+    # Detect fire button press (not hold) - only fire on transition
+    fire_actions = jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])
+    is_fire_pressed = jnp.isin(action, fire_actions)
+    was_fire_pressed = jnp.isin(env_state.prev_action, fire_actions)
+    fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
+    
+    can_fire = fire_just_pressed & (env_state.cooldown == 0) & (
                 _bullets_alive_count(env_state.bullets) < 2)
 
     bullets = jax.lax.cond(
@@ -2176,6 +2224,7 @@ def step_arena(env_state: EnvState, action: int):
         crash_timer=crash_timer_next,
         mode_timer=env_state.mode_timer + 1,
         score=env_state.score + reward,
+        prev_action=action,
     )
 
     # If it's a "win" exit, return directly to the map and restore ship position
@@ -2788,6 +2837,7 @@ class JaxGravitar(JaxEnvironment):
             reactor_destroyed=final_reactor_destroyed, 
             planets_cleared_mask=final_cleared_mask,
             exit_allowed=jnp.array(False),
+            prev_action=jnp.int32(0),
         )
 
         # Ensure obs is a JAX array
@@ -2879,7 +2929,7 @@ class JaxGravitar(JaxEnvironment):
             level_offset=jnp.array(level_offset, dtype=jnp.float32),
             reactor_timer=initial_timer.astype(jnp.int32),
             reactor_activated=jnp.array(False),
-            exit_allowed=jnp.array(False),
+            exit_allowed=(level_id == 4),  # Allow exit from start in reactor level
         )
 
         # Ensure obs is a JAX array
