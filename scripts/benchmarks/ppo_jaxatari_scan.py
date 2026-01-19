@@ -68,9 +68,9 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "freeway"
+    env_id: str = "seaquest"
     """the id of the environment"""
-    mods: tuple[str] = ("no_falling_coconut", )
+    mods: list[str] = [] 
     total_timesteps: int = 10_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
