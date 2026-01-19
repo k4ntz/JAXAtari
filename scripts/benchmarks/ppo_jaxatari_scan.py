@@ -70,8 +70,8 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "seaquest"
     """the id of the environment"""
-    mods: list[str] = [] 
-    total_timesteps: int = 10_000_000
+    mods: tuple[str] = () 
+    total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}_{"oc" if not args.pixel_based else "pixel"}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}_{'oc' if not args.pixel_based else 'pixel'}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
 
