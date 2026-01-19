@@ -11,7 +11,7 @@ dependencies = [
     "flax>=0.10.6",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-    "jax",
+    "jax[cuda12]",
     "ml-dtypes",
     "numpy",
     "opt-einsum>=3.4.0",

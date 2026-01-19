@@ -500,7 +500,8 @@ if __name__ == "__main__":
             frames = jax.vmap(renderer.render)(env_states)
             # currently (N, W, H, C), need (N, C, H, W)
             frames = jnp.transpose(frames, (0, 3, 1, 2)) 
-            writer.add_video("video", np.array(frames)[None, ...], global_step=global_step, fps=60)
+            # writer.add_video("video", np.array(frames)[None, ...], global_step=global_step, fps=60)
+            wandb.log({"eval/video": wandb.Video(np.array(frames), fps=60, format="mp4")}, step=global_step)
             print(f"New video of length {frames.shape[0]} at step {global_step} recorded.")
 
     # TRY NOT TO MODIFY: start the game
@@ -541,7 +542,6 @@ if __name__ == "__main__":
     start_time = time.time()
     for iteration in range(1, args.num_iterations + 1):
         rtpt.step()
-
         if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
            eval_and_vid(iteration, global_step) 
 
