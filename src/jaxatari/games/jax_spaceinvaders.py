@@ -97,7 +97,14 @@ class SpaceInvadersConstants(NamedTuple):
 
     POSITION_LIFE_X: int = 83
 
-    MOVEMENT_RATE: int = 32
+    # Thresholds: [15, 29, 33, 34, 35] (Total destroyed count)
+    MOVEMENT_THRESHOLDS: jnp.ndarray = jnp.array([15, 29, 33, 34, 35], dtype=jnp.int32)
+    # Rates: Delays in frames. 
+    # 0-14 dead -> 32 frames delay
+    # 15-28 dead -> 16 frames delay
+    # ...
+    # 35 dead (1 left) -> 1 frame delay (fastest)
+    MOVEMENT_RATES: jnp.ndarray = jnp.array([32, 16, 8, 4, 2, 1], dtype=jnp.int32)
     ENEMY_FIRE_RATE: int = 60
 
     INITIAL_LIVES: int = 3
@@ -188,6 +195,8 @@ class SpaceInvadersState(NamedTuple):
     enemy_bullets_y: chex.Array
     enemy_fire_cooldown: chex.Array
     barricade_health: chex.Array
+    active_barricade: int # 1 = barricades active, 0 = barricades inactive (deactivated when enemies reach barricade line)
+    enemy_flip: chex.Array 
     rng: jax.random.PRNGKey
 
 class EntityPosition(NamedTuple):
@@ -680,6 +689,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                 self.consts.BARRICADE_HEALTH_INITIAL,
                 dtype=jnp.int32
             ),
+            active_barricade=jnp.array(1, dtype=jnp.int32),
+            enemy_flip=jnp.array(0, dtype=jnp.int32),
             rng=key
         )
         initial_obs = self._get_observation(state)
@@ -694,7 +705,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             step_counter = 0,
             player_score = state.player_score,
             player_lives = state.player_lives,
-            destroyed = jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.int32),
+            destroyed = state.destroyed,
             opponent_current_x = self.consts.OPPONENT_LIMIT_X[0],
             opponent_current_y = self.consts.OPPONENT_LIMIT_Y[0],
             opponent_bounding_rect = state.opponent_bounding_rect,
@@ -713,7 +724,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                 (3, self.consts.BARRICADE_GRID_SHAPE[0], self.consts.BARRICADE_GRID_SHAPE[1]),
                 self.consts.BARRICADE_HEALTH_INITIAL,
                 dtype=jnp.int32
-            )
+            ),
+            active_barricade=jnp.array(1, dtype=jnp.int32)
         )
 
         return state
@@ -753,18 +765,25 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             bullet_x=new_bullet_x,
             bullet_y=new_bullet_y
         )
+        
         new_destroyed, new_score, final_bullet_active, new_ufo_state = self._check_bullet_enemy_collisions(new_bullet_state)
 
-        # Recalculating Bounding Rect
         def find_bounds(arr, axis, limit):
-            # Berechne Zeilensummen
-            sums = jnp.sum(arr, axis=axis)
-
-            # Maske: Zeilen mit Summe == 0
-            mask = sums < 6
-
-            first = jnp.where(jnp.any(mask), jnp.argmax(mask), -1)
-            last = jnp.where(jnp.any(mask), mask.shape[0] - 1 - jnp.argmax(mask[::-1]), -1)
+            # A position is occupied if the value is not 29 (29 = fully dead/gone)
+            # 0 = alive, 1..28 = exploding. Both count as "occupying space" for movement bounds.
+            mask = arr < 29
+            
+            # Check which rows/cols have at least one occupied cell
+            has_occupied = jnp.any(mask, axis=axis)
+            
+            # Identify first and last indices
+            first = jnp.argmax(has_occupied)
+            last = limit - 1 - jnp.argmax(has_occupied[::-1])
+            
+            # Handle case where everything is dead (has_occupied are all False)
+            any_occupied = jnp.any(has_occupied)
+            first = jnp.where(any_occupied, first, -1)
+            last = jnp.where(any_occupied, last, -1)
 
             return first, last
 
@@ -772,15 +791,15 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         row_top, row_bottom = find_bounds(dest, 1, self.consts.ENEMY_ROWS)
         col_left, col_right = find_bounds(dest, 0, self.consts.ENEMY_COLS)
 
-        col_count = col_right - col_left
-        row_count = row_bottom - row_top
+        # FIX 1: Calculate count correctly (inclusive range)
+        col_count = jnp.maximum(0, col_right - col_left + 1)
+        row_count = jnp.maximum(0, row_bottom - row_top + 1)
 
-        new_rect_width = self.consts.OPPONENT_SIZE[0] * col_count + self.consts.OFFSET_OPPONENT[0] * (col_count - 1)
-        new_rect_height = self.consts.OPPONENT_SIZE[1] * row_count + self.consts.OFFSET_OPPONENT[1] * (row_count - 1)
+        new_rect_width = self.consts.OPPONENT_SIZE[0] * col_count + self.consts.OFFSET_OPPONENT[0] * jnp.maximum(0, col_count - 1)
+        new_rect_height = self.consts.OPPONENT_SIZE[1] * row_count + self.consts.OFFSET_OPPONENT[1] * jnp.maximum(0, row_count - 1)
 
-        # Split key for independent random sources in this step
+        # --- ENEMY BULLETS LOGIC (Keep existing) ---
         enemy_bullet_key, ufo_key = jax.random.split(key, 2)
-
         enemy_bullets_active, enemy_bullets_x, enemy_bullets_y, enemy_fire_cooldown = self._update_enemy_bullets(
             state._replace(
                 destroyed=new_destroyed,
@@ -800,23 +819,35 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
                 enemy_bullets_y=enemy_bullets_y
             )
         )
-
-        # step_running is only called when player_dead == 0; simplify logic
         new_player_dead = jnp.where(new_lives != state.player_lives, 1, 0)
 
+        # --- NEW SPEED CALCULATION ---
+        # 1. Count total dead enemies (non-zero entries in destroyed array)
+        num_destroyed = jnp.sum(new_destroyed != 0)
+
+        # 2. Determine Speed Level
+        # Compare current destroyed count against thresholds [15, 29, 33, 34, 35]
+        # Summing the boolean results gives the index for the rates array.
+        # e.g., if 0 destroyed: sum([F,F,F,F,F]) = 0 -> rate 32
+        # e.g., if 15 destroyed: sum([T,F,F,F,F]) = 1 -> rate 16
+        speed_level = jnp.sum(num_destroyed >= self.consts.MOVEMENT_THRESHOLDS)
+        
+        # 3. Get the dynamic rate
+        current_rate = self.consts.MOVEMENT_RATES[speed_level]
+        # -----------------------------
+
+        # --- MOVEMENT LOGIC (Updated to use current_rate) ---
         def get_opponent_position():
+            # ... (Keep your corrected bounds logic from the previous answer) ...
+            # (Just reusing the logic here for context, no changes inside this function needed)
+            stride_x = self.consts.OPPONENT_SIZE[0] + self.consts.OFFSET_OPPONENT[0]
+            visual_left_x = state.opponent_current_x + (col_left * stride_x)
+            visual_right_x = state.opponent_current_x + (col_right * stride_x) + self.consts.OPPONENT_SIZE[0]
+            
             direction = jax.lax.cond(
                 state.opponent_direction < 0,
-                lambda: jax.lax.cond(
-                    self.consts.OPPONENT_LIMIT_X[0] < state.opponent_current_x,
-                    lambda: -1,
-                    lambda: 1
-                ),
-                lambda: jax.lax.cond(
-                    self.consts.OPPONENT_LIMIT_X[1] > state.opponent_current_x + state.opponent_bounding_rect[0],
-                    lambda: 1,
-                    lambda: -1
-                )
+                lambda: jax.lax.cond(visual_left_x <= self.consts.OPPONENT_LIMIT_X[0], lambda: 1, lambda: -1),
+                lambda: jax.lax.cond(visual_right_x >= self.consts.OPPONENT_LIMIT_X[1], lambda: -1, lambda: 1)
             )
 
             new_position_y = jax.lax.cond(
@@ -829,38 +860,57 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             new_position_x = state.opponent_current_x + direction
             return (direction, new_position_x, new_position_y)
 
-        is_opponent_step = state.step_counter % self.consts.MOVEMENT_RATE == 0
-        (direction, new_position_x, new_position_y) = jax.lax.cond(
+        # USE THE DYNAMIC RATE HERE
+        is_opponent_step = state.step_counter % current_rate == 0
+        
+        new_enemy_flip = jax.lax.cond(
             is_opponent_step,
+            lambda: 1 - state.enemy_flip,
+            lambda: state.enemy_flip
+        )
+        
+        all_dead = col_left == -1
+
+        (direction, new_position_x, new_position_y) = jax.lax.cond(
+            jnp.logical_and(is_opponent_step, jnp.logical_not(all_dead)),
             lambda: get_opponent_position(),
             lambda: (state.opponent_direction, state.opponent_current_x, state.opponent_current_y)
         )
 
-        # If enemies overlap barricade line, wipe them
+        # If enemies overlap barricade line, deactivate barricades
         barricade_state = new_position_y + state.opponent_bounding_rect[1] > self.consts.BARRICADE_POS[1]
-        new_barricade_health = jax.lax.cond(
+        new_active_barricade = jax.lax.cond(
             barricade_state,
-            lambda: jnp.zeros_like(state.barricade_health),
-            lambda: state.barricade_health
+            lambda: jnp.array(0, dtype=jnp.int32),
+            lambda: state.active_barricade
+        )
+        new_barricade_health = state.barricade_health
+
+        # Apply enemy bullet damage (only if barricade is active)
+        final_enemy_bullets_active, new_barricade_health = jax.lax.cond(
+            state.active_barricade == 1,
+            lambda: self._update_barricade_health(
+                new_barricade_health,
+                enemy_bullets_x,
+                enemy_bullets_y,
+                final_enemy_bullets_active
+            ),
+            lambda: (final_enemy_bullets_active, new_barricade_health)
         )
 
-        # Apply enemy bullet damage
-        final_enemy_bullets_active, new_barricade_health = self._update_barricade_health(
-            new_barricade_health,
-            enemy_bullets_x,
-            enemy_bullets_y,
-            final_enemy_bullets_active
-        )
-
-        # Apply player bullet damage
+        # Apply player bullet damage (only if barricade is active)
         p_active_arr = jnp.array([final_bullet_active])
         p_x_arr = jnp.array([new_bullet_x])
         p_y_arr = jnp.array([new_bullet_y])
-        p_active_arr, new_barricade_health = self._update_barricade_health(
-            new_barricade_health,
-            p_x_arr,
-            p_y_arr,
-            p_active_arr
+        p_active_arr, new_barricade_health = jax.lax.cond(
+            state.active_barricade == 1,
+            lambda: self._update_barricade_health(
+                new_barricade_health,
+                p_x_arr,
+                p_y_arr,
+                p_active_arr
+            ),
+            lambda: (p_active_arr, new_barricade_health)
         )
         final_bullet_active = p_active_arr[0]
 
@@ -921,10 +971,20 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             enemy_bullets_y=enemy_bullets_y,
             enemy_fire_cooldown=enemy_fire_cooldown,
             barricade_health=new_barricade_health,
+            active_barricade=new_active_barricade,
+            enemy_flip=new_enemy_flip,
             rng=state.rng
         )
 
-        return new_state
+        wave_cleared = jnp.all(new_state.destroyed >= 29)
+
+        final_state = jax.lax.cond(
+            wave_cleared,
+            lambda: self._next_wave(new_state), # Start new wave
+            lambda: new_state                   # Continue current wave
+        )
+
+        return final_state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: SpaceInvadersState, action: chex.Array) -> Tuple[SpaceInvadersObservation, SpaceInvadersState, float, bool, SpaceInvadersInfo]:
@@ -1052,6 +1112,48 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
             dtype=jnp.uint8
         )
+    
+    def _next_wave(self, state: SpaceInvadersState) -> SpaceInvadersState:
+            """
+            Prepares the state for the next wave:
+            1. Resets Enemy Positions (this 'reactivates' shields by moving enemies away from them).
+            2. Resets Enemies to Alive.
+            3. Resets Bullets.
+            4. PRESERVES Barricade Health (does not repair them).
+            """
+            return state._replace(
+                # Reset Player Position (Optional, matches original game feel)
+                player_x=jnp.array(self.consts.INITIAL_PLAYER_X).astype(jnp.int32),
+                player_speed=jnp.array(0.0).astype(jnp.int32),
+                
+                # Revive all enemies
+                destroyed=jnp.zeros((self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS,), dtype=jnp.int32),
+                
+                # Reset Enemy Positions (moves them back to top)
+                opponent_current_x=self.consts.OPPONENT_LIMIT_X[0],
+                opponent_current_y=self.consts.OPPONENT_LIMIT_Y[0],
+                opponent_direction=self.consts.INITIAL_OPPONENT_DIRECTION,
+                
+                # Reset UFO
+                ufo_x=0,
+                ufo_state=0,
+                ufo_dir=1,
+                
+                # Reset Bullets
+                bullet_active=jnp.array(0).astype(jnp.int32),
+                bullet_x=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
+                bullet_y=jnp.array(self.consts.INITIAL_BULLET_POS).astype(jnp.int32),
+                enemy_bullets_active=jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.bool),
+                enemy_bullets_x=jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.int32),
+                enemy_bullets_y=jnp.zeros(self.consts.MAX_ENEMY_BULLETS, dtype=jnp.int32),
+                enemy_fire_cooldown=jnp.array(self.consts.ENEMY_FIRE_RATE).astype(jnp.int32),
+                
+                # --- CRITICAL: Keep current barricade health ---
+                # Resetting enemy positions above stops the 'wipe' logic in step_running,
+                # effectively reactivating the shields with their existing damage.
+                barricade_health=state.barricade_health,
+                active_barricade=jnp.array(1, dtype=jnp.int32)
+            )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: SpaceInvadersState) -> SpaceInvadersInfo:
@@ -1063,7 +1165,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SpaceInvadersState) -> bool:
-        return jnp.greater_equal(state.player_score, self.consts.WIN_SCORE)
+        # The game only ends if the player runs out of lives.
+        return state.player_lives <= 0
 
 class SpaceInvadersRenderer(JAXGameRenderer):
     def __init__(self, consts: SpaceInvadersConstants = None):
@@ -1249,6 +1352,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         """
         Render the original (18x8) defense sprite masked by the barricade health grid
         via the precomputed pixel->chunk map.
+        Only render if active_barricade is true.
         """
         base_sprite = self.SHAPE_MASKS['defense']
 
@@ -1262,7 +1366,12 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             y_pos = self.consts.BARRICADE_POS[1]
             return self.jr.render_at(current_raster, x_pos, y_pos, masked_sprite)
 
-        return jax.lax.fori_loop(0, 3, render_single_barricade, raster)
+        # Only render barricades if active_barricade is 1
+        return jax.lax.cond(
+            state.active_barricade == 1,
+            lambda: jax.lax.fori_loop(0, 3, render_single_barricade, raster),
+            lambda: raster
+        )
 
     def render_explosion(self, state: SpaceInvadersState, raster, x, y, frame_id):
         sprite_id = jnp.searchsorted(self.consts.EXPLOSION_FRAMES, frame_id)
@@ -1275,8 +1384,9 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         flip = jax.lax.cond(
             state.player_dead != 0,
             lambda: False,
-            lambda: jnp.floor(state.step_counter / self.consts.MOVEMENT_RATE) % 2 == 1
+            lambda: state.enemy_flip == 1 # Simple check against the state
         )
+        
         sprites_to_render = jax.lax.cond(
             flip,
             lambda: self.opponent_sprites_b,

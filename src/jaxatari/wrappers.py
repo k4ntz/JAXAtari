@@ -2,6 +2,7 @@
 
 import functools
 from typing import Any, Dict, Tuple, Union, Optional, Callable
+from dataclasses import is_dataclass, asdict
 
 import chex
 from flax import struct
@@ -47,7 +48,11 @@ class MultiRewardWrapper(JaxatariWrapper):
     def step(self, state: EnvState, action: int) -> Tuple[chex.Array, EnvState, float, bool, Dict]: 
         obs, new_state, reward, done, info = self._env.step(state, action)
         all_rewards = self._get_all_rewards(state, new_state)
-        info = info._asdict() if hasattr(info, '_asdict') else info
+        # Convert info to dict: handle NamedTuple (has _asdict) or dataclass (use asdict)
+        if hasattr(info, '_asdict'):
+            info = info._asdict()
+        elif is_dataclass(info):
+            info = asdict(info)
         info["all_rewards"] = all_rewards
         return obs, new_state, reward, done, info 
 
@@ -419,7 +424,6 @@ class PixelObsWrapper(JaxatariWrapper):
         new_state = PixelState(atari_state, image_stack)
         return image_stack, new_state, reward, done, info
 
-
 @struct.dataclass 
 class PixelAndObjectCentricState:
     atari_state: AtariState
@@ -548,6 +552,47 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         # 5. Create the new state with the new atari_state
         new_state = PixelAndObjectCentricState(atari_state, image_stack, flat_obs)
         return (image_stack, flat_obs), new_state, reward, done, info
+    
+class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
+    """
+    Exactly the same as PixelAndObjectCentricWrapper, but return structured OC-obs instead of flattened array.
+    """
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def reset(
+        self, key: chex.PRNGKey
+    ) -> Tuple[chex.Array, EnvState]:
+        # 1. Get the initial object observation stack and state from the AtariWrapper
+        obs_stack, atari_state = self._env.reset(key)
+
+        # 3. Render and preprocess the image
+        image = self._env.render(atari_state.env_state)
+        processed_image = self._preprocess_image(image)
+        image_stack = jnp.stack([processed_image] * self._env.frame_stack_size)
+
+        # 4. Create the state and observation tuple
+        new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
+        return (image_stack, obs_stack), new_state
+    
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def step(
+        self,
+        state: PixelAndObjectCentricState,
+        action: Union[int, float],
+    ) -> Tuple[chex.Array, EnvState, float, bool, Any]:
+        # 1. Step the underlying environment using its state
+        obs_stack, atari_state, reward, done, info = self._env.step(state.atari_state, action)
+
+        # 3. Render and preprocess the new image
+        image = self._env.render(atari_state.env_state)
+        processed_image = self._preprocess_image(image)
+        
+        # 4. Update the image stack with the new processed image
+        image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
+        
+        # 5. Create the new state with the new atari_state
+        new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
+        return (image_stack, obs_stack), new_state, reward, done, info
 
 
 class FlattenObservationWrapper(JaxatariWrapper):
