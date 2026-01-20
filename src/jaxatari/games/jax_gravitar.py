@@ -18,76 +18,190 @@ import jax.debug
 
     Gravitar Rework by Tiago Soares
 """
-FORCE_SPRITES = True
-WORLD_SCALE = 3.0
-# ========== Constants ==========
-SPRITE_DIR = os.path.join(os.path.dirname(__file__), "sprites", "gravitar")
-SCALE = 1
-MAX_BULLETS = 16  # Reduced from 64 for faster compilation
-MAX_ENEMIES = 4   # Reduced from 16 for faster compilation
-# 18 discrete spaceship action constants
-NOOP = 0
-FIRE = 1
-UP = 2
-RIGHT = 3
-LEFT = 4
-DOWN = 5
-UPRIGHT = 6
-UPLEFT = 7
-DOWNRIGHT = 8
-DOWNLEFT = 9
-UPFIRE = 10
-RIGHTFIRE = 11
-LEFTFIRE = 12
-DOWNFIRE = 13
-UPRIGHTFIRE = 14
-UPLEFTFIRE = 15
-DOWNRIGHTFIRE = 16
-DOWNLEFTFIRE = 17
 
-# HUD settings
-HUD_HEIGHT = 24
-MAX_LIVES = 3
-HUD_PADDING = 5
-HUD_SHIP_WIDTH = 10
-HUD_SHIP_HEIGHT = 12
-HUD_SHIP_SPACING = 12
-# Pygame window dimensions
-WINDOW_WIDTH = 160
-WINDOW_HEIGHT = 210
 
-SAUCER_SPAWN_DELAY_FRAMES = 60 * 3
-SAUCER_RESPAWN_DELAY_FRAMES = 180 * 3
-UFO_RESPAWN_DELAY_FRAMES = 180 * 2
-SAUCER_SPEED_MAP = jnp.float32(0.4) / WORLD_SCALE
-SAUCER_SPEED_ARENA = jnp.float32(0.4) / WORLD_SCALE
-SAUCER_RADIUS = jnp.float32(3.0)
-SHIP_RADIUS = jnp.float32(2.0)
-TRACTOR_BEAM_RANGE = jnp.float32(15.0)  # Range for tractor beam to pick up fuel tanks
-SAUCER_INIT_HP = jnp.int32(1)
+def _get_default_ship_angles():
+    """Ship discrete rotation system (16 angles like original ALE)"""
+    return jnp.array([
+        -jnp.pi/2,              # 0: N (270° or -90°)
+        -jnp.pi/2 + jnp.pi/8,   # 1: NNE (292.5°)
+        -jnp.pi/2 + jnp.pi/4,   # 2: NE (315°)
+        -jnp.pi/2 + 3*jnp.pi/8, # 3: ENE (337.5°)
+        0.0,                    # 4: E (0°)
+        jnp.pi/8,               # 5: ESE (22.5°)
+        jnp.pi/4,               # 6: SE (45°)
+        3*jnp.pi/8,             # 7: SSE (67.5°)
+        jnp.pi/2,               # 8: S (90°)
+        jnp.pi/2 + jnp.pi/8,    # 9: SSW (112.5°)
+        jnp.pi/2 + jnp.pi/4,    # 10: SW (135°)
+        jnp.pi/2 + 3*jnp.pi/8,  # 11: WSW (157.5°)
+        jnp.pi,                 # 12: W (180°)
+        jnp.pi + jnp.pi/8,      # 13: WNW (202.5°)
+        jnp.pi + jnp.pi/4,      # 14: NW (225°)
+        jnp.pi + 3*jnp.pi/8,    # 15: NNW (247.5°)
+    ], dtype=jnp.float32)
 
-# Solar system completion bonus rewards (for destroying reactor OR clearing all planets)
-SOLAR_SYSTEM_BONUS_FUEL = 7000.0
-SOLAR_SYSTEM_BONUS_LIVES = 2
-SOLAR_SYSTEM_BONUS_SCORE = 4000.0
 
-# SAUCER_SCALE              = 2.2
-# ENEMY_ORANGE_SCALE = 2.5
-# ENEMY_GREEN_SCALE = 2.5
-# FUEL_TANK_SCALE = 2.5
-# UFO_SCALE = 2.5
+class GravitarConstants(NamedTuple):
+    """Constants for Gravitar game configuration."""
+    
+    # World scaling
+    WORLD_SCALE: float = 3.0
+    FORCE_SPRITES: bool = True
+    SCALE: int = 1
+    
+    # Object limits
+    MAX_BULLETS: int = 16 # reduced from 64 for faster compilation
+    MAX_ENEMIES: int = 4 # reduced from 16 for faster compilation
+    
+    # Action constants
+    NOOP: int = 0
+    FIRE: int = 1
+    UP: int = 2
+    RIGHT: int = 3
+    LEFT: int = 4
+    DOWN: int = 5
+    UPRIGHT: int = 6
+    UPLEFT: int = 7
+    DOWNRIGHT: int = 8
+    DOWNLEFT: int = 9
+    UPFIRE: int = 10
+    RIGHTFIRE: int = 11
+    LEFTFIRE: int = 12
+    DOWNFIRE: int = 13
+    UPRIGHTFIRE: int = 14
+    UPLEFTFIRE: int = 15
+    DOWNRIGHTFIRE: int = 16
+    DOWNLEFTFIRE: int = 17
+    
+    # HUD settings
+    HUD_HEIGHT: int = 24
+    MAX_LIVES: int = 3
+    HUD_PADDING: int = 5
+    HUD_SHIP_WIDTH: int = 10
+    HUD_SHIP_HEIGHT: int = 12
+    HUD_SHIP_SPACING: int = 12
+    
+    # Window dimensions
+    WINDOW_WIDTH: int = 160
+    WINDOW_HEIGHT: int = 210
+    
+    # Spawn and respawn timing
+    SAUCER_SPAWN_DELAY_FRAMES: int = 60 * 3
+    SAUCER_RESPAWN_DELAY_FRAMES: int = 180 * 3
+    UFO_RESPAWN_DELAY_FRAMES: int = 180 * 2
+    
+    # Movement speeds and physics
+    SAUCER_SPEED_MAP: float = 0.4 / 3.0  # 0.4 / WORLD_SCALE
+    SAUCER_SPEED_ARENA: float = 0.4 / 3.0
+    SAUCER_RADIUS: float = 3.0
+    SHIP_RADIUS: float = 2.0
+    TRACTOR_BEAM_RANGE: float = 15.0
+    PLAYER_BULLET_SPEED: float = 4.0 / 3.0  # 4.0 / WORLD_SCALE
+    SAUCER_BULLET_SPEED: float = 2.0 / 3.0  # 2.0 / WORLD_SCALE
+    UFO_HIT_RADIUS: float = 3.0
+    
+    # HP and damage
+    SAUCER_INIT_HP: int = 1
+    
+    # Animation timing
+    SAUCER_EXPLOSION_FRAMES: int = 60
+    SAUCER_FIRE_INTERVAL_FRAMES: int = 24
+    ENEMY_EXPLOSION_FRAMES: int = 60
+    PLAYER_FIRE_COOLDOWN_FRAMES: int = 30
+    
+    # Bonuses
+    SOLAR_SYSTEM_BONUS_FUEL: float = 7000.0
+    SOLAR_SYSTEM_BONUS_LIVES: int = 2
+    SOLAR_SYSTEM_BONUS_SCORE: float = 4000.0
+    
+    # Ship rotation
+    SHIP_ANGLES: jnp.ndarray = _get_default_ship_angles()
+    ROTATION_COOLDOWN_FRAMES: int = 6
+    
+    # Debug settings
+    SHIP_ANCHOR_X: Optional[float] = None
+    SHIP_ANCHOR_Y: Optional[float] = None
+    DEBUG_DRAW_SHIP_ORIGIN: bool = True
+    
+    # Reactor physics
+    REACTOR_START_Y: float = 30.0
 
-PLAYER_BULLET_SPEED = jnp.float32(4) / WORLD_SCALE
-SAUCER_EXPLOSION_FRAMES = jnp.int32(60)
-SAUCER_FIRE_INTERVAL_FRAMES = jnp.int32(24)
-SAUCER_BULLET_SPEED = jnp.float32(2) / WORLD_SCALE
-ENEMY_EXPLOSION_FRAMES = jnp.int32(60)
-UFO_HIT_RADIUS = jnp.float32(3.0)
 
-SHIP_ANCHOR_X = None
-SHIP_ANCHOR_Y = None
-DEBUG_DRAW_SHIP_ORIGIN = True
-PLAYER_FIRE_COOLDOWN_FRAMES = 30
+# Module-level constants used by free functions (not methods)
+# These cannot use self.consts since they're not class methods
+_DEFAULT_CONSTS = GravitarConstants()
+WINDOW_WIDTH = _DEFAULT_CONSTS.WINDOW_WIDTH
+WINDOW_HEIGHT = _DEFAULT_CONSTS.WINDOW_HEIGHT  
+HUD_HEIGHT = _DEFAULT_CONSTS.HUD_HEIGHT
+WORLD_SCALE = _DEFAULT_CONSTS.WORLD_SCALE
+SHIP_RADIUS = _DEFAULT_CONSTS.SHIP_RADIUS
+SHIP_ANGLES = _DEFAULT_CONSTS.SHIP_ANGLES
+MAX_BULLETS = _DEFAULT_CONSTS.MAX_BULLETS
+MAX_ENEMIES = _DEFAULT_CONSTS.MAX_ENEMIES
+NOOP = _DEFAULT_CONSTS.NOOP
+REACTOR_START_Y = _DEFAULT_CONSTS.REACTOR_START_Y
+MAX_LIVES = _DEFAULT_CONSTS.MAX_LIVES
+SAUCER_SPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.SAUCER_SPAWN_DELAY_FRAMES
+SAUCER_RESPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.SAUCER_RESPAWN_DELAY_FRAMES
+UFO_RESPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.UFO_RESPAWN_DELAY_FRAMES
+SAUCER_SPEED_MAP = _DEFAULT_CONSTS.SAUCER_SPEED_MAP
+SAUCER_SPEED_ARENA = _DEFAULT_CONSTS.SAUCER_SPEED_ARENA
+PLAYER_BULLET_SPEED = _DEFAULT_CONSTS.PLAYER_BULLET_SPEED
+SAUCER_BULLET_SPEED = _DEFAULT_CONSTS.SAUCER_BULLET_SPEED
+SAUCER_RADIUS = _DEFAULT_CONSTS.SAUCER_RADIUS
+UFO_HIT_RADIUS = _DEFAULT_CONSTS.UFO_HIT_RADIUS
+TRACTOR_BEAM_RANGE = _DEFAULT_CONSTS.TRACTOR_BEAM_RANGE
+SAUCER_INIT_HP = _DEFAULT_CONSTS.SAUCER_INIT_HP
+SAUCER_EXPLOSION_FRAMES = _DEFAULT_CONSTS.SAUCER_EXPLOSION_FRAMES
+SAUCER_FIRE_INTERVAL_FRAMES = _DEFAULT_CONSTS.SAUCER_FIRE_INTERVAL_FRAMES
+ENEMY_EXPLOSION_FRAMES = _DEFAULT_CONSTS.ENEMY_EXPLOSION_FRAMES
+PLAYER_FIRE_COOLDOWN_FRAMES = _DEFAULT_CONSTS.PLAYER_FIRE_COOLDOWN_FRAMES
+SOLAR_SYSTEM_BONUS_FUEL = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_FUEL
+SOLAR_SYSTEM_BONUS_LIVES = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_LIVES
+SOLAR_SYSTEM_BONUS_SCORE = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_SCORE
+
+
+@jax.jit
+def snap_angle_to_discrete(angle: jnp.ndarray) -> jnp.ndarray:
+    """Snap a continuous angle to the nearest of 12 discrete angles.
+    
+    Args:
+        angle: Angle in radians
+    Returns:
+        Snapped angle from SHIP_ANGLES array
+    """
+    # Normalize angle to [-pi, pi]
+    normalized = jnp.arctan2(jnp.sin(angle), jnp.cos(angle))
+    
+    # Calculate angular distance to each of the 12 discrete angles
+    # Use sin of difference for proper circular distance
+    angle_diffs = jnp.abs(jnp.arctan2(
+        jnp.sin(normalized - SHIP_ANGLES),
+        jnp.cos(normalized - SHIP_ANGLES)
+    ))
+    
+    # Find closest angle
+    closest_idx = jnp.argmin(angle_diffs)
+    return SHIP_ANGLES[closest_idx]
+
+
+@jax.jit
+def get_ship_sprite_idx(angle: jnp.ndarray) -> jnp.ndarray:
+    """Get the sprite index for a given ship angle.
+    
+    Args:
+        angle: Angle in radians (should be one of the discrete angles)
+    Returns:
+        Sprite index from SHIP_SPRITE_INDICES
+    """
+    # Find which discrete angle this is
+    angle_diffs = jnp.abs(jnp.arctan2(
+        jnp.sin(angle - SHIP_ANGLES),
+        jnp.cos(angle - SHIP_ANGLES)
+    ))
+    closest_idx = jnp.argmin(angle_diffs)
+    return SHIP_SPRITE_INDICES[closest_idx]
 
 
 def _jax_rotate(image, angle_deg, reshape=False, order=1, mode='constant', cval=0):
@@ -111,9 +225,27 @@ def _jax_rotate(image, angle_deg, reshape=False, order=1, mode='constant', cval=
 
 class SpriteIdx(IntEnum):
     # Ship & bullets
-    SHIP_IDLE = 0  # spaceship.npy
+    SHIP_IDLE = 0  # spaceship.npy (points north)
     SHIP_THRUST = 1  # ship_thrust.npy
     SHIP_BULLET = 2  # ship_bullet.npy
+    
+    # Ship orientations (16 discrete angles like original ALE)
+    SHIP_N = 0     # North - reuses SHIP_IDLE (spaceship.npy)
+    SHIP_NNE = 50  # spaceship_nne.npy
+    SHIP_NE = 51   # spaceship_ne.npy
+    SHIP_NEE = 52  # spaceship_nee.npy
+    SHIP_E = 53    # spaceship_e.npy
+    SHIP_SEE = 54  # spaceship_see.npy
+    SHIP_SE = 55   # spaceship_se.npy
+    SHIP_SSE = 56  # spaceship_sse.npy
+    SHIP_S = 57    # spaceship_s.npy
+    SHIP_SSW = 58  # spaceship_ssw.npy
+    SHIP_SW = 59   # spaceship_sw.npy
+    SHIP_SWW = 60  # spaceship_sww.npy
+    SHIP_W = 61    # spaceship_w.npy
+    SHIP_NWW = 62  # spaceship_nww.npy
+    SHIP_NW = 63   # spaceship_nw.npy
+    SHIP_NNW = 64  # spaceship_nnw.npy
 
     # Enemy bullets
     ENEMY_BULLET = 3  # enemy_bullet.npy
@@ -166,6 +298,26 @@ class SpriteIdx(IntEnum):
     ENEMY_ORANGE_FLIPPED = 39
     SHIELD = 40
 
+
+# Map angle index to sprite index (defined after SpriteIdx enum)
+SHIP_SPRITE_INDICES = jnp.array([
+    int(SpriteIdx.SHIP_N),    # 0: N
+    int(SpriteIdx.SHIP_NNE),  # 1: NNE
+    int(SpriteIdx.SHIP_NE),   # 2: NE
+    int(SpriteIdx.SHIP_NEE),  # 3: NEE
+    int(SpriteIdx.SHIP_E),    # 4: E
+    int(SpriteIdx.SHIP_SEE),  # 5: SEE
+    int(SpriteIdx.SHIP_SE),   # 6: SE
+    int(SpriteIdx.SHIP_SSE),  # 7: SSE
+    int(SpriteIdx.SHIP_S),    # 8: S
+    int(SpriteIdx.SHIP_SSW),  # 9: SSW
+    int(SpriteIdx.SHIP_SW),   # 10: SW
+    int(SpriteIdx.SHIP_SWW),  # 11: SWW
+    int(SpriteIdx.SHIP_W),    # 12: W
+    int(SpriteIdx.SHIP_NWW),  # 13: NWW
+    int(SpriteIdx.SHIP_NW),   # 14: NW
+    int(SpriteIdx.SHIP_NNW),  # 15: NNW
+], dtype=jnp.int32)
 
 TERRANT_SCALE_OVERRIDES = {
     SpriteIdx.TERRANT2: 1,
@@ -274,6 +426,7 @@ class ShipState(NamedTuple):
     vy: jnp.ndarray
     angle: jnp.ndarray
     is_thrusting: jnp.ndarray  # Boolean flag to track if ship is actively thrusting
+    rotation_cooldown: jnp.ndarray  # Frames until next rotation is allowed
 
 
 # ========== Saucer State ==========
@@ -429,7 +582,8 @@ def map_planet_to_terrant(planet_sprite_idx: jnp.ndarray) -> jnp.ndarray:
 
 
 def _opt(name_wo_ext: str):
-    path = os.path.join(SPRITE_DIR, f"{name_wo_ext}.npy")
+    sprite_dir = os.path.join(os.path.dirname(__file__), "sprites", "gravitar")
+    path = os.path.join(sprite_dir, f"{name_wo_ext}.npy")
     if not os.path.exists(path):
         return None
     try:
@@ -482,9 +636,25 @@ def load_sprites_tuple() -> tuple:
     # 2. Define a dictionary to map SpriteIdx enums to their .npy filenames (without extension).
     #    This is the central place for managing all sprites. Adding a new one just requires one new line here.
     sprite_map = {
-        SpriteIdx.SHIP_IDLE: "spaceship",
+        SpriteIdx.SHIP_IDLE: "spaceship",  # N (north)
         SpriteIdx.SHIP_THRUST: "ship_thrust",
         SpriteIdx.SHIP_BULLET: "ship_bullet",
+        # 16 discrete ship orientations
+        SpriteIdx.SHIP_NNE: "spaceship_nne",
+        SpriteIdx.SHIP_NE: "spaceship_ne",
+        SpriteIdx.SHIP_NEE: "spaceship_nee",
+        SpriteIdx.SHIP_E: "spaceship_e",
+        SpriteIdx.SHIP_SEE: "spaceship_see",
+        SpriteIdx.SHIP_SE: "spaceship_se",
+        SpriteIdx.SHIP_SSE: "spaceship_sse",
+        SpriteIdx.SHIP_S: "spaceship_s",
+        SpriteIdx.SHIP_SSW: "spaceship_ssw",
+        SpriteIdx.SHIP_SW: "spaceship_sw",
+        SpriteIdx.SHIP_SWW: "spaceship_sww",
+        SpriteIdx.SHIP_W: "spaceship_w",
+        SpriteIdx.SHIP_NWW: "spaceship_nww",
+        SpriteIdx.SHIP_NW: "spaceship_nw",
+        SpriteIdx.SHIP_NNW: "spaceship_nnw",
         SpriteIdx.ENEMY_BULLET: "enemy_bullet",
         SpriteIdx.ENEMY_GREEN_BULLET: "enemy_green_bullet",
         SpriteIdx.ENEMY_ORANGE: "enemy_orange",
@@ -585,6 +755,8 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
             vx=jnp.array(0.0),
             vy=jnp.array(0.0),
             angle=jnp.array(-jnp.pi / 2),
+            is_thrusting=jnp.array(False),
+            rotation_cooldown=jnp.int32(0)
         ),
         bullets=create_empty_bullets_64(),
         cooldown=jnp.array(0, dtype=jnp.int32),
@@ -657,7 +829,7 @@ def make_level_start_state(level_id: int) -> ShipState:
     y = jnp.where(is_reactor, REACTOR_START_Y, y)
     angle = jnp.where(is_reactor, angle_down, angle)
 
-    return ShipState(x=x, y=y, vx=jnp.float32(0.0), vy=jnp.float32(0.0), angle=angle, is_thrusting=jnp.array(False))
+    return ShipState(x=x, y=y, vx=jnp.float32(0.0), vy=jnp.float32(0.0), angle=angle, is_thrusting=jnp.array(False), rotation_cooldown=jnp.int32(0))
 
 
 # ========== Update Bullets ==========
@@ -1017,17 +1189,37 @@ def ship_step(state: ShipState,
     vx = state.vx
     vy = state.vy
 
-    # --- 2. Rotation Logic ---
+    # --- 2. Rotation Logic (Discrete 12-angle system) ---
+    rotation_cooldown_frames = 3  # Frames between rotations (adjust for desired rotation speed)
+    
     rotate_right_actions = jnp.array([3, 6, 8, 11, 14, 16])
     rotate_left_actions = jnp.array([4, 7, 9, 12, 15, 17])
     right = jnp.isin(action, rotate_right_actions)
     left = jnp.isin(action, rotate_left_actions)
 
-    # In a Y-down coordinate system:
-    # Turn left -> decrease angle value
-    angle = jnp.where(left, state.angle - rotation_speed, state.angle)
-    # Turn right -> increase angle value
-    angle = jnp.where(right, angle + rotation_speed, angle)
+    # Find current angle index in the discrete angle array
+    current_angle_diffs = jnp.abs(jnp.arctan2(
+        jnp.sin(state.angle - SHIP_ANGLES),
+        jnp.cos(state.angle - SHIP_ANGLES)
+    ))
+    current_idx = jnp.argmin(current_angle_diffs)
+    
+    # Only allow rotation if cooldown has expired
+    can_rotate = state.rotation_cooldown <= 0
+    wants_to_rotate = right | left
+    
+    # Rotate to next/previous discrete angle (wrapping around) only if allowed
+    next_idx = jnp.where(can_rotate & right, (current_idx + 1) % 16, current_idx)
+    next_idx = jnp.where(can_rotate & left, (current_idx - 1) % 16, next_idx)
+    
+    # Update angle and cooldown
+    angle = SHIP_ANGLES[next_idx]
+    did_rotate = (next_idx != current_idx)
+    new_rotation_cooldown = jnp.where(
+        did_rotate,
+        jnp.int32(rotation_cooldown_frames),
+        jnp.maximum(jnp.int32(0), state.rotation_cooldown - 1)
+    )
 
     # --- 3. Thrust Calculation ---
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])
@@ -1163,7 +1355,7 @@ def ship_step(state: ShipState,
     normalized_angle = (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
 
     # f. Return the new state with corrected position and velocity
-    return ShipState(x=final_x, y=final_y, vx=final_vx, vy=final_vy, angle=normalized_angle, is_thrusting=is_thrusting_now)
+    return ShipState(x=final_x, y=final_y, vx=final_vx, vy=final_vy, angle=normalized_angle, is_thrusting=is_thrusting_now, rotation_cooldown=new_rotation_cooldown)
 
 
 # ========== Logic about saucer ==========
@@ -2237,7 +2429,8 @@ def step_arena(env_state: EnvState, action: int):
             vx=jnp.float32(0.0),
             vy=jnp.float32(0.0),
             angle=env.state.angle,
-            is_thrusting=jnp.array(False)
+            is_thrusting=jnp.array(False),
+            rotation_cooldown=jnp.int32(0)
         )
         return env._replace(
             mode=jnp.int32(0), 
@@ -2542,17 +2735,18 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
 
 def get_action_from_key():
     """Placeholder function for key input - returns NOOP since we don't use Pygame input in benchmarks"""
-    return NOOP
+    return 0  # NOOP
 
 class JaxGravitar(JaxEnvironment):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, consts: GravitarConstants = None):
+        consts = consts or GravitarConstants()
+        super().__init__(consts)
         self.obs_shape = (5,)
         self.num_actions = 18
 
         # ---- Resource Loading and JAX Renderer Initialization ----
         self.sprites = load_sprites_tuple()
-        self.renderer = GravitarRenderer(width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
+        self.renderer = GravitarRenderer(width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT, consts=self.consts)
 
         # --- Store original sprite dimensions ---
         self.sprite_dims = {}
@@ -2578,10 +2772,10 @@ class JaxGravitar(JaxEnvironment):
         ]
         px, py, pr, pi = [], [], [], []
         for idx, xp, yp in layout:
-            cx, cy = xp * WINDOW_WIDTH, yp * WINDOW_HEIGHT
+            cx, cy = xp * self.consts.WINDOW_WIDTH, yp * self.consts.WINDOW_HEIGHT
             spr = self.sprites[idx]
             if spr is not None:
-                r = 8.0 / WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.shape[1],
+                r = 8.0 / self.consts.WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.shape[1],
                                                                                   spr.shape[0]) * MAP_SCALE * HITBOX_SCALE
             else:
                 r = 4
@@ -2790,7 +2984,8 @@ class JaxGravitar(JaxEnvironment):
             vx=jnp.array(jnp.cos(-jnp.pi / 4) * 0.3, dtype=jnp.float32),
             vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.3, dtype=jnp.float32),
             angle=jnp.array(-jnp.pi / 2, dtype=jnp.float32),
-            is_thrusting=jnp.array(False)
+            is_thrusting=jnp.array(False),
+            rotation_cooldown=jnp.int32(0)
         )
         px_np, py_np, pr_np, pi_np = self.planets
         ids_np = [SPRITE_TO_LEVEL_ID.get(sprite_idx, -1) for sprite_idx in pi_np]
@@ -2801,12 +2996,12 @@ class JaxGravitar(JaxEnvironment):
         env_state = EnvState(
             mode=jnp.int32(0), state=ship_state, bullets=create_empty_bullets_64(),
             cooldown=jnp.array(0, dtype=jnp.int32), enemies=create_empty_enemies(),
-            fuel_tanks=FuelTanks(x=jnp.zeros(MAX_ENEMIES), y=jnp.zeros(MAX_ENEMIES), w=jnp.zeros(MAX_ENEMIES),
-                                 h=jnp.zeros(MAX_ENEMIES), sprite_idx=jnp.full(MAX_ENEMIES, -1),
-                                 active=jnp.zeros(MAX_ENEMIES, dtype=bool)),
-            enemy_bullets=create_empty_bullets_16(), fire_cooldown=jnp.zeros((MAX_ENEMIES,), dtype=jnp.int32),
+            fuel_tanks=FuelTanks(x=jnp.zeros(self.consts.MAX_ENEMIES), y=jnp.zeros(self.consts.MAX_ENEMIES), w=jnp.zeros(self.consts.MAX_ENEMIES),
+                                 h=jnp.zeros(self.consts.MAX_ENEMIES), sprite_idx=jnp.full(self.consts.MAX_ENEMIES, -1),
+                                 active=jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool)),
+            enemy_bullets=create_empty_bullets_16(), fire_cooldown=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             key=key, key_alt=key, score=jnp.array(score if score is not None else 0.0, dtype=jnp.float32),
-            done=jnp.array(False), lives=jnp.array(lives if lives is not None else MAX_LIVES, dtype=jnp.int32),
+            done=jnp.array(False), lives=jnp.array(lives if lives is not None else self.consts.MAX_LIVES, dtype=jnp.int32),
             fuel=jnp.array(fuel if fuel is not None else 10000.0, dtype=jnp.float32),
             shield_active=jnp.array(False),
             reactor_timer=jnp.int32(0),
@@ -2998,12 +3193,25 @@ class JaxGravitar(JaxEnvironment):
 
 
 class GravitarRenderer(JAXGameRenderer):
-    def __init__(self, width: int = WINDOW_WIDTH, height: int = WINDOW_HEIGHT):
+    def __init__(self, width: int = None, height: int = None, consts: GravitarConstants = None):
         super().__init__()
-        self.width = width
-        self.height = height
+        self.consts = consts or GravitarConstants()
+        self.width = width if width is not None else self.consts.WINDOW_WIDTH
+        self.height = height if height is not None else self.consts.WINDOW_HEIGHT
 
         jax_sprites = _load_and_convert_sprites()
+        
+        # Convert sprites dict to tuple for JIT-compatible indexing
+        max_sprite_idx = max(jax_sprites.keys()) if jax_sprites else -1
+        sprites_list = []
+        for i in range(max_sprite_idx + 1):
+            sprite = jax_sprites.get(i)
+            if sprite is not None:
+                sprites_list.append(sprite)
+            else:
+                # Create a placeholder 1x1 transparent sprite for missing indices
+                sprites_list.append(jnp.zeros((1, 1, 4), dtype=jnp.uint8))
+        self.sprites = tuple(sprites_list)  # Store as tuple for JIT-compatible indexing
 
         def _no_op_blit(frame, x, y):
             return frame
@@ -3035,10 +3243,33 @@ class GravitarRenderer(JAXGameRenderer):
         crash_sprite = jax_sprites.get(int(SpriteIdx.SHIP_CRASH))
         thrust_sprite = jax_sprites.get(int(SpriteIdx.SHIP_THRUST))
 
-        # Unify the dimensions of all ship state sprites for use with lax.cond
-        if all(s is not None for s in [idle_sprite, crash_sprite, thrust_sprite]):
-            max_h = max(s.shape[0] for s in [idle_sprite, crash_sprite, thrust_sprite])
-            max_w = max(s.shape[1] for s in [idle_sprite, crash_sprite, thrust_sprite])
+        # Get all 16 orientation sprites
+        orientation_sprites = [
+            jax_sprites.get(int(SpriteIdx.SHIP_N)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NNE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NEE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_E)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SEE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SSE)),
+            jax_sprites.get(int(SpriteIdx.SHIP_S)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SSW)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SW)),
+            jax_sprites.get(int(SpriteIdx.SHIP_SWW)),
+            jax_sprites.get(int(SpriteIdx.SHIP_W)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NWW)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NW)),
+            jax_sprites.get(int(SpriteIdx.SHIP_NNW)),
+        ]
+
+        # Unify the dimensions of all ship sprites for use with lax.cond and lax.switch
+        all_ship_sprites = [idle_sprite, crash_sprite, thrust_sprite] + orientation_sprites
+        valid_ship_sprites = [s for s in all_ship_sprites if s is not None]
+        
+        if valid_ship_sprites:
+            max_h = max(s.shape[0] for s in valid_ship_sprites)
+            max_w = max(s.shape[1] for s in valid_ship_sprites)
 
             def pad_sprite(sprite, h, w):
                 pad_h = (h - sprite.shape[0]) // 2
@@ -3046,12 +3277,21 @@ class GravitarRenderer(JAXGameRenderer):
                 return jnp.pad(sprite,
                                ((pad_h, h - sprite.shape[0] - pad_h), (pad_w, w - sprite.shape[1] - pad_w), (0, 0)))
 
-            self.padded_ship_idle = pad_sprite(idle_sprite, max_h, max_w)
-            self.padded_ship_crash = pad_sprite(crash_sprite, max_h, max_w)
-            self.padded_ship_thrust = pad_sprite(thrust_sprite, max_h, max_w)
+            self.padded_ship_idle = pad_sprite(idle_sprite, max_h, max_w) if idle_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
+            self.padded_ship_crash = pad_sprite(crash_sprite, max_h, max_w) if crash_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
+            self.padded_ship_thrust = pad_sprite(thrust_sprite, max_h, max_w) if thrust_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
+            
+            # Pad all 16 orientation sprites
+            self.padded_ship_orientations = tuple(
+                pad_sprite(sprite, max_h, max_w) if sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
+                for sprite in orientation_sprites
+            )
         else:
-            self.padded_ship_idle = self.padded_ship_crash = self.padded_ship_thrust = jnp.zeros((1, 1, 4),
-                                                                                                 dtype=jnp.uint8)
+            default_sprite = jnp.zeros((1, 1, 4), dtype=jnp.uint8)
+            self.padded_ship_idle = default_sprite
+            self.padded_ship_crash = default_sprite
+            self.padded_ship_thrust = default_sprite
+            self.padded_ship_orientations = tuple(default_sprite for _ in range(16))
 
     @partial(jax.jit, static_argnames=('self',))
     def render(self, state: EnvState) -> jnp.ndarray:
@@ -3251,23 +3491,52 @@ class GravitarRenderer(JAXGameRenderer):
         is_crashing = state.crash_timer > 0
         is_thrusting = ship_state.is_thrusting
 
-        # Select the base ship sprite (crash or idle)
-        ship_sprite_data = jax.lax.cond(
+        # Select ship sprite: crash sprite if crashing, otherwise oriented sprite
+        def get_crash_sprite():
+            return self.padded_ship_crash
+        
+        def get_oriented_sprite():
+            # Get the correct sprite index based on ship's discrete angle
+            angle_diffs = jnp.abs(jnp.arctan2(
+                jnp.sin(ship_state.angle - SHIP_ANGLES),
+                jnp.cos(ship_state.angle - SHIP_ANGLES)
+            ))
+            angle_idx = jnp.argmin(angle_diffs)
+            
+            # Use lax.switch to select the correct padded orientation sprite based on angle index
+            # All padded sprites have uniform dimensions, satisfying lax.switch requirements
+            return jax.lax.switch(
+                angle_idx,
+                [
+                    lambda: self.padded_ship_orientations[0],   # 0: N
+                    lambda: self.padded_ship_orientations[1],   # 1: NNE
+                    lambda: self.padded_ship_orientations[2],   # 2: NE
+                    lambda: self.padded_ship_orientations[3],   # 3: ENE
+                    lambda: self.padded_ship_orientations[4],   # 4: E
+                    lambda: self.padded_ship_orientations[5],   # 5: ESE
+                    lambda: self.padded_ship_orientations[6],   # 6: SE
+                    lambda: self.padded_ship_orientations[7],   # 7: SSE
+                    lambda: self.padded_ship_orientations[8],   # 8: S
+                    lambda: self.padded_ship_orientations[9],   # 9: SSW
+                    lambda: self.padded_ship_orientations[10],  # 10: SW
+                    lambda: self.padded_ship_orientations[11],  # 11: WSW
+                    lambda: self.padded_ship_orientations[12],  # 12: W
+                    lambda: self.padded_ship_orientations[13],  # 13: WNW
+                    lambda: self.padded_ship_orientations[14],  # 14: NW
+                    lambda: self.padded_ship_orientations[15],  # 15: NNW
+                ]
+            )
+        
+        oriented_ship_rgba = jax.lax.cond(
             is_crashing,
-            lambda _: self.padded_ship_crash,
-            lambda _: self.padded_ship_idle,
-            operand=None
+            get_crash_sprite,
+            get_oriented_sprite
         )
 
-        # Rotate the ship sprite according to its physical angle.
-        # Using order=1 (bilinear) for smoother rotation, reshape=False to maintain size
-        angle_deg = jnp.degrees(ship_state.angle) + 90.0
-        rotated_ship_rgba = _jax_rotate(ship_sprite_data, angle_deg, reshape=False, order=1)
-
-        # Blit the rotated ship onto the frame
-        ship_h, ship_w, _ = rotated_ship_rgba.shape
-        ship_rgb = rotated_ship_rgba[..., :3]
-        ship_alpha = (rotated_ship_rgba[..., 3] / 255.0)[..., None]
+        # Blit the pre-rendered ship sprite onto the frame
+        ship_h, ship_w, _ = oriented_ship_rgba.shape
+        ship_rgb = oriented_ship_rgba[..., :3]
+        ship_alpha = (oriented_ship_rgba[..., 3] / 255.0)[..., None]
 
         start_x = jnp.round(ship_state.x - ship_w / 2).astype(jnp.int32)
         start_y = jnp.round(ship_state.y - ship_h / 2).astype(jnp.int32)
@@ -3286,18 +3555,20 @@ class GravitarRenderer(JAXGameRenderer):
             thrust_x = ship_state.x - jnp.cos(ship_state.angle) * THRUST_OFFSET
             thrust_y = ship_state.y - jnp.sin(ship_state.angle) * THRUST_OFFSET
             
-            # Rotate the thrust sprite to match ship angle
-            rotated_thrust_rgba = _jax_rotate(self.padded_ship_thrust, angle_deg, reshape=False, order=1)
+            # Use the same pre-rendered sprite (thrust sprite is orientation-agnostic for now)
+            # TODO: Could add directional thrust sprites if needed
+            thrust_rgba = self.padded_ship_thrust
             
             # Calculate blit position for thrust
-            thrust_start_x = jnp.round(thrust_x - ship_w / 2).astype(jnp.int32)
-            thrust_start_y = jnp.round(thrust_y - ship_h / 2).astype(jnp.int32)
+            thrust_h, thrust_w, _ = thrust_rgba.shape
+            thrust_start_x = jnp.round(thrust_x - thrust_w / 2).astype(jnp.int32)
+            thrust_start_y = jnp.round(thrust_y - thrust_h / 2).astype(jnp.int32)
             
             # Blit the thrust flame at the back position
-            thrust_rgb = rotated_thrust_rgba[..., :3]
-            thrust_alpha = (rotated_thrust_rgba[..., 3] / 255.0)[..., None]
+            thrust_rgb = thrust_rgba[..., :3]
+            thrust_alpha = (thrust_rgba[..., 3] / 255.0)[..., None]
             
-            target_patch_thrust = jax.lax.dynamic_slice(f, (thrust_start_y, thrust_start_x, 0), (ship_h, ship_w, 3))
+            target_patch_thrust = jax.lax.dynamic_slice(f, (thrust_start_y, thrust_start_x, 0), (thrust_h, thrust_w, 3))
             blended_thrust = thrust_rgb * thrust_alpha + target_patch_thrust * (1 - thrust_alpha)
             return jax.lax.dynamic_update_slice(f, blended_thrust.astype(jnp.uint8), (thrust_start_y, thrust_start_x, 0))
         
