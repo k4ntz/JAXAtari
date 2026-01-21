@@ -23,10 +23,11 @@ from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from torch.utils.tensorboard import SummaryWriter
 import jaxatari
-from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
+from jaxatari.wrappers import MultiRewardWrapper, NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
 from ppo_jaxatari_vmap_eval import evaluate
 
+from flax import struct
 from rtpt import RTPT
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
@@ -112,10 +113,22 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
+@struct.dataclass
+class RewardVariables:
+    highest_y: jnp.array
+
+@jax.jit
+def encourage_up_kangaroo(previous_state, state, reward_vars: RewardVariables):
+    """Encourage the kangaroo to go up by rewarding increases in the y position."""
+    reward = jnp.where(state.player.y > reward_vars.highest_y, 1, 0)
+    reward_vars = reward_vars.replace(highest_y=jnp.maximum(state.player.y, reward_vars.highest_y))
+    return reward, reward_vars
+
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
     def thunk():
         env = jaxatari.make(env_id, mods_config=mods)
+        env = MultiRewardWrapper(env, [encourage_up_kangaroo], [RewardVariables(highest_y=-1.0)], use_as_main=True)
         env = AtariWrapper(
                 env,
                 episodic_life=not eval, # only active during training 

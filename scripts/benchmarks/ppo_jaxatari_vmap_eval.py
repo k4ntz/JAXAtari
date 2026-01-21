@@ -5,7 +5,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import EnvState, JaxEnvironment
 from jaxatari.wrappers import JaxatariWrapper
 
 def evaluate(
@@ -98,8 +98,11 @@ def evaluate(
 
     episodic_returns = jnp.sum(rewards, axis=0)  # shape: (eval_episodes,)
 
+    env_state = jax.tree_util.tree_flatten(first_states, is_leaf=lambda x: not (hasattr(x, "env_state") or hasattr(x, "atari_state")))[0][0]
+
     # first episode video capture
     # states_until_done = first_obs[:first_done[0] + 1, 0]  # shape: (time_until_done, 1, H, W)
-    env_states_until_done = jax.tree.map(lambda x: x[:first_done[0] + 1], first_states.atari_state.atari_state.env_state)
+    # env_states_until_done = jax.tree.map(lambda x: x[:first_done[0] + 1], first_states.atari_state.atari_state.env_state)
+    env_states_until_done = jax.tree.map(lambda x: x[:first_done[0] + 1], env_state) 
 
     return episodic_returns, env_states_until_done

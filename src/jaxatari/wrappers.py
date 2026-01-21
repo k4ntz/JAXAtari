@@ -22,39 +22,69 @@ class JaxatariWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
-    
+
+@struct.dataclass
+class RewardWrapperState:
+    env_state: EnvState
+    reward_vars: Any
+
 class MultiRewardWrapper(JaxatariWrapper):
     """
     Allows providing multiple reward functions to be computed at every step.
     Apply this wrapper directly after the base environment, before any other wrappers.
+    Args:
+        env: The environment to wrap.
+        reward_funcs: A list of callables, each taking (previous_state, state, reward_vars) and returning a scalar reward and updated reward_vars.
+        init_reward_vars: A list of initial reward_vars for each reward function.
+        use_as_main: Optional index of the reward function to use as the main reward. If None, the original env reward is used.
+
+    Note: init_reward_vars may also be chosen as None if the reward functions do not require any stateful variables.
     """
 
-    def __init__(self, env, reward_funcs: list[Callable]):
+    def __init__(self, env, reward_funcs: list[Callable], init_reward_vars: list[Any], use_as_main: int|None = None):
         super().__init__(env)
         assert isinstance(reward_funcs, list) and len(reward_funcs) > 0, "reward_funcs must be a non-empty list of callables" 
         self._reward_funcs = reward_funcs
+        self._use_as_main = use_as_main
+        self._reward_vars = init_reward_vars
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: EnvState, state: EnvState) -> chex.Array:
+    def render(self, state: RewardWrapperState) -> chex.Array:
+        return self._env.render(state.env_state)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    # def _get_all_rewards(self, previous_state: EnvState, state: EnvState) -> chex.Array:
+    def _get_all_rewards(self, previous_state: RewardWrapperState, state: EnvState) -> chex.Array:
         """Compute multiple rewards based on the provided reward functions."""
         if self._reward_funcs is None:
             return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self._reward_funcs]
-        )
-        return rewards
+        rewards_and_vars = [reward_func(previous_state, state, reward_vars) for reward_func, reward_vars in zip(self._reward_funcs, previous_state.reward_vars)]
+        rewards = jnp.array([rv[0] for rv in rewards_and_vars])
+        new_reward_vars = [rv[1] for rv in rewards_and_vars]
+        state = RewardWrapperState(env_state=state, reward_vars=new_reward_vars)
+        return rewards, state
+    
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, RewardWrapperState]:
+        obs, env_state = self._env.reset(key)
+        # Initialize reward_vars for each reward function
+        initial_reward_vars = self._reward_vars 
+        state = RewardWrapperState(env_state=env_state, reward_vars=initial_reward_vars)
+        return obs, state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: EnvState, action: int) -> Tuple[chex.Array, EnvState, float, bool, Dict]: 
-        obs, new_state, reward, done, info = self._env.step(state, action)
-        all_rewards = self._get_all_rewards(state, new_state)
+    def step(self, state: RewardWrapperState, action: int) -> Tuple[chex.Array, RewardWrapperState, float, bool, Dict]: 
+        obs, new_state, reward, done, info = self._env.step(state.env_state, action)
+        all_rewards, new_state = self._get_all_rewards(state, new_state)
         # Convert info to dict: handle NamedTuple (has _asdict) or dataclass (use asdict)
         if hasattr(info, '_asdict'):
             info = info._asdict()
         elif is_dataclass(info):
             info = asdict(info)
         info["all_rewards"] = all_rewards
-        return obs, new_state, reward, done, info 
+        if self._use_as_main is not None:
+            reward = all_rewards[self._use_as_main]
+        return obs, new_state, reward, done, info
 
 @struct.dataclass
 class AtariState:
@@ -396,7 +426,8 @@ class PixelObsWrapper(JaxatariWrapper):
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, PixelState]:
         # The underlying AtariWrapper returns its own state, which we store.
         _, atari_state = self._env.reset(key)
-        image = self._env.render(atari_state.env_state)
+        # image = self._env.render(atari_state.env_state)
+        image = self.render(atari_state.env_state)
         
         processed_image = self._preprocess_image(image)
 
@@ -414,7 +445,8 @@ class PixelObsWrapper(JaxatariWrapper):
         # Pass the nested atari_state to the underlying wrapper's step function
         _, atari_state, reward, done, info = self._env.step(state.atari_state, action)
         
-        image = self._env.render(atari_state.env_state)
+        # image = self._env.render(atari_state.env_state)
+        image = self.render(atari_state.env_state)
         processed_image = self._preprocess_image(image)
 
         # Update the image stack by shifting and adding the new processed image
