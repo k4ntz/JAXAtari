@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Dict, Any
 import jax
 import jax.numpy as jnp
 import chex
@@ -8,8 +8,67 @@ import chex
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create procedural black background (same as original jr.create_initial_frame)
+    black_bg = jnp.zeros((210, 160, 4), dtype=jnp.uint8)
+    black_bg = black_bg.at[:, :, 3].set(255)  # Set alpha to 255
+    return {
+        'black_bg': black_bg,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Turmoil.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # A list of all 15 base enemy frames, to be padded together
+    all_enemy_files = [
+        'enemy/3lines/1.npy',         # 0
+        'enemy/arrow/1.npy',          # 1
+        'enemy/tank/1.npy',           # 2
+        'enemy/tank/2.npy',           # 3
+        'enemy/L/1.npy',              # 4
+        'enemy/L/2.npy',              # 5
+        'enemy/T/1.npy',              # 6
+        'enemy/T/2.npy',              # 7
+        'enemy/rocket/1.npy',         # 8
+        'enemy/rocket/2.npy',         # 9
+        'enemy/triangle_hollow/1.npy',# 10
+        'enemy/x_shape/1.npy',        # 11
+        'enemy/x_shape/2.npy',        # 12
+        'enemy/boom/1.npy',            # 13
+        'enemy/boom/2.npy',           # 14
+    ]
+
+    return (
+        # Background - procedural black background (base layer)
+        {'name': 'black_bg', 'type': 'background', 'data': static_procedural['black_bg']},
+
+        # Game background sprite (drawn conditionally on top of black background)
+        {'name': 'game_bg', 'type': 'single', 'file': 'bg/1.npy'},
+
+        # Player
+        {'name': 'player', 'type': 'single', 'file': 'player/1.npy'},
+        {'name': 'bullet', 'type': 'single', 'file': 'player/bullet/1.npy'},
+        {'name': 'player_shrink', 'type': 'group', 'files': [
+            'player/shrink/1.npy', 'player/shrink/2.npy', 'player/shrink/3.npy',
+            'player/shrink/4.npy', 'player/shrink/5.npy', 'player/shrink/6.npy'
+        ]},
+
+        # Enemies (All base frames in one group for uniform padding)
+        {'name': 'all_enemies', 'type': 'group', 'files': all_enemy_files},
+
+        # Explosion
+        {'name': 'explosion_group', 'type': 'group', 'files': ['enemy/explosion/1.npy', 'enemy/explosion/2.npy']},
+
+        # UI
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
+    )
 
 class TurmoilConstants(NamedTuple):
     # pre-defined movement lanes
@@ -123,6 +182,15 @@ class TurmoilConstants(NamedTuple):
         99999  # lvl 9
     )
     BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
+    
+    # rendering
+    WIDTH: int = 160
+    HEIGHT: int = 210
+    MAX_ENEMIES: int = 7
+    MAX_EXPLOSIONS: int = 7
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class TurmoilState(NamedTuple):
@@ -187,202 +255,10 @@ class TurmoilInfo(NamedTuple):
 
 
 
-# RENDER CONSTANTS
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/bg/1.npy"))
-    player = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/1.npy"))
-    bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/bullet/1.npy"))
-    player_shrink_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/1.npy"))
-    player_shrink_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/2.npy"))
-    player_shrink_3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/3.npy"))
-    player_shrink_4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/4.npy"))
-    player_shrink_5 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/5.npy"))
-    player_shrink_6 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/player/shrink/6.npy"))
-
-    # enemies
-    lines_enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/3lines/1.npy"))
-    arrow_enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/arrow/1.npy"))
-    boom_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/boom/1.npy"))
-    boom_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/boom/2.npy"))
-    L_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/L/1.npy"))
-    L_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/L/2.npy"))
-    rocket_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/rocket/1.npy"))
-    rocket_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/rocket/2.npy"))
-    T_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/T/1.npy"))
-    T_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/T/2.npy"))
-    tank_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/tank/1.npy"))
-    tank_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/tank/2.npy"))
-    triangle_hollow_enemy = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/triangle_hollow/1.npy"))
-    x_shape_enemy_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/x_shape/1.npy"))
-    x_shape_enemy_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/x_shape/2.npy"))
-
-    # enemy explosion
-    explosion_1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/explosion/1.npy"))
-    explosion_2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/turmoil/enemy/explosion/2.npy"))
-    
-    player = [player]
-    bullet = [bullet]
-    bg = [bg]
-    
-    # Pad player shrink sprites to match each other
-    player_shrink_sprites, player_shrink_offsets = jr.pad_to_match([
-        player_shrink_1,
-        player_shrink_2,
-        player_shrink_3,
-        player_shrink_4,
-        player_shrink_5,
-        player_shrink_6
-    ])
-    player_shrink_offsets = jnp.array(player_shrink_offsets)
-
-    lines_enemy_sprites = [lines_enemy]
-    arrow_enemy_sprites = [arrow_enemy]
-    boom_enemy_sprites, _ = jr.pad_to_match([boom_enemy_1, boom_enemy_2])
-    L_enemy_sprites, _ = jr.pad_to_match([L_enemy_1, L_enemy_2])
-    rocket_enemy_sprites, _ = jr.pad_to_match([rocket_enemy_1, rocket_enemy_2])
-    T_enemy_sprites, _ = jr.pad_to_match([T_enemy_1, T_enemy_2])
-    tank_enemy_sprites, _ = jr.pad_to_match([tank_enemy_1, tank_enemy_2])
-    triangle_hollow_enemy_sprites = [triangle_hollow_enemy]
-    x_shape_enemy_sprites, _ = jr.pad_to_match([x_shape_enemy_1, x_shape_enemy_2])
-
-    explosion, _ = jr.pad_to_match([explosion_1, explosion_2])
-
-    # bg sprites
-    SPRITE_BG = jnp.repeat(bg[0][None], 1, axis=0)
-
-    # Player sprites
-    PLAYER_SHIP = jnp.repeat(player[0][None], 1, axis=0)
-
-    # bullet sprites
-    BULLET = jnp.repeat(bullet[0][None], 1, axis=0)
-
-    # player shrink sprites
-    PLAYER_SHRINK = jnp.concatenate(
-        [
-            jnp.repeat(player_shrink_sprites[0][None], 31, axis=0),
-            jnp.repeat(player_shrink_sprites[1][None], 5, axis=0),
-            jnp.repeat(player_shrink_sprites[2][None], 7, axis=0),
-            jnp.repeat(player_shrink_sprites[3][None], 5, axis=0),
-            jnp.repeat(player_shrink_sprites[4][None], 7, axis=0),
-            jnp.repeat(player_shrink_sprites[5][None], 23, axis=0),
-            jnp.repeat(player_shrink_sprites[5][None], 23, axis=0),
-            jnp.repeat(player_shrink_sprites[4][None], 7, axis=0),
-            jnp.repeat(player_shrink_sprites[3][None], 5, axis=0),
-            jnp.repeat(player_shrink_sprites[2][None], 7, axis=0),
-        ]
-    )
-
-    DIGITS = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/turmoil/digits/{}.npy"))
-
-    # enemeis
-    LINES_ENEMY = jnp.repeat(lines_enemy_sprites[0][None], 1, axis=0)
-
-    ARROW_ENEMY = jnp.repeat(arrow_enemy_sprites[0][None], 1, axis=0)
-
-    BOOM_ENEMY = jnp.repeat(boom_enemy_sprites[0][None], 1, axis=0)
-
-    PRIZE = jnp.concatenate(
-        [
-            jnp.repeat(boom_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(boom_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    L_ENEMY = jnp.concatenate(
-        [
-            jnp.repeat(L_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(L_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    ROCKET_ENEMY = jnp.concatenate(
-        [
-            jnp.repeat(rocket_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(rocket_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    T_ENEMY = jnp.concatenate(
-        [
-            jnp.repeat(T_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(T_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    TANK_ENEMY = jnp.concatenate(
-        [
-            jnp.repeat(tank_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(tank_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    TRIANGLE_HOLLOW_ENEMY = jnp.repeat(triangle_hollow_enemy_sprites[0][None], 1, axis=0)
-
-    X_SHAPE_ENEMY = jnp.concatenate(
-        [
-            jnp.repeat(x_shape_enemy_sprites[0][None], 8, axis=0),
-            jnp.repeat(x_shape_enemy_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    ENEMY_EXPLOSION = jnp.concatenate(
-        [
-            jnp.repeat(explosion[0][None], 8, axis=0),
-            jnp.repeat(explosion[1][None], 8, axis=0),
-        ]
-    )
-
-
-    return (
-        SPRITE_BG,
-        PLAYER_SHIP,
-        BULLET,
-        PLAYER_SHRINK,
-        DIGITS,
-        LINES_ENEMY,
-        ARROW_ENEMY,
-        BOOM_ENEMY,
-        L_ENEMY,
-        ROCKET_ENEMY,
-        T_ENEMY,
-        TANK_ENEMY,
-        TRIANGLE_HOLLOW_ENEMY,
-        X_SHAPE_ENEMY,
-        PRIZE,
-        ENEMY_EXPLOSION,
-        player_shrink_offsets
-    )
-
-# Load sprites once at module level
-(
-    SPRITE_BG,
-    PLAYER_SHIP,
-    BULLET,
-    PLAYER_SHRINK,
-    DIGITS,
-    LINES_ENEMY,
-    ARROW_ENEMY,
-    BOOM_ENEMY,
-    L_ENEMY,
-    ROCKET_ENEMY,
-    T_ENEMY,
-    TANK_ENEMY,
-    TRIANGLE_HOLLOW_ENEMY,
-    X_SHAPE_ENEMY,
-    PRIZE,
-    ENEMY_EXPLOSION,
-    PLAYER_SHRINK_OFFSETS
-) = load_sprites()
-
-
 class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, TurmoilConstants]):
-    def __init__(self, consts: TurmoilConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: TurmoilConstants = None):
         consts = consts or TurmoilConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -403,7 +279,6 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.obs_size = 6 + 1 + 7 * 6 + 5 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 
@@ -1970,190 +1845,311 @@ class TurmoilRenderer(JAXGameRenderer):
     def __init__(self, consts: TurmoilConstants = None):
         super().__init__()
         self.consts = consts or TurmoilConstants()
-        self.player_shrink_offsets = len(PLAYER_SHRINK_OFFSETS)
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/turmoil"
+
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 3. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+
+        # 4. Replicate Animation Stack Logic (from old load_sprites)
+
+        # Player Shrink (6 frames -> 120 frames)
+        ps_stack = self.SHAPE_MASKS['player_shrink']
+        self.SHAPE_MASKS['player_shrink'] = jnp.concatenate([
+            jnp.repeat(ps_stack[0][None], 31, axis=0),
+            jnp.repeat(ps_stack[1][None], 5, axis=0),
+            jnp.repeat(ps_stack[2][None], 7, axis=0),
+            jnp.repeat(ps_stack[3][None], 5, axis=0),
+            jnp.repeat(ps_stack[4][None], 7, axis=0),
+            jnp.repeat(ps_stack[5][None], 23, axis=0),
+            jnp.repeat(ps_stack[5][None], 23, axis=0),  # Repeated twice
+            jnp.repeat(ps_stack[4][None], 7, axis=0),
+            jnp.repeat(ps_stack[3][None], 5, axis=0),
+            jnp.repeat(ps_stack[2][None], 7, axis=0),
+        ])
+
+        # Prize (is animated boom_enemy) (2 frames -> 16 frames)
+        prize_stack = self.SHAPE_MASKS['all_enemies'][13:15]  # Get boom_enemy bases
+        self.SHAPE_MASKS['prize'] = jnp.concatenate([
+            jnp.repeat(prize_stack[0][None], 8, axis=0),
+            jnp.repeat(prize_stack[1][None], 8, axis=0),
+        ])
+
+        # Enemy Animations (2 frames -> 16 frames)
+        l_stack = self.SHAPE_MASKS['all_enemies'][4:6]
+        self.SHAPE_MASKS['l_enemy'] = jnp.concatenate([
+            jnp.repeat(l_stack[0][None], 8, axis=0), jnp.repeat(l_stack[1][None], 8, axis=0)
+        ])
+
+        rocket_stack = self.SHAPE_MASKS['all_enemies'][8:10]
+        self.SHAPE_MASKS['rocket_enemy'] = jnp.concatenate([
+            jnp.repeat(rocket_stack[0][None], 8, axis=0), jnp.repeat(rocket_stack[1][None], 8, axis=0)
+        ])
+
+        t_stack = self.SHAPE_MASKS['all_enemies'][6:8]
+        self.SHAPE_MASKS['t_enemy'] = jnp.concatenate([
+            jnp.repeat(t_stack[0][None], 8, axis=0), jnp.repeat(t_stack[1][None], 8, axis=0)
+        ])
+
+        tank_stack = self.SHAPE_MASKS['all_enemies'][2:4]
+        self.SHAPE_MASKS['tank_enemy'] = jnp.concatenate([
+            jnp.repeat(tank_stack[0][None], 8, axis=0), jnp.repeat(tank_stack[1][None], 8, axis=0)
+        ])
+
+        x_shape_stack = self.SHAPE_MASKS['all_enemies'][11:13]
+        self.SHAPE_MASKS['x_shape_enemy'] = jnp.concatenate([
+            jnp.repeat(x_shape_stack[0][None], 8, axis=0), jnp.repeat(x_shape_stack[1][None], 8, axis=0)
+        ])
+
+        boom_stack = self.SHAPE_MASKS['all_enemies'][13:15]
+        self.SHAPE_MASKS['boom_enemy'] = jnp.concatenate([
+            jnp.repeat(boom_stack[0][None], 8, axis=0), jnp.repeat(boom_stack[1][None], 8, axis=0)
+        ])
+
+        # Enemy Explosion (2 frames -> 16 frames)
+        ex_stack = self.SHAPE_MASKS['explosion_group']
+        self.SHAPE_MASKS['enemy_explosion'] = jnp.concatenate([
+            jnp.repeat(ex_stack[0][None], 8, axis=0), jnp.repeat(ex_stack[1][None], 8, axis=0)
+        ])
+
+        # --- 5. Store helper values ---
+
+        # Store animation lengths
+        self.anim_len = {
+            'player_shrink': self.SHAPE_MASKS['player_shrink'].shape[0],
+            'prize': self.SHAPE_MASKS['prize'].shape[0],
+            'l_enemy': self.SHAPE_MASKS['l_enemy'].shape[0],
+            'rocket_enemy': self.SHAPE_MASKS['rocket_enemy'].shape[0],
+            't_enemy': self.SHAPE_MASKS['t_enemy'].shape[0],
+            'tank_enemy': self.SHAPE_MASKS['tank_enemy'].shape[0],
+            'x_shape_enemy': self.SHAPE_MASKS['x_shape_enemy'].shape[0],
+            'boom_enemy': self.SHAPE_MASKS['boom_enemy'].shape[0],
+            'enemy_explosion': self.SHAPE_MASKS['enemy_explosion'].shape[0],
+        }
+
+        # Store the single, uniform flip offset for all enemies
+        self.ENEMY_FLIP_OFFSET = self.FLIP_OFFSETS['all_enemies']
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: TurmoilState):
-        raster = jr.create_initial_frame(width=160, height=210)
-
-        def _render_normal_game_step(raster) :
-            # render background
-            frame_bg = jr.get_sprite_frame(SPRITE_BG, 0)
-            raster = jax.lax.cond(
-                state.bg_visible,
-                lambda r: jr.render_at(r, 0, 0, frame_bg),
-                lambda r: r,
-                raster
-            )
-
-            # render player
-            def _render_player(raster):
-                flip = state.player_direction == self.consts.FACE_LEFT
-
-                def render_normal():
-                    frame = jr.get_sprite_frame(PLAYER_SHIP, 0)
-                    return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
-
-                def render_shrink():
-                    frame = jr.get_sprite_frame(PLAYER_SHRINK, state.game_phase_timer)
-                    return jr.render_at(raster, state.player_x, state.player_y, frame, flip_horizontal=flip)
-
-                raster = jax.lax.cond(
-                    state.game_phase == 2,
-                    render_shrink,
-                    render_normal,
+    def _render_normal_game_step(self, raster, state: TurmoilState):
+        # render player
+        def _render_player(r):
+            flip = state.player_direction == self.consts.FACE_LEFT
+            is_shrink = state.game_phase == 2
+            
+            # Select which mask to use based on game phase
+            # For shrink animation, get the frame index
+            shrink_idx = jnp.clip(state.game_phase_timer, 0, self.anim_len['player_shrink'] - 1)
+            
+            # Render conditionally with two separate render calls to avoid shape mismatch
+            # Use render_at, not clipped, as player is bounded by game logic
+            def render_normal_mask():
+                return self.jr.render_at(
+                    r, state.player_x, state.player_y,
+                    self.SHAPE_MASKS['player'],
+                    flip_horizontal=flip,
+                    flip_offset=self.FLIP_OFFSETS['player']
                 )
-
-                return raster
-
-            raster = _render_player(raster)
-
-            # render bullet
-            frame_bullet = jr.get_sprite_frame(BULLET, 0)
-            raster = jax.lax.cond(
-                state.bullet[2],
-                lambda r: jr.render_at(
-                    r,
-                    state.bullet[0],
-                    state.bullet[1],
-                    frame_bullet
-                ),
-                lambda r: r,
-                raster
-            )
-
-            # show the score
-            score_array = jr.int_to_digits(state.score, max_digits=5)
-            raster = jr.render_label(raster, 60, 10, score_array, DIGITS, spacing=8)
-
-            # show remaining ships
-            frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
-            raster = jnp.where(
-                state.ships > 0,
-                jr.render_indicator(
-                    raster,
-                    55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
-                    190,
-                    state.ships - 1,
-                    frame_pl_ship,
-                    spacing=15
-                ),
-                raster
-            )
-
-            def _render_enemy(raster) :
-                # render enemeis
-                          
-                frame_enemies, _ = jr.pad_to_match([
-                    jr.get_sprite_frame(LINES_ENEMY, 0),
-                    jr.get_sprite_frame(ARROW_ENEMY, 0),
-                    jr.get_sprite_frame(TANK_ENEMY, state.step_counter),
-                    jr.get_sprite_frame(L_ENEMY, state.step_counter),
-                    jr.get_sprite_frame(T_ENEMY, state.step_counter),
-                    jr.get_sprite_frame(ROCKET_ENEMY, state.step_counter),
-                    jr.get_sprite_frame(TRIANGLE_HOLLOW_ENEMY, 0),
-                    jr.get_sprite_frame(X_SHAPE_ENEMY, state.step_counter),
-                    jr.get_sprite_frame(BOOM_ENEMY, state.step_counter),
-                ])
-
-                def render_enemy(i, r) :
-                    return jax.lax.cond(
-                        state.enemy[i, 3] == 1,
-                        lambda r: jr.render_at(
-                            r,
-                            state.enemy[i, 1],
-                            state.enemy[i, 2],
-                            jnp.array(frame_enemies)[state.enemy[i, 0].astype(jnp.int32)],
-                            flip_horizontal = state.enemy[i, 5] == self.consts.FACE_LEFT,
-                        ),
-                        lambda r: r,
-                        r
-                    )
-
-                r = jax.lax.fori_loop(0, state.enemy.shape[0], render_enemy, raster)
-
-                return r
             
-            raster = _render_enemy(raster)
-
+            def render_shrink_mask():
+                return self.jr.render_at(
+                    r, state.player_x, state.player_y,
+                    self.SHAPE_MASKS['player_shrink'][shrink_idx],
+                    flip_horizontal=flip,
+                    flip_offset=self.FLIP_OFFSETS['player_shrink']
+                )
             
-            def _render_explosion(raster):
-                # render explosions
-                frame_explosion = jr.get_sprite_frame(ENEMY_EXPLOSION, state.step_counter)
+            return jax.lax.cond(is_shrink, render_shrink_mask, render_normal_mask)
 
-                def render_explosion(i, r):
-                    return jax.lax.cond(
-                        state.enemy_explosion[i, 2] == 1,
-                        lambda r: jr.render_at(
-                            r,
-                            state.enemy_explosion[i, 0],
-                            state.enemy_explosion[i, 1],
-                            frame_explosion,
-                            flip_horizontal = state.enemy_explosion[i, 3] == self.consts.FACE_LEFT,
-                        ),
-                        lambda r: r,
-                        r
-                    )
+        raster = _render_player(raster)
 
-                r = jax.lax.fori_loop(0, state.enemy_explosion.shape[0], render_explosion, raster)
-
-                return r
-
-            raster = _render_explosion(raster)
-
-
-            # render prize
-            frame_prize = jr.get_sprite_frame(PRIZE, state.step_counter)
-
-            raster = jax.lax.cond(
-                state.prize[3],
-                lambda r: jr.render_at(
-                    r,
-                    state.prize[1],
-                    state.prize[2],
-                    frame_prize
-                ),
-                lambda r: r,
-                raster
-            )
-
-            return raster
-
-
-        def _render_loading_game_step(raster) :
-            # show  level
-            level_array = jr.int_to_digits(state.level, max_digits=1)
-            raster = jr.render_label(raster, 76, 101, level_array, DIGITS, spacing=8)
-
-            # show the score
-            score_array = jr.int_to_digits(state.score, max_digits=5)
-            raster = jr.render_label(raster, 60, 10, score_array, DIGITS, spacing=8)
-
-            # show remaining ships
-            frame_pl_ship = jr.get_sprite_frame(PLAYER_SHIP, 0)
-            raster = jnp.where(
-                state.ships > 0,
-                jr.render_indicator(
-                    raster,
-                    55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
-                    190,
-                    state.ships - 1,
-                    frame_pl_ship,
-                    spacing=15
-                ),
-                raster
-            )
-
-            return raster
-        
-        raster = jax.lax.switch(
-            state.game_phase,
-            [
-                _render_loading_game_step,
-                _render_normal_game_step,
-                _render_normal_game_step,
-            ],
+        # render bullet
+        raster = jax.lax.cond(
+            state.bullet[2],
+            lambda r: self.jr.render_at_clipped(
+                r, state.bullet[0], state.bullet[1],
+                self.SHAPE_MASKS['bullet'], flip_offset=self.FLIP_OFFSETS['bullet']
+            ),
+            lambda r: r,
             raster
         )
 
+        # show the score
+        score_array = self.jr.int_to_digits(state.score, max_digits=5)
+        raster = self.jr.render_label(raster, 60, 10, score_array, self.SHAPE_MASKS['digits'], spacing=8, max_digits=5)
+
+        # show remaining ships
+        raster = jax.lax.cond(
+            state.ships > 0,
+            lambda r: self.jr.render_indicator(
+                r, 55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
+                190, state.ships - 1,
+                self.SHAPE_MASKS['player'],
+                spacing=15, max_value=5  # Assuming max 5 lives
+            ),
+            lambda r: r,
+            raster
+        )
+
+        # render enemies
+        def _render_enemy(r):
+            # Get base masks for non-animated enemies
+            all_masks = self.SHAPE_MASKS['all_enemies']
+            LINES_ENEMY_BASE = all_masks[0]
+            ARROW_ENEMY_BASE = all_masks[1]
+            TRIANGLE_HOLLOW_ENEMY_BASE = all_masks[10]
+
+            # Get dynamic frames for animated enemies
+            # Index into the *pre-built 16-frame stacks*
+            tank_frame = self.SHAPE_MASKS['tank_enemy'][state.step_counter % self.anim_len['tank_enemy']]
+            l_frame = self.SHAPE_MASKS['l_enemy'][state.step_counter % self.anim_len['l_enemy']]
+            t_frame = self.SHAPE_MASKS['t_enemy'][state.step_counter % self.anim_len['t_enemy']]
+            rocket_frame = self.SHAPE_MASKS['rocket_enemy'][state.step_counter % self.anim_len['rocket_enemy']]
+            x_shape_frame = self.SHAPE_MASKS['x_shape_enemy'][state.step_counter % self.anim_len['x_shape_enemy']]
+            boom_frame = self.SHAPE_MASKS['boom_enemy'][state.step_counter % self.anim_len['boom_enemy']]
+
+            # Stack all 9 *current* enemy frames together
+            enemy_mask_stack = jnp.stack([
+                LINES_ENEMY_BASE,           # 0
+                ARROW_ENEMY_BASE,           # 1
+                tank_frame,                 # 2
+                l_frame,                    # 3
+                t_frame,                    # 4
+                rocket_frame,               # 5
+                TRIANGLE_HOLLOW_ENEMY_BASE, # 6
+                x_shape_frame,              # 7
+                boom_frame                  # 8
+            ])
+
+            def render_enemy(i, r_in):
+                enemy_type = state.enemy[i, 0].astype(jnp.int32)
+                mask_to_render = enemy_mask_stack[enemy_type]
+
+                return jax.lax.cond(
+                    state.enemy[i, 3] == 1,
+                    lambda r_l: self.jr.render_at_clipped(
+                        r_l,
+                        state.enemy[i, 1],
+                        state.enemy[i, 2],
+                        mask_to_render,
+                        flip_horizontal=state.enemy[i, 5] == self.consts.FACE_LEFT,
+                        flip_offset=self.ENEMY_FLIP_OFFSET  # All are pre-padded
+                    ),
+                    lambda r_l: r_l,
+                    r_in
+                )
+            return jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, render_enemy, r)
+
+        raster = _render_enemy(raster)
+
+        # render explosions
+        def _render_explosion(r):
+            anim_idx = state.step_counter % self.anim_len['enemy_explosion']
+            frame_explosion = self.SHAPE_MASKS['enemy_explosion'][anim_idx]
+
+            def render_explosion(i, r_in):
+                return jax.lax.cond(
+                    state.enemy_explosion[i, 2] == 1,
+                    lambda r_l: self.jr.render_at_clipped(
+                        r_l,
+                        state.enemy_explosion[i, 0],
+                        state.enemy_explosion[i, 1],
+                        frame_explosion,
+                        flip_horizontal=state.enemy_explosion[i, 3] == self.consts.FACE_LEFT,
+                        flip_offset=self.FLIP_OFFSETS['explosion_group']
+                    ),
+                    lambda r_l: r_l,
+                    r_in
+                )
+            return jax.lax.fori_loop(0, self.consts.MAX_EXPLOSIONS, render_explosion, r)
+
+        raster = _render_explosion(raster)
+
+        # render prize
+        anim_idx = state.step_counter % self.anim_len['prize']
+        frame_prize = self.SHAPE_MASKS['prize'][anim_idx]
+        raster = jax.lax.cond(
+            state.prize[3],
+            lambda r: self.jr.render_at_clipped(
+                r, state.prize[1], state.prize[2],
+                frame_prize, flip_offset=self.ENEMY_FLIP_OFFSET  # Prize is a boom_enemy
+            ),
+            lambda r: r,
+            raster
+        )
         return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_loading_game_step(self, raster, state: TurmoilState):
+        # show level
+        level_array = self.jr.int_to_digits(state.level, max_digits=1)
+        raster = self.jr.render_label_selective(
+            raster, 76, 101, level_array, self.SHAPE_MASKS['digits'],
+            0, 1, spacing=8, max_digits_to_render=1
+        )
+
+        # show the score
+        score_array = self.jr.int_to_digits(state.score, max_digits=5)
+        raster = self.jr.render_label(raster, 60, 10, score_array, self.SHAPE_MASKS['digits'], spacing=8, max_digits=5)
+
+        # show remaining ships
+        raster = jax.lax.cond(
+            state.ships > 0,
+            lambda r: self.jr.render_indicator(
+                r, 55 + (self.consts.PLAYER_SIZE[0]) * (5 - state.ships),
+                190, state.ships - 1,
+                self.SHAPE_MASKS['player'],
+                spacing=15, max_value=5  # Assuming max 5 lives
+            ),
+            lambda r: r,
+            raster
+        )
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: TurmoilState):
+        # --- 1. Select Base Raster ---
+        # Start with the static black background
+        base_raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Conditionally draw the game background on top
+        # Only show game background if bg_visible is true AND not in loading phase
+        # (loading phase always has black background)
+        base_raster = jax.lax.cond(
+            jnp.logical_and(state.bg_visible, state.game_phase != 0),
+            lambda r: self.jr.render_at(
+                r, 0, 0,
+                self.SHAPE_MASKS['game_bg'],
+                flip_offset=self.FLIP_OFFSETS['game_bg']
+            ),
+            lambda r: r,
+            base_raster
+        )
+
+        # --- 2. Call appropriate render step ---
+        raster = jax.lax.switch(
+            state.game_phase,
+            [
+                lambda r: self._render_loading_game_step(r, state),
+                lambda r: self._render_normal_game_step(r, state),
+                lambda r: self._render_normal_game_step(r, state),  # Phase 2 is also normal + shrink
+            ],
+            base_raster
+        )
+
+        return self.jr.render_from_palette(raster, self.PALETTE)

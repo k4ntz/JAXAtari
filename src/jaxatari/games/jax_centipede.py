@@ -7,20 +7,79 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 import os
 import jax
 import jax.numpy as jnp
+import numpy as np
 import chex
 
 import jaxatari.rendering.jax_rendering_utils_legacy as jru
+import jaxatari.rendering.jax_rendering_utils as render_utils
 import time
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Dict, Any, Optional
 
 from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural black background
+    procedural_bg = jnp.zeros((210, 160, 4), dtype=jnp.uint8).at[:, :, 3].set(255)
 
-#from jaxatari.rendering.jax_rendering_utils import recolor_sprite
+    # Procedural colors for palette swapping (constant colors from CentipedeConstants) [redefinition due to current limitation of sprite loading]
+    all_colors = [
+        [181, 83, 40],    # ORANGE 
+        [184, 70, 162],   # PINK
+        [146, 70, 192],   # PURPLE
+        [45, 50, 184],    # DARK_BLUE
+        [187, 187, 53],   # YELLOW
+        [184, 50, 50],    # RED
+        [110, 156, 66],   # GREEN
+        [84, 138, 210],   # LIGHT_BLUE
+        [66, 72, 200],    # DARK_PURPLE
+        [162, 162, 42],   # DARK_YELLOW
+    ]
+    procedural_colors_data = jnp.array(
+        [list(c) + [255] for c in all_colors], dtype=jnp.uint8
+    ).reshape(-1, 1, 1, 4)
+    
+    return {
+        'background': procedural_bg,
+        'recolor_palette': procedural_colors_data,
+    }
 
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Centipede.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Poisoned mushroom files
+    pmush_files = [f'poisoned_mushrooms/{i}.npy' for i in range(1, 17)]
+
+    return (
+        # Procedural assets
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'recolor_palette', 'type': 'procedural', 'data': static_procedural['recolor_palette']},
+        # Single sprites
+        {'name': 'player', 'type': 'single', 'file': 'player/player.npy'},
+        {'name': 'player_spell', 'type': 'single', 'file': 'player_spell/player_spell.npy'},
+        {'name': 'mushroom', 'type': 'single', 'file': 'mushrooms/mushroom.npy'},
+        {'name': 'centipede', 'type': 'single', 'file': 'centipede/segment.npy'},
+        {'name': 'spider_300', 'type': 'single', 'file': 'spider_scores/300.npy'},
+        {'name': 'spider_600', 'type': 'single', 'file': 'spider_scores/600.npy'},
+        {'name': 'spider_900', 'type': 'single', 'file': 'spider_scores/900.npy'},
+        {'name': 'bottom_border', 'type': 'single', 'file': 'ui/bottom_border.npy'},
+        {'name': 'life_indicator', 'type': 'single', 'file': 'ui/wand.npy'},
+        # Groups (for auto-padding)
+        {'name': 'spider_group', 'type': 'group', 'files': ['spider/1.npy', 'spider/2.npy', 'spider/3.npy', 'spider/4.npy']},
+        {'name': 'flea_group', 'type': 'group', 'files': ['flea/1.npy', 'flea/2.npy']},
+        {'name': 'scorpion_group', 'type': 'group', 'files': ['scorpion/1.npy', 'scorpion/2.npy']},
+        {'name': 'sparks', 'type': 'group', 'files': ['sparks/1.npy', 'sparks/2.npy', 'sparks/3.npy', 'sparks/4.npy']},
+        {'name': 'poisoned_mushroom_group', 'type': 'group', 'files': pmush_files},
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'big_numbers/{}.npy'},
+    )
 
 class CentipedeConstants:
     # -------- Game constants --------
@@ -136,6 +195,9 @@ class CentipedeConstants:
     SPRITE_BOTTOM_BORDER_FRAMES = 1
     SPRITE_POISONED_MUSHROOMS_FRAMES = 16
 
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
+
     # -------- Centipede States --------
 
 class CentipedeState(NamedTuple):
@@ -158,6 +220,7 @@ class CentipedeState(NamedTuple):
     wave: chex.Array # (1, 2): logical wave, ui wave
     step_counter: chex.Array
     death_counter: chex.Array
+    spark_position: chex.Array
     rng_key: chex.PRNGKey
 
 class PlayerEntity(NamedTuple):
@@ -190,168 +253,12 @@ class CentipedeInfo(NamedTuple):
     wave: jnp.ndarray
     step_counter: jnp.ndarray
 
-# -------- Render Constants --------
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    player = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/player/player.npy"))
-    player_spell = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/player_spell/player_spell.npy"))
-    mushroom = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/mushrooms/mushroom.npy"))
-    centipede = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/centipede/segment.npy"))
-    spider1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider/1.npy"))
-    spider2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider/2.npy"))
-    spider3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider/3.npy"))
-    spider4 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider/4.npy"))
-    spider_300 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider_scores/300.npy"))
-    spider_600 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider_scores/600.npy"))
-    spider_900 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/spider_scores/900.npy"))
-    flea1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/flea/1.npy"))
-    flea2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/flea/2.npy"))
-    scorpion1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/scorpion/1.npy"))
-    scorpion2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/scorpion/2.npy"))
-    sparks1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/sparks/1.npy"))
-    sparks2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/sparks/2.npy"))
-    sparks3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/sparks/3.npy"))
-    sparks4 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/sparks/4.npy"))
-    bottom_border = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/ui/bottom_border.npy"))
-
-    ## -------- poisoned mushrooms --------
-    pMush1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/1.npy"))
-    pMush2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/2.npy"))
-    pMush3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/3.npy"))
-    pMush4 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/4.npy"))
-    pMush5 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/5.npy"))
-    pMush6 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/6.npy"))
-    pMush7= jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/7.npy"))
-    pMush8 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/8.npy"))
-    pMush9 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/9.npy"))
-    pMush10 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/10.npy"))
-    pMush11 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/11.npy"))
-    pMush12 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/12.npy"))
-    pMush13 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/13.npy"))
-    pMush14 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/14.npy"))
-    pMush15 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/15.npy"))
-    pMush16 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/poisoned_mushrooms/16.npy"))
-
-
-    sparks_sprites, _ = jru.pad_to_match([sparks1, sparks2, sparks3, sparks4])
-    spider_sprites, _ = jru.pad_to_match([spider1, spider2, spider3, spider4])
-    flea_sprites, _ = jru.pad_to_match([flea1, flea2])
-    scorpion_sprites, _ = jru.pad_to_match([scorpion1, scorpion2])
-    poisoned_mushroom_sprites, _ = jru.pad_to_match([pMush1, pMush2, pMush3, pMush4,
-                                                     pMush5, pMush6, pMush7, pMush8,
-                                                     pMush9, pMush10, pMush11, pMush12,
-                                                     pMush13, pMush14, pMush15, pMush16])
-
-    SPRITE_PLAYER = jnp.expand_dims(player, 0)
-    SPRITE_PLAYER_SPELL = jnp.expand_dims(player_spell, 0)
-
-    SPRITE_CENTIPEDE = jnp.expand_dims(centipede, 0)
-    SPRITE_MUSHROOM = jnp.expand_dims(mushroom, 0)
-
-    SPRITE_POISONED_MUSHROOM = jnp.concatenate(
-        [
-            jnp.repeat(poisoned_mushroom_sprites[0][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[1][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[2][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[3][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[4][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[5][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[6][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[7][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[8][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[9][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[10][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[11][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[12][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[13][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[14][None], 4, axis=0),
-            jnp.repeat(poisoned_mushroom_sprites[15][None], 4, axis=0),
-        ]
-    )
-
-    SPRITE_SPIDER = jnp.concatenate(
-        [
-            jnp.repeat(spider_sprites[0][None], 8, axis=0),
-            jnp.repeat(spider_sprites[1][None], 8, axis=0),
-            jnp.repeat(spider_sprites[2][None], 8, axis=0),
-            jnp.repeat(spider_sprites[3][None], 8, axis=0),
-        ]
-    )
-    SPRITE_SPIDER_300 = jnp.expand_dims(spider_300, 0)
-    SPRITE_SPIDER_600 = jnp.expand_dims(spider_600, 0)
-    SPRITE_SPIDER_900 = jnp.expand_dims(spider_900, 0)
-    SPRITE_FLEA = jnp.concatenate(
-        [
-            jnp.repeat(flea_sprites[0][None], 2, axis=0),
-            jnp.repeat(flea_sprites[1][None], 2, axis=0),
-        ]
-    )
-    SPRITE_SCORPION = jnp.concatenate(
-        [
-            jnp.repeat(scorpion_sprites[0][None], 8, axis=0),
-            jnp.repeat(scorpion_sprites[1][None], 8, axis=0),
-        ]
-    )
-
-    SPRITE_SPARKS = jnp.concatenate(
-        [
-            jnp.repeat(sparks_sprites[0][None], 1, axis=0),
-            jnp.repeat(sparks_sprites[1][None], 1, axis=0),
-            jnp.repeat(sparks_sprites[2][None], 1, axis=0),
-            jnp.repeat(sparks_sprites[3][None], 1, axis=0),
-        ]
-    )
-    SPRITE_BOTTOM_BORDER = jnp.expand_dims(bottom_border, 0)
-
-    DIGITS = jru.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/centipede/big_numbers/{}.npy"))
-    LIFE_INDICATOR = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/centipede/ui/wand.npy"))
-
-    return (
-        SPRITE_PLAYER,
-        SPRITE_PLAYER_SPELL,
-        SPRITE_CENTIPEDE,
-        SPRITE_MUSHROOM,
-        SPRITE_POISONED_MUSHROOM,
-        SPRITE_SPIDER,
-        SPRITE_SPIDER_300,
-        SPRITE_SPIDER_600,
-        SPRITE_SPIDER_900,
-        SPRITE_FLEA,
-        SPRITE_SCORPION,
-        SPRITE_SPARKS,
-        SPRITE_BOTTOM_BORDER,
-        DIGITS,
-        LIFE_INDICATOR,
-    )
-
-(
-    SPRITE_PLAYER,
-    SPRITE_PLAYER_SPELL,
-    SPRITE_CENTIPEDE,
-    SPRITE_MUSHROOM,
-    SPRITE_POISONED_MUSHROOM,
-    SPRITE_SPIDER,
-    SPRITE_SPIDER_300,
-    SPRITE_SPIDER_600,
-    SPRITE_SPIDER_900,
-    SPRITE_FLEA,
-    SPRITE_SCORPION,
-    SPRITE_SPARKS,
-    SPRITE_BOTTOM_BORDER,
-    DIGITS,
-    LIFE_INDICATOR,
-) = load_sprites()
-
 # -------- Game Logic --------
 
 class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, CentipedeInfo, CentipedeConstants]):
-    def __init__(self, consts: CentipedeConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: CentipedeConstants = None):
         consts = consts or CentipedeConstants()
         super().__init__(consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -372,7 +279,6 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.obs_size = 6 + 304 * 5 + 9 * 5 + 5 + 5 + 5 + 5 + 1 + 1
         self.renderer = CentipedeRenderer(self.consts)
 
@@ -1950,6 +1856,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             step_counter=jnp.array(0),
             wave=jnp.array([0, 0]),
             death_counter=jnp.array(0),
+            spark_position=jnp.zeros(2, dtype=jnp.int32),
             rng_key=new_key0,
         )
 
@@ -1964,43 +1871,69 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
 
         def handle_death_animation():
 
-            def soft_reset():
-                new_key, key_spider, key_scorpion = jax.random.split(state.rng_key, 3)
-                initial_spider_timer = jax.random.randint(
-                    key_spider,
-                    (),
-                    self.consts.SPIDER_MIN_SPAWN_FRAMES,
-                    self.consts.SPIDER_MAX_SPAWN_FRAMES + 1
-                )
-                initial_scorpion_timer = jax.random.randint(
-                    key_scorpion,
-                    (),
-                    self.consts.SCORPION_MIN_SPAWN_FRAMES,
-                    self.consts.SCORPION_MAX_SPAWN_FRAMES + 1
+            def get_mushroom_for_spark(death_counter, mushroom_positions):
+                # Optimized: No sorting! Just find the Nth alive mushroom in array order
+                # This is MUCH faster than sorting 304 mushrooms twice + looping
+                mush_alive = jnp.count_nonzero(mushroom_positions[:, 3])
+                alive_idx = (mush_alive - jnp.ceil(death_counter / 4)).astype(jnp.int32)
+                
+                # Mask for alive mushrooms
+                alive_mask = mushroom_positions[:, 3] > 0
+                
+                # Cumulative count of alive mushrooms (vectorized, no loop!)
+                alive_count = jnp.cumsum(alive_mask.astype(jnp.int32))
+                
+                # Find the alive_idx-th alive mushroom (where count equals alive_idx + 1)
+                target_mask = (alive_count == (alive_idx + 1)) & alive_mask
+                
+                # Get first matching index
+                target_idx = jnp.argmax(target_mask.astype(jnp.int32))
+                
+                # Return position or [0,0] if none found
+                return jnp.where(
+                    jnp.any(target_mask) & (alive_idx >= 0),
+                    mushroom_positions[target_idx, :2].astype(jnp.int32),
+                    jnp.zeros(2, dtype=jnp.int32)
                 )
 
-                return state._replace(
-                    player_x=jnp.array(self.consts.PLAYER_START_X),
-                    player_y=jnp.array(self.consts.PLAYER_START_Y),
-                    player_velocity_x=jnp.array(0.0),
-                    player_spell=jnp.zeros(3, dtype=jnp.int32),
-                    mushroom_positions=state.mushroom_positions,
-                    centipede_position=self.initialize_centipede_positions(jnp.array([0, 0])),
-                    centipede_spawn_timer=jnp.array(0),
-                    spider_position=jnp.zeros(3, dtype=jnp.int32),
-                    spider_spawn_timer=initial_spider_timer,
-                    spider_points=jnp.array([0, 0]),
-                    flea_position=jnp.zeros(3),
-                    flea_spawn_timer=jnp.array(0),
-                    scorpion_position=jnp.zeros(4, dtype=jnp.int32),
-                    scorpion_spawn_timer=initial_scorpion_timer,
-                    score=state.score,
-                    lives=state.lives - 1,
-                    step_counter=state.step_counter,
-                    wave=state.wave,
-                    death_counter=jnp.array(0),
-                    rng_key=new_key,
-                )
+            def soft_reset():
+                 new_key, key_spider, key_scorpion = jax.random.split(state.rng_key, 3)
+                 initial_spider_timer = jax.random.randint(
+                     key_spider,
+                     (),
+                     self.consts.SPIDER_MIN_SPAWN_FRAMES,
+                     self.consts.SPIDER_MAX_SPAWN_FRAMES + 1
+                 )
+                 initial_scorpion_timer = jax.random.randint(
+                     key_scorpion,
+                     (),
+                     self.consts.SCORPION_MIN_SPAWN_FRAMES,
+                     self.consts.SCORPION_MAX_SPAWN_FRAMES + 1
+                 )
+
+                 return state._replace(
+                     player_x=jnp.array(self.consts.PLAYER_START_X),
+                     player_y=jnp.array(self.consts.PLAYER_START_Y),
+                     player_velocity_x=jnp.array(0.0),
+                     player_spell=jnp.zeros(3, dtype=jnp.int32),
+                     mushroom_positions=state.mushroom_positions,
+                     centipede_position=self.initialize_centipede_positions(jnp.array([0, 0])),
+                     centipede_spawn_timer=jnp.array(0),
+                     spider_position=jnp.zeros(3, dtype=jnp.int32),
+                     spider_spawn_timer=initial_spider_timer,
+                     spider_points=jnp.array([0, 0]),
+                     flea_position=jnp.zeros(3),
+                     flea_spawn_timer=jnp.array(0),
+                     scorpion_position=jnp.zeros(4, dtype=jnp.int32),
+                     scorpion_spawn_timer=initial_scorpion_timer,
+                     score=state.score,
+                     lives=state.lives - 1,
+                     step_counter=state.step_counter,
+                     wave=state.wave,
+                     death_counter=jnp.array(0),
+                     spark_position=jnp.zeros(2, dtype=jnp.int32),
+                     rng_key=new_key,
+                 )
 
             def compute_mushroom_frames():
                 mush_alive = jnp.count_nonzero(state.mushroom_positions[:, 3])
@@ -2018,6 +1951,12 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                 state.score
             )
 
+            new_spark_position = jax.lax.cond(
+                jnp.logical_and(state.death_counter > 0, (state.death_counter - 1) % 4 >= 2),
+                lambda: get_mushroom_for_spark(state.death_counter, state.mushroom_positions),
+                lambda: jnp.zeros(2, dtype=jnp.int32)
+            )
+
             state_during_animation = state._replace(
                 player_spell=jnp.zeros(3, dtype=jnp.int32),
                 spider_position=jnp.zeros(3, dtype=jnp.int32),
@@ -2026,7 +1965,8 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                 scorpion_position=jnp.zeros(4, dtype=jnp.int32),
                 flea_position=jnp.zeros(3),
                 death_counter=new_death_counter,
-                score=new_score
+                score=new_score,
+                spark_position=new_spark_position,
             )
 
             return jax.lax.cond(
@@ -2215,6 +2155,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                 step_counter=state.step_counter + 1,
                 wave=new_wave,
                 death_counter=new_death_counter,
+                spark_position=jnp.zeros(2, dtype=jnp.int32),
                 rng_key=new_rng_key
             )
 
@@ -2243,467 +2184,397 @@ class CentipedeRenderer(JAXGameRenderer):
     def __init__(self, consts: CentipedeConstants = None):
         super().__init__()
         self.consts = consts or CentipedeConstants()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/centipede"
+
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 3. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+
+        # 4. Store original sprite color IDs (for palette swapping)
+        # These are based on the first frame/color in the original game
+        # Convert JAX arrays to numpy arrays, then to tuples for dictionary lookup
+        self.PLAYER_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0)
+        self.CENTIPEDE_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0)
+        self.MUSHROOM_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0)
+        self.SPIDER_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0)
+        self.FLEA_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0)
+        self.SCORPION_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0)
+        self.BORDER_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0)
+
+        # We assume the 4 spark sprites all use the same color in their source .npy
+        # and that we will dynamically "paint" them. Let's assume their original
+        # color is white (or the first color in the palette).
+        # We find this by checking the color of the 'sparks' sprite.
+        # This is complex. Let's assume they are different colors as in the old code.
+        # We need IDs for Blue, Yellow, Red, Orange for the sparks.
+        self.SPARK_BLUE_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0)
+        self.SPARK_YELLOW_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0)
+        self.SPARK_RED_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0)
+        self.SPARK_ORANGE_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0)
+
+        # 5. Build color ID lookup tables for waves
+        self.PLAYER_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+        ])
+        self.CENTIPEDE_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0),
+        ])
+        # (Mushrooms share colors with Player)
+        self.SPIDER_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+        ])
+        self.FLEA_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+        ])
+        self.SCORPION_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+        ])
+        self.BORDER_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_PURPLE)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_YELLOW)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),  # Wave 7 also uses RED
+        ])
+
+        # 6. Replicate Animation Stack Logic (from old load_sprites)
+        self.SHAPE_MASKS['poisoned_mushroom'] = jnp.concatenate(
+            [jnp.repeat(self.SHAPE_MASKS['poisoned_mushroom_group'][i][None], 4, axis=0) for i in range(16)]
+        )
+        self.SHAPE_MASKS['spider'] = jnp.concatenate(
+            [jnp.repeat(self.SHAPE_MASKS['spider_group'][i][None], 8, axis=0) for i in range(4)]
+        )
+        self.SHAPE_MASKS['flea'] = jnp.concatenate(
+            [jnp.repeat(self.SHAPE_MASKS['flea_group'][i][None], 2, axis=0) for i in range(2)]
+        )
+        self.SHAPE_MASKS['scorpion'] = jnp.concatenate(
+            [jnp.repeat(self.SHAPE_MASKS['scorpion_group'][i][None], 8, axis=0) for i in range(2)]
+        )
+
+        # 7. Store animation lengths
+        self.anim_len = {
+            'poisoned_mushroom': self.SHAPE_MASKS['poisoned_mushroom'].shape[0],  # 64
+            'spider': self.SHAPE_MASKS['spider'].shape[0],  # 32
+            'flea': self.SHAPE_MASKS['flea'].shape[0],  # 4
+            'scorpion': self.SHAPE_MASKS['scorpion'].shape[0],  # 16
+            'sparks': self.SHAPE_MASKS['sparks'].shape[0],  # 4
+        }
+
+        # 8. Pre-build colored spark masks
+        PLACEHOLDER_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 1)
+        spark_colors = jnp.array([
+            self.SPARK_BLUE_ID, self.SPARK_YELLOW_ID, self.SPARK_RED_ID, self.SPARK_ORANGE_ID
+        ])
+
+        def create_colored_mask(spark_mask, color_id):
+            return jnp.where(spark_mask == PLACEHOLDER_ID, color_id, spark_mask)
+
+        self.COLORED_SPARK_MASKS = jax.vmap(create_colored_mask)(self.SHAPE_MASKS['sparks'], spark_colors)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_frame_palette(self, wave: chex.Array) -> chex.Array:
+        """Dynamically build the palette for the current wave."""
+        wave_mod = wave[1] % 8
+        frame_palette = self.PALETTE
+
+        frame_palette = frame_palette.at[self.PLAYER_ORIGINAL_ID].set(self.PLAYER_COLOR_IDS[wave_mod])
+        frame_palette = frame_palette.at[self.CENTIPEDE_ORIGINAL_ID].set(self.CENTIPEDE_COLOR_IDS[wave_mod])
+        frame_palette = frame_palette.at[self.MUSHROOM_ORIGINAL_ID].set(self.PLAYER_COLOR_IDS[wave_mod])  # Uses player color
+        frame_palette = frame_palette.at[self.SPIDER_ORIGINAL_ID].set(self.SPIDER_COLOR_IDS[wave_mod])
+        frame_palette = frame_palette.at[self.FLEA_ORIGINAL_ID].set(self.FLEA_COLOR_IDS[wave_mod])
+        frame_palette = frame_palette.at[self.SCORPION_ORIGINAL_ID].set(self.SCORPION_COLOR_IDS[wave_mod])
+        frame_palette = frame_palette.at[self.BORDER_ORIGINAL_ID].set(self.BORDER_COLOR_IDS[wave_mod])
+
+        # Spider score colors are static and do not need to be swapped
+        return frame_palette
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_sparks(self, raster, state: CentipedeState) -> chex.Array:
+        """Render player death or mushroom healing sparks."""
+
+        def no_render(r):
+            return r
+
+        def player_sparks(r):
+            # Sparks logic is complex, just select a frame
+            idx = (-(state.death_counter // 4 + 1)) % 4
+            spark_mask = self.COLORED_SPARK_MASKS[idx]
+
+            return self.jr.render_at_clipped(
+                r, state.player_x - 4, state.player_y + 3,
+                spark_mask, flip_offset=self.FLIP_OFFSETS['sparks']
+            )
+
+        def mushroom_sparks(r):
+            idx = (-jnp.mod(state.death_counter, 4)).astype(jnp.int32)
+            spark_mask = self.COLORED_SPARK_MASKS[idx]
+
+
+            mush_pos = state.spark_position
+
+            return self.jr.render_at_clipped(
+                r, mush_pos[0] - 2, mush_pos[1] - 2, # Use the pre-calculated pos
+                spark_mask, flip_offset=self.FLIP_OFFSETS['sparks']
+            )
+
+        return jax.lax.cond(
+            state.death_counter != 0,
+            lambda r: jax.lax.cond(
+                state.death_counter < 0,
+                player_sparks,
+                lambda r_in: jax.lax.cond(
+                    (state.death_counter - 1) % 4 >= 2,
+                    mushroom_sparks,
+                    no_render,
+                    r_in
+                ),
+                r
+            ),
+            no_render,
+            raster
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CentipedeState):
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
+        # --- 1. Setup ---
+        # Start with the static background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        def recolor_sprite(
-                sprite: chex.Array,
-                color: chex.Array,  # RGB, up to 4 dimensions
-                bounds: tuple[int, int, int, int] = None  # (top, left, bottom, right)
-        ) -> chex.Array:
-            # Ensure color is the same dtype as sprite
-            dtype = sprite.dtype
-            color = color.astype(dtype)
+        # --- 2. Get Dynamic Animation Frames ---
+        poison_anim_idx = state.step_counter % self.anim_len['poisoned_mushroom']
+        spider_anim_idx = state.step_counter % self.anim_len['spider']
+        flea_anim_idx = state.step_counter % self.anim_len['flea']
+        scorpion_anim_idx = state.step_counter % self.anim_len['scorpion']
 
-            assert sprite.ndim == 3 and sprite.shape[2] in (3, 4), "Sprite must be HxWx3 or HxWx4"
-
-            if color.shape[0] < sprite.shape[2]:
-                missing = sprite.shape[2] - color.shape[0]
-                pad = jnp.full((missing,), 255, dtype=dtype)
-                color = jnp.concatenate([color, pad], axis=0)
-
-            assert color.shape[0] == sprite.shape[2], "Color channels must match sprite channels"
-
-            H, W, _ = sprite.shape
-
-            if bounds is None:
-                region = sprite
-            else:
-                top, left, bottom, right = bounds
-                assert 0 <= left < right <= H and 0 <= top < bottom <= W, "Invalid bounds"
-                region = sprite[left:right, top:bottom]
-
-            visible_mask = jnp.any(region != 0, axis=-1, keepdims=True)  # (h, w, 1)
-
-            color_broadcasted = jnp.broadcast_to(color, region.shape).astype(dtype)
-            recolored_region = jnp.where(visible_mask, color_broadcasted, jnp.zeros_like(color_broadcasted))
-
-            if bounds is None:
-                return recolored_region
-            else:
-                recolored_sprite = sprite.at[left:right, top:bottom].set(recolored_region)
-                return recolored_sprite
-
-        def get_sprite_frames(wave: chex.Array, step_counter: int):
-            """Gives all sprite-frames dynamically depending on step_counter and recoloring depending on wave"""
-
-            def get_frame(sprite_id, num_frames: int, step_counter: int):
-                """Calculates dynamically the frame of a sprite"""
-                if num_frames == 1:
-                    return jru.get_sprite_frame(sprite_id, 0)
-                idx = step_counter
-                return jru.get_sprite_frame(sprite_id, idx)
-
-            def get_sparks(death_counter):
-                # jax.debug.print("{}", jnp.mod(jnp.ceil(death_counter / 8), 4).astype(jnp.int32))
-                sprites = jnp.array([
-                    recolor_sprite(jru.get_sprite_frame(SPRITE_SPARKS, 0), self.consts.DARK_BLUE),
-                    recolor_sprite(jru.get_sprite_frame(SPRITE_SPARKS, 1), self.consts.YELLOW),
-                    recolor_sprite(jru.get_sprite_frame(SPRITE_SPARKS, 2), self.consts.RED),
-                    recolor_sprite(jru.get_sprite_frame(SPRITE_SPARKS, 3), self.consts.ORANGE),
-                ])
-                return jnp.where(
-                    death_counter < 0,
-                    sprites[-(death_counter // 4 + 1) % 4],
-                    sprites[-jnp.mod(death_counter, 4).astype(jnp.int32)],      # placeholder
-                )
-
-
-            # --- Get frames dynamically --- #
-            frame_player_idx = get_frame(SPRITE_PLAYER, self.consts.SPRITE_PLAYER_FRAMES, step_counter)
-            frame_player_spell_idx = get_frame(SPRITE_PLAYER_SPELL, self.consts.SPRITE_PLAYER_SPELL_FRAMES, step_counter)
-            frame_centipede_idx = get_frame(SPRITE_CENTIPEDE, self.consts.SPRITE_CENTIPEDE_FRAMES, step_counter)
-            frame_mushroom_idx = get_frame(SPRITE_MUSHROOM, self.consts.SPRITE_MUSHROOM_FRAMES, step_counter)
-            frame_poisoned_mushroom_idx = get_frame(SPRITE_POISONED_MUSHROOM, self.consts.SPRITE_POISONED_MUSHROOMS_FRAMES, step_counter)
-            frame_spider_idx = get_frame(SPRITE_SPIDER, self.consts.SPRITE_SPIDER_FRAMES, step_counter)
-            frame_spider300_idx = get_frame(SPRITE_SPIDER_300, self.consts.SPRITE_SPIDER_300_FRAMES, step_counter)
-            frame_spider600_idx = get_frame(SPRITE_SPIDER_600, self.consts.SPRITE_SPIDER_600_FRAMES, step_counter)
-            frame_spider900_idx = get_frame(SPRITE_SPIDER_900, self.consts.SPRITE_SPIDER_900_FRAMES, step_counter)
-            frame_flea_idx = get_frame(SPRITE_FLEA, self.consts.SPRITE_FLEA_FRAMES, step_counter)
-            frame_scorpion_idx = get_frame(SPRITE_SCORPION, self.consts.SPRITE_SCORPION_FRAMES, step_counter)
-            # frame_sparks_idx = get_frame(SPRITE_SPARKS, self.consts.SPRITE_SPARKS_FRAMES, step_counter)
-            frame_bottom_border_idx = get_frame(SPRITE_BOTTOM_BORDER, self.consts.SPRITE_BOTTOM_BORDER_FRAMES, step_counter)
-
-            # --- Recoloring depending on wave --- #
-            recolored_sparks = get_sparks(state.death_counter)
-
-            def wave_0():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_player_spell_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_centipede_idx, self.consts.PINK),
-                    recolor_sprite(frame_mushroom_idx, self.consts.ORANGE),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_spider300_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_spider600_idx, self.consts.GREEN),
-                    recolor_sprite(frame_spider900_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_flea_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_scorpion_idx, self.consts.LIGHT_BLUE),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.GREEN),
-                )
-
-            def wave_1():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_player_spell_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_centipede_idx, self.consts.RED),
-                    recolor_sprite(frame_mushroom_idx, self.consts.DARK_BLUE),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.GREEN),
-                    recolor_sprite(frame_spider300_idx, self.consts.GREEN),
-                    recolor_sprite(frame_spider600_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_spider900_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_flea_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_scorpion_idx, self.consts.ORANGE),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.LIGHT_BLUE),
-                )
-
-            def wave_2():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_player_spell_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_centipede_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_mushroom_idx, self.consts.YELLOW),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_spider300_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_spider600_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_spider900_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_flea_idx, self.consts.PINK),
-                    recolor_sprite(frame_scorpion_idx, self.consts.DARK_BLUE),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.ORANGE),
-                )
-
-            def wave_3():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.PINK),
-                    recolor_sprite(frame_player_spell_idx, self.consts.PINK),
-                    recolor_sprite(frame_centipede_idx, self.consts.GREEN),
-                    recolor_sprite(frame_mushroom_idx, self.consts.PINK),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_spider300_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_spider600_idx, self.consts.DARK_PURPLE),
-                    recolor_sprite(frame_spider900_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_flea_idx, self.consts.RED),
-                    recolor_sprite(frame_scorpion_idx, self.consts.YELLOW),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.DARK_PURPLE),
-                )
-
-            def wave_4():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.RED),
-                    recolor_sprite(frame_player_spell_idx, self.consts.RED),
-                    recolor_sprite(frame_centipede_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_mushroom_idx, self.consts.RED),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_spider300_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_spider600_idx, self.consts.DARK_YELLOW),
-                    recolor_sprite(frame_spider900_idx, self.consts.PINK),
-                    recolor_sprite(frame_flea_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_scorpion_idx, self.consts.PINK),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.DARK_YELLOW),
-                )
-
-            def wave_5():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_player_spell_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_centipede_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_mushroom_idx, self.consts.PURPLE),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_spider300_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_spider600_idx, self.consts.PINK),
-                    recolor_sprite(frame_spider900_idx, self.consts.RED),
-                    recolor_sprite(frame_flea_idx, self.consts.GREEN),
-                    recolor_sprite(frame_scorpion_idx, self.consts.RED),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.PINK),
-                )
-
-            def wave_6():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.GREEN),
-                    recolor_sprite(frame_player_spell_idx, self.consts.GREEN),
-                    recolor_sprite(frame_centipede_idx, self.consts.DARK_BLUE),
-                    recolor_sprite(frame_mushroom_idx, self.consts.GREEN),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.PINK),
-                    recolor_sprite(frame_spider300_idx, self.consts.PINK),
-                    recolor_sprite(frame_spider600_idx, self.consts.RED),
-                    recolor_sprite(frame_spider900_idx, self.consts.PURPLE),
-                    recolor_sprite(frame_flea_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_scorpion_idx, self.consts.PURPLE),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.RED),
-                )
-
-            def wave_7():
-                return (
-                    recolor_sprite(frame_player_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_player_spell_idx, self.consts.LIGHT_BLUE),
-                    recolor_sprite(frame_centipede_idx, self.consts.YELLOW),
-                    recolor_sprite(frame_mushroom_idx, self.consts.LIGHT_BLUE),
-                    frame_poisoned_mushroom_idx,
-                    recolor_sprite(frame_spider_idx, self.consts.RED),
-                    recolor_sprite(frame_spider300_idx, self.consts.RED),
-                    recolor_sprite(frame_spider600_idx, self.consts.RED),
-                    recolor_sprite(frame_spider900_idx, self.consts.GREEN),
-                    recolor_sprite(frame_flea_idx, self.consts.ORANGE),
-                    recolor_sprite(frame_scorpion_idx, self.consts.GREEN),
-                    recolored_sparks,
-                    recolor_sprite(frame_bottom_border_idx, self.consts.RED),
-                )
-
-            wave_mod = wave[1] % 8
-
-            return jax.lax.switch(
-                wave_mod,
-                [wave_0, wave_1, wave_2, wave_3, wave_4, wave_5, wave_6, wave_7],
-            )
-
-        (
-            frame_player,
-            frame_player_spell,
-            frame_centipede,
-            frame_mushroom,
-            frame_poisoned_mushroom,
-            frame_spider,
-            frame_spider300,
-            frame_spider600,
-            frame_spider900,
-            frame_flea,
-            frame_scorpion,
-            frame_sparks,
-            frame_bottom_border,
-        ) = get_sprite_frames(state.wave, state.step_counter)
-
-        ### -------- Render player -------- ###
-        raster = jnp.where(
+        # --- 3. Render player ---
+        raster = jax.lax.cond(
             state.death_counter >= 0,
-            jru.render_at(
-                raster,
-                state.player_x,
-                state.player_y,
-                frame_player,
+            lambda r: self.jr.render_at(
+                r, state.player_x, state.player_y,
+                self.SHAPE_MASKS['player'], flip_offset=self.FLIP_OFFSETS['player']
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render player spell -------- ###
-        raster = jnp.where(
+        # --- 4. Render player spell ---
+        raster = jax.lax.cond(
             state.player_spell[2] != 0,
-            jru.render_at(
-                raster,
-                state.player_spell[0],
-                state.player_spell[1],
-                frame_player_spell,
+            lambda r: self.jr.render_at_clipped(
+                r, state.player_spell[0], state.player_spell[1],
+                self.SHAPE_MASKS['player_spell'], flip_offset=self.FLIP_OFFSETS['player_spell']
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render mushrooms -------- ###
-        def render_mushroom_scan(raster, pos):
+        # --- 5. Render mushrooms ---
+        frame_mushroom = self.SHAPE_MASKS['mushroom']
+        frame_poisoned_mushroom = self.SHAPE_MASKS['poisoned_mushroom'][poison_anim_idx]
+        mush_offset = self.FLIP_OFFSETS['mushroom']
+        pmush_offset = self.FLIP_OFFSETS['poisoned_mushroom_group']  # Assumes all padded same
+
+        def render_mushroom_scan(raster_in, pos):
             x, y, poisoned, lives = pos
             alive = lives > 0
-            poisoned = poisoned == 1
+            is_poisoned = poisoned == 1
 
             def render_fn(r):
-                return jax.lax.cond(
-                    poisoned,
-                    lambda r2: jru.render_at(r2, x, y, frame_poisoned_mushroom),
-                    lambda r2: jru.render_at(r2, x, y, frame_mushroom),
-                    r,
-                )
+                mask = jax.lax.select(is_poisoned, frame_poisoned_mushroom, frame_mushroom)
+                offset = jax.lax.select(is_poisoned, pmush_offset, mush_offset)
+                return self.jr.render_at(r, x, y, mask, flip_offset=offset)
 
-            return jax.lax.cond(alive, render_fn, lambda r: r, raster), None
+            return jax.lax.cond(alive, render_fn, lambda r: r, raster_in), None
 
-        # Thread raster through all mushrooms
         raster, _ = jax.lax.scan(render_mushroom_scan, raster, state.mushroom_positions)
 
-        ### -------- Render centipede -------- ###
-        def render_segment_scan(raster, pos):
+        # --- 6. Render centipede ---
+        frame_centipede = self.SHAPE_MASKS['centipede']
+        cent_offset = self.FLIP_OFFSETS['centipede']
+
+        def render_segment_scan(raster_in, pos):
             x, y, _, _, alive_flag = pos
-            should_render = jnp.logical_and(alive_flag != 0, state.death_counter <= 0)
+            should_render = (alive_flag != 0) & (state.death_counter <= 0)
 
             def render_fn(r):
-                return jru.render_at(r, x, y, frame_centipede)
+                return self.jr.render_at(r, x, y, frame_centipede, flip_offset=cent_offset)
 
-            return jax.lax.cond(should_render, render_fn, lambda r: r, raster), None
+            return jax.lax.cond(should_render, render_fn, lambda r: r, raster_in), None
 
-        # Scan over all segments, threading the raster
         raster, _ = jax.lax.scan(render_segment_scan, raster, state.centipede_position)
 
-        ### -------- Render spider -------- ###
-        raster = jnp.where(
+        # --- 7. Render spider ---
+        frame_spider = self.SHAPE_MASKS['spider'][spider_anim_idx]
+        spider_offset = self.FLIP_OFFSETS['spider_group']
+
+        raster = jax.lax.cond(
             state.spider_position[2] != 0,
-            jru.render_at(
-                raster,
-                state.spider_position[0] + 2,
-                state.spider_position[1] - 2,
-                frame_spider,
+            lambda r: self.jr.render_at_clipped(
+                r, state.spider_position[0] + 2, state.spider_position[1] - 2,
+                frame_spider, flip_offset=spider_offset
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render spider score -------- ###
-        raster = jnp.where(
+        # --- 8. Render spider score ---
+        frame_spider300 = self.SHAPE_MASKS['spider_300']
+        frame_spider600 = self.SHAPE_MASKS['spider_600']
+        frame_spider900 = self.SHAPE_MASKS['spider_900']
+
+        score_mask = jnp.where(
+            state.spider_points[0] == 1, frame_spider300,
+            jnp.where(state.spider_points[0] == 2, frame_spider600, frame_spider900)
+        )
+        # Assuming offsets are similar, pick one
+        score_offset = self.FLIP_OFFSETS['spider_300']
+
+        raster = jax.lax.cond(
             state.spider_points[1] != 0,
-            jru.render_at(
-                raster,
-                state.spider_position[0] + 2,
-                state.spider_position[1] - 2,
-                jnp.where(
-                    state.spider_points[0] == 1,
-                    frame_spider300,
-                    jnp.where(
-                        state.spider_points[0] == 2,
-                        frame_spider600,
-                        frame_spider900,
-                    )
-                )
+            lambda r: self.jr.render_at_clipped(
+                r, state.spider_position[0] + 2, state.spider_position[1] - 2,
+                score_mask, flip_offset=score_offset
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render Flea -------- ###
-        raster = jnp.where(
+        # --- 9. Render Flea ---
+        frame_flea = self.SHAPE_MASKS['flea'][flea_anim_idx]
+        flea_offset = self.FLIP_OFFSETS['flea_group']
+        raster = jax.lax.cond(
             state.flea_position[2] != 0,
-            jru.render_at(
-                raster,
-                state.flea_position[0],
-                state.flea_position[1],
-                frame_flea,
+            lambda r: self.jr.render_at_clipped(
+                r, state.flea_position[0], state.flea_position[1],
+                frame_flea, flip_offset=flea_offset
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render Scorpion -------- ###
-        raster = jnp.where(
+        # --- 10. Render Scorpion ---
+        frame_scorpion = self.SHAPE_MASKS['scorpion'][scorpion_anim_idx]
+        scorpion_offset = self.FLIP_OFFSETS['scorpion_group']
+
+        raster = jax.lax.cond(
             state.scorpion_position[2] != 0,
-            jru.render_at(
-                raster,
-                state.scorpion_position[0] + 2,
-                state.scorpion_position[1] - 2,
+            lambda r: self.jr.render_at_clipped(
+                r, state.scorpion_position[0] + 2, state.scorpion_position[1] - 2,
                 frame_scorpion,
-                flip_horizontal=state.scorpion_position[2] == -1,
+                flip_horizontal=(state.scorpion_position[2] == -1),
+                flip_offset=scorpion_offset
             ),
+            lambda r: r,
             raster
         )
 
-        ### -------- Render sparks -------- ###
-        def render_sparks(
-                frame_sparks,
-                raster_base,
-                player_pos,
-                mush_pos,
-                death_counter
-        ):
-            def no_render():
-                return raster_base
+        # --- 11. Render sparks ---
+        # This function is complex and dynamically paints masks
+        raster = self._render_sparks(raster, state)
 
-            def player_sparks():
-                return jru.render_at(
-                    raster_base,
-                    player_pos[0] - 4,
-                    player_pos[1] + 3,
-                    frame_sparks,
-                )
-
-            def mushroom_sparks():
-                mush_alive = jnp.count_nonzero(mush_pos[:, 3])
-                alive_idx = mush_alive - jnp.ceil(death_counter / 4)
-
-                def get_mushroom():
-                    idx_y = jnp.argsort(mush_pos[:, 1])
-                    mush_sorted_y = mush_pos[idx_y]
-                    idx_x = jnp.argsort(mush_sorted_y[:, 0])
-                    mush_sorted_x = mush_sorted_y[idx_x]
-
-                    def body(i, carry):
-                        existing_mush_idx, mushroom = carry
-                        cond1 = jnp.all(mushroom == 0)  # "empty" marker for (4,) vector
-                        cond2 = mush_sorted_x[i, 3] != 0
-                        cond3 = existing_mush_idx == alive_idx
-
-                        # Branch result if cond3
-                        new_existing_idx = jnp.where(cond3, existing_mush_idx, existing_mush_idx + 1)
-                        new_mushroom = jnp.where(cond3, mush_sorted_x[i], mushroom)
-
-                        # Combine cond2
-                        new_existing_idx = jnp.where(cond2, new_existing_idx, existing_mush_idx)
-                        new_mushroom = jnp.where(cond2, new_mushroom, mushroom)
-
-                        # Combine cond1
-                        new_existing_idx = jnp.where(cond1, new_existing_idx, existing_mush_idx)
-                        new_mushroom = jnp.where(cond1, new_mushroom, mushroom)
-
-                        return new_existing_idx, new_mushroom
-
-                    # init_carry: index scalar, and a "zero row" with same shape as mush_pos row
-                    init_carry = (jnp.array(0), jnp.zeros(mush_pos.shape[1], dtype=mush_pos.dtype))
-                    _, res_mushroom = jax.lax.fori_loop(0, mush_sorted_x.shape[0], body, init_carry)
-                    return res_mushroom
-
-                mush = get_mushroom()
-
-                res_raster = jru.render_at(
-                    raster_base,
-                    mush[0] - 2,
-                    mush[1] - 2,
-                    frame_sparks,
-                )
-
-                return res_raster
-
-            return jax.lax.cond(
-                death_counter != 0,
-                lambda: jax.lax.cond(
-                    death_counter < 0,
-                    lambda: player_sparks(),
-                    lambda: jax.lax.cond(
-                        (death_counter - 1) % 4 >= 2,
-                        lambda: mushroom_sparks(),
-                        lambda: no_render(),
-                    ),
-                ),
-                lambda: no_render(),
-            )
-
-        raster = render_sparks(
-            frame_sparks,
-            raster,
-            jnp.array([state.player_x, state.player_y]),
-            state.mushroom_positions,
-            state.death_counter,
+        # --- 12. Render bottom border ---
+        raster = self.jr.render_at(
+            raster, 16, 183,
+            self.SHAPE_MASKS['bottom_border'],
+            flip_offset=self.FLIP_OFFSETS['bottom_border']
         )
 
-
-        ### -------- Render bottom border -------- ###
-        raster = jru.render_at(
-            raster,
-            16,
-            183,
-            frame_bottom_border,
+        # --- 13. Render score ---
+        score_array = self.jr.int_to_digits(state.score, max_digits=6)
+        raster = self.jr.render_label(
+            raster, 100, 187, score_array,
+            self.SHAPE_MASKS['digits'], spacing=8, max_digits=6
         )
 
-        ### -------- Render score -------- ###
-        score_array = jru.int_to_digits(state.score, max_digits=6)
-        # first_nonzero = jnp.argmax(score_array != 0)
-        # _, score_array = jnp.split(score_array, first_nonzero - 1)
-        raster = jru.render_label(raster, 100, 187, score_array, DIGITS, spacing=8)
+        # --- 14. Render life indicator ---
+        raster = self.jr.render_indicator(
+            raster, 16, 187, state.lives - 1,
+            self.SHAPE_MASKS['life_indicator'],
+            spacing=8, max_value=5  # Assuming max 5 lives
+        )
 
-        ### -------- Render live indicator -------- ###
-        raster = jru.render_indicator(raster, 16, 187, state.lives - 1, LIFE_INDICATOR, spacing=8)
+        # --- 15. Final Palette Lookup (Now with Dynamic Updates) ---
 
-        return raster
+        # Gather the palette indices we need to update
+        wave_mod = state.wave[1] % 8
+        indices_to_update = jnp.array([
+            self.PLAYER_ORIGINAL_ID,
+            self.CENTIPEDE_ORIGINAL_ID,
+            self.MUSHROOM_ORIGINAL_ID,
+            self.SPIDER_ORIGINAL_ID,
+            self.FLEA_ORIGINAL_ID,
+            self.SCORPION_ORIGINAL_ID,
+            self.BORDER_ORIGINAL_ID
+        ])
+
+        # Gather the new color IDs for the current wave (i.e. which sprite type has which color now)
+        new_color_ids = jnp.array([
+            self.PLAYER_COLOR_IDS[wave_mod],
+            self.CENTIPEDE_COLOR_IDS[wave_mod],
+            self.PLAYER_COLOR_IDS[wave_mod],  # Mushroom uses player color
+            self.SPIDER_COLOR_IDS[wave_mod],
+            self.FLEA_COLOR_IDS[wave_mod],
+            self.SCORPION_COLOR_IDS[wave_mod],
+            self.BORDER_COLOR_IDS[wave_mod]
+        ])
+
+        return self.jr.render_from_palette(
+            raster,
+            self.PALETTE,
+            indices_to_update=indices_to_update,
+            new_color_ids=new_color_ids
+        )

@@ -2,7 +2,7 @@
 
 Structure
 ---------
-- `NameThisGameConfig`: Tunable constants and UI layout.
+- `NameThisGameConstants`: Tunable constants and UI layout.
 - `NameThisGameState`: Pure, JIT-friendly game state (NamedTuple of arrays).
 - `Renderer_NameThisGame`: Sprite/solid renderer producing RGBA frames with JAX.
 - `JaxNameThisGame`: Environment with reset/step and object-centric observations.
@@ -35,17 +35,18 @@ import jax.lax
 import chex
 
 import pygame
-from jaxatari.rendering import jax_rendering_utils_legacy as aj
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
+from typing import NamedTuple as _NamedTupleAlias
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 
 @dataclass(frozen=True)
-class NameThisGameConfig:
+class NameThisGameConstants:
     """All tunable parameters for *Name This Game*.
 
     Units & conventions
@@ -118,6 +119,8 @@ class NameThisGameConfig:
     tentacle_width: int = 4  # for obs space compatibility (narrow bboxes)
     tentacle_base_growth_p: float = 0.015
     tentacle_destroy_points: int = 50
+    # Asset config for render pipeline
+    ASSET_CONFIG: tuple = field(default_factory=lambda: _get_default_asset_config())
 
     # Oxygen line (drops from boat)
     oxygen_full: int = 1200                     # kept for obs-space high
@@ -264,246 +267,28 @@ class NameThisGameInfo(NamedTuple):
     lives_remaining: jnp.ndarray
 
 
-class NameThisGameConstants(NamedTuple):
-    """Kept for interface compatibility; currently unused."""
-    pass
+# Preferred constants alias: use config as constants container
 
 
-# ------------------------------------------------------------
-# Rendering
-# ------------------------------------------------------------
-
-class Renderer_NameThisGame(JAXGameRenderer):
-    """Sprite-based renderer with solid-color fallbacks.
-
-    Loads sprites from `<repo>/sprites/namethisgame`. If a sprite is missing, a
-    solid RGBA block is drawn instead so rendering remains robust under JIT.
+def _get_default_asset_config() -> tuple:
     """
-
-    sprites: Dict[str, Any]
-
-    def __init__(self, config: NameThisGameConfig = None):
-        super().__init__()
-        self.config = config or NameThisGameConfig()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/namethisgame"
-        self.sprites = self._load_sprites()
-        self.score_digit_sprites = self.sprites.get("score_digit_sprites")
-
-    def _load_sprites(self) -> Dict[str, Any]:
-        """Load per-object sprites from disk and return a name->array dict.
-
-        Each sprite is a `uint8` RGBA or RGB array. Score digits are loaded as a packed
-        sprite sheet and padded for fixed-width rendering.
-        """
-        sprites: Dict[str, Any] = {}
-
-        def _load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(self.sprite_path, f"{name}.npy")
-            frame = aj.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
-            return None
-
-        for name in [
-            "diver",
-            "shark",
-            "tentacle",
-            "oxygen_line",
-            "background",
-            "kraken",
-            "boat",
-            "treasure1",
-            "treasure2",
-            "treasure3",
-        ]:
-            spr = _load_sprite_frame(name)
-            if spr is not None:
-                sprites[name] = spr
-
-        sprites["score_digit_sprites"] = aj.load_and_pad_digits(
-            os.path.join(self.sprite_path, "{}_sprite.npy"), num_chars=10
-        )
-        return sprites
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: NameThisGameState) -> chex.Array:
-        """Render the current state to an HxWx3 uint8 RGB image.
-
-        Order: background → HUD bars (centered shrink) → kraken → boat → diver → shark
-        → spear → tentacles → oxygen line → lives → score.
-        """
-        cfg = self.config
-        W, H = cfg.screen_width, cfg.screen_height
-
-        def _solid_rgba(w: int, h: int, rgb: tuple[int, int, int]) -> chex.Array:
-            rgb_arr = jnp.broadcast_to(jnp.array(rgb, jnp.uint8), (h, w, 3))
-            a = jnp.full((h, w, 1), 255, jnp.uint8)
-            return jnp.concatenate([rgb_arr, a], axis=-1)
-
-        raster = jnp.zeros((H, W, 3), jnp.uint8)
-        if "background" in self.sprites:
-            raster = aj.render_at(raster, 0, 0, self.sprites["background"])
-
-        # HUD bars -----------------------------------------------------------
-        # Draw a centered horizontal bar by rendering a full-width sprite and masking
-        # its right side to leave exactly `visible_px` columns; then offset so the
-        # visible portion remains horizontally centered.
-        def _draw_hbar(ras, visible_px: chex.Array, h_px: int, y_px: int, rgb: tuple[int, int, int]):
-            max_w = cfg.hud_bar_initial_px
-            w = jnp.clip(visible_px, 0, jnp.array(max_w, jnp.int32))
-            cols = jnp.arange(max_w, dtype=jnp.int32)
-            alpha_row = jnp.where(cols < w, 255, 0).astype(jnp.uint8)
-            alpha = jnp.broadcast_to(alpha_row[None, :, None], (h_px, max_w, 1))
-            spr = jnp.concatenate(
-                [jnp.broadcast_to(jnp.array(rgb, jnp.uint8), (h_px, max_w, 3)), alpha],
-                axis=-1,
-            )
-            x_left = (cfg.screen_width - w) // 2
-            return aj.render_at(ras, x_left, y_px, spr)
-
-        orange_y = cfg.screen_height - cfg.bars_bottom_margin_px - cfg.bar_orange_height
-        green_y = orange_y - cfg.bars_gap_px - cfg.bar_green_height
-        raster = _draw_hbar(raster, state.oxy_bar_px, cfg.bar_orange_height, orange_y, (195, 102, 52))
-        raster = _draw_hbar(raster, state.wave_bar_px, cfg.bar_green_height, green_y, (27, 121, 38))
-
-        # Kraken (deco)
-        if "kraken" in self.sprites:
-            raster = aj.render_at(raster, cfg.kraken_x, cfg.kraken_y, self.sprites["kraken"])
-
-        # Boat ---------------------------------------------------------------
-        # Attach the boat to the top of the oxygen line baseline and clamp to screen.
-        if "boat" in self.sprites:
-            boat_sprite = self.sprites["boat"]
-            boat_h = int(boat_sprite.shape[0])
-        else:
-            boat_h = 8
-            boat_sprite = _solid_rgba(cfg.boat_width, boat_h, (200, 200, 200))
-
-        boat_y = jnp.maximum(0, cfg.oxygen_y - boat_h)
-        raster = aj.render_at(
-            raster,
-            state.boat_x,
-            boat_y,
-            boat_sprite,
-            flip_horizontal=(state.boat_dx < 0),
-        )
-
-        # Diver --------------------------------------------------------------
-        diver_sprite = self.sprites.get("diver", _solid_rgba(cfg.diver_width, cfg.diver_height, (0, 255, 0)))
-        raster = jax.lax.cond(
-            state.diver_alive,
-            lambda r: aj.render_at(r, state.diver_x, state.diver_y, diver_sprite, flip_horizontal=(state.diver_dir > 0)),
-            lambda r: r,
-            raster,
-        )
-
-        # Shark --------------------------------------------------------------
-        shark_sprite = self.sprites.get("shark", _solid_rgba(cfg.shark_width, cfg.shark_height, (150, 150, 150)))
-        raster = jax.lax.cond(
-            state.shark_alive,
-            lambda r: aj.render_at(r, state.shark_x, state.shark_y, shark_sprite, flip_horizontal=(state.shark_dx < 0)),
-            lambda r: r,
-            raster,
-        )
-
-        # Spear --------------------------------------------------------------
-        spear_sprite = _solid_rgba(cfg.spear_width, cfg.spear_height, (255, 255, 255))
-        raster = jax.lax.cond(
-            state.spear_alive,
-            lambda r: aj.render_at(r, state.spear[0], state.spear[1], spear_sprite),
-            lambda r: r,
-            raster,
-        )
-
-        # Tentacles -----------------------------------------------------------
-        # Tentacles are drawn as a vertical stack of small squares; lateral position
-        # comes from per-row column indices in `state.tentacle_cols[i, k]`.
-        T = self.config.max_tentacles
-        L = int(self.config.tentacle_ys.shape[0])
-        col_w = self.config.tentacle_col_width
-        sq_w = self.config.tentacle_square_w
-        sq_h = self.config.tentacle_square_h
-        tent_color = (0, 0, 0)
-        square_rgba = _solid_rgba(sq_w, sq_h, tent_color)
-
-        def _draw_one_tentacle(i, ras):
-            length = state.tentacle_len[i]
-            base_x = state.tentacle_base_x[i]
-
-            def _draw_k(k, r2):
-                def _place(rr):
-                    col = state.tentacle_cols[i, k]
-                    x = base_x + col * col_w
-                    y = self.config.tentacle_ys[k]
-                    return aj.render_at(rr, x, y, square_rgba)
-
-                return jax.lax.cond(k < length, _place, lambda rr: rr, r2)
-
-            return jax.lax.fori_loop(0, L, _draw_k, ras)
-
-        raster = jax.lax.fori_loop(0, T, _draw_one_tentacle, raster)
-
-        # Oxygen line --------------------------------------------------------
-        oxy_sprite = self.sprites.get(
-            "oxygen_line", _solid_rgba(cfg.oxygen_line_width, cfg.diver_y_floor, (255, 255, 255))
-        )
-        raster = jax.lax.cond(
-            state.oxygen_line_active,
-            lambda r: aj.render_at(r, state.oxygen_line_x, cfg.oxygen_y, oxy_sprite),
-            lambda r: r,
-            raster,
-        )
-
-        # Lives (treasure) ---------------------------------------------------
-        if all(k in self.sprites for k in ("treasure1", "treasure2", "treasure3")):
-            idx = jnp.clip(state.lives_remaining, 0, 3).astype(jnp.int32)
-
-            def draw_none(r):
-                return r
-
-            def draw_t1(r):
-                return aj.render_at(r, cfg.treasure_ui_x, cfg.treasure_ui_y, self.sprites["treasure1"])
-
-            def draw_t2(r):
-                return aj.render_at(r, cfg.treasure_ui_x, cfg.treasure_ui_y, self.sprites["treasure2"])
-
-            def draw_t3(r):
-                return aj.render_at(r, cfg.treasure_ui_x, cfg.treasure_ui_y, self.sprites["treasure3"])
-
-            raster = jax.lax.switch(idx, (draw_none, draw_t1, draw_t2, draw_t3), raster)
-        else:
-            lives = jnp.clip(state.lives_remaining, 0, 3)
-            sq = jnp.concatenate([jnp.full((6, 6, 3), 255, jnp.uint8), jnp.full((6, 6, 1), 255, jnp.uint8)], axis=-1)
-
-            def maybe_draw(i, ras):
-                def draw(rr):
-                    return aj.render_at(rr, cfg.treasure_ui_x + 8 * i, cfg.treasure_ui_y, sq)
-
-                return jax.lax.cond(lives > i, draw, lambda rr: rr, ras)
-
-            raster = jax.lax.fori_loop(0, 3, maybe_draw, raster)
-
-        # Score --------------------------------------------------------------
-        if self.score_digit_sprites is not None:
-            max_digits = cfg.max_digits_for_score
-            num_digits = jnp.where(state.score > 0, jnp.ceil(jnp.log10(state.score.astype(jnp.float32) + 1.0)).astype(jnp.int32), 1)
-            score_digits = aj.int_to_digits(state.score, max_digits=max_digits)
-            digit_w = 8
-            total_w = digit_w * num_digits
-            score_x = (cfg.screen_width - total_w) // 2
-            score_y = 215
-            raster = aj.render_label_selective(
-                raster,
-                score_x,
-                score_y,
-                score_digits,
-                self.score_digit_sprites,
-                max_digits - num_digits,
-                num_digits,
-                spacing=digit_w,
-            )
-
-        return raster
+    Declarative asset manifest for NameThisGame.
+    Returned as an immutable tuple for safe use in defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'diver', 'type': 'single', 'file': 'diver.npy'},
+        {'name': 'shark', 'type': 'single', 'file': 'shark.npy'},
+        {'name': 'tentacle', 'type': 'single', 'file': 'tentacle.npy'},
+        {'name': 'oxygen_line', 'type': 'single', 'file': 'oxygen_line.npy'},
+        {'name': 'kraken', 'type': 'single', 'file': 'kraken.npy'},
+        {'name': 'boat', 'type': 'single', 'file': 'boat.npy'},
+        {'name': 'treasure1', 'type': 'single', 'file': 'treasure1.npy'},
+        {'name': 'treasure2', 'type': 'single', 'file': 'treasure2.npy'},
+        {'name': 'treasure3', 'type': 'single', 'file': 'treasure3.npy'},
+        # Digits: score sprites stored as "<digit>_sprite.npy" (0..9)
+        {'name': 'score_digits', 'type': 'digits', 'pattern': '{}_sprite.npy'},
+    )
 
 
 # ------------------------------------------------------------
@@ -524,13 +309,10 @@ class JaxNameThisGame(
     - Tentacles update round-robin (grow or shuffle laterally with adjacency).
     """
 
-    def __init__(self, frameskip: int = 1, reward_funcs: list = None, config: NameThisGameConfig = None):
+    def __init__(self, consts: NameThisGameConstants = None):
         super().__init__()
-        self.config = config or NameThisGameConfig()
-        self.frameskip = frameskip
-        self.frame_stack_size = 4
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
-        self.renderer = Renderer_NameThisGame(config=self.config)
+        self.consts = consts or NameThisGameConstants()
+        self.renderer = Renderer_NameThisGame(consts=self.consts)
         self.action_set = [Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE]
 
     # -------------------------- Spaces -------------------------------------
@@ -538,7 +320,7 @@ class JaxNameThisGame(
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Dict:
-        cfg = self.config
+        cfg = self.consts
 
         def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
             return spaces.Dict(
@@ -567,7 +349,7 @@ class JaxNameThisGame(
         )
 
     def image_space(self) -> spaces.Box:
-        cfg = self.config
+        cfg = self.consts
         return spaces.Box(low=0, high=255, shape=(cfg.screen_height, cfg.screen_width, 3), dtype=jnp.uint8)
 
     # -------------------------- Reset --------------------------------------
@@ -579,7 +361,7 @@ class JaxNameThisGame(
         - Shark direction is randomized; oxygen drop timer is randomized in range.
         - Returns `(obs, state)` to match the environment interface.
         """
-        cfg = self.config
+        cfg = self.consts
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
 
@@ -715,7 +497,7 @@ class JaxNameThisGame(
         to the current tip, for compatibility with older consumers.
         """
 
-        cfg = self.config
+        cfg = self.consts
         diver_pos = EntityPosition(
             x=jnp.atleast_1d(state.diver_x),
             y=jnp.atleast_1d(state.diver_y),
@@ -810,7 +592,7 @@ class JaxNameThisGame(
         - REST ends on a new fire press.
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         # Exit REST on fire
         def _exit_rest(s: NameThisGameState) -> NameThisGameState:
@@ -865,10 +647,10 @@ class JaxNameThisGame(
                     oxygen_line_active=jnp.array(False, jnp.bool_),
                     oxygen_line_x=jnp.array(-1, jnp.int32),
                     oxygen_line_ttl=jnp.array(0, jnp.int32),
-                    oxy_bar_px=jnp.array(self.config.hud_bar_initial_px, jnp.int32),
-                    oxygen_frames_remaining=jnp.array(self.config.hud_bar_initial_px, jnp.int32),
+                    oxy_bar_px=jnp.array(self.consts.hud_bar_initial_px, jnp.int32),
+                    oxygen_frames_remaining=jnp.array(self.consts.hud_bar_initial_px, jnp.int32),
                     shark_lane=lane0,
-                    shark_y=self.config.shark_lanes_y[lane0],
+                    shark_y=self.consts.shark_lanes_y[lane0],
                     shark_dx=rest_dx,  # <<< key line
                     shark_alive=jnp.array(True, jnp.bool_),
                 )
@@ -895,7 +677,7 @@ class JaxNameThisGame(
         The spear travels vertically with fixed dy.
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         def _spawn(s):
             spawn_x = s.diver_x + (cfg.diver_width // 2)
@@ -909,7 +691,7 @@ class JaxNameThisGame(
     def _move_diver(self, state: NameThisGameState, move_dir: chex.Array) -> NameThisGameState:
         """Move the diver horizontally, clamp to screen, and update facing."""
 
-        cfg = self.config
+        cfg = self.consts
         new_x = jnp.clip(state.diver_x + move_dir * cfg.diver_speed_px, 0, cfg.screen_width - cfg.diver_width)
         new_dir = jnp.where(move_dir != 0, move_dir.astype(jnp.int32), state.diver_dir)
         return state._replace(diver_x=new_x, diver_dir=new_dir)
@@ -917,7 +699,7 @@ class JaxNameThisGame(
     @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
         """Advance the spear by its velocity; despawn when it crosses the ceiling."""
-        cfg = self.config
+        cfg = self.consts
 
         def _step(s):
             # Compute next position (x, y) and write it back.
@@ -944,7 +726,7 @@ class JaxNameThisGame(
           lane lower; when no more lanes remain, the shark is marked not alive.
         """
 
-        cfg = self.config
+        cfg = self.consts
         x_next = state.shark_x + state.shark_dx
 
         def _resting_move(s: NameThisGameState) -> NameThisGameState:
@@ -999,7 +781,7 @@ class JaxNameThisGame(
         `tentacle_edge_wait` implements the one-tick hesitation at edges.
         """
 
-        cfg = self.config
+        cfg = self.consts
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
         max_col = cfg.tentacle_num_cols - 1
@@ -1135,7 +917,7 @@ class JaxNameThisGame(
         random horizontal direction; the spear is consumed.
         """
 
-        cfg = self.config
+        cfg = self.consts
         rng_side, rng_after = jax.random.split(state.rng)
 
         spear_l = state.spear[0]
@@ -1184,7 +966,7 @@ class JaxNameThisGame(
         moving. Multiple tips can be hit simultaneously.
         """
 
-        cfg = self.config
+        cfg = self.consts
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
 
@@ -1229,7 +1011,7 @@ class JaxNameThisGame(
     def _check_diver_hazard(self, state: NameThisGameState) -> NameThisGameState:
         """Kill the diver if any tentacle has reached the bottom row."""
 
-        L = int(self.config.tentacle_ys.shape[0])
+        L = int(self.consts.tentacle_ys.shape[0])
         reached = jnp.any(state.tentacle_len >= L)
         return state._replace(diver_alive=jnp.where(reached, jnp.array(False, jnp.bool_), state.diver_alive))
 
@@ -1237,7 +1019,7 @@ class JaxNameThisGame(
     def _move_boat(self, state: NameThisGameState) -> NameThisGameState:
         """Move the boat with a fixed cadence and bounce at screen edges."""
 
-        cfg = self.config
+        cfg = self.consts
         next_counter = state.boat_move_counter + 1
         move_now = (state.boat_move_counter % cfg.boat_move_every_n_frames) == 0
 
@@ -1262,7 +1044,7 @@ class JaxNameThisGame(
         - On expiry: disable the line and schedule the next drop with a random delay.
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         def _rest(s: NameThisGameState) -> NameThisGameState:
             # Frozen in REST; line already disabled on entering REST.
@@ -1326,7 +1108,7 @@ class JaxNameThisGame(
           * if already full, award small points at the same cadence.
         - `oxygen_frames_remaining` mirrors `oxy_bar_px` for integer-safe logic.
         """
-        cfg = self.config
+        cfg = self.consts
 
         def _rest(s: NameThisGameState) -> NameThisGameState:
             # keep the integer mirror coherent
@@ -1362,7 +1144,7 @@ class JaxNameThisGame(
 
     @partial(jax.jit, static_argnums=(0,))
     def _life_loss_reset(self, state: NameThisGameState) -> NameThisGameState:
-        cfg = self.config
+        cfg = self.consts
         rng1, rng2 = jax.random.split(state.rng)
         next_timer = jax.random.randint(
             rng2, (), cfg.oxygen_drop_min_interval, cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32
@@ -1456,7 +1238,7 @@ class JaxNameThisGame(
         each round.
         """
 
-        cfg = self.config
+        cfg = self.consts
         nlanes_i = jnp.array(cfg.shark_lanes_y.shape[0], jnp.int32)
         r = jnp.maximum(round_idx + jnp.array(1, jnp.int32), jnp.array(0, jnp.int32))
         lane_i = lane.astype(jnp.int32)
@@ -1569,26 +1351,8 @@ class JaxNameThisGame(
     def step(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
-        """Frameskip wrapper over `_step_once` that accumulates reward within a macro-step."""
-
-        def body(i, carry):
-            st, total_r, done_flag = carry
-
-            def do_step(c):
-                st0, tr0, df0 = c
-                _obs_i, st1, r_i, done_i, _info_i = self._step_once(st0, action)
-                return (st1, tr0 + r_i, jnp.logical_or(df0, done_i))
-
-            return jax.lax.cond(done_flag, lambda c: c, do_step, (st, total_r, done_flag))
-
-        init_carry = (state, jnp.array(0.0, jnp.float32), jnp.array(False, jnp.bool_))
-        state_fs, total_reward, _ = jax.lax.fori_loop(0, int(self.frameskip), body, init_carry)
-
-        obs_final = self._get_observation(state_fs)
-        done_final = self._get_done(state_fs)
-        state_fs = state_fs._replace(reward=total_reward)
-        info_final = self._get_info(state_fs)
-        return obs_final, state_fs, total_reward, done_final, info_final
+        """Step function - frameskip is handled by the wrapper."""
+        return self._step_once(state, action)
 
 
 # -------------------------- Human control (optional) -----------------------
@@ -1613,62 +1377,192 @@ def get_human_action() -> chex.Array:
     return jnp.array(Action.NOOP)
 
 
-def main():
-    """Run a human-playable loop with pygame.
+# ------------------------------------------------------------
+# Rendering
+# ------------------------------------------------------------
 
-    Controls:
-    - A/Left ←, D/Right →, Space = Fire
-    - F toggles frame-by-frame mode; when on, press N to step one frame.
+class Renderer_NameThisGame(JAXGameRenderer):
+    """Sprite-based renderer with solid-color fallbacks.
+
+    Loads sprites from `<repo>/sprites/namethisgame`. If a sprite is missing, a
+    solid RGBA block is drawn instead so rendering remains robust under JIT.
     """
 
-    config = NameThisGameConfig()
-    pygame.init()
-    screen = pygame.display.set_mode(
-        (config.screen_width * config.scaling_factor, config.screen_height * config.scaling_factor)
-    )
-    pygame.display.set_caption("NameThisGame")
-    clock = pygame.time.Clock()
-    game = JaxNameThisGame(config=config)
-    renderer = Renderer_NameThisGame(config=config)
+    sprites: Dict[str, Any]
 
-    obs, state = game.reset(jax.random.PRNGKey(0))
-    jitted_step = game.step
+    def __init__(self, consts: NameThisGameConstants = None):
+        super().__init__()
+        self.consts = consts or NameThisGameConstants()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/namethisgame"
+        # Configure render utils
+        self.ru_config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Build asset config: copy defaults and add swatch for palette colors we need (orange, green, white, black)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        swatch_rgba = jnp.array([
+            [195, 102,  52, 255],  # orange bar
+            [ 27, 121,  38, 255],  # green bar
+            [255, 255, 255, 255],  # white
+            [  0,   0,   0, 255],  # black
+        ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+        final_asset_config.append({'name': 'swatch', 'type': 'procedural', 'data': swatch_rgba})
+        # Load assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+        # Resolve color IDs robustly
+        self.ORANGE_ID = self._get_color_id((195, 102, 52))
+        self.GREEN_ID = self._get_color_id((27, 121, 38))
+        self.WHITE_ID = self._get_color_id((255, 255, 255))
+        self.BLACK_ID = self._get_color_id((0, 0, 0))
+        # Cache masks
+        self.MASKS = self.SHAPE_MASKS
+        self.DIGITS = self.MASKS.get('score_digits', None)
 
-    running = True
-    frame_by_frame = False
+    def _get_color_id(self, rgb: tuple) -> int:
+        cid = self.COLOR_TO_ID.get(rgb, None)
+        if cid is not None:
+            return int(cid)
+        # Fallback to nearest palette color
+        palette_np = np.array(self.PALETTE)
+        rgb_np = np.array(rgb, dtype=np.int32)
+        diffs = np.sum(np.abs(palette_np[:, :3].astype(np.int32) - rgb_np[None, :]), axis=1)
+        return int(np.argmin(diffs))
 
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                frame_by_frame = not frame_by_frame
-            elif frame_by_frame and event.type == pygame.KEYDOWN and event.key == pygame.K_n:
-                action = get_human_action()
-                obs, state, reward, done, info = jitted_step(state, action)
-                if bool(jax.device_get(done)):
-                    running = False
+    def _draw_box_ids(self, raster: jnp.ndarray, x: chex.Array, y: chex.Array, w: int, h: int, color_id: int) -> jnp.ndarray:
+        # Scale and build mask in render-utils space
+        sx = jnp.round(x * self.ru_config.width_scaling).astype(jnp.int32)
+        sy = jnp.round(y * self.ru_config.height_scaling).astype(jnp.int32)
+        sw = jnp.maximum(1, jnp.round(w * self.ru_config.width_scaling)).astype(jnp.int32)
+        sh = jnp.maximum(1, jnp.round(h * self.ru_config.height_scaling)).astype(jnp.int32)
+        xx, yy = self.jr._xx, self.jr._yy
+        mask = (xx >= sx) & (xx < sx + sw) & (yy >= sy) & (yy < sy + sh)
+        return jnp.where(mask, jnp.asarray(color_id, raster.dtype), raster)
 
-        if not frame_by_frame:
-            action = get_human_action()
-            obs, state, reward, done, info = jitted_step(state, action)
-            if bool(jax.device_get(done)):
-                running = False
-
-        raster = renderer.render(state)
-        frame_np = np.array(jax.device_get(raster), dtype=np.uint8)
-        frame_np = np.transpose(frame_np, (1, 0, 2))
-        surface = pygame.surfarray.make_surface(frame_np)
-        if config.scaling_factor != 1:
-            surface = pygame.transform.scale(
-                surface, (config.screen_width * config.scaling_factor, config.screen_height * config.scaling_factor)
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: NameThisGameState) -> chex.Array:
+        """Render using render_utils: background -> HUD -> sprites -> score."""
+        cfg = self.consts
+        # Start with background ID raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        # HUD bars (centered)
+        max_w = cfg.hud_bar_initial_px
+        # Orange bar
+        orange_y = cfg.screen_height - cfg.bars_bottom_margin_px - cfg.bar_orange_height
+        orange_w = jnp.clip(state.oxy_bar_px, 0, jnp.array(max_w, jnp.int32))
+        orange_x = (cfg.screen_width - orange_w) // 2
+        raster = self._draw_box_ids(raster, orange_x, orange_y, orange_w, cfg.bar_orange_height, self.ORANGE_ID)
+        # Green bar
+        green_y = orange_y - cfg.bars_gap_px - cfg.bar_green_height
+        green_w = jnp.clip(state.wave_bar_px, 0, jnp.array(max_w, jnp.int32))
+        green_x = (cfg.screen_width - green_w) // 2
+        raster = self._draw_box_ids(raster, green_x, green_y, green_w, cfg.bar_green_height, self.GREEN_ID)
+        # Kraken
+        kraken = self.MASKS.get('kraken', None)
+        if kraken is not None:
+            raster = self.jr.render_at(raster, cfg.kraken_x, cfg.kraken_y, kraken, flip_offset=self.FLIP_OFFSETS.get('kraken', jnp.array([0,0])))
+        # Boat
+        boat = self.MASKS.get('boat', None)
+        if boat is not None:
+            boat_h = boat.shape[0]
+            boat_y = jnp.maximum(0, cfg.oxygen_y - boat_h)
+            raster = self.jr.render_at(raster, state.boat_x, boat_y, boat, flip_horizontal=(state.boat_dx < 0), flip_offset=self.FLIP_OFFSETS.get('boat', jnp.array([0,0])))
+        # Diver
+        diver = self.MASKS.get('diver', None)
+        raster = jax.lax.cond(
+            state.diver_alive & (diver is not None),
+            lambda r: self.jr.render_at(r, state.diver_x, state.diver_y, diver, flip_horizontal=(state.diver_dir > 0), flip_offset=self.FLIP_OFFSETS.get('diver', jnp.array([0,0]))),
+            lambda r: r,
+            raster
+        )
+        # Shark
+        shark = self.MASKS.get('shark', None)
+        raster = jax.lax.cond(
+            state.shark_alive & (shark is not None),
+            lambda r: self.jr.render_at_clipped(r, state.shark_x, state.shark_y, shark, flip_horizontal=(state.shark_dx < 0), flip_offset=self.FLIP_OFFSETS.get('shark', jnp.array([0,0]))),
+            lambda r: r,
+            raster
+        )
+        # Spear (1x1 white box)
+        raster = jax.lax.cond(
+            state.spear_alive,
+            lambda r: self._draw_box_ids(r, state.spear[0], state.spear[1], cfg.spear_width, cfg.spear_height, self.WHITE_ID),
+            lambda r: r,
+            raster
+        )
+        # Tentacles: draw squares, using tentacle sprite if present, else boxes
+        tentacle_mask = self.MASKS.get('tentacle', None)
+        T = self.consts.max_tentacles
+        L = int(self.consts.tentacle_ys.shape[0])
+        col_w = self.consts.tentacle_col_width
+        sq_w = self.consts.tentacle_square_w
+        sq_h = self.consts.tentacle_square_h
+        def _draw_one_tentacle(i, ras):
+            length = state.tentacle_len[i]
+            base_x = state.tentacle_base_x[i]
+            def _draw_k(k, r2):
+                def _place(rr):
+                    col = state.tentacle_cols[i, k]
+                    x = base_x + col * col_w
+                    y = self.consts.tentacle_ys[k]
+                    return jax.lax.cond(
+                        tentacle_mask is not None,
+                        lambda r3: self.jr.render_at(r3, x, y, tentacle_mask, flip_offset=self.FLIP_OFFSETS.get('tentacle', jnp.array([0,0]))),
+                        lambda r3: self._draw_box_ids(r3, x, y, sq_w, sq_h, self.BLACK_ID),
+                        rr
+                    )
+                return jax.lax.cond(k < length, _place, lambda rr: rr, r2)
+            return jax.lax.fori_loop(0, L, _draw_k, ras)
+        raster = jax.lax.fori_loop(0, T, _draw_one_tentacle, raster)
+        # Oxygen line
+        oxy = self.MASKS.get('oxygen_line', None)
+        raster = jax.lax.cond(
+            state.oxygen_line_active & (oxy is not None),
+            lambda r: self.jr.render_at(r, state.oxygen_line_x, cfg.oxygen_y, oxy, flip_offset=self.FLIP_OFFSETS.get('oxygen_line', jnp.array([0,0]))),
+            lambda r: r,
+            raster
+        )
+        # Lives (treasures)
+        idx = jnp.clip(state.lives_remaining, 0, 3).astype(jnp.int32)
+        def draw_none(r): return r
+        def draw_t1(r):
+            t = self.MASKS.get('treasure1', None)
+            return jax.lax.cond(t is not None, lambda rr: self.jr.render_at(rr, cfg.treasure_ui_x, cfg.treasure_ui_y, t, flip_offset=self.FLIP_OFFSETS.get('treasure1', jnp.array([0,0]))), lambda rr: rr, r)
+        def draw_t2(r):
+            t = self.MASKS.get('treasure2', None)
+            return jax.lax.cond(t is not None, lambda rr: self.jr.render_at(rr, cfg.treasure_ui_x, cfg.treasure_ui_y, t, flip_offset=self.FLIP_OFFSETS.get('treasure2', jnp.array([0,0]))), lambda rr: rr, r)
+        def draw_t3(r):
+            t = self.MASKS.get('treasure3', None)
+            return jax.lax.cond(t is not None, lambda rr: self.jr.render_at(rr, cfg.treasure_ui_x, cfg.treasure_ui_y, t, flip_offset=self.FLIP_OFFSETS.get('treasure3', jnp.array([0,0]))), lambda rr: rr, r)
+        raster = jax.lax.switch(idx, (draw_none, draw_t1, draw_t2, draw_t3), raster)
+        # Score (centered)
+        if self.DIGITS is not None:
+            max_digits = cfg.max_digits_for_score
+            n = jnp.asarray(state.score, jnp.int32)
+            num_digits = jnp.where(n > 0, jnp.ceil(jnp.log10(n.astype(jnp.float32) + 1.0)).astype(jnp.int32), 1)
+            score_digits = self.jr.int_to_digits(n, max_digits=max_digits)
+            digit_w = self.DIGITS.shape[2]
+            spacing = digit_w  # use tight spacing
+            total_w = digit_w * num_digits
+            score_x = (cfg.screen_width - total_w) // 2
+            score_y = jnp.array(215, jnp.int32)
+            raster = self.jr.render_label_selective(
+                raster,
+                score_x,
+                score_y,
+                score_digits,
+                self.DIGITS,
+                max_digits - num_digits,
+                num_digits,
+                spacing=spacing,
+                max_digits_to_render=max_digits
             )
-        screen.blit(surface, (0, 0))
-        pygame.display.flip()
-        clock.tick(60)
-
-    pygame.quit()
-
-
-if __name__ == "__main__":
-    main()
+        # Convert palette IDs to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)

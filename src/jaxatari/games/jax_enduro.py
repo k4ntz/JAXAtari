@@ -7,14 +7,68 @@ import jax.random as jrandom
 import numpy as np
 import os
 from pathlib import Path
-from typing import Tuple, NamedTuple, Any
+
+from typing import Tuple, NamedTuple, Any, List, Dict
 
 # jaxatari
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as aj
+from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
 
+# +++ HELPER FUNCTIONS (for setup) +++
+
+# These are used *once* in __init__ and are NOT JIT-compiled.
+
+def _load_rgba_sprite(sprite_path_car: str) -> np.ndarray:
+
+    """Loads a .npy file as a numpy array with shape (N, H, W, 4) or (1, H, W, 4)."""
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    sprite_path = Path(sprite_path_car)
+
+    if not sprite_path.is_absolute():
+        sprite_path = module_dir / sprite_path
+
+    arr = np.load(str(sprite_path))  # (N, H, W, C) or (H, W, C)
+    if arr.ndim == 3:
+        if arr.shape[2] != 4:
+            raise ValueError(f"Static sprite must have 4 channels (RGBA), got shape {arr.shape}")
+        arr = arr[None, ...]  # Add frame axis -> (1, H, W, 4)
+    elif arr.ndim == 4:
+        if arr.shape[3] != 4:
+            raise ValueError(f"Animated sprite must have 4 channels (RGBA), got shape {arr.shape}")
+    else:
+        raise ValueError(f"Unsupported array shape: {arr.shape}")
+
+    return arr.astype(np.uint8)
+
+def _recolor_rgba_sprite_np(rgba_sprite_frame: np.ndarray, new_rgb: np.ndarray) -> np.ndarray:
+
+    """Recolors a single (H, W, 4) RGBA sprite frame. Uses NumPy."""
+
+    # Create a mask for non-black, non-white, non-transparent pixels
+
+    rgb_frame = rgba_sprite_frame[..., :3]
+    alpha_mask = rgba_sprite_frame[..., 3] > 0
+
+    # Original Enduro sprites use black (0,0,0) for shadows/outlines
+    # and white (255,255,255) for highlights. We only want to color the 'body'.
+    # We find pixels that are not black and not white.
+    not_black = np.any(rgb_frame > 0, axis=-1)
+    not_white = np.any(rgb_frame < 255, axis=-1)
+
+    # Combine masks: must be visible AND not black AND not white
+    color_mask = alpha_mask & not_black & not_white
+
+    # Create a new frame to hold the result
+    recolored_frame = rgba_sprite_frame.copy()
+
+    # Apply the new color
+    recolored_frame[color_mask, 0] = new_rgb[0]
+    recolored_frame[color_mask, 1] = new_rgb[1]
+    recolored_frame[color_mask, 2] = new_rgb[2]
+
+    return recolored_frame
 
 def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int) -> tuple[
     jnp.ndarray, jnp.ndarray]:
@@ -49,7 +103,7 @@ def precompute_all_track_curves(max_offset: int, track_height: int, track_width:
     all_left_curves = []
     all_right_curves = []
 
-    print(f"Precomputing {num_offsets} track curves...")
+    # print(f"Precomputing {num_offsets} track curves...") # Removed print for JAX compatibility
 
     # Generate a curve for each possible integer offset
     for offset in offset_range:
@@ -76,9 +130,102 @@ def precompute_all_track_curves(max_offset: int, track_height: int, track_width:
     precomputed_left_curves = jnp.array(all_left_curves)  # Shape: (101, track_height)
     precomputed_right_curves = jnp.array(all_right_curves)  # Shape: (101, track_height)
 
-    print(f"Precomputed curves shape: {precomputed_left_curves.shape}")
+    # print(f"Precomputed curves shape: {precomputed_left_curves.shape}") # Removed print
 
     return precomputed_left_curves, precomputed_right_curves
+
+def _create_static_procedural_sprites(car_palette: List[Tuple[int, int, int]]) -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    sprites = {}
+    # 1. Add 1x1 pixel sprites for each car color to ensure they are in the palette
+    for i, rgb in enumerate(car_palette):
+        color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
+        sprites[f'car_color_{i}'] = color.reshape(1, 1, 4)
+    return sprites
+
+def _get_default_asset_config(
+    weather_colors: np.ndarray, 
+    car_palette: List[Tuple[int, int, int]]
+) -> tuple:
+    """
+    Returns the default declarative asset manifest for Enduro.
+    This now generates all weather assets procedurally.
+    Car assets are loaded manually by the renderer.
+    """
+    # Base path for loading RGBA data
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    base_sprite_path = os.path.join(module_dir, "sprites/enduro")
+    config_list = [
+        # --- Static Backgrounds ---
+        {'name': 'background', 'type': 'background', 'file': 'backgrounds/background.npy'},
+        {'name': 'background_overlay', 'type': 'single', 'file': 'backgrounds/background_overlay.npy'},
+        {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
+        {'name': 'activision_logo', 'type': 'single', 'file': 'backgrounds/activision_logo.npy'},
+        {'name': 'green_level_background', 'type': 'single', 'file': 'backgrounds/green_level_background.npy'},
+        {'name': 'fog_box', 'type': 'single', 'file': 'misc/fog_box.npy'},
+        # --- UI Elements ---
+        {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits/{}_black.npy'},
+        # --- Odometer Sprite Sheets ---
+        {'name': 'black_digit_array', 'type': 'single', 'file': 'digits/black_digit_array.npy'},
+        {'name': 'brown_digit_array', 'type': 'single', 'file': 'digits/brown_digit_array.npy'},
+    ]
+
+    # Load flags.npy as a multi-frame file and split into frames
+    flags_path = os.path.join(base_sprite_path, "misc/flags.npy")
+    flags_data = _load_rgba_sprite(flags_path)  # Returns (N, H, W, 4) or (1, H, W, 4)
+    # Ensure we have at least 2 frames (if only 1 frame, duplicate it)
+    if flags_data.shape[0] == 1:
+        flags_frames = jnp.concatenate([flags_data, flags_data], axis=0)
+    else:
+        flags_frames = flags_data[:2]  # Take first 2 frames
+    config_list.append({'name': 'flags', 'type': 'procedural', 'data': flags_frames})
+
+    # --- Procedural Weather Assets ---
+    # Manually load, recolor, and add all 16 weather variations
+    weather_asset_configs = [
+        ('background_sky.npy', 'sky', 'backgrounds'),
+        ('background_gras.npy', 'grass', 'backgrounds'),
+        ('mountain_left.npy', 'mountain_left', 'misc'),
+        ('mountain_right.npy', 'mountain_right', 'misc'),
+        ('background_horizon.npy', 'horizon_1', 'backgrounds'),
+        ('background_horizon.npy', 'horizon_2', 'backgrounds'),
+        ('background_horizon.npy', 'horizon_3', 'backgrounds'),
+    ]
+    # Map asset names to their color index in the weather_colors array
+    name_to_color_idx = {
+        'sky': 0, 'grass': 1, 'mountain_left': 2, 'mountain_right': 2,
+        'horizon_1': 3, 'horizon_2': 4, 'horizon_3': 5
+    }
+    # Load base sprites ONCE (for file-based assets)
+    base_weather_sprites = {}
+    for base_file, asset_name, folder in weather_asset_configs:
+        if base_file not in base_weather_sprites:
+            full_path = os.path.join(base_sprite_path, f"{folder}/{base_file}")
+            # Load as (1, H, W, 4)
+            base_weather_sprites[base_file] = _load_rgba_sprite(full_path)[0] # Get (H, W, 4)
+    # Generate 16 versions for each weather asset
+    num_weathers = weather_colors.shape[0] # Should be 16
+    for weather_idx in range(num_weathers):
+        # Process file-based weather assets (including mountains)
+        for base_file, asset_name, folder in weather_asset_configs:
+            # Get the correct color for this asset and this weather
+            color_idx = name_to_color_idx[asset_name]
+            new_rgb = weather_colors[weather_idx, color_idx]
+            # Recolor the base sprite
+            base_sprite_np = np.array(base_weather_sprites[base_file])
+            recolored_sprite_np = _recolor_rgba_sprite_np(base_sprite_np, new_rgb)
+            # Add to config list
+            config_list.append({
+                'name': f'{asset_name}_{weather_idx}',
+                'type': 'procedural',
+                'data': jnp.array(recolored_sprite_np)
+            })
+    # --- Procedural Car Color Palette ---
+    static_procedural = _create_static_procedural_sprites(car_palette)
+    for name, data in static_procedural.items():
+        config_list.append({'name': name, 'type': 'procedural', 'data': data})
+
+    return tuple(config_list)
 
 
 class EnduroConstants(NamedTuple):
@@ -117,6 +264,50 @@ class EnduroConstants(NamedTuple):
     # player car start position
     player_x_start: float = game_screen_middle
     player_y_start: int = game_window_height - car_height_0 - 1
+
+    
+
+    # Static car color palette (16 colors)
+
+    # Using a standard 16-color palette (e.g., CGA, Windows)
+
+    CAR_COLOR_PALETTE: List[Tuple[int, int, int]] = [
+
+        (0, 0, 0),       # 0. Black (Player Color)
+
+        (0, 0, 170),     # 1. Blue
+
+        (0, 170, 0),     # 2. Green
+
+        (0, 170, 170),   # 3. Cyan
+
+        (170, 0, 0),     # 4. Red
+
+        (170, 0, 170),   # 5. Magenta
+
+        (170, 85, 0),    # 6. Brown
+
+        (170, 170, 170), # 7. Light Gray
+
+        (85, 85, 85),    # 8. Dark Gray
+
+        (85, 85, 255),   # 9. Light Blue
+
+        (85, 255, 85),   # 10. Light Green
+
+        (85, 255, 255),  # 11. Light Cyan
+
+        (255, 85, 85),   # 12. Light Red
+
+        (255, 85, 255),  # 13. Light Magenta
+
+        (255, 255, 85),  # 14. Yellow
+
+        (255, 255, 255)  # 15. White
+
+    ]
+
+    PLAYER_COLOR_INDEX: int = 15 # Player is White
 
     # =============
     # === Track ===
@@ -271,6 +462,12 @@ class EnduroConstants(NamedTuple):
 
     ], dtype=jnp.int32)
 
+    
+
+    # Asset config baked into constants (immutable default)
+
+    ASSET_CONFIG: tuple = _get_default_asset_config(weather_color_codes, CAR_COLOR_PALETTE)
+
     # =================
     # === Opponents ===
     # =================
@@ -281,7 +478,7 @@ class EnduroConstants(NamedTuple):
     opponent_spawn_seed: int = 42
 
     length_of_opponent_array = 5000
-    opponent_density = 0.0
+    opponent_density = 0.2
     opponent_delay_slots = 10
 
     # How many opponents to overtake to progress into the next level
@@ -355,8 +552,11 @@ class EnduroGameState(NamedTuple):
     level_passed: chex.Array
 
     # opponents
-    opponent_pos_and_color: chex.Array  # shape (N, 2) where [:, 0] is x, [:, 1] is y
-    visible_opponent_positions: chex.Array
+    # opponent_pos_and_color: chex.Array  # shape (N, 2) where [:, 0] is lane_idx (-1 to 2), [:, 1] is color_idx (0-15)
+
+    opponent_pos_and_color: chex.Array  # shape (2, N) where [0] is lane_idx, [1] is color_idx
+
+    visible_opponent_positions: chex.Array # shape (7, 3) [x, y, color_idx]
     opponent_index: chex.Array
     is_collision: chex.Array
 
@@ -471,18 +671,12 @@ StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, Enduro
 
 # https://www.free80sarcade.com/atari2600_Enduro.php
 class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
-    def __init__(self, consts: EnduroConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: EnduroConstants = None):
         self.config = consts or EnduroConstants()
         super().__init__(self.config)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-
-        self.frame_stack_size = 4
         self.state = self.reset()
         self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
-        self.reward_funcs = None
 
         self.action_set = [
             Action.NOOP,
@@ -1630,11 +1824,15 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         Returns:
             2D array of shape (2, total_length) where:
+
             - Row 0: lane positions (-1 = empty, 0 = left, 1 = middle, 2 = right)
-            - Row 1: colors (0 = no opponent, RGB packed as single int for opponents)
+
+            - Row 1: color_index (0-15, or -1 for no opponent)
 
         Encoding:
+
             -1 = empty slot (gap), 0 = left, 1 = middle, 2 = right
+
         """
         key = jax.random.PRNGKey(seed)
         key, key_colors = jax.random.split(key)  # Split key for color generation
@@ -1657,28 +1855,16 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
 
         # Generate colors for all positions (we'll mask out non-opponents later)
-        def generate_non_red_color(color_key):
-            """Generate vibrant colors avoiding pure red"""
-            keys = jax.random.split(color_key, 3)
+        def generate_opponent_color_index(color_key):
+            """Generate a random color index from 0 to 15."""
+            # We skip the player's color index to avoid using the same color
+            idx = jax.random.randint(color_key, (), 0, 15) # Generates 0-14
 
-            r = jax.random.randint(keys[0], (), 50, 256)
-            g = jax.random.randint(keys[1], (), 0, 256)
-            b = jax.random.randint(keys[2], (), 0, 256)
-
-            # Ensure at least G or B is >128 to avoid pure red
-            max_gb = jnp.maximum(g, b)
-            adjustment_needed = jnp.where(max_gb < 128, 128 - max_gb, 0)
-
-            g = jnp.where((g >= b) & (max_gb < 128), g + adjustment_needed, g)
-            b = jnp.where((b > g) & (max_gb < 128), b + adjustment_needed, b)
-
-            # Pack RGB into single integer: (R << 16) | (G << 8) | B
-            color = jnp.clip(r, 0, 255) * 65536 + jnp.clip(g, 0, 255) * 256 + jnp.clip(b, 0, 255)
-            return color.astype(jnp.int32)
+            return jnp.where(idx >= self.config.PLAYER_COLOR_INDEX, idx + 1, idx).astype(jnp.int32)
 
         # Generate colors for each position
         color_keys = jax.random.split(key_colors, length_of_opponent_array)
-        colors = jax.vmap(generate_non_red_color)(color_keys)
+        colors = jax.vmap(generate_opponent_color_index)(color_keys)
 
         def process_slot(carry, inputs):
             """Process each slot, enforcing the no-triple-lane constraint"""
@@ -1702,7 +1888,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
             # Output: -1 for gap, final_lane for occupied
             output_lane = jnp.where(is_occupied, final_lane, jnp.int8(-1))
-            output_color = jnp.where(is_occupied, color, jnp.int32(0))
+            output_color = jnp.where(is_occupied, color, jnp.int32(-1)) # Use -1 for no opponent
 
             # Update carry for next iteration
             new_non_gap_count = jnp.where(is_occupied, non_gap_count + 1, jnp.int32(0))
@@ -1728,7 +1914,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         # Add delay slots at the beginning
         delay_lanes = jnp.full((opponent_delay_slots,), -1, dtype=jnp.int8)
-        delay_colors = jnp.full((opponent_delay_slots,), 0, dtype=jnp.int32)
+        delay_colors = jnp.full((opponent_delay_slots,), -1, dtype=jnp.int32)
 
         final_lanes = jnp.concatenate([delay_lanes, lane_sequence])
         final_colors = jnp.concatenate([delay_colors, color_sequence])
@@ -2226,64 +2412,200 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             lambda: -1  # Kick to the left
         )
 
-
-# --------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------
-
-
 class EnduroRenderer(JAXGameRenderer):
     """
-    Renders the jax_enduro game
+    Renders the jax_enduro game using the new JAX-native rendering utils
     """
-
     def __init__(self, consts: EnduroConstants = None):
         super().__init__()
-        self.config = consts or EnduroConstants()
-
-        # sprite sizes to easily and dynamically adjust renderings
-        self.background_sizes: dict[str, tuple[int, int]] = {}
-        self.sprites = self._load_sprites()
-
-        self.track_height = self.background_sizes['background_gras.npy'][0]
-
-        # render all background that do not change only once
-        self.static_background = self._render_static_background()
-
-    def _load_sprites(self):
+        self.consts = consts or EnduroConstants()
+        
+        # Configure renderer and utils
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # Store scaling factors as static values for use in JIT functions
+        self._height_scaling = float(self.config.height_scaling)
+        self._width_scaling = float(self.config.width_scaling)
+        # Asset base path
         module_dir = os.path.dirname(os.path.abspath(__file__))
+        self._sprite_path = os.path.join(module_dir, "sprites/enduro")
+        # 1. Load all declared assets (weather, UI, background, etc.)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # Add car sprites to asset config so their colors are included in the palette
+        # Car files are multi-frame (4D), so we load them manually and add as procedural data
+        # We'll load them again manually in _setup_car_masks for recoloring, but this ensures
+        # all their colors are in COLOR_TO_ID
+        for i in range(7):
+            # Load day car (may have multiple frames)
+            car_day_path = os.path.join(self._sprite_path, f'cars/car_{i}.npy')
+            car_day_data = _load_rgba_sprite(car_day_path)  # (N, H, W, 4)
+            final_asset_config.append({'name': f'car_base_{i}', 'type': 'procedural', 'data': jnp.array(car_day_data)})
+            
+            # Load night car (single frame)
+            car_night_path = os.path.join(self._sprite_path, f'cars/car_{i}_night.npy')
+            car_night_data = _load_rgba_sprite(car_night_path)  # (1, H, W, 4) or (N, H, W, 4)
+            final_asset_config.append({'name': f'car_night_base_{i}', 'type': 'procedural', 'data': jnp.array(car_night_data)})
+        
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, self._sprite_path)
 
-        sprites: dict[str, Any] = {}
+        # 2. Store Track Color IDs
+        # Convert jnp array of [R, G, B] to list of tuples for dict lookup
+        track_rgbs_list = [tuple(c.tolist()) for c in self.consts.track_colors]
+        self.TRACK_COLOR_IDS = jnp.array(
+            [self.COLOR_TO_ID[rgb] for rgb in track_rgbs_list], 
+            dtype=jnp.uint8
+        )
 
-        # required sprite folders
-        folders = ['backgrounds', 'cars', 'digits', 'misc']
+        # 3. Stack Weather Stencils for easy indexing
+        num_weathers = len(self.consts.weather_color_codes)
+        self.sky_masks = jnp.stack([self.SHAPE_MASKS[f'sky_{i}'] for i in range(num_weathers)])
+        self.grass_masks = jnp.stack([self.SHAPE_MASKS[f'grass_{i}'] for i in range(num_weathers)])
+        self.mountain_left_masks = jnp.stack([self.SHAPE_MASKS[f'mountain_left_{i}'] for i in range(num_weathers)])
+        self.mountain_right_masks = jnp.stack([self.SHAPE_MASKS[f'mountain_right_{i}'] for i in range(num_weathers)])
+        self.horizon_1_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_1_{i}'] for i in range(num_weathers)])
+        self.horizon_2_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_2_{i}'] for i in range(num_weathers)])
+        self.horizon_3_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_3_{i}'] for i in range(num_weathers)])
 
-        # using a folder structure is much easier than keeping track of all required files one by one.
-        # the game will only load sprites that are in the folders above
-        for folder in folders:
-            folder_path = os.path.join(module_dir, f"sprites/enduro/{folder}/")
-            # --- load sprites ---
-            for filename in os.listdir(folder_path):
-                # load npy files
-                if filename.endswith(".npy"):
-                    full_path = os.path.join(folder_path, filename)
-                    frame = load_frame_with_animation(full_path, transpose=False)
-                    # save with the full extension, so remember to also load them with .npy
-                    sprites[filename] = frame.astype(jnp.uint8)
+        # 4. Store Odometer Sheet ID Masks
+        self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
+        self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
 
-                    # Store size info for backgrounds
-                    if folder == 'backgrounds':
-                        height = frame.shape[1]  # (N, H, W, C)
-                        width = frame.shape[2]
-                        self.background_sizes[filename] = (height, width)
+        # 5. Manually Load, Recolor, and Store Car ID Masks
+        self.recolored_car_masks_day, self.car_masks_night, self.player_car_night_mask = self._setup_car_masks()
+        
+    def _setup_car_masks(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Loads all RGBA car sprites, recolors them for each palette color,
+        and converts them to stacked ID masks. Runs once during __init__.
+        """
+        car_names = [f'cars/car_{i}.npy' for i in range(7)]
+        car_night_names = [f'cars/car_{i}_night.npy' for i in range(7)]
+        player_car_night_name = 'cars/car_0_night.npy' # Player uses car_0_night
 
-        return sprites
+        # --- Load Base RGBA Sprites ---
+        base_car_sprites = [_load_rgba_sprite(os.path.join(self._sprite_path, name)) for name in car_names]
+        base_car_night_sprites = [_load_rgba_sprite(os.path.join(self._sprite_path, name)) for name in car_night_names]
+        player_car_night_sprite = _load_rgba_sprite(os.path.join(self._sprite_path, player_car_night_name))
+
+        # --- Find Max Dimensions ---
+        all_sprites = base_car_sprites + base_car_night_sprites + [player_car_night_sprite]
+        max_h = max(s.shape[1] for s in all_sprites)
+        max_w = max(s.shape[2] for s in all_sprites)
+
+        def _pad_mask(id_mask, h=max_h, w=max_w):
+            pad_h = h - id_mask.shape[0]
+            pad_w = w - id_mask.shape[1]
+            return jnp.pad(
+                id_mask, 
+                ((0, pad_h), (0, pad_w)), 
+                'constant', 
+                constant_values=self.jr.TRANSPARENT_ID
+            )
+
+        # --- Process Day Cars (Recolored) ---
+        num_colors = len(self.consts.CAR_COLOR_PALETTE)
+        num_sizes = 7
+        # Find the maximum number of frames across all car sprites
+        max_frames = max(sprite.shape[0] for sprite in base_car_sprites)
+        num_anims_day = max(2, max_frames)  # Ensure at least 2 frames for animation
+        all_car_masks = []
+        for color_idx in range(num_colors):
+            rgb_tuple = self.consts.CAR_COLOR_PALETTE[color_idx]
+            new_rgb_np = np.array(rgb_tuple)
+            
+            color_masks_day = []
+            for size_idx in range(num_sizes):
+                base_sprite_stack = base_car_sprites[size_idx] # (N, H, W, 4) where N can vary
+                num_frames = base_sprite_stack.shape[0]
+                recolored_frames = []
+                
+                for frame_idx in range(num_anims_day):
+                    # If this car has fewer frames, use the last frame (or duplicate if only 1 frame)
+                    actual_frame_idx = min(frame_idx, num_frames - 1)
+                    frame_rgba_np = np.array(base_sprite_stack[actual_frame_idx])
+                    recolored_frame_np = _recolor_rgba_sprite_np(frame_rgba_np, new_rgb_np)
+                    id_mask = self.jr._create_id_mask(jnp.array(recolored_frame_np), self.COLOR_TO_ID)
+                    padded_mask = _pad_mask(id_mask)
+                    recolored_frames.append(padded_mask)
+                    
+                color_masks_day.append(jnp.stack(recolored_frames))
+            all_car_masks.append(jnp.stack(color_masks_day))
+            
+        recolored_car_masks_day = jnp.stack(all_car_masks)
+        # Final Shape: [num_colors, num_sizes, num_anims_day, max_h, max_w]
+
+        # --- Process Night Cars (Opponents) ---
+        num_anims_night = 1
+        all_car_masks_night = []
+        for size_idx in range(num_sizes):
+            base_sprite_stack = base_car_night_sprites[size_idx] # (1, H, W, 4)
+            frame_rgba_np = np.array(base_sprite_stack[0]) # Get the single frame
+            id_mask = self.jr._create_id_mask(jnp.array(frame_rgba_np), self.COLOR_TO_ID)
+            padded_mask = _pad_mask(id_mask)
+            all_car_masks_night.append(padded_mask[None, ...]) # Add anim dim back
+            
+        car_masks_night = jnp.stack(all_car_masks_night)
+        # Final Shape: [num_sizes, 1, max_h, max_w]
+
+        # --- Process Night Car (Player) ---
+        player_frame_np = np.array(player_car_night_sprite[0])
+        player_id_mask = self.jr._create_id_mask(jnp.array(player_frame_np), self.COLOR_TO_ID)
+        player_car_night_mask = _pad_mask(player_id_mask)
+        # Final Shape: [max_h, max_w]
+
+        # --- Scale car masks if downscaling is enabled ---
+        if self.config.downscale:
+            def scale_mask(mask):
+                """Scale a single mask using nearest-neighbor interpolation."""
+                original_h, original_w = mask.shape
+                scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
+                return jax.image.resize(mask, (scaled_h, scaled_w), method='nearest')
+            
+            # Scale day car masks: [num_colors, num_sizes, num_anims_day, H, W]
+            def scale_day_car_stack(color_stack):
+                def scale_size_stack(size_stack):
+                    def scale_anim_stack(anim_stack):
+                        return jax.vmap(scale_mask)(anim_stack)
+                    return jax.vmap(scale_anim_stack)(size_stack)
+                return jax.vmap(scale_size_stack)(color_stack)
+            recolored_car_masks_day = scale_day_car_stack(recolored_car_masks_day)
+            
+            # Scale night car masks: [num_sizes, 1, H, W]
+            def scale_night_car_stack(size_stack):
+                def scale_anim(anim_stack):
+                    return jax.vmap(scale_mask)(anim_stack)
+                return jax.vmap(scale_anim)(size_stack)
+            car_masks_night = scale_night_car_stack(car_masks_night)
+            
+            # Scale player night mask: [H, W]
+            player_car_night_mask = scale_mask(player_car_night_mask)
+
+        return recolored_car_masks_day, car_masks_night, player_car_night_mask
+
+    def _scale_mask(self, mask: jnp.ndarray) -> jnp.ndarray:
+        """Helper to scale a mask when downscaling is enabled."""
+        original_h, original_w = mask.shape
+        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
+        return jax.image.resize(mask, (scaled_h, scaled_w), method='nearest')
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: EnduroGameState) -> jnp.ndarray:
         """Render the game state to a raster image."""
-        raster = self.static_background.copy()
+        # Start with the static background
+        raster = self.BACKGROUND
 
         # render weather first because it changes the backgrounds
         raster = self._render_weather(raster, state)
@@ -2310,24 +2632,18 @@ class EnduroRenderer(JAXGameRenderer):
 
         # render the fog as the last thing!
         raster = self._render_fog(raster, state)
-
-        return raster
+        
+        # Convert the final ID raster to an RGB image
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_player_car(self, raster: jnp.ndarray, state: EnduroGameState):
         """
         Renders the player car. The animation speed depends on the player speed
-        Args:
-            raster: the raster to draw in
-            state: the enduro Game State
-
-        Returns: the final raster with the rendered track
         """
         # Calculate animation period based on player speed
-        # At opponent_speed (24): period = 8 (same as opponents)
-        # At max_speed (120): period = 1 (change every step)
-        animation_period = self.config.opponent_animation_steps - (state.player_speed - self.config.opponent_speed) / (
-                self.config.max_speed - self.config.opponent_speed) * (self.config.opponent_animation_steps - 1)
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
+                self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
 
         # Calculate animation step (slower at low speeds, faster at high speeds)
         animation_step = jnp.floor(state.step_count / animation_period)
@@ -2335,14 +2651,21 @@ class EnduroRenderer(JAXGameRenderer):
         # Alternate between frame 0 and 1 based on animation step
         frame_index = (animation_step % 2).astype(jnp.int32)
 
-        # render player car position. The player's car is always in size 0 (largest)
-        player_car = aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index)
+        # Check if it's day or night
+        is_day = ~jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
+        
+        # Get the correct mask
+        player_color_idx = self.consts.PLAYER_COLOR_INDEX
+        day_mask = self.recolored_car_masks_day[player_color_idx, 0, frame_index] # Size 0
+        night_mask = self.player_car_night_mask
+        
+        final_mask = jax.lax.cond(is_day, lambda: day_mask, lambda: night_mask)
 
-        # get the car position in an absolute coordinate
-        raster = aj.render_at(raster,
-                              state.player_x_abs_position,
+        # Render player car position
+        raster = self.jr.render_at(raster,
+                              state.player_x_abs_position.astype(jnp.int32),
                               state.player_y_abs_position.astype(jnp.int32),
-                              player_car)
+                              final_mask)
 
         return raster
 
@@ -2352,81 +2675,87 @@ class EnduroRenderer(JAXGameRenderer):
         Renders the track pixels from the Enduro Game State with animated colors.
         """
         # get a less steep slope for the acceleration of the animation
-        effective_speed = (self.config.min_speed +
-                           (state.player_speed - self.config.min_speed) * self.config.track_speed_animation_factor)
+        effective_speed = (self.consts.min_speed +
+                           (state.player_speed - self.consts.min_speed) * self.consts.track_speed_animation_factor)
         # Calculate animation step
         animation_step = jnp.floor(
-            effective_speed * state.step_count * self.config.track_color_move_speed_per_speed
-        ) % self.config.track_move_range
+            effective_speed * state.step_count * self.consts.track_color_move_speed_per_speed
+        ) % self.consts.track_move_range
         animation_step = animation_step.astype(jnp.int32)
 
         # build the y array
-        sky_height = self.background_sizes['background_sky.npy'][0]
-        y = jnp.add(jnp.arange(self.track_height), sky_height)
+        y = jnp.add(jnp.arange(self.consts.track_height), self.consts.sky_height)
 
         # Concatenate both sides and create a grid of x & y coordinates
         x_coords = jnp.concatenate([state.visible_track_left, state.visible_track_right])
         y_coords = jnp.concatenate([y, y])
 
-        # Create track sprite with animated colors
-        track_sprite = self._draw_animated_track_sprite(x_coords, y_coords, animation_step)
+        # Create track sprite (ID MASK) with animated colors
+        track_id_mask = self._draw_animated_track_sprite(
+            x_coords, y_coords, animation_step, self.TRACK_COLOR_IDS
+        )
+        # Scale track mask if downscaling is enabled - compute scaled dimensions from static values
+        if self.config.downscale:
+            scaled_h = max(1, int(round(self.consts.screen_height * self._height_scaling)))
+            scaled_w = max(1, int(round(self.consts.screen_width * self._width_scaling)))
+            track_id_mask = jax.image.resize(track_id_mask, (scaled_h, scaled_w), method='nearest')
         # Render to raster
-        raster = aj.render_at(raster, 0, 0, track_sprite)
+        raster = self.jr.render_at(raster, 0, 0, track_id_mask)
 
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_animated_track_sprite(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray,
-                                    animation_step: jnp.int32) -> jnp.ndarray:
+                                    animation_step: jnp.int32, 
+                                    track_color_ids: jnp.ndarray) -> jnp.ndarray:
         """
-        Creates a sprite for the track with animated colors based on animation step.
+        Creates an ID MASK sprite for the track with animated colors.
         """
-        # Create full-screen-sized sprite
-        sprite = jnp.zeros((self.config.screen_height, self.config.screen_width, 4), dtype=jnp.uint8)
+        # Create full-screen-sized ID mask, initialized to transparent
+        sprite = jnp.full(
+            (self.consts.screen_height, self.consts.screen_width), 
+            self.jr.TRANSPARENT_ID, 
+            dtype=jnp.uint8
+        )
 
-        # Calculate color regions based on animation step
-        sky_height = self.background_sizes['background_sky.npy'][0]
-
-        def get_track_color(track_row_index: jnp.int32) -> jnp.ndarray:
-            """Determine color for a given track row based on animation step."""
-
+        def get_track_color_index(track_row_index: jnp.int32) -> jnp.int32:
+            """Determine color *index* (0-3) for a given track row."""
             # Calculate boundaries (these shift with animation_step)
-            top_region_end = self.config.track_top_min_length + animation_step
-            moving_top_end = top_region_end + self.config.track_moving_top_length
+            top_region_end = self.consts.track_top_min_length + animation_step
+            moving_top_end = top_region_end + self.consts.track_moving_top_length
 
-            # Check if we should spawn moving bottom (step >= 6)
-            spawn_moving_bottom = animation_step >= self.config.track_moving_bottom_spawn_step
+            # Check if we should spawn moving bottom
+            spawn_moving_bottom = animation_step >= self.consts.track_moving_bottom_spawn_step
             moving_bottom_end = jnp.where(
                 spawn_moving_bottom,
-                moving_top_end + self.config.track_moving_bottom_length,
+                moving_top_end + self.consts.track_moving_bottom_length,
                 moving_top_end
             )
 
-            # Determine color based on position
-            color = jnp.where(
+            # Determine color index
+            color_idx = jnp.where(
                 track_row_index < top_region_end,
-                self.config.track_colors[0],  # top color
+                0,  # top color index
                 jnp.where(
                     track_row_index < moving_top_end,
-                    self.config.track_colors[1],  # moving top color
+                    1,  # moving top color index
                     jnp.where(
                         (track_row_index < moving_bottom_end) & spawn_moving_bottom,
-                        self.config.track_colors[2],  # moving bottom color
-                        self.config.track_colors[3]  # bottom/rest color
+                        2,  # moving bottom color index
+                        3   # bottom/rest color index
                     )
                 )
             )
 
-            return color
+            return color_idx.astype(jnp.int32)
 
         def draw_pixel(i, s):
             x = x_coords[i]
             y = y_coords[i]
-            track_row_index = y - sky_height
-            color = get_track_color(track_row_index)
-            # Add alpha channel (assuming track should be opaque)
-            color_with_alpha = jnp.append(color, 255)
-            return s.at[y, x].set(color_with_alpha)
+            track_row_index = y - self.consts.sky_height
+            color_idx = get_track_color_index(track_row_index)
+            color_id = track_color_ids[color_idx] # Get ID from lookup array
+            return s.at[y, x].set(color_id)
 
         sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
         return sprite
@@ -2434,131 +2763,59 @@ class EnduroRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _render_opponent_cars(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders all opponent cars into the game with custom colors
-        Args:
-            raster: the raster for rendering
-            state: the game state
-
-        Returns: the new raster with colored opponents
+        Renders all opponent cars onto the raster using pre-compiled ID masks.
         """
         # adjust the animation speed for opponents
-        animation_step = jnp.floor(state.step_count / self.config.opponent_animation_steps)
-
-        # Alternate between frame 0 and 1 based on step count
+        animation_step = jnp.floor(state.step_count / self.consts.opponent_animation_steps)
         frame_index = (animation_step % 2).astype(jnp.int32)
 
-        is_day = ~jnp.isin(state.weather_index, self.config.weather_with_night_car_sprite)
+        is_day = ~jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
 
-        # Load all car sprites as separate variables (they have different shapes) depending on the current weather
-        car_0 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_0.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_0_night.npy'], 0)
-        )
-        car_1 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_1.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_1_night.npy'], 0)
-        )
-        car_2 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_2.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_2_night.npy'], 0)
-        )
-        car_3 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_3.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_3_night.npy'], 0)
-        )
-        car_4 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_4.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_4_night.npy'], 0)
-        )
-        car_5 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_5.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_5_night.npy'], 0)
-        )
-        car_6 = lax.cond(
-            is_day,
-            lambda: aj.get_sprite_frame(self.sprites['car_6.npy'], frame_index),
-            lambda: aj.get_sprite_frame(self.sprites['car_6_night.npy'], 0)
-        )
+        # Get opponent positions and color indices
+        opponent_positions = state.visible_opponent_positions # (7, 3) [x, y, color_idx]
+        xs = opponent_positions[:, 0]
+        ys = opponent_positions[:, 1]
+        color_indices = opponent_positions[:, 2]
 
-        # Get opponent positions from precomputed state
-        opponent_positions = state.visible_opponent_positions
+        def render_one_car(i, r):
+            # i = size_idx (0 to 6)
+            x, y, color_idx = xs[i], ys[i], color_indices[i]
+            
+            # Check if opponent exists in this slot
+            should_draw = (x != -1)
+            def _draw_car(r_in):
+                # Get the correct mask based on day/night and color
+                day_mask = self.recolored_car_masks_day[color_idx, i, frame_index]
+                night_mask = self.car_masks_night[i, 0] # size i, anim 0
+                
+                final_mask = jax.lax.cond(is_day, lambda: day_mask, lambda: night_mask)
+                
+                return self.jr.render_at(r_in, x, y, final_mask)
 
-        # Extract positions and colors
-        xs = opponent_positions[:, 0]  # x positions
-        ys = opponent_positions[:, 1]  # y positions
-        colors = opponent_positions[:, 2]  # packed RGB colors
+            return jax.lax.cond(should_draw, _draw_car, lambda r_in: r_in, r)
 
-        def apply_color_to_sprite(sprite, packed_color):
-            """Apply custom color to sprite, replacing non-black pixels"""
-            # Unpack RGB from integer
-            r = (packed_color >> 16) & 0xFF
-            g = (packed_color >> 8) & 0xFF
-            b = packed_color & 0xFF
-            return change_sprite_color(sprite, jnp.stack([r, g, b], dtype=jnp.int32))
-
-        # Apply colors to each sprite when it is day. At night just keep the sprite (rear lights)
-        colored_car_0 = lax.cond(is_day, lambda: apply_color_to_sprite(car_0, colors[0]), lambda: car_0)
-        colored_car_1 = lax.cond(is_day, lambda: apply_color_to_sprite(car_1, colors[1]), lambda: car_1)
-        colored_car_2 = lax.cond(is_day, lambda: apply_color_to_sprite(car_2, colors[2]), lambda: car_2)
-        colored_car_3 = lax.cond(is_day, lambda: apply_color_to_sprite(car_3, colors[3]), lambda: car_3)
-        colored_car_4 = lax.cond(is_day, lambda: apply_color_to_sprite(car_4, colors[4]), lambda: car_4)
-        colored_car_5 = lax.cond(is_day, lambda: apply_color_to_sprite(car_5, colors[5]), lambda: car_5)
-        colored_car_6 = lax.cond(is_day, lambda: apply_color_to_sprite(car_6, colors[6]), lambda: car_6)
-
-        # Render each car individually with explicit conditionals
-        # Car 0 (closest)
-        raster = jnp.where((xs[0] != -1), aj.render_at(raster, xs[0], ys[0], colored_car_0), raster)
-        # Car 1
-        raster = jnp.where((xs[1] != -1), aj.render_at(raster, xs[1], ys[1], colored_car_1), raster)
-        # Car 2
-        raster = jnp.where((xs[2] != -1), aj.render_at(raster, xs[2], ys[2], colored_car_2), raster)
-        # Car 3
-        raster = jnp.where((xs[3] != -1), aj.render_at(raster, xs[3], ys[3], colored_car_3), raster)
-        # Car 4
-        raster = jnp.where((xs[4] != -1), aj.render_at(raster, xs[4], ys[4], colored_car_4), raster)
-        # Car 5
-        raster = jnp.where((xs[5] != -1), aj.render_at(raster, xs[5], ys[5], colored_car_5), raster)
-        # Car 6 (farthest)
-        raster = jnp.where((xs[6] != -1), aj.render_at(raster, xs[6], ys[6], colored_car_6), raster)
-
+        raster = jax.lax.fori_loop(0, 7, render_one_car, raster)
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_distance_odometer(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders the odometer that shows the distance that we've covered.
-        first 4 digits are in black font and the decimal digit is in brown font.
-        The digits roll down like in a car odometer.
-        Args:
-            raster: the raster for rendering
-            state: the game state
-
-        Returns: the new raster with odometer
+        Renders the rolling odometer using dynamic slices from ID mask sheets.
         """
-        # Get digit dimensions from a sample sprite
-        digit_0_black = aj.get_sprite_frame(self.sprites['0_black.npy'], 0)
-        window_height = digit_0_black.shape[0] + 2
-        digit_width = digit_0_black.shape[1]
+        # Get digit dimensions from the pre-loaded digit masks
+        digit_mask_sample = self.SHAPE_MASKS['digits_black'][0]
+        window_height = digit_mask_sample.shape[0] + 2
+        digit_width = digit_mask_sample.shape[1]
 
-        # get the black and brown digit sprites that have all digits
-        digit_sprite_black = aj.get_sprite_frame(self.sprites['black_digit_array.npy'], 0)
-        digit_sprite_brown = aj.get_sprite_frame(self.sprites['brown_digit_array.npy'], 0)
+        # Get the ID mask sheets
+        digit_sheet_black = self.black_digit_sheet_mask
+        digit_sheet_brown = self.brown_digit_sheet_mask
 
         # determine the base position in the sprite that represents the lowest y for the window
-        base_y = digit_sprite_brown.shape[0] - window_height + 1
+        base_y = digit_sheet_brown.shape[0] - window_height + 1
 
         # Calculate how many 0.0125 increments have passed for decimal animation
-        increments_passed = jnp.floor(state.distance / 0.0125)
-        increments_passed = increments_passed.astype(jnp.int32)
-
-        # Adjust y by 1 for each increment, using modulo to reset when decimal digit rolls over
-        # Each full decimal digit (0-9) represents 80 increments (1.0 / 0.0125 = 80)
+        increments_passed = jnp.floor(state.distance / 0.0125).astype(jnp.int32)
         y_offset = increments_passed % 80
 
         # Extract actual digit values from distance
@@ -2569,78 +2826,53 @@ class EnduroRenderer(JAXGameRenderer):
         tens_digit = (distance_int // 10) % 10
         ones_digit = distance_int % 10
 
-        # synchronize the movement of the digits when they spin from 9 to 0
+        # synchronize the movement of the digits
         decimal_y = base_y - y_offset
         ones_y = base_y - ones_digit * (window_height - 1) - jnp.clip(window_height - decimal_y - 2, 0)
         tens_y = base_y - tens_digit * (window_height - 1) - jnp.clip(window_height - ones_y - 2, 0)
         hundreds_y = base_y - hundreds_digit * (window_height - 1) - jnp.clip(window_height - tens_y - 2, 0)
         thousands_y = base_y - thousands_digit * (window_height - 1) - jnp.clip(window_height - hundreds_y - 2, 0)
 
-        # Reset to base_y when we complete a full cycle (decimal part hits 0 again)
+        # Reset to base_y when we complete a full cycle
         decimal_y = jnp.where(decimal_digit < 0.001, base_y, decimal_y)
         ones_y = jnp.where(ones_y < 0.001, base_y, ones_y)
         tens_y = jnp.where(tens_y < 0.001, base_y, tens_y)
         hundreds_y = jnp.where(hundreds_y < 0.001, base_y, hundreds_y)
         thousands_y = jnp.where(thousands_y < 0.001, base_y, thousands_y)
 
-        # Extract decimal digit window
+        # Extract decimal digit window (ID MASK)
         digit_window = jax.lax.dynamic_slice(
-            digit_sprite_brown,
-            (decimal_y, 0, 0),  # start indices (y position in sprite, x=0, channel=0)
-            (window_height, digit_width, digit_sprite_brown.shape[2])
+            digit_sheet_brown,
+            (decimal_y, 0),  # start indices (y, x)
+            (window_height, digit_width)
         )
-
-        # Add rolling animation offsets when appropriate
-        # Ones digit - moves when decimal digit is rolling
+        
         ones_window = jax.lax.dynamic_slice(
-            digit_sprite_black,
-            (ones_y, 0, 0),
-            (window_height, digit_width, digit_sprite_black.shape[2])
+            digit_sheet_black, (ones_y, 0), (window_height, digit_width)
         )
-
-        # Tens digit - moves when ones digit is rolling
         tens_window = jax.lax.dynamic_slice(
-            digit_sprite_black,
-            (tens_y, 0, 0),
-            (window_height, digit_width, digit_sprite_black.shape[2])
+            digit_sheet_black, (tens_y, 0), (window_height, digit_width)
         )
-
-        # Hundreds digit - moves when hundreds digit is rolling
         hundreds_window = jax.lax.dynamic_slice(
-            digit_sprite_black,
-            (hundreds_y, 0, 0),
-            (window_height, digit_width, digit_sprite_black.shape[2])
+            digit_sheet_black, (hundreds_y, 0), (window_height, digit_width)
         )
-
-        # Thousands digit - moves when hundreds digit is rolling
         thousands_window = jax.lax.dynamic_slice(
-            digit_sprite_black,
-            (thousands_y, 0, 0),
-            (window_height, digit_width, digit_sprite_black.shape[2])
+            digit_sheet_black, (thousands_y, 0), (window_height, digit_width)
         )
 
-        # === Render all numbers ===
-        render_y = self.config.distance_odometer_start_y
-
-        # Render the decimal digit window at the specified position
-        decimal_x = self.config.distance_odometer_start_x + 4 * (digit_width + 2)  # +2 for the spaces between digits
-        raster = aj.render_at(raster, decimal_x, render_y, digit_window)
-
-        # Render the ones digit window at the specified position
-        ones_x = self.config.distance_odometer_start_x + 3 * (digit_width + 2)
-        raster = aj.render_at(raster, ones_x, render_y, ones_window)
-
-        # Render the tens digit window at the specified position
-        tens_x = self.config.distance_odometer_start_x + 2 * (digit_width + 2)
-        raster = aj.render_at(raster, tens_x, render_y, tens_window)
-
-        # Render the hundreds digit window at the specified position
-        hundreds_x = self.config.distance_odometer_start_x + (digit_width + 2)
-        raster = aj.render_at(raster, hundreds_x, render_y, hundreds_window)
-
-        # Render the thousands digit window at the specified position
-        thousands_x = self.config.distance_odometer_start_x
-        raster = aj.render_at(raster, thousands_x, render_y, thousands_window)
+        # === Render all number ID masks ===
+        render_y = self.consts.distance_odometer_start_y
+        spacing = digit_width + 2
+        decimal_x = self.consts.distance_odometer_start_x + 4 * spacing
+        raster = self.jr.render_at(raster, decimal_x, render_y, digit_window)
+        ones_x = self.consts.distance_odometer_start_x + 3 * spacing
+        raster = self.jr.render_at(raster, ones_x, render_y, ones_window)
+        tens_x = self.consts.distance_odometer_start_x + 2 * spacing
+        raster = self.jr.render_at(raster, tens_x, render_y, tens_window)
+        hundreds_x = self.consts.distance_odometer_start_x + 1 * spacing
+        raster = self.jr.render_at(raster, hundreds_x, render_y, hundreds_window)
+        thousands_x = self.consts.distance_odometer_start_x
+        raster = self.jr.render_at(raster, thousands_x, render_y, thousands_window)
 
         return raster
 
@@ -2648,27 +2880,11 @@ class EnduroRenderer(JAXGameRenderer):
     def _render_level_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
         Renders the current level digit.
-        Args:
-            raster: the raster for rendering
-            state: the game state
-
-        Returns: the new raster with the level score
-
         """
-        # Get digit dimensions from a sample sprite
         current_level = state.level
-
-        # create an array with all sprites to access them based on the current level
-        digit_sprites = jnp.stack([
-            aj.get_sprite_frame(self.sprites['0_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['1_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['2_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['3_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['4_black.npy'], 0),
-            aj.get_sprite_frame(self.sprites['5_black.npy'], 0),
-        ])
-
-        raster = aj.render_at(raster, self.config.level_x, self.config.level_y, digit_sprites[current_level])
+        digit_sprites = self.SHAPE_MASKS['digits_black'] # Stacked (10, H, W)
+        level_digit_mask = digit_sprites[current_level]
+        raster = self.jr.render_at(raster, self.consts.level_x, self.consts.level_y, level_digit_mask)
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2676,311 +2892,149 @@ class EnduroRenderer(JAXGameRenderer):
         """
         Renders the score that shows how many cars still have to be overtaken.
         Renders flags instead if the level goal has been reached.
-
-        Args:
-            raster: the raster for rendering
-            state: the game state
-
-        Returns: the new raster with the score
         """
-
         def render_level_passed(flag_raster) -> jnp.ndarray:
             # change the flag animation every second
             frame_index = (state.step_count // 60) % 2
-            flag_sprite = aj.get_sprite_frame(self.sprites['flags.npy'], frame_index)
-
+            flag_sprite = self.SHAPE_MASKS['flags'][frame_index]
             # render the flags at the hundreds position - the car symbol
-            x_pos = self.config.score_start_x - 9
-            flag_raster = aj.render_at(flag_raster, x_pos, self.config.score_start_y - 1, flag_sprite)
-
+            x_pos = self.consts.score_start_x - 9
+            flag_raster = self.jr.render_at(flag_raster, x_pos, self.consts.score_start_y - 1, flag_sprite)
             # render the background color of the level score differently (in green)
-            background_sprite = aj.get_sprite_frame(self.sprites['green_level_background.npy'], 0)
-            flag_raster = aj.render_at(flag_raster, self.config.level_x - 1, self.config.level_y - 1, background_sprite)
-
+            background_sprite = self.SHAPE_MASKS['green_level_background']
+            flag_raster = self.jr.render_at(flag_raster, self.consts.level_x - 1, self.consts.level_y - 1, background_sprite)
             return flag_raster
 
         def render_digits(digit_raster) -> jnp.ndarray:
-            # Get digit dimensions from a sample sprite
             cars_to_overtake = state.cars_to_overtake - state.cars_overtaken
-            # create an array with all sprites to access them based on the current score digit
-            digit_sprites = jnp.stack([
-                aj.get_sprite_frame(self.sprites['0_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['1_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['2_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['3_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['4_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['5_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['6_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['7_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['8_black.npy'], 0),
-                aj.get_sprite_frame(self.sprites['9_black.npy'], 0),
-            ])
-
-            digit_width = digit_sprites[0].shape[1]
-
+            digit_sprites = self.SHAPE_MASKS['digits_black']
+            digit_width = digit_sprites.shape[2]
+            spacing = digit_width + 2
             ones_digit = cars_to_overtake % 10
             tens_digit = (cars_to_overtake // 10) % 10
             hundreds_digit = (cars_to_overtake // 100) % 10
-
-            # load the sprite depending on the digit
             ones_sprite = digit_sprites[ones_digit]
             tens_sprite = digit_sprites[tens_digit]
             hundreds_sprite = digit_sprites[hundreds_digit]
-
-            # Render the ones digit window at the specified position
-            ones_x = self.config.score_start_x + 2 * (digit_width + 2)
-            digit_raster = aj.render_at(digit_raster, ones_x, self.config.score_start_y, ones_sprite)
-
+            # Render the ones digit window
+            ones_x = self.consts.score_start_x + 2 * spacing
+            digit_raster = self.jr.render_at(digit_raster, ones_x, self.consts.score_start_y, ones_sprite)
             # Only render tens digit if number >= 10
-            tens_x = self.config.score_start_x + (digit_width + 2)
+            tens_x = self.consts.score_start_x + spacing
             digit_raster = jnp.where(
                 cars_to_overtake >= 10,
-                aj.render_at(digit_raster, tens_x, self.config.score_start_y, tens_sprite),
+                self.jr.render_at(digit_raster, tens_x, self.consts.score_start_y, tens_sprite),
                 digit_raster
             )
-
             # Only render hundreds digit if number >= 100
-            hundreds_x = self.config.score_start_x
+            hundreds_x = self.consts.score_start_x
             digit_raster = jnp.where(
                 cars_to_overtake >= 100,
-                aj.render_at(digit_raster, hundreds_x, self.config.score_start_y, hundreds_sprite),
+                self.jr.render_at(digit_raster, hundreds_x, self.consts.score_start_y, hundreds_sprite),
                 digit_raster
             )
-
             return digit_raster
 
-        # check whether to render the digits or the flags
         raster = lax.cond(
-            state.level_passed,
-            lambda x: render_level_passed(x),
-            lambda x: render_digits(x),
+            state.level_passed > 0,
+            render_level_passed,
+            render_digits,
             raster
         )
-
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_mountains(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders mountains. If a mountain sprite would extend beyond the right edge (hi),
-        draw an additional wrapped copy at x - period so it appears on the left.
-        Returns: the raster for the rendering
+        Renders mountains using pre-compiled, pre-colored weather stencils.
         """
-        # load mountains
-        mountain_left_sprite = aj.get_sprite_frame(self.sprites['mountain_left.npy'], 0)
-        mountain_right_sprite = aj.get_sprite_frame(self.sprites['mountain_right.npy'], 0)
-
-        # color them according to the weather
-        weather_index = self.config.weather_color_codes[state.weather_index]
-        mountain_left_sprite = change_sprite_color(mountain_left_sprite, weather_index[2])
-        mountain_right_sprite = change_sprite_color(mountain_right_sprite, weather_index[2])
+        weather_idx = state.weather_index
+        
+        # Get the correct pre-colored mask for the current weather
+        mountain_left_sprite = self.mountain_left_masks[weather_idx]
+        mountain_right_sprite = self.mountain_right_masks[weather_idx]
 
         # Geometry / sizes
-        sky_height = self.background_sizes['background_sky.npy'][0]
-        mountain_left_height = self.sprites['mountain_left.npy'].shape[1]
-        mountain_right_height = self.sprites['mountain_right.npy'].shape[1]
-        mountain_left_width = self.sprites['mountain_left.npy'].shape[2]
-        mountain_right_width = self.sprites['mountain_right.npy'].shape[2]
+        mountain_left_height = mountain_left_sprite.shape[0]
+        mountain_right_height = mountain_right_sprite.shape[0]
+        mountain_left_width = mountain_left_sprite.shape[1]
+        mountain_right_width = mountain_right_sprite.shape[1]
 
-        # Visible interval and period (inclusive interval -> +1)
-        lo = self.config.window_offset_left
-        hi = self.config.screen_width
+        # Visible interval and period
+        lo = self.consts.window_offset_left
+        hi = self.consts.screen_width
         period = (hi - lo + 1)
 
         # Positions of the mountain edges
-        x_left_mountain = state.mountain_left_x
-        x_right_mountain = state.mountain_right_x
-        y_left_mountain = sky_height - mountain_left_height
-        y_right_mountain = sky_height - mountain_right_height
+        x_left_mountain = state.mountain_left_x.astype(jnp.int32)
+        x_right_mountain = state.mountain_right_x.astype(jnp.int32)
+        y_left_mountain = self.consts.sky_height - mountain_left_height
+        y_right_mountain = self.consts.sky_height - mountain_right_height
 
-        # 1) Base draw at current positions
-        raster = aj.render_at(raster, x_left_mountain, y_left_mountain, mountain_left_sprite)
-        raster = aj.render_at(raster, x_right_mountain, y_right_mountain, mountain_right_sprite)
+        # 1) Base draw at current positions (use clipped render)
+        raster = self.jr.render_at_clipped(raster, x_left_mountain, y_left_mountain, mountain_left_sprite)
+        raster = self.jr.render_at_clipped(raster, x_right_mountain, y_right_mountain, mountain_right_sprite)
 
-        # 2) If the sprite overflows the right edge (x + width > hi + 1),
-        #    draw a wrapped copy at x - period (which lands on the left side).
+        # 2) If the sprite overflows the right edge, draw a wrapped copy
         overflow_left = (x_left_mountain + mountain_left_width) > (hi + 1)
         overflow_right = (x_right_mountain + mountain_right_width) > (hi + 1)
-
         raster = lax.cond(
             overflow_left,
-            lambda _: aj.render_at(raster, x_left_mountain - period, y_left_mountain, mountain_left_sprite),
-            lambda _: raster,
-            operand=None,
+            lambda r: self.jr.render_at_clipped(r, x_left_mountain - period, y_left_mountain, mountain_left_sprite),
+            lambda r: r,
+            raster,
         )
         raster = lax.cond(
             overflow_right,
-            lambda _: aj.render_at(raster, x_right_mountain - period, y_right_mountain, mountain_right_sprite),
-            lambda _: raster,
-            operand=None,
+            lambda r: self.jr.render_at_clipped(r, x_right_mountain - period, y_right_mountain, mountain_right_sprite),
+            lambda r: r,
+            raster,
         )
-
-        # 3) Mask out all pixels at or to the left of window_offset_left
-        # Create a mask for valid x coordinates
-        x_coords = jnp.arange(raster.shape[1])
-        valid_x_mask = x_coords > self.config.window_offset_left
-
-        # Expand mask to match raster dimensions
-        valid_x_mask = jnp.expand_dims(valid_x_mask, axis=(0, 2))  # (1, width, 1)
-        valid_x_mask = jnp.broadcast_to(valid_x_mask, raster.shape)  # (width, height, channels)
-
-        # Apply mask - set invalid pixels to black (0)
-        raster = jnp.where(valid_x_mask, raster, 0)
-
+        
+        # 3) No manual masking needed. The BACKGROUND raster already provides the borders.
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_weather(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders the skybox and the track background in the color of the current weather.
-        Args:
-            raster: the current raster
-            state: the current game state
-
-        Returns:
-            a raster with the weather effects.
+        Renders the skybox and the track background using pre-compiled stencils.
         """
-        # load the rgb codes for the current weather
-        weather_colors = self.config.weather_color_codes[state.weather_index]
-
+        weather_idx = state.weather_index
         # sky background
-        sky = aj.get_sprite_frame(self.sprites['background_sky.npy'], 0)
-        colored_sky = change_sprite_color(sky, weather_colors[0])
-        raster = aj.render_at(raster, self.config.window_offset_left, 0, colored_sky)
-
+        raster = self.jr.render_at(raster, self.consts.window_offset_left, 0, self.sky_masks[weather_idx])
         # green background
-        gras = aj.get_sprite_frame(self.sprites['background_gras.npy'], 0)
-        colored_gras = change_sprite_color(gras, weather_colors[1])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0], colored_gras)
-
+        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height, self.grass_masks[weather_idx])
         # render the horizon stripes
-        stripe_1 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_1 = change_sprite_color(stripe_1, weather_colors[3])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 2, colored_stripe_1)
-
-        stripe_2 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_2 = change_sprite_color(stripe_2, weather_colors[4])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 4, colored_stripe_2)
-
-        stripe_3 = aj.get_sprite_frame(self.sprites['background_horizon.npy'], 0)
-        colored_stripe_3 = change_sprite_color(stripe_3, weather_colors[5])
-        raster = aj.render_at(raster, self.config.window_offset_left, sky.shape[0] - 6, colored_stripe_3)
-
+        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 2, self.horizon_1_masks[weather_idx])
+        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 4, self.horizon_2_masks[weather_idx])
+        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 6, self.horizon_3_masks[weather_idx])
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_lower_background(self, raster: jnp.ndarray) -> jnp.ndarray:
         """
-        Renders the background and score box under the player screen to avoid that opponent cars are visible there.
-        Args:
-            raster: the current raster
-
-        Returns:
-            a raster with the background overlay
+        Renders the background and score box under the player screen.
         """
-
         # black background
-        background_overlay = aj.get_sprite_frame(self.sprites['background_overlay.npy'], 0)
-        raster = aj.render_at(raster, 0, self.config.game_window_height - 1, background_overlay)
-
+        background_overlay = self.SHAPE_MASKS['background_overlay']
+        raster = self.jr.render_at(raster, 0, self.consts.game_window_height - 1, background_overlay)
         # score box
-        score_box = aj.get_sprite_frame(self.sprites['score_box.npy'], 0)
-        raster = aj.render_at(raster, self.config.info_box_x_pos, self.config.info_box_y_pos, score_box)
-
-        return raster
-
-    def _render_static_background(self) -> jnp.ndarray:
-        """
-        The background only needs to be rendered or loaded once. For all future frames the array can just be copied,
-        which saves some performance. So, only load static sprites here that do not change throughout the game.
-        """
-        raster = jnp.zeros((self.config.screen_height, self.config.screen_width, 3), dtype=jnp.uint8)
-
-        # black background
-        background = aj.get_sprite_frame(self.sprites['background.npy'], 0)
-        raster = aj.render_at(raster, 0, 0, background)
-
-        # activision logo
-        logo = aj.get_sprite_frame(self.sprites['activision_logo.npy'], 0)
-        raster = aj.render_at(raster, self.config.logo_x_position, self.config.logo_y_position, logo)
-
+        score_box = self.SHAPE_MASKS['score_box']
+        raster = self.jr.render_at(raster, self.consts.info_box_x_pos, self.consts.info_box_y_pos, score_box)
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_fog(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders the fog if applicable. Needs to be done as the last thing, so we don't draw anything on top.
-        Args:
-            raster: the raster
-            state: the Enduro Game State
-
-        Returns:
-            a raster with the rendered fog
+        Renders the fog if applicable.
         """
-        # fog bar if the weather is fog
-        fog = aj.get_sprite_frame(self.sprites['fog_box.npy'], 0)
+        fog_mask = self.SHAPE_MASKS['fog_box']
         raster = jnp.where(
-            state.weather_index == self.config.night_fog_index,
-            aj.render_at(raster, self.config.window_offset_left, 0, fog),
+            state.weather_index == self.consts.night_fog_index,
+            self.jr.render_at(raster, self.consts.window_offset_left, 0, fog_mask),
             raster
         )
         return raster
-
-
-def load_frame_with_animation(path: str, transpose: bool = True) -> jnp.ndarray:
-    """
-    Loads a sprite from .npy file.
-    - If it's a static frame (shape: H, W, 4), wraps it to shape (1, W, H, 4)
-    - If it's an animation (shape: N, H, W, 4), transposes each frame to (W, H, 4)
-
-    Returns:
-        JAX array of shape (NumFrames, W, H, 4)
-    """
-    arr = np.load(path)  # Use NumPy to inspect shape first
-
-    if arr.ndim == 3:
-        if arr.shape[2] != 4:
-            raise ValueError(f"Static sprite must have 4 channels (RGBA), got shape {arr.shape}")
-        if transpose:
-            arr = np.transpose(arr, (1, 0, 2))  # HWC -> WHC
-        arr = arr[None, ...]  # Add frame axis → (1, W, H, 4)
-
-    elif arr.ndim == 4:
-        if arr.shape[3] != 4:
-            raise ValueError(f"Animated sprite must have 4 channels (RGBA), got shape {arr.shape}")
-        if transpose:
-            arr = np.transpose(arr, (0, 2, 1, 3))  # NHWC -> NWHC
-
-    else:
-        raise ValueError(f"Unsupported array shape: {arr.shape}")
-
-    return jnp.array(arr).astype(jnp.uint8)
-
-
-def change_sprite_color(sprite, rgb_color):
-    """
-    Change the color of an RGBA sprite.
-
-    Args:
-        sprite: 3D array with shape (W, H, C) representing an RGBA sprite
-        rgb_color: RGB color array [R, G, B]
-
-    Returns:
-        3D RGBA array with the sprite recolored
-    """
-    # Create a mask for non-transparent pixels (assuming alpha channel is index 3)
-    mask = sprite[..., 3] > 0  # Shape (W, H) - check alpha channel
-
-    # Create output sprite, keeping original alpha
-    colored_sprite = sprite.copy()
-
-    # Apply new RGB colors where mask is True, preserve alpha channel
-    colored_sprite = colored_sprite.at[..., 0].set(jnp.where(mask, rgb_color[0], sprite[..., 0]))
-    colored_sprite = colored_sprite.at[..., 1].set(jnp.where(mask, rgb_color[1], sprite[..., 1]))
-    colored_sprite = colored_sprite.at[..., 2].set(jnp.where(mask, rgb_color[2], sprite[..., 2]))
-    # Keep original alpha: colored_sprite[..., 3] stays the same
-
-    return colored_sprite.astype(jnp.uint8)
 
 
 """
@@ -3180,10 +3234,13 @@ class EnduroDebugRenderer:
         """
         pygame_screen.fill((0, 0, 0))
 
-        # Convert JAX array (H, W, C) to NumPy (H, W, C), then transpose to (W, H, C) for pygame
+        # Convert JAX array to NumPy, then transpose to (W, H, C) for pygame if needed
         raster_np = np.array(raster)
         raster_np = raster_np.astype(np.uint8)
-        raster_np = np.transpose(raster_np, (1, 0, 2))  # (H, W, C) -> (W, H, C)
+        # Transpose only if shape is (H, W, C) - new renderer outputs (H, W, C)
+        if len(raster_np.shape) == 3 and raster_np.shape[0] != raster_np.shape[1]:
+            # Likely (H, W, C) format, transpose to (W, H, C) for pygame
+            raster_np = np.transpose(raster_np, (1, 0, 2))  # (H, W, C) -> (W, H, C)
 
         # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
         frame_surface = pygame.surfarray.make_surface(raster_np)
@@ -3259,7 +3316,7 @@ class EnduroDebugRenderer:
         pygame.init()
         # Initialize game and renderer
         game = JaxEnduro()
-        renderer = EnduroRenderer()
+        renderer = EnduroRenderer(game.config)
         scaling = 4
 
         screen = pygame.display.set_mode((160 * scaling, 210 * scaling))
@@ -3327,7 +3384,7 @@ class EnduroDebugRenderer:
 
             # Add debug overlay if enabled
             if debug_mode and show_debug:
-                self.render_debug_overlay(screen, state, font, renderer.config, obs, reward)
+                self.render_debug_overlay(screen, state, font, renderer.consts, obs, reward)
 
                 # Add controls help in corner
                 help_text = small_font.render("Press 'D' to toggle debug", True, (200, 200, 200))

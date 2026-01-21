@@ -52,7 +52,7 @@
 | riverraid                    | 🥈       | 0 |
 | road_runner                  | unsupported | 0 |
 | robotank                     | unsupported | 0 |
-| skiing                       | 🥈       | 0 |
+| skiing                       | 🥉       | 0 |
 | star_gunner                  | unsupported | 0 |
 | tennis                       | 🥈       | 0 |
 | time_pilot                   | 🥈       | 0 |
@@ -81,7 +81,7 @@
 | earthworld                   | unsupported | 0 |
 | entombed                     | unsupported | 0 |
 | et                           | unsupported | 0 |
-| flag_capture                 | 🥉       | 0 |
+| flag_capture                 | 🥇       | 0 |
 | freeway                      | 🥇       | 3 |
 | frogger                      | unsupported | 0 |
 | galaxian                     | 🥈       | 0 |

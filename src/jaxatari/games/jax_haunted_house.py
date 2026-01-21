@@ -10,9 +10,101 @@ from tensorstore import int32
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+
+def _load_collision_masks():
+    """Helper to load WALL and LIGHT masks for collision detection."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    jr_temp = render_utils.JaxRenderingUtils(render_utils.RendererConfig())
+    wall = jr_temp.loadFrame(os.path.join(base_dir, "sprites/hauntedhouse/Wall.npy"))
+    light = jr_temp.loadFrame(os.path.join(base_dir, "sprites/hauntedhouse/SpriteLight1.npy"))
+    WALL_COLOR_BLUE = jnp.array([24, 26, 167, 255], dtype=jnp.uint8)
+    LIGHT_COLOR = jnp.array([198, 108, 58, 255], dtype=jnp.uint8)
+    wall_mask = jnp.any(wall == WALL_COLOR_BLUE, axis=-1)
+    light_mask = jnp.any(light == LIGHT_COLOR, axis=-1)
+    return wall_mask, light_mask
+
+
+_COLLISION_WALL, _COLLISION_LIGHT = _load_collision_masks()
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural colors for wall palette swapping
+    wall_colors = jnp.array([
+        [24, 26, 167, 255],   # Blue (original)
+        [163, 57, 21, 255],   # Red
+        [24, 98, 78, 255],    # Green
+        [162, 134, 56, 255],  # Yellow
+        [255, 255, 255, 255], # White
+        [198, 108, 58, 255],  # Light Color
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    return {
+        'wall_colors': wall_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for HauntedHouse.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define item files for grouping
+    ground_item_files = [
+        'SpriteItemScepter.npy',
+        'SpriteItemUrnLeft.npy',
+        'SpriteItemUrnMiddle.npy',
+        'SpriteItemUrnRight.npy',
+        'SpriteItemUrnLeftMiddle.npy',
+        'SpriteItemUrnMiddleRight.npy',
+        'SpriteItemUrnLeftRight.npy',
+        'SpriteItemUrn.npy'
+    ]
+    
+    held_item_files = [
+        'SpriteHeldItemScepter.npy',
+        'SpriteHeldItemUrnLeft.npy',
+        'SpriteHeldItemUrnMiddle.npy',
+        'SpriteHeldItemUrnRight.npy',
+        'SpriteHeldItemUrnLeftMiddle.npy',
+        'SpriteHeldItemUrnMiddleRight.npy',
+        'SpriteHeldItemUrnLeftRight.npy',
+        'SpriteHeldItemUrn.npy'
+    ]
+
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'file': 'SpriteBackground.npy'},
+        
+        # Procedural Colors
+        {'name': 'wall_colors', 'type': 'procedural', 'data': static_procedural['wall_colors']},
+        
+        # Sprites (as groups for padding)
+        {'name': 'player_group', 'type': 'group', 'files': [
+            'SpriteEyesMiddle.npy', 'SpriteEyesUp.npy', 'SpriteEyesUpLeft.npy',
+            'SpriteEyesLeft.npy', 'SpriteEyesDownLeft.npy', 'SpriteEyesDown.npy',
+            'SpriteEyesDownRight.npy', 'SpriteEyesRight.npy', 'SpriteEyesUpRight.npy'
+        ]},
+        {'name': 'ghost_group', 'type': 'group', 'files': ['SpriteGhost1.npy', 'SpriteGhost2.npy']},
+        {'name': 'spider_group', 'type': 'group', 'files': ['SpriteSpider1.npy', 'SpriteSpider2.npy']},
+        {'name': 'bat_group', 'type': 'group', 'files': ['SpriteBat1.npy', 'SpriteBat2.npy']},
+        {'name': 'light_group', 'type': 'group', 'files': ['SpriteLight1.npy', 'SpriteLight2.npy']},
+        # Wall & UI
+        {'name': 'wall', 'type': 'single', 'file': 'Wall.npy'},
+        {'name': 'scoreboard', 'type': 'single', 'file': 'SpriteScoreboard.npy'},
+        {'name': 'blackbar', 'type': 'single', 'file': 'SpriteBlackBar.npy'},
+        {'name': 'stairsthintop', 'type': 'single', 'file': 'SpriteStairsThin.npy'},
+        {'name': 'stairswide', 'type': 'single', 'file': 'SpriteStairsWide.npy'},
+        # Items (Ground) - Load as groups for uniform padding
+        {'name': 'ground_item_group', 'type': 'group', 'files': ground_item_files},
+        # Items (Held) - Load as groups for uniform padding
+        {'name': 'held_item_group', 'type': 'group', 'files': held_item_files},
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'SpriteNumber{}.npy'},
+    )
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -124,10 +216,13 @@ class HauntedHouseConstants(NamedTuple):
     ROOM_SIZES: chex.Array = jnp.array([(80, 177), (80, 177), (80, 161), (80, 161), (80, 177), (80, 177)])
 
     # Used for collision detection
-    WALL: chex.Array = jnp.any(jr.loadFrame(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/hauntedhouse/Wall.npy")) == WALL_COLOR_BLUE, axis=-1)
-    LIGHT: chex.Array = jnp.any(jr.loadFrame(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/hauntedhouse/SpriteLight1.npy")) == LIGHT_COLOR, axis=-1)
+    WALL: chex.Array = _COLLISION_WALL
+    LIGHT: chex.Array = _COLLISION_LIGHT
 
     INVISIBLE_ENTITY: EntityPosition = EntityPosition(x=jnp.array(-1), y=jnp.array(-1), floor=jnp.array(-1), width=jnp.array(-1), height=jnp.array(-1))
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # immutable state container
@@ -190,13 +285,10 @@ class HauntedHouseInfo(NamedTuple):
 
 
 class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation, HauntedHouseInfo, HauntedHouseConstants]):
-    def __init__(self, consts: HauntedHouseConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: HauntedHouseConstants = None):
         consts = consts or HauntedHouseConstants()
         super().__init__(consts)
         self.renderer = HauntedHouseRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -1253,491 +1345,319 @@ class HauntedHouseRenderer(JAXGameRenderer):
     def __init__(self, consts: HauntedHouseConstants = None):
         super().__init__()
         self.consts = consts or HauntedHouseConstants()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/hauntedhouse"
+        
+        # 1. Configure the rendering utility
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 3. Make one call to load and process all assets
         (
-            self.bg, self.wall, self.player, self.ghost, self.spider, self.bat, self.light, self.numbers, self.scoreboard,
-            self.blackbar, self.stairsthintop, self.stairsthinbottom, self.stairswide,
-            self.scepter, self.scepterheld, self.urn, self.urnheld,
-            self.urnleft, self.urnleftheld, self.urnmiddle, self.urnmiddleheld, self.urnright, self.urnrightheld,
-            self.urnleftmiddle, self.urnleftmiddleheld, self.urnmiddleright,
-            self.urnmiddlerightheld, self.urnleftright, self.urnleftrightheld
-        ) = self.load_sprites()
-
-    def load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-        player0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesMiddle.npy"))
-        player1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesUp.npy"))
-        player2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesUpLeft.npy"))
-        player3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesLeft.npy"))
-        player4 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesDownLeft.npy"))
-        player5 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesDown.npy"))
-        player6 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesDownRight.npy"))
-        player7 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesRight.npy"))
-        player8 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteEyesUpRight.npy"))
-
-        ghost0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteGhost1.npy"))
-        ghost1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteGhost2.npy"))
-        spider0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteSpider1.npy"))
-        spider1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteSpider2.npy"))
-        bat0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteBat1.npy"))
-        bat1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteBat2.npy"))
-
-        scepter = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemScepter.npy"))
-        scepterheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemScepter.npy"))
-        urn = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrn.npy"))
-        urnheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrn.npy"))
-        urnleft = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnLeft.npy"))
-        urnmiddle = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnMiddle.npy"))
-        urnright = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnRight.npy"))
-        urnleftmiddle = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnLeftMiddle.npy"))
-        urnmiddleright = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnMiddleRight.npy"))
-        urnleftright = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteItemUrnLeftRight.npy"))
-        urnleftheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnLeft.npy"))
-        urnmiddleheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnMiddle.npy"))
-        urnrightheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnRight.npy"))
-        urnleftmiddleheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnLeftMiddle.npy"))
-        urnmiddlerightheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnMiddleRight.npy"))
-        urnleftrightheld = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteHeldItemUrnLeftRight.npy"))
-
-        light0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteLight1.npy"))
-        light1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteLight2.npy"))
-        stairswide = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteStairsWide.npy"))
-        stairsthintop = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteStairsThin.npy"))
-        stairsthinbottom = stairsthintop[::-1, :, :]
-
-        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteBackground.npy"))
-        wall = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/Wall.npy"))
-        scoreboard = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteScoreboard.npy"))
-        blackbar = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteBlackBar.npy"))
-
-        player, _ = jr.pad_to_match([player0, player1, player2, player3, player4, player5, player6, player7, player8])
-        ghost, _ = jr.pad_to_match([ghost0, ghost1])
-        spider, _ = jr.pad_to_match([spider0, spider1])
-        bat, _ = jr.pad_to_match([bat0, bat1])
-        light, _ = jr.pad_to_match([light0, light1])
-
-        player = jnp.concatenate(
-            [
-                jnp.repeat(player[0][None], 1, axis=0),
-                jnp.repeat(player[1][None], 1, axis=0),
-                jnp.repeat(player[2][None], 1, axis=0),
-                jnp.repeat(player[3][None], 1, axis=0),
-                jnp.repeat(player[4][None], 1, axis=0),
-                jnp.repeat(player[5][None], 1, axis=0),
-                jnp.repeat(player[6][None], 1, axis=0),
-                jnp.repeat(player[7][None], 1, axis=0),
-                jnp.repeat(player[8][None], 1, axis=0)
-            ]
-        )
-
-        ghost = jnp.concatenate([
-                jnp.repeat(ghost[0][None], 1, axis=0),
-                jnp.repeat(ghost[1][None], 1, axis=0)])
-
-        spider = jnp.concatenate([
-                 jnp.repeat(spider[0][None], 1, axis=0),
-                 jnp.repeat(spider[1][None], 1, axis=0)])
-
-        bat = jnp.concatenate([
-              jnp.repeat(bat[0][None], 1, axis=0),
-              jnp.repeat(bat[1][None], 1, axis=0)])
-
-        light = jnp.concatenate([
-                jnp.repeat(light[0][None], 1, axis=0),
-                jnp.repeat(light[1][None], 1, axis=0)])
-
-
-        bg = jnp.expand_dims(bg, axis=0)
-        wall = jnp.expand_dims(wall, axis=0)
-        scoreboard = jnp.expand_dims(scoreboard, axis=0)
-
-        scepter = jnp.expand_dims(scepter, axis=0)
-        urnleft = jnp.expand_dims(urnleft, axis=0)
-        urnmiddle = jnp.expand_dims(urnmiddle, axis=0)
-        urnright = jnp.expand_dims(urnright, axis=0)
-        urnleftmiddle = jnp.expand_dims(urnleftmiddle, axis=0)
-        urnmiddleright = jnp.expand_dims(urnmiddleright, axis=0)
-        urnleftright = jnp.expand_dims(urnleftright, axis=0)
-        urn = jnp.expand_dims(urn, axis=0)
-
-        scepterheld = jnp.expand_dims(scepterheld, axis=0)
-        urnleftheld = jnp.expand_dims(urnleftheld, axis=0)
-        urnmiddleheld = jnp.expand_dims(urnmiddleheld, axis=0)
-        urnrightheld = jnp.expand_dims(urnrightheld, axis=0)
-        urnleftmiddleheld = jnp.expand_dims(urnleftmiddleheld, axis=0)
-        urnmiddlerightheld = jnp.expand_dims(urnmiddlerightheld, axis=0)
-        urnleftrightheld = jnp.expand_dims(urnleftrightheld, axis=0)
-        urnheld = jnp.expand_dims(urnheld, axis=0)
-
-        stairsthintop = jnp.expand_dims(stairsthintop, axis=0)
-        stairsthinbottom = jnp.expand_dims(stairsthinbottom, axis=0)
-        stairswide = jnp.expand_dims(stairswide, axis=0)
-        blackbar = jnp.expand_dims(blackbar, axis=0)
-
-
-
-
-        numbers = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/hauntedhouse/SpriteNumber{}.npy"),
-            num_chars=10,
-        )
-
-
-        return (
-            bg, wall, player, ghost, spider, bat, light, numbers, scoreboard, blackbar,
-            stairsthintop, stairsthinbottom, stairswide, scepter, scepterheld, urn, urnheld,
-            urnleft, urnleftheld, urnmiddle, urnmiddleheld, urnright, urnrightheld,
-            urnleftmiddle, urnleftmiddleheld, urnmiddleright, urnmiddlerightheld, urnleftright, urnleftrightheld
-        )
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+        
+        # 4. Store key color IDs for wall palette swapping
+        self.BLUE_WALL_ID = self.COLOR_TO_ID.get((24, 26, 167), 0)
+        self.WALL_COLOR_IDS = jnp.array([
+            self.COLOR_TO_ID.get((255, 255, 255), 0),  # 0: White
+            self.BLUE_WALL_ID,                         # 1: Blue
+            self.COLOR_TO_ID.get((163, 57, 21), 0),    # 2: Red
+            self.COLOR_TO_ID.get((24, 98, 78), 0),    # 3: Green
+            self.COLOR_TO_ID.get((162, 134, 56), 0)   # 4: Yellow
+        ])
+        
+        # 5. Store animation lengths
+        self.anim_len = {
+            'light': self.SHAPE_MASKS['light_group'].shape[0],
+        }
+        
+        # 6. Get the pre-built stacks from SHAPE_MASKS
+        # These are now guaranteed to have the same shape.
+        self.HELD_ITEM_STACKS = self.SHAPE_MASKS['held_item_group']
+        self.ITEM_MASKS_STACK = self.SHAPE_MASKS['ground_item_group']
+        
+        # 7. Get the single, uniform offset for each group
+        self.HELD_ITEM_OFFSET = self.FLIP_OFFSETS['held_item_group']
+        self.ITEM_OFFSET = self.FLIP_OFFSETS['ground_item_group']
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:HauntedHouseState):
-        raster = jr.create_initial_frame(width=160, height=210)
-
-        camera_offset = jnp.where(state.player[1] < 82,0, state.player[1] - 82)
+        # 1. Start with the static blue background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        
+        # 2. Calculate camera offset
+        camera_offset = jnp.where(state.player[1] < 82, 0, state.player[1] - 82)
         camera_offset = jnp.clip(camera_offset, min=0, max=356)
-        bg = jr.get_sprite_frame(self.bg, 0)
-        raster = jr.render_at(raster, 0, 0, bg)
-
-        floor_checks = self.check_same_floor(state)
-
+        
+        # 3. Check which items are lit
+        illuminated = jnp.where(
+            state.match_duration > 0,
+            self._check_illuminated(state),
+            jnp.array([False, False, False, False, False, False, False, False])
+        )
+        
+        # 4. Render Player
         player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
-        player = jr.get_sprite_frame(self.player, player_frame)
-        raster = jr.render_at(raster, state.player[0], state.player[1] - camera_offset, player)
-
-
-        # Monster
+        player_mask = self.SHAPE_MASKS['player_group'][player_frame]
+        raster = self.jr.render_at(
+            raster, state.player[0], state.player[1] - camera_offset,
+            player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
+        )
+        
+        # 5. Render Monsters
         k = jax.random.key(state.step_counter)
-        k, subkey = jax.random.split(k)
-        ghostframe = jax.random.randint(k, minval=0, maxval=2, shape=())
-        k, subkey = jax.random.split(subkey)
-        spiderframe = jax.random.randint(k, minval=0, maxval=2, shape=())
-        k, subkey = jax.random.split(subkey)
-        batframe = jax.random.randint(k, minval=0, maxval=2, shape=())
-
-
-        vanish_with_scepter = jnp.logical_and(state.item_held == 1, state.step_counter % 4 != 0)
-        not_vanishing = jnp.logical_not(vanish_with_scepter)
-
-        ghost = jr.get_sprite_frame(self.ghost, ghostframe)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[0], not_vanishing),
-                              lambda r: jr.render_at(r, state.ghost[0], state.ghost[1] - camera_offset, ghost),
-                              lambda r: r,
-                              raster)
-        spider = jr.get_sprite_frame(self.spider, spiderframe)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[1], not_vanishing),
-                              lambda r: jr.render_at(r, state.spider[0], state.spider[1] - camera_offset, spider),
-                              lambda r: r,
-                              raster)
-        bat = jr.get_sprite_frame(self.bat, batframe)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[2], not_vanishing),
-                              lambda r: jr.render_at(r, state.bat[0], state.bat[1] - camera_offset, bat),
-                              lambda r: r,
-                              raster)
-
-
-        # Items
-        illuminated = jnp.where(state.match_duration > 0,
-                                self.check_illuminated(state),
-                                jnp.array([False, False, False, False, False, False, False, False]))
-
-        scepter = jr.get_sprite_frame(self.scepter, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[3], illuminated[0]),
-                              lambda r: jr.render_at(r, state.scepter[0], state.scepter[1] - camera_offset, scepter),
-                              lambda r: r,
-                              raster)
-        urn_left = jr.get_sprite_frame(self.urnleft, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[4], illuminated[1]),
-                              lambda r: jr.render_at(r, state.urn_left[0], state.urn_left[1] - camera_offset, urn_left),
-                              lambda r: r,
-                              raster)
-        urn_middle = jr.get_sprite_frame(self.urnmiddle, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[5], illuminated[2]),
-                              lambda r: jr.render_at(r, state.urn_middle[0], state.urn_middle[1] - camera_offset, urn_middle),
-                              lambda r: r,
-                              raster)
-        urn_right = jr.get_sprite_frame(self.urnright, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[6], illuminated[3]),
-                              lambda r: jr.render_at(r, state.urn_right[0], state.urn_right[1] - camera_offset, urn_right),
-                              lambda r: r,
-                              raster)
-        urn_left_middle = jr.get_sprite_frame(self.urnleftmiddle, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[7], illuminated[4]),
-                              lambda r: jr.render_at(r, state.urn_left_middle[0], state.urn_left_middle[1] - camera_offset, urn_left_middle),
-                              lambda r: r,
-                              raster)
-        urn_middle_right = jr.get_sprite_frame(self.urnmiddleright, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[8], illuminated[5]),
-                              lambda r: jr.render_at(r, state.urn_middle_right[0], state.urn_middle_right[1] - camera_offset, urn_middle_right),
-                              lambda r: r,
-                              raster)
-        urn_left_right = jr.get_sprite_frame(self.urnleftright, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[9], illuminated[6]),
-                              lambda r: jr.render_at(r, state.urn_left_right[0], state.urn_left_right[1] - camera_offset, urn_left_right),
-                              lambda r: r,
-                              raster)
-        urn = jr.get_sprite_frame(self.urn, 0)
-        raster = jax.lax.cond(jnp.logical_and(floor_checks[10], illuminated[7]),
-                              lambda r: jr.render_at(r, state.urn[0], state.urn[1] - camera_offset, urn),
-                              lambda r: r,
-                              raster)
-
-
-
-        # Light
-        lightframe = jnp.where((state.step_counter % 8) < 2, 1, 0)
-        light = jr.get_sprite_frame(self.light, lightframe)
-        raster = jax.lax.cond(jnp.logical_and(state.step_counter % 2 == 0, state.match_duration > 0),
-                              lambda r: jr.render_at(r, state.player[0] - 12, state.player[1] - 24 - camera_offset, light),
-                              lambda r: r,
-                              raster)
-
-
-        # Stairs
-        stairsthintop = jr.get_sprite_frame(self.stairsthintop, 0)
-        stairsthinbottom = jr.get_sprite_frame(self.stairsthinbottom, 0)
-        stairswide = jr.get_sprite_frame(self.stairswide, 0)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_TOP_LEFT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r, 32, 7 - camera_offset, stairsthintop),
-                              lambda r: r,
-                              raster)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_TOP_RIGHT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r, 112, 7 - camera_offset, stairsthinbottom),
-                              lambda r: r,
-                              raster)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_BOTTOM_LEFT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r,32 , 478 - camera_offset, stairsthintop),
-                              lambda r: r,
-                              raster)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_BOTTOM_RIGHT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r, 112, 478 - camera_offset, stairsthinbottom),
-                              lambda r: r,
-                              raster)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_LEFT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r, 5, 226 - camera_offset, stairswide),
-                              lambda r: r,
-                              raster)
-        raster = jax.lax.cond(jnp.logical_and(self.consts.STAIRS_RIGHT[state.player[2] - 1], state.match_duration > 0),
-                              lambda r: jr.render_at(r, 140, 225 - camera_offset, stairswide),
-                              lambda r: r,
-                              raster)
-
-
-
-
-        # Walls
-        wall = jr.get_sprite_frame(self.wall, 0)
-
-        k, subkey = jax.random.split(subkey)
-        chase_flash = jnp.logical_or(state.chasing % 64 == 1, state.chasing % 64 == 9)
-        stun_flash = jnp.logical_and(state.stun_duration % 4 == 1, jax.random.choice(k, jnp.array([True, False])))
-        wall_flashing = jnp.logical_or(chase_flash, stun_flash)
-
-        wall_color = jnp.where(wall_flashing, self.get_wall_color(0), self.get_wall_color(state.player[2]))
-
-        wall_color_mask = jnp.all(wall == self.consts.WALL_COLOR_BLUE, axis=-1, keepdims=True)
-
-        wall = jnp.where(wall_color_mask, wall_color, wall)
-
-        raster = jr.render_at(raster, 0, self.consts.WALL_Y_OFFSET - camera_offset, wall)
-
-        black_bar = jr.get_sprite_frame(self.blackbar, 0)
-        raster = jr.render_at(raster, 32, self.consts.WALL_Y_OFFSET - camera_offset, black_bar)
-        raster = jr.render_at(raster, 112, self.consts.WALL_Y_OFFSET - camera_offset, black_bar)
-
-        # Scoreboard
-        scoreboard = jr.get_sprite_frame(self.scoreboard, 0)
-        raster = jr.render_at(raster, 0, 161, scoreboard)
-
-        scepter_held = jr.get_sprite_frame(self.scepterheld, 0)
-        urn_left_held = jr.get_sprite_frame(self.urnleftheld, 0)
-        urn_middle_held = jr.get_sprite_frame(self.urnmiddleheld, 0)
-        urn_right_held = jr.get_sprite_frame(self.urnrightheld, 0)
-        urn_left_middle_held = jr.get_sprite_frame(self.urnleftmiddleheld, 0)
-        urn_middle_right_held = jr.get_sprite_frame(self.urnmiddlerightheld, 0)
-        urn_left_right_held = jr.get_sprite_frame(self.urnleftrightheld, 0)
-        urn_held = jr.get_sprite_frame(self.urnheld, 0)
-
-        held_item_sprites = [scepter_held, urn_left_held, urn_middle_held, urn_right_held,
-                             urn_left_middle_held, urn_middle_right_held, urn_left_right_held, urn_held]
-
-        raster = jax.lax.cond(state.item_held == 1,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[0]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 2,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[1]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 3,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[2]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 4,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[3]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 5,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[4]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 6,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[5]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 7,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[6]),
-                              lambda r: r,
-                              raster)
-
-        raster = jax.lax.cond(state.item_held == 8,
-                              lambda r: jr.render_at(r, 91 + self.consts.ITEM_OFFSETS[state.item_held][0],
-                                                     166 + self.consts.ITEM_OFFSETS[state.item_held][1],
-                                                     held_item_sprites[7]),
-                              lambda r: r,
-                              raster)
-
-
-        matches_used_digits = jr.int_to_digits(state.matches_used, max_digits=2)
-        lives_digits = jr.int_to_digits(state.lives, max_digits=1)
-        player_floor_digits = jr.int_to_digits(state.player[2], max_digits=1)
-
-        raster = jr.render_label_selective(raster, 37, 176,
-                                            matches_used_digits, self.numbers,
-                                            0, 2,
-                                            spacing=1)
-
-        raster = jr.render_label_selective(raster, 110, 176,
-                                           lives_digits, self.numbers,
-                                           0, 1,
-                                           spacing=0)
-
-        raster = jr.render_label_selective(raster, 61, 166,
-                                           player_floor_digits, self.numbers,
-                                           0, 1,
-                                           spacing=0)
-
-
-        return raster
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def get_wall_color(self, selector):
-
-        def case_white():
-            return self.consts.WALL_COLOR_WHITE
-        def case_blue():
-            return self.consts.WALL_COLOR_BLUE
-        def case_red():
-            return self.consts.WALL_COLOR_RED
-        def case_green():
-            return self.consts.WALL_COLOR_GREEN
-        def case_yellow():
-            return self.consts.WALL_COLOR_YELLOW
-
-        branches = (case_white, case_blue, case_red, case_green, case_yellow)
-
-        return jax.lax.switch(selector, branches)
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def check_same_floor(self, state: HauntedHouseState):
-        """
-        Returns a list of 10 booleans representing whether objects and monsters are on the same floor as the player.
-        Returns: [ghost, spider, bat, scepter, urn_left, urn_middle, urn_right,
-        urn_left_middle, urn_middle_right, urn_left_right, urn]
-        """
-
-        p = state.player[2]
-        return jnp.array([p == state.ghost[2], p == state.spider[2], p == state.bat[2], p == state.scepter[2],
-                          p == state.urn_left[2], p == state.urn_middle[2], p == state.urn_right[2],
-                          p == state.urn_left_middle[2], p == state.urn_middle_right[2], p == state.urn_left_right[2],
-                          p == state.urn[2]]).astype(jnp.bool)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def check_illuminated(self, state: HauntedHouseState):
-
-        vmapped_func = jax.vmap(
-            self.check_illuminated_single,
-            in_axes=(None, 0, 0)
+        k_ghost, k_spider, k_bat = jax.random.split(k, 3)
+        ghost_frame = jax.random.randint(k_ghost, minval=0, maxval=2, shape=())
+        spider_frame = jax.random.randint(k_spider, minval=0, maxval=2, shape=())
+        bat_frame = jax.random.randint(k_bat, minval=0, maxval=2, shape=())
+        
+        vanish_with_scepter = (state.item_held == 1) & (state.step_counter % 4 != 0)
+        not_vanishing = ~vanish_with_scepter
+        
+        floor_checks = (state.player[2] == state.ghost[2],
+                        state.player[2] == state.spider[2],
+                        state.player[2] == state.bat[2])
+        
+        raster = jax.lax.cond(
+            floor_checks[0] & not_vanishing,
+            lambda r: self.jr.render_at_clipped(
+                r, state.ghost[0], state.ghost[1] - camera_offset,
+                self.SHAPE_MASKS['ghost_group'][ghost_frame],
+                flip_offset=self.FLIP_OFFSETS['ghost_group']
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        raster = jax.lax.cond(
+            floor_checks[1] & not_vanishing,
+            lambda r: self.jr.render_at_clipped(
+                r, state.spider[0], state.spider[1] - camera_offset,
+                self.SHAPE_MASKS['spider_group'][spider_frame],
+                flip_offset=self.FLIP_OFFSETS['spider_group']
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        raster = jax.lax.cond(
+            floor_checks[2] & not_vanishing,
+            lambda r: self.jr.render_at_clipped(
+                r, state.bat[0], state.bat[1] - camera_offset,
+                self.SHAPE_MASKS['bat_group'][bat_frame],
+                flip_offset=self.FLIP_OFFSETS['bat_group']
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        # 6. Render Items
+        item_positions = jnp.stack([
+            state.scepter, state.urn_left, state.urn_middle, state.urn_right,
+            state.urn_left_middle, state.urn_middle_right, state.urn_left_right, state.urn
+        ])
+        
+        def render_item(i, r):
+            item_pos = item_positions[i]
+            on_same_floor = state.player[2] == item_pos[2]
+            is_lit = illuminated[i]
+            
+            # Use the single uniform offset for the group
+            return jax.lax.cond(
+                on_same_floor & is_lit,
+                lambda r_in: self.jr.render_at_clipped(
+                    r_in, item_pos[0], item_pos[1] - camera_offset,
+                    self.ITEM_MASKS_STACK[i],
+                    flip_offset=self.ITEM_OFFSET  # Use the single group offset
+                ),
+                lambda r_in: r_in,
+                r
+            )
+        
+        raster = jax.lax.fori_loop(0, 8, render_item, raster)
+        
+        # 7. Render Light
+        light_frame = jnp.where((state.step_counter % 8) < 2, 1, 0)
+        light_mask = self.SHAPE_MASKS['light_group'][light_frame]
+        raster = jax.lax.cond(
+            (state.step_counter % 2 == 0) & (state.match_duration > 0),
+            # Use render_at_clipped for negative y positions
+            lambda r: self.jr.render_at_clipped(
+                r, state.player[0] - 12, state.player[1] - 24 - camera_offset,
+                light_mask, flip_offset=self.FLIP_OFFSETS['light_group']
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        # 8. Render Stairs
+        stairsthintop_mask = self.SHAPE_MASKS['stairsthintop']
+        stairsthintop_offset = self.FLIP_OFFSETS['stairsthintop']
+        # Procedurally create the flipped bottom stair mask
+        stairsthinbottom_mask = jnp.flip(stairsthintop_mask, axis=0)
+        
+        stairswide_mask = self.SHAPE_MASKS['stairswide']
+        stairswide_offset = self.FLIP_OFFSETS['stairswide']
+        floor_idx = state.player[2] - 1  # Convert 1-based floor to 0-based index
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_TOP_LEFT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 32, 7 - camera_offset, stairsthintop_mask, flip_offset=stairsthintop_offset),
+            lambda r: r, raster
+        )
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_TOP_RIGHT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 112, 7 - camera_offset, stairsthinbottom_mask, flip_offset=stairsthintop_offset),
+            lambda r: r, raster
+        )
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_BOTTOM_LEFT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 32, 478 - camera_offset, stairsthintop_mask, flip_offset=stairsthintop_offset),
+            lambda r: r, raster
+        )
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_BOTTOM_RIGHT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 112, 478 - camera_offset, stairsthinbottom_mask, flip_offset=stairsthintop_offset),
+            lambda r: r, raster
+        )
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_LEFT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 5, 226 - camera_offset, stairswide_mask, flip_offset=stairswide_offset),
+            lambda r: r, raster
+        )
+        
+        raster = jax.lax.cond(
+            self.consts.STAIRS_RIGHT[floor_idx] & (state.match_duration > 0),
+            lambda r: self.jr.render_at_clipped(r, 140, 225 - camera_offset, stairswide_mask, flip_offset=stairswide_offset),
+            lambda r: r, raster
+        )
+        
+        # 9. Render Wall (with palette swap)
+        k_flash = jax.random.key(state.step_counter)
+        k_flash, _ = jax.random.split(k_flash)
+        chase_flash = (state.chasing % 64 == 1) | (state.chasing % 64 == 9)
+        stun_flash = (state.stun_duration % 4 == 1) & jax.random.bernoulli(k_flash)
+        wall_flashing = chase_flash | stun_flash
+        wall_color_selector = jnp.where(wall_flashing, 0, state.player[2])  # 0 is White
+        wall_color_id = self.WALL_COLOR_IDS[wall_color_selector]
+        
+        indices_to_update = jnp.array([self.BLUE_WALL_ID])
+        new_color_ids = jnp.array([wall_color_id])
+        
+        raster = self.jr.render_at_clipped(
+            raster, 0, self.consts.WALL_Y_OFFSET - camera_offset,
+            self.SHAPE_MASKS['wall'], flip_offset=self.FLIP_OFFSETS['wall']
+        )
+        
+        # 10. Render UI
+        # Use render_at_clipped for the black bars (they use camera offset)
+        raster = self.jr.render_at_clipped(
+            raster, 32, self.consts.WALL_Y_OFFSET - camera_offset,
+            self.SHAPE_MASKS['blackbar'], flip_offset=self.FLIP_OFFSETS['blackbar']
+        )
+        raster = self.jr.render_at_clipped(
+            raster, 112, self.consts.WALL_Y_OFFSET - camera_offset,
+            self.SHAPE_MASKS['blackbar'], flip_offset=self.FLIP_OFFSETS['blackbar']
+        )
+        # The scoreboard is at a fixed positive Y, so 'render_at' is fine.
+        raster = self.jr.render_at(
+            raster, 0, 161,
+            self.SHAPE_MASKS['scoreboard'], flip_offset=self.FLIP_OFFSETS['scoreboard']
+        )
+        
+        # Render Held Item
+        def render_held_item(r):
+            item_idx = state.item_held - 1
+            mask = self.HELD_ITEM_STACKS[item_idx]
+            offset = self.consts.ITEM_OFFSETS[item_idx].astype(jnp.int32)
+            # Use the single uniform offset for the group
+            return self.jr.render_at(
+                r, 91 + offset[0], 166 + offset[1],
+                mask, flip_offset=self.HELD_ITEM_OFFSET
+            )
+        
+        raster = jax.lax.cond(state.item_held > 0, render_held_item, lambda r: r, raster)
+        
+        # Render Numbers
+        matches_used_digits = self.jr.int_to_digits(state.matches_used, max_digits=2)
+        lives_digits = self.jr.int_to_digits(state.lives, max_digits=1)
+        player_floor_digits = self.jr.int_to_digits(state.player[2], max_digits=1)
+        
+        raster = self.jr.render_label_selective(
+            raster, 37, 176, matches_used_digits, self.SHAPE_MASKS['digits'],
+            0, 2, spacing=1, max_digits_to_render=2
+        )
+        
+        raster = self.jr.render_label_selective(
+            raster, 110, 176, lives_digits, self.SHAPE_MASKS['digits'],
+            0, 1, spacing=0, max_digits_to_render=1
+        )
+        
+        raster = self.jr.render_label_selective(
+            raster, 61, 166, player_floor_digits, self.SHAPE_MASKS['digits'],
+            0, 1, spacing=0, max_digits_to_render=1
+        )
+        
+        # 11. Final Palette Lookup
+        return self.jr.render_from_palette(
+            raster,
+            self.PALETTE,
+            indices_to_update=indices_to_update,
+            new_color_ids=new_color_ids
         )
 
-        entities = jnp.array([state.scepter, state.urn_left, state.urn_middle, state.urn_right,
-                              state.urn_left_middle, state.urn_middle_right, state.urn_left_right, state.urn])
-
-        result = vmapped_func(state.player, entities, self.consts.ITEM_SIZES)
-
-        return result
 
     @partial(jax.jit, static_argnums=(0,))
-    def check_illuminated_single(self, player, pos, size):
-        pos = jnp.array([pos[0] - player[0] + 12, pos[1] - player[1] + 24])
-        height, width = self.consts.LIGHT.shape
-
-        oob = jnp.logical_or(jnp.logical_or(pos[1] < 0, pos[1] >= height),
-                             jnp.logical_or(pos[0] < 0, pos[0] >= width))
-        collision_top_left = jax.lax.cond(oob,
-                                          lambda x: False,
-                                          lambda x: self.consts.LIGHT[pos[1]][pos[0]],
-                                          operand=None)
-
-        oob = jnp.logical_or(jnp.logical_or(pos[1] < 0, pos[1] >= height),
-                             jnp.logical_or(pos[0] + size[0] - 1 < 0, pos[0] + size[0] - 1 >= width))
-        collision_top_right = jax.lax.cond(oob,
-                                          lambda x: False,
-                                          lambda x: self.consts.LIGHT[pos[1]][pos[0] + size[0] - 1],
-                                          operand=None)
-
-        oob = jnp.logical_or(jnp.logical_or(pos[1] < 0 + size[1] - 1, pos[1] + size[1] - 1 >= height),
-                             jnp.logical_or(pos[0] < 0, pos[0] >= width))
-        collision_bottom_left = jax.lax.cond(oob,
-                                              lambda x: False,
-                                              lambda x: self.consts.LIGHT[pos[1] + size[1] - 1][pos[0]],
-                                              operand=None)
-
-        oob = jnp.logical_or(jnp.logical_or(pos[1] + size[1] - 1 < 0, pos[1] + size[1] - 1 >= height),
-                             jnp.logical_or(pos[0] + size[0] - 1 < 0, pos[0] + size[0] - 1 >= width))
-        collision_bottom_right = jax.lax.cond(oob,
-                                           lambda x: False,
-                                           lambda x: self.consts.LIGHT[pos[1] + size[1] - 1][pos[0] + size[0] - 1],
-                                           operand=None)
-
-        return jnp.any(
-            jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def _check_illuminated(self, state: HauntedHouseState) -> chex.Array:
+        """JIT-compatible check to see which items are illuminated by the match."""
+        
+        # We use the 'light_group' mask for collision, not consts.LIGHT
+        # Assuming frame 0 is the main light mask
+        light_mask = self.SHAPE_MASKS['light_group'][0]
+        light_h, light_w = light_mask.shape
+        
+        # Player's light is centered at (player_x + 12, player_y + 24)
+        # and we check from the top-left of the light mask
+        light_topleft_x = state.player[0] - 12
+        light_topleft_y = state.player[1] - 24
+        entities = jnp.array([
+            state.scepter, state.urn_left, state.urn_middle, state.urn_right,
+            state.urn_left_middle, state.urn_middle_right, state.urn_left_right, state.urn
+        ])
+        
+        def _check_single(item_pos, item_size):
+            # Calculate item pos relative to the light mask's top-left corner
+            rel_x = item_pos[0] - light_topleft_x
+            rel_y = item_pos[1] - light_topleft_y
+            
+            # Check 4 corners
+            points_x = jnp.array([rel_x, rel_x + item_size[0] - 1, rel_x, rel_x + item_size[0] - 1])
+            points_y = jnp.array([rel_y, rel_y, rel_y + item_size[1] - 1, rel_y + item_size[1] - 1])
+            
+            def check_point(i):
+                px, py = points_x[i], points_y[i]
+                # Check bounds
+                oob = (px < 0) | (px >= light_w) | (py < 0) | (py >= light_h)
+                # Check if light mask is "on" at this pixel
+                # We assume the light mask's non-transparent pixels are not TRANSPARENT_ID
+                is_lit = light_mask[py, px] != self.jr.TRANSPARENT_ID
+                return jnp.where(oob, False, is_lit)
+            
+            # Check if any of the 4 corners are lit
+            return jnp.any(jax.vmap(check_point)(jnp.arange(4)))
+        
+        return jax.vmap(_check_single)(entities, self.consts.ITEM_SIZES)

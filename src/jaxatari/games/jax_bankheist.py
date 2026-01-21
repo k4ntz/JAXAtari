@@ -5,10 +5,11 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
-import pygame
 import jaxatari.spaces as spaces
 
-from jaxatari.rendering import jax_rendering_utils_legacy as aj
+# Use the new rendering utilities
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jax.scipy.ndimage import map_coordinates
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 
@@ -186,25 +187,51 @@ def find_free_areas(map, h, w):
 CITY_COLLISION_MAPS = jnp.array([load_city_collision_map(f"map_{i+1}_collision.npy") for i in range(8)])
 CITY_SPAWNS = get_spawn_points(CITY_COLLISION_MAPS)
 
-def get_human_action() -> chex.Array:
-    """
-    Records if UP or DOWN is being pressed and returns the corresponding action.
 
-    Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
+
+def _get_default_asset_config() -> tuple:
     """
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-        return jnp.array(LEFT)
-    elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-        return jnp.array(RIGHT)
-    elif keys[pygame.K_w] or keys[pygame.K_UP]:
-        return jnp.array(UP)
-    elif keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        return jnp.array(DOWN)
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(FIRE)
-    return jnp.array(NOOP)
+    Returns the default declarative asset manifest for BankHeist.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # Define file lists for groups
+    city_files = [f"map_{i+1}.npy" for i in range(8)]
+    
+    # Define procedural sprites
+    # This color is used to fill the fuel tank
+    fuel_fill_color = (167, 26, 26) 
+    fuel_color_rgba = jnp.array(fuel_fill_color + (255,), dtype=jnp.uint8).reshape(1, 1, 4)
+    config = (
+        # Backgrounds (loaded as a group)
+        # Note: The 'background' type is not used here, as the city map is the primary background.
+        # We will treat 'cities' as our base background sprites.
+        {'name': 'cities', 'type': 'group', 'files': city_files},
+        
+        # Player (loaded as single sprites for manual padding)
+        {'name': 'player_side', 'type': 'single', 'file': 'player_side.npy'},
+        {'name': 'player_front', 'type': 'single', 'file': 'player_front.npy'},
+        
+        # Police (loaded as single sprites for manual padding)
+        {'name': 'police_side', 'type': 'single', 'file': 'police_side.npy'},
+        {'name': 'police_front', 'type': 'single', 'file': 'police_front.npy'},
+        
+        # Other objects
+        {'name': 'bank', 'type': 'single', 'file': 'bank.npy'},
+        {'name': 'dynamite', 'type': 'single', 'file': 'dynamite_0.npy'},
+        # This file is (11, 25, 4) on disk. It should be rendered as (11, 25).
+        # We remove transpose=True.
+        {'name': 'fuel_tank', 'type': 'single', 'file': 'fuel_tank.npy'}, 
+        # This file is (3, 1, 4) on disk but should be rendered as (1, 3).
+        {'name': 'fuel_gauge', 'type': 'single', 'file': 'fuel_gauge.npy', 'transpose': True},
+        
+        # UI
+        {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        
+        # Procedural
+        {'name': 'fuel_color', 'type': 'procedural', 'data': fuel_color_rgba},
+    )
+    
+    return config
 
 class BankHeistConstants(NamedTuple):
     WIDTH: int = WIDTH
@@ -226,6 +253,9 @@ class BankHeistConstants(NamedTuple):
     POLICE_RANDOM_FACTOR: float = POLICE_RANDOM_FACTOR
     POLICE_BIAS_FACTOR: float = POLICE_BIAS_FACTOR
     DYNAMITE_EXPLOSION_DELAY: int = DYNAMITE_EXPLOSION_DELAY
+    
+    # Asset config baked into constants
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class Entity(NamedTuple):
     position: jnp.ndarray
@@ -283,13 +313,13 @@ class BankHeistInfo(NamedTuple):
 
 class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeistInfo, BankHeistConstants]):
     
-    def __init__(self):
-        super().__init__()
-        self.frameskip = 1
-        self.frame_stack_size = 4
+    def __init__(self, consts: BankHeistConstants = None):
+        consts = consts or BankHeistConstants()
+        super().__init__(consts)
+        self.consts = consts
         self.action_set = {NOOP, FIRE, RIGHT, LEFT, UP, DOWN}
-        self.reward_funcs = None
-        self.renderer = Renderer_AtraBankisHeist()
+        # Use the new renderer class
+        self.renderer = BankHeistRenderer(self.consts)
     
     def action_space(self) -> spaces.Discrete:
         """
@@ -370,11 +400,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             time=jnp.array(0, dtype=jnp.int32),
         )
         obs = self._get_observation(state)
-        def expand_and_copy(x):
-            x_expanded = jnp.expand_dims(x, axis=0)
-            return jnp.concatenate([x_expanded] * self.frame_stack_size, axis=0)
-        obs_stack = jax.tree.map(expand_and_copy, obs)
-        state = state._replace(obs_stack=obs_stack)
         return  obs, state
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1259,258 +1284,229 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     def _get_done(self, state: BankHeistState) -> bool:
         return state.player_lives < 0
 
-def load_bankheist_sprites():
-    cities = [aj.loadFrame(os.path.join(SPRITES_DIR, f"map_{i+1}.npy"), transpose=False) for i in range(8)]
-    player_side = aj.loadFrame(os.path.join(SPRITES_DIR, "player_side.npy"), transpose=False)
-    player_front = aj.loadFrame(os.path.join(SPRITES_DIR, "player_front.npy"), transpose=False)
-    police_side = aj.loadFrame(os.path.join(SPRITES_DIR, "police_side.npy"), transpose=False)
-    police_front = aj.loadFrame(os.path.join(SPRITES_DIR, "police_front.npy"), transpose=False)
-    bank = aj.loadFrame(os.path.join(SPRITES_DIR, "bank.npy"), transpose=False)
-    dynamite = aj.loadFrame(os.path.join(SPRITES_DIR, "dynamite_0.npy"), transpose=False)
-    fuel_tank = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_tank.npy"), transpose=True)
-    fuel_gauge = aj.loadFrame(os.path.join(SPRITES_DIR, "fuel_gauge.npy"), transpose=False)
-
-    # Add padding to front sprites so they have same dimensions as side sprites
-    player_front_padded = jnp.pad(player_front, ((0,0), (1,1), (0,0)), mode='constant')
-    police_front_padded = jnp.pad(police_front, ((0,0), (1,1), (0,0)), mode='constant')
-
-    CITY_SPRITES = jnp.stack([jnp.expand_dims(city, axis=0) for city in cities])
-    PLAYER_SIDE_SPRITE = jnp.expand_dims(player_side, axis=0)
-    PLAYER_FRONT_SPRITE = jnp.expand_dims(player_front_padded, axis=0)
-    POLICE_SIDE_SPRITE = jnp.expand_dims(police_side, axis=0)
-    POLICE_FRONT_SPRITE = jnp.expand_dims(police_front_padded, axis=0)
-    BANK_SPRITE = jnp.expand_dims(bank, axis=0)
-    DYNAMITE_SPRITE = jnp.expand_dims(dynamite, axis=0)
-    FUEL_TANK_SPRITE = jnp.expand_dims(fuel_tank, axis=0)
-    FUEL_GAUGE_SPRITE = jnp.expand_dims(fuel_gauge, axis=0)
-
-    DIGIT_SPRITES = aj.load_and_pad_digits(
-        os.path.join(MODULE_DIR, os.path.join(SPRITES_DIR, "score_{}.npy")),
-        num_chars=10,
-    )
-
-    return (PLAYER_SIDE_SPRITE, PLAYER_FRONT_SPRITE, POLICE_SIDE_SPRITE, POLICE_FRONT_SPRITE, BANK_SPRITE,DYNAMITE_SPRITE, CITY_SPRITES, FUEL_TANK_SPRITE, FUEL_GAUGE_SPRITE, DIGIT_SPRITES)
-
-class Renderer_AtraBankisHeist(JAXGameRenderer):
-    def __init__(self):
+class BankHeistRenderer(JAXGameRenderer):
+    def __init__(self, consts: BankHeistConstants = None):
+        super().__init__()
+        consts = consts or BankHeistConstants()
+        self.consts = consts
+        # 1. Configure the renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # 2. Define asset path
+        sprite_path = os.path.join(MODULE_DIR, "sprites", "bankheist")
+        # 3. Load all assets using the manifest from constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        city_asset = next((a for a in final_asset_config if a['name'] == 'cities'), None)
+        if city_asset:
+            final_asset_config.remove(city_asset)
+            city_files = city_asset['files']
+            # Add first city as the default background
+            final_asset_config.append({'name': 'background', 'type': 'background', 'file': city_files[0]})
+            # Add all cities (including first) as a group for indexing
+            final_asset_config.append({'name': 'city_maps', 'type': 'group', 'files': city_files})
         (
-            self.SPRITE_PLAYER_SIDE,
-            self.SPRITE_PLAYER_FRONT,
-            self.SPRITE_POLICE_SIDE,
-            self.SPRITE_POLICE_FRONT,
-            self.SPRITE_BANK,
-            self.SPRITE_DYNAMITE,
-            self.SPRITES_CITY,
-            self.SPRITE_FUEL_TANK,
-            self.SPRITE_FUEL_GAUGE,
-            self.DIGIT_SPRITES
-        ) = load_bankheist_sprites() 
-
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # --- 4. Manual Padding for Cars (to match old symmetric padding) ---
+        p_side_mask = self.SHAPE_MASKS['player_side']   # (H, W_side)
+        p_front_mask = self.SHAPE_MASKS['player_front'] # (H, W_front)
+        
+        pad_w = p_side_mask.shape[1] - p_front_mask.shape[1]
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+        
+        p_front_padded = jnp.pad(
+            p_front_mask, 
+            ((0,0), (pad_left, pad_right)), 
+            mode="constant", 
+            constant_values=self.jr.TRANSPARENT_ID
+        )
+        self.PLAYER_MASKS = jnp.stack([p_side_mask, p_front_padded])
+        
+        pol_side_mask = self.SHAPE_MASKS['police_side']
+        pol_front_mask = self.SHAPE_MASKS['police_front']
+        pad_w_pol = pol_side_mask.shape[1] - pol_front_mask.shape[1]
+        pad_left_pol = pad_w_pol // 2
+        pad_right_pol = pad_w_pol - pad_left_pol
+        pol_front_padded = jnp.pad(
+            pol_front_mask,
+            ((0,0), (pad_left_pol, pad_right_pol)),
+            mode="constant",
+            constant_values=self.jr.TRANSPARENT_ID
+        )
+        self.POLICE_MASKS = jnp.stack([pol_side_mask, pol_front_padded])
+        
+        # --- 5. Store procedural color ID ---
+        self.fuel_color_id = self.COLOR_TO_ID[(167, 26, 26)]
     @partial(jax.jit, static_argnums=(0,))
-    def fuel_tank_filler(self, sprite: chex.Array, state: BankHeistState) -> jax.Array:
+    def _render_fuel_tank(self, raster, state):
         """
-        Colors the bottom part of the fuel tank sprite red, based on current fuel level.
-
-        Returns: Jax Array of same shape as input sprite
+        Renders the fuel tank base and procedurally fills it based on fuel level.
+        This replaces the old 'fuel_tank_filler' logic.
         """
-        # Get the number of channels
-        num_channels = sprite.shape[-1]
-        
-        # Extract channels
-        r = sprite[..., 0]
-        g = sprite[..., 1]
-        b = sprite[..., 2]
-        
-        # Handle alpha channel if present
-        has_alpha = num_channels >= 4
-        alpha = jnp.ones_like(r) if not has_alpha else sprite[..., 3]
-        # Calculate the fill level based on fuel
+        # 1. Draw the base tank sprite
+        tank_mask = self.SHAPE_MASKS['fuel_tank'] # Shape (11, 25)
+        tank_x, tank_y = FUEL_TANK_POSITION
+        raster = self.jr.render_at(raster, tank_x, tank_y, tank_mask, flip_offset=self.FLIP_OFFSETS['fuel_tank'])
+        # 2. Calculate fill
         level = state.fuel / FUEL_CAPACITY
-        pixel_level = jnp.ceil(level * TANK_HEIGHT)
-        # Create a mask for the pixels to be filled
-        fill_mask = jnp.arange(TANK_HEIGHT) > TANK_HEIGHT-pixel_level
-
-        final_r = jnp.where(fill_mask, 167, r)
-        final_g = jnp.where(fill_mask, 26, g)
-        final_b = jnp.where(fill_mask, 26, b)
-
-        # Stack channels back together with alpha if it exists
-        if has_alpha:
-            return jnp.stack([final_r, final_g, final_b, alpha], axis=-1).astype(jnp.uint8)
-        else:
-            return jnp.stack([final_r, final_g, final_b], axis=-1).astype(jnp.uint8)
-
+        
+        # Get scaled coords
+        scaled_tank_x = jnp.round(tank_x * self.jr.config.width_scaling).astype(jnp.int32)
+        scaled_tank_y = jnp.round(tank_y * self.jr.config.height_scaling).astype(jnp.int32)
+        
+        # Get scaled sprite dimensions from the mask
+        sprite_h, sprite_w = tank_mask.shape # (11, 25)
+        
+        # We calculate the fill level based on the sprite's HEIGHT (sprite_h)
+        # instead of its width (sprite_w).
+        pixel_level = jnp.ceil(level * sprite_h).astype(jnp.int32)
+        
+        # 3. Create fill mask (filling from the bottom-up)
+        xx, yy = self.jr._xx, self.jr._yy
+        
+        # Calculate the top Y coordinate of the filled portion
+        fill_top_y = scaled_tank_y + sprite_h - pixel_level
+        
+        # Bounding box for the fill (fills vertically)
+        fill_box_mask = (yy >= fill_top_y) & (yy < scaled_tank_y + sprite_h) & \
+                        (xx >= scaled_tank_x) & (xx < scaled_tank_x + sprite_w)
+        
+        # 4. Get mask for the tank sprite itself (to fill *inside* it)
+        # Sample the tank mask at its rendered position
+        sprite_coords_y = yy - scaled_tank_y
+        sprite_coords_x = xx - scaled_tank_x
+        sampled_tank_mask = map_coordinates(
+            tank_mask,
+            [sprite_coords_y, sprite_coords_x],
+            order=0,
+            cval=self.jr.TRANSPARENT_ID
+        )
+        tank_pixels_mask = (sampled_tank_mask != self.jr.TRANSPARENT_ID)
+        # 5. Combine masks
+        final_fill_mask = fill_box_mask & tank_pixels_mask
+        
+        # 6. Paint the raster
+        return jnp.where(final_fill_mask, jnp.asarray(self.fuel_color_id, raster.dtype), raster)
     @partial(jax.jit, static_argnums=(0,))
-    def render_lives(self, raster, state, life_frame):
+    def render_lives(self, raster, state, life_mask):
+        # Use the manually padded player side mask
         def body_fun(i, rast):
             return jax.lax.cond(
                 i < state.player_lives,
-                lambda r: aj.render_at(r, LIFE_POSITIONS[i][0], LIFE_POSITIONS[i][1], life_frame),
+                # Use [0,0] flip_offset for symmetrically padded sprites
+                lambda r: self.jr.render_at(r, LIFE_POSITIONS[i][0], LIFE_POSITIONS[i][1], life_mask, flip_offset=jnp.array([0,0])),
                 lambda r: r,
                 rast
             )
         raster = jax.lax.fori_loop(0, len(LIFE_POSITIONS), body_fun, raster)
         return raster
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = jnp.zeros((HEIGHT, WIDTH, 3), dtype=jnp.uint8)
-
+        # Start with a base raster (e.g., black or first city map)
+        # We use the 'background' (map_1) as the default
+        raster = self.jr.create_object_raster(self.BACKGROUND)
         ### Render City
-        frame_city = aj.get_sprite_frame(self.SPRITES_CITY[state.level % self.SPRITES_CITY.shape[0]], 0)
-        raster = aj.render_at(raster, 0, 0, frame_city)
-
+        # Get the correct city map mask from the 'city_maps' group
+        city_mask = self.SHAPE_MASKS['city_maps'][state.level % self.SHAPE_MASKS['city_maps'].shape[0]]
+        # Stamp the current city map over the background
+        raster = self.jr.render_at(raster, 0, 0, city_mask, flip_offset=self.FLIP_OFFSETS['city_maps'])
         ### Render Player
+        # Use the manually padded masks
         branches = [
-            lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # DOWN
-            lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_FRONT, 0),  # UP
-            lambda: aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0),   # RIGHT
-            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0), axis=1),   # LEFT, Frame is Mirrored
+            lambda: self.PLAYER_MASKS[1],  # DOWN (Front)
+            lambda: self.PLAYER_MASKS[1],  # UP (Front)
+            lambda: self.PLAYER_MASKS[0],  # RIGHT (Side)
+            lambda: jnp.flip(self.PLAYER_MASKS[0], axis=1),   # LEFT (Flipped Side)
         ]
-        # Make no Direction equal to right for rendering
         player_direction = jax.lax.cond(
-            state.player.direction == 4,
-            lambda: 2,
+            state.player.direction == 4, # NOOP
+            lambda: 2, # Default to RIGHT
             lambda: state.player.direction
         )
-        player_frame = jax.lax.switch(player_direction, branches)
-        raster = aj.render_at(raster, state.player.position[0], state.player.position[1], player_frame)
-
-        ### Render Fuel Tank
-        fuel_tank_frame = aj.get_sprite_frame(self.SPRITE_FUEL_TANK, 0)
-        # color in the bottom of the fuel tank in red
-        fuel_tank_frame = self.fuel_tank_filler(fuel_tank_frame, state).transpose(1, 0, 2)
-        raster = aj.render_at(raster, FUEL_TANK_POSITION[0], FUEL_TANK_POSITION[1], fuel_tank_frame)
+        player_mask = jax.lax.switch(player_direction, branches)
+        # Use [0,0] offset for symmetric padding
+        raster = self.jr.render_at(raster, state.player.position[0], state.player.position[1], player_mask, flip_offset=jnp.array([0,0]))
+        ### Render Fuel Tank (using new procedural function)
+        raster = self._render_fuel_tank(raster, state)
         # Render the Fuel gauge
         fuel_gauge_position = jax.lax.dynamic_index_in_dim(TANK_LEVELS, state.bank_heists, axis=0, keepdims=False)
-        fuel_gauge_frame = aj.get_sprite_frame(self.SPRITE_FUEL_GAUGE, 0)
+        fuel_gauge_mask = self.SHAPE_MASKS['fuel_gauge']
         raster = jax.lax.cond(fuel_gauge_position > 0,
-                              lambda: aj.render_at(raster, FUEL_TANK_POSITION[0]+8, FUEL_TANK_POSITION[1]+(TANK_HEIGHT - fuel_gauge_position), fuel_gauge_frame),
+                              lambda: self.jr.render_at(raster, 
+                                                        FUEL_TANK_POSITION[0]+8, 
+                                                        FUEL_TANK_POSITION[1]+(TANK_HEIGHT - fuel_gauge_position), 
+                                                        fuel_gauge_mask,
+                                                        flip_offset=self.FLIP_OFFSETS['fuel_gauge']),
                               lambda: raster,
                               )
-
         ### Render Player Lives
-        life_frame = aj.get_sprite_frame(self.SPRITE_PLAYER_SIDE, 0)
-        raster = self.render_lives(raster, state, life_frame)
-
+        life_mask = self.PLAYER_MASKS[0] # Player side view
+        raster = self.render_lives(raster, state, life_mask)
         ### Render Banks
-        bank_frame = aj.get_sprite_frame(self.SPRITE_BANK, 0)
-        for i in range(state.bank_positions.position.shape[0]):
-            raster = jax.lax.cond(
+        bank_mask = self.SHAPE_MASKS['bank']
+        bank_flip_offset = self.FLIP_OFFSETS['bank']
+        def render_bank(i, r):
+            return jax.lax.cond(
                 state.bank_positions.visibility[i] != 0,
-                lambda r: aj.render_at(r, state.bank_positions.position[i, 0], state.bank_positions.position[i, 1], bank_frame),
-                lambda r: r,
-                raster
+                lambda r_in: self.jr.render_at(r_in, state.bank_positions.position[i, 0], state.bank_positions.position[i, 1], bank_mask, flip_offset=bank_flip_offset),
+                lambda r_in: r_in,
+                r
             )
-
+        raster = jax.lax.fori_loop(0, state.bank_positions.position.shape[0], render_bank, raster)
         ### Render Police Cars
         police_branches = [
-            lambda: aj.get_sprite_frame(self.SPRITE_POLICE_FRONT, 0),  # DOWN
-            lambda: aj.get_sprite_frame(self.SPRITE_POLICE_FRONT, 0),  # UP
-            lambda: jnp.flip(aj.get_sprite_frame(self.SPRITE_POLICE_SIDE, 0), axis=1),   # RIGHT
-            lambda: aj.get_sprite_frame(self.SPRITE_POLICE_SIDE, 0),   # LEFT, Frame is Mirrored
+            lambda: self.POLICE_MASKS[1],  # DOWN (Front)
+            lambda: self.POLICE_MASKS[1],  # UP (Front)
+            lambda: jnp.flip(self.POLICE_MASKS[0], axis=1),   # RIGHT (Flipped Side)
+            lambda: self.POLICE_MASKS[0],   # LEFT (Side)
         ]
         
-        for i in range(state.enemy_positions.position.shape[0]):
+        def render_police_car(i, r):
             def render_police(raster_input):
-                # Get police direction, default to right if direction is 4 (NOOP)
                 police_direction = jax.lax.cond(
-                    state.enemy_positions.direction[i] == 4,
+                    state.enemy_positions.direction[i] == 4, # NOOP
                     lambda: 2,  # Default to RIGHT
                     lambda: state.enemy_positions.direction[i]
                 )
-                police_frame = jax.lax.switch(police_direction, police_branches)
-                return aj.render_at(raster_input, state.enemy_positions.position[i, 0], state.enemy_positions.position[i, 1], police_frame)
+                police_mask = jax.lax.switch(police_direction, police_branches)
+                # Use [0,0] offset for symmetric padding
+                return self.jr.render_at(raster_input, state.enemy_positions.position[i, 0], state.enemy_positions.position[i, 1], police_mask, flip_offset=jnp.array([0,0]))
             
-            raster = jax.lax.cond(
+            return jax.lax.cond(
                 state.enemy_positions.visibility[i] != 0,
                 render_police,
-                lambda r: r,
-                raster
+                lambda r_in: r_in,
+                r
             )
-
+        raster = jax.lax.fori_loop(0, state.enemy_positions.position.shape[0], render_police_car, raster)
         ### Render Dynamite (only when active)
         def render_dynamite(raster_input):
-            dynamite_frame = aj.get_sprite_frame(self.SPRITE_DYNAMITE, 0)
-            return aj.render_at(raster_input, state.dynamite_position[0], state.dynamite_position[1], dynamite_frame)
+            dynamite_mask = self.SHAPE_MASKS['dynamite']
+            return self.jr.render_at(raster_input, state.dynamite_position[0], state.dynamite_position[1], dynamite_mask, flip_offset=self.FLIP_OFFSETS['dynamite'])
         
-        # Check if dynamite is active (not at [-1, -1])
         dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
         raster = jax.lax.cond(dynamite_active, render_dynamite, lambda r: r, raster)
-
-
-
-        score_digits = aj.int_to_digits(state.money, max_digits=4)
-        raster = aj.render_label_selective(
-            raster, 90, 179, score_digits, self.DIGIT_SPRITES, 0, len(score_digits), spacing=12
+        ### Render Score
+        score_digits_arr = self.jr.int_to_digits(state.money, max_digits=4)
+        raster = self.jr.render_label_selective(
+            raster, 90, 179, 
+            all_digits=score_digits_arr, 
+            digit_id_masks=self.SHAPE_MASKS['digits'], 
+            start_index=0, 
+            num_to_render=4, # Always render 4 digits for score
+            spacing=12,
+            max_digits_to_render=4
         )
-
-        return raster
-"""
-if __name__ == "__main__":
-    # Initialize Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Assault Game")
-    clock = pygame.time.Clock()
-
-    game = JaxBankHeist()
-
-    # Create the JAX renderer
-    renderer = Renderer_AtraBankisHeist()
-
-    # Get jitted functions
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    obs, curr_state = jitted_reset()
-
-    # Game loop
-    running = True
-    frame_by_frame = False
-    frameskip = game.frameskip
-    counter = 1
-
-    while running:
-        game_over = jnp.logical_or(
-            jnp.less(curr_state.player_lives, 0),  # Player has 0 or fewer lives
-            jnp.greater_equal(curr_state.money, 999999)  # Score reached 999999
-        )
-
-        if game_over:
-            print(f"Game Over! Final Score: {curr_state.money}, Lives: {curr_state.player_lives}")
-            running = False
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-            elif event.type == pygame.KEYDOWN or (
-                    event.type == pygame.KEYUP and event.key == pygame.K_n
-            ):
-                if event.key == pygame.K_n and frame_by_frame:
-                    if counter % frameskip == 0:
-                        action = get_human_action()
-                        obs, curr_state, reward, done, info = jitted_step(
-                            curr_state, action
-                        )
-
-        if not frame_by_frame:
-            if counter % frameskip == 0:
-                action = get_human_action()
-                obs, curr_state, reward, done, info = jitted_step(curr_state, action)
-
-        
-
-        # Render and display
-        raster = renderer.render(curr_state)
-
-        update_pygame(screen, raster, 3, WIDTH, HEIGHT)
-
-        counter += 1
-        clock.tick(60)
-
-    pygame.quit()
-"""
+        # Final conversion from ID raster to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)

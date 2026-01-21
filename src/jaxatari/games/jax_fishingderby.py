@@ -1,49 +1,86 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, List, Dict
+from typing import NamedTuple, Tuple, Dict, List, Optional
 
+import chex
 import jax
 import jax.numpy as jnp
-import chex
-import pygame
-from dataclasses import dataclass
 
+import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-import jaxatari.rendering.jax_rendering_utils_legacy as aj
-from jaxatari.renderers import JAXGameRenderer
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Create procedural background with sky and water colors
+    # Using default values from GameConfig
+    SCREEN_HEIGHT = 210
+    SCREEN_WIDTH = 160
+    WATER_Y_START = 60
+    SKY_COLOR = (117, 128, 240)  # RGB
+    WATER_COLOR = (24, 26, 167)  # RGB
+    
+    # Create RGBA background
+    background = jnp.zeros((SCREEN_HEIGHT, SCREEN_WIDTH, 4), dtype=jnp.uint8)
+    
+    # Set sky color (top part)
+    sky_rgb = jnp.array(SKY_COLOR + (255,), dtype=jnp.uint8)  # Add alpha
+    background = background.at[:WATER_Y_START, :, :].set(sky_rgb)
+    
+    # Set water color (bottom part)
+    water_rgb = jnp.array(WATER_COLOR + (255,), dtype=jnp.uint8)  # Add alpha
+    background = background.at[WATER_Y_START:, :, :].set(water_rgb)
+    
+    return {
+        'background': background,
+    }
 
-"""
-   Loads a sprite frame from a given file path.
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Fishing Derby.
+    """
+    procedural_sprites = _create_static_procedural_sprites()
+    asset_list = [
+        {'name': 'background', 'type': 'background', 'data': procedural_sprites['background']},
+        {'name': 'player1', 'type': 'single', 'file': 'player1.npy'},
+        {'name': 'player2', 'type': 'single', 'file': 'player2.npy'},
+        {'name': 'sky', 'type': 'single', 'file': 'sky.npy'},
+        {'name': 'pier', 'type': 'single', 'file': 'pier.npy'},
+        {'name': 'shark', 'type': 'group', 'files': ['shark_new_1.npy', 'shark_new_2.npy']},
+        {'name': 'fish', 'type': 'group', 'files': ['fish1.npy', 'fish4.npy']},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        {
+            'name': 'line_colors',
+            'type': 'procedural',
+            'data': jnp.array(
+                [
+                    [[0, 0, 0, 255]],
+                    [[255, 255, 0, 255]],
+                    [[255, 255, 255, 255]],
+                ],
+                dtype=jnp.uint8,
+            ).reshape(3, 1, 1, 4),
+        },
+    ]
+    return tuple(asset_list)
 
-   This function attempts to load a NumPy array from the specified file path
-   and converts it to a JAX array. If the file does not exist, it returns an
-   empty JAX array.
 
-   Args:
-       path (str): The file path to the sprite frame.
-
-   Returns:
-       chex.Array: The loaded sprite frame as a JAX array, or an empty array
-       if the file does not exist.
-   """
-def load_sprite_frame(path: str) -> chex.Array:
-    import numpy as np
-    if os.path.exists(path):
-        return jnp.array(np.load(path))
-    return jnp.array([])  # Return empty array instead of None
-
-
-@dataclass
-class GameConfig:
+class GameConfig(NamedTuple):
     """All static configuration parameters for the game."""
+    # Screen dimensions
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
+    
+    # Colors
     SKY_COLOR: Tuple[int, int, int] = (117, 128, 240)
     WATER_COLOR: Tuple[int, int, int] = (24, 26, 167)
+    
+    # Water
     WATER_Y_START: int = 60
     WATER_SHIMMER_HEIGHT: int = 16
+    
+    # Game control
     RESET: int = 18
 
     # Player and Rod/Hook
@@ -74,6 +111,7 @@ class GameConfig:
     LINE_Y_START: int = 48
     LINE_Y_END: int = 180
     AUTO_LOWER_SPEED: float = 2.0
+    
     # Physics
     Acceleration: float = 0.2
     Damping: float = 0.85
@@ -84,12 +122,13 @@ class GameConfig:
     WOBBLE_AMP_BASE: float = 0.05  # base wobble dx (px/frame)
     WOBBLE_AMP_RANGE: float = 0.20  # extra wobble dx with depth
 
-    # Occasional downward tugs by row (px/frame) when you’re NOT reeling on this frame
+    # Occasional downward tugs by row (px/frame) when you're NOT reeling on this frame
     FISH_PULL_PER_ROW: Tuple[float, ...] = (0.10, 0.12, 0.14, 0.16, 0.18, 0.20)
 
     # Boundaries
     LEFT_BOUNDARY: float = 10
     RIGHT_BOUNDARY: float = 115
+    
     # Fish
     FISH_WIDTH: int = 8
     FISH_HEIGHT: int = 7
@@ -109,7 +148,6 @@ class GameConfig:
     # Turning cooldown for hooked fish
     HOOKED_FISH_TURNING_COOLDOWN: int = 30  # frames before hooked fish can turn again
 
-
     # Shark
     SHARK_WIDTH: int = 16
     SHARK_HEIGHT: int = 7
@@ -118,6 +156,77 @@ class GameConfig:
     SHARK_BURST_SPEED: float = 1.5
     SHARK_BURST_DURATION: int = 300 # Frames
     SHARK_BURST_CHANCE: float = 0.001 # percentage
+    
+    # Asset configuration
+    ASSET_CONFIG: tuple = None  # Will be set via factory method
+    
+    @classmethod
+    def create_default(cls):
+        """Factory method to create GameConfig with default asset config."""
+        # Create with all defaults, using _replace to set ASSET_CONFIG
+        # We need to provide all fields, so we'll use the defaults from the class definition
+        return cls(
+            SCREEN_WIDTH=160,
+            SCREEN_HEIGHT=210,
+            SKY_COLOR=(117, 128, 240),
+            WATER_COLOR=(24, 26, 167),
+            WATER_Y_START=60,
+            WATER_SHIMMER_HEIGHT=16,
+            RESET=18,
+            P1_START_X=9,
+            P2_START_X=135,
+            PLAYER_Y=23,
+            ROD_Y=38,
+            FISH_SCORING_Y=78,
+            MIN_ROD_LENGTH_X=23,
+            START_ROD_LENGTH_X=23,
+            MAX_ROD_LENGTH_X=65,
+            P2_MIN_ROD_LENGTH_X=7,
+            P2_MAX_ROD_LENGTH_X=46,
+            MIN_HOOK_DEPTH_Y=0,
+            START_HOOK_DEPTH_Y=40,
+            MAX_HOOK_DEPTH_Y=160,
+            ROD_SPEED=1.0,
+            FISH_DEATH_LINE_OFFSET=20,
+            HOOK_WIDTH=3,
+            HOOK_HEIGHT=5,
+            HOOK_SPEED_V=10.0,
+            REEL_SLOW_SPEED=1.0,
+            LINE_Y_START=48,
+            LINE_Y_END=180,
+            AUTO_LOWER_SPEED=2.0,
+            Acceleration=0.2,
+            Damping=0.85,
+            SLOW_REEL_PERIOD=6,
+            MAX_HOOKED_WOBBLE_DX=0.9,
+            WOBBLE_FREQ_BASE=0.10,
+            WOBBLE_FREQ_RANGE=0.06,
+            WOBBLE_AMP_BASE=0.05,
+            WOBBLE_AMP_RANGE=0.20,
+            FISH_PULL_PER_ROW=(0.10, 0.12, 0.14, 0.16, 0.18, 0.20),
+            LEFT_BOUNDARY=10.0,
+            RIGHT_BOUNDARY=115.0,
+            FISH_WIDTH=8,
+            FISH_HEIGHT=7,
+            FISH_SPEED=0.4,
+            NUM_FISH=6,
+            FISH_ROW_YS=(95, 111, 127, 143, 159, 175),
+            FISH_ROW_SCORES=(2, 2, 4, 4, 6, 6),
+            HOOKED_FISH_SPEED_MULTIPLIER=1.5,
+            HOOKED_FISH_TURN_PROBABILITY=0.04,
+            HOOKED_FISH_BOUNDARY_ENABLED=True,
+            HOOKED_FISH_BOUNDARY_PADDING=20,
+            FISH_BASE_TURN_PROBABILITY=0.01,
+            HOOKED_FISH_TURNING_COOLDOWN=30,
+            SHARK_WIDTH=16,
+            SHARK_HEIGHT=7,
+            SHARK_SPEED=0.3,
+            SHARK_Y=78,
+            SHARK_BURST_SPEED=1.5,
+            SHARK_BURST_DURATION=300,
+            SHARK_BURST_CHANCE=0.001,
+            ASSET_CONFIG=_get_default_asset_config()
+        )
 
 class PlayerState(NamedTuple):
     rod_length: chex.Array  # Length of horizontal rod extension
@@ -185,9 +294,11 @@ class FishingDerbyInfo(NamedTuple):
     collision detection.
 """
 class FishingDerby(JaxEnvironment):
-    def __init__(self):
+    def __init__(self, consts: Optional[GameConfig] = None):
+        consts = consts or GameConfig.create_default()
         super().__init__()
-        self.config = GameConfig()
+        self.consts = consts
+        self.renderer = FishingDerbyRenderer(self.consts)
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -211,7 +322,7 @@ class FishingDerby(JaxEnvironment):
 
     def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
         """Calculate the actual hook position based on rod length and hook depth."""
-        cfg = self.config
+        cfg = self.consts
         rod_end_x = player_x + player_state.rod_length
         # Apply horizontal offset for water resistance effect
         hook_x = rod_end_x + player_state.hook_x_offset
@@ -220,7 +331,7 @@ class FishingDerby(JaxEnvironment):
 
     def _get_hook_position_p2(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
         """Calculate the actual hook position for Player 2 based on rod length and hook depth."""
-        cfg = self.config
+        cfg = self.consts
         # Player 2's rod extends leftward, so subtract rod length from starting position
         rod_end_x = player_x - player_state.rod_length
         # Apply horizontal offset for water resistance effect
@@ -248,8 +359,8 @@ class FishingDerby(JaxEnvironment):
         key, fish_key = jax.random.split(key)
 
         p1_state = PlayerState(
-            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),
-            hook_y=jnp.array(float(self.config.START_HOOK_DEPTH_Y)),
+            rod_length=jnp.array(float(self.consts.START_ROD_LENGTH_X)),
+            hook_y=jnp.array(float(self.consts.START_HOOK_DEPTH_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
@@ -261,8 +372,8 @@ class FishingDerby(JaxEnvironment):
         )
 
         p2_state = PlayerState(
-            rod_length=jnp.array(float(self.config.START_ROD_LENGTH_X)),
-            hook_y=jnp.array(float(self.config.WATER_Y_START - self.config.ROD_Y)),
+            rod_length=jnp.array(float(self.consts.START_ROD_LENGTH_X)),
+            hook_y=jnp.array(float(self.consts.WATER_Y_START - self.consts.ROD_Y)),
             score=jnp.array(0),
             hook_state=jnp.array(0),
             hooked_fish_idx=jnp.array(-1, dtype=jnp.int32),
@@ -273,17 +384,17 @@ class FishingDerby(JaxEnvironment):
             line_segments_x=jnp.zeros(8)
         )
 
-        fish_x = jax.random.uniform(fish_key, (self.config.NUM_FISH,), minval=self.config.LEFT_BOUNDARY,
-                                    maxval=self.config.RIGHT_BOUNDARY)
-        fish_y = jnp.array(self.config.FISH_ROW_YS, dtype=jnp.float32)
+        fish_x = jax.random.uniform(fish_key, (self.consts.NUM_FISH,), minval=self.consts.LEFT_BOUNDARY,
+                                    maxval=self.consts.RIGHT_BOUNDARY)
+        fish_y = jnp.array(self.consts.FISH_ROW_YS, dtype=jnp.float32)
 
         state = GameState(
             p1=p1_state, p2=p2_state,
             fish_positions=jnp.stack([fish_x, fish_y], axis=1),
-            fish_directions=jax.random.choice(key, jnp.array([-1.0, 1.0]), (self.config.NUM_FISH,)),
-            fish_active=jnp.ones(self.config.NUM_FISH, dtype=jnp.bool_),
-            fish_turn_cooldowns=jnp.zeros(self.config.NUM_FISH, dtype=jnp.int32),  # Initialize cooldowns
-            shark_x=jnp.array(self.config.SCREEN_WIDTH / 2.0),
+            fish_directions=jax.random.choice(key, jnp.array([-1.0, 1.0]), (self.consts.NUM_FISH,)),
+            fish_active=jnp.ones(self.consts.NUM_FISH, dtype=jnp.bool_),
+            fish_turn_cooldowns=jnp.zeros(self.consts.NUM_FISH, dtype=jnp.int32),  # Initialize cooldowns
+            shark_x=jnp.array(self.consts.SCREEN_WIDTH / 2.0),
             shark_dir=jnp.array(1.0),
             shark_burst_timer=jnp.array(0),
             reeling_priority=jnp.array(-1),
@@ -308,7 +419,7 @@ class FishingDerby(JaxEnvironment):
                 of Player 1's hook, the positions of all fish, the x coordinate of the shark,
                 and Player 1's current score.
             """
-        hook_x, hook_y = self._get_hook_position(self.config.P1_START_X, state.p1)
+        hook_x, hook_y = self._get_hook_position(self.consts.P1_START_X, state.p1)
         return FishingDerbyObservation(
             player1_hook_xy=jnp.array([hook_x, hook_y]),
             fish_xy=state.fish_positions,
@@ -367,7 +478,7 @@ class FishingDerby(JaxEnvironment):
             - Properly retracts rod when reeling in fish
 
             """
-            cfg = self.config
+            cfg = self.consts
             p2_state = state.p2
             fish_pos = state.fish_positions
             fish_active = state.fish_active
@@ -579,8 +690,7 @@ class FishingDerby(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> chex.Array:
         """Render the current game state."""
-        renderer = FishingDerbyRenderer()
-        return renderer.render(state)
+        return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
         """
@@ -611,20 +721,20 @@ class FishingDerby(JaxEnvironment):
         return spaces.Dict({
             "player1_hook_xy": spaces.Box(
                 low=jnp.array([0.0, 0.0], dtype=jnp.float32),
-                high=jnp.array([self.config.SCREEN_WIDTH, self.config.SCREEN_HEIGHT], dtype=jnp.float32),
+                high=jnp.array([self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT], dtype=jnp.float32),
                 shape=(2,),
                 dtype=jnp.float32
             ),
             "fish_xy": spaces.Box(
-                low=jnp.array([[0.0, 0.0]] * self.config.NUM_FISH, dtype=jnp.float32),
-                high=jnp.array([[self.config.SCREEN_WIDTH, self.config.SCREEN_HEIGHT]] * self.config.NUM_FISH,
+                low=jnp.array([[0.0, 0.0]] * self.consts.NUM_FISH, dtype=jnp.float32),
+                high=jnp.array([[self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT]] * self.consts.NUM_FISH,
                                dtype=jnp.float32),
-                shape=(self.config.NUM_FISH, 2),
+                shape=(self.consts.NUM_FISH, 2),
                 dtype=jnp.float32
             ),
             "shark_x": spaces.Box(
                 low=jnp.array(0.0, dtype=jnp.float32),
-                high=jnp.array(self.config.SCREEN_WIDTH, dtype=jnp.float32),
+                high=jnp.array(self.consts.SCREEN_WIDTH, dtype=jnp.float32),
                 shape=(),
                 dtype=jnp.float32
             ),
@@ -641,7 +751,7 @@ class FishingDerby(JaxEnvironment):
         return spaces.Box(
             low=0,
             high=255,
-            shape=(self.config.SCREEN_HEIGHT, self.config.SCREEN_WIDTH, 3),
+            shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
 
@@ -669,7 +779,7 @@ class FishingDerby(JaxEnvironment):
 
     def _step_logic(self, state: GameState, p1_action: int, p2_action: int) -> GameState:
         """The core logic for a single game step, returning only the new state."""
-        cfg = self.config
+        cfg = self.consts
 
         def reset_branch(_):
             _, new_state = self.reset(state.key)
@@ -1466,125 +1576,53 @@ class FishingDerby(JaxEnvironment):
         return jax.lax.cond(p1_action == cfg.RESET, reset_branch, game_branch, state)
 
 
-def normalize_frame(frame: chex.Array, target_shape: Tuple[int, int, int]) -> chex.Array:
-    """Crop or pad a sprite to the target shape with transparent (255) background."""
-    h, w, c = frame.shape
-    th, tw, tc = target_shape
-    assert c == tc
-
-    # Crop if larger
-    frame = frame[:min(h, th), :min(w, tw), :]
-
-    # Pad if smaller
-    pad_h = th - frame.shape[0]
-    pad_w = tw - frame.shape[1]
-
-    frame = jnp.pad(
-        frame,
-        ((0, pad_h), (0, pad_w), (0, 0)),
-        mode="constant",
-        constant_values=0
-    )
-    return frame
-
-
-def load_sprites():
-    """
-        Loads and normalizes all sprite assets required for the Fishing Derby game.
-
-        This function loads sprite files from predefined paths, normalizes their dimensions
-        to ensure consistency, and organizes them into a dictionary for use in rendering.
-        It raises a `FileNotFoundError` if any required sprite file is missing.
-
-        Returns:
-            Dict[str, chex.Array]: A dictionary where keys are sprite names and values are
-            the corresponding JAX arrays representing the sprites.
-        """
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    sprite_paths = {
-        'background': os.path.join(MODULE_DIR, "sprites/fishingderby/background.npy"),
-        'player1': os.path.join(MODULE_DIR, "sprites/fishingderby/player1.npy"),
-        'player2': os.path.join(MODULE_DIR, "sprites/fishingderby/player2.npy"),
-        'shark1': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_1.npy"),
-        'shark2': os.path.join(MODULE_DIR, "sprites/fishingderby/shark_new_2.npy"),
-        'fish1': os.path.join(MODULE_DIR, "sprites/fishingderby/fish1.npy"),
-        'fish2': os.path.join(MODULE_DIR, "sprites/fishingderby/fish4.npy"),
-        'sky': os.path.join(MODULE_DIR, "sprites/fishingderby/sky.npy"),
-        'pier': os.path.join(MODULE_DIR, "sprites/fishingderby/pier.npy"),
-        **{f"score_{i}": os.path.join(MODULE_DIR, f"sprites/fishingderby/score_{i}.npy") for i in range(10)}
-    }
-
-    sprites = {}
-    for name, path in sprite_paths.items():
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Sprite file not found: {path}")
-        sprite = aj.loadFrame(path, transpose=False)
-        if sprite is None:
-            raise ValueError(f"Failed to load sprite: {path}")
-        sprites[name] = sprite
-
-    # Normalize shark frames
-    shark_sprites = [sprites['shark1'], sprites['shark2']]
-    max_shape = (
-        max(s.shape[0] for s in shark_sprites),
-        max(s.shape[1] for s in shark_sprites),
-        shark_sprites[0].shape[2]
-    )
-    sprites['shark1'] = normalize_frame(sprites['shark1'], max_shape)
-    sprites['shark2'] = normalize_frame(sprites['shark2'], max_shape)
-
-    # Normalize fish frames
-    fish_sprites = [sprites['fish1'], sprites['fish2']]
-    max_shape = (
-        max(s.shape[0] for s in fish_sprites),
-        max(s.shape[1] for s in fish_sprites),
-        fish_sprites[0].shape[2]
-    )
-    sprites['fish1'] = normalize_frame(sprites['fish1'], max_shape)
-    sprites['fish2'] = normalize_frame(sprites['fish2'], max_shape)
-
-    # Score digits
-    score_digits = jnp.stack([sprites[f'score_{i}'] for i in range(10)])
-
-    return (
-        sprites['background'], sprites['player1'], sprites['player2'],
-        sprites['shark1'], sprites['shark2'], sprites['fish1'], sprites['fish2'],
-        sprites['sky'], score_digits, sprites['pier']
-    )
-
-
 class FishingDerbyRenderer(JAXGameRenderer):
     """
-    This class handles the rendering of the game state, including the background,
-    players, fish, shark, and other game elements. It uses preloaded sprite assets
-    and applies transformations such as positioning, flipping, and scaling to render
-    the game accurately.
+    Renders the Fishing Derby game state.
+
+    Missing: water shimmer effect
     """
-    def __init__(self):
+
+    def __init__(self, consts: Optional[GameConfig] = None):
         super().__init__()
-        self.config = GameConfig()
+        self.consts = consts or GameConfig.create_default()
+
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        self.sprite_path = os.path.join(module_dir, "sprites/fishingderby")
+
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         (
-            self.SPRITE_BG, self.SPRITE_PLAYER1, self.SPRITE_PLAYER2,
-            self.SPRITE_SHARK1, self.SPRITE_SHARK2, self.SPRITE_FISH1,
-            self.SPRITE_FISH2, self.SPRITE_SKY, self.SPRITE_SCORE_DIGITS, self.SPRITE_PIER
-        ) = load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+
+        self.LINE_P1_ID = self.COLOR_TO_ID.get((255, 255, 0), 0)
+        self.LINE_P2_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.HOOK_ID = self.COLOR_TO_ID.get((255, 255, 255), 0)
+
+        self.SPRITE_SHARK = self.SHAPE_MASKS['shark']
+        self.SPRITE_FISH = self.SHAPE_MASKS['fish']
 
     def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
-        """Calculate the actual hook position based on rod length and hook depth for P1."""
-        cfg = self.config
+        cfg = self.consts
         rod_end_x = player_x + player_state.rod_length
-        # Apply horizontal offset for water resistance effect
         hook_x = rod_end_x + player_state.hook_x_offset
         hook_y = cfg.ROD_Y + player_state.hook_y
         return hook_x, hook_y
 
     def _get_hook_position_p2(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
-        """Calculate the actual hook position based on rod length and hook depth for P2."""
-        cfg = self.config
-        # Player 2's rod extends leftward, so subtract rod length from starting position
+        cfg = self.consts
         rod_end_x = player_x - player_state.rod_length
-        # Apply horizontal offset for water resistance effect
         hook_x = rod_end_x + player_state.hook_x_offset
         hook_y = cfg.ROD_Y + player_state.hook_y
         return hook_x, hook_y
@@ -1592,97 +1630,168 @@ class FishingDerbyRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GameState) -> chex.Array:
         """
-            Renders the current game state into a raster image.
+        Renders the current game state into a raster image.
 
-            This method generates a visual representation of the game state, including
-            the background, water, and other game elements. It uses JAX for efficient
-            computation and returns the rendered frame as a JAX array.
+        WARNING: This is an incomplete render. See class docstring for details.
+        """
+        cfg = self.consts
 
-            Args:
-                state (GameState): The current state of the game, containing all
-                    necessary information about players, fish, shark, and other game
-                    entities.
+        raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            Returns:
-                chex.Array: A JAX array representing the rendered game frame, with
-                dimensions matching the screen resolution and containing RGB values.
-            """
-        cfg = self.config
-        raster = jnp.zeros((cfg.SCREEN_HEIGHT, cfg.SCREEN_WIDTH, 3), dtype=jnp.uint8)
+        raster = self.jr.render_at(
+            raster,
+            cfg.P1_START_X,
+            cfg.PLAYER_Y,
+            self.SHAPE_MASKS['player1'],
+            flip_offset=self.FLIP_OFFSETS['player1'],
+        )
+        raster = self.jr.render_at(
+            raster,
+            cfg.P2_START_X,
+            cfg.PLAYER_Y,
+            self.SHAPE_MASKS['player2'],
+            flip_offset=self.FLIP_OFFSETS['player2'],
+        )
 
-        # Draw sky
-        raster = raster.at[:cfg.WATER_Y_START, :, :].set(jnp.array(cfg.SKY_COLOR, dtype=jnp.uint8))
+        shark_frame_idx = (state.time // 4) % self.SPRITE_SHARK.shape[0]
+        shark_frame = self.SPRITE_SHARK[shark_frame_idx]
+        raster = self.jr.render_at(
+            raster,
+            state.shark_x,
+            cfg.SHARK_Y,
+            shark_frame,
+            flip_horizontal=state.shark_dir < 0,
+            flip_offset=self.FLIP_OFFSETS['shark'],
+        )
 
-        # Draw base water color first
-        base_water = jnp.array(cfg.WATER_COLOR, dtype=jnp.uint8)
-        raster = raster.at[cfg.WATER_Y_START:, :, :].set(base_water)
+        fish_frame_idx = (state.time // 5) % self.SPRITE_FISH.shape[0]
+        fish_frame = self.SPRITE_FISH[fish_frame_idx]
+        hooked_fish_frame = self.SPRITE_FISH[(state.time // 6) % self.SPRITE_FISH.shape[0]]
 
-        # Draw background shimmer (top 10 pixels of shimmer region)
-        SHIMMER_HEIGHT = 16
-        BACKGROUND_SHIMMER_HEIGHT = 10
-        shimmer_start = cfg.WATER_Y_START
-        background_shimmer_end = shimmer_start + BACKGROUND_SHIMMER_HEIGHT
+        def draw_one_fish(i, r):
+            pos = state.fish_positions[i]
+            direction = state.fish_directions[i]
+            active = state.fish_active[i]
+            is_hooked_p1 = (state.p1.hooked_fish_idx == i) & (state.p1.hook_state > 0)
+            is_hooked_p2 = (state.p2.hooked_fish_idx == i) & (state.p2.hook_state > 0)
+            is_hooked = is_hooked_p1 | is_hooked_p2
 
-        # Generate background shimmer
-        shimmer_time = state.time // 8
-        y_indices_bg = jnp.arange(BACKGROUND_SHIMMER_HEIGHT)
+            frame_to_use = jax.lax.cond(is_hooked, lambda: hooked_fish_frame, lambda: fish_frame)
+            flip_sprite = direction > 0
 
-        def compute_shimmer_color(y_offset):
-            """
-               Computes the shimmer color for a specific vertical offset in the water shimmer effect.
+            def render_active(raster_in):
+                return self.jr.render_at(
+                    raster_in,
+                    pos[0],
+                    pos[1],
+                    frame_to_use,
+                    flip_horizontal=flip_sprite,
+                    flip_offset=self.FLIP_OFFSETS['fish'],
+                )
 
-               This function calculates a color based on the current shimmer time and the vertical
-               offset. It alternates between light and dark colors to create a shimmering effect
-               on the water surface.
+            return jax.lax.cond(active, render_active, lambda raster_in: raster_in, r)
 
-               Args:
-                   y_offset (int): The vertical offset from the start of the shimmer region.
+        raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
 
-               Returns:
-                   jnp.ndarray: A 1D array representing the RGB color values for the shimmer,
-                   with values clipped between 0 and 255.
-               """
-            y = shimmer_start + y_offset
-            color_hash = (shimmer_time * 17 + y * 11) & 255
-            use_light = (color_hash & 3) > 1
+        def draw_hooked_p1(r):
+            fish_idx = state.p1.hooked_fish_idx
+            fish_pos = state.fish_positions[fish_idx]
+            fish_dir = state.fish_directions[fish_idx]
+            flip_sprite = fish_dir > 0
+            frame = self.SPRITE_FISH[(state.time // 2) % self.SPRITE_FISH.shape[0]]
+            return self.jr.render_at(
+                r,
+                fish_pos[0],
+                fish_pos[1],
+                frame,
+                flip_horizontal=flip_sprite,
+                flip_offset=self.FLIP_OFFSETS['fish'],
+            )
 
-            light_color = jnp.array([
-                base_water[0] + 6,
-                base_water[1] + 8,
-                base_water[2] + 6
-            ], dtype=jnp.int16)
+        should_draw_hooked_p1 = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
+        raster = jax.lax.cond(should_draw_hooked_p1, draw_hooked_p1, lambda r: r, raster)
 
-            dark_color = jnp.array([
-                base_water[0] - 4,
-                base_water[1] - 4,
-                base_water[2] - 2
-            ], dtype=jnp.int16)
+        def draw_hooked_p2(r):
+            fish_idx = state.p2.hooked_fish_idx
+            fish_pos = state.fish_positions[fish_idx]
+            fish_dir = state.fish_directions[fish_idx]
+            flip_sprite = fish_dir > 0
+            frame = self.SPRITE_FISH[(state.time // 2) % self.SPRITE_FISH.shape[0]]
+            return self.jr.render_at(
+                r,
+                fish_pos[0],
+                fish_pos[1],
+                frame,
+                flip_horizontal=flip_sprite,
+                flip_offset=self.FLIP_OFFSETS['fish'],
+            )
 
-            shimmer_color = jnp.where(use_light, light_color, dark_color)
-            return jnp.clip(shimmer_color, 0, 255).astype(jnp.uint8)
+        should_draw_hooked_p2 = (state.p2.hook_state > 0) & (state.p2.hooked_fish_idx >= 0) & (state.p2.hook_state != 3)
+        raster = jax.lax.cond(should_draw_hooked_p2, draw_hooked_p2, lambda r: r, raster)
 
-        # Apply background shimmer
-        def apply_background_shimmer(carry, y_offset):
-            r = carry
-            y = shimmer_start + y_offset
-            shimmer_color = compute_shimmer_color(y_offset)
-            r = r.at[y, :, :].set(shimmer_color)
-            return r, None
+        raster = self.jr.render_at(
+            raster,
+            0,
+            cfg.WATER_Y_START - 10,
+            self.SHAPE_MASKS['pier'],
+            flip_offset=self.FLIP_OFFSETS['pier'],
+        )
 
-        raster, _ = jax.lax.scan(apply_background_shimmer, raster, y_indices_bg)
+        raster = self._render_score(raster, state.p1.display_score, 50, 10)
+        raster = self._render_score(raster, state.p2.display_score, 100, 10)
 
+        # Draw fishing lines (before palette conversion)
+        raster = self._draw_fishing_lines(raster, state)
 
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
-        # Draw players
-        raster = self._render_at(raster, cfg.P1_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER1)
-        raster = self._render_at(raster, cfg.P2_START_X, cfg.PLAYER_Y, self.SPRITE_PLAYER2)
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_score(self, raster, display_score, x, y):
+        """Renders the player's score using the new API."""
+        digit_masks = self.SHAPE_MASKS['score_digits']
+        s1 = display_score // 10
+        s0 = display_score % 10
 
-        # Draw Player 1 fishing line
+        raster = self.jr.render_at(
+            raster,
+            x,
+            y,
+            digit_masks[s1],
+            flip_offset=self.FLIP_OFFSETS['score_digits'],
+        )
+        raster = self.jr.render_at(
+            raster,
+            x + 7,
+            y,
+            digit_masks[s0],
+            flip_offset=self.FLIP_OFFSETS['score_digits'],
+        )
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_fishing_lines(self, raster, state):
+        """Draws fishing lines for both players on the palette-ID raster."""
+        cfg = self.consts
+        
+        # Get scaling factors for downscaling
+        width_scale = jnp.array(self.jr.config.width_scaling, dtype=jnp.float32)
+        height_scale = jnp.array(self.jr.config.height_scaling, dtype=jnp.float32)
+
+        # Player 1 fishing line
         p1_rod_end_x = cfg.P1_START_X + state.p1.rod_length
         hook_x, hook_y = self._get_hook_position(cfg.P1_START_X, state.p1)
 
-        # Draw horizontal part of Player 1 rod
-        raster = self._render_line(raster, cfg.P1_START_X + 7, cfg.ROD_Y, p1_rod_end_x, cfg.ROD_Y, (0, 0, 0))
+        # Scale coordinates for downscaling
+        p1_rod_start_x_scaled = jnp.round((cfg.P1_START_X + 7) * width_scale).astype(jnp.int32)
+        p1_rod_start_y_scaled = jnp.round(cfg.ROD_Y * height_scale).astype(jnp.int32)
+        p1_rod_end_x_scaled = jnp.round(p1_rod_end_x * width_scale).astype(jnp.int32)
+        p1_rod_end_y_scaled = jnp.round(cfg.ROD_Y * height_scale).astype(jnp.int32)
+        hook_x_scaled = jnp.round(hook_x * width_scale).astype(jnp.int32)
+        hook_y_scaled = jnp.round(hook_y * height_scale).astype(jnp.int32)
+
+        # Draw horizontal part of Player 1 rod (black)
+        raster = self._render_line_id(raster, p1_rod_start_x_scaled, p1_rod_start_y_scaled, 
+                                      p1_rod_end_x_scaled, p1_rod_end_y_scaled, self.LINE_P2_ID)
 
         # Player 1 line rendering logic
         in_water = state.p1.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
@@ -1690,264 +1799,69 @@ class FishingDerbyRenderer(JAXGameRenderer):
         has_horizontal_offset = jnp.abs(state.p1.hook_x_offset) > 0.5
         apply_sag = in_water & ~is_reeling & has_horizontal_offset
 
-        water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0,
-                                     1.0)
-        sag_amount = jnp.where(apply_sag, 3.0 + water_depth_ratio * 3.0, 0.0)
+        water_depth_ratio = jnp.clip((state.p1.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
+        # Scale sag amount proportionally (use average of width and height scaling for sag)
+        sag_scale = (width_scale + height_scale) / 2.0
+        sag_amount = jnp.where(apply_sag, (3.0 + water_depth_ratio * 3.0) * sag_scale, 0.0)
 
-        line_start = jnp.array([p1_rod_end_x, cfg.ROD_Y])
-        line_end = jnp.array([hook_x, hook_y])
+        line_start = jnp.array([p1_rod_end_x_scaled, p1_rod_end_y_scaled], dtype=jnp.float32)
+        line_end = jnp.array([hook_x_scaled, hook_y_scaled], dtype=jnp.float32)
 
         raster = jax.lax.cond(
             apply_sag,
-            lambda r: self._render_saggy_line(r, line_start, line_end, sag_amount, (255, 255, 0)),
-            lambda r: self._render_line(r, line_start[0], line_start[1], line_end[0], line_end[1], (255, 255, 0)),
+            lambda r: self._render_saggy_line_id(r, line_start, line_end, sag_amount, self.LINE_P1_ID, sag_scale),
+            lambda r: self._render_line_id(r, line_start[0], line_start[1], line_end[0], line_end[1], self.LINE_P1_ID),
             raster
         )
 
-        # Draw Player 2 fishing line
+        # Player 2 fishing line
         p2_rod_end_x = cfg.P2_START_X - state.p2.rod_length
         p2_hook_x, p2_hook_y = self._get_hook_position_p2(cfg.P2_START_X, state.p2)
 
-        # Draw horizontal part of Player 2 rod
-        raster = self._render_line(raster, cfg.P2_START_X + 8, cfg.ROD_Y, p2_rod_end_x, cfg.ROD_Y, (0, 0, 0))
+        # Scale coordinates for downscaling
+        p2_rod_start_x_scaled = jnp.round((cfg.P2_START_X + 8) * width_scale).astype(jnp.int32)
+        p2_rod_start_y_scaled = jnp.round(cfg.ROD_Y * height_scale).astype(jnp.int32)
+        p2_rod_end_x_scaled = jnp.round(p2_rod_end_x * width_scale).astype(jnp.int32)
+        p2_rod_end_y_scaled = jnp.round(cfg.ROD_Y * height_scale).astype(jnp.int32)
+        p2_hook_x_scaled = jnp.round(p2_hook_x * width_scale).astype(jnp.int32)
+        p2_hook_y_scaled = jnp.round(p2_hook_y * height_scale).astype(jnp.int32)
+
+        # Draw horizontal part of Player 2 rod (black)
+        raster = self._render_line_id(raster, p2_rod_start_x_scaled, p2_rod_start_y_scaled,
+                                      p2_rod_end_x_scaled, p2_rod_end_y_scaled, self.LINE_P2_ID)
 
         # Player 2 line rendering logic
         p2_in_water = state.p2.hook_y > (cfg.WATER_Y_START - cfg.ROD_Y)
         p2_is_reeling = state.p2.hook_state > 0
         p2_has_horizontal_offset = jnp.abs(state.p2.hook_x_offset) > 0.5
         p2_apply_sag = p2_in_water & ~p2_is_reeling & p2_has_horizontal_offset
-        p2_water_depth_ratio = jnp.clip((state.p2.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0,
-                                        1.0)
-        p2_sag_amount = jnp.where(p2_apply_sag, 3.0 + p2_water_depth_ratio * 3.0, 0.0)
-        p2_line_start = jnp.array([p2_rod_end_x, cfg.ROD_Y])
-        p2_line_end = jnp.array([p2_hook_x, p2_hook_y])
+        p2_water_depth_ratio = jnp.clip((state.p2.hook_y - (cfg.WATER_Y_START - cfg.ROD_Y)) / cfg.MAX_HOOK_DEPTH_Y, 0.0, 1.0)
+        p2_sag_amount = jnp.where(p2_apply_sag, (3.0 + p2_water_depth_ratio * 3.0) * sag_scale, 0.0)
+        p2_line_start = jnp.array([p2_rod_end_x_scaled, p2_rod_end_y_scaled], dtype=jnp.float32)
+        p2_line_end = jnp.array([p2_hook_x_scaled, p2_hook_y_scaled], dtype=jnp.float32)
 
         raster = jax.lax.cond(
             p2_apply_sag,
-            lambda r: self._render_saggy_line(r, p2_line_start, p2_line_end, p2_sag_amount, (0, 0, 0)),
-            lambda r: self._render_line(r, p2_line_start[0], p2_line_start[1], p2_line_end[0], p2_line_end[1],
-                                        (0, 0, 0)),
+            lambda r: self._render_saggy_line_id(r, p2_line_start, p2_line_end, p2_sag_amount, self.LINE_P2_ID, sag_scale),
+            lambda r: self._render_line_id(r, p2_line_start[0], p2_line_start[1], p2_line_end[0], p2_line_end[1], self.LINE_P2_ID),
             raster
         )
 
-        # Draw shark
-        shark_frame = jax.lax.cond((state.time // 4) % 2 == 0, lambda: self.SPRITE_SHARK1, lambda: self.SPRITE_SHARK2)
-        raster = self._render_at(raster, state.shark_x, cfg.SHARK_Y, shark_frame, flip_h=state.shark_dir < 0)
-
-        # Draw fish
-        fish_frame = jax.lax.cond((state.time // 5) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
-
-        def draw_one_fish(i, r):
-            """
-                Draws a single fish on the game raster.
-
-                This function renders a fish at its current position, facing the direction
-                of its movement. It also handles the appearance of hooked fish, flipping
-                the sprite based on the direction of travel, and skipping inactive fish.
-
-                Args:
-                    i (int): The index of the fish to draw.
-                    r (chex.Array): The current game raster to render onto.
-
-                Returns:
-                    chex.Array: The updated game raster with the fish rendered.
-                """
-            pos, direction, active = state.fish_positions[i], state.fish_directions[i], state.fish_active[i]
-            is_hooked_p1 = (state.p1.hooked_fish_idx == i) & (state.p1.hook_state > 0)
-            is_hooked_p2 = (state.p2.hooked_fish_idx == i) & (state.p2.hook_state > 0)
-            is_hooked = is_hooked_p1 | is_hooked_p2
-
-            hooked_fish_frame = jax.lax.cond((state.time // 6) % 2 == 0, lambda: self.SPRITE_FISH1,
-                                             lambda: self.SPRITE_FISH2)
-            frame_to_use = jax.lax.cond(is_hooked, lambda: hooked_fish_frame, lambda: fish_frame)
-
-            # fish should face direction of travel, flip when direction > 0 (moving right)
-            flip_sprite = direction > 0
-
-            return jax.lax.cond(active,
-                                lambda r_in: self._render_at(r_in, pos[0], pos[1], frame_to_use, flip_h=flip_sprite),
-                                lambda r_in: r_in, r)
-
-        raster = jax.lax.fori_loop(0, cfg.NUM_FISH, draw_one_fish, raster)
-
-        # Draw hooked fish for Player 1
-        def draw_hooked_p1(r):
-            fish_idx = state.p1.hooked_fish_idx
-            fish_pos = state.fish_positions[fish_idx]
-            fish_dir = state.fish_directions[fish_idx]
-
-            # fish should face direction of travel, flip when direction > 0 (moving right)
-            flip_sprite = fish_dir > 0
-
-            fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
-            return self._render_at(r, fish_pos[0], fish_pos[1], fish_frame, flip_h=flip_sprite)
-
-        should_draw_hooked_p1 = (state.p1.hook_state > 0) & (state.p1.hooked_fish_idx >= 0) & (state.p1.hook_state != 3)
-        raster = jax.lax.cond(should_draw_hooked_p1, draw_hooked_p1, lambda r: r, raster)
-
-        # Draw hooked fish for Player 2
-        def draw_hooked_p2(r):
-            fish_idx = state.p2.hooked_fish_idx
-            fish_pos = state.fish_positions[fish_idx]
-            fish_dir = state.fish_directions[fish_idx]
-
-            # fish should face direction of travel, flip when direction > 0 (moving right)
-            flip_sprite = fish_dir > 0
-
-            fish_frame = jax.lax.cond((state.time // 2) % 2 == 0, lambda: self.SPRITE_FISH1, lambda: self.SPRITE_FISH2)
-            return self._render_at(r, fish_pos[0], fish_pos[1], fish_frame, flip_h=flip_sprite)
-
-        should_draw_hooked_p2 = (state.p2.hook_state > 0) & (state.p2.hooked_fish_idx >= 0) & (state.p2.hook_state != 3)
-        raster = jax.lax.cond(should_draw_hooked_p2, draw_hooked_p2, lambda r: r, raster)
-
-        # Draw hooks
-        raster = self._render_at(raster, hook_x - cfg.HOOK_WIDTH // 2, hook_y - cfg.HOOK_HEIGHT // 2,
-                                 jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
-        raster = self._render_at(raster, p2_hook_x - cfg.HOOK_WIDTH // 2, p2_hook_y - cfg.HOOK_HEIGHT // 2,
-                                 jnp.array([[[255, 255, 255]]], dtype=jnp.uint8))
-        # Draw pier on top
-        raster = self._render_at(raster, 0, cfg.WATER_Y_START - 10, self.SPRITE_PIER)
-        # Draw scores
-        raster = self._render_score(raster, state.p1.display_score, 50, 10)
-        raster = self._render_score(raster, state.p2.display_score, 100, 10)
-
-        # renders above all sprites for realistic water surface effect
-        FOREGROUND_SHIMMER_HEIGHT = 6
-        foreground_shimmer_start = background_shimmer_end
-        foreground_shimmer_end = shimmer_start + SHIMMER_HEIGHT
-
-        y_indices_fg = jnp.arange(FOREGROUND_SHIMMER_HEIGHT)
-
-        def apply_foreground_shimmer(carry, y_offset):
-            r = carry
-            y = foreground_shimmer_start + y_offset
-            # Use same shimmer calculation but with different y offset
-            shimmer_color = compute_shimmer_color(BACKGROUND_SHIMMER_HEIGHT + y_offset)
-
-            # Apply shimmer with some transparency effect by blending with existing pixels
-            existing_color = r[y, :, :]
-            blended_color = (shimmer_color.astype(jnp.int16) + existing_color.astype(jnp.int16)) // 2
-            blended_color = jnp.clip(blended_color, 0, 255).astype(jnp.uint8)
-
-            r = r.at[y, :, :].set(blended_color)
-            return r, None
-
-        raster, _ = jax.lax.scan(apply_foreground_shimmer, raster, y_indices_fg)
-
-        return raster
-
-    def _render_score(self, raster, display_score, x, y):
-        """
-            Renders the player's score on the game screen.
-
-            This method takes the current raster (game screen), the player's score,
-            and the coordinates where the score should be displayed. It splits the
-            score into tens and units digits, retrieves the corresponding sprites,
-            and renders them at the specified position.
-
-            Args:
-                raster (chex.Array): The current game raster to render onto.
-                display_score (int): The score to be displayed, expected to be a
-                    two-digit number (0-99).
-                x (int): The x-coordinate where the score rendering starts.
-                y (int): The y-coordinate where the score rendering starts.
-
-            Returns:
-                chex.Array: The updated raster with the score rendered.
-            """
-        s1, s0 = display_score // 10, display_score % 10
-        digit1_sprite, digit0_sprite = self.SPRITE_SCORE_DIGITS[s1], self.SPRITE_SCORE_DIGITS[s0]
-        raster = self._render_at(raster, x, y, digit1_sprite)
-        raster = self._render_at(raster, x + 7, y, digit0_sprite)
         return raster
 
     @staticmethod
     @jax.jit
-    def _render_at(raster, x, y, sprite, flip_h=False):
-        """
-            Renders a sprite onto the raster at the specified position.
-
-            This function places a sprite onto the given raster (game screen) at the
-            specified (x, y) coordinates. It supports optional horizontal flipping
-            of the sprite. The sprite's transparency or masking is handled based on
-            its alpha channel or specific color values.
-
-            Args:
-                raster (chex.Array): The current game raster to render onto.
-                x (int): The x-coordinate where the sprite should be placed.
-                y (int): The y-coordinate where the sprite should be placed.
-                sprite (chex.Array): The sprite to render, expected to be a 3D array
-                    with RGB or RGBA values.
-                flip_h (bool, optional): Whether to flip the sprite horizontally.
-                    Defaults to False.
-
-            Returns:
-                chex.Array: The updated raster with the sprite rendered at the specified position.
-            """
-        sprite_rgb = sprite[:, :, :3]
-        h, w = sprite.shape[0], sprite.shape[1]
-        x, y = jnp.round(x).astype(jnp.int32), jnp.round(y).astype(jnp.int32)
-        sprite_to_draw = jnp.where(flip_h, jnp.fliplr(sprite_rgb), sprite_rgb)
-
-        has_alpha = sprite.shape[2] > 3
-        if has_alpha:
-            alpha = sprite[:, :, 3:4]
-            alpha = jnp.where(flip_h, jnp.fliplr(alpha), alpha)
-            mask = alpha > 0
-        else:
-            is_black = jnp.all(sprite_to_draw == 0, axis=-1, keepdims=True)
-            is_white = jnp.all(sprite_to_draw == 255, axis=-1, keepdims=True)
-            mask = ~(is_black | is_white)
-
-        region = jax.lax.dynamic_slice(raster, (y, x, 0), (h, w, 3))
-        patch = jnp.where(mask, sprite_to_draw, region)
-
-        return jax.lax.dynamic_update_slice(raster, patch, (y, x, 0))
-
-    @staticmethod
-    @jax.jit
-    def _render_line(raster, x0, y0, x1, y1, color=(200, 200, 200)):
-        """
-            Renders a straight line on the raster using the Bresenham's line algorithm.
-
-            This function draws a line between two points `(x0, y0)` and `(x1, y1)` on the
-            given raster. The line is rendered in the specified color, which defaults to
-            a light gray `(200, 200, 200)`.
-
-            Args:
-                raster (chex.Array): The raster (game screen) to draw the line on.
-                x0 (float): The x-coordinate of the starting point of the line.
-                y0 (float): The y-coordinate of the starting point of the line.
-                x1 (float): The x-coordinate of the ending point of the line.
-                y1 (float): The y-coordinate of the ending point of the line.
-                color (Tuple[int, int, int], optional): The RGB color of the line. Defaults to `(200, 200, 200)`.
-
-            Returns:
-                chex.Array: The updated raster with the line rendered.
-            """
+    def _render_line_id(raster, x0, y0, x1, y1, color_id):
+        """Renders a straight line on a palette-ID raster using Bresenham's algorithm."""
         x0, y0, x1, y1 = jnp.round(jnp.array([x0, y0, x1, y1])).astype(jnp.int32)
         dx, sx, dy, sy = jnp.abs(x1 - x0), jnp.sign(x1 - x0), -jnp.abs(y1 - y0), jnp.sign(y1 - y0)
         err = dx + dy
-        color_uint8 = jnp.array(color, dtype=jnp.uint8)
+        color_id_val = jnp.asarray(color_id, dtype=raster.dtype)
 
         def loop_body(carry):
-            """
-                    The body of the loop for drawing the line.
-
-                    This function updates the raster at the current point `(x, y)` with the
-                    specified color and calculates the next point along the line.
-
-                    Args:
-                        carry (Tuple[int, int, chex.Array, int]): A tuple containing the current
-                            x-coordinate, y-coordinate, raster, and error term.
-
-                    Returns:
-                        Tuple[int, int, chex.Array, int]: The updated x-coordinate, y-coordinate,
-                        raster, and error term.
-                    """
             x, y, r, e = carry
             safe_y, safe_x = jnp.clip(y, 0, r.shape[0] - 1), jnp.clip(x, 0, r.shape[1] - 1)
-            r = r.at[safe_y, safe_x, :].set(color_uint8)
+            r = r.at[safe_y, safe_x].set(color_id_val)
             e2 = 2 * e
             e_new = jnp.where(e2 >= dy, e + dy, e)
             x_new = jnp.where(e2 >= dy, x + sx, x)
@@ -1956,52 +1870,18 @@ class FishingDerbyRenderer(JAXGameRenderer):
             return x_new, y_new, r, e_final
 
         def loop_cond(carry):
-            """
-               Determines the continuation condition for the Bresenham's line drawing loop.
-
-               This function checks whether the current point `(carry[0], carry[1])` has
-               reached the target point `(x1, y1)`. The loop continues until the current
-               point matches the target point.
-
-               Args:
-                   carry (Tuple[int, int, chex.Array, int]): A tuple containing the current
-                       x-coordinate, y-coordinate, raster, and error term.
-
-               Returns:
-                   bool: True if the loop should continue, False otherwise.
-               """
             return ~((carry[0] == x1) & (carry[1] == y1))
 
         _, _, raster, _ = jax.lax.while_loop(loop_cond, loop_body, (x0, y0, raster, err))
 
         safe_y1, safe_x1 = jnp.clip(y1, 0, raster.shape[0] - 1), jnp.clip(x1, 0, raster.shape[1] - 1)
-        raster = raster.at[safe_y1, safe_x1, :].set(color_uint8)
+        raster = raster.at[safe_y1, safe_x1].set(color_id_val)
         return raster
 
     @staticmethod
-    @partial(jax.jit, static_argnums=(5,))
-    def _render_saggy_line(raster, p_start, p_end, sag_amount, color, num_segments=10):
-        """
-    Renders a fishing line with a realistic sagging effect.
-
-    This function draws a curved line between two points `(p_start, p_end)` to
-    simulate the sag of a fishing line under gravity. The sag is controlled by
-    the `sag_amount` parameter, and the line is divided into `num_segments` for
-    smooth rendering.
-
-    Args:
-        raster (chex.Array): The raster (game screen) to draw the line on.
-        p_start (jnp.ndarray): The starting point of the line as a 2D vector `[x, y]`.
-        p_end (jnp.ndarray): The ending point of the line as a 2D vector `[x, y]`.
-        sag_amount (float): The amount of sag to apply to the line.
-        color (Tuple[int, int, int]): The RGB color of the line.
-        num_segments (int, optional): The number of segments to divide the line into.
-            Defaults to 10.
-
-    Returns:
-        chex.Array: The updated raster with the sagging line rendered.
-    """
-
+    @partial(jax.jit, static_argnums=(4,))
+    def _render_saggy_line_id(raster, p_start, p_end, sag_amount, color_id, scale_factor, num_segments=10):
+        """Renders a fishing line with sagging effect on a palette-ID raster."""
         # Create 't' values from 0.0 to 1.0 to parameterize the curve
         t = jnp.linspace(0.0, 1.0, num_segments + 1)
 
@@ -2010,201 +1890,35 @@ class FishingDerbyRenderer(JAXGameRenderer):
 
         # Calculate line properties
         line_vector = p_end - p_start
-        line_length = jnp.linalg.norm(line_vector) + 1e-8  # Add small epsilon to avoid division by zero
+        line_length = jnp.linalg.norm(line_vector) + 1e-8
 
-        # More realistic sag calculation combining parabolic and catenary effects
-        # Parabolic component (primary gravity effect)
-        parabolic_sag = 4.0 * t * (1.0 - t)  # Maximum at t=0.5, zero at endpoints
-
-        # Catenary-like component for more realistic physics
-        # Uses hyperbolic cosine shape but simplified for performance
+        # Sag calculation - scale the length threshold to match the coordinate scaling
+        scaled_length_threshold = 50.0 * scale_factor
+        parabolic_sag = 4.0 * t * (1.0 - t)
         catenary_factor = jnp.cosh(3.0 * (t - 0.5)) - 1.0
         normalized_catenary = catenary_factor / (jnp.max(catenary_factor) + 1e-8)
-
-        # Combine both components with line length influence
-        # Shorter lines sag more relative to their length
-        length_factor = jnp.clip(line_length / 50.0, 0.5, 2.0)  # Scale based on line length
+        length_factor = jnp.clip(line_length / scaled_length_threshold, 0.5, 2.0)
         total_sag = sag_amount * (0.8 * parabolic_sag + 0.2 * normalized_catenary) / length_factor
 
-        # Use JAX-compatible conditional for sag direction
-        # For nearly vertical lines (fishing lines), apply horizontal sag
+        # Sag direction
         is_nearly_vertical = jnp.abs(line_vector[0]) < 0.1
-
-        # Calculate perpendicular direction for non-vertical lines
         line_direction_norm = line_vector / line_length
         perpendicular = jnp.array([-line_direction_norm[1], line_direction_norm[0]])
 
-        # Use jnp.where for JAX-compatible conditional logic
         sag_offsets_x = jnp.where(is_nearly_vertical, total_sag, total_sag * perpendicular[0])
         sag_offsets_y = jnp.where(is_nearly_vertical, jnp.zeros_like(total_sag), total_sag * perpendicular[1])
 
-        # Apply sag offsets to points
+        # Apply sag offsets
         points = points.at[:, 0].add(sag_offsets_x)
         points = points.at[:, 1].add(sag_offsets_y)
 
         # Draw segments
         def draw_segment(i, current_raster):
-            """
-               Draws a single segment of a sagging line on the raster.
-
-               This function takes the current raster and draws a line segment between
-               two consecutive points in the `points` array. The segment is rendered
-               using the `_render_line` method of the `FishingDerbyRenderer` class.
-
-               Args:
-                   i (int): The index of the starting point of the segment in the `points` array.
-                   current_raster (chex.Array): The current raster (game screen) to draw the segment on.
-
-               Returns:
-                   chex.Array: The updated raster with the segment rendered.
-               """
             p1 = points[i]
             p2 = points[i + 1]
-            return FishingDerbyRenderer._render_line(
-                current_raster, p1[0], p1[1], p2[0], p2[1], color
+            return FishingDerbyRenderer._render_line_id(
+                current_raster, p1[0], p1[1], p2[0], p2[1], color_id
             )
 
         raster = jax.lax.fori_loop(0, num_segments, draw_segment, raster)
         return raster
-
-
-def get_human_action() -> chex.Array:
-    """
-       Captures the human player's action based on keyboard input.
-
-       This function reads the current state of the keyboard and determines
-       the action being performed by the player. It maps specific keys to
-       directional and fire actions.
-
-       Returns:
-           chex.Array: An array representing the player's action.
-       """
-    keys = pygame.key.get_pressed()
-    up = keys[pygame.K_w] or keys[pygame.K_UP]
-    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
-    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    fire = keys[pygame.K_SPACE]
-    reset = keys[pygame.K_r]
-
-    if reset:
-        return jnp.array(GameConfig.RESET)
-
-    # Simplified input detection that allows diagonal movement
-    # No exclusion between directions, allowing simultaneous presses
-    is_up = up
-    is_down = down
-    is_left = left
-    is_right = right
-
-    # Prevent conflicting directions (up+down or left+right)
-    # If both opposing directions are pressed, neither takes effect
-    if is_up and is_down:
-        is_up = is_down = False
-    if is_left and is_right:
-        is_left = is_right = False
-
-    if fire:
-        if is_up and is_left: return jnp.array(Action.UPLEFTFIRE)
-        if is_up and is_right: return jnp.array(Action.UPRIGHTFIRE)
-        if is_down and is_left: return jnp.array(Action.DOWNLEFTFIRE)
-        if is_down and is_right: return jnp.array(Action.DOWNRIGHTFIRE)
-        if is_up: return jnp.array(Action.UPFIRE)
-        if is_down: return jnp.array(Action.DOWNFIRE)
-        if is_left: return jnp.array(Action.LEFTFIRE)
-        if is_right: return jnp.array(Action.RIGHTFIRE)
-        return jnp.array(Action.FIRE)
-    else:
-        if is_up and is_left: return jnp.array(Action.UPLEFT)
-        if is_up and is_right: return jnp.array(Action.UPRIGHT)
-        if is_down and is_left: return jnp.array(Action.DOWNLEFT)
-        if is_down and is_right: return jnp.array(Action.DOWNRIGHT)
-        if is_up: return jnp.array(Action.UP)
-        if is_down: return jnp.array(Action.DOWN)
-        if is_left: return jnp.array(Action.LEFT)
-        if is_right: return jnp.array(Action.RIGHT)
-
-    return jnp.array(Action.NOOP)
-
-
-if __name__ == "__main__":
-    """
-        Main entry point for the Fishing Derby game.
-
-        This block initializes the game environment, sets up the rendering system,
-        and handles the main game loop. It also manages user input, game state updates,
-        and rendering the game frame-by-frame.
-
-        The game supports both real-time and frame-by-frame modes for debugging or
-        detailed observation.
-
-        Controls:
-            - WASD or Arrow Keys: Move the hook/rod.
-            - SPACE: Fast reel (when a fish is hooked).
-            - R: Reset the game.
-            - F: Toggle frame-by-frame mode.
-            - N: Advance to the next frame (in frame-by-frame mode).
-        """
-    pygame.init()
-    game = FishingDerby()
-    renderer = FishingDerbyRenderer()
-    jitted_step = jax.jit(game.step)
-    key = jax.random.PRNGKey(0)
-    key, reset_key = jax.random.split(key)
-    (_, curr_state) = game.reset(reset_key)
-
-    scaling = 4
-    screen = pygame.display.set_mode((GameConfig.SCREEN_WIDTH * scaling, GameConfig.SCREEN_HEIGHT * scaling))
-    pygame.display.set_caption("JAX Fishing Derby")
-
-    running = True
-    frame_by_frame = False
-
-    clock = pygame.time.Clock()
-
-    # Game Controls
-    print("Controls:")
-    print("WASD or Arrow Keys - Move hook/rod")
-    print("SPACE - Fast reel (when fish is hooked)")
-    print("R - Reset game")
-    print("F - Toggle frame-by-frame mode")
-    print("N - Next frame (in frame-by-frame mode)")
-    while running:
-        """
-        Main game loop.
-
-        This loop handles user input, updates the game state, and renders the game.
-        It supports both real-time and frame-by-frame modes.
-        """
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-                    print(f"Frame-by-frame mode: {'ON' if frame_by_frame else 'OFF'}")
-                elif event.key == pygame.K_n and frame_by_frame:
-                    action = get_human_action()
-                    key, step_key = jax.random.split(curr_state.key)
-                    (_, curr_state, _, _, _) = jitted_step(curr_state, action)
-
-        if not frame_by_frame:
-            action = get_human_action()
-            key, step_key = jax.random.split(curr_state.key)
-            (_, curr_state, _, _, _) = jitted_step(curr_state, action)
-
-        # Render and display
-        raster = renderer.render(curr_state)
-        aj.update_pygame(screen, raster, scaling, GameConfig.SCREEN_WIDTH, GameConfig.SCREEN_HEIGHT)
-
-        # Display game info
-        if curr_state.time % 60 == 0:  # Update every second
-            print(
-                f"Player 1 Score: {curr_state.p1.score}, Player 2 Score: {curr_state.p2.score}, Time: {curr_state.time}")
-
-        clock.tick(60)
-
-    pygame.quit()
-
-    # run with: python scripts/play.py --game fishingderby --record my_record_file.npz
-

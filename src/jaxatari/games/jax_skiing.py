@@ -2,16 +2,111 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-import jax.image as jimage
 from dataclasses import dataclass
-from typing import Tuple, NamedTuple, Callable, Sequence, Optional
+from typing import Any, Tuple, NamedTuple, Callable, Sequence, Optional
 import os
 import numpy as np
 import collections
-
+import jaxatari.rendering.jax_rendering_utils as render_utils 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural white background
+    white_bg = jnp.full((210, 160, 4), 255, dtype=jnp.uint8)
+    
+    # Procedurally create text colors
+    text_colors = jnp.array([
+        [0, 0, 0, 255], # Black text
+        [255, 0, 0, 255] # Red text
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    # Create procedural digits from _GLYPHS_BITS
+    def upsample(bits):
+        b = bits.astype(jnp.uint8)
+        scale = 2
+        one = jnp.ones((scale, scale), dtype=jnp.uint8)
+        up = jnp.kron(b, one)  # (H*scale, W*scale)
+        
+        # Create an RGBA sprite: Black (0,0,0) where bits=1, Transparent (0,0,0,0) where bits=0
+        color = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        transparent = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
+        
+        # Broadcast up to (H*scale, W*scale, 1) for comparison
+        up_mask = up[..., None] > 0  # (H*scale, W*scale, 1) boolean
+        return jnp.where(up_mask, color, transparent)
+    
+    # _GLYPHS_BITS is defined later in the file, but we'll reference it
+    # For now, we'll create the digits in the function that uses it
+    procedural_digits = None  # Will be set in _get_default_asset_config
+    
+    return {
+        'background': white_bg,
+        'ui_colors': text_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Skiing.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Note: Flag sprites need to be loaded from files, so they're added in renderer.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Create procedural digits from _GLYPHS_BITS
+    def upsample(bits):
+        b = bits.astype(jnp.uint8)
+        scale = 2
+        one = jnp.ones((scale, scale), dtype=jnp.uint8)
+        up = jnp.kron(b, one)  # (H*scale, W*scale)
+        
+        color = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        transparent = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
+        up_mask = up[..., None] > 0
+        return jnp.where(up_mask, color, transparent)
+    
+    # Import _GLYPHS_BITS - it's defined later in the file
+    # We need to reference it, but it's defined after this function
+    # So we'll create it inline here
+    _GLYPHS_BITS = jnp.array([
+        [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],  # 0
+        [[0,1,0],[1,1,0],[0,1,0],[0,1,0],[1,1,1]],  # 1
+        [[1,1,1],[0,0,1],[1,1,1],[1,0,0],[1,1,1]],  # 2
+        [[1,1,1],[0,0,1],[0,1,1],[0,0,1],[1,1,1]],  # 3
+        [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],  # 4
+        [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],  # 5
+        [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],  # 6
+        [[1,1,1],[0,0,1],[0,1,0],[1,0,0],[1,0,0]],  # 7
+        [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],  # 8
+        [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],  # 9
+        [[0,0,0],[0,1,0],[0,0,0],[0,1,0],[0,0,0]],  # : (10)
+        [[0,0,0],[0,0,0],[0,0,0],[0,1,0],[0,1,0]],  # . (11)
+    ], dtype=jnp.uint8)
+    
+    procedural_digits = jax.vmap(upsample)(_GLYPHS_BITS)  # (12, hs, ws, 4)
+    
+    return (
+        # Background
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+
+        # Skier Sprites (as a group for padding)
+        {'name': 'skier_group', 'type': 'group', 'files': [
+            "skiier_right.npy", # 0: skier_left
+            "skiier_front.npy", # 1: skier_front
+            "skiier_left.npy",  # 2: skier_right
+            "skier_fallen.npy"  # 3: skier_fallen
+        ]},
+
+        # Obstacles
+        {'name': 'tree', 'type': 'single', 'file': 'tree.npy'},
+        {'name': 'rock', 'type': 'single', 'file': 'stone.npy'},
+        
+        # UI
+        {'name': 'digits', 'type': 'procedural', 'data': procedural_digits},
+        {'name': 'ui_colors', 'type': 'procedural', 'data': static_procedural['ui_colors']}
+    )
 
 class SkiingConstants(NamedTuple):
     NOOP = 0
@@ -33,7 +128,7 @@ class GameConfig:
     flag_width: int = 10
     flag_height: int = 28
     flag_distance: int = 20
-    gate_vertical_spacing: int = 90  # fixed vertical spacing between gates (in pixels)
+    gate_vertical_spacing: int = 90
     tree_width: int = 16
     tree_height: int = 30
     rock_width: int = 16
@@ -48,6 +143,9 @@ class GameConfig:
     max_num_trees: int = 4
     max_num_rocks: int = 3
     speed: float = 1.0
+
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 class GameState(NamedTuple):
@@ -92,11 +190,10 @@ class SkiingInfo(NamedTuple):
 
 
 class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingConstants]):
-    def __init__(self, consts: SkiingConstants | None = None, reward_funcs: Optional[Sequence[Callable[[GameState, GameState], jnp.ndarray]]] = None,):
+    def __init__(self, consts: SkiingConstants | None = None):
         consts = consts or SkiingConstants()
         super().__init__(consts)
         self.config = GameConfig()
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
         self.state = self.reset()
         self.renderer = SkiingRenderer(self.config)
 
@@ -194,7 +291,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         base_ty = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.5
         step_ty = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
         trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
-        # --- FIX: ensure integer pixels & uniqueness stays (no rounding collisions)
         trees_y = jnp.round(trees_y).astype(jnp.float32)
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
@@ -236,8 +332,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         base_ry = flags_y[0] - jnp.float32(self.config.gate_vertical_spacing) * 0.25
         step_ry = jnp.float32(self.config.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_rocks))
         rocks_y = (base_ry + jnp.arange(c.max_num_rocks, dtype=jnp.float32) * step_ry).astype(jnp.float32)
-
-        # --- FIX: remove initial subpixel jitter for rocks by rounding Y to integer pixels
         rocks_y = jnp.round(rocks_y).astype(jnp.float32)
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.config.rock_width)+jnp.float32(self.config.tree_width)) + jnp.float32(self.config.sep_margin_tree_rock)
@@ -342,8 +436,6 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
             step_tx = 17
             x_tree = (min_tx + (((state.gates_seen + i) * step_tx) % span_tx)).astype(jnp.float32)
 
-            # --- FIX (requested): ensure trees never spawn at the same Y height.
-            # Base Y just behind the deepest flag, then stagger each tree by a small delta.
             base_y = (jnp.max(new_flags[:, 1]) 
                       + jnp.float32(self.config.gate_vertical_spacing) / 2.0 
                       + jnp.float32(self.config.min_y_offset_tree_vs_rock))
@@ -778,138 +870,7 @@ class RenderConfig:
     # False = JAX-Bitmap-Font
     use_pygame_text: bool = False
 
-# ---- Sprite-Assets als JAX-Arrays ------------------------------------------------
-
-class RenderAssets(NamedTuple):
-    skier_left: jnp.ndarray      # (Hs, Ws, 4) uint8
-    skier_front: jnp.ndarray
-    skier_right: jnp.ndarray
-    skier_fallen: jnp.ndarray
-    flag_red: jnp.ndarray
-    flag_blue: jnp.ndarray
-    tree: jnp.ndarray
-    rock: jnp.ndarray
-
-def _device_put_u8(arr: np.ndarray) -> jnp.ndarray:
-    return jax.device_put(jnp.array(arr, dtype=jnp.uint8))
-
-def _load_sprite_npy(base_dir: str, name: str) -> jnp.ndarray:
-    path = os.path.join(base_dir, name)
-    rgba = np.load(path).astype(np.uint8)  # (H, W, 4)
-    if rgba.shape[-1] == 3:
-        a = np.full(rgba.shape[:2] + (1,), 255, np.uint8)
-        rgba = np.concatenate([rgba, a], axis=-1)
-    return _device_put_u8(rgba)
-
-def _recolor_rgba(sprite_rgba: jnp.ndarray, rgb: Tuple[int,int,int]) -> jnp.ndarray:
-    """Ersetzt RGB an allen Pixeln mit Alpha>0 (gerade, einfache Variante)."""
-    mask = (sprite_rgba[..., 3:4] > 0).astype(jnp.uint8)  # (H,W,1)
-    rgb_arr = jnp.array(jnp.array(rgb, dtype=jnp.uint8))[None, None, :].astype(jnp.uint8)
-    new_rgb = (sprite_rgba[..., :3] * (1 - mask)) + (rgb_arr * mask)
-    return jnp.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
-
-# ---- JAX Hilfsfunktionen: Skalierung & Blitting ----------------------------------
-
-def _nn_resize_rgba(img: jnp.ndarray, new_h: int, new_w: int) -> jnp.ndarray:
-    out = jimage.resize(img, (new_h, new_w, 4), method="nearest")
-    return jnp.clip(out, 0, 255).astype(jnp.uint8)
-
-def _alpha_over(dst: jnp.ndarray, src: jnp.ndarray, top: jnp.ndarray, left: jnp.ndarray) -> jnp.ndarray:
-    """
-    Alpha-Compositing (SrcOver) eines RGBA-Sprites in ein RGBA-Frame – JIT-sicher.
-    Verwendet Padding + dynamic_slice/update, damit alle Slice-Größen statisch sind.
-    """
-    H, W, _ = dst.shape
-    h, w, _ = src.shape
-
-    top  = jnp.array(top,  jnp.int32)
-    left = jnp.array(left, jnp.int32)
-
-    # Puffer-Padding: groß genug, dass wir immer (h,w) aus der gepaddeten Fläche schneiden können
-    ph = h
-    pw = w
-    pad_cfg = ((ph, ph), (pw, pw), (0, 0))
-    dst_pad = jnp.pad(dst, pad_cfg, mode="constant", constant_values=0)
-
-    # Startkoordinaten in der gepaddeten Fläche (immer gültig)
-    start_y = jnp.clip(top  + ph, 0, H + 2*ph - h).astype(jnp.int32)
-    start_x = jnp.clip(left + pw, 0, W + 2*pw - w).astype(jnp.int32)
-
-    # Fixe (statische) Slice-Größen: (h, w, 4)
-    dst_sub = jax.lax.dynamic_slice(dst_pad, (start_y, start_x, 0), (h, w, 4)).astype(jnp.float32)
-    src_sub = src.astype(jnp.float32)
-
-    sa = src_sub[..., 3:4] / 255.0
-    da = dst_sub[..., 3:4] / 255.0
-    out_a   = sa + da * (1.0 - sa)
-    out_rgb = src_sub[..., :3] * sa + dst_sub[..., :3] * (1.0 - sa)
-    out = jnp.concatenate([out_rgb, out_a * 255.0], axis=-1)
-    out = jnp.clip(out, 0.0, 255.0).astype(jnp.uint8)
-
-    # Patch zurückschreiben
-    dst_pad = jax.lax.dynamic_update_slice(dst_pad, out, (start_y, start_x, 0))
-
-    # Originalbereich aus der gepaddeten Fläche zurückschneiden
-    dst_final = jax.lax.dynamic_slice(dst_pad, (ph, pw, 0), (H, W, 4))
-    return dst_final
-
-def _blit_center(dst: jnp.ndarray, sprite: jnp.ndarray, cx: jnp.ndarray, cy: jnp.ndarray) -> jnp.ndarray:
-    """Blit Sprite so, dass seine Mitte bei (cx, cy) in Pixelkoordinaten liegt (JIT-sicher)."""
-    h = sprite.shape[0]
-    w = sprite.shape[1]
-    # cx, cy sind JAX-Scalars; rechne alles als jnp.int32 weiter
-    top  = (cy - (h // 2)).astype(jnp.int32)
-    left = (cx - (w // 2)).astype(jnp.int32)
-    return _alpha_over(dst, sprite, top, left)
-
-def _scan_blit(dst: jnp.ndarray, sprites: jnp.ndarray, centers_xy: jnp.ndarray) -> jnp.ndarray:
-    """Zeichnet mehrere Sprites nacheinander (Reihenfolge bleibt erhalten).
-       sprites: (N, hs, ws, 4) oder (N, 1, 1, 4) wenn gleiche Größe → wir vmap’en nicht über Größe.
-       centers_xy: (N, 2) int32 Pixelcenter."""
-    def body(frame, inputs):
-        spr, cxy = inputs
-        frame = _blit_center(frame, spr, cxy[0], cxy[1])
-        return frame, None
-    out, _ = jax.lax.scan(body, dst, (sprites, centers_xy))
-    return out
-
-
-def _enforce_min_sep_x(x_init: jnp.ndarray, taken_xs: jnp.ndarray, min_sep: jnp.ndarray, xmin: jnp.ndarray, xmax: jnp.ndarray, n_valid: jnp.ndarray) -> jnp.ndarray:
-    """Shift x_init away from up to the first `n_valid` entries in taken_xs so that |x - taken_x| >= min_sep.
-    Uses fixed-size fori_loop (JAX-friendly)."""
-    def body(j, x_curr):
-        tx = taken_xs[j]
-        dx = x_curr - tx
-        too_close = jnp.abs(dx) < min_sep
-        apply = jnp.less(j, n_valid)
-        direction = jnp.where(dx >= 0.0, 1.0, -1.0)
-        candidate = jnp.clip(tx + direction * min_sep, xmin, xmax)
-        x_next = jnp.where(jnp.logical_and(apply, too_close), candidate, x_curr)
-        return x_next
-    x = jax.lax.fori_loop(0, taken_xs.shape[0], body, x_init)
-    return jnp.clip(x, xmin, xmax)
-
-
-    def body(i, x_curr):
-        tx = taken_xs[i]
-        dx = x_curr - tx
-        too_close = jnp.abs(dx) < min_sep
-        # Push to the side where we already are farther, default to right if exactly equal
-        direction = jnp.where(dx >= 0.0, 1.0, -1.0)
-        candidate = tx + direction * min_sep
-        # Clamp to bounds
-        candidate = jnp.clip(candidate, xmin, xmax)
-        return jnp.where(too_close, candidate, x_curr)
-
-    x = jax.lax.fori_loop(0, n, body, x)
-    # final clamp
-    x = jnp.clip(x, xmin, xmax)
-    return x
-
-# ---- Pure JAX Renderer -----------------------------------------------------------
-
-# ---- Minimal JAX bitmap font (3x5) for digits/time UI -----------------------
-# Glyph order: '0'-'9' -> 0..9, ':' -> 10, '.' -> 11, ' ' (blank) -> 12
+# Hard-coded bitmap font for procedural digit generation
 _GLYPHS_BITS = jnp.array([
     # 0
     [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],
@@ -931,216 +892,234 @@ _GLYPHS_BITS = jnp.array([
     [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],
     # 9
     [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],
-    # :
+    # : (10)
     [[0,0,0],[0,1,0],[0,0,0],[0,1,0],[0,0,0]],
-    # .
+    # . (11) - Not used but included for completeness
     [[0,0,0],[0,0,0],[0,0,0],[0,1,0],[0,1,0]],
 ], dtype=jnp.uint8)
 
-def _glyph_rgba(scale: int = 2) -> jnp.ndarray:
-    """Return RGBA sprites for 12 glyphs, scaled with nearest-neighbor."""
-    H, W = _GLYPHS_BITS.shape[1], _GLYPHS_BITS.shape[2]
-    def upsample(bits):
-        b = bits.astype(jnp.uint8)
-        one = jnp.ones((scale, scale), dtype=jnp.uint8)
-        up = jnp.kron(b, one)  # (H*scale, W*scale)
-        rgb = jnp.zeros((up.shape[0], up.shape[1], 3), dtype=jnp.uint8)
-        a = (up * 255).astype(jnp.uint8)
-        return jnp.concatenate([rgb, a[..., None]], axis=-1)  # RGBA
-    sprites = jax.vmap(upsample)(_GLYPHS_BITS)  # (12, hs, ws, 4)
-    return sprites
+def _enforce_min_sep_x(x_init: jnp.ndarray, taken_xs: jnp.ndarray, min_sep: jnp.ndarray, xmin: jnp.ndarray, xmax: jnp.ndarray, n_valid: jnp.ndarray) -> jnp.ndarray:
+    """Shift x_init away from up to the first `n_valid` entries in taken_xs so that |x - taken_x| >= min_sep.
+    Uses fixed-size fori_loop (JAX-friendly)."""
+    def body(j, x_curr):
+        tx = taken_xs[j]
+        dx = x_curr - tx
+        too_close = jnp.abs(dx) < min_sep
+        apply = jnp.less(j, n_valid)
+        direction = jnp.where(dx >= 0.0, 1.0, -1.0)
+        candidate = jnp.clip(tx + direction * min_sep, xmin, xmax)
+        x_next = jnp.where(jnp.logical_and(apply, too_close), candidate, x_curr)
+        return x_next
+    x = jax.lax.fori_loop(0, taken_xs.shape[0], body, x_init)
+    return jnp.clip(x, xmin, xmax)
 
-def _center_positions(num_glyphs: int, glyph_w: int, y_top: int, screen_w: int, spacing: int=1):
-    total_w = num_glyphs * glyph_w + (num_glyphs - 1) * spacing
-    left = (screen_w - total_w) // 2
-    xs = jnp.arange(num_glyphs) * (glyph_w + spacing) + left + glyph_w // 2
-    ys = jnp.full((num_glyphs,), y_top + (glyph_w // 2), dtype=jnp.int32)
-    centers = jnp.stack([xs.astype(jnp.int32), ys], axis=1)
-    return centers
 
-def _draw_digits_line(frame: jnp.ndarray, digit_codes: jnp.ndarray, y_top: int, scale: int = 2) -> jnp.ndarray:
-    sprites = _glyph_rgba(scale)
-    gh = sprites.shape[1]
-    gw = sprites.shape[2]
-    centers = _center_positions(digit_codes.shape[0], gw, y_top, frame.shape[1], spacing=1)
-    chosen = sprites[digit_codes]
-    return _scan_blit(frame, chosen, centers)
-
-def _format_score_digits(score: jnp.ndarray) -> jnp.ndarray:
-    # Two digits (00..99), clipped
-    s_val = jnp.clip(score.astype(jnp.int32), 0, 99)
-    tens = (s_val // 10) % 10
-    ones = s_val % 10
-    return jnp.stack([tens, ones], axis=0)
-    val_out, arr_out = jax.lax.fori_loop(0, MAXD, body, (v, out))
-    return arr_out
-
-def _format_time_digits(t: jnp.ndarray) -> jnp.ndarray:
-    # Zeit aus Frames berechnen: 60 FPS -> Sekunden (bei anderem Takt FPS anpassen)
-    t = jnp.maximum(t.astype(jnp.float32), 0.0)
-    FPS = jnp.float32(60.0)
-    seconds_total = t / FPS
-
-    # M:SS:MS  (M = Minuten einstellig, SS = Sekunden zweistellig, MS = Millisekunden zweistellig)
-    minutes_digit = (jnp.floor(seconds_total / 60.0).astype(jnp.int32)) % 10
-    seconds_int   = jnp.floor(jnp.mod(seconds_total, 60.0)).astype(jnp.int32)
-    ms_int        = jnp.floor((seconds_total - jnp.floor(seconds_total)) * 1000.0).astype(jnp.int32)  # 0..999
-
-    s_t  = (seconds_int // 10) % 10
-    s_o  = seconds_int % 10
-    ms_t = (ms_int // 10) % 10      # Zehner der Millisekunden (letzte zwei Stellen)
-    ms_o = ms_int % 10
-
-    colon = jnp.int32(10)  # ':'-Glyph
-    return jnp.stack([minutes_digit, colon, s_t, s_o, colon, ms_t, ms_o], axis=0)
-@partial(jax.jit,
-         static_argnames=("screen_width","screen_height","scale_factor","skier_y","flag_distance","draw_ui_jax"))
-def render_frame(
-    state: GameState,
-    assets: RenderAssets,
-    *,
-    screen_width: int,
-    screen_height: int,
-    scale_factor: int,
-    skier_y: int,
-    flag_distance: int,
-    draw_ui_jax: bool = False,
-) -> jnp.ndarray:
-    """Erzeugt ein RGBA-Frame (uint8) rein in JAX – keine Seiteneffekte."""
-    # 1) Leeres (upgescaltes) RGBA-Frame
-    H = screen_height * scale_factor
-    W = screen_width * scale_factor
-    bg_rgb = jnp.array([255, 255, 255], dtype=jnp.uint8)
-    frame = jnp.concatenate(
-        [jnp.full((H, W, 3), bg_rgb, dtype=jnp.uint8),
-         jnp.full((H, W, 1), 255, dtype=jnp.uint8)],
-        axis=-1
-    )
-
-    # 2) Hilfsfunktionen für Koordinaten (Game→Pixel)
-    def to_px_x(x): return jnp.round(x * scale_factor).astype(jnp.int32)
-    def to_px_y(y): return jnp.round(y * scale_factor).astype(jnp.int32)
-
-    # 3) Skier-Sprite auswählen (links/front/rechts; „fallen“ hat Vorrang)
-    # mapping wie bisher: 0..2 = left, 3..4 = front, 5..7 = right
-    pos = jnp.clip(state.skier_pos, 0, 7)
-  
-    skier_base = jax.lax.cond(
-        pos <= 2,
-        lambda _: assets.skier_left,
-        lambda _: jax.lax.cond(
-            pos >= 5,
-            lambda __: assets.skier_right,
-            lambda __: assets.skier_front,
-            operand=None,   # <— WICHTIG: inneres cond bekommt ein operand
-        ),
-        operand=None,       # <— WICHTIG: äußeres cond bekommt ein operand
-    )
-    
-    is_fallen = jnp.logical_and(
-        state.skier_fell > 0,
-        jnp.logical_or(state.collision_type == 1,
-                       jnp.logical_or(state.collision_type == 2, state.collision_type == 3))
-    )
-    skier_sprite = jax.lax.cond(is_fallen, lambda _: assets.skier_fallen, lambda _: skier_base, operand=None)
-
-    skier_cx = to_px_x(state.skier_x)
-    skier_cy = to_px_y(jnp.array(skier_y))
-
-    # 4) Flags (links & rechts), jede 20. Gate rot, sonst blau
-    #    centers sind Pixelcenter; Reihenfolge: Skier -> Flags -> Trees -> Rocks (wie zuvor)
-    flags = state.flags  # (N,2) in Game-Koordinaten
-    # Nur (x,y) verwenden – robust, egal ob flags (N,2) oder (N,4) ist
-    flags_xy = flags[..., :2]  # -> (N,2)
-    
-    left_px  = jnp.round(flags_xy * scale_factor).astype(jnp.int32)
-    right_px = jnp.round((flags_xy + jnp.array([float(flag_distance), 0.0], dtype=jnp.float32))
-                         * scale_factor).astype(jnp.int32)
-    
-    # The 20th gate should be red. Identify the visible gate closest to the skier
-    # and color it red only when 19 gates have already been seen.
-    n_flags = flags.shape[0]
-    dy_to_skier = jnp.abs(flags_xy[:, 1] - jnp.float32(skier_y))
-    closest_idx = jnp.argmin(dy_to_skier)
-    is_twentieth = jnp.greater_equal(state.gates_seen, jnp.int32(19))
-    is_red = jnp.zeros((n_flags,), dtype=bool).at[closest_idx].set(is_twentieth)
-
-    # For each gate we draw two flags (left & right) with the same color.
-    flag_sprites_gate = jax.vmap(lambda r: jax.lax.cond(r, lambda _: assets.flag_red, lambda _: assets.flag_blue, operand=None))(is_red)
-    # tiles: (N*2, ...)
-    flag_sprites = jnp.concatenate([flag_sprites_gate, flag_sprites_gate], axis=0)
-    flag_centers = jnp.concatenate([left_px, right_px], axis=0)
-
-    # 5) Trees & Rocks (Pixelcenter)
-    tree_px = jnp.round(state.trees * scale_factor).astype(jnp.int32)
-    rock_px = jnp.round(state.rocks * scale_factor).astype(jnp.int32)
-
-    # 6) Skalierungen der Sprites für Ausgabeauflösung (scale_factor)
-    def scale_sprite(spr: jnp.ndarray) -> jnp.ndarray:
-        # Zielgröße ist immer "input * scale_factor"
-        h = spr.shape[0]
-        w = spr.shape[1]
-        return _nn_resize_rgba(spr, h * scale_factor, w * scale_factor)
-
-    skier_draw = scale_sprite(skier_sprite)
-    flag_red_draw  = scale_sprite(assets.flag_red)
-    flag_blue_draw = scale_sprite(assets.flag_blue)
-    tree_draw = scale_sprite(assets.tree)
-    rock_draw = scale_sprite(assets.rock)
-    # Da Flags gemischt sind, bauen wir ein Array der tatsächlich verwendeten Sprites:
-    # (N*2, h, w, 4) – wir mappen „is_red“ erneut:
-    flag_sprites = jax.vmap(lambda r: jax.lax.cond(r, lambda _: flag_red_draw, lambda _: flag_blue_draw, operand=None))(jnp.concatenate([is_red, is_red], axis=0))
-
-    # 7) Zeichnen in der korrekten Reihenfolge
-    frame = _blit_center(frame, skier_draw, skier_cx, skier_cy)
-    frame = _scan_blit(frame, flag_sprites, flag_centers)
-    frame = _scan_blit(frame, jnp.repeat(tree_draw[None, ...], tree_px.shape[0], axis=0), tree_px)
-    frame = _scan_blit(frame, jnp.repeat(rock_draw[None, ...], rock_px.shape[0], axis=0), rock_px)
-
-    # 8) UI/Text direkt in JAX – hier deaktiviert um identische Optik
-
-    # 9) Optional UI: score (top line) and time (second line), centered
-    if draw_ui_jax:
-        score_digits = _format_score_digits(state.score)
-        time_digits  = _format_time_digits(state.time)
-        frame = _draw_digits_line(frame, score_digits, y_top=2, scale=2)
-        frame = _draw_digits_line(frame, time_digits,  y_top=2 + 5*2 + 2, scale=2)  # place below first line
-
-    return frame
 class SkiingRenderer(JAXGameRenderer):
-    def __init__(self, consts=None):
+    def __init__(self, consts: GameConfig = None):
         super().__init__()
-        # Deine Game-Konstanten (Breite/Höhe/Abstände) – wie bei Pong: env.consts
-        self.consts = consts or GameConfig()
-
-        # Sprites einmalig als JAX-Arrays laden (RGBA)
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(base_dir, "sprites", "skiing")
-
-        flag_red = _load_sprite_npy(sprite_dir, "checkered_flag.npy")
-        self.assets = RenderAssets(
-            skier_left   = _load_sprite_npy(sprite_dir, "skiier_right.npy"),  # (deine Spiegelung beibehalten)
-            skier_front  = _load_sprite_npy(sprite_dir, "skiier_front.npy"),
-            skier_right  = _load_sprite_npy(sprite_dir, "skiier_left.npy"),
-            skier_fallen = _load_sprite_npy(sprite_dir, "skier_fallen.npy"),
-            flag_red     = flag_red,
-            flag_blue    = _recolor_rgba(flag_red, (0, 96, 255)),
-            tree         = _load_sprite_npy(sprite_dir, "tree.npy"),
-            rock         = _load_sprite_npy(sprite_dir, "stone.npy"),
+        self.config = consts or GameConfig()
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/skiing"
+        
+        # 1. Configure the rendering utility
+        self.render_config = render_utils.RendererConfig(
+            game_dimensions=(self.config.screen_height, self.config.screen_width),
+            channels=3,
         )
+        self.jr = render_utils.JaxRenderingUtils(self.render_config)
 
-        # JIT’ter für deine pure Renderfunktion, **ohne Upscaling**
-        self._render_fn = partial(
-            render_frame,
-            screen_width   = self.consts.screen_width,    # 160
-            screen_height  = self.consts.screen_height,   # 210
-            scale_factor   = 1,         # play.py skaliert selbst
-            skier_y        = self.consts.skier_y,
-            flag_distance  = self.consts.flag_distance,
-            draw_ui_jax    = True,
-        )
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.config.ASSET_CONFIG)
+        
+        # 3. Load and recolor flags (needs sprite path, so done here)
+        flag_red_rgba = self._load_rgba_sprite("checkered_flag.npy")
+        flag_blue_rgba = self._recolor_rgba(flag_red_rgba, (0, 96, 255))
+        final_asset_config.append({'name': 'flag_red', 'type': 'procedural', 'data': flag_red_rgba})
+        final_asset_config.append({'name': 'flag_blue', 'type': 'procedural', 'data': flag_blue_rgba})
+
+        # 4. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+
+        # 5. Store key color/shape IDs
+        self.RED_FLAG_MASK = self.SHAPE_MASKS['flag_red']
+        self.BLUE_FLAG_MASK = self.SHAPE_MASKS['flag_blue']
+        self.RED_FLAG_OFFSET = self.FLIP_OFFSETS['flag_red']
+        self.BLUE_FLAG_OFFSET = self.FLIP_OFFSETS['flag_blue']
+        
+        # 6. Store glyph dimensions for UI
+        # The digits mask is (N, H, W)
+        self.glyph_height = self.SHAPE_MASKS['digits'].shape[1]
+        self.glyph_width = self.SHAPE_MASKS['digits'].shape[2]
+        self.glyph_spacing = 1  # From old _center_positions logic
+
+    def _load_rgba_sprite(self, file_name: str) -> np.ndarray:
+        """Helper to load and standardize sprites to RGBA."""
+        path = os.path.join(self.sprite_path, file_name)
+        rgba = np.load(path).astype(np.uint8)
+        if rgba.shape[-1] == 3:
+            a = np.full(rgba.shape[:2] + (1,), 255, np.uint8)
+            rgba = np.concatenate([rgba, a], axis=-1)
+        return rgba
+
+    def _recolor_rgba(self, sprite_rgba: np.ndarray, rgb: Tuple[int,int,int]) -> np.ndarray:
+        """Manually recolors an RGBA sprite. For setup only."""
+        mask = (sprite_rgba[..., 3:4] > 0)
+        rgb_arr = np.array(rgb, dtype=np.uint8)[None, None, :]
+        new_rgb = np.where(mask, rgb_arr, sprite_rgba[..., :3])
+        return np.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
+        
+    @partial(jax.jit, static_argnums=(0,))
+    def _format_score_digits(self, score: jnp.ndarray) -> jnp.ndarray:
+        s_val = jnp.clip(score.astype(jnp.int32), 0, 99)
+        tens = (s_val // 10) % 10
+        ones = s_val % 10
+        return jnp.stack([tens, ones], axis=0)
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state) -> jnp.ndarray:
-        rgba = self._render_fn(state, self.assets)   # (210,160,4) uint8
-        return rgba[..., :3]                         # -> (210,160,3) RGB
+    def _format_time_digits(self, t: jnp.ndarray) -> jnp.ndarray:
+        t = jnp.maximum(t.astype(jnp.float32), 0.0)
+        FPS = jnp.float32(60.0)
+        seconds_total = t / FPS
+
+        minutes_digit = (jnp.floor(seconds_total / 60.0).astype(jnp.int32)) % 10
+        seconds_int   = jnp.floor(jnp.mod(seconds_total, 60.0)).astype(jnp.int32)
+        ms_int        = jnp.floor((seconds_total - jnp.floor(seconds_total)) * 1000.0).astype(jnp.int32)
+
+        s_t  = (seconds_int // 10) % 10
+        s_o  = seconds_int % 10
+        ms_t = (ms_int // 10) % 10
+        ms_o = ms_int % 10
+
+        # Index 10 is ':' in _GLYPHS_BITS
+        colon = jnp.int32(10)
+        return jnp.stack([minutes_digit, colon, s_t, s_o, colon, ms_t, ms_o], axis=0)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: GameState) -> jnp.ndarray:
+        # 1. Start with the white background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # 2. Get skier sprite
+        skier_masks = self.SHAPE_MASKS['skier_group']
+        skier_offset = self.FLIP_OFFSETS['skier_group']
+        
+        pos = jnp.clip(state.skier_pos, 0, 7)
+        # 0..2 = left (idx 0), 3..4 = front (idx 1), 5..7 = right (idx 2)
+        skier_base_idx = jax.lax.select(
+            pos <= 2, 0,
+            jax.lax.select(pos >= 5, 2, 1)
+        )
+        skier_base = skier_masks[skier_base_idx]
+
+        is_fallen = (state.skier_fell > 0) & \
+                    ((state.collision_type == 1) | (state.collision_type == 2) | (state.collision_type == 3))
+        
+        skier_sprite = jax.lax.select(is_fallen, skier_masks[3], skier_base)  # idx 3 is 'skier_fallen'
+        
+        # Center coordinates
+        skier_cx = state.skier_x
+        skier_cy = jnp.array(self.config.skier_y)
+        
+        # Top-left coordinates
+        skier_top = (skier_cy - (skier_sprite.shape[0] // 2)).astype(jnp.int32)
+        skier_left = (skier_cx - (skier_sprite.shape[1] // 2)).astype(jnp.int32)
+
+        # 3. Draw Skier
+        raster = self.jr.render_at(
+            raster, skier_left, skier_top, 
+            skier_sprite, flip_offset=skier_offset
+        )
+
+        # 4. Draw Flags
+        flags_xy = state.flags[..., :2]
+        left_pos = flags_xy.astype(jnp.int32)
+        right_pos = (flags_xy + jnp.array([self.config.flag_distance, 0.0])).astype(jnp.int32)
+        
+        n_flags = state.flags.shape[0]
+        dy_to_skier = jnp.abs(flags_xy[:, 1] - jnp.float32(self.config.skier_y))
+        closest_idx = jnp.argmin(dy_to_skier)
+        is_twentieth = jnp.greater_equal(state.gates_seen, jnp.int32(19))
+        is_red_mask = jnp.zeros((n_flags,), dtype=bool).at[closest_idx].set(is_twentieth)
+        
+        # Render flags one by one
+        def draw_flag(i, r):
+            is_red = is_red_mask[i]
+            mask = jax.lax.select(is_red, self.RED_FLAG_MASK, self.BLUE_FLAG_MASK)
+            offset = jax.lax.select(is_red, self.RED_FLAG_OFFSET, self.BLUE_FLAG_OFFSET)
+            
+            # Center coords
+            cx_left, cy = left_pos[i]
+            cx_right, _ = right_pos[i]
+            
+            # Top-left coords
+            top = (cy - (mask.shape[0] // 2)).astype(jnp.int32)
+            left_l = (cx_left - (mask.shape[1] // 2)).astype(jnp.int32)
+            left_r = (cx_right - (mask.shape[1] // 2)).astype(jnp.int32)
+            
+            r = self.jr.render_at_clipped(r, left_l, top, mask, flip_offset=offset)
+            r = self.jr.render_at_clipped(r, left_r, top, mask, flip_offset=offset)
+            return r
+
+        raster = jax.lax.fori_loop(0, self.config.max_num_flags, draw_flag, raster)
+
+        # 5. Draw Trees
+        tree_mask = self.SHAPE_MASKS['tree']
+        tree_offset = self.FLIP_OFFSETS['tree']
+        tree_h, tree_w = tree_mask.shape[0], tree_mask.shape[1]
+        
+        def draw_tree(i, r):
+            cx, cy = state.trees[i, :2]
+            top = (cy - (tree_h // 2)).astype(jnp.int32)
+            left = (cx - (tree_w // 2)).astype(jnp.int32)
+            return self.jr.render_at_clipped(r, left, top, tree_mask, flip_offset=tree_offset)
+            
+        raster = jax.lax.fori_loop(0, self.config.max_num_trees, draw_tree, raster)
+
+        # 6. Draw Rocks
+        rock_mask = self.SHAPE_MASKS['rock']
+        rock_offset = self.FLIP_OFFSETS['rock']
+        rock_h, rock_w = rock_mask.shape[0], rock_mask.shape[1]
+
+        def draw_rock(i, r):
+            cx, cy = state.rocks[i, :2]
+            top = (cy - (rock_h // 2)).astype(jnp.int32)
+            left = (cx - (rock_w // 2)).astype(jnp.int32)
+            return self.jr.render_at_clipped(r, left, top, rock_mask, flip_offset=rock_offset)
+            
+        raster = jax.lax.fori_loop(0, self.config.max_num_rocks, draw_rock, raster)
+
+        # 7. Draw UI
+        score_digits = self._format_score_digits(state.score)
+        time_digits  = self._format_time_digits(state.time)
+        
+        # Center score
+        num_glyphs_score = score_digits.shape[0]
+        total_w_score = num_glyphs_score * self.glyph_width + (num_glyphs_score - 1) * self.glyph_spacing
+        left_score = (self.config.screen_width - total_w_score) // 2
+        
+        raster = self.jr.render_label(
+            raster, left_score, 2, score_digits,
+            self.SHAPE_MASKS['digits'], 
+            spacing=self.glyph_width + self.glyph_spacing,
+            max_digits=num_glyphs_score
+        )
+        
+        # Center time
+        num_glyphs_time = time_digits.shape[0]
+        total_w_time = num_glyphs_time * self.glyph_width + (num_glyphs_time - 1) * self.glyph_spacing
+        left_time = (self.config.screen_width - total_w_time) // 2
+        
+        raster = self.jr.render_label(
+            raster, left_time, 2 + self.glyph_height + 2, time_digits,
+            self.SHAPE_MASKS['digits'], 
+            spacing=self.glyph_width + self.glyph_spacing,
+            max_digits=num_glyphs_time
+        )
+        
+        # 8. Final conversion
+        return self.jr.render_from_palette(raster, self.PALETTE)

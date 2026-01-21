@@ -1,13 +1,14 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Dict, Any, List, Optional
+import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 from jaxatari.spaces import Space
 
@@ -23,6 +24,31 @@ from jaxatari.spaces import Space
 # MOVE_PIECE -> SHOW_OPPONENT_MOVE: # Player moves the piece with no further jumps available
 # MOVE_PIECE -> MOVE_PIECE: # Player moves the piece with further jumps available
 # SHOW_OPPONENT_MOVE -> SELECT_PIECE: # Player makes an input to select a piece after the opponent's move
+
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for VideoCheckers.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    # Pieces: 0=EMPTY, 1=WHITE_PIECE, 2=BLACK_PIECE, 3=WHITE_KING, 4=BLACK_KING, 5=BLACK_CURSOR, 6=WHITE_CURSOR
+    piece_files = [
+        f"pieces/{i}.npy" for i in range(7)
+    ]
+    
+    # Text sprites: 0-11
+    text_files = [f"text/{i}.npy" for i in range(12)]
+    
+    return (
+        # The checkerboard pattern
+        {'name': 'board', 'type': 'single', 'file': 'background.npy', 'transpose': True},
+        
+        # Group for all piece types
+        {'name': 'pieces', 'type': 'group', 'files': piece_files},
+        
+        # Group for text sprites
+        {'name': 'text', 'type': 'group', 'files': text_files},
+    )
 
 
 class VideoCheckersConstants:
@@ -75,6 +101,9 @@ class VideoCheckersConstants:
 
     ANIMATION_FRAME_RATE = 30
 
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
+
 
 class OpponentMove(NamedTuple):
     start_pos: chex.Array  # Start position of the opponent's piece
@@ -126,6 +155,7 @@ class VideoCheckersState(NamedTuple):
     frame_counter: chex.Array
     opponent_move: OpponentMove
     winner: int  # -1 if no winner, COLOUR_WHITE if white won, COLOUR_BLACK if black won.
+    must_jump: bool  # True if player must jump (computed once per step, cached in state)
     rng_key: chex.PRNGKey
 
 
@@ -393,9 +423,10 @@ class BoardHandler:
             move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces
             can jump.
         """
-        own_pieces = jax.lax.cond(colour == VideoCheckersConstants.COLOUR_WHITE,
-                                  lambda: [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING],
-                                  lambda: [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING], )
+        if colour == VideoCheckersConstants.COLOUR_WHITE:
+            own_pieces = [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING]
+        else:
+            own_pieces = [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING]
         own_pieces_mask = jnp.zeros_like(board, dtype=bool)
         for piece in own_pieces:
             own_pieces_mask |= (board == piece)
@@ -443,14 +474,10 @@ class BoardHandler:
 
 class JaxVideoCheckers(
     JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
-    def __init__(self, consts: VideoCheckersConstants = None, reward_funcs: list[callable] = None):
+    def __init__(self, consts: VideoCheckersConstants = None):
         consts = consts or VideoCheckersConstants()
         super().__init__(consts)
         self.renderer = VideoCheckersRenderer(self.consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = {
             Action.FIRE,
             Action.UPRIGHT,
@@ -487,6 +514,9 @@ class JaxVideoCheckers(
         # Initialize the board with pieces, this is a placeholder
         board = BoardHandler.reset_board()
 
+        # Calculate initial must_jump
+        _, must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, board)
+
         # Default state
         state = VideoCheckersState(cursor_pos=jnp.array([6, 7]), board=board, game_phase=self.consts.SELECT_PIECE_PHASE,
                                    selected_piece=jnp.array([-1, -1]), frame_counter=jnp.array(0), winner=-1,
@@ -499,7 +529,8 @@ class JaxVideoCheckers(
                                                               resulting_board=board
                                                               ),
                                    rng_key=key,
-                                   has_jumped=False)
+                                   has_jumped=False,
+                                   must_jump=must_jump)
         """
         testboard = jnp.zeros((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X), dtype=jnp.int32)
         # Debug
@@ -550,14 +581,6 @@ class JaxVideoCheckers(
                                                                     captured_positions=jnp.array([[-1, -1]])
                                                                     ))"""
 
-        # if the phase is not SELECT_PIECE_PHASE, print a debug message
-        jax.lax.cond(
-            state.game_phase != self.consts.SELECT_PIECE_PHASE,
-            lambda: jax.debug.print("Warning: Game phase is not SELECT_PIECE_PHASE, it is {game_phase}",
-                                    game_phase=state.game_phase),
-            lambda: None,
-
-        )
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -627,12 +650,10 @@ class JaxVideoCheckers(
 
         return new_state
 
-    @staticmethod
     def calculate_best_move_per_piece(self, piece: chex.Array, key, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """
         For a given piece, returns the best move and its score.
         Args:
-            self: the current game (JaxVideoCheckers instance)
             piece: array containing the pieces row and col
             key: an RNG key used for breaking ties
             board: current game board
@@ -690,28 +711,29 @@ class JaxVideoCheckers(
         best_move = jnp.where(all_illegal, jnp.array([0, 0], moves.dtype), moves[best_idx])
         best_score = jnp.where(all_illegal, -jnp.inf, scores[best_idx])
 
-        jax.debug.print("Piece {p} best move {m} score {s}", p=piece, m=best_move, s=best_score)
-
         return best_move, best_score
 
-    @staticmethod
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
             -> VideoCheckersState:
         """
         Computes the first move (of potentially multiple) based on simple heuristics. Doesn't apply them (this gets done
         in step_show_opponent_move_phase)
         Args:
-             self: the current game (JaxVideoCheckers instance)
-             movable_pieces: array of size MAX_PIECES containing row and col position for movable pieces and -1,-1 for imovable
-             state: current game state
-         Returns:
-             new state with updated opponent_move and has_jumped fields
+            movable_pieces: array of size MAX_PIECES containing row and col position for movable pieces and -1,-1 for imovable
+            state: current game state
+        Returns:
+            new state with updated opponent_move and has_jumped fields
         """
 
         # Supply an independent RNG key per piece
         rng_key, splitkey = jax.random.split(state.rng_key)
-        best_moves, best_scores = (jax.vmap(self.calculate_best_move_per_piece, in_axes=(None, 0, None, None)
-                                            )(self, movable_pieces, splitkey, state.board))
+        # Generate a separate key for each of the MAX_PIECES
+        splitkeys = jax.random.split(splitkey, self.consts.MAX_PIECES)
+        # vmap over (piece, key, board). 'self' is implicit.
+        # in_axes=(0, 0, None) corresponds to (movable_pieces, splitkeys, state.board)
+        best_moves, best_scores = jax.vmap(
+            self.calculate_best_move_per_piece, in_axes=(0, 0, None)
+        )(movable_pieces, splitkeys, state.board)
 
         # Choose the overall best move among all pieces
         top_piece_idx = jnp.argmax(best_scores)
@@ -746,61 +768,45 @@ class JaxVideoCheckers(
         Returns:
             new state with updated opponent_move and has_jumped fields
         """
-        jax.debug.print("Computing further opponent move...")
+        def while_cond_fun(state: VideoCheckersState) -> bool:
+            # Continue looping as long as the AI has a jump
+            return state.has_jumped
 
-        def loop_body(i, state: VideoCheckersState) -> VideoCheckersState:
-            """
-            Loop body for the fori_loop, which calculates the best further opponent move.
-            This is called when the opponent has already jumped and can jump again.
-            """
+        def while_body_fun(state: VideoCheckersState) -> VideoCheckersState:
+            # This is the logic from the old 'calc_further_move'
+            piece = state.opponent_move.end_pos
+            rng_key, splitkey = jax.random.split(state.rng_key)
+            board = state.opponent_move.resulting_board
 
-            def calc_further_move(state: VideoCheckersState) -> VideoCheckersState:
-                """
-                Get all moves for this piece and check if there is a jump available.
-                If so use that jump, otherwise return the state unchanged except has_jumped is set to False.
-                Use the function calculate_best_move_per_piece to get the best move for the piece.
-                """
-                piece = state.opponent_move.end_pos
-                rng_key, splitkey = jax.random.split(state.rng_key)
-                board = state.opponent_move.resulting_board
+            best_move, best_score = self.calculate_best_move_per_piece(piece, splitkey, board)
+            new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
+                row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
+            new_pos = piece + best_move
 
-                best_move, best_score = self.calculate_best_move_per_piece(self, piece, splitkey, board)
-                jax.debug.print("Best move for piece {piece}: {best_move}, score: {best_score}",
-                                piece=piece, best_move=best_move, best_score=best_score)
-                new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
-                    row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
-                new_pos = piece + best_move
-
-                new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece,
-                                                                 resulting_board=new_board)
-                new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move,
-                                                                              jnp.array((c_row, c_col),
-                                                                                        dtype=jnp.int32))
-                return jax.lax.cond(
-                    is_jump,
-                    lambda: state._replace(
-                        has_jumped=True,
-                        opponent_move=new_opponent_move,
-                        rng_key=rng_key
-                    ),
-                    lambda: state._replace(
-                        has_jumped=False,
-                        rng_key=rng_key
-                    )
-                )
-
+            new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece,
+                                                             resulting_board=new_board)
+            new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move,
+                                                                          jnp.array((c_row, c_col),
+                                                                                    dtype=jnp.int32))
+            # This condition now controls the loop
             return jax.lax.cond(
-                state.has_jumped,
-                lambda s: calc_further_move(s),
-                lambda s: s,
-                state
+                is_jump,
+                lambda: state._replace(
+                    has_jumped=True,  # Loop will continue
+                    opponent_move=new_opponent_move,
+                    rng_key=rng_key
+                ),
+                lambda: state._replace(
+                    has_jumped=False,  # Loop will terminate
+                    rng_key=rng_key
+                )
             )
 
-        return jax.lax.fori_loop(
-            lower=0,
-            upper=12,
-            body_fun=loop_body,
-            init_val=state
+        # Replace the fori_loop with while_loop
+        return jax.lax.while_loop(
+            while_cond_fun,
+            while_body_fun,
+            state
         )
 
     def step_move_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
@@ -824,7 +830,7 @@ class JaxVideoCheckers(
             """
 
             def moves_available(moveable_pieces: chex.Array, state: VideoCheckersState):
-                new_state = self.calculate_best_first_opponent_move(self, moveable_pieces, state)
+                new_state = self.calculate_best_first_opponent_move(moveable_pieces, state)
                 # if the opponent has jumped, we need to check calculate_best_further_opponent_move
                 opponent_move = jax.lax.cond(
                     new_state.has_jumped,
@@ -1107,34 +1113,36 @@ class JaxVideoCheckers(
         """
         # Switch between game phases to choose which function handles the step
         # So separate function for each game phase
+        def _run_phase_logic(state, action):
+            # Define operands to pass to the branch functions
+            # Note: We create simple lambda wrappers to match the required
+            # function signature for jax.lax.switch, which is (operand,).
+            # Here, our "operand" is the tuple (state, action).
+            
+            # We pass 'state' and 'action' as a tuple (the operand)
+            operands = (state, action)
+            # List of functions to call based on the index (game_phase)
+            # Each function must accept the (state, action) operand
+            phase_functions = [
+                lambda op: self.step_select_piece_phase(op[0], op[1]),
+                lambda op: self.step_move_piece_phase(op[0], op[1]),
+                lambda op: self.step_show_opponent_move_phase(op[0], op[1]),
+                lambda op: self.step_game_over_phase(op[0], op[1]),
+            ]
+            
+            return jax.lax.switch(state.game_phase, phase_functions, operands)
+
         new_state = jax.lax.cond(
             (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (action != Action.NOOP),
-            lambda: jax.lax.cond(
-                state.game_phase == self.consts.SELECT_PIECE_PHASE,
-                lambda: self.step_select_piece_phase(state, action),
-                lambda: jax.lax.cond(
-                    state.game_phase == self.consts.MOVE_PIECE_PHASE,
-                    lambda: self.step_move_piece_phase(state, action),
-                    lambda: jax.lax.cond(
-                        state.game_phase == self.consts.SHOW_OPPONENT_MOVE_PHASE,
-                        lambda: self.step_show_opponent_move_phase(state, action),
-                        lambda: self.step_game_over_phase(state, action),
-                    ),
-                ),
-            ),
+            lambda: _run_phase_logic(state, action),  # Call the new switch logic
             lambda: state,
         )
 
-        # if the new_state phase is not equal to the old state phase,
-        # print what the old phase was and what the new phase is
-
-        jax.lax.cond(
-            new_state.game_phase != state.game_phase,
-            lambda: jax.debug.print("Game phase changed from {old_phase} to {new_phase}",
-                                    old_phase=state.game_phase, new_phase=new_state.game_phase),
-            lambda: None)
-
         new_state = new_state._replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
+
+        # Re-calculate and store must_jump for the *new* state
+        _, new_must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, new_state.board)
+        new_state = new_state._replace(must_jump=new_must_jump)
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(state, new_state)
@@ -1198,11 +1206,11 @@ class JaxVideoCheckers(
         Returns:
             VideoCheckersObservation: The observation of the game state.
         """
-        _, must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, state.board)
+        # Read must_jump from state instead of recalculating
         return VideoCheckersObservation(board=state.board,
                                         start_pos=state.cursor_pos,
                                         end_pos=state.selected_piece,
-                                        must_jump=must_jump.astype(jnp.int32),
+                                        must_jump=state.must_jump.astype(jnp.int32),
                                         cursor_pos=state.cursor_pos)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1219,6 +1227,17 @@ class JaxVideoCheckers(
         return new_lead_black - previous_lead_black
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
+        """
+        Calculates the reward from the environment state.
+        Args:
+            previous_state: The previous environment state.
+            state: The environment state.
+        Returns: reward
+        """
+        return self._get_env_reward(previous_state, state)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoCheckersState) -> bool:
         """
         Returns whether the game is done based on the game state.
@@ -1228,259 +1247,255 @@ class JaxVideoCheckers(
         return state.game_phase == VideoCheckersConstants.GAME_OVER_PHASE
 
 
-def load_sprites():
-    """
-    Load all sprites required for Flag Capture rendering.
-    Returns:
-        Sprite arrays (BG, pieces, text)
-    """
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    background = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/videocheckers/background.npy"), transpose=True)
-
-    # Convert all sprites to the expected format (add frame dimension)
-    SPRITE_BG = jnp.expand_dims(background, axis=0)
-    SPRITE_PIECES = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/videocheckers/pieces/{}.npy"),
-                                           num_chars=7)
-    SPRITE_TEXT = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/videocheckers/text/{}.npy"),
-                                         num_chars=12)
-
-    return (
-        SPRITE_BG,
-        SPRITE_PIECES,
-        SPRITE_TEXT,
-    )
 
 
 class VideoCheckersRenderer(JAXGameRenderer):
     def __init__(self, consts: VideoCheckersConstants = None):
         super().__init__()
         self.consts = consts or VideoCheckersConstants()
+        
+        # 1. Configure the renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            #downscale=(84, 84)
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Define sprite path
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocheckers"
+        
+        # 3. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # 4. Create procedural assets using modded constants
+        background_sprite = jnp.array([[[160, 96, 64, 255]]], dtype=jnp.uint8)
+        
+        # 5. Append procedural assets
+        final_asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': background_sprite})
+        
+        # 6. Load all assets, create palette, and generate ID masks
         (
-            self.SPRITE_BG,
-            self.SPRITE_PIECES,
-            self.SPRITE_TEXT,
-        ) = load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # 5. Expand background to full size if it's procedural (1x1)
+        # The procedural background creates a 1x1 raster, but we need full game dimensions
+        bg_h, bg_w = self.BACKGROUND.shape
+        # Determine the correct target size (use downscaled dimensions if downscaling is enabled)
+        if self.config.downscale:
+            target_h, target_w = self.config.downscale
+        else:
+            target_h, target_w = self.config.game_dimensions
+        if bg_h != target_h or bg_w != target_w:
+            # Get the background color ID from the 1x1 background
+            bg_color_id = self.BACKGROUND[0, 0]
+            # Create full-size background filled with that color ID
+            self.BACKGROUND = jnp.full((target_h, target_w), bg_color_id, dtype=self.BACKGROUND.dtype)
+        
+        # 7. Pre-compute/cache values for rendering
+        self._cache_sprite_stacks()
+        self.PRE_RENDERED_BOARD = self._precompute_static_board()
 
+    def _cache_sprite_stacks(self):
+        """Caches the sprite stacks for easy access."""
+        self.PIECE_STACK = self.SHAPE_MASKS['pieces']
+        self.TEXT_STACK = self.SHAPE_MASKS['text']
+
+    def _precompute_static_board(self) -> jnp.ndarray:
+        """Pre-renders the static board onto the solid background color."""
+        # self.BACKGROUND is already the solid color ID mask
+        board_mask = self.SHAPE_MASKS['board']
+        return self.jr.render_at(
+            self.BACKGROUND,
+            self.consts.OFFSET_X_BOARD,
+            self.consts.OFFSET_Y_BOARD,
+            board_mask
+        )
+
+    # --- Vectorized Logic for Piece Calculation ---
+    
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
+    def _calculate_piece_grid(self, state: VideoCheckersState) -> jnp.ndarray:
         """
-        Renders the current game state using JAX operations.
-
-        Args:
-            state: A VideoCheckersState object containing the current game state.
-
-        Returns:
-            A JAX array representing the rendered frame.
+        Vectorized function to compute the 8x8 grid of piece *indices* to be rendered.
+        This contains all the complex game phase logic.
         """
-
-        raster = jr.create_initial_frame(width=self.consts.WIDTH, height=self.consts.HEIGHT)
-
-        def determine_piece_type_select_phase(row, col, state: VideoCheckersState):
-            """
-            Determines the piece type to render in the select piece phase.
-            This means rendering a cursor if frame_counter is under half
-            Args:
-                row: Row index of the piece.
-                col: Column index of the piece.
-                state: Current game state.
-            Returns:
-                The piece type to render.
-            """
+        
+        # --- Helper functions (internal to the JIT-ted function) ---
+        def determine_piece_type_select_phase(row, col, state):
+            is_cursor = (state.cursor_pos[0] == row) & (state.cursor_pos[1] == col)
+            is_flashing = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
             return jax.lax.cond(
-                (state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)) & (state.cursor_pos[0] == row) & (
-                        state.cursor_pos[1] == col),
+                is_cursor & is_flashing,
                 lambda: self.consts.BLACK_CURSOR,
                 lambda: state.board[row, col],
             )
 
-        def determine_piece_type_move_phase(row, col, state: VideoCheckersState):
-            """
-            Determines the piece type to render in the move piece phase.
-            We have a selected piece and destination.
-            if the destination is on the selected piece the piece should be fast blinking (render the piece sprite if frame_counter is not 5 to 10 or 15 to 20)
-            if the destination is not on the selected piece we have two animation states. one for < 30 and one for >= 30.
-            all pieces on the board should be rendered as normal. exceptions are only the selected piece and the destination.
-            for the < 30 state, the selected piece should be rendered as BLACK_CURSOR and the destination as the selected pieces tile sprite.
-            For the >= 30 state, the selected piece should be rendered as its original sprite and the destination as nothing (empty tile).
-            if the piece to be determined is not the selected piece or destination, it should be rendered as normal.
-            Args:
-                row: Row index of the piece.
-                col: Column index of the piece.
-                state: Current game state.
-            Returns:
-                The piece type to render.
-            """
-            is_selected_piece = jnp.all(state.selected_piece == jnp.array([row, col]))
-            is_cursor_pos = jnp.all(state.cursor_pos == jnp.array([row, col]))
-            is_unmoved = jnp.all(is_selected_piece & is_cursor_pos)
+        def determine_piece_type_move_phase(row, col, state):
+            is_selected_piece = (state.selected_piece[0] == row) & (state.selected_piece[1] == col)
+            is_cursor_pos = (state.cursor_pos[0] == row) & (state.cursor_pos[1] == col)
+            is_unmoved = is_selected_piece & is_cursor_pos
 
-            def f_umoved():
-                # If the piece is unmoved, blink fast
+            def f_unmoved():
+                frame_mod = state.frame_counter % self.consts.ANIMATION_FRAME_RATE
+                is_flashing_off = ((frame_mod >= 5) & (frame_mod < 10)) | (frame_mod >= 15)
                 return jax.lax.cond(
-                    (state.frame_counter % self.consts.ANIMATION_FRAME_RATE < 5) | (
-                            state.frame_counter % self.consts.ANIMATION_FRAME_RATE >= 10) & (
-                            state.frame_counter % self.consts.ANIMATION_FRAME_RATE < 15),
+                    is_flashing_off,
                     lambda: self.consts.EMPTY_TILE,
                     lambda: state.board[row, col],
                 )
 
             def f_selected():
-                # If the piece is selected, render it as BLACK_CURSOR if frame_counter < 30, else render it as its original sprite
+                is_flashing_off = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
                 return jax.lax.cond(
-                    state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2),
+                    is_flashing_off,
                     lambda: self.consts.BLACK_CURSOR,
                     lambda: state.board[row, col],
                 )
 
             def f_cursor():
-                # If the piece is the destination, render it as the selected piece's tile sprite if frame_counter < 30, else render it as EMPTY_TILE
+                is_flashing_off = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
+                selected_piece_type = state.board[state.selected_piece[0], state.selected_piece[1]]
                 return jax.lax.cond(
-                    state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2),
-                    lambda: state.board[state.selected_piece[0], state.selected_piece[1]],
-                    # Use selected piece's tile sprite
+                    is_flashing_off,
+                    lambda: selected_piece_type,
                     lambda: self.consts.EMPTY_TILE,
                 )
 
             return jax.lax.cond(
-                is_unmoved,
-                f_umoved,
-                lambda: jax.lax.cond(
-                    is_selected_piece,
-                    f_selected,
-                    lambda: jax.lax.cond(
-                        is_cursor_pos,
-                        f_cursor,
-                        lambda: state.board[row, col],
-                    ),
-
-                ),
+                is_unmoved, f_unmoved,
+                lambda: jax.lax.cond(is_selected_piece, f_selected,
+                    lambda: jax.lax.cond(is_cursor_pos, f_cursor,
+                        lambda: state.board[row, col]
+                    )
+                )
             )
 
-        def determine_piece_type_show_opponent_move_phase(row, col, state: VideoCheckersState):
-            """
-            Determines the piece type to render in the show opponent move phase.
-            We have two animation states. one for < 30, let call it "before move" and one for >= 30, let call it "after move".
-            In the "before move" state, the opponent_move.start_pos should be rendered as WHITE_CURSOR and the opponent_move.end_pos as an empty tile.
-            The captured positions should be rendered as their original piece type.
-            In the "after move" state, the opponent_move.start_pos should be rendered as an empty tile, the opponent_move.end_pos as the opponent_move.piece_type and the captured positions as BLACK_CURSOR.
-            Args:
-                row: Row index of the piece.
-                col: Column index of the piece.
-                state: Current game state.
-            Returns:
-                The piece type to render.
-            """
+        def determine_piece_type_show_opponent_move_phase(row, col, state):
+            is_start_pos = (state.opponent_move.start_pos[0] == row) & (state.opponent_move.start_pos[1] == col)
+            is_end_pos = (state.opponent_move.end_pos[0] == row) & (state.opponent_move.end_pos[1] == col)
+            
+            # Vectorized check for captured position
+            captured_matches = (state.opponent_move.captured_positions[:, 0] == row) & \
+                               (state.opponent_move.captured_positions[:, 1] == col)
+            is_captured_pos = jnp.any(captured_matches)
 
-            is_start_pos = jnp.all(state.opponent_move.start_pos == jnp.array([row, col]))
-            is_end_pos = jnp.all(state.opponent_move.end_pos == jnp.array([row, col]))
-            is_captured_pos = jnp.any(jnp.all(state.opponent_move.captured_positions == jnp.array([row, col]), axis=1))
+            is_before_move = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
 
-            def f_before_move(s):
+            def f_before_move():
                 return jax.lax.cond(
-                    is_start_pos,
-                    lambda s: self.consts.WHITE_CURSOR,
-                    lambda s: jax.lax.cond(
-                        is_end_pos,
-                        lambda s: self.consts.EMPTY_TILE,
-                        lambda s: s.board[row, col],
-                        operand=s
-                    ),
-                    operand=s
+                    is_start_pos, lambda: self.consts.WHITE_CURSOR,
+                    lambda: jax.lax.cond(is_end_pos, lambda: self.consts.EMPTY_TILE,
+                        lambda: state.board[row, col]
+                    )
                 )
 
-            def f_after_move(s):
+            def f_after_move():
                 return jax.lax.cond(
-                    is_start_pos,
-                    lambda s: self.consts.EMPTY_TILE,
-                    lambda s: jax.lax.cond(
-                        is_end_pos,
-                        lambda s: state.opponent_move.piece_type,  # Render end position as the opponent's piece type
-                        lambda s: jax.lax.cond(
-                            is_captured_pos,
-                            lambda s: self.consts.BLACK_CURSOR,  # Render captured positions as BLACK_CURSOR
-                            lambda s: s.board[row, col],
-                            operand=s
-                        ),
-                        operand=s
-                    ),
-                    operand=s
+                    is_start_pos, lambda: self.consts.EMPTY_TILE,
+                    lambda: jax.lax.cond(is_end_pos, lambda: state.opponent_move.piece_type,
+                        lambda: jax.lax.cond(is_captured_pos, lambda: self.consts.BLACK_CURSOR,
+                            lambda: state.board[row, col]
+                        )
+                    )
                 )
 
-            return jax.lax.cond(
-                state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2),
-                f_before_move,
-                f_after_move,
-                operand=state
-            )
-
-        def determine_piece_type_game_over_phase(row, col, state: VideoCheckersState):
+            return jax.lax.cond(is_before_move, f_before_move, f_after_move)
+        
+        def determine_piece_type_game_over_phase(row, col, state):
             return state.board[row, col]
 
-        def render_pieces_on_board(raster, state: VideoCheckersState):
-            def render_piece(row, col, raster):
-                # call 4 different function to determine which piece to render depending on the phase of the game. No logic just call the 4 functions
-                piece_type = jax.lax.cond(
-                    state.game_phase == self.consts.SELECT_PIECE_PHASE,
-                    lambda: determine_piece_type_select_phase(row, col, state),
-                    lambda: jax.lax.cond(
-                        state.game_phase == self.consts.MOVE_PIECE_PHASE,
-                        lambda: determine_piece_type_move_phase(row, col, state),
-                        lambda: jax.lax.cond(
-                            state.game_phase == self.consts.SHOW_OPPONENT_MOVE_PHASE,
-                            lambda: determine_piece_type_show_opponent_move_phase(row, col, state),
-                            lambda: determine_piece_type_game_over_phase(row, col, state),
-                        ),
-                    ),
-                )
-
-                piece_frame = jr.get_sprite_frame(self.SPRITE_PIECES, piece_type)
-                return jax.lax.cond(
-                    (piece_frame is not None) & ((row + col) % 2 == 1),  # Only render on dark squares
-                    lambda: jr.render_at(
-                        raster,
-                        self.consts.OFFSET_X_BOARD + 4 + col * 17,  # Calculate the position on the board
-                        self.consts.OFFSET_Y_BOARD + 2 + row * 13,
-                        piece_frame,
-                    ),
-                    lambda: raster,
-                )
-
-            def render_row(row, raster):
-                return jax.lax.fori_loop(
-                    0, self.consts.NUM_FIELDS_X, lambda col, raster: render_piece(row, col, raster), raster
-                )
-
-            return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_Y, render_row, raster)
-
-        def render_jump_indicator(raster, state: VideoCheckersState):
-            _, must_jump = BoardHandler.get_movable_pieces(VideoCheckersConstants.BLACK_PIECE, state.board)
-
-            def _render(raster):
-                x_offset = 100
-                j_sprite = jr.get_sprite_frame(self.SPRITE_TEXT, 10)
-                p_sprite = jr.get_sprite_frame(self.SPRITE_TEXT, 11)
-                pos_xj = x_offset
-                pos_xp = x_offset + 10
-                pos_y = 20
-                raster = jr.render_at(raster, pos_xj, pos_y, j_sprite)
-                raster = jr.render_at(raster, pos_xp, pos_y, p_sprite)
-
-                return raster
-
-            new_raster = jax.lax.cond(
-                must_jump,
-                _render,
-                lambda r: r,
-                raster
+        # --- Main Vmapped Logic ---
+        def get_piece_for_square(row, col):
+            # This function is vmapped over all 64 squares
+            return jax.lax.switch(
+                state.game_phase,
+                [
+                    lambda s: determine_piece_type_select_phase(row, col, s),
+                    lambda s: determine_piece_type_move_phase(row, col, s),
+                    lambda s: determine_piece_type_show_opponent_move_phase(row, col, s),
+                    lambda s: determine_piece_type_game_over_phase(row, col, s),
+                ],
+                state
             )
-            return new_raster
 
-        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
-        # fill background with [160, 96, 64]
-        raster = raster.at[:, :].set(jnp.array([160, 96, 64], dtype=jnp.uint8))
-        raster = jr.render_at(raster, self.consts.OFFSET_X_BOARD, self.consts.OFFSET_Y_BOARD, frame_bg)
-        raster = render_pieces_on_board(raster, state)
-        raster = render_jump_indicator(raster, state)
+        # Create 1D arrays of row and col indices
+        rows = jnp.arange(self.consts.NUM_FIELDS_Y)
+        cols = jnp.arange(self.consts.NUM_FIELDS_X)
+        
+        # Run the logic in parallel for all 64 squares using nested vmaps
+        piece_grid = jax.vmap(lambda r: jax.vmap(lambda c: get_piece_for_square(r, c))(cols))(rows)
+        
+        return piece_grid
 
-        return raster
+    # --- JIT-ted Render Helpers ---
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_pieces_on_board(self, piece_grid: jnp.ndarray, raster: jnp.ndarray) -> jnp.ndarray:
+        """
+        Renders the 8x8 piece grid onto the raster.
+        Assumes piece_grid is an 8x8 array of sprite indices.
+        """
+        
+        def render_piece(row, col, r):
+            piece_index = piece_grid[row, col]
+            
+            def draw(r_in):
+                piece_mask = self.PIECE_STACK[piece_index]
+                x = self.consts.OFFSET_X_BOARD + 4 + col * 17
+                y = self.consts.OFFSET_Y_BOARD + 2 + row * 13
+                # Use render_at, not clipped, as pieces are always on their square
+                return self.jr.render_at(r_in, x, y, piece_mask)
+            
+            # Only render on dark squares and if not an empty tile
+            is_dark_square = (row + col) % 2 == 1
+            is_not_empty = piece_index != self.consts.EMPTY_TILE
+            
+            return jax.lax.cond(is_dark_square & is_not_empty, draw, lambda r_in: r_in, r)
+
+        def render_row(row, r):
+            return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_X, lambda col, r_in: render_piece(row, col, r_in), r)
+
+        return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_Y, render_row, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_jump_indicator(self, must_jump: bool, raster: jnp.ndarray) -> jnp.ndarray:
+        """Renders the 'JP' (must jump) indicator."""
+        
+        def _render(r):
+            x_offset = 100
+            j_sprite = self.TEXT_STACK[10] # 'J'
+            p_sprite = self.TEXT_STACK[11] # 'P'
+            r = self.jr.render_at(r, x_offset, 20, j_sprite)
+            r = self.jr.render_at(r, x_offset + 10, 20, p_sprite)
+            return r
+
+        return jax.lax.cond(must_jump, _render, lambda r: r, raster)
+
+    # --- Main Render Function ---
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: VideoCheckersState):
+        """
+        Renders the current game state using JAX operations.
+        """
+        # 1. Start with the pre-rendered static board
+        raster = self.PRE_RENDERED_BOARD
+
+        # 2. Calculate the 8x8 grid of piece indices to draw
+        # This is where all the complex logic happens (vectorized)
+        piece_grid = self._calculate_piece_grid(state)
+
+        # 3. Render the pieces based on the calculated grid
+        raster = self._render_pieces_on_board(piece_grid, raster)
+        
+        # 4. Render the jump indicator (read from state instead of recalculating)
+        raster = self._render_jump_indicator(state.must_jump, raster)
+
+        # 5. Final conversion from palette IDs to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)

@@ -78,19 +78,44 @@ from jaxatari.rendering import jax_rendering_utils_legacy as aj
 import jaxatari.spaces as spaces
 
 
-@dataclass(frozen=True)
-class SlotMachineConfig:
+SLOT_MACHINE_SYMBOL_NAMES: Tuple[str, ...] = (
+    "Cactus",
+    "Table",
+    "Bar",
+    "TV",
+    "Bell",
+    "Car",
+    "Empty",
+)
+
+
+def _get_default_asset_config() -> tuple:
     """
+    Returns the default declarative asset manifest for Slot Machine.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    assets = []
+    for idx, symbol_name in enumerate(SLOT_MACHINE_SYMBOL_NAMES):
+        assets.append(
+            {
+                "name": f"symbol_{idx}",
+                "type": "single",
+                "file": f"{symbol_name}.npy",
+            }
+        )
+    return tuple(assets)
 
-    Configuration class for Slot Machine game parameters.
-    This class holds all the tweakable parameters for the slot machine.
 
+@dataclass(frozen=True)
+class SlotMachineConstants:
+    """
+    Unified constants for Slot Machine game parameters and assets.
     """
     # Screen dimensions
     screen_width: int = 160
     screen_height: int = 210
     scaling_factor: int = 3
-
+    
     # Reel layout
     num_reels: int = 3
     reel_width: int = 40
@@ -98,23 +123,23 @@ class SlotMachineConfig:
     reel_spacing: int = 10
     symbols_per_reel: int = 3
     total_symbols_per_reel: int = 20
-
+    
     # Symbol configuration
     num_symbol_types: int = 6
     symbol_height: int = 28
     symbol_width: int = 28
-
+    
     # Game start finances
     starting_credits: int = 25
     bet_amount: int = 1
     min_wager: int = 1
     max_wager: int = 5
-
+    
     # Reel timing
     min_spin_duration: int = 60
     max_spin_duration: int = 120
     reel_stop_delay: int = 30
-
+    
     reel_layouts: jnp.ndarray = field(
         default_factory=lambda: jnp.array([
             [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
@@ -122,7 +147,7 @@ class SlotMachineConfig:
             [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
         ], dtype=jnp.int32)
     )
-
+    
     reel_layouts_jackpot: jnp.ndarray = field(
         default_factory=lambda: jnp.array([
             [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
@@ -130,10 +155,30 @@ class SlotMachineConfig:
             [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
         ], dtype=jnp.int32)
     )
-
+    
     # Reel positions - UI layout coordinates
     reel_start_x: int = 11
     reel_start_y: int = 50
+    
+    # Asset config baked into constants
+    ASSET_CONFIG: tuple = field(default_factory=lambda: tuple([
+        {
+            'name': 'symbols',
+            'type': 'group',
+            'files': [
+                # Explicit paths relative to sprite_dir -> sprites/slotmachine/
+                'Cactus.npy',
+                'Table.npy',
+                'Bar.npy',
+                'TV.npy',
+                'Bell.npy',
+                'Car.npy',
+                'Empty.npy',
+            ]
+        },
+        # Background and reel frame are added procedurally in the renderer init
+    ]))
+    sprite_scale_factor: float = 0.7
 
 
 class SlotMachineState(NamedTuple):
@@ -221,12 +266,14 @@ class SlotMachineInfo(NamedTuple):
     player2_spins_played: jnp.ndarray
 
 
-class SlotMachineConstants(NamedTuple):
+class SlotMachineConstantsRuntime(NamedTuple):
     """
-    Game constants and symbol definitions.
+    Symbol names and any runtime constants that are convenience only.
     """
+    symbol_names: tuple = SLOT_MACHINE_SYMBOL_NAMES
 
-    symbol_names: tuple = ("Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty")
+
+from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 class SlotMachineRenderer(JAXGameRenderer):
@@ -245,74 +292,62 @@ class SlotMachineRenderer(JAXGameRenderer):
 
     """
 
-    def __init__(self, config: SlotMachineConfig = None):
-
+    def __init__(self, consts: SlotMachineConstants = None):
+    
         super().__init__()
-        self.config = config or SlotMachineConfig()
-        self.sprites = self._load_sprites()
+        self.consts = consts or SlotMachineConstants()
+        self.runtime = SlotMachineConstantsRuntime()
+        self.sprite_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/slotmachine"
+        # Configure new render utils
+        self.ru_config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Build asset config from constants and inject pre-scaled symbol data (slightly hacky to keep compatibility with modification pipeline)
+        final_asset_config = [dict(item) for item in self.consts.ASSET_CONFIG]
+        for item in final_asset_config:
+            if item.get('name') == 'symbols':
+                item.pop('files', None)
+                item['data'] = self._load_scaled_symbols_rgba(self.consts.sprite_scale_factor)
+        final_asset_config.append({'name': 'background', 'type': 'background', 'data': self._create_background_rgba()})
+        final_asset_config.append({'name': 'reel_frame', 'type': 'procedural', 'data': self._create_reel_frame_rgba()})
+        # Load assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_dir)
 
-    def _load_sprites(self) -> Dict[str, Any]:
-        """
-        Load all necessary sprites and rescale them by 70%. 70% is just a design choice so it looks good.
+    def _load_scaled_symbols_rgba(self, scale_factor: float) -> Any:
+        """Load symbol RGBA sprites from disk and downscale them by scale_factor, keep dtype uint8."""
+        import numpy as np
+        import jax
+        from jax import image as jimage
+        scaled_list = []
+        for name in SLOT_MACHINE_SYMBOL_NAMES:
+            npy_path = os.path.join(self.sprite_dir, f"{name}.npy")
+            rgba_np = np.load(npy_path)
+            sprite = jnp.array(rgba_np, dtype=jnp.uint8)
+            h, w = sprite.shape[:2]
+            new_h = jnp.maximum(1, jnp.round(h * scale_factor)).astype(jnp.int32)
+            new_w = jnp.maximum(1, jnp.round(w * scale_factor)).astype(jnp.int32)
+            # jax.image.resize expects shape as (H, W, C)
+            resized = jax.image.resize(sprite, (new_h, new_w, sprite.shape[2]), method='nearest').astype(jnp.uint8)
+            scaled_list.append(resized)
+        # Return as a stack for efficiency; loader accepts list or stack
+        return jnp.stack(scaled_list)
 
-        """
-        sprites = {}
-
-        # Load sprite files from the sprites directory
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(MODULE_DIR, "sprites/slotmachine")
-
-        # Scale factor for all sprites (70%)
-        scale_factor = 0.7
-
-        # Symbol names mapping
-        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty"]
-
-        for i, symbol_name in enumerate(symbol_names):
-            npy_file = f"{sprite_dir}/{symbol_name}.npy"
-
-            import numpy as np
-
-            sprite_data = np.load(npy_file)
-            original_sprite = jnp.array(sprite_data, dtype=jnp.uint8)
-
-            rescaled_sprite = self._rescale_sprite(original_sprite, scale_factor)
-
-            sprites[f'symbol_{i}'] = rescaled_sprite
-            sprites[symbol_name] = rescaled_sprite
-
-        sprites['background'] = self._create_background()
-        sprites['reel_frame'] = self._create_reel_frame()
-        #sprites['digit_sprites'] = self._load_digit_sprites()
-
-        return sprites
-
-    def _rescale_sprite(self, sprite: jnp.ndarray, scale_factor: float) -> jnp.ndarray:
-
-        """Resize ``sprite`` with nearest-neighbour sampling. Used 40x40 array at first, but then I had to do this to
-        downsize the sprites, I know this is overengineering but  that's what I learnt  in computer vision :D """
-
-        original_height, original_width = sprite.shape[:2]
-        new_height = int(original_height * scale_factor)
-        new_width = int(original_width * scale_factor)
-
-        y_coords = jnp.linspace(0, original_height - 1, new_height).astype(jnp.int32)
-        x_coords = jnp.linspace(0, original_width - 1, new_width).astype(jnp.int32)
-
-        y_grid, x_grid = jnp.meshgrid(y_coords, x_coords, indexing='ij')
-
-        rescaled_sprite = sprite[y_grid, x_grid]
-
-        return rescaled_sprite
-
-    def _create_background(self) -> jnp.ndarray:
+    def _create_background_rgba(self) -> jnp.ndarray:
 
         """
          Create classic atari greenish tint with blue frame.
 
          """
 
-        h, w = self.config.screen_height, self.config.screen_width
+        h, w = self.consts.screen_height, self.consts.screen_width
         bg = jnp.zeros((h, w, 4), dtype=jnp.uint8)
 
         # Fill entire background with greenish tint
@@ -331,9 +366,9 @@ class SlotMachineRenderer(JAXGameRenderer):
 
         return bg
 
-    def _create_reel_frame(self) -> jnp.ndarray:
+    def _create_reel_frame_rgba(self) -> jnp.ndarray:
         """Create reel frame """
-        h, w = self.config.reel_height, self.config.reel_width
+        h, w = self.consts.reel_height, self.consts.reel_width
         frame = jnp.zeros((h, w, 4), dtype=jnp.uint8)
 
         light_blue = jnp.array([70, 82, 184], dtype=jnp.uint8)
@@ -342,16 +377,6 @@ class SlotMachineRenderer(JAXGameRenderer):
         frame = frame.at[..., :3].set(light_blue)
         frame = frame.at[..., 3].set(alpha)
         return frame
-
-    def _get_symbol_sprite(self, symbol_type: chex.Array) -> jnp.ndarray:
-        """Fetch the sprite that corresponds to ``symbol_type``."""
-        symbol_names = ["Cactus", "Table", "Bar", "TV", "Bell", "Car", "Empty"]
-
-        symbol_sprites = jnp.stack([
-            self.sprites[name] for name in symbol_names
-        ])
-
-        return symbol_sprites[symbol_type]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SlotMachineState) -> chex.Array:
@@ -366,67 +391,52 @@ class SlotMachineRenderer(JAXGameRenderer):
         5. Flash the whole scene if we are celebrating a win.
 
         """
-        cfg = self.config
-
-        # Start with classic attari green background
-        raster = self.sprites['background'][..., :3]
-
+        cfg = self.consts
+    
+        # Start with palette-id raster background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+    
         # Render each reel
         for reel_idx in range(cfg.num_reels):
             reel_x = cfg.reel_start_x + reel_idx * (cfg.reel_width + cfg.reel_spacing)
             reel_y = cfg.reel_start_y
-
+    
             # Render reel frame first
-            frame_sprite = self.sprites['reel_frame']
-            raster = aj.render_at(raster, reel_x, reel_y, frame_sprite)
-
+            frame_mask = self.SHAPE_MASKS['reel_frame']
+            raster = self.jr.render_at(raster, reel_x, reel_y, frame_mask, flip_offset=self.FLIP_OFFSETS['reel_frame'])
+    
             # Get reel state for this specific reel
             reel_pos = state.reel_positions[reel_idx]
-            is_spinning = state.reel_spinning[reel_idx]
-
+    
             # Render the 3 visible symbols in this reel
             for symbol_slot in range(cfg.symbols_per_reel):
                 symbol_slot_y = reel_y + symbol_slot * 40
-
+    
                 # Calculate which symbol to show at this position
-                # This math wraps around the 20-symbol cycle as in the original game
                 symbol_index = (reel_pos + symbol_slot) % cfg.total_symbols_per_reel
                 symbol_type = state.reel_layouts[reel_idx, symbol_index]
-
-                # Get the sprite for this symbol type
-                symbol_sprite = self._get_symbol_sprite(symbol_type)
-
-                # Apply blur effect if spinning (makes it look like the reel is in motion)
-                # This simple darkening effect si what gives it a spinning illusion
-                sprite_to_render = jax.lax.cond(
-                    is_spinning,
-                    lambda s: (s.at[..., :3].multiply(0.7)).astype(s.dtype),
-                    lambda s: s,
-                    symbol_sprite
-                )
-
-                # Center the sprite within the 40x40 slot and position in the middle as rescaled to 0,7
+    
+                # Select mask from grouped symbols
+                symbol_mask_stack = self.SHAPE_MASKS['symbols']
+                symbol_mask = symbol_mask_stack[symbol_type]
+    
+                # Center the 28x28 (padded) sprite within the 40x40 slot
                 centered_x = reel_x + 6
                 centered_y = symbol_slot_y + 6
-
-                raster = aj.render_at(raster, centered_x, centered_y, sprite_to_render)
-
-        # Render UI elements
-        raster = self._render_credits_display(raster, state)
-
-        # Apply win flash effect if we hit a win
-        raster = jax.lax.cond(
-            state.win_flash_timer > 0,
-            lambda r: self._render_win_flash(r, state.win_flash_timer),
-            lambda r: r,
-            raster
-        )
-
-        return raster
+    
+                raster = self.jr.render_at(raster, centered_x, centered_y, symbol_mask, flip_offset=self.FLIP_OFFSETS['symbols'])
+    
+        # Render UI elements (boxes and numbers) directly onto the raster
+        raster = self._render_credits_display_ids(raster, state)
+    
+        # No per-pixel flash multiplier here; could recolor via palette if needed
+    
+        # Convert palette-id raster to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
     def _render_winner_message(self, raster: jnp.ndarray, winner: chex.Array) -> jnp.ndarray:
         """Render winner message in the center of the screen."""
-        cfg = self.config
+        cfg = self.consts
         
         # Message position (center of screen)
         msg_x = cfg.screen_width // 2 - 50  # Increased space for longer messages
@@ -512,15 +522,14 @@ class SlotMachineRenderer(JAXGameRenderer):
         
         return raster
 
-    def _render_credits_display(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
-        """Draw the credits and wager boxes for both players."""
-        raster = self._render_text_labels(raster, state)
-        return raster
+    def _render_credits_display_ids(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
+        """Draw the credits and wager boxes for both players using ID raster operations."""
+        return self._render_text_labels_ids(raster, state)
 
-    def _render_text_labels(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
+    def _render_text_labels_ids(self, raster: jnp.ndarray, state: SlotMachineState) -> jnp.ndarray:
         """Helper function to draw the HUD plates and insert credits and wagers for both players.
         """
-        cfg = self.config
+        cfg = self.consts
 
         # Calculate reel positions
         first_reel_x = cfg.reel_start_x
@@ -528,37 +537,40 @@ class SlotMachineRenderer(JAXGameRenderer):
         reel_y = cfg.reel_start_y
 
         # Colors
-        box_color = jnp.array([70, 82, 184], dtype=jnp.uint8)
-        number_color = jnp.array([194, 67, 115], dtype=jnp.uint8)
+        # Pick palette IDs closest to the intended colors
+        box_rgb = (70, 82, 184)
+        number_rgb = (194, 67, 115)
+        box_id = self.COLOR_TO_ID.get(box_rgb, 0)
+        num_id = self.COLOR_TO_ID.get(number_rgb, 0)
 
         # Player 1 (right side)
         # UI for player 1 credits
         credits_y = reel_y - 22
-        raster = self._draw_colored_box(raster, third_reel_x - 3, credits_y - 2, 47, 16, box_color)
-        credits_digits = aj.int_to_digits(state.player1_credits, max_digits=4)
-        raster = self._render_colored_number(raster, credits_digits, third_reel_x + 2, credits_y + 2, number_color)
+        raster = self._draw_colored_box_ids(raster, third_reel_x - 3, credits_y - 2, 47, 16, box_id)
+        credits_digits = self.jr.int_to_digits(state.player1_credits, max_digits=4)
+        raster = self._render_digits_ids(raster, credits_digits, third_reel_x + 2, credits_y + 2, num_id)
 
         # UI for player 1 wager
         wager_y = reel_y + cfg.reel_height + 10
-        raster = self._draw_colored_box(raster, third_reel_x + 7, wager_y - 4, 27, 16, box_color)
-        wager_digits = aj.int_to_digits(state.player1_wager, max_digits=2)
-        raster = self._render_colored_number(raster, wager_digits, third_reel_x + 12, wager_y, number_color)
+        raster = self._draw_colored_box_ids(raster, third_reel_x + 7, wager_y - 4, 27, 16, box_id)
+        wager_digits = self.jr.int_to_digits(state.player1_wager, max_digits=2)
+        raster = self._render_digits_ids(raster, wager_digits, third_reel_x + 12, wager_y, num_id)
 
         # Player 2 (left side)
         # UI for player 2 credits (above first reel)
-        raster = self._draw_colored_box(raster, first_reel_x - 3, credits_y - 2, 47, 16, box_color)
-        credits_digits_p2 = aj.int_to_digits(state.player2_credits, max_digits=4)
-        raster = self._render_colored_number(raster, credits_digits_p2, first_reel_x + 2, credits_y + 2, number_color)
+        raster = self._draw_colored_box_ids(raster, first_reel_x - 3, credits_y - 2, 47, 16, box_id)
+        credits_digits_p2 = self.jr.int_to_digits(state.player2_credits, max_digits=4)
+        raster = self._render_digits_ids(raster, credits_digits_p2, first_reel_x + 2, credits_y + 2, num_id)
 
         # UI for player 2 wager (below first reel)
-        raster = self._draw_colored_box(raster, first_reel_x + 7, wager_y - 4, 27, 16, box_color)
-        wager_digits_p2 = aj.int_to_digits(state.player2_wager, max_digits=2)
-        raster = self._render_colored_number(raster, wager_digits_p2, first_reel_x + 12, wager_y, number_color)
+        raster = self._draw_colored_box_ids(raster, first_reel_x + 7, wager_y - 4, 27, 16, box_id)
+        wager_digits_p2 = self.jr.int_to_digits(state.player2_wager, max_digits=2)
+        raster = self._render_digits_ids(raster, wager_digits_p2, first_reel_x + 12, wager_y, num_id)
 
         # Render jackpot mode message if timer is active
         raster = jax.lax.cond(
             state.jackpot_message_timer > 0,
-            lambda r: self._render_jackpot_message(r, state.jackpot_mode),
+            lambda r: self._render_jackpot_message_ids(r, state.jackpot_mode, box_id),
             lambda r: r,
             raster
         )
@@ -566,16 +578,50 @@ class SlotMachineRenderer(JAXGameRenderer):
         # Check if game is over, reels have stopped, and display winner message
         raster = jax.lax.cond(
             state.game_over & (state.win_display_timer > 0) & (~jnp.any(state.reel_spinning)),
-            lambda r: self._render_winner_message(r, state.winner),
+            lambda r: self._render_winner_message_ids(r, state.winner, box_id),
             lambda r: r,
             raster
         )
 
         return raster
 
+    def _render_jackpot_message_ids(self, raster: jnp.ndarray, jackpot_mode: chex.Array, box_id: int) -> jnp.ndarray:
+        """Render jackpot mode toggle message using ID raster ops."""
+        cfg = self.consts
+        msg_x = cfg.screen_width // 2 - 59
+        msg_y = cfg.screen_height // 2 + 1
+        raster = self._draw_colored_box_ids(raster, msg_x - 10, msg_y - 5, 140, 20, box_id)
+        white_id = self.COLOR_TO_ID.get((255, 255, 255), 0)
+        def render_on(r):
+            return self._render_simple_text_ids(r, "JACKPOT MODE ON", msg_x, msg_y, white_id)
+        def render_off(r):
+            return self._render_simple_text_ids(r, "JACKPOT MODE OFF", msg_x, msg_y, white_id)
+        return jax.lax.cond(jackpot_mode, render_on, render_off, raster)
+
+    def _render_winner_message_ids(self, raster: jnp.ndarray, winner: chex.Array, box_id: int) -> jnp.ndarray:
+        """Render winner message in the center of the screen using ID raster ops."""
+        cfg = self.consts
+        msg_x = cfg.screen_width // 2 - 50
+        msg_y = cfg.screen_height // 2 + 1
+        raster = self._draw_colored_box_ids(raster, msg_x - 15, msg_y - 5, 130, 20, box_id)
+        white_id = self.COLOR_TO_ID.get((255, 255, 255), 0)
+        def render_player(r, num):
+            r = self._render_simple_text_ids(r, "PLAYER ", msg_x, msg_y, white_id)
+            r = self._render_simple_text_ids(r, "1" if num == 1 else "2", msg_x + 42, msg_y, white_id)
+            r = self._render_simple_text_ids(r, " WINS", msg_x + 52, msg_y, white_id)
+            return r
+        def render_over(r):
+            return self._render_simple_text_ids(r, "GAME OVER", msg_x + 35, msg_y, white_id)
+        return jax.lax.cond(
+            winner == 1,
+            lambda r: render_player(r, 1),
+            lambda r: jax.lax.cond(winner == 2, lambda r2: render_player(r2, 2), render_over, r),
+            raster
+        )
+
     def _render_jackpot_message(self, raster: jnp.ndarray, jackpot_mode: chex.Array) -> jnp.ndarray:
         """Render jackpot mode toggle message."""
-        cfg = self.config
+        cfg = self.consts
         
         # Message position (center of screen)
         msg_x = cfg.screen_width // 2 - 59
@@ -604,27 +650,20 @@ class SlotMachineRenderer(JAXGameRenderer):
         
         return raster
 
-    def _render_colored_number(self, raster: jnp.ndarray, digits: jnp.ndarray, x: int, y: int, color: jnp.ndarray) -> jnp.ndarray:
-        """
-        Render a number using colored digit sprites.
-        """
-
+    def _render_digits_ids(self, raster: jnp.ndarray, digits: jnp.ndarray, x: int, y: int, color_id: int) -> jnp.ndarray:
         spacing = 10
-
-        for i in range(digits.shape[0]):
+    
+        def body(i, r_in):
             digit_idx = digits[i]
-            digit_x = x + i * spacing
-
-            raster = jax.lax.cond(
+            return jax.lax.cond(
                 digit_idx >= 0,
-                lambda r: self._render_colored_digit(r, digit_idx, digit_x, y, color),
+                lambda r: self._render_digit_bitmap_id(r, digit_idx, x + i * spacing, y, color_id),
                 lambda r: r,
-                raster
+                r_in
             )
+        return jax.lax.fori_loop(0, digits.shape[0], body, raster)
 
-        return raster
-
-    def _render_colored_digit(self, raster: jnp.ndarray, digit: int, x: int, y: int, color: jnp.ndarray) -> jnp.ndarray:
+    def _render_digit_bitmap_id(self, raster: jnp.ndarray, digit: int, x: int, y: int, color_id: int) -> jnp.ndarray:
 
         # Pre-define digit patterns
         digit_patterns = jnp.array([
@@ -658,35 +697,27 @@ class SlotMachineRenderer(JAXGameRenderer):
         valid_y = (y >= 0) & (y + digit_h <= raster.shape[0])
         valid_render = valid_x & valid_y
 
-        def render_digit():
-            # Get the region where the digits should be rendered
-            target_region = raster[y:y+digit_h, x:x+digit_w, :]
-            
-            # Oonly render visible pixels
-            digit_mask = pattern > 0
-            
-            # Only update pixels where the pattern is > 0, leave others unchanged (transparent)
-            new_region = jnp.where(
-                digit_mask[..., None],
-                color[None, None, :],
-                target_region
-            )
-            
-            # Update only the digit region
-            return raster.at[y:y+digit_h, x:x+digit_w, :].set(new_region)
+        def render_digit_ids():
+            # Build a sprite ID mask: pattern>0 -> color_id, else TRANSPARENT
+            sprite_mask = jnp.where(pattern > 0,
+                                    jnp.asarray(color_id, dtype=jnp.uint8),
+                                    jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8))
+            # Stamp via render_utils (handles dynamic positions)
+            return self.jr.render_at(raster, x, y, sprite_mask)
+    
+        return jax.lax.cond(valid_render, render_digit_ids, lambda: raster)
 
-        return jax.lax.cond(valid_render, render_digit, lambda: raster)
-
-    def _draw_colored_box(self, raster: jnp.ndarray, x: int, y: int, width: int, height: int, color: jnp.ndarray) -> jnp.ndarray:
-        """Fill a rectangle and clamp edges so we do not paint off-screen."""
-        x1 = max(0, min(x, raster.shape[1]))
-        y1 = max(0, min(y, raster.shape[0]))
-        x2 = max(0, min(x + width, raster.shape[1]))
-        y2 = max(0, min(y + height, raster.shape[0]))
-
-        raster = raster.at[y1:y2, x1:x2, :].set(color)
-
-        return raster
+    def _draw_colored_box_ids(self, raster: jnp.ndarray, x: int, y: int, width: int, height: int, color_id: int) -> jnp.ndarray:
+        """Fill a rectangle using scaled boolean masks (compatible with downscaling)."""
+        # Scale geometric parameters according to renderer config
+        scaled_x = jnp.round(x * self.ru_config.width_scaling).astype(jnp.int32)
+        scaled_y = jnp.round(y * self.ru_config.height_scaling).astype(jnp.int32)
+        scaled_w = jnp.maximum(1, jnp.round(width * self.ru_config.width_scaling)).astype(jnp.int32)
+        scaled_h = jnp.maximum(1, jnp.round(height * self.ru_config.height_scaling)).astype(jnp.int32)
+        # Build mask over cached grids
+        xx, yy = self.jr._xx, self.jr._yy
+        mask = (xx >= scaled_x) & (xx < scaled_x + scaled_w) & (yy >= scaled_y) & (yy < scaled_y + scaled_h)
+        return jnp.where(mask, jnp.asarray(color_id, raster.dtype), raster)
 
     def _render_win_flash(self, raster: jnp.ndarray, flash_timer: chex.Array) -> jnp.ndarray:
         """Apply a brief brightness pulse after a win."""
@@ -696,6 +727,46 @@ class SlotMachineRenderer(JAXGameRenderer):
         flashed_raster = raster_float * flash_intensity
 
         return jnp.clip(flashed_raster, 0, 255).astype(jnp.uint8)
+    
+    def _render_simple_text_ids(self, raster: jnp.ndarray, text: str, x: int, y: int, color_id: int) -> jnp.ndarray:
+        """Render simple text using a basic bitmap font to the ID raster."""
+        char_patterns = {
+            'P': jnp.array([[1,1,1,1],[1,0,0,1],[1,1,1,1],[1,0,0,0],[1,0,0,0],[1,0,0,0]], dtype=jnp.int32),
+            'L': jnp.array([[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,1,1,1]], dtype=jnp.int32),
+            'A': jnp.array([[0,1,1,0],[1,0,0,1],[1,0,0,1],[1,1,1,1],[1,0,0,1],[1,0,0,1]], dtype=jnp.int32),
+            'Y': jnp.array([[1,0,0,1],[1,0,0,1],[0,1,1,0],[0,1,1,0],[0,1,1,0],[0,1,1,0]], dtype=jnp.int32),
+            'E': jnp.array([[1,1,1,1],[1,0,0,0],[1,1,1,0],[1,0,0,0],[1,0,0,0],[1,1,1,1]], dtype=jnp.int32),
+            'R': jnp.array([[1,1,1,0],[1,0,0,1],[1,1,1,0],[1,1,0,0],[1,0,1,0],[1,0,0,1]], dtype=jnp.int32),
+            'W': jnp.array([[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,0,1,1],[1,1,0,1],[1,0,0,1]], dtype=jnp.int32),
+            'I': jnp.array([[1,1,1],[0,1,0],[0,1,0],[0,1,0],[0,1,0],[1,1,1]], dtype=jnp.int32),
+            'N': jnp.array([[1,0,0,1],[1,1,0,1],[1,0,1,1],[1,0,0,1],[1,0,0,1],[1,0,0,1]], dtype=jnp.int32),
+            'S': jnp.array([[0,1,1,1],[1,0,0,0],[0,1,1,0],[0,0,0,1],[0,0,0,1],[1,1,1,0]], dtype=jnp.int32),
+            'O': jnp.array([[0,1,1,0],[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,0,0,1],[0,1,1,0]], dtype=jnp.int32),
+            'T': jnp.array([[1,1,1,1,1],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0]], dtype=jnp.int32),
+            'C': jnp.array([[0,1,1,1],[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,0,0,0],[0,1,1,1]], dtype=jnp.int32),
+            'K': jnp.array([[1,0,0,1],[1,0,1,0],[1,1,0,0],[1,1,0,0],[1,0,1,0],[1,0,0,1]], dtype=jnp.int32),
+            'J': jnp.array([[0,0,0,1],[0,0,0,1],[0,0,0,1],[0,0,0,1],[1,0,0,1],[0,1,1,0]], dtype=jnp.int32),
+            'M': jnp.array([[1,0,0,0,1],[1,1,0,1,1],[1,0,1,0,1],[1,0,0,0,1],[1,0,0,0,1],[1,0,0,0,1]], dtype=jnp.int32),
+            'D': jnp.array([[1,1,1,0],[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,1,1,0]], dtype=jnp.int32),
+            'F': jnp.array([[1,1,1,1],[1,0,0,0],[1,1,1,0],[1,0,0,0],[1,0,0,0],[1,0,0,0]], dtype=jnp.int32),
+            'G': jnp.array([[0,1,1,1],[1,0,0,0],[1,0,1,1],[1,0,0,1],[1,0,0,1],[0,1,1,0]], dtype=jnp.int32),
+            'V': jnp.array([[1,0,0,0,1],[1,0,0,0,1],[1,0,0,0,1],[0,1,0,1,0],[0,1,0,1,0],[0,0,1,0,0]], dtype=jnp.int32),
+            ' ': jnp.array([[0,0],[0,0],[0,0],[0,0],[0,0],[0,0]], dtype=jnp.int32),
+        }
+        cur_x = x
+        for ch in text.upper():
+            pattern = char_patterns.get(ch)
+            if pattern is None:
+                cur_x += 2
+                continue
+            sprite_mask = jnp.where(
+                pattern > 0,
+                jnp.asarray(color_id, dtype=jnp.uint8),
+                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8)
+            )
+            raster = self.jr.render_at(raster, cur_x, y, sprite_mask)
+            cur_x += pattern.shape[1] + 1
+        return raster
 
 
 class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, SlotMachineInfo, SlotMachineConstants]):
@@ -710,19 +781,13 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
     def __init__(
             self,
-            config: SlotMachineConfig = None,
-            reward_funcs: list[callable] = None,
+            consts: SlotMachineConstants = None,
     ):
         """Instantiate the environment and its renderer."""
-        self.config = config or SlotMachineConfig()
-        consts = SlotMachineConstants()
+        consts = consts or SlotMachineConstants()
         super().__init__(consts)
-
-        self.renderer = SlotMachineRenderer(self.config)
-
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
+    
+        self.renderer = SlotMachineRenderer(consts)
 
         # Define available actions
         self.action_set = [
@@ -745,7 +810,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         if key is None:
             import time
@@ -823,7 +888,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         7. Calculate rewards and check game over
 
         """
-        cfg = self.config
+        cfg = self.consts
         previous_state = state
 
         # Check if game is already over and display timer has expired
@@ -992,7 +1057,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         Start spinning the reels using provided RNG key. This function sets up a new spin: deducts credits,
         generates random outcomes, and starts the reel animations for both players.
         """
-        cfg = self.config
+        cfg = self.consts
 
         # Deduct wagers from both players
         new_p1_credits = state.player1_credits - state.player1_wager
@@ -1063,7 +1128,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Visual position updates create spinning effect
         - Final position is revealed when reel stops
         """
-        cfg = self.config
+        cfg = self.consts
 
         # Decrement spin timers (countdown to reel stop)
         new_timers = jnp.maximum(state.spin_timers - 1, 0)
@@ -1103,7 +1168,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Car, Car, Car         -> 200x wager
 
         """
-        cfg = self.config
+        cfg = self.consts
 
         all_stopped = ~jnp.any(state.reel_spinning)
         has_spun = (state.player1_spins_played > 0) | (state.player2_spins_played > 0)
@@ -1248,7 +1313,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         
         Important: Game should only end AFTER reels stop and final payouts are processed
         """
-        cfg = self.config
+        cfg = self.consts
 
         # Check if game should end - but only when reels are not spinning
         # This ensures final spins complete and payouts are processed
@@ -1310,7 +1375,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         Extract observation from game state.
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         # Get currently visible symbols for each reel from static layout
         reel_indices = jnp.arange(cfg.num_reels)[:, None]
@@ -1370,7 +1435,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         - Jackpot mode: boolean (is jackpot mode enabled)
         - Game over and winner status
         """
-        cfg = self.config
+        cfg = self.consts
 
         return spaces.Dict({
             'player1_credits': spaces.Box(low=0, high=9999, shape=(), dtype=jnp.float32),
@@ -1394,7 +1459,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
 
     def image_space(self) -> spaces.Space:
         """Image space describing rendered RGB frames."""
-        cfg = self.config
+        cfg = self.consts
         return spaces.Box(
             low=0,
             high=255,
@@ -1447,129 +1512,3 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
     def _get_done(self, state: SlotMachineState) -> jnp.bool_:
         """Check if the game is over and display timer has expired"""
         return state.game_over & (state.win_display_timer <= 0)
-
-def main():
-    """
-    Simple test function to run the slot machine game with proper randomness.
-
-    This is a basic demo. For actual gameplay, use:
-    python scripts/play.py --game slotmachine
-    """
-    import pygame
-    import time
-    import numpy as np
-
-    pygame.init()
-
-    config = SlotMachineConfig()
-    game = JaxSlotMachine(config)
-    symbol_names = SlotMachineConstants().symbol_names
-
-    jitted_step = jax.jit(game.step)
-    jitted_reset = jax.jit(game.reset)
-
-    random_seed = int(time.time() * 1000000) % (2**31)
-    key = jax.random.PRNGKey(random_seed)
-    obs, state = jitted_reset(key)
-
-    screen_size = (
-        config.screen_width * config.scaling_factor,
-        config.screen_height * config.scaling_factor
-    )
-    screen = pygame.display.set_mode(screen_size)
-    pygame.display.set_caption("JAX Slot Machine")
-    clock = pygame.time.Clock()
-
-    print(" JAX SLOT MACHINE - TWO PLAYER")
-    print(f"Random seed: {random_seed}")
-    print("Controls:")
-    print("  SPACE = Spin (both players)")
-    print("  Player 2: LEFT/RIGHT = Decrease/Increase wager")
-    print("  Player 1: DOWN/UP = Decrease/Increase wager")
-    print("  J = Toggle Jackpot Mode (before any spins)")
-    print("  ESC = Quit")
-    print("For full gameplay, use: python scripts/play.py --game slotmachine")
-
-    # Game loop
-    running = True
-    action = Action.NOOP
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.key == pygame.K_SPACE:
-                    action = Action.FIRE
-                elif event.key == pygame.K_UP:
-                    action = Action.UP      # Player 1 increase wager
-                elif event.key == pygame.K_DOWN:
-                    action = Action.DOWN    # Player 1 decrease wager
-                elif event.key == pygame.K_LEFT:
-                    action = Action.LEFT    # Player 2 increase wager (W key)
-                elif event.key == pygame.K_RIGHT:
-                    action = Action.RIGHT   # Player 2 decrease wager (S key)
-                elif event.key == pygame.K_j:
-                    action = 7              # J key for jackpot mode toggle in pygame, UPLEFT in scripts/play.py
-                else:
-                    action = Action.NOOP
-            elif event.type == pygame.KEYUP:
-                action = Action.NOOP
-
-        obs, state, reward, done, info = jitted_step(state, action)
-
-        reward_value = float(np.array(reward))
-
-        if reward_value > 0:
-            center_symbols = []
-            center_positions = []
-            reel_positions = np.array(state.reel_positions)
-            for reel_idx in range(config.num_reels):
-                pos = int(reel_positions[reel_idx])
-                center_positions.append(pos)
-                symbol_index = (pos + 1) % config.total_symbols_per_reel
-                symbol_type = symbol_index % config.num_symbol_types
-                center_symbols.append(symbol_names[symbol_type])
-
-
-        if done:
-            # Check who won
-            winner = int(np.array(state.winner))
-            if winner == 1:
-                print("Player 1 wins! Thanks for playing!")
-            elif winner == 2:
-                print("Player 2 wins! Thanks for playing!")
-            else:
-                print("Game over! Thanks for playing!")
-            running = False
-
-        if not running:
-            break
-
-        try:
-            frame = game.render(state)
-            if frame.shape[-1] == 3:  # RGB format
-                frame_np = jnp.array(frame, dtype=jnp.uint8)
-                scaled_frame = jnp.repeat(
-                    jnp.repeat(frame_np, config.scaling_factor, axis=0),
-                    config.scaling_factor, axis=1
-                )
-                surf = pygame.surfarray.make_surface(scaled_frame.swapaxes(0, 1))
-                screen.blit(surf, (0, 0))
-        except Exception as e:
-            print(f"Rendering error: {e}")
-
-        # Update display
-        pygame.display.flip()
-        clock.tick(60)
-
-        action = Action.NOOP
-
-    pygame.quit()
-    print("Game ended. Use python scripts/play.py --game slotmachine for full gameplay !")
-
-
-if __name__ == "__main__":
-    main()

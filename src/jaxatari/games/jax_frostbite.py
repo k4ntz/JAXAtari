@@ -10,8 +10,33 @@ import jax.random as jrandom
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+# Import the new rendering utils
+import jaxatari.rendering.jax_rendering_utils as render_utils
+# We need the legacy loader *only* for its .npy loading functions
+import jaxatari.rendering.jax_rendering_utils_legacy as jr_legacy
 
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Black bar for left gutter (procedural)
+    # Using constants: SCREEN_HEIGHT=210, PLAYFIELD_LEFT=8
+    black_bar = jnp.zeros((210, 8, 4), dtype=jnp.uint8)
+    black_bar = black_bar.at[:, :, 3].set(255)
+    return {
+        'black_bar': black_bar,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for Frostbite.
+    Most assets are loaded from files and processed dynamically, so this returns
+    only the procedural assets that can be statically defined.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    return (
+        {'name': 'black_bar', 'type': 'procedural', 'data': static_procedural['black_bar']},
+    )
 
 
 # ==========================================================================================
@@ -167,6 +192,8 @@ class FrostbiteConstants(NamedTuple):
     SPACING_NARROW: int = 16
     SPACING_MEDIUM: int = 32
     SPACING_WIDE: int = 32
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 
 # ==========================================================================================
@@ -388,17 +415,14 @@ class FrostbiteInfo(NamedTuple):
 class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, FrostbiteInfo, FrostbiteConstants]):
     """Bailey-only Frostbite implementation"""
     
-    def __init__(self, consts: FrostbiteConstants = None, reward_funcs: list = None, engine_fps: int = 30):
+    def __init__(self, consts: FrostbiteConstants = None):
         if consts is None:
             consts = FrostbiteConstants()
         super().__init__(consts)
 
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-
         # how many simulation ticks to run per external step
-        self._substeps = max(1, 60 // int(engine_fps))  # 2 when engine_fps=30, 1 when =60
+        # Default to 2 (equivalent to engine_fps=30)
+        self._substeps = 2
 
         self.renderer = FrostbiteRenderer(self.consts)
         
@@ -2806,761 +2830,607 @@ class FrostbiteRenderer(JAXGameRenderer):
         """
         super().__init__()
         self.consts = consts or FrostbiteConstants()
-        self.sprites = self.load_sprites()
+        
+        # 1. Configure the new renderer
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        self.sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "frostbite")
+        # 2. Call the asset preparation helper
+        self._load_and_prepare_assets()
     
-    def _decode_sprite_duplication(self, code: jnp.ndarray):
-        """Decode sprite duplication mode to get number of copies and spacing.
-
-        Args:
-            code: Duplication mode code (0-7)
-
-        Returns:
-            Tuple of (number_of_copies, spacing_in_pixels)
+    def _load_frame_legacy(self, file_name):
+        """Helper to load a single .npy file as an RGBA array."""
+        # We use a temporary instance of the *new* utils class,
+        # which has the same .loadFrame utility method.
+        return render_utils.JaxRenderingUtils.loadFrame(
+            self, os.path.join(self.sprite_path, file_name)
+        )
+    
+    def _load_and_prepare_assets(self):
         """
-        close = self.consts.SPACING_NARROW
-        med   = self.consts.SPACING_MEDIUM
-        wide  = self.consts.SPACING_WIDE
-
+        Loads all base sprites and pre-generates all required variations
+        (tints, flips, masks) as RGBA arrays.
+        """
+        
+        # --- Load Base Sprites ---
+        bg_day = self._load_frame_legacy("background_day.npy")
+        bg_night = self._load_frame_legacy("background_night.npy")
+        bailey_0 = self._load_frame_legacy("bailey_walking_00.npy")
+        bailey_1 = jnp.flip(self._load_frame_legacy("bailey_walking_01.npy"), axis=1)
+        bailey_2 = jnp.flip(self._load_frame_legacy("bailey_jumping_00.npy"), axis=1)
+        bailey_3 = self._load_frame_legacy("bailey_death_00.npy")
+        bailey_4 = self._load_frame_legacy("bailey_death_01.npy")
+        
+        ice_wide_white = self._load_frame_legacy("ice_float_wide.npy")
+        ice_narrow_white = self._load_frame_legacy("ice_float_narrow.npy")
+        geese_0 = self._load_frame_legacy("snow_geese_00.npy")
+        geese_1 = self._load_frame_legacy("snow_geese_01.npy")
+        fish_0 = self._load_frame_legacy("fish_00.npy")
+        fish_1 = jnp.flip(self._load_frame_legacy("fish_01.npy"), axis=1)
+        crab_0 = self._load_frame_legacy("king_crab_00.npy")
+        crab_1 = self._load_frame_legacy("king_crab_01.npy")
+        clam_0 = jnp.flip(self._load_frame_legacy("clam_00.npy"), axis=1)
+        clam_1 = jnp.flip(self._load_frame_legacy("clam_01.npy"), axis=1)
+        bear_0 = self._load_frame_legacy("bear_00.npy")
+        bear_1 = self._load_frame_legacy("bear_01.npy")
+        igloo_block = self._load_frame_legacy("igloo_block_00.npy")
+        igloo_door = self._load_frame_legacy("igloo_door.npy")
+        degree_symbol = self._load_frame_legacy("degree_symbol.npy")
+        
+        # Use legacy digit loader
+        digit_path_pattern = os.path.join(self.sprite_path, "digit_{}.npy")
+        digits_array = jr_legacy.load_and_pad_digits(digit_path_pattern, num_chars=10)
+        digits_list = [digits_array[i] for i in range(10)]
+        
+        # --- Pre-generate Variations ---
+        
+        # Bailey (Frozen)
+        bailey_frames = [bailey_0, bailey_1, bailey_2, bailey_3, bailey_4]
+        bailey_frozen_frames = [self._apply_frozen_tint(f) for f in bailey_frames]
+        
+        # Ice (Blue)
+        ice_wide_blue = self._apply_ice_color(ice_wide_white, is_blue=True)
+        ice_narrow_blue = self._apply_ice_color(ice_narrow_white, is_blue=True)
+        
+        # Bear (Lightened for Night)
+        bear_0_light = self._lighten_bear(bear_0)
+        bear_1_light = self._lighten_bear(bear_1)
+        
+        # Obstacles (Floating)
+        # Max float offset is 4. We need 5 variations (0, 1, 2, 3, 4)
+        float_offsets = jnp.arange(5)
+        
+        def create_float_variations(sprite):
+            return jnp.stack([self._apply_float_mask(sprite, offset) for offset in float_offsets])
+        
+        fish_0_floats = create_float_variations(fish_0)     # (5, H, W, 4)
+        fish_1_floats = create_float_variations(fish_1)     # (5, H, W, 4)
+        crab_0_floats = create_float_variations(crab_0)     # (5, H, W, 4)
+        crab_1_floats = create_float_variations(crab_1)     # (5, H, W, 4)
+        clam_0_floats = create_float_variations(clam_0)     # (5, H, W, 4)
+        clam_1_floats = create_float_variations(clam_1)     # (5, H, W, 4)
+        
+        # 3. Start from asset config in constants and extend with dynamically loaded assets
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        
+        # Get black_bar from constants (already in ASSET_CONFIG)
+        black_bar = None
+        for asset in final_asset_config:
+            if asset['name'] == 'black_bar':
+                black_bar = asset['data']
+                break
+        
+        # Add dynamically loaded and processed assets
+        final_asset_config.extend([
+            {'name': 'background_day', 'type': 'background', 'data': bg_day},
+            {'name': 'background_night', 'type': 'procedural', 'data': bg_night},
+            
+            # Bailey (5 frames)
+            {'name': 'bailey', 'type': 'group', 'data': bailey_frames},
+            {'name': 'bailey_frozen', 'type': 'group', 'data': bailey_frozen_frames},
+            
+            # Ice (4 variations: wide/narrow, white/blue)
+            {'name': 'ice', 'type': 'group', 'data': [ice_wide_white, ice_wide_blue, ice_narrow_white, ice_narrow_blue]},
+            
+            # Obstacles (pre-floated)
+            {'name': 'geese', 'type': 'group', 'data': [geese_0, geese_1]}, # 2 frames
+            {'name': 'fish', 'type': 'group', 'data': jnp.concatenate([fish_0_floats, fish_1_floats], axis=0)}, # 10 frames
+            {'name': 'crab', 'type': 'group', 'data': jnp.concatenate([crab_0_floats, crab_1_floats], axis=0)}, # 10 frames
+            {'name': 'clam', 'type': 'group', 'data': jnp.concatenate([clam_0_floats, clam_1_floats], axis=0)}, # 10 frames
+            
+            # Bear (4 variations: 2 anim frames, day/night)
+            {'name': 'bear', 'type': 'group', 'data': [bear_0, bear_1]},
+            {'name': 'bear_light', 'type': 'group', 'data': [bear_0_light, bear_1_light]},
+            
+            # UI (1 igloo block, 1 door, 1 degree, 10 digits)
+            {'name': 'igloo', 'type': 'group', 'data': [igloo_block, igloo_door]},
+            {'name': 'degree', 'type': 'procedural', 'data': degree_symbol},
+            {'name': 'digits', 'type': 'group', 'data': digits_list},
+        ])
+        
+        asset_config = final_asset_config
+        
+        # 4. Load all assets and build palette/masks
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+        
+        # 5. Store helper dimensions
+        self.DIGIT_MASKS = self.SHAPE_MASKS['digits']
+        self.BAILEY_MASKS = self.SHAPE_MASKS['bailey']
+        self.BAILEY_FROZEN_MASKS = self.SHAPE_MASKS['bailey_frozen']
+        self.ICE_MASKS = self.SHAPE_MASKS['ice']
+        self.GEESE_MASKS = self.SHAPE_MASKS['geese']
+        self.FISH_MASKS = self.SHAPE_MASKS['fish']
+        self.CRAB_MASKS = self.SHAPE_MASKS['crab']
+        self.CLAM_MASKS = self.SHAPE_MASKS['clam']
+        self.BEAR_MASKS = self.SHAPE_MASKS['bear']
+        self.BEAR_LIGHT_MASKS = self.SHAPE_MASKS['bear_light']
+        self.IGLOO_BLOCK_MASK = self.SHAPE_MASKS['igloo'][0]
+        self.IGLOO_DOOR_MASK = self.SHAPE_MASKS['igloo'][1]
+        self.DEGREE_MASK = self.SHAPE_MASKS['degree']
+        self.BLACK_BAR_MASK = self.SHAPE_MASKS['black_bar']
+        
+        # Convert ICE_ROW_Y tuple to JAX array for dynamic indexing
+        self.ICE_ROW_Y_ARRAY = jnp.array(self.consts.ICE_ROW_Y, dtype=jnp.int32)
+    
+    @staticmethod
+    def _decode_sprite_duplication(consts, code: jnp.ndarray):
+        """Decode sprite duplication mode to get number of copies and spacing.
+        (Static copy of game logic needed for rendering)
+        """
+        close = consts.SPACING_NARROW
+        med   = consts.SPACING_MEDIUM
+        wide  = consts.SPACING_WIDE
         copies = jnp.array(1, dtype=jnp.int32)
         spacing = jnp.array(0, dtype=jnp.int32)
-
-        copies = jnp.where(code == self.consts.SPRITE_SINGLE, 1, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_SINGLE, 0, spacing)
-        copies = jnp.where(code == self.consts.SPRITE_DOUBLE, 2, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_DOUBLE, close, spacing)
-        copies = jnp.where(code == self.consts.SPRITE_DOUBLE_SPACED, 2, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_DOUBLE_SPACED, med, spacing)
-        copies = jnp.where(code == self.consts.SPRITE_DOUBLE_WIDE, 2, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_DOUBLE_WIDE, wide, spacing)
-        copies = jnp.where(code == self.consts.SPRITE_TRIPLE, 3, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_TRIPLE, close, spacing)
-        copies = jnp.where(code == self.consts.SPRITE_TRIPLE_SPACED, 3, copies)
-        spacing = jnp.where(code == self.consts.SPRITE_TRIPLE_SPACED, med, spacing)
-
+        copies = jnp.where(code == consts.SPRITE_SINGLE, 1, copies)
+        spacing = jnp.where(code == consts.SPRITE_SINGLE, 0, spacing)
+        copies = jnp.where(code == consts.SPRITE_DOUBLE, 2, copies)
+        spacing = jnp.where(code == consts.SPRITE_DOUBLE, close, spacing)
+        copies = jnp.where(code == consts.SPRITE_DOUBLE_SPACED, 2, copies)
+        spacing = jnp.where(code == consts.SPRITE_DOUBLE_SPACED, med, spacing)
+        copies = jnp.where(code == consts.SPRITE_DOUBLE_WIDE, 2, copies)
+        spacing = jnp.where(code == consts.SPRITE_DOUBLE_WIDE, wide, spacing)
+        copies = jnp.where(code == consts.SPRITE_TRIPLE, 3, copies)
+        spacing = jnp.where(code == consts.SPRITE_TRIPLE, close, spacing)
+        copies = jnp.where(code == consts.SPRITE_TRIPLE_SPACED, 3, copies)
+        spacing = jnp.where(code == consts.SPRITE_TRIPLE_SPACED, med, spacing)
         return copies, spacing
     
-    def load_sprites(self):
-        """Load all sprite assets from pre-rendered numpy arrays.
-
-        Loads .npy files containing sprite pixel data for all game entities:
-        - Backgrounds (day/night versions)
-        - Bailey animations (5 frames total)
-        - Ice blocks (wide and narrow)
-        - All obstacle types with animation frames
-        - Polar bear frames
-        - Igloo components
-        - HUD digits and degree symbol
-
-        Returns:
-            Dictionary mapping sprite names to 4D JAX arrays (1, H, W, C)
-        """
-        sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "frostbite")
-        sprites = {}
+    # --- Tinting helpers (used only in __init__) ---
+    
+    @staticmethod
+    def _apply_ice_color(block_sprite, is_blue):
+        """Apply color tinting to ice block sprites."""
+        if not is_blue:
+            return block_sprite
         
-        # Load background sprites (day/night cycle every 4 levels)
-        sprites['background_day'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "background_day.npy")), axis=0)
-        sprites['background_night'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "background_night.npy")), axis=0)
+        # Apply blue tint
+        return jnp.where(
+            block_sprite[..., 3:4] > 0,  # Only tint non-transparent pixels
+            jnp.concatenate([
+                (block_sprite[..., 0:1] * 0.3).astype(block_sprite.dtype),  # Reduce red channel
+                (block_sprite[..., 1:2] * 0.5).astype(block_sprite.dtype),  # Reduce green channel
+                (block_sprite[..., 2:3] * 0.9).astype(block_sprite.dtype),  # Keep most blue
+                block_sprite[..., 3:4]  # Preserve alpha channel
+            ], axis=-1), block_sprite).astype(block_sprite.dtype)
+    
+    @staticmethod
+    def _apply_frozen_tint(frame_bailey):
+        """Apply blue tint when Bailey is frozen."""
+        return jnp.where(
+            frame_bailey[..., 3:4] > 0,  # Only tint non-transparent pixels
+            jnp.concatenate([
+                jnp.ones_like(frame_bailey[..., 0:1]) * 100,  # Reduce red
+                jnp.ones_like(frame_bailey[..., 1:2]) * 160,  # Slightly reduce green
+                jnp.ones_like(frame_bailey[..., 2:3]) * 220,  # Keep blue high
+                frame_bailey[..., 3:4]  # Preserve alpha
+            ], axis=-1), frame_bailey).astype(frame_bailey.dtype)
 
-        # Load Bailey sprites
-        # bailey_0: Walking frame 1 (facing right)
-        sprites['bailey_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "bailey_walking_00.npy")), axis=0)
-        # bailey_1: Walking frame 2 (flipped for left-facing)
-        bailey_1_frame = jr.loadFrame(os.path.join(sprite_path, "bailey_walking_01.npy"))
-        sprites['bailey_1'] = jnp.expand_dims(jnp.flip(bailey_1_frame, axis=1), axis=0)
-        # bailey_2: Jumping frame (flipped for direction)
-        bailey_2_frame = jr.loadFrame(os.path.join(sprite_path, "bailey_jumping_00.npy"))
-        sprites['bailey_2'] = jnp.expand_dims(jnp.flip(bailey_2_frame, axis=1), axis=0)
-        # bailey_3: Death frame 1 (drowning)
-        sprites['bailey_3'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "bailey_death_00.npy")), axis=0)
-        # bailey_4: Death frame 2 (frozen)
-        sprites['bailey_4'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "bailey_death_01.npy")), axis=0)
-        
-        # Load HUD elements
-        digit_path_pattern = os.path.join(sprite_path, "digit_{}.npy")
-        sprites['digits'] = jr.load_and_pad_digits(digit_path_pattern, num_chars=10)
-        sprites['degree'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "degree_symbol.npy")), axis=0)
+    @staticmethod
+    def _lighten_bear(sprite):
+        """Make bear lighter during night cycles for better visibility."""
+        return jnp.where(
+            sprite[..., 3:4] > 0,  # Where alpha > 0
+            jnp.concatenate([
+                jnp.minimum(sprite[..., 0:1] + 40, 255).astype(sprite.dtype),  # R
+                jnp.minimum(sprite[..., 1:2] + 40, 255).astype(sprite.dtype),  # G
+                jnp.minimum(sprite[..., 2:3] + 40, 255).astype(sprite.dtype),  # B
+                sprite[..., 3:4]  # Keep alpha unchanged
+            ], axis=-1),
+            sprite
+        )
 
-        # Load igloo components
-        sprites['igloo_block'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "igloo_block_00.npy")), axis=0)
-        sprites['igloo_door'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "igloo_door.npy")), axis=0)
+    @staticmethod
+    def _apply_float_mask(s, float_offset_int):
+        """Mask sprite to create partial submersion effect."""
+        rows = jnp.arange(s.shape[0], dtype=jnp.int32).reshape((-1, 1, 1))
+        height = jnp.int32(s.shape[0])
+        cutoff = jnp.maximum(height - float_offset_int, 0)  # Hide bottom pixels
+        mask = rows < cutoff  # Only show pixels above water line
+        return jnp.where(mask, s, jnp.zeros_like(s))
 
-        # Load ice block sprites (3 wide blocks vs 6 narrow blocks)
-        sprites['ice_wide'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "ice_float_wide.npy")), axis=0)
-        sprites['ice_narrow'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "ice_float_narrow.npy")), axis=0)
-        
-        # Load obstacle sprites (2 animation frames each)
-        # Snow geese: can appear in flocks
-        sprites['snow_geese_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "snow_geese_00.npy")), axis=0)
-        sprites['snow_geese_1'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "snow_geese_01.npy")), axis=0)
-        # Fish: edible, worth 200 points
-        sprites['fish_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "fish_00.npy")), axis=0)
-        sprites['fish_1'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "fish_01.npy")), axis=0)
-        # King crab: harmful obstacle
-        sprites['king_crab_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "king_crab_00.npy")), axis=0)
-        sprites['king_crab_1'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "king_crab_01.npy")), axis=0)
-        # Killer clam: harmful obstacle with slower animation
-        sprites['clam_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "clam_00.npy")), axis=0)
-        sprites['clam_1'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "clam_01.npy")), axis=0)
-
-        # Load polar grizzly (bear) sprites - appears at level 3+
-        sprites['bear_0'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "bear_00.npy")), axis=0)
-        sprites['bear_1'] = jnp.expand_dims(jr.loadFrame(os.path.join(sprite_path, "bear_01.npy")), axis=0)
-        
-        return sprites
-
-    def _render_with_wrap(self, raster, x, y, sprite):
-        """Render a sprite with horizontal wrapping at playfield boundaries and gutter masking."""
-        L = self.consts.PLAYFIELD_LEFT
-        R = self.consts.PLAYFIELD_RIGHT
+    # --- JIT-compiled Render Helpers ---
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_with_wrap(self, raster, x, y, sprite_mask):
+        """Render a sprite with horizontal wrapping at playfield boundaries."""
         W = self.consts.PLAYFIELD_WIDTH
-        width = sprite.shape[1]  # Width of the sprite
-        height = sprite.shape[0]  # Height of the sprite
-
-        # Keep left edge in [L - width, R)
-        x = jnp.where(x >= R, x - W, jnp.where(x < L - width, x + W, x))
-
-        # Helper to mask sprite columns that fall in the gutter (x < L)
-        def mask_gutter(s, x_pos):
-            """Mask out any columns of the sprite that would appear in the gutter."""
-            cols = jnp.arange(width, dtype=jnp.int32).reshape((1, -1, 1))
-            # Mask columns where x_pos + col < L (in the gutter)
-            gutter_mask = (x_pos + cols) >= L
-            return jnp.where(gutter_mask, s, jnp.zeros_like(s))
-
-        # Draw main sprite if visible (with gutter masking)
-        visible = (x + width > L) & (x < R)
-        masked_sprite = mask_gutter(sprite, x)
-        raster = jax.lax.cond(visible, lambda r: jr.render_at(r, x, y, masked_sprite), lambda r: r, raster)
-
-        # Draw wrap copies (also with gutter masking)
-        # Left wrap: when sprite extends past left edge, show it on right (but mask gutter)
-        wrapped_right_sprite = mask_gutter(sprite, x + W)
-        raster = jax.lax.cond(x < L, lambda r: jr.render_at(r, x + W, y, wrapped_right_sprite), lambda r: r, raster)
-
-        # Right wrap: when sprite extends past right edge, show it on left (but mask gutter)
-        wrapped_left_sprite = mask_gutter(sprite, x - W)
-        raster = jax.lax.cond(x + width > R, lambda r: jr.render_at(r, x - W, y, wrapped_left_sprite), lambda r: r, raster)
-
+        
+        # Draw main sprite (clipped to screen edges)
+        raster = self.jr.render_at_clipped(raster, x, y, sprite_mask)
+        
+        # Draw wrap copies
+        raster = self.jr.render_at_clipped(raster, x - W, y, sprite_mask)
+        raster = self.jr.render_at_clipped(raster, x + W, y, sprite_mask)
+        
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: FrostbiteState) -> jnp.ndarray:
-        """Render the complete game frame from the current state.
-
-        Composites all visual elements in the correct order:
-        1. Background (day/night)
-        2. Ice blocks with color states
-        3. Obstacles with sprite duplication
-        4. Bailey with correct animation
-        5. Polar bear (if active)
-        6. Igloo construction
-        7. HUD (score, temperature, lives)
-
-        Args:
-            state: Current game state containing all entity positions and states
-
-        Returns:
-            160x210x3 RGB array representing the rendered frame
-        """
-        raster = jr.create_initial_frame(width=160, height=210)
-
-        # Render background with day/night cycle
-        # Day/night switches every 4 levels: 1-4 day, 5-8 night, 9-12 day, etc.
-        is_night = ((state.level - 1) // 4) % 2 == 1
-        bg_sprite = jnp.where(is_night, self.sprites['background_night'], self.sprites['background_day'])
-        frame_bg = jr.get_sprite_frame(bg_sprite, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
-
-        # Get ice block sprites for rendering
-        ice_wide = jr.get_sprite_frame(self.sprites['ice_wide'], 0)  # 24-pixel wide blocks
-        ice_narrow = jr.get_sprite_frame(self.sprites['ice_narrow'], 0)  # 12-pixel narrow blocks
-        
-        # Render ice blocks for each of the 4 rows
-        for row in range(4):
-            y_pos = self.consts.ICE_ROW_Y[row]  # Y position for this ice row
-            # Ice turns blue when Bailey has stepped on it
-            is_blue = state.ice_colors[row] == self.consts.COLOR_ICE_BLUE
-
-            # Apply color tinting to ice sprites
-            wide_colored = self._apply_ice_color(ice_wide, is_blue)
-            narrow_colored = self._apply_ice_color(ice_narrow, is_blue)
-
-            # Get ice block configuration for this row
-            block_positions = state.ice_block_positions[row]
-            block_count = state.ice_block_counts[row]  # 3 or 6 blocks
-
-            # Ice breathing animation active on odd levels 5+ with 3 blocks
-            breathing_active = (
-                (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &  # Level 5+
-                ((state.level & 1) == 1) &  # Odd levels only
-                (block_count <= 3)  # Only when 3 wide blocks
-            )
-
-            # Compute ice segment positions for breathing animation
-            segment_positions, segment_widths, segment_mask = _compute_row_segments(
-                self.consts,
-                block_positions,
-                block_count,
-                state.ice_fine_motion_index,
-                breathing_active,
-                state.ice_x[row]
-            )
-
-            def render_block(r, bx, sprite, width):
-                """Render a single ice block with playfield wrapping."""
-                return self._render_with_wrap(r, bx, y_pos, sprite)
-
-            def render_row(r):
-                """Render all ice blocks in the current row using scan."""
-                def render_one_segment(raster, i):
-                    active = segment_mask[i]  # Is this segment active?
-                    width = segment_widths[i]
-
-                    # Choose sprite and render conditionally
-                    rendered = jax.lax.cond(
-                        width == 12,
-                        lambda: render_block(raster, segment_positions[i], narrow_colored, 12),
-                        lambda: render_block(raster, segment_positions[i], wide_colored, 24)
-                    )
-
-                    # Only apply if active
-                    raster_out = jax.lax.cond(active, lambda: rendered, lambda: raster)
-                    return raster_out, None
-
-                # Use scan for sequential rendering
-                final_raster, _ = jax.lax.scan(render_one_segment, r, jnp.arange(segment_positions.shape[0]))
-                return final_raster
-
-            raster = render_row(raster)
-
-        # Render game entities in proper z-order
-        raster = self._render_hud(raster, state)  # Score, lives, temperature
-        raster = self._render_igloo(raster, state)  # Igloo construction progress
-        raster = self._render_obstacles(raster, state)  # Fish, crabs, clams, geese
-        raster = self._render_polar_grizzly(raster, state)  # Bear (level 3+)
-
-        # Render Bailey with correct animation state
-        is_dead = (state.bailey_alive == 0) | (state.bailey_death_frame > 0)
-        is_visible = state.bailey_visible == 1
-        # Death animation alternates between frames 3 and 4
-        animation_idx = jnp.where(
-            is_dead, 3 + ((state.bailey_death_frame // 30) % 2), state.bailey_animation_idx
-        )
-        
-        # Render Bailey sprite based on animation index
-        for idx in range(5):  # Bailey has 5 animation frames (0-4)
-            sprite_key = f'bailey_{idx}'
-            frame_bailey = jr.get_sprite_frame(self.sprites[sprite_key], 0)
-
-            # Flip sprite horizontally when facing left (direction == 1)
-            frame_bailey = jax.lax.cond(
-                (state.bailey_direction == 1) & (idx < 3),  # Don't flip death frames
-                lambda f: jnp.flip(f, axis=1), lambda f: f, frame_bailey
-            )
-
-            # Walking frame 2 needs Y adjustment for proper foot placement
-            y_offset = jnp.where(idx == 1, -1, 0)
-            adjusted_y = state.bailey_y + y_offset
-
-            # Apply blue tint when Bailey is frozen (temperature = 0)
-            frame_bailey_tinted = jax.lax.cond(
-                state.bailey_frozen == 1,
-                lambda f: jnp.where(
-                    f[..., 3:4] > 0,  # Only tint non-transparent pixels
-                    jnp.concatenate([
-                        jnp.ones_like(f[..., 0:1]) * 100,  # Reduce red
-                        jnp.ones_like(f[..., 1:2]) * 160,  # Slightly reduce green
-                        jnp.ones_like(f[..., 2:3]) * 220,  # Keep blue high
-                        f[..., 3:4]  # Preserve alpha
-                    ], axis=-1), f),
-                lambda f: f, frame_bailey
-            )
-
-            # Only render the current animation frame
-            raster = jax.lax.cond(
-                (animation_idx == idx) & is_visible,
-                lambda r, f, y: jr.render_at(r, state.bailey_x, y, f),
-                lambda r, f, y: r, raster, frame_bailey_tinted, adjusted_y
-            )
-        
-        return raster
-    
-    def _apply_ice_color(self, block_sprite, is_blue):
-        """Apply color tinting to ice block sprites.
-
-        Ice blocks start white and turn blue when Bailey steps on them.
-        Blue blocks award points when all blocks in a row are blue.
-
-        Args:
-            block_sprite: The base ice sprite to color
-            is_blue: Whether to apply blue tint (True) or keep white (False)
-
-        Returns:
-            Tinted sprite with appropriate coloring
-        """
-        return jax.lax.cond(
-            is_blue,
-            lambda s: jnp.where(
-                s[..., 3:4] > 0,  # Only tint non-transparent pixels
-                jnp.concatenate([
-                    (s[..., 0:1] * 0.3).astype(s.dtype),  # Reduce red channel
-                    (s[..., 1:2] * 0.5).astype(s.dtype),  # Reduce green channel
-                    (s[..., 2:3] * 0.9).astype(s.dtype),  # Keep most blue
-                    s[..., 3:4]  # Preserve alpha channel
-                ], axis=-1), s).astype(s.dtype),
-            lambda s: s, block_sprite
-        )
-    
     def _bcd_to_decimal(self, bcd_score: jnp.ndarray) -> jnp.ndarray:
         """Convert 3-byte BCD score to decimal value."""
-        # Each byte contains two BCD digits - convert in single expression
-        # This is more JIT-friendly than sequential operations
         return (((bcd_score[0] >> 4) & 0xF) * 100000 +
                 (bcd_score[0] & 0xF) * 10000 +
                 ((bcd_score[1] >> 4) & 0xF) * 1000 +
                 (bcd_score[1] & 0xF) * 100 +
                 ((bcd_score[2] >> 4) & 0xF) * 10 +
                 (bcd_score[2] & 0xF)).astype(jnp.int32)
-
-    def _add_bcd_score_renderer(self, score, points):
-        """Add points to BCD score (Binary Coded Decimal)"""
-        current = self._bcd_to_decimal(score)
-        # Convert BCD points to decimal (handles up to 3 digits)
-        hundreds = (points >> 8) & 0x0F
-        tens = (points >> 4) & 0x0F
-        ones = points & 0x0F
-        decimal_points = hundreds * 100 + tens * 10 + ones
-        new_total = current + decimal_points
-
-        # Convert back to BCD format (each byte stores 2 BCD digits)
-        d5 = (new_total // 100000) % 10
-        d4 = (new_total // 10000) % 10
-        d3 = (new_total // 1000) % 10
-        d2 = (new_total // 100) % 10
-        d1 = (new_total // 10) % 10
-        d0 = new_total % 10
-
-        new_score = score.at[0].set((d5 << 4) | d4)
-        new_score = new_score.at[1].set((d3 << 4) | d2)
-        new_score = new_score.at[2].set((d1 << 4) | d0)
-        
-        return new_score
     
+    @partial(jax.jit, static_argnums=(0,))
     def _render_hud(self, raster, state):
-        """Render HUD elements at top of screen.
-
-        Displays:
-        - Score (6 digits, top left)
-        - Lives remaining (1 digit, top center)
-        - Temperature with degree symbol (2 digits, top right)
-        - Temperature flashes when below 10 degrees as warning
-
-        Args:
-            raster: Current frame buffer
-            state: Game state with score, lives, temperature
-
-        Returns:
-            Updated raster with HUD elements
-        """
-        digits_array = self.sprites['digits']
-        score_y, lives_y, temp_y = 10, 22, 22  # Y positions for HUD elements
-
-        # Flash temperature display when dangerously low (< 10 degrees)
+        """Render HUD elements at top of screen."""
+        digits_masks = self.DIGIT_MASKS
+        score_y, lives_y, temp_y = 10, 22, 22
         should_flash = state.temperature < 0x10
-        is_visible = ~should_flash | ((state.frame_count % 90) < 45)  # Flash cycle
-        
-        # Render lives counter (center of screen)
-        lives_x = 59  # Center position
-        lives_clamped = jnp.clip(state.remaining_lives, 0, 9)  # Max 9 lives display
-        lives_sprite = jnp.expand_dims(digits_array[lives_clamped], axis=0)
+        is_visible = ~should_flash | ((state.frame_count % 90) < 45)
+        # Render lives
+        lives_x = 59
+        lives_clamped = jnp.clip(state.remaining_lives, 0, 9)
+        lives_sprite = digits_masks[lives_clamped]
         raster = jax.lax.cond(
-            is_visible, lambda r: jr.render_at(r, lives_x, lives_y, jr.get_sprite_frame(lives_sprite, 0)), lambda r: r, raster
+            is_visible, lambda r: self.jr.render_at(r, lives_x, lives_y, lives_sprite), lambda r: r, raster
         )
         
-        # Render temperature display (left of center)
+        # Render temperature
         temp_x_base = lives_x - 16 - 6
-        # Extract BCD digits (temperature stored as 0x45 = 45 degrees)
         temp_tens, temp_ones = (state.temperature >> 4) & 0x0F, state.temperature & 0x0F
         temp_x = jnp.where(temp_tens > 0, temp_x_base - 16, temp_x_base - 8)
         x_offset = temp_x
-
-        # Render tens digit (if not zero)
-        tens_sprite = jnp.expand_dims(digits_array[temp_tens], axis=0)
+        tens_sprite = digits_masks[temp_tens]
         raster = jax.lax.cond(
-            (temp_tens > 0) & is_visible, lambda r, x: jr.render_at(r, x, temp_y, jr.get_sprite_frame(tens_sprite, 0)),
+            (temp_tens > 0) & is_visible, lambda r, x: self.jr.render_at(r, x, temp_y, tens_sprite),
             lambda r, x: r, raster, x_offset
         )
         x_offset += jnp.where(temp_tens > 0, 8, 0)
-
-        # Render ones digit (always shown)
-        ones_sprite = jnp.expand_dims(digits_array[temp_ones], axis=0)
+        ones_sprite = digits_masks[temp_ones]
         raster = jax.lax.cond(
-            is_visible, lambda r: jr.render_at(r, x_offset, temp_y, jr.get_sprite_frame(ones_sprite, 0)), lambda r: r, raster
+            is_visible, lambda r: self.jr.render_at(r, x_offset, temp_y, ones_sprite), lambda r: r, raster
         )
-
-        # Render degree symbol
-        degree_sprite = jr.get_sprite_frame(self.sprites['degree'], 0)
+        degree_sprite = self.DEGREE_MASK
         raster = jax.lax.cond(
-            is_visible, lambda r: jr.render_at(r, temp_x_base, temp_y, degree_sprite), lambda r: r, raster
+            is_visible, lambda r: self.jr.render_at(r, temp_x_base, temp_y, degree_sprite), lambda r: r, raster
         )
         
-        # Render score (centered based on number of digits)
+        # Render score
         total_score = self._bcd_to_decimal(state.score)
-        # Calculate number of digits to display (minimum 1 for score of 0)
-        # Add small epsilon to handle floating point precision at powers of 10
         num_digits = jnp.where(
             total_score == 0,
             1,
             jnp.floor(jnp.log10(jnp.maximum(1, total_score) + 0.5)).astype(jnp.int32) + 1
         )
-
-        # Center the score display (each digit is 8 pixels wide)
         score_x_start = lives_x - ((num_digits - 1) * 4)
-
-        def render_one_digit(r, i):
-            """Render a single digit of the score using scan."""
-            # Only render if this digit index is within num_digits
-            should_render = i < num_digits
-
-            digit_val = (total_score // (10**(num_digits-1-i))) % 10
-            sprite = jnp.expand_dims(digits_array[digit_val], axis=0)
-
-            raster_out = jax.lax.cond(
-                should_render,
-                lambda: jr.render_at(r, score_x_start + i * 8, score_y, jr.get_sprite_frame(sprite, 0)),
-                lambda: r
-            )
-            return raster_out, None
-
-        # Use lax.scan with static maximum (6 digits max for score)
-        raster, _ = jax.lax.scan(render_one_digit, raster, jnp.arange(6))
+        score_digits = self.jr.int_to_digits(total_score, max_digits=6)
+        start_index = 6 - num_digits
+        
+        raster = self.jr.render_label_selective(
+            raster, score_x_start, score_y,
+            score_digits, digits_masks,
+            start_index, num_digits,
+            spacing=8,
+            max_digits_to_render=6
+        )
         
         return raster
     
-    def _render_igloo(self, raster, state):
-        """Render igloo blocks based on building progress.
-
-        The igloo is built block by block as Bailey collects ice blocks.
-        Each of the 15 blocks appears in a specific pattern to form the dome.
-        The 16th "block" is actually the door that appears last.
-
-        Args:
-            raster: Current frame buffer
-            state: Game state with igloo building progress
-
-        Returns:
-            Updated raster with igloo
-        """
-        return jax.lax.cond(
-            state.building_igloo_idx < 0,  # No blocks collected yet
-            lambda r: r, lambda r: self._render_igloo_blocks(r, state), raster
-        )
-    
+    @partial(jax.jit, static_argnums=(0,))
     def _render_igloo_blocks(self, raster, state):
-        """Render igloo blocks in the specific construction pattern.
-
-        The igloo is built in this order:
-        - Blocks 0-3: Bottom row (left to right)
-        - Blocks 4-7: Second row (right to left)
-        - Blocks 8-11: Third row (left to right)
-        - Blocks 12-13: Top side blocks (wider)
-        - Block 14: Top center block (widest)
-        - Block 15: Door
-
-        Args:
-            raster: Current frame buffer
-            state: Game state with building progress index
-
-        Returns:
-            Updated raster with igloo blocks
-        """
-        block_sprite = jr.get_sprite_frame(self.sprites['igloo_block'], 0)
-        door_sprite = jr.get_sprite_frame(self.sprites['igloo_door'], 0)
+        """Render igloo blocks in the specific construction pattern."""
+        block_mask = self.IGLOO_BLOCK_MASK
+        door_mask = self.IGLOO_DOOR_MASK
         base_x, base_y = self.consts.IGLOO_X, self.consts.IGLOO_Y
-        igloo_offset = -43  # Offset to position igloo correctly
+        igloo_offset = -43
         
-        for i in range(16):
-            should_render = i <= state.building_igloo_idx  # Only render collected blocks
-
-            # Calculate position based on block index
-            if i < 4:  # Bottom row (left to right)
-                x, y = base_x + igloo_offset + (i * 8), base_y + 7
-            elif i < 8:  # Second row (right to left)
-                x, y = base_x + igloo_offset + ((3 - (i - 4)) * 8), base_y + 3
-            elif i < 12:  # Third row (left to right)
-                x, y = base_x + igloo_offset + ((i - 8) * 8), base_y - 1
-            elif i < 14:  # Top side blocks (wider)
-                x, y = base_x + igloo_offset + 4 + ((1 - (i - 12)) * 12), base_y - 5
-            elif i == 14:  # Top center block (widest)
-                x, y = base_x + igloo_offset + 8, base_y - 9
-            else:  # Door (block 15)
-                x, y = 122, base_y + 3
-
-            def render_block(r, xp, yp):
-                """Render a single igloo block (some blocks are wider)."""
-                if 12 <= i < 14:  # Top side blocks use 2 sprites
-                    return jr.render_at(jr.render_at(r, xp, yp, block_sprite), xp + 4, yp, block_sprite)
-                elif i == 14:  # Top center block uses 2 sprites with more spacing
-                    return jr.render_at(jr.render_at(r, xp, yp, block_sprite), xp + 8, yp, block_sprite)
-                else:  # Normal single block
-                    return jr.render_at(r, xp, yp, block_sprite)
-
-            # Render the block or door
-            if i < 15:  # Regular blocks
-                raster = jax.lax.cond(
-                    should_render, lambda r, xp, yp: render_block(r, xp, yp), lambda r, xp, yp: r, raster, x, y
-                )
-            else:  # Door (block 15)
-                raster = jax.lax.cond(
-                    should_render, lambda r, xp, yp: jr.render_at(r, xp, yp, door_sprite), lambda r, xp, yp: r, raster, x, y
-                )
+        # Precompute all positions
+        x_pos = jnp.array([
+            base_x + igloo_offset + 0,  # 0
+            base_x + igloo_offset + 8,  # 1
+            base_x + igloo_offset + 16, # 2
+            base_x + igloo_offset + 24, # 3
+            base_x + igloo_offset + 24, # 4
+            base_x + igloo_offset + 16, # 5
+            base_x + igloo_offset + 8,  # 6
+            base_x + igloo_offset + 0,  # 7
+            base_x + igloo_offset + 0,  # 8
+            base_x + igloo_offset + 8,  # 9
+            base_x + igloo_offset + 16, # 10
+            base_x + igloo_offset + 24, # 11
+            base_x + igloo_offset + 4,  # 12
+            base_x + igloo_offset + 16, # 13
+            base_x + igloo_offset + 8,  # 14
+            122                       # 15 (door)
+        ], dtype=jnp.int32)
+        y_pos = jnp.array([
+            base_y + 7, base_y + 7, base_y + 7, base_y + 7, # 0-3
+            base_y + 3, base_y + 3, base_y + 3, base_y + 3, # 4-7
+            base_y - 1, base_y - 1, base_y - 1, base_y - 1, # 8-11
+            base_y - 5, base_y - 5, # 12-13
+            base_y - 9, # 14
+            base_y + 3  # 15 (door)
+        ], dtype=jnp.int32)
         
+        def render_block(i, r):
+            should_render = i <= state.building_igloo_idx
+            x, y = x_pos[i], y_pos[i]
+            
+            def draw_fn(r_in):
+                # Render block 15 (door)
+                r_out = jax.lax.cond(
+                    i == 15,
+                    lambda r: self.jr.render_at(r, x, y, door_mask),
+                    lambda r: r,
+                    r_in)
+                
+                # Render blocks 0-14
+                r_out = jax.lax.cond(
+                    i < 15,
+                    lambda r: self.jr.render_at(r, x, y, block_mask),
+                    lambda r: r,
+                    r_out)
+                
+                # Render extra sprites for wider blocks
+                r_out = jax.lax.cond(
+                    (i >= 12) & (i <= 13), # Blocks 12, 13
+                    lambda r: self.jr.render_at(r, x + 4, y, block_mask),
+                    lambda r: r,
+                    r_out)
+                r_out = jax.lax.cond(
+                    i == 14, # Block 14
+                    lambda r: self.jr.render_at(r, x + 8, y, block_mask),
+                    lambda r: r,
+                    r_out)
+                
+                return r_out
+            return jax.lax.cond(should_render, draw_fn, lambda r: r, r)
+        raster = jax.lax.fori_loop(0, 16, render_block, raster)
         return raster
     
+    @partial(jax.jit, static_argnums=(0,))
     def _render_obstacles(self, raster, state):
-        """Render all active obstacles with sprite duplication patterns.
-
-        Obstacles can appear as single sprites or duplicated (flocks/schools):
-        - Snow geese: often appear in flocks of 2-3
-        - Fish: can appear in schools
-        - Crabs and clams: usually single but can be duplicated
-
-        Each obstacle has independent animation timing and vertical float offsets
-        for aquatic creatures.
-
-        Args:
-            raster: Current frame buffer
-            state: Game state with obstacle positions and types
-
-        Returns:
-            Updated raster with obstacles rendered
-        """
-        for i in range(4):  # Process up to 4 active obstacles
-            if_render = state.obstacle_active[i] == 1
-
-            # Get obstacle properties from state
-            animation_idx = state.obstacle_animation_idx[i]  # Animation frame (0 or 1)
-            direction = state.obstacle_directions[i]  # Movement direction
-            x_pos = state.obstacle_x[i]  # Base X position
-            y_pos = state.obstacle_y[i]  # Base Y position
-            float_offset = state.obstacle_float_offsets[i]  # Vertical bobbing for water creatures
-            obstacle_type = state.obstacle_types[i]  # Type ID (0=geese, 1=fish, 2=crab, 3=clam)
-
-            # Decode sprite duplication mode to get number of copies and spacing
-            copies, spacing = self._decode_sprite_duplication(state.obstacle_duplication_mode[i])
-
-            alive_mask_i = state.fish_alive_mask[i]  # NEW
-
-            def render_one_copy(current_raster, k):
-                """Render a single copy of the obstacle sprite using scan."""
-                xp = x_pos + k * spacing  # Calculate position with spacing
-                copy_alive = jnp.where(
-                    obstacle_type == self.consts.ID_FISH,
-                    ((alive_mask_i >> jnp.int32(k)) & 1) == 1,
-                    True
-                )
-                should_show = if_render & (k < copies) & copy_alive
-
-                raster_out = jax.lax.cond(
-                    should_show,
-                    lambda: self._render_single_obstacle(current_raster, xp, y_pos, obstacle_type, animation_idx, direction, float_offset),
-                    lambda: current_raster
-                )
-                return raster_out, None
-
-            # Use scan for rendering up to 3 copies
-            raster, _ = jax.lax.scan(render_one_copy, raster, jnp.arange(3))
+        """Render all active obstacles with sprite duplication patterns."""
         
+        def render_lane(i, r):
+            if_render = state.obstacle_active[i] == 1
+            
+            def draw_lane(r_in):
+                anim_idx = state.obstacle_animation_idx[i]
+                direction = state.obstacle_directions[i]
+                x_pos = state.obstacle_x[i]
+                y_pos = state.obstacle_y[i]
+                float_offset_int = jnp.clip(state.obstacle_float_offsets[i].astype(jnp.int32), 0, 4)
+                obstacle_type = state.obstacle_types[i]
+                alive_mask_i = state.fish_alive_mask[i]
+                
+                copies, spacing = self._decode_sprite_duplication(self.consts, state.obstacle_duplication_mode[i])
+                
+                # Helper function to render a single obstacle type
+                def render_obstacle_type(base_sprite, is_aquatic_flag):
+                    # Adjust Y position for floating
+                    y_render = jnp.where(is_aquatic_flag, y_pos + float_offset_int, y_pos)
+                    # Flip sprite based on direction
+                    sprite = jax.lax.cond(
+                        direction == 1, lambda s: jnp.flip(s, axis=1), lambda s: s, base_sprite
+                    )
+                    
+                    # Render copies
+                    def render_copy(k, r_copy):
+                        xp = x_pos + k * spacing
+                        copy_alive = jnp.where(
+                            obstacle_type == self.consts.ID_FISH,
+                            ((alive_mask_i >> jnp.int32(k)) & 1) == 1,
+                            True
+                        )
+                        should_show = (k < copies) & copy_alive
+                        
+                        return jax.lax.cond(
+                            should_show,
+                            lambda r: self.jr.render_at_clipped(r, xp, y_render, sprite),
+                            lambda r: r,
+                            r_copy
+                        )
+                    
+                    return jax.lax.fori_loop(0, 3, render_copy, r_in)
+                
+                # Select the correct sprite animation stack
+                # flat_idx = anim_idx * 5 + float_offset_int
+                fish_mask = self.FISH_MASKS[anim_idx * 5 + float_offset_int]
+                crab_mask = self.CRAB_MASKS[anim_idx * 5 + float_offset_int]
+                clam_mask = self.CLAM_MASKS[anim_idx * 5 + float_offset_int]
+                
+                # Render each obstacle type (each branch returns the raster, so shapes match)
+                def render_geese(r):
+                    sprite = self.GEESE_MASKS[anim_idx]
+                    return render_obstacle_type(sprite, False)
+                
+                def render_fish(r):
+                    return render_obstacle_type(fish_mask, True)
+                
+                def render_crab(r):
+                    return render_obstacle_type(crab_mask, True)
+                
+                def render_clam(r):
+                    return render_obstacle_type(clam_mask, True)
+                
+                # Select and render the correct obstacle type
+                r_out = jax.lax.cond(
+                    obstacle_type == self.consts.ID_SNOW_GOOSE,
+                    render_geese,
+                    lambda r: jax.lax.cond(
+                        obstacle_type == self.consts.ID_FISH,
+                        render_fish,
+                        lambda r: jax.lax.cond(
+                            obstacle_type == self.consts.ID_KING_CRAB,
+                            render_crab,
+                            render_clam,
+                            r
+                        ),
+                        r
+                    ),
+                    r_in
+                )
+                return r_out
+            return jax.lax.cond(if_render, draw_lane, lambda r: r, r)
+        raster = jax.lax.fori_loop(0, 4, render_lane, raster)
         return raster
     
-    def _render_single_obstacle(self, raster, x_pos, y_pos, obstacle_type, animation_idx, direction, float_offset):
-        """Render a single obstacle sprite with animation and directional flipping.
-
-        Args:
-            raster: Current frame buffer
-            x_pos: X position for this sprite
-            y_pos: Y position (before float offset)
-            obstacle_type: Type ID (0=geese, 1=fish, 2=crab, 3=clam)
-            animation_idx: Animation frame (0 or 1)
-            direction: Movement direction for horizontal flipping
-            float_offset: Vertical offset for floating animation
-
-        Returns:
-            Updated raster with obstacle rendered
-        """
-        # Load all obstacle sprites (2 animation frames per type)
-        geese_0 = jr.get_sprite_frame(self.sprites['snow_geese_0'], 0)
-        geese_1 = jr.get_sprite_frame(self.sprites['snow_geese_1'], 0)
-        fish_0 = jr.get_sprite_frame(self.sprites['fish_0'], 0)
-        fish_1 = jr.get_sprite_frame(self.sprites['fish_1'], 0)
-        crab_0 = jr.get_sprite_frame(self.sprites['king_crab_0'], 0)
-        crab_1 = jr.get_sprite_frame(self.sprites['king_crab_1'], 0)
-        clam_0 = jr.get_sprite_frame(self.sprites['clam_0'], 0)
-        clam_1 = jr.get_sprite_frame(self.sprites['clam_1'], 0)
-        
-        # Normalize sprite sizes for JAX operations (all must be same shape)
-        all_sprites = [geese_0, geese_1, fish_0, fish_1, crab_0, crab_1, clam_0, clam_1]
-        max_h = max(s.shape[0] for s in all_sprites)
-        max_w = max(s.shape[1] for s in all_sprites)
-
-        # Pad sprites to uniform size
-        def pad_sprite(s):
-            """Pad sprite to maximum dimensions with transparency."""
-            return jnp.pad(s, ((0, max_h - s.shape[0]), (0, max_w - s.shape[1]), (0, 0)), mode='constant')
-        
-        geese_0_pad = pad_sprite(geese_0)
-        geese_1_pad = pad_sprite(geese_1)
-        fish_0_pad = pad_sprite(fish_0)
-        fish_1_pad = pad_sprite(fish_1)
-        crab_0_pad = pad_sprite(crab_0)
-        crab_1_pad = pad_sprite(crab_1)
-        clam_0_pad = pad_sprite(clam_0)
-        clam_1_pad = pad_sprite(clam_1)
-        
-        # Select appropriate sprite based on type and animation frame
-        # Geese: simple wing flapping animation
-        geese_sprite = jnp.where(animation_idx == 0, geese_0_pad, geese_1_pad)
-
-        # Fish: second frame needs horizontal flip for swimming motion
-        fish_1_flipped = jnp.flip(fish_1_pad, axis=1)
-        fish_sprite = jnp.where(animation_idx == 0, fish_0_pad, fish_1_flipped)
-
-        # Crab: sideways scuttling animation
-        crab_sprite = jnp.where(animation_idx == 0, crab_0_pad, crab_1_pad)
-
-        # Clam: sprites are backwards in files, pre-flip them
-        # They'll be flipped again based on movement direction
-        clam_0_flipped = jnp.flip(clam_0_pad, axis=1)
-        clam_1_flipped = jnp.flip(clam_1_pad, axis=1)
-        clam_sprite = jnp.where(animation_idx == 0, clam_0_flipped, clam_1_flipped)
-
-        # Select sprite based on obstacle type ID
-        # Select final sprite based on obstacle type using nested conditionals
-        sprite = jnp.where(obstacle_type == self.consts.ID_SNOW_GOOSE, geese_sprite,
-                jnp.where(obstacle_type == self.consts.ID_FISH, fish_sprite,
-                jnp.where(obstacle_type == self.consts.ID_KING_CRAB, crab_sprite,
-                          clam_sprite)))
-
-        # Apply floating animation for aquatic creatures (fish, crab, clam)
-        max_float = self.consts.FLOATING_OBSTACLE_MAX_OFFSET
-        float_offset_int = jnp.clip(float_offset.astype(jnp.int32), 0, jnp.int32(max_float))
-        is_aquatic = obstacle_type >= self.consts.ID_FISH  # Fish, crab, clam bob up and down
-
-        def apply_float_mask(s):
-            """Mask sprite to create partial submersion effect."""
-            rows = jnp.arange(s.shape[0], dtype=jnp.int32).reshape((-1, 1, 1))
-            height = jnp.int32(s.shape[0])
-            cutoff = jnp.maximum(height - float_offset_int, 0)  # Hide bottom pixels
-            mask = rows < cutoff  # Only show pixels above water line
-            return jnp.where(mask, s, jnp.zeros_like(s))
-
-        # Apply floating mask to aquatic creatures
-        sprite = jax.lax.cond(
-            is_aquatic,
-            apply_float_mask,
-            lambda s: s,
-            sprite
-        )
-
-        # Adjust Y position for floating offset
-        y_render = jnp.where(is_aquatic, y_pos + float_offset_int, y_pos)
-
-        # Flip sprite horizontally based on movement direction
-        sprite = jax.lax.cond(
-            direction == 1, lambda s: jnp.flip(s, axis=1), lambda s: s, sprite
-        )
-
-        # Apply gutter masking (hide any columns in x=0..7) without wrapping
-        # Obstacles should NOT wrap - they disappear and spawn new random ones
-        L = self.consts.PLAYFIELD_LEFT
-        width = sprite.shape[1]
-        cols = jnp.arange(width, dtype=jnp.int32).reshape((1, -1, 1))
-        gutter_mask = (x_pos + cols) >= L
-        masked_sprite = jnp.where(gutter_mask, sprite, jnp.zeros_like(sprite))
-
-        return jr.render_at(raster, x_pos, y_render, masked_sprite)
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_black_bar(self, raster):
+        """Renders the black gutter bar on the left to hide obstacle spawns."""
+        return self.jr.render_at(raster, 0, 0, self.BLACK_BAR_MASK)
     
+    @partial(jax.jit, static_argnums=(0,))
     def _render_polar_grizzly(self, raster, state):
-        """Render the polar grizzly (bear) when active.
-
-        The bear appears starting at level 3 and patrols the shore area.
-        It has an 8-frame walking animation that cycles as it moves.
-        The bear sprite is flipped based on movement direction.
-
-        Args:
-            raster: Current frame buffer
-            state: Game state with bear position and animation
-
-        Returns:
-            Updated raster with bear rendered
-        """
-        # Only render if bear is active (level 3+)
+        """Render the polar grizzly (bear) when active."""
         should_render = state.polar_grizzly_active == 1
-
-        # Load bear animation frames
-        bear_0 = jr.get_sprite_frame(self.sprites['bear_0'], 0)
-        bear_1 = jr.get_sprite_frame(self.sprites['bear_1'], 0)
-
-        # Normalize sprite dimensions for JAX operations
-        max_h = max(bear_0.shape[0], bear_1.shape[0])
-        max_w = max(bear_0.shape[1], bear_1.shape[1])
-
-        def pad_bear_sprite(s):
-            """Pad bear sprite to uniform size."""
-            return jnp.pad(s, ((0, max_h - s.shape[0]), (0, max_w - s.shape[1]), (0, 0)), mode='constant')
-        
-        bear_0_pad = pad_bear_sprite(bear_0)
-        bear_1_pad = pad_bear_sprite(bear_1)
-        
-        # Select animation frame using the 8-entry animation map
-        # Pattern: [0, 0, 1, 1, 0, 0, 1, 1] for walking cycle
-        anim_idx = jnp.clip(state.polar_grizzly_animation_idx, 0, 7)
-        animation_frame = jnp.array(self.consts.POLAR_GRIZZLY_ANIM_MAP)[anim_idx]
-        bear_sprite = jnp.where(animation_frame == 0, bear_0_pad, bear_1_pad)
-
-        # Handle sprite height differences for proper ground alignment
-        # bear_0 is 16 pixels high, bear_1 is 15 pixels (1 pixel shorter)
-        # Apply Y offset to keep bear's feet consistently on the ground
-        bear_y_offset = jnp.where(animation_frame == 1, 1, 0)  # Frame 1 is shorter, offset down by 1
-        bear_y = self.consts.YMIN_BAILEY + bear_y_offset
-        
-        # Check if it's night time for brightness adjustment
-        is_night = ((state.level - 1) // 4) % 2 == 1
-
-        # Make bear lighter during night cycles for better visibility
-        def lighten_bear(sprite):
-            # Increase brightness by adding 40 to RGB values where sprite is visible
-            return jnp.where(
-                sprite[..., 3:4] > 0,  # Where alpha > 0
-                jnp.concatenate([
-                    jnp.minimum(sprite[..., 0:1] + 40, 255).astype(sprite.dtype),  # R
-                    jnp.minimum(sprite[..., 1:2] + 40, 255).astype(sprite.dtype),  # G
-                    jnp.minimum(sprite[..., 2:3] + 40, 255).astype(sprite.dtype),  # B
-                    sprite[..., 3:4]  # Keep alpha unchanged
-                ], axis=-1),
-                sprite
+        def draw_bear(r):
+            is_night = ((state.level - 1) // 4) % 2 == 1
+            
+            bear_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
+            
+            anim_idx = jnp.clip(state.polar_grizzly_animation_idx, 0, 7)
+            animation_frame_idx = jnp.array(self.consts.POLAR_GRIZZLY_ANIM_MAP)[anim_idx]
+            bear_sprite = bear_stack[animation_frame_idx]
+            bear_y_offset = jnp.where(animation_frame_idx == 1, 1, 0)
+            bear_y = self.consts.YMIN_BAILEY + bear_y_offset
+            
+            bear_sprite_flipped = jax.lax.cond(
+                state.polar_grizzly_direction == 0,
+                lambda s: jnp.flip(s, axis=1),
+                lambda s: s,
+                bear_sprite
             )
+            
+            return self.jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite_flipped)
+        return jax.lax.cond(should_render, draw_bear, lambda r: r, raster)
 
-        # Apply lightening effect during night
-        bear_sprite = jax.lax.cond(
-            is_night,
-            lighten_bear,
-            lambda s: s,
-            bear_sprite
-        )
-
-        # Flip sprite based on direction (0=right, 1=left)
-        # Reverse the flipping logic if bear is facing wrong way
-        bear_sprite = jax.lax.cond(
-            state.polar_grizzly_direction == 0,  # Flip when facing right instead
-            lambda s: jnp.flip(s, axis=1),
-            lambda s: s,
-            bear_sprite
-        )
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: FrostbiteState) -> jnp.ndarray:
+        """Render the complete game frame from the current state."""
         
-        return jax.lax.cond(
-            should_render,
-            lambda r: jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite),
+        # 1. Render background (day/night)
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        is_night = ((state.level - 1) // 4) % 2 == 1
+        raster = jax.lax.cond(
+            is_night,
+            lambda r: self.jr.render_at(r, 0, 0, self.SHAPE_MASKS['background_night']),
             lambda r: r,
             raster
         )
+        # 2. Render ice blocks
+        ice_masks = self.ICE_MASKS # (4, H, W) [wide_w, wide_b, narrow_w, narrow_b]
+        def render_row(row_idx, raster_in):
+            y_pos = self.ICE_ROW_Y_ARRAY[row_idx]
+            is_blue = state.ice_colors[row_idx] == self.consts.COLOR_ICE_BLUE
+            block_positions = state.ice_block_positions[row_idx]
+            block_count = state.ice_block_counts[row_idx]
+            is_narrow = (block_count == 6)
+            
+            breathing_active = (
+                (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &
+                ((state.level & 1) == 1) &
+                ~is_narrow
+            )
+            segment_positions, segment_widths, segment_mask = _compute_row_segments(
+                self.consts,
+                block_positions,
+                block_count,
+                state.ice_fine_motion_index,
+                breathing_active,
+                state.ice_x[row_idx]
+            )
+            
+            # Select base masks: 0=wide_w, 1=wide_b
+            base_idx = jnp.int32(is_blue) 
+            # Select narrow masks: 2=narrow_w, 3=narrow_b
+            narrow_idx_offset = jnp.int32(is_narrow) * 2 
+            
+            def render_one_segment(i, raster_seg):
+                active = segment_mask[i]
+                width = segment_widths[i] # 12 or 24
+                
+                # Must use lax.select
+                sprite_mask = jax.lax.select(width == 12, 
+                                             ice_masks[2 + base_idx], # narrow_mask
+                                             ice_masks[0 + base_idx]) # wide_mask
+                
+                return jax.lax.cond(
+                    active,
+                    lambda r: self._render_with_wrap(r, segment_positions[i], y_pos, sprite_mask),
+                    lambda r: r,
+                    raster_seg
+                )
+            final_raster = jax.lax.fori_loop(0, segment_positions.shape[0], render_one_segment, raster_in)
+            return final_raster
+        raster = jax.lax.fori_loop(0, 4, render_row, raster)
+        # 3. Render game entities in proper z-order
+        raster = self._render_hud(raster, state)
+        raster = self._render_igloo_blocks(raster, state)
+        raster = self._render_obstacles(raster, state)
+        raster = self._render_polar_grizzly(raster, state)
+        # 4. Render Bailey
+        is_dead = (state.bailey_alive == 0) | (state.bailey_death_frame > 0)
+        is_visible = state.bailey_visible == 1
+        
+        # Select correct animation frame
+        animation_idx = jnp.where(
+            is_dead, 3 + ((state.bailey_death_frame // 30) % 2), state.bailey_animation_idx
+        )
+        
+        bailey_stack = jax.lax.select(
+            state.bailey_frozen == 1,
+            self.BAILEY_FROZEN_MASKS,
+            self.BAILEY_MASKS
+        )
+        
+        # Get the final mask
+        frame_bailey = bailey_stack[animation_idx] # Dynamic slice
+        
+        # Flip sprite horizontally when facing left
+        flip = (state.bailey_direction == 1) & (animation_idx < 3)
+        frame_bailey_flipped = jax.lax.cond(
+            flip,
+            lambda f: jnp.flip(f, axis=1), lambda f: f, frame_bailey
+        )
+        
+        # Adjust Y for walking frame
+        y_offset = jnp.where(animation_idx == 1, -1, 0)
+        adjusted_y = state.bailey_y + y_offset
+        # Render if visible
+        raster = jax.lax.cond(
+            is_visible,
+            lambda r: self.jr.render_at(r, state.bailey_x, adjusted_y, frame_bailey_flipped),
+            lambda r: r, 
+            raster
+        )
+        
+        # 5. Render the black bar over the gutter to hide spawns
+        raster = self._render_black_bar(raster)
+        
+        # 6. Final palette lookup
+        return self.jr.render_from_palette(raster, self.PALETTE)

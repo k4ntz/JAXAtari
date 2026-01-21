@@ -1,20 +1,87 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
+import numpy as np
 import chex
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+
+def _create_static_procedural_sprites() -> dict:
+    """Creates procedural sprites that don't depend on dynamic values."""
+    # Procedural assets
+    procedural_bg = jnp.zeros((250, 160, 4), dtype=jnp.uint8).at[:,:,3].set(255) # Opaque Black
+    
+    # Death flash colors (constant array from KingKongConstants)
+    DEATH_FLASH_COLORS = jnp.array([
+        [82, 82, 82], [151, 151, 151], [210, 210, 210], [0, 0, 0],
+        [82, 82, 82], [151, 151, 151], [210, 210, 210], [128, 88, 0],
+        [171, 135, 50], [207, 175, 92], [238, 209, 128], [68, 92, 0],
+        [118, 147, 50], [160, 194, 92], [196, 234, 128], [112, 52, 0],
+        [160, 107, 50], [201, 154, 92], [236, 194, 128], [0, 100, 20],
+        [50, 152, 82], [92, 197, 135], [128, 235, 180], [112, 0, 20]
+    ], dtype=jnp.uint8)
+    
+    # Add flash colors and UI colors to palette
+    procedural_colors = jnp.array(
+        [[201, 92, 135, 255]] + [list(c) + [255] for c in DEATH_FLASH_COLORS], 
+        dtype=jnp.uint8
+    ).reshape(-1, 1, 1, 4)
+    debug_colors = jnp.array([
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+        [0, 255, 0, 255],
+    ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
+    
+    return {
+        'background': procedural_bg,
+        'ui_colors': procedural_colors,
+        'debug_colors': debug_colors,
+    }
+
+def _get_default_asset_config() -> tuple:
+    """
+    Returns the default declarative asset manifest for KingKong.
+    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    """
+    static_procedural = _create_static_procedural_sprites()
+    
+    # Define sprite groups (for auto-padding)
+    player_keys = [
+        'player_idle.npy', 'player_move1.npy', 'player_move2.npy',
+        'player_dead.npy', 'player_jump.npy', 'player_fall.npy',
+        'player_climb1.npy', 'player_climb2.npy'
+    ]
+    
+    bomb_keys = ['bomb.npy', 'magic_bomb.npy']
+    princess_keys = ['princess_closed.npy', 'princess_open.npy']
+    
+    return (
+        # Procedural assets
+        {'name': 'background', 'type': 'background', 'data': static_procedural['background']},
+        {'name': 'ui_colors', 'type': 'procedural', 'data': static_procedural['ui_colors']},
+        {'name': 'debug_colors', 'type': 'procedural', 'data': static_procedural['debug_colors']},
+        # Groups (will be auto-padded)
+        {'name': 'player_group', 'type': 'group', 'files': player_keys},
+        {'name': 'bomb_group', 'type': 'group', 'files': bomb_keys},
+        {'name': 'princess_group', 'type': 'group', 'files': princess_keys},
+        # Single sprites
+        {'name': 'level', 'type': 'single', 'file': 'level.npy'},
+        {'name': 'kong', 'type': 'single', 'file': 'kingkong_idle.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'player_move2.npy'}, # Was a copy of player_move2
+        # Digits
+        {'name': 'digits', 'type': 'digits', 'pattern': '{}.npy'},
+    )
 
 class KingKongConstants(NamedTuple):
 	### Screen
 	WIDTH: int = 160
 	HEIGHT: int = 250
-	FPS: int = 30 # Can this be read dynamically? 
 	DEBUG: int = 0 # Debug prints
 	DEBUG_RENDER: int = 0 # Render some debug helpers
 
@@ -291,6 +358,9 @@ class KingKongConstants(NamedTuple):
 	PLAYER_CATAPULT_LEFT = 44
 	PLAYER_CATAPULT_RIGHT = 45 
 
+	# Asset config baked into constants (immutable default) for asset overrides
+	ASSET_CONFIG: tuple = _get_default_asset_config()
+
 class KingKongState(NamedTuple):
 	# Game state management
 	gamestate: chex.Array # Current game stage
@@ -376,13 +446,10 @@ class KingKongInfo(NamedTuple):
 	time: chex.Array
 
 class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInfo, KingKongConstants]):
-	def __init__(self, consts: KingKongConstants = None, reward_funcs: list[callable]=None):
+	def __init__(self, consts: KingKongConstants = None):
 		consts = consts or KingKongConstants()
 		super().__init__(consts)
 		self.renderer = KingKongRenderer(self.consts)
-		if reward_funcs is not None:
-			reward_funcs = tuple(reward_funcs)
-		self.reward_funcs = reward_funcs
 		self.action_set = [
 			Action.NOOP,
 			Action.LEFT,
@@ -803,9 +870,9 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				operand=None
 			)
 
-			# bonus timer ticks once per second
+			# bonus timer ticks every 63 frames
 			new_bonus_timer = jax.lax.cond(
-				jnp.logical_and(jnp.logical_and(state.stage_steps != 0, state.stage_steps % self.consts.FPS == 0), state.bonus_timer > 0),
+				jnp.logical_and(jnp.logical_and(state.stage_steps != 0, state.stage_steps % 63 == 0), state.bonus_timer > 0),
 				lambda _: jnp.maximum(0, state.bonus_timer - self.consts.BONUS_DECREMENT),
 				lambda _: state.bonus_timer,
 				operand=None
@@ -2146,401 +2213,306 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 class KingKongRenderer(JAXGameRenderer):
 	def __init__(self, consts: KingKongConstants = None):
 		super().__init__()
-		self.consts = consts
+		self.consts = consts or KingKongConstants()
+		self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kingkong"
+		
+		# 1. Configure the rendering utility
+		self.config = render_utils.RendererConfig(
+			game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+			channels=3,
+			#downscale=(84, 84)
+		)
+		self.jr = render_utils.JaxRenderingUtils(self.config)
+		
+		# 2. Start from (possibly modded) asset config provided via constants
+		final_asset_config = list(self.consts.ASSET_CONFIG)
+		
+		# 3. Make one call to load and process all assets
 		(
-			self.SPRITE_LEVEL,
-			self.SPRITE_PLAYER_IDLE_RIGHT,
-			self.SPRITE_PLAYER_IDLE_LEFT,
-			self.SPRITE_PLAYER_MOVE1_RIGHT,
-			self.SPRITE_PLAYER_MOVE1_LEFT,
-			self.SPRITE_PLAYER_MOVE2_RIGHT,
-			self.SPRITE_PLAYER_MOVE2_LEFT,
-			self.SPRITE_PLAYER_DEAD,
-			self.SPRITE_PLAYER_JUMP_LEFT,
-			self.SPRITE_PLAYER_JUMP_RIGHT,
-			self.SPRITE_PLAYER_FALL,
-			self.SPRITE_PLAYER_CLIMB1,
-			self.SPRITE_PLAYER_CLIMB2,
-			self.SPRITE_KONG,
-			self.SPRITE_LIFE,
-			self.SPRITE_BOMB,
-			self.SPRITE_MAGIC_BOMB,
-			self.SPRITE_PRINCESS_CLOSED,
-			self.SPRITE_PRINCESS_OPEN,
-			self.SPRITE_NUMBERS
-		) = self.load_sprites()
+			self.PALETTE,
+			self.SHAPE_MASKS,
+			self.BACKGROUND,
+			self.COLOR_TO_ID,
+			self.FLIP_OFFSETS
+		) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+		
+		# 4. Store key color IDs
+		self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
+		self.BAR_COLOR_ID = self.COLOR_TO_ID.get((201, 92, 135), 0)
+		
+		# Store death flash color IDs in a JAX array
+		# Convert JAX array to list of tuples for dictionary lookup
+		death_flash_colors_np = np.asarray(self.consts.DEATH_FLASH_COLORS)
+		self.DEATH_FLASH_COLOR_IDS = jnp.array([
+			self.COLOR_TO_ID.get(tuple(color), 0) for color in death_flash_colors_np
+		])
+		
+		# Store debug color IDs (always create them, even if not used)
+		self.DEBUG_RED_ID = self.COLOR_TO_ID.get((255, 0, 0), 0)
+		self.DEBUG_BLUE_ID = self.COLOR_TO_ID.get((0, 0, 255), 0)
+		self.DEBUG_WHITE_ID = self.COLOR_TO_ID.get((255, 255, 255), 0)
+		self.DEBUG_GREEN_ID = self.COLOR_TO_ID.get((0, 255, 0), 0)
+		
+		# 5. Create helper mappings to map old sprite names to new indices
+		self._create_helper_mappings()
+		
+		# 6. Store Python int values for static arguments (extracted outside JIT)
+		self.SCORE_X = int(self.consts.SCORE_LOCATION[0])
+		self.SCORE_Y = int(self.consts.SCORE_LOCATION[1] - self.consts.NUMBER_SIZE[1])
+		self.SCORE_SPACING = int(self.consts.NUMBER_SIZE[0] + self.consts.SCORE_SPACE_BETWEEN)
+		self.TIMER_X = int(self.consts.TIMER_LOCATION[0])
+		self.TIMER_Y = int(self.consts.TIMER_LOCATION[1] - self.consts.NUMBER_SIZE[1])
+		self.TIMER_SPACING = int(self.consts.NUMBER_SIZE[0] + self.consts.TIMER_SPACE_BETWEEN)
+		self.LIFE_X = int(self.consts.LIFE_LOCATION[0])
+		self.LIFE_Y = int(self.consts.LIFE_LOCATION[1] - self.consts.PLAYER_SIZE[1])
+		self.LIFE_SPACING = int(self.consts.LIFE_SPACE_BETWEEN)
 
-	def load_sprites(self):
-		MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-		# Load sprites
-		level = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/level.npy"))
-		player_idle = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_idle.npy"))
-		player_idle_left = player_idle[:, ::-1, :]
-		player_idle_right = player_idle
-
-		player_move1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move1.npy"))
-		player_move2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_move2.npy"))
-		player_move1_left = player_move1[:, ::-1, :]
-		player_move2_left = player_move2[:, ::-1, :]
-		player_move1_right = player_move1
-		player_move2_right = player_move2
-
-		player_dead = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_dead.npy"))
-		player_jump = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_jump.npy"))
-		player_jump_left = player_jump[:, ::-1, :]
-		player_jump_right = player_jump
-		player_fall = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_fall.npy"))
-		player_climb1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb1.npy"))
-		player_climb2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/player_climb2.npy"))
-
-		kong = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/kingkong_idle.npy"))
-		bomb = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/bomb.npy"))
-		magic_bomb = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/magic_bomb.npy"))
-		princess_closed = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/princess_closed.npy"))
-		princess_open = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/kingkong/princess_open.npy"))
-
-		numbers = {i: jr.loadFrame(os.path.join(MODULE_DIR, f"sprites/kingkong/{i}.npy")) for i in range(10)}
-
-		# Padding function
-		def pad(sprite, target_h, target_w, side="right"):
-			h, w, c = sprite.shape
-			pad_top = pad_bottom = pad_left = pad_right = 0
-
-			if "bottom" in side:
-				pad_top = target_h - h
-			else:
-				pad_bottom = target_h - h
-
-			if "left" in side:
-				pad_left = target_w - w
-			else:
-				pad_right = target_w - w
-
-			return jnp.pad(sprite, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode="constant")
-
-		# Compute target dimensions for player sprites
-		all_player_sprites = [
-			player_idle_right, player_idle_left,
-			player_move1_right, player_move1_left,
-			player_move2_right, player_move2_left,
-			player_dead
-		]
-		player_target_height = max(max(sprite.shape[0] for sprite in all_player_sprites), 16)
-		player_target_width  = max(max(sprite.shape[1] for sprite in all_player_sprites), 8)
-
-		# Pad all player sprites
-		player_idle_right  = pad(player_idle_right,  player_target_height, player_target_width)
-		player_idle_left   = pad(player_idle_left,   player_target_height, player_target_width, side="left")
-		player_move1_right = pad(player_move1_right, player_target_height, player_target_width)
-		player_move1_left  = pad(player_move1_left,  player_target_height, player_target_width, side="left")
-		player_move2_right = pad(player_move2_right, player_target_height, player_target_width)
-		player_move2_left  = pad(player_move2_left,  player_target_height, player_target_width, side="left")
-		player_dead        = pad(player_dead,        player_target_height, player_target_width, side="bottom-left")
-		player_jump        = pad(player_jump,        player_target_height, player_target_width)
-		player_fall        = pad(player_fall,        player_target_height, player_target_width)
-		player_climb1      = pad(player_climb1,      player_target_height, player_target_width, side="left")
-		player_climb2      = pad(player_climb2,      player_target_height, player_target_width, side="right")
-
-		# Pad bomb sprites
-		bomb_sprites = [bomb, magic_bomb]
-		bomb_target_height = max(max(sprite.shape[0] for sprite in bomb_sprites), 14)
-		bomb_target_width  = max(max(sprite.shape[1] for sprite in bomb_sprites), 8)
-		bomb = pad(bomb, bomb_target_height, bomb_target_width)
-		magic_bomb = pad(magic_bomb, bomb_target_height, bomb_target_width)
-
-		# Pad princess sprites
-		princess_sprites = [princess_closed, princess_open]
-		princess_target_height = max(max(sprite.shape[0] for sprite in princess_sprites), 17)
-		princess_target_width  = max(max(sprite.shape[1] for sprite in princess_sprites), 8)
-		princess_closed = pad(princess_closed, princess_target_height, princess_target_width)
-		princess_open   = pad(princess_open,   princess_target_height, princess_target_width)
-
-		life = player_move2_right.copy()
-
-		# Expand dimensions
-		SPRITE_LEVEL             = jnp.expand_dims(level, axis=0)
-		SPRITE_PLAYER_IDLE_RIGHT = jnp.expand_dims(player_idle_right, axis=0)
-		SPRITE_PLAYER_IDLE_LEFT  = jnp.expand_dims(player_idle_left, axis=0)
-		SPRITE_PLAYER_MOVE1_RIGHT = jnp.expand_dims(player_move1_right, axis=0)
-		SPRITE_PLAYER_MOVE1_LEFT  = jnp.expand_dims(player_move1_left, axis=0)
-		SPRITE_PLAYER_MOVE2_RIGHT = jnp.expand_dims(player_move2_right, axis=0)
-		SPRITE_PLAYER_MOVE2_LEFT  = jnp.expand_dims(player_move2_left, axis=0)
-		SPRITE_PLAYER_DEAD        = jnp.expand_dims(player_dead, axis=0)
-		SPRITE_PLAYER_JUMP_LEFT   = jnp.expand_dims(player_jump_left, axis=0)
-		SPRITE_PLAYER_JUMP_RIGHT  = jnp.expand_dims(player_jump_right, axis=0)
-		SPRITE_PLAYER_FALL        = jnp.expand_dims(player_fall, axis=0)
-		SPRITE_PLAYER_CLIMB1      = jnp.expand_dims(player_climb1, axis=0)
-		SPRITE_PLAYER_CLIMB2      = jnp.expand_dims(player_climb2, axis=0)
-		SPRITE_KONG               = jnp.expand_dims(kong, axis=0)
-		SPRITE_LIFE               = jnp.expand_dims(life, axis=0)
-		SPRITE_BOMB               = jnp.expand_dims(bomb, axis=0)
-		SPRITE_MAGIC_BOMB         = jnp.expand_dims(magic_bomb, axis=0)
-		SPRITE_PRINCESS_CLOSED    = jnp.expand_dims(princess_closed, axis=0)
-		SPRITE_PRINCESS_OPEN      = jnp.expand_dims(princess_open, axis=0)
-		SPRITE_NUMBERS            = jnp.stack([jnp.expand_dims(numbers[i], axis=0) for i in range(10)], axis=0)
-
-		return (
-			SPRITE_LEVEL, SPRITE_PLAYER_IDLE_RIGHT, SPRITE_PLAYER_IDLE_LEFT,
-			SPRITE_PLAYER_MOVE1_RIGHT, SPRITE_PLAYER_MOVE1_LEFT,
-			SPRITE_PLAYER_MOVE2_RIGHT, SPRITE_PLAYER_MOVE2_LEFT,
-			SPRITE_PLAYER_DEAD, SPRITE_PLAYER_JUMP_LEFT, SPRITE_PLAYER_JUMP_RIGHT, SPRITE_PLAYER_FALL,
-			SPRITE_PLAYER_CLIMB1, SPRITE_PLAYER_CLIMB2, SPRITE_KONG,
-			SPRITE_LIFE, SPRITE_BOMB, SPRITE_MAGIC_BOMB, SPRITE_PRINCESS_CLOSED,
-			SPRITE_PRINCESS_OPEN, SPRITE_NUMBERS
-		)
-
-	def render(self, state: KingKongState) -> jnp.ndarray:
-		raster = jr.create_initial_frame(self.consts.WIDTH, self.consts.HEIGHT)
-
-		# --- Death Flash --- 
-		flash_idx = (state.stage_steps // self.consts.DUR_SINGLE_DEATH_FLASH) % self.consts.CNT_DEATH_FLASHES
-		flash_color = self.consts.DEATH_FLASH_COLORS[flash_idx]
-		flash_bg = jnp.full((self.consts.HEIGHT, self.consts.WIDTH, 3), flash_color, dtype=jnp.uint8)
-		black_bg = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
-
-		is_bomb_explosion_death = state.death_type == self.consts.DEATH_TYPE_BOMB_EXPLODE
-		raster = jax.lax.cond(
-			is_bomb_explosion_death,
-			lambda: flash_bg,
-			lambda: black_bg
-		)
-
-		# Render level 
-		frame_level = jr.get_sprite_frame(self.SPRITE_LEVEL, 0)
-		raster = jr.render_at(raster, *self.consts.LEVEL_LOCATION, frame_level)
-
-		# Render active bombs
-		def render_single_bomb(i, raster_in):
-			is_active = state.bomb_active[i] > 0
-
-			def draw_bomb(raster_bomb):				
-				# Create deterministic seed that only depends on bomb index and time period
-				# Use a fixed base key to avoid dependency on changing state.rng_key
-				base_key = jax.random.key(42)  # Fixed seed
-				bomb_key = jax.random.fold_in(base_key, i)  # unique per bomb
-				period_key = jax.random.fold_in(bomb_key, state.stage_steps // 8)
-				
-				# Generate random boolean for mirroring (10% chance per period)
-				should_mirror = jax.random.bernoulli(period_key, p=0.5)
-				
-				# Get base sprite
-				base_sprite = jax.lax.cond(
-					state.bomb_is_magic[i] > 0,
-					lambda: self.SPRITE_MAGIC_BOMB,
-					lambda: self.SPRITE_BOMB
-				)
-				
-				# Apply horizontal mirroring if needed
-				bomb_sprite = jax.lax.cond(
-					should_mirror,
-					lambda: base_sprite[:, :, ::-1, :],  # Flip horizontally
-					lambda: base_sprite
-				)
-
-				# Calculate offsets - simplified logic
-				base_offset_x = jax.lax.cond(
-					state.bomb_is_magic[i] > 0,
-					lambda: 1,
-					lambda: 0
-				)
-				
-				# Add 2-pixel left offset when mirrored (only for magic bombs)
-				mirror_offset_x = jax.lax.cond(
-					jnp.logical_and(should_mirror, state.bomb_is_magic[i] > 0),
-					lambda: -2,
-					lambda: 0
-				)
-				
-				total_offset_x = base_offset_x + mirror_offset_x
-
-				return jr.render_at(
-					raster_bomb,
-					state.bomb_positions_x[i] + total_offset_x,
-					state.bomb_positions_y[i] - self.consts.BOMB_SIZE[1],
-					jr.get_sprite_frame(bomb_sprite, 0)
-				)
-
-			return jax.lax.cond(is_active, draw_bomb, lambda r: r, operand=raster_in)
-
-		# Render all bombs
-		for i in range(self.consts.MAX_BOMBS):
-			raster = render_single_bomb(i, raster)
-
-					
-		# Render player based on state
-		def get_player_sprite():
-			def is_idle_state():
-				return jnp.logical_or(
-					state.player_state == self.consts.PLAYER_IDLE_LEFT,
-					state.player_state == self.consts.PLAYER_IDLE_RIGHT
-				)
-
-			def is_jumping_state():
-				return (state.player_state == self.consts.PLAYER_JUMP_LEFT) | \
-					(state.player_state == self.consts.PLAYER_JUMP_RIGHT) | \
-					(state.player_state == self.consts.PLAYER_CATAPULT_LEFT) | \
-					(state.player_state == self.consts.PLAYER_CATAPULT_RIGHT)
-
-			def is_falling():
-				return state.player_state == self.consts.PLAYER_FALL
-
-			def is_dead():
-				return state.player_state == self.consts.PLAYER_DEAD
-
-			def is_climbing():
-				return jnp.logical_or(
-					state.player_state == self.consts.PLAYER_CLIMB_UP,
-					state.player_state == self.consts.PLAYER_CLIMB_DOWN
-				)
-
-			def is_climb_idle():
-				return state.player_state == self.consts.PLAYER_CLIMB_IDLE
-
-			def is_moving():
-				return jnp.logical_or(
-					state.player_state == self.consts.PLAYER_MOVE_LEFT,
-					state.player_state == self.consts.PLAYER_MOVE_RIGHT
-				)
-
-			def walk_cycle(freeze):
-				frame = ((state.stage_steps - 1) // 4) % 4
-				def right_frames():
-					return jax.lax.switch(
-						frame,
-						[
-							lambda: self.SPRITE_PLAYER_MOVE1_RIGHT,
-							lambda: self.SPRITE_PLAYER_MOVE2_RIGHT,
-							lambda: self.SPRITE_PLAYER_MOVE1_RIGHT,
-							lambda: self.SPRITE_PLAYER_IDLE_RIGHT
-						]
-					)
-				def left_frames():
-					return jax.lax.switch(
-						frame,
-						[
-							lambda: self.SPRITE_PLAYER_MOVE1_LEFT,
-							lambda: self.SPRITE_PLAYER_MOVE2_LEFT,
-							lambda: self.SPRITE_PLAYER_MOVE1_LEFT,
-							lambda: self.SPRITE_PLAYER_IDLE_LEFT
-						]
-					)
-				def idle_right():
-					return self.SPRITE_PLAYER_IDLE_RIGHT
-				def idle_left():
-					return self.SPRITE_PLAYER_IDLE_LEFT
-
-				return jax.lax.cond(
-					freeze,
-					lambda: jax.lax.cond(
-						jnp.logical_or(
-							state.player_state == self.consts.PLAYER_MOVE_LEFT,
-							state.player_state == self.consts.PLAYER_IDLE_LEFT
-						),
-						idle_left,
-						idle_right
-					),
-					lambda: jax.lax.cond(
-						jnp.logical_or(
-							state.player_state == self.consts.PLAYER_MOVE_LEFT,
-							state.player_state == self.consts.PLAYER_IDLE_LEFT
-						),
-						left_frames,
-						right_frames
-					)
-				)
+	def _create_helper_mappings(self):
+		"""Creates dicts to map old sprite names to new group indices/offsets."""
+		self.sprite_indices = {
+			'player_idle': 0, 'player_move1': 1, 'player_move2': 2,
+			'player_dead': 3, 'player_jump': 4, 'player_fall': 5,
+			'player_climb1': 6, 'player_climb2': 7,
 			
-			def climb_cycle(freeze):
-				frame = ((state.stage_steps - 1) // 8) % 2
-				def idle():
-					return self.SPRITE_PLAYER_CLIMB2
-				def anim():
-					return jax.lax.switch(
-						frame,
-						[
-							lambda: self.SPRITE_PLAYER_CLIMB1,
-							lambda: self.SPRITE_PLAYER_CLIMB2
-						]
-					)
-				return jax.lax.cond(freeze, idle, anim)
+			'bomb': 0, 'magic_bomb': 1,
+			
+			'princess_closed': 0, 'princess_open': 1,
+		}
+		
+		self.group_offsets = {
+			'player': self.FLIP_OFFSETS['player_group'],
+			'bomb': self.FLIP_OFFSETS['bomb_group'],
+			'princess': self.FLIP_OFFSETS['princess_group'],
+		}
 
-
-			freeze = state.death_type != self.consts.DEATH_TYPE_NONE
-			# Main sprite selection logic
-			sprite = jax.lax.cond(
-				is_jumping_state(),
+	@partial(jax.jit, static_argnums=(0,))
+	def _get_player_sprite(self, state: KingKongState) -> Tuple[chex.Array, bool]:
+		"""JIT-compatible helper to select the correct player mask and flip status."""
+		
+		player_masks = self.SHAPE_MASKS['player_group']
+		idx = self.sprite_indices
+		
+		# --- Define sprite indices and flip booleans separately ---
+		# Store as (sprite_idx, flip_h)
+		# Convert to JAX integers for use in JAX conditionals
+		SPRITE_IDLE = jnp.int32(idx['player_idle'])
+		SPRITE_JUMP = jnp.int32(idx['player_jump'])
+		SPRITE_FALL = jnp.int32(idx['player_fall'])
+		SPRITE_DEAD = jnp.int32(idx['player_dead'])
+		SPRITE_CLIMB1 = jnp.int32(idx['player_climb1'])
+		SPRITE_CLIMB2 = jnp.int32(idx['player_climb2'])
+		SPRITE_MOVE1 = jnp.int32(idx['player_move1'])
+		SPRITE_MOVE2 = jnp.int32(idx['player_move2'])
+		
+		# --- State checks ---
+		is_idle = (state.player_state == self.consts.PLAYER_IDLE_LEFT) | (state.player_state == self.consts.PLAYER_IDLE_RIGHT)
+		is_jumping = (state.player_state == self.consts.PLAYER_JUMP_LEFT) | \
+					 (state.player_state == self.consts.PLAYER_JUMP_RIGHT) | \
+					 (state.player_state == self.consts.PLAYER_CATAPULT_LEFT) | \
+					 (state.player_state == self.consts.PLAYER_CATAPULT_RIGHT)
+		is_falling = state.player_state == self.consts.PLAYER_FALL
+		is_dead = state.player_state == self.consts.PLAYER_DEAD
+		is_climbing = (state.player_state == self.consts.PLAYER_CLIMB_UP) | (state.player_state == self.consts.PLAYER_CLIMB_DOWN)
+		is_climb_idle = state.player_state == self.consts.PLAYER_CLIMB_IDLE
+		is_moving = (state.player_state == self.consts.PLAYER_MOVE_LEFT) | (state.player_state == self.consts.PLAYER_MOVE_RIGHT)
+		is_left_facing = (state.player_state == self.consts.PLAYER_IDLE_LEFT) | \
+						 (state.player_state == self.consts.PLAYER_MOVE_LEFT) | \
+						 (state.player_state == self.consts.PLAYER_JUMP_LEFT) | \
+						 (state.player_state == self.consts.PLAYER_CATAPULT_LEFT)
+		
+		freeze = state.death_type != self.consts.DEATH_TYPE_NONE
+		
+		def walk_cycle():
+			frame = ((state.stage_steps - 1) // 4) % 4
+			
+			# Select sprite index using jnp.take
+			frame_indices = jnp.array([SPRITE_MOVE1, SPRITE_MOVE2, SPRITE_MOVE1, SPRITE_IDLE])
+			sprite_idx = jnp.take(frame_indices, frame)
+			
+			# For freeze, always use idle
+			final_idx = jax.lax.cond(freeze, lambda: SPRITE_IDLE, lambda: sprite_idx)
+			
+			return final_idx
+		
+		def climb_cycle():
+			frame = ((state.stage_steps - 1) // 8) % 2
+			# Select sprite index using jnp.take
+			frame_indices = jnp.array([SPRITE_CLIMB1, SPRITE_CLIMB2])
+			anim_idx = jnp.take(frame_indices, frame)
+			return jax.lax.cond(freeze, lambda: SPRITE_CLIMB2, lambda: anim_idx)
+		
+		# Main selection logic - select sprite index
+		sprite_idx = jax.lax.cond(
+			is_jumping,
+			lambda: SPRITE_JUMP,
+			lambda: jax.lax.cond(
+				is_falling, lambda: SPRITE_FALL,
 				lambda: jax.lax.cond(
-					jnp.logical_or(state.player_state == self.consts.PLAYER_JUMP_LEFT, state.player_state == self.consts.PLAYER_CATAPULT_LEFT),
-					lambda: self.SPRITE_PLAYER_JUMP_LEFT,
-					lambda: self.SPRITE_PLAYER_JUMP_RIGHT
-				),  # Jump sprite takes priority
-				lambda: jax.lax.cond(
-					is_falling(),
-					lambda: self.SPRITE_PLAYER_FALL,  # Show fall animation when falling
+					is_dead, lambda: SPRITE_DEAD,
 					lambda: jax.lax.cond(
-						is_dead(),
-						lambda: self.SPRITE_PLAYER_DEAD,  # Show dead sprite when dead
+						is_idle, lambda: SPRITE_IDLE,
 						lambda: jax.lax.cond(
-							is_idle_state(),
+							is_climb_idle, lambda: SPRITE_CLIMB2,
 							lambda: jax.lax.cond(
-								state.player_state == self.consts.PLAYER_IDLE_LEFT,
-								lambda: self.SPRITE_PLAYER_IDLE_LEFT,
-								lambda: self.SPRITE_PLAYER_IDLE_RIGHT
-							),
-							lambda: jax.lax.cond(
-								is_climb_idle(),
-								lambda: self.SPRITE_PLAYER_CLIMB2, # freeze on last climb frame
+								is_climbing, climb_cycle,
 								lambda: jax.lax.cond(
-									is_climbing(),
-									lambda: climb_cycle(freeze),
-									lambda: jax.lax.cond(
-										is_moving(),
-										lambda: walk_cycle(freeze),
-										lambda: self.SPRITE_PLAYER_IDLE_RIGHT  # fallback
-									)
+									is_moving, walk_cycle,
+									lambda: SPRITE_IDLE # fallback
 								)
 							)
 						)
 					)
 				)
 			)
-
-			return sprite
+		)
 		
-		# Render player
-		player_sprite = get_player_sprite()
+		# Determine flip based on sprite and state
+		# Flip for: idle_left, move_left, jump_left, catapult_left
+		# Also flip idle sprite when frozen in left-facing movement
+		flip_h = jnp.bool_(is_left_facing)
+		
+		# Get the actual mask using dynamic indexing
+		# Use jnp.take or indexing - sprite_idx is a JAX tracerso we can't use Python indexing
+		# We need to use jnp.take or a similar approach
+		mask = player_masks[sprite_idx]
+		
+		return mask, flip_h
 
+	@partial(jax.jit, static_argnums=(0,))
+	def _render_debug_overlay(self, raster, state):
+		
+		def render_bbox_points(r, bbox, color_id):
+			x1, y1, x2, y2 = bbox
+			r = r.at[y1, x1].set(color_id)
+			r = r.at[y1, x2].set(color_id)
+			r = r.at[y2, x1].set(color_id)
+			r = r.at[y2, x2].set(color_id)
+			return r
+		
+		def render_all_bbox(r, locations, color_id):
+			def body(i, r_in):
+				return render_bbox_points(r_in, locations[i], color_id)
+			return jax.lax.fori_loop(0, locations.shape[0], body, r)
+		
+		raster = render_all_bbox(raster, self.consts.LADDER_LOCATIONS, self.DEBUG_RED_ID)
+		
+		# Compute player bounding box
+		player_width, player_height = self.consts.PLAYER_SIZE
+		player_bbox = jnp.array([
+			state.player_x,
+			state.player_y - player_height,
+			state.player_x + player_width,
+			state.player_y
+		])
+		raster = render_bbox_points(raster, player_bbox, self.DEBUG_WHITE_ID)
+		
+		# Render player bounding box points
+		raster = render_bbox_points(raster, player_bbox, self.DEBUG_WHITE_ID)
+		
+		def render_floor_points(r, floor_locations, color_id):
+			def body(i, r_in):
+				y = floor_locations[i]
+				return r_in.at[y, 0].set(color_id)
+			return jax.lax.fori_loop(0, floor_locations.shape[0], body, r)
+		
+		raster = render_floor_points(raster, self.consts.FLOOR_LOCATIONS, self.DEBUG_BLUE_ID)
+		
+		raster = render_all_bbox(raster, self.consts.HOLE_LOCATIONS, self.DEBUG_GREEN_ID)
+		
+		active_mask = state.bomb_active > 0
+		def draw_bomb_box(i, r):
+			def draw_box(r_in):
+				x = state.bomb_positions_x[i]
+				y = state.bomb_positions_y[i]
+				w, h = self.consts.BOMB_SIZE
+				bbox = jnp.array([x, y, x+w, y-h])
+				return render_bbox_points(r_in, bbox, self.DEBUG_WHITE_ID)
+			
+			return jax.lax.cond(active_mask[i], draw_box, lambda r_in: r_in, r)
+		
+		raster = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, draw_bomb_box, raster)
+		
+		return raster
+
+	@partial(jax.jit, static_argnums=(0,))
+	def render(self, state: KingKongState) -> jnp.ndarray:
+		
+		# --- 1. Death Flash Base Raster --- 
+		flash_idx = (state.stage_steps // self.consts.DUR_SINGLE_DEATH_FLASH) % self.consts.CNT_DEATH_FLASHES
+		flash_color_id = self.DEATH_FLASH_COLOR_IDS[flash_idx]
+		flash_bg = jnp.full_like(self.BACKGROUND, flash_color_id)
+		
+		is_bomb_explosion_death = state.death_type == self.consts.DEATH_TYPE_BOMB_EXPLODE
+		raster = jax.lax.cond(
+			is_bomb_explosion_death,
+			lambda: flash_bg,
+			lambda: self.BACKGROUND # Black background
+		)
+		
+		# --- 2. Render Level ---
+		raster = self.jr.render_at(
+			raster, *self.consts.LEVEL_LOCATION, 
+			self.SHAPE_MASKS['level'], 
+			flip_offset=self.FLIP_OFFSETS['level']
+		)
+		
+		# --- 3. Render Active Bombs ---
+		def render_single_bomb(i, raster_in):
+			# Get base sprite mask and offset
+			bomb_type_idx = jax.lax.select(state.bomb_is_magic[i] > 0, 1, 0)
+			base_mask = self.SHAPE_MASKS['bomb_group'][bomb_type_idx]
+			base_offset = self.group_offsets['bomb']
+			
+			# Create deterministic key for this bomb and time step
+			base_key = jax.random.key(42)
+			bomb_key = jax.random.fold_in(base_key, i)
+			period_key = jax.random.fold_in(bomb_key, state.stage_steps // 8)
+			should_mirror = jax.random.bernoulli(period_key, p=0.5)
+			
+			# Calculate offsets
+			base_offset_x = jax.lax.select(state.bomb_is_magic[i] > 0, 1, 0)
+			mirror_offset_x = jax.lax.select(
+				(should_mirror & (state.bomb_is_magic[i] > 0)), -2, 0
+			)
+			total_offset_x = base_offset_x + mirror_offset_x
+			
+			draw_fn = lambda r: self.jr.render_at(
+				r,
+				state.bomb_positions_x[i] + total_offset_x,
+				state.bomb_positions_y[i] - self.consts.BOMB_SIZE[1],
+				base_mask,
+				flip_horizontal=should_mirror,
+				flip_offset=base_offset
+			)
+			
+			return jax.lax.cond(state.bomb_active[i] > 0, draw_fn, lambda r: r, raster_in)
+		
+		raster = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, render_single_bomb, raster)
+					
+		# --- 4. Render Player ---
 		def render_player(raster_in):
-			def offset():
-				is_climbing_state = jnp.logical_or(
-					state.player_state == self.consts.PLAYER_CLIMB_IDLE,
-					jnp.logical_or(
-						state.player_state == self.consts.PLAYER_CLIMB_UP,
-						state.player_state == self.consts.PLAYER_CLIMB_DOWN
-					)
-				)
-				return jax.lax.cond(
-					is_climbing_state,
-					lambda: -3,
-					lambda: jax.lax.cond(
-						jnp.logical_or(state.player_state == self.consts.PLAYER_FALL, state.player_state == self.consts.PLAYER_DEAD),
-						lambda: -2,
-						lambda: jax.lax.cond(
-							(state.player_state == self.consts.PLAYER_IDLE_RIGHT) |
-							(state.player_state == self.consts.PLAYER_MOVE_RIGHT) |
-							(state.player_state == self.consts.PLAYER_JUMP_RIGHT) |
-							(state.player_state == self.consts.PLAYER_CATAPULT_RIGHT),
-							lambda: -2,
-							lambda: -5
-						)
-					)
-				)
-
-			return jr.render_at(
+			player_mask, flip_h = self._get_player_sprite(state)
+			
+			is_climbing = (state.player_state == self.consts.PLAYER_CLIMB_IDLE) | \
+						  (state.player_state == self.consts.PLAYER_CLIMB_UP) | \
+						  (state.player_state == self.consts.PLAYER_CLIMB_DOWN)
+			is_fall_or_dead = (state.player_state == self.consts.PLAYER_FALL) | \
+							  (state.player_state == self.consts.PLAYER_DEAD)
+			is_right_facing = (state.player_state == self.consts.PLAYER_IDLE_RIGHT) | \
+							  (state.player_state == self.consts.PLAYER_MOVE_RIGHT) | \
+							  (state.player_state == self.consts.PLAYER_JUMP_RIGHT) | \
+							  (state.player_state == self.consts.PLAYER_CATAPULT_RIGHT)
+			
+			x_offset = jnp.where(is_climbing, -3,
+					   jnp.where(is_fall_or_dead, -2,
+					   jnp.where(is_right_facing, -2, -5)))
+			return self.jr.render_at(
 				raster_in,
-				state.player_x + offset(),
+				state.player_x + x_offset,
 				state.player_y - self.consts.PLAYER_SIZE[1],
-				jr.get_sprite_frame(player_sprite, 0)
+				player_mask,
+				flip_horizontal=flip_h,
+				flip_offset=self.group_offsets['player']
 			)
 				
 		raster = jax.lax.cond(
@@ -2549,213 +2521,120 @@ class KingKongRenderer(JAXGameRenderer):
 			(state.gamestate == self.consts.GAMESTATE_SUCCESS),
 			render_player,
 			lambda r: r,
-			operand=raster
+			raster
 		)
-
-		# Render Kong if visible
+		
+		# --- 5. Render Kong ---
 		def render_kong(raster_in):
-			return jr.render_at(
+			return self.jr.render_at(
 				raster_in,
 				state.kong_x,
 				state.kong_y - self.consts.KONG_SIZE[1],
-				jr.get_sprite_frame(self.SPRITE_KONG, 0)
+				self.SHAPE_MASKS['kong'],
+				flip_offset=self.FLIP_OFFSETS['kong']
 			)
 		
-		raster = jax.lax.cond(
-			state.kong_visible != 0,
-			render_kong,
-			lambda r: r,
-			operand=raster
-		)
-
-		def render_overlay(raster_in, player_height):
-			bar_color = jnp.array([201, 92, 135, 255], dtype=jnp.uint8)
+		raster = jax.lax.cond(state.kong_visible != 0, render_kong, lambda r: r, raster)
+		
+		# --- 6. Render UI Overlay ---
+		def render_overlay(raster_in):
 			width = self.consts.WIDTH - 48
-
-			bar = jnp.full((1, width, 4), bar_color, dtype=jnp.uint8)
-			raster_out = jr.render_at(raster_in, 24, 39, bar)
-
-			box_height = player_height * 3
-			black_box = jnp.zeros((box_height, width, 4), dtype=jnp.uint8)
-			black_box = black_box.at[:, :, 3].set(255)
-
-			raster_out = jr.render_at(raster_out, 24, 39 - box_height, black_box)
-
-			return raster_out
-
-		# Place this call after player rendering but before princess rendering
+			box_height = self.consts.PLAYER_SIZE[1] * 3
+			
+			# Draw pink bar
+			r_out = self.jr.draw_rects(
+				raster_in, 
+				jnp.array([[24, 39]]), 
+				jnp.array([[width, 1]]), 
+				self.BAR_COLOR_ID
+			)
+			# Draw black box
+			r_out = self.jr.draw_rects(
+				r_out, 
+				jnp.array([[24, 39 - box_height]]), 
+				jnp.array([[width, box_height]]), 
+				self.BLACK_ID
+			)
+			return r_out
+		
 		raster = jax.lax.cond(
-			jnp.logical_and(state.gamestate != self.consts.GAMESTATE_SUCCESS, state.death_type != self.consts.DEATH_TYPE_BOMB_EXPLODE),
-			lambda r: render_overlay(r, 16), # self.consts.PLAYER_SIZE[1] for some reason cant access that here
+			(state.gamestate != self.consts.GAMESTATE_SUCCESS) & (state.death_type != self.consts.DEATH_TYPE_BOMB_EXPLODE),
+			render_overlay,
 			lambda r: r,
-			operand=raster
+			raster
 		)
 		
+		# --- 7. Render Princess ---
 		def render_princess(raster_in):
-			def closed(): return self.SPRITE_PRINCESS_CLOSED, 0
-			def open(): return self.SPRITE_PRINCESS_OPEN, 1 # offset x by 1
-
-			princess_sprite, x_offset = jax.lax.cond(
-				state.princess_waving,
-				closed,
-				open
-			)
-
-			return jr.render_at(
+			princess_idx = jax.lax.select(state.princess_waving, 0, 1) # 0=closed, 1=open
+			x_offset = jax.lax.select(state.princess_waving, 0, -1) # original logic had offset of 1, but render_at_left
+			
+			return self.jr.render_at(
 				raster_in,
-				state.princess_x - x_offset,
+				state.princess_x + x_offset,
 				state.princess_y - self.consts.PRINCESS_SIZE[1],
-				jr.get_sprite_frame(princess_sprite, 0)
+				self.SHAPE_MASKS['princess_group'][princess_idx],
+				flip_offset=self.group_offsets['princess']
 			)
-
-		raster = jax.lax.cond(
-			state.princess_visible != 0,
-			render_princess,
-			lambda r: r,
-			operand=raster
-		)
 		
-		# Render lives
+		raster = jax.lax.cond(state.princess_visible != 0, render_princess, lambda r: r, raster)
+		
+		# --- 8. Render Lives ---
 		def render_lives(raster_in):
-			def draw_life_loop(i, raster_current):
-				life_x = self.consts.LIFE_LOCATION[0] + i * self.consts.LIFE_SPACE_BETWEEN
-				life_y = self.consts.LIFE_LOCATION[1]
-				should_draw = i < state.lives
-				return jax.lax.cond(
-					should_draw,
-					lambda r: jr.render_at(
-						r, life_x, life_y - self.consts.PLAYER_SIZE[1],
-						jr.get_sprite_frame(self.SPRITE_LIFE, 0)
-					),
-					lambda r: r,
-					operand=raster_current
-				)
-			return jax.lax.fori_loop(0, self.consts.MAX_LIVES, draw_life_loop, raster_in)
+			return self.jr.render_indicator(
+				raster_in,
+				self.LIFE_X,
+				self.LIFE_Y,
+				state.lives,
+				self.SHAPE_MASKS['life'],
+				spacing=self.LIFE_SPACING,
+				max_value=self.consts.MAX_LIVES
+			)
 		
-		# Because the Respawn Icons are UI-only they are rendered depending on the gamestate 
 		raster = jax.lax.cond(
 			state.gamestate == self.consts.GAMESTATE_RESPAWN,
 			render_lives,
 			lambda r: r,
-			operand=raster
+			raster
 		) 
 		
-		# Render score and timer. They are always shown. 
+		# --- 9. Render Score ---
 		def render_score(raster_in):
-			def extract_score_digits(score):
-				d3 = score // 1000 % 10
-				d2 = score // 100 % 10
-				d1 = score // 10 % 10
-				d0 = score % 10
-				return jnp.array([d3, d2, d1, d0])
-			
-			def draw_score_digits(raster_inner):
-				digits = extract_score_digits(state.score)
-				def draw_digit_loop(i, raster_current):
-					digit_x = self.consts.SCORE_LOCATION[0] + i * (self.consts.NUMBER_SIZE[0] + self.consts.SCORE_SPACE_BETWEEN)
-					digit_y = self.consts.SCORE_LOCATION[1] - self.consts.NUMBER_SIZE[1]
-					digit_value = digits[i]
-					return jr.render_at(
-						raster_current, digit_x, digit_y,
-						jr.get_sprite_frame(self.SPRITE_NUMBERS[digit_value], 0)
-					)
-				return jax.lax.fori_loop(0, 4, draw_digit_loop, raster_inner)
-			return draw_score_digits(raster_in)
+			score_digits = self.jr.int_to_digits(state.score, max_digits=4)
+			return self.jr.render_label(
+				raster_in,
+				self.SCORE_X,
+				self.SCORE_Y,
+				score_digits,
+				self.SHAPE_MASKS['digits'],
+				spacing=self.SCORE_SPACING,
+				max_digits=4
+			)
 		
 		raster = render_score(raster)
 		
+		# --- 10. Render Bonus Timer ---
 		def render_bonus_timer(raster_in):
-			def extract_timer_digits(bonus):
-				d2 = bonus // 100 % 10
-				d1 = bonus // 10 % 10
-				d0 = bonus % 10
-				return jnp.array([d2, d1, d0])
-			
-			def draw_timer_digits(raster_inner):
-				digits = extract_timer_digits(state.bonus_timer)
-				def draw_timer_digit_loop(i, raster_current):
-					digit_x = self.consts.TIMER_LOCATION[0] + i * (self.consts.NUMBER_SIZE[0] + self.consts.TIMER_SPACE_BETWEEN)
-					digit_y = self.consts.TIMER_LOCATION[1] - self.consts.NUMBER_SIZE[1]
-					digit_value = digits[i]
-					return jr.render_at(
-						raster_current, digit_x, digit_y,
-						jr.get_sprite_frame(self.SPRITE_NUMBERS[digit_value], 0)
-					)
-				return jax.lax.fori_loop(0, 3, draw_timer_digit_loop, raster_inner)
-			return draw_timer_digits(raster_in)
+			timer_digits = self.jr.int_to_digits(state.bonus_timer, max_digits=3)
+			return self.jr.render_label(
+				raster_in,
+				self.TIMER_X,
+				self.TIMER_Y,
+				timer_digits,
+				self.SHAPE_MASKS['digits'],
+				spacing=self.TIMER_SPACING,
+				max_digits=3
+			)
 		
 		raster = render_bonus_timer(raster)
-
-		# Render debug info
-		if self.consts.DEBUG_RENDER:
-			red_pixel = jnp.array([[[255, 0, 0, 255]]], dtype=jnp.uint8)
-			blue_pixel = jnp.array([[[0, 0, 255, 255]]], dtype=jnp.uint8)
-			white_pixel = jnp.array([[[255, 255, 255, 255]]], dtype=jnp.uint8)
-			green_pixel = jnp.array([[[0, 255, 0, 255]]], dtype=jnp.uint8)
-
-			def render_bbox_points(raster, bbox, pixel):
-				x1, y1, x2, y2 = bbox
-				points = jnp.array([
-					[x1, y1],
-					[x2, y1],
-					[x1, y2],
-					[x2, y2]
-				])
-				def body(i, r):
-					x, y = points[i]
-					return jr.render_at(r, x, y, pixel)
-				return jax.lax.fori_loop(0, points.shape[0], body, raster)
-
-			def render_all_bbox(raster, ladder_locations, pixel):
-				def body(i, r):
-					return render_bbox_points(r, ladder_locations[i], pixel)
-				return jax.lax.fori_loop(0, ladder_locations.shape[0], body, raster)
-
-			raster = render_all_bbox(raster, self.consts.LADDER_LOCATIONS, red_pixel)
-
-			# Compute player bounding box
-			player_width, player_height = self.consts.PLAYER_SIZE
-			player_bbox = jnp.array([
-				state.player_x,
-				state.player_y - player_height,
-				state.player_x + player_width,
-				state.player_y
-			])
-			raster = render_bbox_points(raster, player_bbox, white_pixel)
-
-			# Render player bounding box points
-			raster = render_bbox_points(raster, player_bbox, white_pixel)
-
-			def render_floor_points(raster, floor_locations, pixel):
-				def body(i, r):
-					y = floor_locations[i]
-					return jr.render_at(r, 0, y, pixel)
-				return jax.lax.fori_loop(0, floor_locations.shape[0], body, raster)
-
-			raster = render_floor_points(raster, self.consts.FLOOR_LOCATIONS, blue_pixel)
-			
-			raster = render_all_bbox(raster, self.consts.HOLE_LOCATIONS, green_pixel)
-			
-			active_mask = state.bomb_active > 0
-			def draw_bomb_box(i, r):
-				is_active = active_mask[i]
-	
-				def draw_box(r):
-					x = state.bomb_positions_x[i]
-					y = state.bomb_positions_y[i]
-					w, h = self.consts.BOMB_SIZE
-					
-					r = render_bbox_points(r, [x, y, x+w, y-h], white_pixel)
-					
-					return r
+		
+		# --- 11. Render Debug Info ---
+		raster = jax.lax.cond(
+			self.consts.DEBUG_RENDER,
+			lambda r: self._render_debug_overlay(r, state),
+			lambda r: r,
+			raster
+		)
 				
-				return jax.lax.cond(is_active, lambda r: draw_box(r), lambda r: r, r)
-			
-			# Draw all bomb boxes
-			raster = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, draw_bomb_box, raster)
-
-			raster = jr.render_at(raster, 0, 0, jr.get_sprite_frame(self.SPRITE_NUMBERS[0], 0))
-			raster = render_bbox_points(raster, [0, 0, 0+self.consts.NUMBER_SIZE[0], 0-self.consts.PLAYER_SIZE[1]], white_pixel)
-
-					
-		return raster
+		# --- 12. Final Palette Lookup ---
+		return self.jr.render_from_palette(raster, self.PALETTE)

@@ -9,7 +9,7 @@ from typing import Tuple, NamedTuple, Callable
 import chex
 import jax
 import jax.numpy as jnp
-import jaxatari.rendering.jax_rendering_utils_legacy as jru
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
@@ -394,223 +394,143 @@ class LaserGatesInfo(NamedTuple):
     # difficulty: jnp.ndarray # add if necessary
     step_counter: jnp.ndarray
 
-# -------- Render Constants --------
-def load_sprites():
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+# -------- Render Asset Configuration --------
+RADAR_MORTAR_SPRITE_ANIMATION_SPEED = 15
+BYTE_BAT_ANIMATION_SPEED = 16
+ROCK_MUNCHER_ANIMATION_SPEED = 10
 
-    # Background parts
-    upper_brown_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/upper_brown_bg.npy"))
-    lower_brown_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/lower_brown_bg.npy"))
-    playing_field_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/playing_field_bg.npy"))
-    playing_field_small_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/playing_field_small_bg.npy"))
-    gray_gui_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/gray_gui_bg.npy"))
-    lower_mountain = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/lower_mountain.npy"))
-    upper_mountain = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/mountains/upper_mountain.npy"))
-    black_stripe = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/background/black_stripe.npy"))
-
-    # Player and player missile
-    player = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/player/player.npy"))
-    player_missile = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/player_missile.npy"))
-
-    # Instrument panel parts
-    gui_colored_background = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/colored_background.npy"))
-    gui_black_background = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/black_background.npy"))
-    gui_text_score = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/score.npy"))
-    gui_text_energy = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/energy.npy"))
-    gui_text_shields = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/shields.npy"))
-    gui_text_dtime = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/text/dtime.npy"))
-    gui_score_digits = jru.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/{}.npy"))
-    gui_score_comma = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/gui/score_numbers/comma.npy"))
-
-    # Entities
-    # Entity missile
-    entity_missile = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/missiles/enemy_missile.npy"))
-
-    # Death sprites
-    upper_death_sprites_temp = []
-    for i in range(1, 13):
-        temp = jru.loadFrame(os.path.join(MODULE_DIR, f"sprites/lasergates/enemies/enemy_death/top/{i}.npy"))
-        upper_death_sprites_temp.append(temp)
-        upper_death_sprites_temp[i - 1] = jnp.expand_dims(upper_death_sprites_temp[i - 1], axis=0)
-
-    upper_death_sprites = jnp.concatenate(upper_death_sprites_temp, axis=0)
-
-    lower_death_sprites_temp = []
-    for i in range(1, 13):
-        temp = jru.loadFrame(os.path.join(MODULE_DIR, f"sprites/lasergates/enemies/enemy_death/bottom/{i}.npy"))
-        lower_death_sprites_temp.append(temp)
-        lower_death_sprites_temp[i - 1] = jnp.expand_dims(lower_death_sprites_temp[i - 1], axis=0)
-
-    lower_death_sprites = jnp.concatenate(lower_death_sprites_temp, axis=0)
-
-    death_sprite_number_325 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/325.npy"))
-    death_sprite_number_525 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/525.npy"))
-    death_sprite_number_bg = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/enemy_death/numbers/background.npy"))
+PROCEDURAL_COLORS = {
+    "PFB_BASE_COLOR": (0, 0, 0, 255),
+    "PFB_COLLISION_COLOR": (104, 104, 0, 255),
+    "DEATH_NUMBER_COLOR": (208, 208, 0, 255),
+    "RADAR_MORTAR_COLOR_GRAY": (104, 104, 104, 255),
+    "RADAR_MORTAR_COLOR_BLUE": (0, 0, 172, 255),
+    "RADAR_MORTAR_MISSILE_COLOR": (85, 92, 197, 255),
+    "BYTE_BAT_COLOR": (0, 88, 0, 255),
+    "ROCK_MUNCHER_MISSILE_COLOR": (208, 208, 0, 255),
+    "DENSEPACK_COLOR": (0, 88, 0, 255),
+    "DETONATOR_COLOR": (104, 104, 104, 255),
+    "ENERGY_POD_COLOR_GREEN": (0, 172, 0, 255),
+    "ENERGY_POD_COLOR_GRAY": (104, 104, 104, 255),
+    "GUI_COLORED_BACKGROUND_COLOR_BLUE": (0, 0, 172, 255),
+    "GUI_COLORED_BACKGROUND_COLOR_GREEN": (0, 172, 0, 255),
+    "GUI_COLORED_BACKGROUND_COLOR_BEIGE": (208, 208, 0, 255),
+    "GUI_COLORED_BACKGROUND_COLOR_GRAY": (104, 104, 104, 255),
+    "GUI_TEXT_COLOR_GRAY": (104, 104, 104, 255),
+    "GUI_TEXT_COLOR_BEIGE": (208, 208, 0, 255),
+    "GUI_BAR_EMPTY_COLOR": (0, 0, 0, 0),
+    "PLAYER_NORMAL_COLOR": (208, 208, 0, 255),
+    "PLAYER_COLLISION_COLOR": (172, 0, 0, 255),
+    "PLAYER_MISSILE_BASE_COLOR": (208, 208, 0, 255),
+    "RASTER_BACKGROUND": (0, 0, 0, 255),
+    "FORCEFIELD_COLOR_0": (255, 0, 0, 255),
+    "FORCEFIELD_COLOR_1": (255, 128, 0, 255),
+    "FORCEFIELD_COLOR_2": (255, 255, 0, 255),
+    "FORCEFIELD_COLOR_3": (128, 255, 0, 255),
+    "FORCEFIELD_COLOR_4": (0, 255, 0, 255),
+    "FORCEFIELD_COLOR_5": (0, 255, 128, 255),
+    "FORCEFIELD_COLOR_6": (0, 255, 255, 255),
+    "FORCEFIELD_COLOR_7": (0, 128, 255, 255),
+    "FORCEFIELD_COLOR_8": (0, 0, 255, 255),
+    "FORCEFIELD_COLOR_9": (128, 0, 255, 255),
+    "FORCEFIELD_COLOR_10": (255, 0, 255, 255),
+    "FORCEFIELD_COLOR_11": (255, 0, 128, 255),
+    "FORCEFIELD_COLOR_12": (255, 255, 255, 255),
+    "FORCEFIELD_COLOR_13": (192, 192, 192, 255),
+    "FORCEFIELD_COLOR_14": (128, 128, 128, 255),
+    "FORCEFIELD_COLOR_15": (255, 255, 255, 255),
+}
 
 
-    # Radar mortar
-    radar_mortar_frame_left = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/1.npy"))
-    radar_mortar_frame_middle = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/2.npy"))
-    radar_mortar_frame_right = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/radar_mortar/3.npy"))
+def _procedural_sprite(color: Tuple[int, int, int, int]) -> jnp.ndarray:
+    return jnp.array(color, dtype=jnp.uint8).reshape(1, 1, 4)
 
-    rms, _ = jru.pad_to_match([radar_mortar_frame_left, radar_mortar_frame_middle, radar_mortar_frame_right])
-    RADAR_MORTAR_SPRITE_ANIMATION_SPEED = 15  # Change sprite frame (left, middle, right) of radar mortar every RADAR_MORTAR_SPRITE_ROTATION_SPEED frames
-    radar_mortar_sprites = jnp.concatenate([
-        jnp.repeat(rms[0][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rms[2][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-    ]) # Radar mortar rotation animation
 
-    # Byte bat
-    byte_bat_frame_up = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/1.npy"))
-    byte_bat_frame_mid = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/2.npy"))
-    byte_bat_frame_down = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/byte_bat/3.npy"))
+def _build_background(height: int, width: int) -> jnp.ndarray:
+    color = jnp.array(PROCEDURAL_COLORS["RASTER_BACKGROUND"], dtype=jnp.uint8).reshape(1, 1, 4)
+    return jnp.tile(color, (height, width, 1))
 
-    bbs, _ = jru.pad_to_match([byte_bat_frame_up, byte_bat_frame_mid, byte_bat_frame_down, byte_bat_frame_mid])
-    BYTE_BAT_ANIMATION_SPEED = 16  # Flap speed of byte bat, higher is slower
-    byte_bat_sprites = jnp.concatenate([
-        jnp.repeat(bbs[0][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-        jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-        jnp.repeat(bbs[2][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-        jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-    ]) # Byte bat flap animation
 
-    # Rock muncher
-    rock_muncher_frame_small = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/1.npy"))
-    rock_muncher_frame_mid = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/2.npy"))
-    rock_muncher_frame_big = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/rock_muncher/3.npy"))
+def _get_default_asset_config() -> Tuple[dict, ...]:
+    densepack_files = [f"enemies/densepack/{i}.npy" for i in range(5, 0, -1)]
+    radar_mortar_files = [
+        "enemies/radar_mortar/1.npy",
+        "enemies/radar_mortar/2.npy",
+        "enemies/radar_mortar/3.npy",
+    ]
+    byte_bat_files = [
+        "enemies/byte_bat/1.npy",
+        "enemies/byte_bat/2.npy",
+        "enemies/byte_bat/3.npy",
+    ]
+    rock_muncher_files = [
+        "enemies/rock_muncher/1.npy",
+        "enemies/rock_muncher/2.npy",
+        "enemies/rock_muncher/3.npy",
+    ]
+    upper_death_files = [f"enemies/enemy_death/top/{i}.npy" for i in range(1, 13)]
+    lower_death_files = [f"enemies/enemy_death/bottom/{i}.npy" for i in range(1, 13)]
 
-    rmus, _ = jru.pad_to_match([rock_muncher_frame_small, rock_muncher_frame_mid, rock_muncher_frame_big, rock_muncher_frame_mid])
-    ROCK_MUNCHER_ANIMATION_SPEED = 10  # Animation speed of rock muncher
-    rock_muncher_sprites = jnp.concatenate([
-        jnp.repeat(rmus[0][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rmus[2][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-        jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-    ]) # Rock muncher animation
+    config = [
+        {
+            "name": "base_background",
+            "type": "background",
+            "data": _build_background(LaserGatesConstants.HEIGHT, LaserGatesConstants.WIDTH),
+        },
+        {"name": "upper_brown_bg", "type": "single", "file": "background/upper_brown_bg.npy"},
+        {"name": "lower_brown_bg", "type": "single", "file": "background/lower_brown_bg.npy"},
+        {"name": "playing_field_bg", "type": "single", "file": "background/playing_field_bg.npy"},
+        {
+            "name": "playing_field_small_bg",
+            "type": "single",
+            "file": "background/mountains/playing_field_small_bg.npy",
+        },
+        {"name": "gray_gui_bg", "type": "single", "file": "background/gray_gui_bg.npy"},
+        {"name": "lower_mountain", "type": "single", "file": "background/mountains/lower_mountain.npy"},
+        {"name": "upper_mountain", "type": "single", "file": "background/mountains/upper_mountain.npy"},
+        {"name": "black_stripe", "type": "single", "file": "background/black_stripe.npy"},
+        {"name": "player", "type": "single", "file": "player/player.npy"},
+        {"name": "player_missile", "type": "single", "file": "missiles/player_missile.npy"},
+        {"name": "gui_colored_background", "type": "single", "file": "gui/colored_background.npy"},
+        {"name": "gui_black_background", "type": "single", "file": "gui/black_background.npy"},
+        {"name": "gui_text_score", "type": "single", "file": "gui/text/score.npy"},
+        {"name": "gui_text_energy", "type": "single", "file": "gui/text/energy.npy"},
+        {"name": "gui_text_shields", "type": "single", "file": "gui/text/shields.npy"},
+        {"name": "gui_text_dtime", "type": "single", "file": "gui/text/dtime.npy"},
+        {"name": "gui_score_digits", "type": "digits", "pattern": "gui/score_numbers/{}.npy"},
+        {"name": "gui_score_comma", "type": "single", "file": "gui/score_numbers/comma.npy"},
+        {"name": "entity_missile", "type": "single", "file": "missiles/enemy_missile.npy"},
+        {"name": "homing_missile", "type": "single", "file": "enemies/homing_missile/homing_missile.npy"},
+        {"name": "forcefield", "type": "single", "file": "enemies/forcefield/forcefield.npy"},
+        {"name": "detonator", "type": "single", "file": "enemies/detonator/detonator.npy"},
+        {"name": "detonator_6507", "type": "single", "file": "enemies/detonator/6507.npy"},
+        {"name": "energy_pod", "type": "single", "file": "enemies/energy_pod/energy_pod.npy"},
+        {"name": "upper_death_frames", "type": "group", "files": upper_death_files},
+        {"name": "lower_death_frames", "type": "group", "files": lower_death_files},
+        {"name": "death_number_325", "type": "single", "file": "enemies/enemy_death/numbers/325.npy"},
+        {"name": "death_number_525", "type": "single", "file": "enemies/enemy_death/numbers/525.npy"},
+        {"name": "death_number_bg", "type": "single", "file": "enemies/enemy_death/numbers/background.npy"},
+        {"name": "radar_mortar_frames", "type": "group", "files": radar_mortar_files},
+        {"name": "byte_bat_frames", "type": "group", "files": byte_bat_files},
+        {"name": "rock_muncher_frames", "type": "group", "files": rock_muncher_files},
+        {"name": "densepack_frames", "type": "group", "files": densepack_files},
+    ]
 
-    # Homing missile
-    homing_missile_sprite = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/homing_missile/homing_missile.npy"))
+    for name, color in PROCEDURAL_COLORS.items():
+        config.append({"name": name, "type": "procedural", "data": _procedural_sprite(color)})
 
-    # Forcefield
-    forcefield_sprite = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/forcefield/forcefield.npy"))
+    return tuple(config)
 
-    # Densepack
-    densepack_frame_0 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/5.npy"))
-    densepack_frame_1 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/4.npy"))
-    densepack_frame_2 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/3.npy"))
-    densepack_frame_3 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/2.npy"))
-    densepack_frame_4 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/densepack/1.npy"))
 
-    densepack_sprites = jnp.array([
-        densepack_frame_0, densepack_frame_1, densepack_frame_2, densepack_frame_3, densepack_frame_4
-    ])
-
-    # Detonator
-    detonator_sprite = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/detonator.npy"))
-    detonator_6507 = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/detonator/6507.npy"))
-
-    # Energy pods
-    energy_pod_sprite = jru.loadFrame(os.path.join(MODULE_DIR, "sprites/lasergates/enemies/energy_pod/energy_pod.npy"))
-
-    return (
-        # Player sprites
-        player,
-        player_missile,
-
-        # Entity sprites
-        entity_missile,
-        upper_death_sprites,
-        lower_death_sprites,
-        death_sprite_number_325,
-        death_sprite_number_525,
-        death_sprite_number_bg,
-        radar_mortar_sprites,
-        byte_bat_sprites,
-        rock_muncher_sprites,
-        homing_missile_sprite,
-        forcefield_sprite,
-        densepack_sprites,
-        detonator_sprite,
-        detonator_6507,
-        energy_pod_sprite,
-
-        # Background sprites
-        upper_brown_bg,
-        lower_brown_bg,
-        playing_field_bg,
-        playing_field_small_bg,
-        gray_gui_bg,
-        lower_mountain,
-        upper_mountain,
-        black_stripe,
-
-        # Instrument panel sprites
-        gui_colored_background,
-        gui_black_background,
-        gui_text_score,
-        gui_text_energy,
-        gui_text_shields,
-        gui_text_dtime,
-        gui_score_digits,
-        gui_score_comma,
-    )
-
-(
-    # Player sprites
-    SPRITE_PLAYER,
-    SPRITE_PLAYER_MISSILE,
-
-    # Entity sprites
-    SPRITE_ENTITY_MISSILE,
-    SPRITE_UPPER_DEATH_SPRITES,
-    SPRITE_LOWER_DEATH_SPRITES,
-    SPRITE_DEATH_NUMBER_325,
-    SPRITE_DEATH_NUMBER_525,
-    SPRITE_DEATH_NUMBER_BG,
-    SPRITE_RADAR_MORTAR,
-    SPRITE_BYTE_BAT,
-    SPRITE_ROCK_MUNCHER,
-    SPRITE_HOMING_MISSILE,
-    SPRITE_FORCEFIELD,
-    SPRITE_DENSEPACK,
-    SPRITE_DETONATOR,
-    SPRITE_6507,
-    SPRITE_ENERGY_POD,
-
-    # Background sprites
-    SPRITE_UPPER_BROWN_BG,
-    SPRITE_LOWER_BROWN_BG,
-    SPRITE_PLAYING_FIELD_BG,
-    SPRITE_PLAYING_FIELD_SMALL_BG,
-    SPRITE_GRAY_GUI_BG,
-    SPRITE_LOWER_MOUNTAIN,
-    SPRITE_UPPER_MOUNTAIN,
-    SPRITE_BLACK_STRIPE,
-
-    # Instrument panel sprites
-    SPRITE_GUI_COLORED_BACKGROUND,
-    SPRITE_GUI_BLACK_BACKGROUND,
-    SPRITE_GUI_TEXT_SCORE,
-    SPRITE_GUI_TEXT_ENERGY,
-    SPRITE_GUI_TEXT_SHIELDS,
-    SPRITE_GUI_TEXT_DTIME,
-    SPRITE_GUI_SCORE_DIGITS,
-    SPRITE_GUI_SCORE_COMMA,
-) = load_sprites()
+LaserGatesConstants.ASSET_CONFIG = _get_default_asset_config()
 
 # -------- Game Logic --------
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
 
-    def __init__(self, consts: LaserGatesConstants = None, frameskip: int = 1, reward_funcs: list[Callable] =None):
+    def __init__(self, consts: LaserGatesConstants = None):
         consts = consts or LaserGatesConstants()
         super().__init__(consts)
-        self.frameskip = frameskip
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -631,7 +551,6 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
         ]
-        self.frame_stack_size = 4
         self.num_obs_slots = 23
         self.features_per_slot = 5  # x, y, w, h, active
         self.obs_size = self.num_obs_slots * self.features_per_slot
@@ -2618,49 +2537,198 @@ class LaserGatesRenderer(JAXGameRenderer):
         super().__init__()
         self.consts = consts or LaserGatesConstants()
 
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/lasergates")
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+        def get_template_id(name: str) -> jnp.ndarray:
+            """More robustly finds the first non-transparent color ID."""
+            mask = self.SHAPE_MASKS[name]
+            if mask.ndim == 3:  # Handle groups by taking first sprite
+                mask = mask[0]
+            flat_mask = mask.reshape(-1)
+            # Find the ID at the first non-transparent index
+            first_color_id = flat_mask[jnp.argmax(flat_mask != self.jr.TRANSPARENT_ID)]
+            return first_color_id
+
+        self.TEMPLATE_WHITE_ID = self.COLOR_TO_ID.get((255, 255, 255), 0)
+        self.TEMPLATE_BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.TEMPLATE_PFB_ID = get_template_id("playing_field_bg")
+
+        self.COLOR_IDS = {
+            name: self.COLOR_TO_ID.get(tuple(color[:3]), self.jr.TRANSPARENT_ID)
+            for name, color in PROCEDURAL_COLORS.items()
+        }
+        self.FORCEFIELD_COLOR_IDS = jnp.array(
+            [self.COLOR_IDS[f"FORCEFIELD_COLOR_{i}"] for i in range(16)],
+            dtype=jnp.int32,
+        )
+
+        self.PLAYING_FIELD_SMALL_BG_TEMPLATE_ID = get_template_id("playing_field_small_bg")
+        self.DEATH_NUMBER_BG_TEMPLATE_ID = get_template_id("death_number_bg")
+        self.DEATH_NUMBER_325_TEMPLATE_ID = get_template_id("death_number_325")
+        self.DEATH_NUMBER_525_TEMPLATE_ID = get_template_id("death_number_525")
+        self.ENTITY_MISSILE_TEMPLATE_ID = get_template_id("entity_missile")
+        self.GUI_TEMPLATE_ID = get_template_id("gui_colored_background")
+        self.GUI_TEXT_TEMPLATE_ID = get_template_id("gui_text_score")
+        self.GUI_COMMA_TEMPLATE_ID = get_template_id("gui_score_comma")
+        self.GUI_DIGITS_TEMPLATE_ID = get_template_id("gui_score_digits")
+        self.PLAYER_TEMPLATE_ID = get_template_id("player")
+        self.PLAYER_MISSILE_TEMPLATE_ID = get_template_id("player_missile")
+        self.DENSEPACK_TEMPLATE_ID = get_template_id("densepack_frames")
+        self.FORCEFIELD_TEMPLATE_ID = get_template_id("forcefield")
+        self.DETONATOR_TEMPLATE_ID = get_template_id("detonator")
+        self.ENERGY_POD_TEMPLATE_ID = get_template_id("energy_pod")
+
+        rms = self.SHAPE_MASKS["radar_mortar_frames"]
+        self.SPRITE_RADAR_MORTAR = jnp.concatenate(
+            [
+                jnp.repeat(rms[0][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[2][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+            ]
+        )
+
+        bbs = self.SHAPE_MASKS["byte_bat_frames"]
+        self.SPRITE_BYTE_BAT = jnp.concatenate(
+            [
+                jnp.repeat(bbs[0][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[2][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
+            ]
+        )
+
+        rmus = self.SHAPE_MASKS["rock_muncher_frames"]
+        self.SPRITE_ROCK_MUNCHER = jnp.concatenate(
+            [
+                jnp.repeat(rmus[0][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[2][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+            ]
+        )
+
+        # Convenient sprite aliases for palette-indexed masks
+        self.SPRITE_PLAYING_FIELD_BG = self.SHAPE_MASKS["playing_field_bg"]
+        self.SPRITE_PLAYING_FIELD_SMALL_BG = self.SHAPE_MASKS["playing_field_small_bg"]
+        self.SPRITE_LOWER_DEATH_SPRITES = self.SHAPE_MASKS["lower_death_frames"]
+        self.SPRITE_UPPER_DEATH_SPRITES = self.SHAPE_MASKS["upper_death_frames"]
+        self.SPRITE_DEATH_NUMBER_BG = self.SHAPE_MASKS["death_number_bg"]
+        self.SPRITE_DEATH_NUMBER_325 = self.SHAPE_MASKS["death_number_325"]
+        self.SPRITE_DEATH_NUMBER_525 = self.SHAPE_MASKS["death_number_525"]
+        self.SPRITE_ENTITY_MISSILE = self.SHAPE_MASKS["entity_missile"]
+        self.SPRITE_FORCEFIELD = self.SHAPE_MASKS["forcefield"]
+        self.SPRITE_DENSEPACK = self.SHAPE_MASKS["densepack_frames"]
+        self.SPRITE_DETONATOR = self.SHAPE_MASKS["detonator"]
+        self.SPRITE_6507 = self.SHAPE_MASKS["detonator_6507"]
+        self.SPRITE_ENERGY_POD = self.SHAPE_MASKS["energy_pod"]
+        self.SPRITE_UPPER_BROWN_BG = self.SHAPE_MASKS["upper_brown_bg"]
+        self.SPRITE_LOWER_BROWN_BG = self.SHAPE_MASKS["lower_brown_bg"]
+        self.SPRITE_GRAY_GUI_BG = self.SHAPE_MASKS["gray_gui_bg"]
+        self.SPRITE_GUI_COLORED_BACKGROUND = self.SHAPE_MASKS["gui_colored_background"]
+        self.SPRITE_GUI_BLACK_BACKGROUND = self.SHAPE_MASKS["gui_black_background"]
+        self.SPRITE_GUI_TEXT_SCORE = self.SHAPE_MASKS["gui_text_score"]
+        self.SPRITE_GUI_TEXT_ENERGY = self.SHAPE_MASKS["gui_text_energy"]
+        self.SPRITE_GUI_TEXT_SHIELDS = self.SHAPE_MASKS["gui_text_shields"]
+        self.SPRITE_GUI_TEXT_DTIME = self.SHAPE_MASKS["gui_text_dtime"]
+        self.SPRITE_GUI_SCORE_DIGITS = self.SHAPE_MASKS["gui_score_digits"]
+        self.SPRITE_GUI_SCORE_COMMA = self.SHAPE_MASKS["gui_score_comma"]
+        self.SPRITE_PLAYER = self.SHAPE_MASKS["player"]
+        self.SPRITE_PLAYER_MISSILE = self.SHAPE_MASKS["player_missile"]
+        self.SPRITE_LOWER_MOUNTAIN = self.SHAPE_MASKS["lower_mountain"]
+        self.SPRITE_UPPER_MOUNTAIN = self.SHAPE_MASKS["upper_mountain"]
+        self.SPRITE_BLACK_STRIPE = self.SHAPE_MASKS["black_stripe"]
+        self.SPRITE_HOMING_MISSILE = self.SHAPE_MASKS["homing_missile"]
+
+        # --- Add Aliases for Flip Offsets ---
+        self.OFFSET_LOWER_DEATH = self.FLIP_OFFSETS["lower_death_frames"]
+        self.OFFSET_UPPER_DEATH = self.FLIP_OFFSETS["upper_death_frames"]
+        self.OFFSET_DEATH_BG = self.FLIP_OFFSETS["death_number_bg"]
+        self.OFFSET_DEATH_325 = self.FLIP_OFFSETS["death_number_325"]
+        self.OFFSET_DEATH_525 = self.FLIP_OFFSETS["death_number_525"]
+        self.OFFSET_RADAR_MORTAR = self.FLIP_OFFSETS["radar_mortar_frames"]
+        self.OFFSET_ENTITY_MISSILE = self.FLIP_OFFSETS["entity_missile"]
+        self.OFFSET_BYTE_BAT = self.FLIP_OFFSETS["byte_bat_frames"]
+        self.OFFSET_ROCK_MUNCHER = self.FLIP_OFFSETS["rock_muncher_frames"]
+        self.OFFSET_HOMING_MISSILE = self.FLIP_OFFSETS["homing_missile"]
+        self.OFFSET_FORCEFIELD = self.FLIP_OFFSETS["forcefield"]
+        self.OFFSET_DENSEPACK = self.FLIP_OFFSETS["densepack_frames"]
+        self.OFFSET_DETONATOR = self.FLIP_OFFSETS["detonator"]
+        self.OFFSET_6507 = self.FLIP_OFFSETS["detonator_6507"]
+        self.OFFSET_ENERGY_POD = self.FLIP_OFFSETS["energy_pod"]
+        self.OFFSET_LOWER_MOUNTAIN = self.FLIP_OFFSETS["lower_mountain"]
+        self.OFFSET_UPPER_MOUNTAIN = self.FLIP_OFFSETS["upper_mountain"]
+        self.OFFSET_PLAYER = self.FLIP_OFFSETS["player"]
+        self.OFFSET_PLAYER_MISSILE = self.FLIP_OFFSETS["player_missile"]
+
+        # Color lookup table (name -> palette ID)
+        self.color_ids = {}
+        for name, rgba in PROCEDURAL_COLORS.items():
+            rgb_key = (rgba[0], rgba[1], rgba[2])
+            # All procedural colors are part of the palette; fall back to 0 if missing.
+            self.color_ids[name] = int(self.COLOR_TO_ID.get(rgb_key, 0))
+
+    def _colorize_mask(self, mask: jnp.ndarray, color_id: jnp.ndarray) -> jnp.ndarray:
+        """Return a new mask where all non-transparent pixels become `color_id`."""
+        color_id = jnp.asarray(color_id, dtype=mask.dtype)
+        transparent = jnp.asarray(self.jr.TRANSPARENT_ID, dtype=mask.dtype)
+        return jnp.where(mask != transparent, color_id, mask)
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: LaserGatesState):
-        raster = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3))
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        jru = self.jr
 
-        def recolor_sprite(
-                sprite: jnp.ndarray,
-                color: jnp.ndarray,  # RGB, up to 4 dimensions
-                bounds: tuple[int, int, int, int] = None  # (top, left, bottom, right)
-        ) -> jnp.ndarray:
-            # Ensure color is the same dtype as sprite
-            dtype = sprite.dtype
-            color = color.astype(dtype)
+        def color_id(name: str) -> jnp.ndarray:
+            return jnp.int32(self.color_ids[name])
 
-            assert sprite.ndim == 3 and sprite.shape[2] in (3, 4), "Sprite must be HxWx3 or HxWx4"
-
-            if color.shape[0] < sprite.shape[2]:
-                missing = sprite.shape[2] - color.shape[0]
-                pad = jnp.full((missing,), 255, dtype=dtype)
-                color = jnp.concatenate([color, pad], axis=0)
-
-            assert color.shape[0] == sprite.shape[2], "Color channels must match sprite channels"
-
-            H, W, _ = sprite.shape
-
-            if bounds is None:
-                region = sprite
-            else:
-                top, left, bottom, right = bounds
-                assert 0 <= left < right <= H and 0 <= top < bottom <= W, "Invalid bounds"
-                region = sprite[left:right, top:bottom]
-
-            visible_mask = jnp.any(region != 0, axis=-1, keepdims=True)  # (h, w, 1)
-
-            color_broadcasted = jnp.broadcast_to(color, region.shape).astype(dtype)
-            recolored_region = jnp.where(visible_mask, color_broadcasted, jnp.zeros_like(color_broadcasted))
-
-            if bounds is None:
-                return recolored_region
-            else:
-                top, left, bottom, right = bounds
-                recolored_sprite = sprite.at[left:right, top:bottom].set(recolored_region)
-                return recolored_sprite
-
+        SPRITE_PLAYING_FIELD_BG = self.SPRITE_PLAYING_FIELD_BG
+        SPRITE_PLAYING_FIELD_SMALL_BG = self.SPRITE_PLAYING_FIELD_SMALL_BG
+        SPRITE_RADAR_MORTAR = self.SPRITE_RADAR_MORTAR
+        SPRITE_BYTE_BAT = self.SPRITE_BYTE_BAT
+        SPRITE_ROCK_MUNCHER = self.SPRITE_ROCK_MUNCHER
+        SPRITE_LOWER_DEATH_SPRITES = self.SPRITE_LOWER_DEATH_SPRITES
+        SPRITE_UPPER_DEATH_SPRITES = self.SPRITE_UPPER_DEATH_SPRITES
+        SPRITE_DEATH_NUMBER_BG = self.SPRITE_DEATH_NUMBER_BG
+        SPRITE_DEATH_NUMBER_325 = self.SPRITE_DEATH_NUMBER_325
+        SPRITE_DEATH_NUMBER_525 = self.SPRITE_DEATH_NUMBER_525
+        SPRITE_ENTITY_MISSILE = self.SPRITE_ENTITY_MISSILE
+        SPRITE_FORCEFIELD = self.SPRITE_FORCEFIELD
+        SPRITE_DENSEPACK = self.SPRITE_DENSEPACK
+        SPRITE_DETONATOR = self.SPRITE_DETONATOR
+        SPRITE_6507 = self.SPRITE_6507
+        SPRITE_ENERGY_POD = self.SPRITE_ENERGY_POD
+        SPRITE_UPPER_BROWN_BG = self.SPRITE_UPPER_BROWN_BG
+        SPRITE_LOWER_BROWN_BG = self.SPRITE_LOWER_BROWN_BG
+        SPRITE_GRAY_GUI_BG = self.SPRITE_GRAY_GUI_BG
+        SPRITE_GUI_COLORED_BACKGROUND = self.SPRITE_GUI_COLORED_BACKGROUND
+        SPRITE_GUI_BLACK_BACKGROUND = self.SPRITE_GUI_BLACK_BACKGROUND
+        SPRITE_GUI_TEXT_SCORE = self.SPRITE_GUI_TEXT_SCORE
+        SPRITE_GUI_TEXT_ENERGY = self.SPRITE_GUI_TEXT_ENERGY
+        SPRITE_GUI_TEXT_SHIELDS = self.SPRITE_GUI_TEXT_SHIELDS
+        SPRITE_GUI_TEXT_DTIME = self.SPRITE_GUI_TEXT_DTIME
+        SPRITE_GUI_SCORE_DIGITS = self.SPRITE_GUI_SCORE_DIGITS
+        SPRITE_GUI_SCORE_COMMA = self.SPRITE_GUI_SCORE_COMMA
+        SPRITE_PLAYER = self.SPRITE_PLAYER
+        SPRITE_PLAYER_MISSILE = self.SPRITE_PLAYER_MISSILE
+        SPRITE_LOWER_MOUNTAIN = self.SPRITE_LOWER_MOUNTAIN
+        SPRITE_UPPER_MOUNTAIN = self.SPRITE_UPPER_MOUNTAIN
+        SPRITE_BLACK_STRIPE = self.SPRITE_BLACK_STRIPE
+        SPRITE_HOMING_MISSILE = self.SPRITE_HOMING_MISSILE
 
         def get_death_sprite_index(death_timer: jnp.ndarray, total_duration: int) -> jnp.ndarray:
             sprite_length = total_duration // 12
@@ -2668,17 +2736,46 @@ class LaserGatesRenderer(JAXGameRenderer):
             index = 12 - (clamped_timer - 1) // sprite_length
             return index
 
+        def animation_frame(frames: jnp.ndarray) -> jnp.ndarray:
+            frame_count = frames.shape[0]
+            frame_idx = jnp.mod(state.step_counter, frame_count)
+            return jax.lax.dynamic_index_in_dim(frames, frame_idx, axis=0, keepdims=False)
+
         # -------- Render playing field background --------
 
         # Playing field background, color adjusts if player collision
         pfb_t = jnp.clip(255 * jnp.exp(-self.consts.PLAYING_FILED_BG_COLOR_FADE_SPEED * (255 - state.animation_timer)), 0, 255)
-        pfb_t = pfb_t.astype(jnp.uint8)
-        PLAYING_FIELD_COLOR = jnp.array((self.consts.PLAYING_FIELD_BG_COLLISION_COLOR[0], self.consts.PLAYING_FIELD_BG_COLLISION_COLOR[1], self.consts.PLAYING_FIELD_BG_COLLISION_COLOR[2], pfb_t))
+        collision_color_active = pfb_t > 128
+        playing_field_color_id = jnp.where(
+            collision_color_active,
+            color_id("PFB_COLLISION_COLOR"),
+            color_id("PFB_BASE_COLOR"),
+        )
+        playing_field_bg = self._colorize_mask(SPRITE_PLAYING_FIELD_BG, playing_field_color_id)
+        death_number_bg_colored = self._colorize_mask(SPRITE_DEATH_NUMBER_BG, playing_field_color_id)
+        death_number_325_colored = self._colorize_mask(SPRITE_DEATH_NUMBER_325, color_id("DEATH_NUMBER_COLOR"))
+        death_number_525_colored = self._colorize_mask(SPRITE_DEATH_NUMBER_525, color_id("DEATH_NUMBER_COLOR"))
         raster = jru.render_at(
             raster,
             0,
             19,
-            recolor_sprite(SPRITE_PLAYING_FIELD_BG, PLAYING_FIELD_COLOR),
+            playing_field_bg,
+        )
+        playing_field_small_bg = self._colorize_mask(SPRITE_PLAYING_FIELD_SMALL_BG, playing_field_color_id)
+        # --- FIX 1: Use render_at_clipped for scrolling elements ---
+        raster = jru.render_at_clipped(
+            raster,
+            0,
+            19,
+            playing_field_small_bg,
+            flip_offset=self.FLIP_OFFSETS["playing_field_small_bg"]
+        )
+        raster = jru.render_at_clipped(
+            raster,
+            0,
+            80,
+            playing_field_small_bg,
+            flip_offset=self.FLIP_OFFSETS["playing_field_small_bg"]
         )
 
         # -------- Render Entity Death Sprites --------
@@ -2752,11 +2849,11 @@ class LaserGatesRenderer(JAXGameRenderer):
                                     ),
                                     rmu_x,
                                     rmu_y + 2,
-                                    recolor_sprite(SPRITE_DEATH_NUMBER_BG, PLAYING_FIELD_COLOR), # Black background mimicing playing field bg for number
+                                    death_number_bg_colored, # Black background mimicing playing field bg for number
                                 ),
                                rmu_x,
                                rmu_y + 2,
-                               recolor_sprite(SPRITE_DEATH_NUMBER_325, jnp.array(self.consts.ENTITY_DEATH_SPRITES_NUMBER_COLOR)), # Number showing the score
+                               death_number_325_colored, # Number showing the score
                            ),
                            # Case: in event but dead and death animation over -> do not render
                            raster
@@ -2787,11 +2884,11 @@ class LaserGatesRenderer(JAXGameRenderer):
                                     ),
                                     hm_x,
                                     hm_y + 1,
-                                    recolor_sprite(SPRITE_DEATH_NUMBER_BG, PLAYING_FIELD_COLOR), # Black background mimicing playing field bg for number
+                                    death_number_bg_colored, # Black background mimicing playing field bg for number
                                 ),
                                 hm_x,
                                 hm_y + 1,
-                                recolor_sprite(SPRITE_DEATH_NUMBER_525, jnp.array(self.consts.ENTITY_DEATH_SPRITES_NUMBER_COLOR)), # Number showing the score
+                                death_number_525_colored, # Number showing the score
                             ),
                            # Case: in event but dead and death animation over -> do not render
                            raster
@@ -2824,37 +2921,17 @@ class LaserGatesRenderer(JAXGameRenderer):
                            )
 
 
-        # -------- Render Mountain Playing Field Background --------
-
-        colored_playing_field_small_bg = recolor_sprite(SPRITE_PLAYING_FIELD_SMALL_BG, PLAYING_FIELD_COLOR)
-
-        raster = jru.render_at(
-                    jru.render_at(
-                        jru.render_at(
-                            jru.render_at(
-                                raster,
-                                0,
-                                19,
-                                SPRITE_PLAYING_FIELD_SMALL_BG  # upper background of background
-                            ),
-                            0,
-                            19,
-                            colored_playing_field_small_bg, # upper playing field background
-                        ),
-                        0,
-                        80,
-                        SPRITE_PLAYING_FIELD_SMALL_BG # lower background of background
-                    ),
-                    0,
-                    80,
-                    colored_playing_field_small_bg, # lower playing field background
-                )
-
         # -------- Render Radar Mortar --------
 
         # Normal radar mortar
-        radar_mortar_frame = jru.get_sprite_frame(SPRITE_RADAR_MORTAR, state.step_counter)
-        radar_mortar_frame = jnp.where(state.entities.radar_mortar_state.y == self.consts.RADAR_MORTAR_SPAWN_BOTTOM_Y, radar_mortar_frame, recolor_sprite(radar_mortar_frame, jnp.array(self.consts.RADAR_MORTAR_COLOR_GRAY)))
+        radar_mortar_frame = animation_frame(SPRITE_RADAR_MORTAR)
+        radar_mortar_blue = self._colorize_mask(radar_mortar_frame, color_id("RADAR_MORTAR_COLOR_BLUE"))
+        radar_mortar_gray = self._colorize_mask(radar_mortar_frame, color_id("RADAR_MORTAR_COLOR_GRAY"))
+        radar_mortar_frame = jnp.where(
+            state.entities.radar_mortar_state.y == self.consts.RADAR_MORTAR_SPAWN_BOTTOM_Y,
+            radar_mortar_blue,
+            radar_mortar_gray,
+        )
 
         raster = jnp.where(
             jnp.logical_and(rm_state.is_in_current_event, rm_state.is_alive),
@@ -2872,7 +2949,7 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # Render radar mortar missile
         should_render_rock_muncher_missile = jnp.logical_and(state.entities.radar_mortar_state.missile_x != 0, state.entities.radar_mortar_state.missile_y != 0)
-        rock_muncher_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(self.consts.RADAR_MORTAR_COLOR_BLUE))
+        radar_missile_sprite = self._colorize_mask(SPRITE_ENTITY_MISSILE, color_id("RADAR_MORTAR_MISSILE_COLOR"))
 
         raster = jnp.where(
             jnp.logical_and(should_render_rock_muncher_missile, state.entities.radar_mortar_state.is_in_current_event),
@@ -2880,7 +2957,7 @@ class LaserGatesRenderer(JAXGameRenderer):
                    raster,
                    state.entities.radar_mortar_state.missile_x,
                    state.entities.radar_mortar_state.missile_y,
-                   rock_muncher_missile_sprite,
+                   radar_missile_sprite,
                    flip_horizontal=state.entities.radar_mortar_state.missile_direction[0] < 0,
                ),
                # Case: not in event -> do not render
@@ -2891,8 +2968,8 @@ class LaserGatesRenderer(JAXGameRenderer):
         # -------- Render Byte Bat --------
 
         # Normal Byte Bat
-        byte_bat_frame = jru.get_sprite_frame(SPRITE_BYTE_BAT, state.step_counter)
-        byte_bat_frame = recolor_sprite(byte_bat_frame, jnp.array(self.consts.BYTE_BAT_COLOR))
+        byte_bat_frame = animation_frame(SPRITE_BYTE_BAT)
+        byte_bat_frame = self._colorize_mask(byte_bat_frame, color_id("BYTE_BAT_COLOR"))
 
         raster = jnp.where(
             jnp.logical_and(bb_state.is_in_current_event, bb_state.is_alive),
@@ -2910,7 +2987,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # -------- Render Rock Muncher --------
 
         # Normal rock_muncher
-        rock_muncher_frame = jru.get_sprite_frame(SPRITE_ROCK_MUNCHER, state.step_counter)
+        rock_muncher_frame = animation_frame(SPRITE_ROCK_MUNCHER)
 
         raster = jnp.where(
             jnp.logical_and(rmu_state.is_in_current_event, rmu_state.is_alive),
@@ -2927,7 +3004,7 @@ class LaserGatesRenderer(JAXGameRenderer):
 
 
         # Render rock muncher missile
-        rock_muncher_missile_sprite = recolor_sprite(SPRITE_ENTITY_MISSILE, jnp.array(self.consts.ROCK_MUNCHER_MISSILE_COLOR))
+        rock_muncher_missile_sprite = self._colorize_mask(SPRITE_ENTITY_MISSILE, color_id("ROCK_MUNCHER_MISSILE_COLOR"))
 
         raster = jnp.where(jnp.logical_and(jnp.logical_and(rmu_state.missile_x != 0, rmu_state.missile_y != 0), rmu_state.is_in_current_event),
                            jru.render_at(
@@ -2956,63 +3033,11 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # -------- Render Forcefield --------
 
+        # Use the forcefield mask directly (already in correct orientation)
+        base_forcefield_mask = SPRITE_FORCEFIELD
+        forcefield_flip_offset = self.OFFSET_FORCEFIELD
+
         ff_state = state.entities.forcefield_state
-
-        @jax.jit
-        def recolor_forcefield(
-                sprite: jnp.ndarray,
-                x_position: jnp.ndarray,
-                y_position: jnp.ndarray,
-                flipped: jnp.ndarray
-        ) -> jnp.ndarray:
-            W, H, C = sprite.shape
-
-            # Column indices (x) and their corresponding y-positions
-            xs = jnp.arange(W, dtype=jnp.int32)
-            ys = xs + jnp.asarray(y_position, jnp.int32)
-            ys = jnp.where(flipped, ys[::-1], ys)
-
-            # Using hashes instead of PRNG key for better performance
-            def _splitmix32(u32):
-                x = u32.astype(jnp.uint32)
-                x = (x + jnp.uint32(0x9E3779B9)) & jnp.uint32(0xFFFFFFFF)
-                x = (x ^ (x >> 16)) * jnp.uint32(0x85EBCA6B) & jnp.uint32(0xFFFFFFFF)
-                x = (x ^ (x >> 13)) * jnp.uint32(0xC2B2AE35) & jnp.uint32(0xFFFFFFFF)
-                x = x ^ (x >> 16)
-                return x
-
-            seed = jnp.asarray(x_position, jnp.uint32)
-            ux = (seed + xs.astype(jnp.uint32)) & jnp.uint32(0xFFFFFFFF)
-
-            r = (_splitmix32(ux) >> 24).astype(jnp.int32)
-            g = (_splitmix32(ux + jnp.uint32(0x9E37)) >> 24).astype(jnp.int32)
-            b = (_splitmix32(ux + jnp.uint32(0x2C1B)) >> 24).astype(jnp.int32)
-
-            rgb = jnp.stack([r, g, b], axis=1)  # (W, 3)
-            # rgb: (W, 3)
-            alpha = jnp.full((W, 1), 255, jnp.int32)  # always build
-            col_colors4 = jnp.concatenate([rgb, alpha], axis=1)  # (W, 4)
-            col_colors = col_colors4[:, :C]  # (W, C) with C∈{3,4}
-
-            # Freeze logic (y positions where colors remain constant)
-            lower = jnp.int32(32)
-            upper = jnp.int32(80)
-
-            # Anchor colors from column 32 and 80 (no clamping/mods)
-            anchor_low = col_colors[lower]  # (C,)
-            anchor_up = col_colors[upper]  # (C,)
-
-            above_lower = ys >= lower
-            within_band = jnp.logical_and(ys >= lower, ys <= upper)
-
-            # For columns outside the band: if y >= 32 -> anchor 80, else anchor 32
-            frozen_color = jnp.where(above_lower[:, None], anchor_up[None, :], anchor_low[None, :])  # (W, C)
-            # Inside the band: dynamic column color
-            final_cols = jnp.where(within_band[:, None], col_colors, frozen_color)  # (W, C)
-
-            # Broadcast correctly to (H, W, C) and cast to sprite.dtype
-            color_grid = jnp.broadcast_to(final_cols[:, None, :], (W, H, C)).astype(sprite.dtype)
-            return color_grid
 
         # Despawn earlier
         move_left = self.consts.FORCEFIELD_SIZE[0]
@@ -3023,86 +3048,55 @@ class LaserGatesRenderer(JAXGameRenderer):
         render_x4 = jnp.where(ff_state.x4 <= 0, ff_state.x4 - move_left, ff_state.x4)
         render_x5 = jnp.where(ff_state.x5 <= 0, ff_state.x5 - move_left, ff_state.x5)
 
-        x_positions = jnp.array([render_x0, render_x1 + 1, render_x2 + 2, render_x3 + 3, render_x4 + 4, render_x5 + 5], dtype=jnp.int32)
-        y_positions = jnp.array([ff_state.y0, ff_state.y1, ff_state.y2, ff_state.y3, ff_state.y4, ff_state.y5], dtype=jnp.int32)
-        flipped = jnp.array([False, True, False, True, False, True], dtype=jnp.bool)
+        ff_cycle_length = self.FORCEFIELD_COLOR_IDS.shape[0]
+        ff_color_idx = jnp.mod(state.step_counter, ff_cycle_length)
+        target_ff_color_id = self.FORCEFIELD_COLOR_IDS[ff_color_idx]
 
-        batched_recolor = jax.vmap(
-            recolor_forcefield,
-            in_axes=(None, 0, 0, 0),  # sprite bleibt gleich, x_position variiert
-            out_axes=0  # erste Achse im Output wird die Batch‑Achse
-        )
-        all_sprites = batched_recolor(SPRITE_FORCEFIELD, x_positions, y_positions, flipped)
+        forcefield_mask = self._colorize_mask(base_forcefield_mask, target_ff_color_id)
 
-        # now make a wide version of each, swapping H/W
-        def resize_sprite_width_ff(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
-            H, W, C = sprite.shape
-            # resize to (H, new_width, C), not (new_width, W, C)
-            return jax.image.resize(sprite, (H, new_width, C), method='nearest')
-
-        sprites_normal = all_sprites  # (6, H, W, C)
-        sprites_wide = jax.vmap(
-            lambda sprite: resize_sprite_width_ff(sprite, self.consts.FORCEFIELD_WIDE_SIZE[0])
-        )(all_sprites)  # (6, H, wide, C)
-
-        max_width = max(sprites_normal.shape[2], sprites_wide.shape[2])
-
-        def pad_to_width_ff(sprites, width):
-            # sprites.shape == (6, H, W0, C)
-            H, W0, C = sprites.shape[1:]
-            pad = width - W0
-            # pad on width axis (axis=2), not height
-            return jnp.pad(sprites, ((0, 0), (0, 0), (0, pad), (0, 0)))
-
-        sprites_normal_padded = pad_to_width_ff(sprites_normal, max_width)  # (6, H, max_w, C)
-        sprites_wide_padded = pad_to_width_ff(sprites_wide, max_width)
-
-        # Choose sprite if forcefield is wide
-        all_sprites = jax.lax.cond(
-            ff_state.is_wide,
-            lambda _: sprites_wide_padded,
-            lambda _: sprites_normal_padded,
-            operand=None
-        )
-
-        raster = jnp.where(jnp.logical_and(ff_state.is_in_current_event, jnp.logical_and(ff_state.is_alive, ff_state.flash_on)),
-            # Case: alive -> render normally
-            jru.render_at(
-                jru.render_at(
-                    jru.render_at(
-                        jru.render_at(
-                            jru.render_at(
-                                jru.render_at(
+        raster = jnp.where(
+            jnp.logical_and(ff_state.is_in_current_event, jnp.logical_and(ff_state.is_alive, ff_state.flash_on)),
+            jru.render_at_clipped(
+                jru.render_at_clipped(
+                    jru.render_at_clipped(
+                        jru.render_at_clipped(
+                            jru.render_at_clipped(
+                                jru.render_at_clipped(
                                     raster,
                                     render_x0,
                                     ff_state.y0,
-                                    all_sprites[0],
+                                    forcefield_mask,
+                                    flip_offset=forcefield_flip_offset,
                                 ),
                                 render_x1,
                                 ff_state.y1,
-                                all_sprites[1],
-                                flip_vertical=True
+                                forcefield_mask,
+                                flip_vertical=True,
+                                flip_offset=forcefield_flip_offset,
                             ),
                             render_x2,
                             ff_state.y2,
-                            all_sprites[2],
+                            forcefield_mask,
+                            flip_offset=forcefield_flip_offset,
                         ),
                         render_x3,
                         ff_state.y3,
-                        all_sprites[3],
-                        flip_vertical=True
+                        forcefield_mask,
+                        flip_vertical=True,
+                        flip_offset=forcefield_flip_offset,
                     ),
                     render_x4,
                     ff_state.y4,
-                    all_sprites[4],
+                    forcefield_mask,
+                    flip_offset=forcefield_flip_offset,
                 ),
                 render_x5,
                 ff_state.y5,
-                all_sprites[5],
-                flip_vertical=True
+                forcefield_mask,
+                flip_vertical=True,
+                flip_offset=forcefield_flip_offset,
             ),
-        # Case: not in event -> do not render
-        raster
+            raster,
         )
 
         # -------- Render Densepack --------
@@ -3112,39 +3106,9 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # select correct sprites based on broken_states
         densepack_correct_sprites = SPRITE_DENSEPACK[dp_state.broken_states]
-        # first recolor each part sprite
-        recolored_sprites = jax.vmap(
-            lambda sp: recolor_sprite(sp, jnp.array(self.consts.DENSEPACK_COLOR))
+        densepack_masks = jax.vmap(
+            lambda sp: self._colorize_mask(sp, color_id("DENSEPACK_COLOR"))
         )(densepack_correct_sprites)
-
-        def resize_sprite_width_dp(sprite: jnp.ndarray, new_width: int) -> jnp.ndarray:
-            H, W, C = sprite.shape
-            # swap back to (H, new_width, C)
-            return jax.image.resize(sprite, (H, new_width, C), method='nearest')
-
-        sprites_normal = recolored_sprites  # (n_parts, H, W, C)
-        sprites_wide = jax.vmap(
-            lambda s: resize_sprite_width_dp(s, self.consts.FORCEFIELD_WIDE_SIZE[0])
-        )(recolored_sprites)  # (n_parts, H, wide, C)
-
-        max_width = max(sprites_normal.shape[2], sprites_wide.shape[2])
-
-        def pad_to_width_dp(sprites, width):
-            H, W0, C = sprites.shape[1:]  # sprites.shape == (n_parts, H, W0, C)
-            pad = width - W0
-            # pad on the width axis (axis=2), not height
-            return jnp.pad(sprites, ((0, 0), (0, 0), (0, pad), (0, 0)))
-
-        sprites_normal_padded = pad_to_width_dp(sprites_normal, max_width)  # (n_parts, H, max_w, C)
-        sprites_wide_padded = pad_to_width_dp(sprites_wide, max_width)
-
-        # Choose sprite if densepack is wide
-        all_sprites = jax.lax.cond(
-            dp_state.is_wide,
-            lambda _: sprites_wide_padded,
-            lambda _: sprites_normal_padded,
-            operand=None
-        )
 
         def render_densepack_parts(raster):
             idx = jnp.arange(self.consts.DENSEPACK_NUMBER_OF_PARTS, dtype=jnp.int32)
@@ -3152,7 +3116,8 @@ class LaserGatesRenderer(JAXGameRenderer):
 
             def step(r, args):
                 i, y = args
-                return jru.render_at(r, dp_x, y, all_sprites[i]), None
+                mask = densepack_masks[i]
+                return jru.render_at(r, dp_x, y, mask), None
 
             raster_out, _ = jax.lax.scan(step, raster, (idx, ys))
             return raster_out
@@ -3165,6 +3130,8 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # -------- Render Detonator --------
 
+        detonator_colored = self._colorize_mask(SPRITE_DETONATOR, color_id("DETONATOR_COLOR"))
+
         raster = jnp.where(
             jnp.logical_and(dn_state.is_in_current_event, dn_state.is_alive),
             jru.render_at(
@@ -3172,7 +3139,7 @@ class LaserGatesRenderer(JAXGameRenderer):
                     raster,
                     dn_state.x,
                     dn_state.y,
-                    recolor_sprite(SPRITE_DETONATOR, jnp.array(self.consts.DETONATOR_COLOR)),
+                    detonator_colored,
                 ),
                 dn_state.x + 2,
                 dn_state.y + 25,
@@ -3183,10 +3150,13 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # -------- Render Energy Pod --------
 
-        energy_pod_colored = jnp.where(ep_state.animation_timer < (self.consts.ENERGY_POD_ANIMATION_SPEED // 2),
-                                       recolor_sprite(SPRITE_ENERGY_POD, jnp.array(self.consts.ENERGY_POD_COLOR_GREEN)),
-                                       recolor_sprite(SPRITE_ENERGY_POD, jnp.array(self.consts.ENERGY_POD_COLOR_GRAY))
-                                       )
+        energy_pod_green = self._colorize_mask(SPRITE_ENERGY_POD, color_id("ENERGY_POD_COLOR_GREEN"))
+        energy_pod_gray = self._colorize_mask(SPRITE_ENERGY_POD, color_id("ENERGY_POD_COLOR_GRAY"))
+        energy_pod_colored = jnp.where(
+            ep_state.animation_timer < (self.consts.ENERGY_POD_ANIMATION_SPEED // 2),
+            energy_pod_green,
+            energy_pod_gray,
+        )
 
         raster = jnp.where(
             jnp.logical_and(ep_state.is_in_current_event, ep_state.is_alive),
@@ -3228,10 +3198,10 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # -------- Render gui --------
 
-        sprite_gui_colored_background_blue = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BLUE)) # For Score
-        sprite_gui_colored_background_green = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GREEN)) # For Energy, Shields and Dtime
-        sprite_gui_colored_background_beige = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_BEIGE))
-        sprite_gui_colored_background_gray = recolor_sprite(SPRITE_GUI_COLORED_BACKGROUND, jnp.array(self.consts.GUI_COLORED_BACKGROUND_COLOR_GRAY))
+        sprite_gui_colored_background_blue = self._colorize_mask(SPRITE_GUI_COLORED_BACKGROUND, color_id("GUI_COLORED_BACKGROUND_COLOR_BLUE")) # For Score
+        sprite_gui_colored_background_green = self._colorize_mask(SPRITE_GUI_COLORED_BACKGROUND, color_id("GUI_COLORED_BACKGROUND_COLOR_GREEN")) # For Energy, Shields and Dtime
+        sprite_gui_colored_background_beige = self._colorize_mask(SPRITE_GUI_COLORED_BACKGROUND, color_id("GUI_COLORED_BACKGROUND_COLOR_BEIGE"))
+        sprite_gui_colored_background_gray = self._colorize_mask(SPRITE_GUI_COLORED_BACKGROUND, color_id("GUI_COLORED_BACKGROUND_COLOR_GRAY"))
         blinking_sprite_gui_colored_background = jnp.where((state.step_counter % self.consts.INSTRUMENT_PANEL_ANIMATION_SPEED) < (self.consts.INSTRUMENT_PANEL_ANIMATION_SPEED // 2), sprite_gui_colored_background_beige, sprite_gui_colored_background_gray)
 
         # Colored backgrounds ---------------
@@ -3312,37 +3282,38 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # Text ---------------
 
-        # score text
-        required_text_and_bar_color = jnp.where(jnp.array(True), jnp.array(self.consts.GUI_TEXT_COLOR_GRAY), jnp.array(self.consts.GUI_TEXT_COLOR_BEIGE))
+        required_text_and_bar_color_id = color_id("GUI_TEXT_COLOR_GRAY")
+        gui_text_score = self._colorize_mask(SPRITE_GUI_TEXT_SCORE, required_text_and_bar_color_id)
+        gui_text_energy = self._colorize_mask(SPRITE_GUI_TEXT_ENERGY, required_text_and_bar_color_id)
+        gui_text_shields = self._colorize_mask(SPRITE_GUI_TEXT_SHIELDS, required_text_and_bar_color_id)
+        gui_text_dtime = self._colorize_mask(SPRITE_GUI_TEXT_DTIME, required_text_and_bar_color_id)
+
         raster = jru.render_at(
             raster,
             self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             score_col_bg_y + 2,
-            recolor_sprite(SPRITE_GUI_TEXT_SCORE, required_text_and_bar_color),
+            gui_text_score,
         )
 
-        # energy text
         raster = jru.render_at(
             raster,
             self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             energy_col_bg_y + 2,
-            recolor_sprite(SPRITE_GUI_TEXT_ENERGY, required_text_and_bar_color),
+            gui_text_energy,
         )
 
-        # shields text
         raster = jru.render_at(
             raster,
             self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             shields_col_bg_y + 2,
-            recolor_sprite(SPRITE_GUI_TEXT_SHIELDS, required_text_and_bar_color),
+            gui_text_shields,
         )
 
-        # d-time text
         raster = jru.render_at(
             raster,
             self.consts.GUI_X_BASE + self.consts.GUI_BLACK_BACKGROUND_X_OFFSET + 5,
             dtime_col_bg_y + 2,
-            recolor_sprite(SPRITE_GUI_TEXT_DTIME, required_text_and_bar_color),
+            gui_text_dtime,
         )
 
         # Bars ---------------
@@ -3356,8 +3327,8 @@ class LaserGatesRenderer(JAXGameRenderer):
             self.consts.MAX_ENERGY, # maximum value
             40, # width
             2, # height
-            required_text_and_bar_color, # color of filled part
-            jnp.array((0, 0, 0, 0)) # color of unfilled part
+            required_text_and_bar_color_id, # color of filled part
+            color_id("GUI_BAR_EMPTY_COLOR") # color of unfilled part
         )
 
         # shields bar
@@ -3369,8 +3340,8 @@ class LaserGatesRenderer(JAXGameRenderer):
             self.consts.MAX_SHIELDS, # maximum value
             31, # width
             2, # height
-            required_text_and_bar_color, # color of filled part
-            jnp.array((0, 0, 0, 0)) # color of unfilled part
+            required_text_and_bar_color_id, # color of filled part
+            color_id("GUI_BAR_EMPTY_COLOR") # color of unfilled part
         )
 
         # d-time bar
@@ -3382,8 +3353,8 @@ class LaserGatesRenderer(JAXGameRenderer):
             self.consts.MAX_DTIME, # maximum value
             40, # width
             2, # height
-            required_text_and_bar_color, # color of filled part
-            jnp.array((0, 0, 0, 0)) # color of unfilled part
+            required_text_and_bar_color_id, # color of filled part
+            color_id("GUI_BAR_EMPTY_COLOR") # color of unfilled part
         )
 
         # Score ---------------
@@ -3391,7 +3362,7 @@ class LaserGatesRenderer(JAXGameRenderer):
         # digits of score
         score_array = jru.int_to_digits(state.score, 6) # Convert integer to array with its digits
 
-        recolor_single = lambda sprite_idx: recolor_sprite(sprite_idx, required_text_and_bar_color)
+        recolor_single = lambda sprite_idx: self._colorize_mask(sprite_idx, required_text_and_bar_color_id)
         recolored_sprites = jax.vmap(recolor_single)(SPRITE_GUI_SCORE_DIGITS) # Vmap over all digit sprites and recolor to desired color
 
         first_non_zero = jnp.argmax(score_array != 0) # Index of first element in score_array that is not zero
@@ -3415,38 +3386,35 @@ class LaserGatesRenderer(JAXGameRenderer):
                            )
 
         # Comma, render only if score > 999
-        raster = jnp.where(state.score > 999,
-                           jru.render_at(
-                               raster,
-                               base_x - 14,
-                               score_col_bg_y + 8,
-                               recolor_sprite(SPRITE_GUI_SCORE_COMMA, required_text_and_bar_color),
-                           ),
-                           raster
-                           )
+        gui_score_comma = self._colorize_mask(SPRITE_GUI_SCORE_COMMA, required_text_and_bar_color_id)
+        raster = jnp.where(
+            state.score > 999,
+            jru.render_at(
+                raster,
+                base_x - 14,
+                score_col_bg_y + 8,
+                gui_score_comma,
+            ),
+            raster,
+        )
 
 
         # -------- Render player --------
         timer = state.animation_timer.astype(jnp.int32) - (255 - self.consts.PLAYER_COLOR_CHANGE_DURATION)
+        player_normal = self._colorize_mask(SPRITE_PLAYER, color_id("PLAYER_NORMAL_COLOR"))
+        player_collision = self._colorize_mask(SPRITE_PLAYER, color_id("PLAYER_COLLISION_COLOR"))
+        player_sprite = jnp.where(timer <= 0, player_normal, player_collision)
         raster = jru.render_at(
             raster,
             state.player_x,
             state.player_y,
-            recolor_sprite(SPRITE_PLAYER, jnp.where(timer <= 0, jnp.array(self.consts.PLAYER_NORMAL_COLOR), jnp.array(self.consts.PLAYER_COLLISION_COLOR))),
+            player_sprite,
             flip_horizontal=state.player_facing_direction < 0,
         )
 
         # -------- Render player missile --------
 
-        base_r, base_g, base_b, base_t = self.consts.PLAYER_MISSILE_BASE_COLOR
-        color_change = state.player_missile.velocity * self.consts.PLAYER_MISSILE_COLOR_CHANGE_SPEED
-
-        r = jnp.clip(base_r + color_change, 0, 255)
-        g = jnp.clip(base_g + color_change, 0, 255)
-        b = jnp.clip(base_b + color_change, 0, 255)
-        t = jnp.clip(base_t + color_change, 0, 255)
-
-        colored_player_missile = recolor_sprite(SPRITE_PLAYER_MISSILE, jnp.array((r, g, b, t)))
+        colored_player_missile = self._colorize_mask(SPRITE_PLAYER_MISSILE, color_id("PLAYER_MISSILE_BASE_COLOR"))
         raster = jnp.where(state.player_missile.direction != 0,
                            jru.render_at(
                       raster,
@@ -3459,49 +3427,56 @@ class LaserGatesRenderer(JAXGameRenderer):
                            )
 
         # -------- Render mountains --------
+        # --- FIX 1: Use render_at_clipped for scrolling mountains ---
 
         # Lower mountains
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.lower_mountains.x1,
             state.lower_mountains.y,
             SPRITE_LOWER_MOUNTAIN,
+            flip_offset=self.OFFSET_LOWER_MOUNTAIN
         )
 
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.lower_mountains.x2,
             state.lower_mountains.y,
             SPRITE_LOWER_MOUNTAIN,
+            flip_offset=self.OFFSET_LOWER_MOUNTAIN
         )
 
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.lower_mountains.x3,
             state.lower_mountains.y,
             SPRITE_LOWER_MOUNTAIN,
+            flip_offset=self.OFFSET_LOWER_MOUNTAIN
         )
 
         # Upper mountains
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.upper_mountains.x1,
             state.upper_mountains.y,
             SPRITE_UPPER_MOUNTAIN,
+            flip_offset=self.OFFSET_UPPER_MOUNTAIN
         )
 
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.upper_mountains.x2,
             state.upper_mountains.y,
             SPRITE_UPPER_MOUNTAIN,
+            flip_offset=self.OFFSET_UPPER_MOUNTAIN
         )
 
-        raster = jru.render_at(
+        raster = jru.render_at_clipped(
             raster,
             state.upper_mountains.x3,
             state.upper_mountains.y,
             SPRITE_UPPER_MOUNTAIN,
+            flip_offset=self.OFFSET_UPPER_MOUNTAIN
         )
 
         # Weird black stripe 1
@@ -3520,4 +3495,4 @@ class LaserGatesRenderer(JAXGameRenderer):
             SPRITE_BLACK_STRIPE,
         )
 
-        return raster
+        return self.jr.render_from_palette(raster, self.PALETTE)
