@@ -580,16 +580,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             )
         
         def update_ghost_action(type, mode, action, position, key, skip):
-            return jax.lax.cond(
-                skip or mode == GhostMode.ENJAILED or mode == GhostMode.RETURNING,
-                lambda: action,
-                lambda: choose_direction(type, mode, action, position, key)
+            return jnp.asarray(
+                jax.lax.cond(
+                    skip or mode == GhostMode.ENJAILED or mode == GhostMode.RETURNING,
+                    lambda: action,
+                    lambda: choose_direction(type, mode, action, position, key)
+                ),
+                dtype=jnp.uint8
             )
 
         def choose_direction(type, mode, action, position, key):
             allowed = get_allowed_directions(position, action, state.level.dofmaze)
             return jax.lax.cond(
-                not allowed,
+                len(allowed) == 0,
                 lambda: action,
                 lambda: jax.lax.cond(
                     len(allowed) == 1,
@@ -805,7 +808,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # 1) Choose new direction based on last position, action and fruit timer
         allowed = get_allowed_directions(state.fruit.position, state.fruit.action, state.level.dofmaze)
         new_dir = jax.lax.cond(
-            not allowed,
+            len(allowed) == 0,
             lambda: state.fruit.action,
             lambda: jax.lax.cond(
                 len(allowed) == 1,
@@ -896,6 +899,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
         self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)), self.sprites["score"])
 
+    # TODO: Make this and all of its dependencies jittable
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
         """Renders the current game state on screen."""
@@ -1044,48 +1048,66 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 # -------- Helper functions --------
 def to_hashable(value):
     """Converts a value to a hashable type (e.g. from chex.Array to int or float)."""
-    if hasattr(value, "item"):
-        return value.item()
-    return value
+    return jax.lax.cond(
+        hasattr(value, "item"),
+        lambda: value.item(),
+        lambda: value
+    )
 
 
-def get_digit_count(number: chex.Array) -> int:
+def get_digit_count(number: chex.Array):
     """Returns the number of digits in a given decimal number."""
-    return len(str(abs(number)))
+    number = jnp.abs(number)
+    return jax.lax.cond(
+        number == 0,
+        lambda: 1,
+        lambda: jnp.floor(jnp.log10(number) + 1).astype(jnp.uint8)
+    )
 
 
 def last_pressed_action(action, prev_action):
     """Returns the last pressed action in cases where both actions are pressed"""
-    if action == Action.UPRIGHT:
-        if prev_action == Action.UP:
-            return Action.RIGHT
-        else:
-            return Action.UP
-    elif action == Action.UPLEFT:
-        if prev_action == Action.UP:
-            return Action.LEFT
-        else:
-            return Action.UP
-    elif action == Action.DOWNRIGHT:
-        if prev_action == Action.DOWN:
-            return Action.RIGHT
-        else:
-            return Action.DOWN
-    elif action == Action.DOWNLEFT:
-        if prev_action == Action.DOWN:
-            return Action.LEFT
-        else:
-            return Action.DOWN
-    else:
-        return action
+    return jax.lax.cond(
+        action == Action.UPRIGHT,
+        lambda: jax.lax.cond(
+            prev_action == Action.UP,
+            lambda: Action.RIGHT,
+            lambda: Action.UP
+        ),
+        lambda: jax.lax.cond(
+            action == Action.UPLEFT,
+            lambda: jax.lax.cond(
+                prev_action == Action.UP,
+                lambda: Action.LEFT,
+                lambda: Action.UP
+            ),
+            lambda: jax.lax.cond(
+                action == Action.DOWNRIGHT,
+                lambda: jax.lax.cond(
+                    prev_action == Action.DOWN,
+                    lambda: Action.RIGHT,
+                    lambda: Action.DOWN
+                ),
+                lambda: jax.lax.cond(
+                    action == Action.DOWNLEFT,
+                    lambda: jax.lax.cond(
+                        prev_action == Action.DOWN,
+                        lambda: Action.LEFT,
+                        lambda: Action.DOWN
+                    ),
+                    lambda: action
+                )
+            )
+        )
+    )
 
 
 def dof(pos: chex.Array, dofmaze: chex.Array):
     """Degree of freedom of the object, can it move up, right, left, down"""
     x, y = pos
-    grid_x = (x+5)//4
-    grid_y = (y+3)//4
-    return dofmaze[grid_x][grid_y]
+    grid_x = (x + 5) // 4
+    grid_y = (y + 3) // 4
+    return dofmaze[grid_x, grid_y]
 
 
 def available_directions(pos: chex.Array, dofmaze: chex.Array):
@@ -1107,7 +1129,12 @@ def available_directions(pos: chex.Array, dofmaze: chex.Array):
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
     on_horizontal_grid = y % 12 == 6 # can potentially move left/right
     up, right, left, down = dof(pos, dofmaze)
-    return up and on_vertical_grid, right and on_horizontal_grid, left and on_horizontal_grid, down and on_vertical_grid
+    return jnp.array([
+        up & on_vertical_grid,
+        right & on_horizontal_grid,
+        left & on_horizontal_grid,
+        down & on_vertical_grid
+    ], dtype=jnp.bool_)
 
 
 def stop_wall(pos: chex.Array, dofmaze: chex.Array):
@@ -1128,7 +1155,12 @@ def stop_wall(pos: chex.Array, dofmaze: chex.Array):
     on_vertical_grid = x % 4 == 1 # can potentially move up/down
     on_horizontal_grid = y % 12 == 6 # can potentially move left/right
     up, right, left, down = dof(pos, dofmaze)
-    return not(up) and on_horizontal_grid, not(right) and on_vertical_grid, not(left) and on_vertical_grid, not(down) and on_horizontal_grid
+    return jnp.array([
+        ~up & on_horizontal_grid,
+        ~right & on_vertical_grid,
+        ~left & on_vertical_grid,
+        ~down & on_horizontal_grid
+    ], dtype=jnp.bool_)
 
 
 def get_allowed_directions(position: chex.Array, direction: chex.Array, dofmaze: chex.Array):
@@ -1136,15 +1168,27 @@ def get_allowed_directions(position: chex.Array, direction: chex.Array, dofmaze:
     Returns an array of all directions (indices) in which movement is possible.
     Turning is only allowed at the centre of each tile and reverting is not allowed.
     """
-    allowed = []
-    if position[0] % 4 == 1 and position[1] % 12 == 6: # on horizontal and vertical grid - tile centre
-        possible = available_directions(position, dofmaze) 
-        for i, can_go in zip(DIRECTIONS, possible):
-            if can_go and (direction == 0 or i != reverse_direction(direction)):
-                allowed.append(i)
-    else:
-        allowed.append(direction)
-    return allowed
+    # Check if the position is at the center of a tile
+    at_tile_center = (position[0] % 4 == 1) & (position[1] % 12 == 6)
+
+    def at_center(_):
+        possible = available_directions(position, dofmaze)
+
+        # Get viable (not obstructed by a wall and not reversing) directions
+        def check_direction(i, allowed):
+            can_go = possible[i]
+            action = i + 2  # Convert direction index to action index
+            is_not_reverse = (direction == 0) | (action != reverse_direction(direction))
+            return allowed.at[i].set(can_go & is_not_reverse)
+
+        allowed = jnp.zeros(len(DIRECTIONS), dtype=jnp.bool_)
+        allowed = jax.lax.fori_loop(0, len(DIRECTIONS), check_direction, allowed)
+        return jnp.where(allowed)[0] + 2  # Return action indices of allowed directions
+
+    def not_at_center(_):
+        return jnp.array([direction], dtype=jnp.uint8)
+
+    return jax.lax.cond(at_tile_center, at_center, not_at_center, None)
 
 
 def get_chase_target(ghost: GhostType,
@@ -1154,22 +1198,31 @@ def get_chase_target(ghost: GhostType,
     Compute the chase-mode target for each ghost:
     0=Red (Blinky), 1=Pink (Pinky), 2=Blue (Inky), 3=Orange (Sue)
     """
-    match ghost:
-        case GhostType.BLINKY:
-            # Target Pac-Man's current tile
-            return player_pos
-        case GhostType.PINKY:
-            # Target 4 tiles ahead of Pac-Man
-            return player_pos + 4*MsPacmanMaze.TILE_SCALE * ACTIONS[player_dir]
-        case GhostType.INKY:
-            # Target the tip of the vector from Blinky to two tiles ahead of Pac-Man, doubled
-            two_ahead = player_pos + 2*MsPacmanMaze.TILE_SCALE * ACTIONS[player_dir]
-            vect = two_ahead - blinky_pos
-            return blinky_pos + 2 * vect
-        case GhostType.SUE:
-            # Target Pac-Man if >8 tiles away, else target corner
-            dist = jnp.linalg.norm(ghost_position - player_pos)
-            return jnp.where(dist > 8*MsPacmanMaze.TILE_SCALE, player_pos, SCATTER_TARGETS[GhostType.SUE])
+    def get_blinky_target(_):
+        return player_pos
+    
+    def get_pinky_target(_):
+        return player_pos + 4*MsPacmanMaze.TILE_SCALE * ACTIONS[player_dir]
+    
+    def get_inky_target(_):
+        two_ahead = player_pos + 2*MsPacmanMaze.TILE_SCALE * ACTIONS[player_dir]
+        vect = two_ahead - blinky_pos
+        return blinky_pos + 2 * vect
+    
+    def get_sue_target(_):
+        dist = jnp.linalg.norm(ghost_position - player_pos)
+        return jnp.where(dist > 8*MsPacmanMaze.TILE_SCALE, player_pos, SCATTER_TARGETS[GhostType.SUE])
+    
+    return jax.lax.switch(
+        ghost,
+        (
+            get_blinky_target,  # GhostType.BLINKY
+            get_pinky_target,   # GhostType.PINKY
+            get_inky_target,    # GhostType.INKY
+            get_sue_target      # GhostType.SUE
+        ),
+        None
+    )
 
 
 def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, allowed: chex.Array, key: chex.Array):
@@ -1178,102 +1231,162 @@ def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, al
     If multiple options exist the direction is chosen that minimizes the distance on the longer axis - horizontal or vertical.
     If both distances are equal or multiple options exist on the same axis, the direction is chosen randomly.
     """
-    # Check allowed directions
-    if len(allowed) == 0: # If no direction allowed - Continue forward
-        return direction
-    if len(allowed) == 1: # If one direction allowed - Take it
-        return allowed[0]
+    n_allowed = allowed.shape[0]
 
-    # If multiple directions allowed - Get cost of allowed directions
-    cost = {}
-    for dir in allowed:
-        new_pos = position + ACTIONS[dir]
-        cost[to_hashable(dir)] = jnp.abs(new_pos[0] - target[0]) + jnp.abs(new_pos[1] - target[1])
-    min_cost = min(cost.values())
-    min_dirs = jnp.array([k for k, v in cost.items() if v == min_cost])
-    if len(min_dirs) == 1: # If one direction advantageous - Take it
-        return min_dirs[0]
-    
-    # If multiple directions advantageous - Prioritize the longer axis
-    horizontal_distance = jnp.abs(position[0] - target[0])
-    vertical_distance = jnp.abs(position[1] - target[1])
-    mask = jnp.full(len(min_dirs), False)
-    if horizontal_distance >= vertical_distance:
-        mask |= jnp.isin(min_dirs, jnp.array([Action.LEFT, Action.RIGHT]))
-    if vertical_distance >= horizontal_distance:
-        mask |= jnp.isin(min_dirs, jnp.array([Action.DOWN, Action.UP]))
+    # If no direction allowed - Continue forward
+    def no_allowed():
+        return direction.astype(allowed.dtype)
 
-    if jnp.sum(mask) == 0: # If no direction advantageous on longer axis - Choose randomly
-        return jax.random.choice(key, min_dirs)
-    if jnp.sum(mask) == 1: # If one direction advantageous on longer axis - Take it
-        return jnp.squeeze(min_dirs[mask])
-    else: # If multiple directions advantageous on longer or equal axis - Choose randomly with mask
-        return jax.random.choice(key, min_dirs[mask])
+    # If one direction allowed - Take it
+    def one_allowed():
+        return allowed[0].astype(allowed.dtype)
+
+    # If multiple directions allowed - Get cost of all possible steps and determine advantageous directions
+    def multi_allowed():
+        new_positions = position + ACTIONS[allowed]
+        costs = jnp.abs(new_positions - target).sum(axis=1)  # Manhattan distances
+        min_cost = jnp.min(costs)
+        min_mask = costs == min_cost
+        min_dirs = allowed[min_mask]
+
+        # If one direction advantageous - Take it
+        def one_min():
+            return min_dirs[0].astype(allowed.dtype)
+
+        # If multiple directions advantageous - Prioritize the longer axis
+        def multi_min():
+            h_dist = jnp.abs(position[0] - target[0])
+            v_dist = jnp.abs(position[1] - target[1])
+            h_dirs = jnp.array([int(Action.LEFT), int(Action.RIGHT)], dtype=jnp.int32)
+            v_dirs = jnp.array([int(Action.DOWN), int(Action.UP)], dtype=jnp.int32)
+            h_mask = jnp.isin(min_dirs, h_dirs)
+            v_mask = jnp.isin(min_dirs, v_dirs)
+            prefer_h = h_dist >= v_dist
+            prefer_v = v_dist >= h_dist
+            prefered = (h_mask & prefer_h) | (v_mask & prefer_v)
+            n_prefered = jnp.sum(prefered)
+
+            # If no direction advantageous on longer axis - Choose randomly
+            def no_long_axis():
+                return jax.random.choice(key, min_dirs).astype(allowed.dtype)
+
+            # If one direction advantageous on longer axis - Take it
+            def one_long_axis():
+                return jnp.squeeze(min_dirs[prefered]).astype(allowed.dtype)
+            
+            # If multiple directions advantageous on longer or equal axis - Choose randomly with mask
+            def multi_long_axis():
+                return jax.random.choice(key, min_dirs[prefered]).astype(allowed.dtype)
+
+            # Check for advantageous directions on longer axis
+            return jax.lax.cond(
+                n_prefered == 0,
+                no_long_axis,
+                lambda: jax.lax.cond(
+                    n_prefered == 1,
+                    one_long_axis,
+                    multi_long_axis
+                )
+            )
+
+        # Check for advantageous directions
+        return jax.lax.cond(
+            min_dirs.shape[0] == 1,
+            one_min,
+            multi_min
+        )
+
+    # Check for allowed directions
+    return jax.lax.cond(
+        n_allowed == 0,
+        no_allowed,
+        lambda: jax.lax.cond(
+            n_allowed == 1,
+            one_allowed,
+            multi_allowed
+        )
+    )
 
 
 def get_level_maze(level: chex.Array):
     """Returns the maze id that correpsonds to the current level."""
-    if level < 0:
-        raise ValueError("Invalid level!")
-    elif level < 3:
-        return 0
-    elif level < 6:
-        return 1
-    elif level < 10:
-        return 2
-    elif level < 14:
-        return 3
-    else:
-        if level % 4 == 0 or level % 4 == 1:
-            return 2
-        else:
-            return 3
+    return jax.lax.switch(  # Invalid levels (<0) are not handled explicitly and just get assigned to level 0
+        jnp.digitize(level, jnp.array([3, 6, 10, 14])),
+        (
+            lambda _: 0,                # Levels 1-3
+            lambda _: 1,                # Levels 4-6
+            lambda _: 2,                # Levels 7-10
+            lambda _: 3,                # Levels 11-14
+            lambda _: jax.lax.cond(     # Levels 15+
+                (level % 4 == 0) | (level % 4 == 1),
+                lambda: 2,
+                lambda: 3
+            )
+        ),
+        None
+    )
 
 
 def get_level_fruit(level: chex, key: chex.Array):
     """Returns the fruit that corresponds to the current level."""
-    match level:
-        case 1: return FruitType.CHERRY
-        case 2: return FruitType.STRAWBERRY
-        case 3: return FruitType.ORANGE
-        case 4: return FruitType.PRETZEL
-        case 5: return FruitType.APPLE
-        case 6: return FruitType.PEAR
-        case 7: return FruitType.BANANA
-        case _: return jax.random.randint(key, (), 1, 8)
+    return jax.lax.cond(
+        level > 7,
+        lambda: jax.random.randint(key, (), 1, 8),
+        lambda: jax.lax.switch(
+            level,
+            (
+                lambda _: FruitType.CHERRY,     # Level 0 - Invalid level, defaults to cherry
+                lambda _: FruitType.CHERRY,     # Level 1
+                lambda _: FruitType.STRAWBERRY, # Level 2
+                lambda _: FruitType.ORANGE,     # Level 3
+                lambda _: FruitType.PRETZEL,    # Level 4
+                lambda _: FruitType.APPLE,      # Level 5
+                lambda _: FruitType.PEAR,       # Level 6
+                lambda _: FruitType.BANANA      # Level 7
+            ),
+            None
+        )
+    )
 
 
 def get_random_tunnel(level: chex.Array, key: chex.Array):
     """Returns the position and exit direction of a random tunnel."""
     maze = get_level_maze(level)
-    tunnel_heights = MsPacmanMaze.TUNNEL_HEIGHTS[maze]
-    tunnels = [[0, tunnel_heights[0], Action.RIGHT], [MsPacmanMaze.WIDTH - 1, tunnel_heights[0], Action.LEFT], 
-               [0, tunnel_heights[1], Action.RIGHT], [MsPacmanMaze.WIDTH - 1, tunnel_heights[1], Action.LEFT]]
-    if tunnel_heights[1] == 0: # If the second element is 0, there is only one pair of tunnels
-        tunnel_idx = jax.random.randint(key, (), 0, 2)
-    else:
-        tunnel_idx = jax.random.randint(key, (), 0, 4)
+    tunnel_heights = jnp.array(MsPacmanMaze.TUNNEL_HEIGHTS)[maze]
 
-    tunnel = tunnels[tunnel_idx]
-    tunnel_pos = tunnel[:2]
-    tunnel_dir = tunnel[2]
-    return tunnel_pos, tunnel_dir
+    tunnels_dir = jnp.array([
+        int(Action.RIGHT),
+        int(Action.LEFT),
+        int(Action.RIGHT),
+        int(Action.LEFT)
+    ], dtype=jnp.uint8)
+
+    tunnels_pos = jnp.array([
+        [0, tunnel_heights[0]],
+        [MsPacmanMaze.WIDTH - 1, tunnel_heights[0]],
+        [0, tunnel_heights[1]],
+        [MsPacmanMaze.WIDTH - 1, tunnel_heights[1]]
+    ], dtype=jnp.int32)
+
+    # If the second element is 0, there is only one pair of tunnels
+    max_choices = jax.lax.cond(tunnel_heights[1] == 0, lambda: 2, lambda: 4)
+    tunnel_idx = jax.random.randint(key, (), 0, max_choices)
+
+    return tunnels_pos[tunnel_idx], tunnels_dir[tunnel_idx]
 
 
 def reverse_direction(dir_idx: chex.Array):
     """Inverts the direction if possible."""
-    INV_DIR = {2:5, 3:4, 4:3, 5:2}
-    dir_idx = to_hashable(dir_idx)
-    if dir_idx not in INV_DIR:
-        return dir_idx
-    return INV_DIR[dir_idx]
+    # Mapping for actions: 0->0, 1->1, 2->5, 3->4, 4->3, 5->2
+    inv_map = jnp.array([0, 1, 5, 4, 3, 2], dtype=jnp.int32)
+    idx = jnp.asarray(dir_idx).astype(jnp.int32)
+    in_range = (idx >= 0) & (idx < inv_map.shape[0])
+    return jnp.where(in_range, inv_map[idx], idx).astype(idx.dtype)
     
 
 def detect_collision(position_1: chex.Array, position_2: chex.Array):
     """Checks if the two positions are closer than the collision threshold."""
-    if jnp.all(abs(jnp.array(position_1) - jnp.array(position_2)) < COLLISION_THRESHOLD):
-        return True
-    return False
+    return jnp.all(abs(jnp.array(position_1) - jnp.array(position_2)) < COLLISION_THRESHOLD)
 
 
 # -------- Reset functions --------
