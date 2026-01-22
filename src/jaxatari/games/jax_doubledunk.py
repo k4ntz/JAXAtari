@@ -35,6 +35,9 @@ class OffensiveAction(IntEnum):
 class DefensiveStrategy(IntEnum):
     LANE_DEFENSE = 0
     TIGHT_DEFENSE = 1
+    PASS_DEFENSE = 2
+    PICK_DEFENSE = 3
+    REBOUND_DEFENSE = 4
 
 # Strategies based on Manual
 # Note: "Jump" and "Shoot" are often combined or sequential. 
@@ -549,40 +552,94 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # --- Defensive Logic (Target Calculation) ---
         
-        # P1 Defensive Targets (if P1 is defending)
-        p1_in_target_lane_x = (state.player2_inside.x + state.player2_outside.x) // 2
-        p1_in_target_lane_y = (state.player2_inside.y + state.player2_outside.y) // 2
-        p1_out_target_lane_x = state.player2_outside.x
-        p1_out_target_lane_y = state.player2_outside.y
+        # Helper to select target based on strategy
+        def select_def_target(strat, t_lane, t_tight, t_pass, t_pick, t_reb):
+            return jax.lax.select(
+                strat == DefensiveStrategy.LANE_DEFENSE, t_lane,
+                jax.lax.select(
+                    strat == DefensiveStrategy.TIGHT_DEFENSE, t_tight,
+                    jax.lax.select(
+                        strat == DefensiveStrategy.PASS_DEFENSE, t_pass,
+                        jax.lax.select(
+                            strat == DefensiveStrategy.PICK_DEFENSE, t_pick,
+                            t_reb # REBOUND
+                        )
+                    )
+                )
+            )
+
+        # --- P1 Defensive Targets (if P1 is defending) ---
+        # Opponents: P2 Inside, P2 Outside
         
-        p1_in_target_tight_x = state.player2_inside.x
-        p1_in_target_tight_y = state.player2_inside.y
-        p1_out_target_tight_x = state.player2_outside.x
-        p1_out_target_tight_y = state.player2_outside.y
+        # 1. TIGHT (Man-to-man)
+        p1_in_t_tight_x, p1_in_t_tight_y = state.player2_inside.x, state.player2_inside.y
+        p1_out_t_tight_x, p1_out_t_tight_y = state.player2_outside.x, state.player2_outside.y
         
-        p1_in_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_in_target_lane_x, p1_in_target_tight_x)
-        p1_in_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_in_target_lane_y, p1_in_target_tight_y)
-        p1_out_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_out_target_lane_x, p1_out_target_tight_x)
-        p1_out_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p1_out_target_lane_y, p1_out_target_tight_y)
+        # 2. LANE (Inside helps middle)
+        p1_in_t_lane_x = (state.player2_inside.x + state.player2_outside.x) // 2
+        p1_in_t_lane_y = (state.player2_inside.y + state.player2_outside.y) // 2
+        p1_out_t_lane_x, p1_out_t_lane_y = p1_out_t_tight_x, p1_out_t_tight_y
+        
+        # 3. PASS (Guard the passing lane - midpoint)
+        mid_p2_x = (state.player2_inside.x + state.player2_outside.x) // 2
+        mid_p2_y = (state.player2_inside.y + state.player2_outside.y) // 2
+        p1_in_t_pass_x, p1_in_t_pass_y = mid_p2_x, mid_p2_y
+        p1_out_t_pass_x, p1_out_t_pass_y = mid_p2_x, mid_p2_y
+        
+        # 4. PICK (Switch on close proximity)
+        dist_p2 = jnp.sqrt((state.player2_inside.x - state.player2_outside.x)**2 + (state.player2_inside.y - state.player2_outside.y)**2)
+        switch_p1 = dist_p2 < 15
+        p1_in_t_pick_x = jax.lax.select(switch_p1, state.player2_outside.x, state.player2_inside.x)
+        p1_in_t_pick_y = jax.lax.select(switch_p1, state.player2_outside.y, state.player2_inside.y)
+        p1_out_t_pick_x = jax.lax.select(switch_p1, state.player2_inside.x, state.player2_outside.x)
+        p1_out_t_pick_y = jax.lax.select(switch_p1, state.player2_inside.y, state.player2_outside.y)
+        
+        # 5. REBOUND (Inside guards basket)
+        p1_in_t_reb_x, p1_in_t_reb_y = basket_x, basket_y + 10
+        p1_out_t_reb_x, p1_out_t_reb_y = p1_out_t_tight_x, p1_out_t_tight_y
+
+        p1_in_def_x = select_def_target(defensive_strat, p1_in_t_lane_x, p1_in_t_tight_x, p1_in_t_pass_x, p1_in_t_pick_x, p1_in_t_reb_x)
+        p1_in_def_y = select_def_target(defensive_strat, p1_in_t_lane_y, p1_in_t_tight_y, p1_in_t_pass_y, p1_in_t_pick_y, p1_in_t_reb_y)
+        p1_out_def_x = select_def_target(defensive_strat, p1_out_t_lane_x, p1_out_t_tight_x, p1_out_t_pass_x, p1_out_t_pick_x, p1_out_t_reb_x)
+        p1_out_def_y = select_def_target(defensive_strat, p1_out_t_lane_y, p1_out_t_tight_y, p1_out_t_pass_y, p1_out_t_pick_y, p1_out_t_reb_y)
         
         p1_in_def_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, p1_in_def_x, p1_in_def_y)
         p1_out_def_action = get_move_to_target(state.player1_outside.x, state.player1_outside.y, p1_out_def_x, p1_out_def_y)
 
-        # P2 Defensive Targets (if P2 is defending)
-        p2_in_target_lane_x = (state.player1_inside.x + state.player1_outside.x) // 2
-        p2_in_target_lane_y = (state.player1_inside.y + state.player1_outside.y) // 2
-        p2_out_target_lane_x = state.player1_outside.x
-        p2_out_target_lane_y = state.player1_outside.y
+        # --- P2 Defensive Targets (if P2 is defending) ---
+        # Opponents: P1 Inside, P1 Outside
 
-        p2_in_target_tight_x = state.player1_inside.x
-        p2_in_target_tight_y = state.player1_inside.y
-        p2_out_target_tight_x = state.player1_outside.x
-        p2_out_target_tight_y = state.player1_outside.y
+        # 1. TIGHT
+        p2_in_t_tight_x, p2_in_t_tight_y = state.player1_inside.x, state.player1_inside.y
+        p2_out_t_tight_x, p2_out_t_tight_y = state.player1_outside.x, state.player1_outside.y
 
-        p2_in_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_in_target_lane_x, p2_in_target_tight_x)
-        p2_in_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_in_target_lane_y, p2_in_target_tight_y)
-        p2_out_def_x = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_out_target_lane_x, p2_out_target_tight_x)
-        p2_out_def_y = jax.lax.select(defensive_strat == DefensiveStrategy.LANE_DEFENSE, p2_out_target_lane_y, p2_out_target_tight_y)
+        # 2. LANE
+        p2_in_t_lane_x = (state.player1_inside.x + state.player1_outside.x) // 2
+        p2_in_t_lane_y = (state.player1_inside.y + state.player1_outside.y) // 2
+        p2_out_t_lane_x, p2_out_t_lane_y = p2_out_t_tight_x, p2_out_t_tight_y
+
+        # 3. PASS
+        mid_p1_x = (state.player1_inside.x + state.player1_outside.x) // 2
+        mid_p1_y = (state.player1_inside.y + state.player1_outside.y) // 2
+        p2_in_t_pass_x, p2_in_t_pass_y = mid_p1_x, mid_p1_y
+        p2_out_t_pass_x, p2_out_t_pass_y = mid_p1_x, mid_p1_y
+
+        # 4. PICK
+        dist_p1 = jnp.sqrt((state.player1_inside.x - state.player1_outside.x)**2 + (state.player1_inside.y - state.player1_outside.y)**2)
+        switch_p2 = dist_p1 < 15
+        p2_in_t_pick_x = jax.lax.select(switch_p2, state.player1_outside.x, state.player1_inside.x)
+        p2_in_t_pick_y = jax.lax.select(switch_p2, state.player1_outside.y, state.player1_inside.y)
+        p2_out_t_pick_x = jax.lax.select(switch_p2, state.player1_inside.x, state.player1_outside.x)
+        p2_out_t_pick_y = jax.lax.select(switch_p2, state.player1_inside.y, state.player1_outside.y)
+
+        # 5. REBOUND
+        p2_in_t_reb_x, p2_in_t_reb_y = basket_x, basket_y + 10
+        p2_out_t_reb_x, p2_out_t_reb_y = p2_out_t_tight_x, p2_out_t_tight_y
+
+        p2_in_def_x = select_def_target(defensive_strat, p2_in_t_lane_x, p2_in_t_tight_x, p2_in_t_pass_x, p2_in_t_pick_x, p2_in_t_reb_x)
+        p2_in_def_y = select_def_target(defensive_strat, p2_in_t_lane_y, p2_in_t_tight_y, p2_in_t_pass_y, p2_in_t_pick_y, p2_in_t_reb_y)
+        p2_out_def_x = select_def_target(defensive_strat, p2_out_t_lane_x, p2_out_t_tight_x, p2_out_t_pass_x, p2_out_t_pick_x, p2_out_t_reb_x)
+        p2_out_def_y = select_def_target(defensive_strat, p2_out_t_lane_y, p2_out_t_tight_y, p2_out_t_pass_y, p2_out_t_pick_y, p2_out_t_reb_y)
 
         p2_in_def_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, p2_in_def_x, p2_in_def_y)
         p2_out_def_action = get_move_to_target(state.player2_outside.x, state.player2_outside.y, p2_out_def_x, p2_out_def_y)
@@ -1211,10 +1268,16 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         key, strat_key = random.split(state.key)
 
         # Enemy choices
-        random_offensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=3) # 0, 1, 2
-        enemy_offensive_strategy = jax.lax.switch(random_offensive_idx, [lambda: PICK_AND_ROLL, lambda: GIVE_AND_GO, lambda: MR_OUTSIDE_SHOOTS])
+        random_offensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=5) # 0, 1, 2, 3, 4
+        enemy_offensive_strategy = jax.lax.switch(random_offensive_idx, [
+            lambda: PICK_AND_ROLL, 
+            lambda: GIVE_AND_GO, 
+            lambda: MR_OUTSIDE_SHOOTS,
+            lambda: PICK_PLAY,
+            lambda: MR_INSIDE_SHOOTS
+        ])
         
-        random_defensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=2) # 0, 1
+        random_defensive_idx = random.randint(strat_key, shape=(), minval=0, maxval=5) # 0, 1, 2, 3, 4
         enemy_defensive_strategy = random_defensive_idx
 
         def start_game(s, selected_off, selected_def, direction):
@@ -1288,11 +1351,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # Case 2: P2 Has Ball (Enemy chooses Offense, User chooses Defense)
+        # Mapping from Manual:
+        # TOP (UP)          = LANE_DEFENSE
+        # UPPER L/R         = TIGHT_DEFENSE
+        # L/R               = PASS_DEFENSE
+        # LOWER L/R         = PICK_DEFENSE
+        # BOTTOM (DOWN)     = REBOUND_DEFENSE
+
         def_p1 = jax.lax.select(
-            jnp.logical_or(jnp.logical_or(is_up, is_down_left), is_down_right), DefensiveStrategy.LANE_DEFENSE,
+            is_up, DefensiveStrategy.LANE_DEFENSE,
             jax.lax.select(
-                jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(is_down, is_left), is_right), is_up_left), is_up_right), DefensiveStrategy.TIGHT_DEFENSE, 
-                state.strategy.defense_pattern
+                jnp.logical_or(is_up_left, is_up_right), DefensiveStrategy.TIGHT_DEFENSE,
+                jax.lax.select(
+                    jnp.logical_or(is_left, is_right), DefensiveStrategy.PASS_DEFENSE,
+                    jax.lax.select(
+                        jnp.logical_or(is_down_left, is_down_right), DefensiveStrategy.PICK_DEFENSE,
+                        jax.lax.select(
+                            is_down, DefensiveStrategy.REBOUND_DEFENSE,
+                            state.strategy.defense_pattern
+                        )
+                    )
+                )
             )
         )
         
@@ -1303,7 +1382,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         valid_input_p1_def = valid_input_p1_off
         # Prompt says: "whoever has the ball (User or enemy) must choose an offensive strategy and the other team chooses a defensive strategy"
-        # I'll stick to Up/Down for defense as I only have 2 defensive strategies.
 
         state_p2_ball = jax.lax.cond(
              valid_input_p1_def,
