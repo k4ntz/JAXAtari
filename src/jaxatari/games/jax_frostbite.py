@@ -415,6 +415,31 @@ class FrostbiteInfo(NamedTuple):
 class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, FrostbiteInfo, FrostbiteConstants]):
     """Bailey-only Frostbite implementation"""
     
+    # Minimal ALE action set for Frostbite
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: FrostbiteConstants = None):
         if consts is None:
             consts = FrostbiteConstants()
@@ -425,20 +450,6 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         self._substeps = 2
 
         self.renderer = FrostbiteRenderer(self.consts)
-        
-        # Action set
-        self.action_set = [
-            Action.NOOP,
-            Action.UP,
-            Action.RIGHT,
-            Action.DOWN,
-            Action.LEFT,
-            Action.UPRIGHT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.UPLEFT,
-            Action.FIRE,
-        ]
     
     def _get_point_value_for_level(self, level: jnp.ndarray):
         """Get point value for level × 10 in BCD format"""
@@ -1089,10 +1100,12 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FrostbiteState, action: int):
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
         """Framesafe wrapper: run the 60 Hz simulation multiple times per engine tick."""
         def body(carry, _):
             st, reward_sum = carry
-            obs, st, r, done, info = self._step_once(st, action)
+            obs, st, r, done, info = self._step_once(st, atari_action)
             # We keep simulating for determinism even if done flips; callers can stop next frame.
             return (st, reward_sum + r), (obs, done, info)
 
@@ -2768,7 +2781,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
     
     def action_space(self):
         """Return the action space"""
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
         """Return the observation space as Dict matching FrostbiteObservation fields"""

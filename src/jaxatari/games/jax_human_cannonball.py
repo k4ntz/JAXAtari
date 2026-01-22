@@ -163,20 +163,35 @@ class HumanCannonballInfo(NamedTuple):
     time: jnp.ndarray
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
+    # Minimal ALE action set for Human Cannonball
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: HumanCannonballConstants = None):
         consts = consts or HumanCannonballConstants()
         super().__init__(consts)
         self.renderer = HumanCannonballRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.DOWNLEFT
-        ]
         self.obs_size = 4+4+1+1+1+1
 
     # Determines the starting position of the human based on the angle
@@ -453,16 +468,18 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     def step(
         self, state: HumanCannonballState, action: chex.Array
     ) -> Tuple[HumanCannonballObservation, HumanCannonballState, float, bool, HumanCannonballInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # Step 1: Update the angle of the cannon
         new_angle_counter = jax.lax.cond(
             jnp.logical_or(         # If the action is UP, DOWN, UPLEFT or DOWNLEFT
                 jnp.logical_or(
-                    action == Action.UP,
-                    action == Action.DOWN),
+                    atari_action == Action.UP,
+                    atari_action == Action.DOWN),
                 jnp.logical_or(
-                    action == Action.UPLEFT,
-                    action == Action.DOWNLEFT
+                    atari_action == Action.UPLEFT,
+                    atari_action == Action.DOWNLEFT
                 )
             ),
             lambda s: s + 1,  # Increment the angle counter
@@ -474,13 +491,13 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             state.angle,
             state.human_launched,
             new_angle_counter,
-            action
+            atari_action
         )
 
         # Step 2: Update the position of the human projectile
         new_human_x, new_human_y, new_human_x_vel, new_human_y_vel, human_launched, tower_wall_hit = jax.lax.cond(
             jnp.logical_and(    # If human is in flight or the current action is FIRE
-                jnp.logical_or(state.human_launched, action == Action.FIRE),
+                jnp.logical_or(state.human_launched, atari_action == Action.FIRE),
                 jnp.mod(state.step_counter, 2) == 0,    # Only execute human_step on even steps (base implementation only moves the projectile every second tick)
             ),
             lambda _: self.human_step(   # Calculate the new position/velocity of the human via human_step
@@ -514,7 +531,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
                 state.water_tower_x,
                 tower_wall_hit,
                 state.human_launched,
-                action
+                atari_action
             ),
             lambda _: state.water_tower_x,  # Else, leave it unchanged
             operand=None
@@ -744,7 +761,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({

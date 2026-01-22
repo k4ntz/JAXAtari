@@ -204,6 +204,30 @@ class TennisInfo(NamedTuple):
 
 
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+    # Minimal ALE action set for Tennis (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(self, consts: TennisConstants = None):
         if consts is None:
@@ -294,11 +318,14 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                                 ),
                                 state.counter + 1, animator_state=AnimatorState(),random_key=state.random_key)
         
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         new_state = jax.lax.cond(state.game_state.is_finished,
                         lambda s: s,
                         lambda s: jax.lax.cond(s.game_state.pause_counter > 0,
                                                _pause_step,
-                                               lambda s_inner: self._normal_step(s_inner, action),
+                                               lambda s_inner: self._normal_step(s_inner, atari_action),
                                                s
                                                ),
                         state
@@ -311,20 +338,19 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return new_obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _normal_step(self, state: TennisState, action) -> TennisState:
+    def _normal_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates the entire state of the game by calling all step functions. Should be used when game is not paused.
 
         Args:
             state (TennisState): The current state of the game.
-            action: The action to apply.
-
+            atari_action: The translated ALE action to apply.
         Returns:
             TennisState: The updated state of the game.
         """
         new_state_after_score_check = self._check_score(state)
-        new_state_after_ball_step = self._ball_step(new_state_after_score_check, action)
-        new_player_state = self._player_step(new_state_after_ball_step, action)
+        new_state_after_ball_step = self._ball_step(new_state_after_score_check, atari_action)
+        new_player_state = self._player_step(new_state_after_ball_step, atari_action)
         new_enemy_state = self._enemy_step(new_state_after_ball_step)
         new_animator_state = self._animator_step(state, new_player_state, new_enemy_state)
 
@@ -1135,6 +1161,13 @@ class TennisInfo(NamedTuple):
 
 
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+    # ALE minimal action set: [NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT, UPFIRE, RIGHTFIRE, LEFTFIRE, DOWNFIRE, UPRIGHTFIRE, UPLEFTFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE]
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
+        Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
+        Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE,
+        Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
+    ], dtype=jnp.int32)
 
     def __init__(self, consts: TennisConstants = None):
         if consts is None:
@@ -1210,6 +1243,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         Returns:
             TennisState: The updated state of the game.
         """
+        # Translate agent action (0,1,2,...,17) to ALE action
+        atari_action = jnp.take(self.ACTION_SET, action)
         
         def _pause_step(state: TennisState) -> TennisState:
             return TennisState(state.player_state, state.enemy_state,
@@ -1229,7 +1264,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                         lambda s: s,
                         lambda s: jax.lax.cond(s.game_state.pause_counter > 0,
                                                _pause_step,
-                                               lambda s_inner: self._normal_step(s_inner, action),
+                                               lambda s_inner: self._normal_step(s_inner, atari_action),
                                                s
                                                ),
                         state
@@ -1242,20 +1277,20 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return new_obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _normal_step(self, state: TennisState, action) -> TennisState:
+    def _normal_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates the entire state of the game by calling all step functions. Should be used when game is not paused.
 
         Args:
             state (TennisState): The current state of the game.
-            action: The action to apply.
+            atari_action: The translated ALE action to apply.
 
         Returns:
             TennisState: The updated state of the game.
         """
         new_state_after_score_check = self._check_score(state)
-        new_state_after_ball_step = self._ball_step(new_state_after_score_check, action)
-        new_player_state = self._player_step(new_state_after_ball_step, action)
+        new_state_after_ball_step = self._ball_step(new_state_after_score_check, atari_action)
+        new_player_state = self._player_step(new_state_after_ball_step, atari_action)
         new_enemy_state = self._enemy_step(new_state_after_ball_step)
         new_animator_state = self._animator_step(state, new_player_state, new_enemy_state)
 
@@ -1265,8 +1300,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def render(self, state: TennisState) -> Tuple[jnp.ndarray]:
         return self.renderer.render(state)
 
-    def action_space(self) -> jnp.ndarray:
-        return spaces.Discrete(18)
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def flatten_player_obs(self, player_obs: PlayerObs):
         return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float64)]), jnp.array([player_obs.player_y.astype(jnp.float64)]),
@@ -1672,13 +1707,13 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                          state.player_game_score, state.enemy_game_score, is_finished)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _player_step(self, state: TennisState, action: chex.Array) -> PlayerState:
+    def _player_step(self, state: TennisState, atari_action: chex.Array) -> PlayerState:
         """
         Updates player position based on provided action and applies bounding box.
 
         Args:
             state (PlayerState): The current player state.
-            action (chex.Array): The action to apply.
+            atari_action (chex.Array): The translated ALE action to apply.
 
         Returns:
             PlayerState: The updated player state.
@@ -1689,33 +1724,33 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         # does the action contain UP
         up = jnp.any(
             jnp.array(
-                [action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT,
-                 action == Action.UPFIRE, action == Action.UPRIGHTFIRE,
-                 action == Action.UPLEFTFIRE]
+                [atari_action == Action.UP, atari_action == Action.UPRIGHT, atari_action == Action.UPLEFT,
+                 atari_action == Action.UPFIRE, atari_action == Action.UPRIGHTFIRE,
+                 atari_action == Action.UPLEFTFIRE]
             )
         )
         # does the action contain DOWN
         down = jnp.any(
             jnp.array(
-                [action == Action.DOWN, action == Action.DOWNRIGHT, action == Action.DOWNLEFT,
-                 action == Action.DOWNFIRE, action == Action.DOWNRIGHTFIRE,
-                 action == Action.DOWNLEFTFIRE]
+                [atari_action == Action.DOWN, atari_action == Action.DOWNRIGHT, atari_action == Action.DOWNLEFT,
+                 atari_action == Action.DOWNFIRE, atari_action == Action.DOWNRIGHTFIRE,
+                 atari_action == Action.DOWNLEFTFIRE]
             )
         )
         # does the action contain LEFT
         left = jnp.any(
             jnp.array(
-                [action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT,
-                 action == Action.LEFTFIRE, action == Action.UPLEFTFIRE,
-                 action == Action.DOWNLEFTFIRE]
+                [atari_action == Action.LEFT, atari_action == Action.UPLEFT, atari_action == Action.DOWNLEFT,
+                 atari_action == Action.LEFTFIRE, atari_action == Action.UPLEFTFIRE,
+                 atari_action == Action.DOWNLEFTFIRE]
             )
         )
         # does the action contain RIGHT
         right = jnp.any(
             jnp.array(
-                [action == Action.RIGHT, action == Action.UPRIGHT, action == Action.DOWNRIGHT,
-                 action == Action.RIGHTFIRE, action == Action.UPRIGHTFIRE,
-                 action == Action.DOWNRIGHTFIRE]
+                [atari_action == Action.RIGHT, atari_action == Action.UPRIGHT, atari_action == Action.DOWNRIGHT,
+                 atari_action == Action.RIGHTFIRE, atari_action == Action.UPRIGHTFIRE,
+                 atari_action == Action.DOWNRIGHTFIRE]
             )
         )
 
@@ -1927,14 +1962,14 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _ball_step(self, state: TennisState, action) -> TennisState:
+    def _ball_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates ball position by applying velocity and gravity. Also handles player-ball collisions
         and fires the ball if the provided action contains FIRE.
 
         Args:
             state (TennisState): The current state of the game.
-            action (chex.Array): The action to apply.
+            atari_action (chex.Array): The translated ALE action to apply.
 
         Returns:
             BallState: The updated ball state.
@@ -2069,11 +2104,11 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
         # check if fire is pressed
         fire = jnp.any(jnp.array(
-            [action == Action.FIRE, action == Action.LEFTFIRE, action == Action.DOWNLEFTFIRE,
-             action == Action.DOWNFIRE,
-             action == Action.DOWNRIGHTFIRE, action == Action.RIGHTFIRE,
-             action == Action.UPRIGHTFIRE, action == Action.UPFIRE,
-             action == Action.UPLEFTFIRE]))
+            [atari_action == Action.FIRE, atari_action == Action.LEFTFIRE, atari_action == Action.DOWNLEFTFIRE,
+             atari_action == Action.DOWNFIRE,
+             atari_action == Action.DOWNRIGHTFIRE, atari_action == Action.RIGHTFIRE,
+             atari_action == Action.UPRIGHTFIRE, atari_action == Action.UPFIRE,
+             atari_action == Action.UPLEFTFIRE]))
 
         any_entity_ready_to_fire = jnp.logical_or(
             jnp.logical_and(

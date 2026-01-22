@@ -209,6 +209,12 @@ class FreewayInfo(NamedTuple):
 
 
 class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
+    # Map agent action indices (0, 1, 2) to ALE console actions
+    # 0 -> NOOP, 1 -> UP, 2 -> DOWN
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.UP, Action.DOWN], dtype=jnp.int32
+    )
+
     def __init__(self, consts: FreewayConstants = None):
         if consts is None:
             consts = FreewayConstants()
@@ -263,6 +269,9 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FreewayState, action: int) -> tuple[FreewayObservation, FreewayState, float, bool, FreewayInfo]:
         """Take a step in the game given an action"""
+        # Translate compact agent action (0, 1, 2) to ALE console action constant
+        atari_action = jnp.take(self.ACTION_SET, action)
+
         # Update chicken position if not in cooldown
         dy = jnp.where(
             jnp.logical_and(
@@ -270,7 +279,11 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
             ),
             1.0,
-            jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
+            jnp.where(
+                atari_action == Action.UP,
+                -1.0,
+                jnp.where(atari_action == Action.DOWN, 1.0, 0.0),
+            ),
         )
 
         dy = jnp.where(
@@ -456,13 +469,8 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return state.game_over
 
     def action_space(self) -> spaces.Discrete:
-        """Returns the action space for Freeway.
-        Actions are:
-        0: NOOP
-        1: UP
-        2: DOWN
-        """
-        return spaces.Discrete(3)
+        """Returns the action space for Freeway."""
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Freeway.

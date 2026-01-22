@@ -396,11 +396,17 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         - 3 starting lives, max 6 total lives
         - Extra life every 100k points (up to max)
     """
+
+    # Minimal ALE action set for Sir Lancelot:
+    # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
     
     def __init__(self, consts: SirLancelotConstants = None):
         consts = consts or SirLancelotConstants()
         super().__init__(consts)
-        self.action_set = Action.get_all_values()
         self.renderer = SirLancelotRenderer(consts)
         
     def reset(self, key: jax.random.PRNGKey = None):

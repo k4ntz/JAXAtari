@@ -152,6 +152,15 @@ class TetrisInfo(NamedTuple):
 # ======================= Environment =====================
 
 class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, TetrisConstants]):
+    # ALE minimal action set: [NOOP, FIRE, RIGHT, LEFT, DOWN]
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP,
+        Action.FIRE,
+        Action.RIGHT,
+        Action.LEFT,
+        Action.DOWN
+    ], dtype=jnp.int32)
+
     def __init__(self, consts: TetrisConstants = None):
         """ Initialize the JaxTetris environment"""
 
@@ -351,7 +360,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         """
         Return the action space for the environment.
         """
-        return spaces.Discrete(5)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """
@@ -402,17 +411,18 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         Returns the new observation, state, reward, done flag, and info.
         """
         previous_state = state
-        a = action.astype(jnp.int32)
+        # Translate agent action (0,1,2,3,4) to ALE action
+        atari_action = jnp.take(self.ACTION_SET, action)
 
         # Decode inputs
-        is_left = (a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT)
-        is_right = (a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT)
-        is_up = (a == Action.UP) | (a == Action.UPLEFT) | (a == Action.UPRIGHT)
-        is_down = (a == Action.DOWN) | (a == Action.DOWNLEFT) | (a == Action.DOWNRIGHT)
-        is_fire = (a == Action.FIRE) | (a == Action.DOWNFIRE) | (a == Action.UPFIRE) \
-                  | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE) \
-                  | (a == Action.UPLEFTFIRE) | (a == Action.UPRIGHTFIRE) \
-                  | (a == Action.DOWNLEFTFIRE) | (a == Action.DOWNRIGHTFIRE)
+        is_left = (atari_action == Action.LEFT) | (atari_action == Action.UPLEFT) | (atari_action == Action.DOWNLEFT)
+        is_right = (atari_action == Action.RIGHT) | (atari_action == Action.UPRIGHT) | (atari_action == Action.DOWNRIGHT)
+        is_up = (atari_action == Action.UP) | (atari_action == Action.UPLEFT) | (atari_action == Action.UPRIGHT)
+        is_down = (atari_action == Action.DOWN) | (atari_action == Action.DOWNLEFT) | (atari_action == Action.DOWNRIGHT)
+        is_fire = (atari_action == Action.FIRE) | (atari_action == Action.DOWNFIRE) | (atari_action == Action.UPFIRE) \
+                  | (atari_action == Action.LEFTFIRE) | (atari_action == Action.RIGHTFIRE) \
+                  | (atari_action == Action.UPLEFTFIRE) | (atari_action == Action.UPRIGHTFIRE) \
+                  | (atari_action == Action.DOWNLEFTFIRE) | (atari_action == Action.DOWNRIGHTFIRE)
 
         # Allow only single-key actions: if multiple logical keys pressed, treat as NOOP
         pressed_count = (
@@ -429,7 +439,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         is_down = is_down & exactly_one
         is_fire = is_fire & exactly_one
 
-        do_reset = (a == self.consts.RESET)
+        do_reset = (atari_action == self.consts.RESET)
 
         tick_next = state.tick + jnp.int32(1)
         gravity_drop = (tick_next % jnp.int32(self.consts.GRAVITY_FRAMES) == 0).astype(jnp.int32)
@@ -449,8 +459,8 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         # ---- Rotation repeat gating ----
         # Allow FIRE to rotate only when instant_drop is disabled
         allow_fire_rotate = jnp.logical_not(jnp.bool_(self.instant_drop))
-        is_up_single = (a == Action.UP)
-        is_fire_single = (a == Action.FIRE)
+        is_up_single = (atari_action == Action.UP)
+        is_fire_single = (atari_action == Action.FIRE)
         rotate_pressed = is_up_single | (allow_fire_rotate & is_fire_single)
         last_was_rotate = ((state.last_action == Action.UP) |
                            (allow_fire_rotate & (state.last_action == Action.FIRE)))
@@ -538,7 +548,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             move_dir=new_move_dir,
             rot_timer=jnp.where(do_rotate_now, jnp.int32(self.consts.ROT_DAS_FRAMES), rot_timer),
             soft_timer=jnp.where(do_soft_now, jnp.int32(self.consts.SOFT_PACE_FRAMES), soft_timer),
-            last_action=a,
+            last_action=atari_action,
             banner_timer=next_banner_timer,
             banner_code=jnp.where(next_banner_timer == 0, jnp.int32(0), state.banner_code)
         )

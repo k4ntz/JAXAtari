@@ -6,6 +6,7 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import jaxatari.spaces as spaces
+from jaxatari.environment import JAXAtariAction as Action
 
 # Use the new rendering utilities
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -21,38 +22,15 @@ HEIGHT = 210
 # LEFTFIRE: int = 12
 # DOWNFIRE: int = 13
 
-LEFTFIRE = 9
-RIGHTFIRE = 8
-UPFIRE = 7
-DOWNFIRE = 6
-NOOP = 5
-FIRE = 4
-LEFT = 3
-RIGHT = 2
-UP = 1
-DOWN = 0
+# ACTION_TRANSLATOR removed - now using ACTION_SET class attribute
 
-ACTION_TRANSLATOR = jnp.array([
-    NOOP,
-    FIRE,
-    UP,
-    RIGHT,
-    LEFT,
-    DOWN,
-    UP,
-    UP,
-    DOWN,
-    DOWN,
-    UPFIRE,
-    RIGHTFIRE,
-    LEFTFIRE,
-    DOWNFIRE,
-    UPFIRE,
-    RIGHTFIRE,
-    LEFTFIRE,
-    DOWNFIRE,
-])
-# DOWN = 5
+# Internal direction codes (not Action constants)
+# These are used for internal direction representation: 0=DOWN, 1=UP, 2=RIGHT, 3=LEFT, 4=NOOP
+DIR_DOWN = 0
+DIR_UP = 1
+DIR_RIGHT = 2
+DIR_LEFT = 3
+DIR_NOOP = 4
 
 # Max Amount of Fuel, results in 170 seconds of time with speed of 1 and 60 fps
 FUEL_CAPACITY = 10200.0
@@ -312,12 +290,35 @@ class BankHeistInfo(NamedTuple):
     time: jnp.ndarray
 
 class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeistInfo, BankHeistConstants]):
+    # Minimal ALE action set for Bank Heist
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
     
     def __init__(self, consts: BankHeistConstants = None):
         consts = consts or BankHeistConstants()
         super().__init__(consts)
         self.consts = consts
-        self.action_set = {NOOP, FIRE, RIGHT, LEFT, UP, DOWN}
         # Use the new renderer class
         self.renderer = BankHeistRenderer(self.consts)
     
@@ -325,7 +326,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         Returns the action space of the environment.
         """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces:
         """
@@ -897,14 +898,14 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             chex.Array: Array of valid directions (0-3), with -1 for invalid slots.
         """
         # All possible directions (excluding NOOP and FIRE)
-        all_directions = jnp.array([DOWN, UP, RIGHT, LEFT])
+        all_directions = jnp.array([DIR_DOWN, DIR_UP, DIR_RIGHT, DIR_LEFT])
         
         # Calculate reverse direction
         reverse_direction = jax.lax.switch(current_direction, [
-            lambda: UP,    # If going DOWN, reverse is UP
-            lambda: DOWN,  # If going UP, reverse is DOWN  
-            lambda: LEFT,  # If going RIGHT, reverse is LEFT
-            lambda: RIGHT, # If going LEFT, reverse is RIGHT
+            lambda: DIR_UP,    # If going DOWN, reverse is UP
+            lambda: DIR_DOWN,  # If going UP, reverse is DOWN  
+            lambda: DIR_LEFT,  # If going RIGHT, reverse is LEFT
+            lambda: DIR_RIGHT, # If going LEFT, reverse is RIGHT
             lambda: -1,    # If NOOP, no reverse
         ])
         
@@ -955,7 +956,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 return moved_entity.position
             
             # Get new positions for all directions
-            new_positions = jax.vmap(get_new_position)(jnp.array([DOWN, UP, RIGHT, LEFT]))
+            new_positions = jax.vmap(get_new_position)(jnp.array([DIR_DOWN, DIR_UP, DIR_RIGHT, DIR_LEFT]))
             
             # Calculate distances to player for each direction
             distances = jnp.linalg.norm(new_positions - player_position[None, :], axis=1)
@@ -1063,8 +1064,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BankHeistState, action: chex.Array) -> Tuple[BankHeistState, BankHeistObservation, float, bool, BankHeistInfo]:
-        # Translate action
-        action = ACTION_TRANSLATOR[action]
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
@@ -1072,7 +1073,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = new_state._replace(reserve_speed=jnp.mod(full_speed, 1.0))
         full_speed = full_speed.astype(jnp.int32)
         # Player step. Must be run first as this step unpauses the game if it is paused!
-        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, action), new_state)
+        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, atari_action), new_state)
         police_speed = jax.lax.cond(
             new_state.game_paused,
             lambda: jnp.array(0).astype(jnp.float32),
@@ -1127,16 +1128,51 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return self._get_observation(new_state), new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, state: BankHeistState, action: chex.Array) -> BankHeistState:
+    def player_step(self, state: BankHeistState, atari_action: chex.Array) -> BankHeistState:
         """
         Handles player Input & movement.
 
         Returns:
             BankHeistState: The new state of the game after the player's action.
         """
-        player_input = jnp.where(action == NOOP, state.player.direction, action)  # Convert NOOP to direction 4
-        player_input = jnp.where(action > 5, action - 6, player_input)  # Convert UP+FIRE to UP (etc)
-        player_input = jnp.where(action == FIRE, state.player.direction, player_input)  # Ignore FIRE for movement
+        # Convert action to direction: NOOP/FIRE -> keep current direction, fire actions -> extract base direction
+        is_fire_action = jnp.logical_or(
+            jnp.logical_or(
+                jnp.logical_or(atari_action == Action.UPFIRE, atari_action == Action.RIGHTFIRE),
+                jnp.logical_or(atari_action == Action.LEFTFIRE, atari_action == Action.DOWNFIRE)
+            ),
+            jnp.logical_or(
+                jnp.logical_or(atari_action == Action.UPRIGHTFIRE, atari_action == Action.UPLEFTFIRE),
+                jnp.logical_or(atari_action == Action.DOWNRIGHTFIRE, atari_action == Action.DOWNLEFTFIRE)
+            )
+        )
+        # Extract base direction from fire actions (UPFIRE -> UP, etc.)
+        base_action = jnp.select(
+            condlist=[
+                atari_action == Action.UPFIRE,
+                atari_action == Action.RIGHTFIRE,
+                atari_action == Action.LEFTFIRE,
+                atari_action == Action.DOWNFIRE,
+                atari_action == Action.UPRIGHTFIRE,
+                atari_action == Action.UPLEFTFIRE,
+                atari_action == Action.DOWNRIGHTFIRE,
+                atari_action == Action.DOWNLEFTFIRE,
+            ],
+            choicelist=[
+                Action.UP,
+                Action.RIGHT,
+                Action.LEFT,
+                Action.DOWN,
+                Action.UPRIGHT,
+                Action.UPLEFT,
+                Action.DOWNRIGHT,
+                Action.DOWNLEFT,
+            ],
+            default=atari_action,
+        )
+        
+        player_input = jnp.where(atari_action == Action.NOOP, state.player.direction, base_action)  # Convert NOOP to direction 4
+        player_input = jnp.where(atari_action == Action.FIRE, state.player.direction, player_input)  # Ignore FIRE for movement
         current_player, invalid_input = self.validate_input(state, state.player, player_input)
         new_player = self.move(current_player, current_player.direction)
         collision = self.check_background_collision(state, new_player)
@@ -1148,7 +1184,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
         new_state = state._replace(
             player=new_player,
-            game_paused=jnp.where(jnp.logical_and(jnp.logical_not(invalid_input), action != NOOP), jnp.array(False).astype(jnp.bool_), state.game_paused)
+            game_paused=jnp.where(jnp.logical_and(jnp.logical_not(invalid_input), atari_action != Action.NOOP), jnp.array(False).astype(jnp.bool_), state.game_paused)
         )
 
         # Check for bank collisions and handle bank robberies (before any other state changes)
@@ -1166,7 +1202,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_state = jax.lax.cond(police_hit, lambda: self.lose_life(new_state), lambda: new_state)
 
         # Handle dynamite placement when FIRE action is pressed
-        new_state = jax.lax.cond(jnp.logical_or(action >= DOWNFIRE, action == FIRE), 
+        is_fire = jnp.logical_or(is_fire_action, atari_action == Action.FIRE)
+        new_state = jax.lax.cond(is_fire, 
             lambda: self.place_dynamite(new_state, new_player),
             lambda: new_state
         )

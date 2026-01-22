@@ -313,11 +313,17 @@ class JaxNameThisGame(
         super().__init__()
         self.consts = consts or NameThisGameConstants()
         self.renderer = Renderer_NameThisGame(consts=self.consts)
-        self.action_set = [Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE]
+
+    # Minimal ALE action set for Name This Game:
+    # ['NOOP', 'FIRE', 'RIGHT', 'LEFT', 'RIGHTFIRE', 'LEFTFIRE']
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
 
     # -------------------------- Spaces -------------------------------------
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         cfg = self.consts
@@ -1352,7 +1358,8 @@ class JaxNameThisGame(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
         """Step function - frameskip is handled by the wrapper."""
-        return self._step_once(state, action)
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        return self._step_once(state, atari_action)
 
 
 # -------------------------- Human control (optional) -----------------------

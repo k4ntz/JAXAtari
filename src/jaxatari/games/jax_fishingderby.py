@@ -294,12 +294,9 @@ class FishingDerbyInfo(NamedTuple):
     collision detection.
 """
 class FishingDerby(JaxEnvironment):
-    def __init__(self, consts: Optional[GameConfig] = None):
-        consts = consts or GameConfig.create_default()
-        super().__init__()
-        self.consts = consts
-        self.renderer = FishingDerbyRenderer(self.consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -317,8 +314,16 @@ class FishingDerby(JaxEnvironment):
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: Optional[GameConfig] = None):
+        consts = consts or GameConfig.create_default()
+        super().__init__()
+        self.consts = consts
+        self.renderer = FishingDerbyRenderer(self.consts)
 
     def _get_hook_position(self, player_x: float, player_state: PlayerState) -> Tuple[float, float]:
         """Calculate the actual hook position based on rod length and hook depth."""
@@ -467,6 +472,8 @@ class FishingDerby(JaxEnvironment):
     def step(self, state: GameState, action: int, p2_action: int = -1) -> Tuple[
         FishingDerbyObservation, GameState, chex.Array, bool, FishingDerbyInfo]:
         """Processes one frame of the game and returns the full tuple."""
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         key, p2_key = jax.random.split(state.key)
 
@@ -702,7 +709,7 @@ class FishingDerby(JaxEnvironment):
             Returns:
                 spaces.Discrete: A discrete space object representing the number of possible actions.
             """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def get_action_space(self) -> jnp.ndarray:
         """
@@ -714,7 +721,7 @@ class FishingDerby(JaxEnvironment):
             Returns:
                 jnp.ndarray: A JAX array containing all possible actions.
             """
-        return jnp.array(self.action_set)
+        return self.ACTION_SET
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the environment."""

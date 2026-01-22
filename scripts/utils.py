@@ -252,7 +252,35 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
             if const_overrides:
                 # Recreate env with modded constants
                 base_consts = env.consts
-                modded_consts = base_consts._replace(**const_overrides)
+                
+                # Separate NamedTuple fields from class attributes
+                # NamedTuple._replace() only works on actual fields, not class attributes
+                field_overrides = {}
+                class_attr_overrides = {}
+                
+                if hasattr(base_consts, '_fields'):
+                    for key, value in const_overrides.items():
+                        if key in base_consts._fields:
+                            field_overrides[key] = value
+                        else:
+                            class_attr_overrides[key] = value
+                else:
+                    # Not a NamedTuple, treat all as fields
+                    field_overrides = const_overrides
+                
+                # Apply field overrides using _replace()
+                if field_overrides:
+                    modded_consts = base_consts._replace(**field_overrides)
+                else:
+                    modded_consts = base_consts
+                
+                # Handle class attributes by setting them on the class
+                # Python's attribute lookup will find class attributes when accessed via instance
+                if class_attr_overrides:
+                    consts_class = type(base_consts)
+                    for key, value in class_attr_overrides.items():
+                        setattr(consts_class, key, value)
+                
                 env = env.__class__(consts=modded_consts)
 
             # 4. BUILD STAGE 1 (Internal Controller)

@@ -552,16 +552,9 @@ def movement_controller(state: VideoCubeState):
 
 
 class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCubeInfo, VideoCubeConstants]):
-    def __init__(self, consts: VideoCubeConstants = None):
-        """ Initialisation of VideoCube Game
-
-        :param consts: all constants needed for the game
-        """
-        consts = consts or VideoCubeConstants()
-        super().__init__(consts)
-        self.consts = consts
-        self.renderer = VideoCubeRenderer(self.consts)
-        self.action_set = [
+    # Minimal ALE action set for Video Cube (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -579,8 +572,20 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: VideoCubeConstants = None):
+        """ Initialisation of VideoCube Game
+
+        :param consts: all constants needed for the game
+        """
+        consts = consts or VideoCubeConstants()
+        super().__init__(consts)
+        self.consts = consts
+        self.renderer = VideoCubeRenderer(self.consts)
         self.obs_size = 5
 
     def reset(self, key=jax.random.PRNGKey(int.from_bytes(os.urandom(3), byteorder='big'))) -> Tuple[VideoCubeObservation, VideoCubeState]:
@@ -630,8 +635,34 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: VideoCubeState, action: chex.Array) -> Tuple[VideoCubeObservation, VideoCubeState, float, bool, VideoCubeInfo]:
-        action = jnp.array([Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.RIGHT, Action.LEFT, Action.RIGHT,
-                           Action.LEFT, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.RIGHT, Action.LEFT, Action.RIGHT, Action.LEFT])[action]
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        # Treat FIRE-combo actions as their base directions for movement/aiming.
+        # (Only plain FIRE triggers the color-change mechanic below.)
+        action = jnp.select(
+            condlist=[
+                atari_action == Action.UPFIRE,
+                atari_action == Action.RIGHTFIRE,
+                atari_action == Action.LEFTFIRE,
+                atari_action == Action.DOWNFIRE,
+                atari_action == Action.UPRIGHTFIRE,
+                atari_action == Action.UPLEFTFIRE,
+                atari_action == Action.DOWNRIGHTFIRE,
+                atari_action == Action.DOWNLEFTFIRE,
+            ],
+            choicelist=[
+                Action.UP,
+                Action.RIGHT,
+                Action.LEFT,
+                Action.DOWN,
+                Action.UPRIGHT,
+                Action.UPLEFT,
+                Action.DOWNRIGHT,
+                Action.DOWNLEFT,
+            ],
+            default=atari_action,
+        )
 
         # Set action to Noop if game_variation 2 (only up and right) is selected and something else was pressed
         condition = jnp.logical_or(self.consts.GAME_VARIATION != 2, jnp.logical_not(jnp.logical_or(jnp.logical_or(action == Action.NOOP, action == Action.FIRE), jnp.logical_or(action == Action.UP, action == Action.RIGHT))))
@@ -719,7 +750,17 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             return dy * 12 + dx * 1
 
         # move_direction: up = 0, right = 1, down = 2, left = 3
-        move_direction = jnp.array([0, 1, 3, 2])[action - 2]
+        # Map diagonal actions to their primary axis direction.
+        move_direction = jnp.select(
+            condlist=[
+                jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT)),
+                jnp.logical_or(action == Action.RIGHT, jnp.logical_or(action == Action.UPRIGHT, action == Action.DOWNRIGHT)),
+                jnp.logical_or(action == Action.DOWN, jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT)),
+                jnp.logical_or(action == Action.LEFT, jnp.logical_or(action == Action.UPLEFT, action == Action.DOWNLEFT)),
+            ],
+            choicelist=[0, 1, 2, 3],
+            default=0,
+        ).astype(jnp.int32)
         new_step_value = get_step_value(state.cube_orientation, move_direction)
         new_pos = state.player_pos + new_step_value
 
@@ -851,7 +892,7 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
         return self.renderer.render(state)
 
     def action_space(self) -> Discrete:
-        return Discrete(len(self.action_set))
+        return Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> Box:
         return Box(0, 255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)

@@ -113,6 +113,11 @@ def _build_modded_asset_config(base_consts, registry, expanded_mods_config):
     asset_conflicts = defaultdict(list)  # Track which mods override which assets
     
     for mod_key in expanded_mods_config:
+        if mod_key not in registry:
+            raise ValueError(
+                f"Mod '{mod_key}' not recognized in registry. "
+                f"Available mods: {list(registry.keys())}"
+            )
         plugin_class = registry[mod_key]
         if hasattr(plugin_class, "asset_overrides"):
             for asset_name in plugin_class.asset_overrides:
@@ -254,6 +259,11 @@ class JaxAtariModController:
         
         # Collect constants and detect conflicts
         for mod_key in mods_config:
+            if mod_key not in registry:
+                raise ValueError(
+                    f"Mod '{mod_key}' not recognized in registry. "
+                    f"Available mods: {list(registry.keys())}"
+                )
             plugin_class = registry[mod_key]
             if hasattr(plugin_class, "constants_overrides"):
                 for const_name in plugin_class.constants_overrides:
@@ -648,7 +658,33 @@ def apply_modifications(
         allow_conflicts
     )
 
-    modded_consts = base_consts._replace(**const_overrides)
+    # Separate NamedTuple fields from class attributes
+    # NamedTuple._replace() only works on actual fields, not class attributes
+    field_overrides = {}
+    class_attr_overrides = {}
+    
+    if hasattr(base_consts, '_fields'):
+        for key, value in const_overrides.items():
+            if key in base_consts._fields:
+                field_overrides[key] = value
+            else:
+                class_attr_overrides[key] = value
+    else:
+        # Not a NamedTuple, treat all as fields
+        field_overrides = const_overrides
+    
+    # Apply field overrides using _replace()
+    if field_overrides:
+        modded_consts = base_consts._replace(**field_overrides)
+    else:
+        modded_consts = base_consts
+    
+    # Handle class attributes by setting them on the class
+    # Python's attribute lookup will find class attributes when accessed via instance
+    if class_attr_overrides:
+        consts_class = type(base_consts)
+        for key, value in class_attr_overrides.items():
+            setattr(consts_class, key, value)
 
     base_env = env_class(consts=modded_consts)
 

@@ -2020,10 +2020,9 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         return jnp.minimum(base_points + additional_points, max_points)
 
 
-    def __init__(self, consts: SeaquestConstants = None):
-        consts = consts or SeaquestConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set for Seaquest (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -2041,8 +2040,14 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: SeaquestConstants = None):
+        consts = consts or SeaquestConstants()
+        super().__init__(consts)
         self.obs_size = 6 + 12 * 5 + 12 * 5 + 4 * 5 + 4 * 5 + 5 + 5 + 4
         self.renderer = SeaquestRenderer(self.consts)
 
@@ -2088,7 +2093,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Seaquest.
@@ -2276,6 +2281,8 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
     def step(
         self, state: SeaquestState, action: chex.Array
     ) -> Tuple[SeaquestObservation, SeaquestState, float, bool, SeaquestInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         previous_state = state
         _, reset_state = self.reset(state.rng_key)
@@ -2423,7 +2430,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             player_y = jnp.where(
                 should_block, jnp.array(46, dtype=jnp.int32), state.player_y
             )
-            action_mod = jnp.where(should_block, jnp.array(Action.NOOP), action)
+            action_mod = jnp.where(should_block, jnp.array(Action.NOOP), atari_action)
 
             # Now calculate movement using potentially modified positions and action
             next_x, next_y, player_direction = self.player_step(
@@ -2716,6 +2723,41 @@ class SeaquestRenderer(JAXGameRenderer):
         color_cycle_indices = jnp.array([0, 1, 2, 3, 0, 1, 0, 3])
         cycle_rgb_colors = self.consts.SHARK_DIFFICULTY_COLORS[color_cycle_indices]
         return jnp.array([self.COLOR_TO_ID[tuple(rgb)] for rgb in np.array(cycle_rgb_colors)])
+    
+    # --- Sequential Rendering for Batched Objects ---
+    def render_object_sequentially(self, current_raster, pos, shape_masks, flip_offsets, anim_idx):
+        """Helper to render a single object with a pre-calculated animation index."""
+        is_active = pos[2] != 0
+        
+        return jax.lax.cond(
+            is_active,
+            lambda r: self.jr.render_at_clipped(r, pos[0], pos[1], shape_masks[anim_idx],
+                                                flip_horizontal=pos[2] == self.consts.FACE_LEFT,
+                                                flip_offset=flip_offsets),
+            lambda r: r,
+            current_raster
+        )
+    
+    # --- Render Divers ---
+    # Original cycle: Frame 0 for 16 steps, Frame 1 for 4 steps. Total = 20 steps.
+    def _draw_divers(self, raster, state):
+        diver_anim_idx = jax.lax.select((state.step_counter % 20) < 16, 0, 1)
+        raster = jax.lax.fori_loop(
+            0, state.diver_positions.shape[0],
+            lambda i, r: self.render_object_sequentially(r, state.diver_positions[i], self.SHAPE_MASKS['diver'], self.FLIP_OFFSETS['diver'], diver_anim_idx),
+            raster
+        )
+
+        # --- Render Enemy Subs ---
+        # Original cycle: 3 frames, each for 4 steps. Total = 12 steps.
+        enemy_sub_anim_idx = (state.step_counter % 12) // 4
+        all_subs = jnp.concatenate([state.sub_positions, state.surface_sub_position[None, :]])
+        raster = jax.lax.fori_loop(
+            0, all_subs.shape[0],
+            lambda i, r: self.render_object_sequentially(r, all_subs[i], self.SHAPE_MASKS['enemy_sub'], self.FLIP_OFFSETS['enemy_sub'], enemy_sub_anim_idx),
+            raster
+        )
+        return raster
 
     @partial(jax.jit, static_argnames=['self'])
     def render(self, state: SeaquestState) -> jnp.ndarray:
@@ -2743,44 +2785,13 @@ class SeaquestRenderer(JAXGameRenderer):
             raster
         )
 
-        # --- Sequential Rendering for Batched Objects ---
-        def render_object_sequentially(current_raster, pos, shape_masks, flip_offsets, anim_idx):
-            """Helper to render a single object with a pre-calculated animation index."""
-            is_active = pos[2] != 0
-            
-            return jax.lax.cond(
-                is_active,
-                lambda r: self.jr.render_at_clipped(r, pos[0], pos[1], shape_masks[anim_idx],
-                                                    flip_horizontal=pos[2] == self.consts.FACE_LEFT,
-                                                    flip_offset=flip_offsets),
-                lambda r: r,
-                current_raster
-            )
-
-        # --- Render Divers ---
-        # Original cycle: Frame 0 for 16 steps, Frame 1 for 4 steps. Total = 20 steps.
-        diver_anim_idx = jax.lax.select((step_counter % 20) < 16, 0, 1)
-        raster = jax.lax.fori_loop(
-            0, state.diver_positions.shape[0],
-            lambda i, r: render_object_sequentially(r, state.diver_positions[i], self.SHAPE_MASKS['diver'], self.FLIP_OFFSETS['diver'], diver_anim_idx),
-            raster
-        )
-
-        # --- Render Enemy Subs ---
-        # Original cycle: 3 frames, each for 4 steps. Total = 12 steps.
-        enemy_sub_anim_idx = (step_counter % 12) // 4
-        all_subs = jnp.concatenate([state.sub_positions, state.surface_sub_position[None, :]])
-        raster = jax.lax.fori_loop(
-            0, all_subs.shape[0],
-            lambda i, r: render_object_sequentially(r, all_subs[i], self.SHAPE_MASKS['enemy_sub'], self.FLIP_OFFSETS['enemy_sub'], enemy_sub_anim_idx),
-            raster
-        )
+        raster = self._draw_divers(raster, state)
         
         # --- Render Enemy Torpedoes ---
         # No animation, so index is always 0
         raster = jax.lax.fori_loop(
             0, state.enemy_missile_positions.shape[0],
-            lambda i, r: render_object_sequentially(r, state.enemy_missile_positions[i], self.SHAPE_MASKS['enemy_torp'][None, ...], jnp.zeros(2, dtype=jnp.int32), 0),
+            lambda i, r: self.render_object_sequentially(r, state.enemy_missile_positions[i], self.SHAPE_MASKS['enemy_torp'][None, ...], jnp.zeros(2, dtype=jnp.int32), 0),
             raster
         )
 
@@ -2794,7 +2805,7 @@ class SeaquestRenderer(JAXGameRenderer):
         recolored_shark_masks = jnp.where(base_shark_masks != self.jr.TRANSPARENT_ID, shark_color_id, base_shark_masks)
         raster = jax.lax.fori_loop(
             0, state.shark_positions.shape[0],
-            lambda i, r: render_object_sequentially(r, state.shark_positions[i], recolored_shark_masks, self.FLIP_OFFSETS['shark_base'], shark_anim_idx),
+            lambda i, r: self.render_object_sequentially(r, state.shark_positions[i], recolored_shark_masks, self.FLIP_OFFSETS['shark_base'], shark_anim_idx),
             raster
         )
         

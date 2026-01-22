@@ -101,18 +101,17 @@ class PongInfo(NamedTuple):
 
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
+    # Minimal ALE action set for Pong:
+    # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: PongConstants = None):
         consts = consts or PongConstants()
         super().__init__(consts)
         self.renderer = PongRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-        ]
 
     def _player_step(self, state: PongState, action: chex.Array) -> PongState:
         up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
@@ -456,10 +455,13 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         previous_state = state
-        state = self._player_step(state, action)
+        state = self._player_step(state, atari_action)
         state = self._enemy_step(state)
-        state = self._ball_step(state, action)
+        state = self._ball_step(state, atari_action)
         state = self._score_and_reset(state)
 
     def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
@@ -507,6 +509,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         # Split step key from state and keep a new key for the next state
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
@@ -527,9 +532,9 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             buffer=state.buffer,
             key=step_key,
         )
-        state = self._player_step(state, action)
+        state = self._player_step(state, atari_action)
         state = self._enemy_step(state)
-        state = self._ball_step(state, action)
+        state = self._ball_step(state, atari_action)
         state = self._score_and_reset(state)
 
         # Update state key to new_state_key for next step
@@ -596,7 +601,7 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
            )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({
