@@ -6,9 +6,9 @@ import jax.numpy as jnp
 import chex
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space
 
 
@@ -50,12 +50,12 @@ class FlagCaptureConstants:
     NUM_FIELDS_Y = 7
 
     FIELD_PADDING_LEFT = 12
-    FIELD_PADDING_TOP = 11
+    FIELD_PADDING_TOP = 26
     FIELD_GAP_X = 8
-    FIELD_GAP_Y = 4
-    FIELD_WIDTH = FIELD_HEIGHT = 8
-    NUMBER_WIDTH = 12
-    NUMBER_HEIGHT = 5
+    FIELD_GAP_Y = 8
+    FIELD_WIDTH = 8
+    FIELD_HEIGHT = 16
+    SCORE_AND_TIMER_PADDING_TOP = 7
 
     NUM_BOMBS = 3
     NUM_NUMBER_CLUES = 30
@@ -148,7 +148,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             player_y=jnp.array(0).astype(jnp.int32),
             time=jnp.array(75 * self.consts.STEPS_PER_SECOND).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
-            is_checking=jnp.array(1).astype(jnp.int32),
+            is_checking=jnp.array(0).astype(jnp.int32),
             player_move_cooldown=jnp.array(0).astype(jnp.int32),
             animation_cooldown=jnp.array(0).astype(jnp.int32),
             animation_type=jnp.array(0).astype(jnp.int32),
@@ -170,10 +170,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return FlagCaptureObservation(
             player=PlayerEntity(
                 x=jnp.array(
-                    self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (state.player_x * self.consts.FIELD_GAP_X)).astype(
+                    self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (
+                                state.player_x * self.consts.FIELD_GAP_X)).astype(
                     jnp.int32),
                 y=jnp.array(
-                    self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (state.player_y * self.consts.FIELD_GAP_Y)).astype(
+                    self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (
+                                state.player_y * self.consts.FIELD_GAP_Y)).astype(
                     jnp.int32),
                 width=jnp.array(self.consts.FIELD_WIDTH).astype(jnp.int32),
                 height=jnp.array(self.consts.FIELD_HEIGHT).astype(jnp.int32),
@@ -213,7 +215,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return spaces.Box(
             low=0,
             high=255,
-            shape=(self.consts.HEIGHT,self.consts.WIDTH, 3),
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
             dtype=jnp.uint8,
         )
 
@@ -265,56 +267,66 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                 new_is_checking: Updated state of the player (checking or not).
                 new_player_move_cooldown: Updated cooldown for player movement.
             """
-            new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, Action.FIRE),
-                                                          jnp.logical_and(jnp.greater_equal(action, Action.UPFIRE),
-                                                                          jnp.less_equal(action, Action.DOWNLEFTFIRE))),
+            new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),
+                                                          jnp.logical_and(
+                                                              jnp.greater_equal(action, JAXAtariAction.UPFIRE),
+                                                              jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),
                                            lambda: 1, lambda: 0)
-            is_up = jnp.logical_or(jnp.equal(action, Action.UP),
-                                   jnp.logical_or(jnp.equal(action, Action.UPFIRE),
-                                                  jnp.logical_or(jnp.equal(action, Action.UPRIGHT),
-                                                                 jnp.logical_or(jnp.equal(action, Action.UPLEFT),
-                                                                                jnp.logical_or(jnp.equal(action,
-                                                                                                         Action.UPRIGHTFIRE),
-                                                                                               jnp.equal(action,
-                                                                                                         Action.UPLEFTFIRE))))))
-            is_down = jnp.logical_or(jnp.equal(action, Action.DOWN),
-                                     jnp.logical_or(jnp.equal(action, Action.DOWNFIRE),
-                                                    jnp.logical_or(jnp.equal(action, Action.DOWNRIGHT),
-                                                                   jnp.logical_or(jnp.equal(action, Action.DOWNLEFT),
-                                                                                  jnp.logical_or(jnp.equal(action,
-                                                                                                           Action.DOWNRIGHTFIRE),
-                                                                                                 jnp.equal(action,
-                                                                                                           Action.DOWNLEFTFIRE))))))
-            is_left = jnp.logical_or(jnp.equal(action, Action.LEFT),
-                                     jnp.logical_or(jnp.equal(action, Action.UPLEFT),
-                                                    jnp.logical_or(jnp.equal(action, Action.DOWNLEFT),
-                                                                   jnp.logical_or(jnp.equal(action, Action.LEFTFIRE),
-                                                                                  jnp.logical_or(jnp.equal(action,
-                                                                                                           Action.UPLEFTFIRE),
-                                                                                                 jnp.equal(action,
-                                                                                                           Action.DOWNLEFTFIRE))))))
-            is_right = jnp.logical_or(jnp.equal(action, Action.RIGHT),
-                                      jnp.logical_or(jnp.equal(action, Action.UPRIGHT),
-                                                     jnp.logical_or(jnp.equal(action, Action.DOWNRIGHT),
-                                                                    jnp.logical_or(jnp.equal(action, Action.RIGHTFIRE),
-                                                                                   jnp.logical_or(jnp.equal(action,
-                                                                                                            Action.UPRIGHTFIRE),
-                                                                                                  jnp.equal(action,
-                                                                                                            Action.DOWNRIGHTFIRE))))))
+            is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP),
+                                   jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE),
+                                                  jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
+                                                                 jnp.logical_or(
+                                                                     jnp.equal(action, JAXAtariAction.UPLEFT),
+                                                                     jnp.logical_or(jnp.equal(action,
+                                                                                              JAXAtariAction.UPRIGHTFIRE),
+                                                                                    jnp.equal(action,
+                                                                                              JAXAtariAction.UPLEFTFIRE))))))
+            is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN),
+                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE),
+                                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
+                                                                   jnp.logical_or(
+                                                                       jnp.equal(action, JAXAtariAction.DOWNLEFT),
+                                                                       jnp.logical_or(jnp.equal(action,
+                                                                                                JAXAtariAction.DOWNRIGHTFIRE),
+                                                                                      jnp.equal(action,
+                                                                                                JAXAtariAction.DOWNLEFTFIRE))))))
+            is_left = jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFT),
+                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT),
+                                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT),
+                                                                   jnp.logical_or(
+                                                                       jnp.equal(action, JAXAtariAction.LEFTFIRE),
+                                                                       jnp.logical_or(jnp.equal(action,
+                                                                                                JAXAtariAction.UPLEFTFIRE),
+                                                                                      jnp.equal(action,
+                                                                                                JAXAtariAction.DOWNLEFTFIRE))))))
+            is_right = jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHT),
+                                      jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
+                                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
+                                                                    jnp.logical_or(
+                                                                        jnp.equal(action, JAXAtariAction.RIGHTFIRE),
+                                                                        jnp.logical_or(jnp.equal(action,
+                                                                                                 JAXAtariAction.UPRIGHTFIRE),
+                                                                                       jnp.equal(action,
+                                                                                                 JAXAtariAction.DOWNRIGHTFIRE))))))
 
             new_player_y = jax.lax.cond(is_down, lambda: player_y + 1, lambda: player_y)
             new_player_y = jax.lax.cond(is_up, lambda: player_y - 1, lambda: new_player_y)
             new_player_x = jax.lax.cond(is_left, lambda: player_x - 1, lambda: player_x)
             new_player_x = jax.lax.cond(is_right, lambda: player_x + 1, lambda: new_player_x)
             new_player_x = jax.lax.cond(jnp.logical_or(new_is_checking,
-                                                       jnp.logical_or(jnp.not_equal(animation_type, self.consts.ANIMATION_TYPE_NONE),
-                                                                      jnp.greater(player_move_cooldown, 0))), lambda: player_x,
+                                                       jnp.logical_or(jnp.not_equal(animation_type,
+                                                                                    self.consts.ANIMATION_TYPE_NONE),
+                                                                      jnp.greater(player_move_cooldown, 0))),
+                                        lambda: player_x,
                                         lambda: jnp.mod(new_player_x, self.consts.NUM_FIELDS_X))
             new_player_y = jax.lax.cond(jnp.logical_or(new_is_checking,
-                                                       jnp.logical_or(jnp.not_equal(animation_type, self.consts.ANIMATION_TYPE_NONE),
-                                                                      jnp.greater(player_move_cooldown, 0))), lambda: player_y,
+                                                       jnp.logical_or(jnp.not_equal(animation_type,
+                                                                                    self.consts.ANIMATION_TYPE_NONE),
+                                                                      jnp.greater(player_move_cooldown, 0))),
+                                        lambda: player_y,
                                         lambda: jnp.mod(new_player_y, self.consts.NUM_FIELDS_Y))
-            new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0), lambda: self.consts.MOVE_COOLDOWN,
+            new_player_move_cooldown = jax.lax.cond(jnp.less_equal(player_move_cooldown, 0),
+                                                    lambda: self.consts.MOVE_COOLDOWN,
                                                     lambda: player_move_cooldown - 1)
 
             return new_player_x, new_player_y, new_is_checking, new_player_move_cooldown
@@ -345,7 +357,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         rng_key, splitkey = jax.random.split(state.rng_key)
         new_field = jax.lax.cond(
             flag_animation_over,
-            lambda: self.generate_field(splitkey, self.consts.NUM_BOMBS, self.consts.NUM_NUMBER_CLUES, self.consts.NUM_DIRECTION_CLUES),
+            lambda: self.generate_field(splitkey, self.consts.NUM_BOMBS, self.consts.NUM_NUMBER_CLUES,
+                                        self.consts.NUM_DIRECTION_CLUES),
             lambda: state.field
         )
 
@@ -420,7 +433,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
         return observation, new_state, env_reward, done, info
 
-    def generate_field(self,rng_key, n_bombs, n_number_clues, n_direction_clues):
+    def generate_field(self, rng_key, n_bombs, n_number_clues, n_direction_clues):
         """
         Generates a game field with a flag, bombs, number clues, and direction clues.
         If too few bombs+clues are provided, the rest of the field will be filled with empty spaces.
@@ -442,9 +455,11 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
         bombs = jnp.full((n_bombs,), self.consts.PLAYER_STATUS_BOMB, dtype=jnp.int32)
         number_clues = jnp.full((n_number_clues,), self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_NUMBER, dtype=jnp.int32)
-        direction_clues = jnp.full((n_direction_clues,), self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION, dtype=jnp.int32)
-        filler_fields = jnp.full(((self.consts.NUM_FIELDS_X * self.consts.NUM_FIELDS_Y) - n_bombs - n_number_clues - n_direction_clues,),
-                                 self.consts.PLAYER_STATUS_ALIVE, dtype=jnp.int32)
+        direction_clues = jnp.full((n_direction_clues,), self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION,
+                                   dtype=jnp.int32)
+        filler_fields = jnp.full(
+            ((self.consts.NUM_FIELDS_X * self.consts.NUM_FIELDS_Y) - n_bombs - n_number_clues - n_direction_clues,),
+            self.consts.PLAYER_STATUS_ALIVE, dtype=jnp.int32)
 
         field = jnp.concatenate((bombs, number_clues, direction_clues, filler_fields))
         field = jax.random.permutation(splitkey, field)
@@ -484,12 +499,14 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             ret_val = jax.lax.cond(
                 jnp.equal(dx, 0),
                 lambda: jax.lax.cond(
-                    jnp.greater(dy, 0), lambda: self.consts.PLAYER_STATUS_DIRECTION_UP, lambda: self.consts.PLAYER_STATUS_DIRECTION_DOWN
+                    jnp.greater(dy, 0), lambda: self.consts.PLAYER_STATUS_DIRECTION_UP,
+                    lambda: self.consts.PLAYER_STATUS_DIRECTION_DOWN
                 ),
                 lambda: jax.lax.cond(
                     jnp.equal(dy, 0),
                     lambda: jax.lax.cond(
-                        jnp.greater(dx, 0), lambda: self.consts.PLAYER_STATUS_DIRECTION_LEFT, lambda: self.consts.PLAYER_STATUS_DIRECTION_RIGHT
+                        jnp.greater(dx, 0), lambda: self.consts.PLAYER_STATUS_DIRECTION_LEFT,
+                        lambda: self.consts.PLAYER_STATUS_DIRECTION_RIGHT
                     ),
                     lambda: jax.lax.cond(
                         jnp.greater(dx * dy, 0),
@@ -521,10 +538,11 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             """
             return jax.lax.cond(jnp.equal(value, self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_NUMBER),
                                 lambda: resolve_number_clue(x, y),
-                                lambda: jax.lax.cond(jnp.equal(value, self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION),
-                                                     lambda: resolve_direction_clue(x, y),
-                                                     lambda: value
-                                                     )
+                                lambda: jax.lax.cond(
+                                    jnp.equal(value, self.consts.PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION),
+                                    lambda: resolve_direction_clue(x, y),
+                                    lambda: value
+                                    )
                                 )
 
         def vectorized_resolve(x, y):
@@ -539,7 +557,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             """
             return resolve_clue(x, y, field[x.astype(jnp.int32), y.astype(jnp.int32)])
 
-        field = jnp.fromfunction(vectorized_resolve, (self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y), dtype=jnp.int32)
+        field = jnp.fromfunction(vectorized_resolve, (self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y),
+                                 dtype=jnp.int32)
 
         return field
 
@@ -564,123 +583,148 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         return state.time <= 0
 
 
-def load_sprites():
-    """
-    Load all sprites required for Flag Capture rendering.
-    Returns:
-        SPRITE_BG: Background sprite.
-        SPRITE_PLAYER: Player sprites.
-        SPRITE_SCORE: Score sprites.
-        SPRITE_TIMER: Timer sprites.
-    """
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    background = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/flagcapture/background.npy"))
-
-    SPRITE_BG = jnp.expand_dims(background, axis=0)
-    SPRITE_PLAYER = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/player_states/player_{}.npy"),
-                                           num_chars=19)
-    SPRITE_SCORE = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/green_digits/{}.npy"),
-                                          num_chars=10)
-    SPRITE_TIMER = jr.load_and_pad_digits(os.path.join(MODULE_DIR, "sprites/flagcapture/red_digits/{}.npy"),
-                                          num_chars=10)
-
-    return (
-        SPRITE_BG,
-        SPRITE_PLAYER,
-        SPRITE_SCORE,
-        SPRITE_TIMER,
-    )
-
-
 class FlagCaptureRenderer(JAXGameRenderer):
-    def __init__(self,consts: FlagCaptureConstants = None):
+    def __init__(self, consts: FlagCaptureConstants = None):
         super().__init__()
         self.consts = consts or FlagCaptureConstants()
+
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH), # TODO window size?
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
         (
-            self.SPRITE_BG,
-            self.SPRITE_PLAYER,
-            self.SPRITE_SCORE,
-            self.SPRITE_TIMER,
-        ) = load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND_RASTER,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self._load_sprites()
+
+    def _load_sprites(self):
+        """Defines the asset manifest for FlagCapture and loads them using the new utility."""
+        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+        sprite_base = os.path.join(MODULE_DIR, "sprites/flagcapture")
+
+        # Player states: player_0.npy (Normal) to player_18.npy (19 total)
+        player_files = [f"player_states/player_{i}.npy" for i in range(19)]
+
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            # The SPRITE_PLAYER array (19 states)
+            {'name': 'player_states', 'type': 'group', 'files': player_files},
+            # The SPRITE_SCORE digits (0-9)
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'green_digits/{}.npy'},
+            # The SPRITE_TIMER digits (0-9)
+            {'name': 'timer_digits', 'type': 'digits', 'pattern': 'red_digits/{}.npy'},
+        ]
+
+        return self.jr.load_and_setup_assets(asset_config, sprite_base)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """
         Renders the current game state using JAX operations.
-
-        Args:
-            state: A FlagCaptureState object containing the current game state.
-
-        Returns:
-            A JAX array representing the rendered frame.
         """
-        raster: jnp.ndarray = jr.create_initial_frame(width=self.consts.WIDTH,height=self.consts.HEIGHT)
+        # 1. Initialize Raster from the pre-rendered Background ID Raster
+        raster: jnp.ndarray = self.jr.create_object_raster(self.BACKGROUND_RASTER)
 
-        frame_bg = jr.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = jr.render_at(raster, 0, 0, frame_bg)
+        # 2. Calculate Player Position
+        player_x = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (
+                    state.player_x * self.consts.FIELD_GAP_X)
+        player_y = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (
+                    state.player_y * self.consts.FIELD_GAP_Y)
 
-        player_x = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (state.player_x * self.consts.FIELD_GAP_X)
-        player_y = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (state.player_y * self.consts.FIELD_GAP_Y)
+        player_offset = self.FLIP_OFFSETS["player_states"]
 
-        raster = jax.lax.cond(jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_NONE),
-                              lambda: jax.lax.cond(jax.lax.eq(state.is_checking, 0),
-                                                   lambda: jr.render_at(raster, player_x, player_y,
-                                                                        self.SPRITE_PLAYER[0]),
-                                                   lambda: jr.render_at(raster, player_x, player_y,
-                                                                        self.SPRITE_PLAYER[
-                                                                            state.field[
-                                                                                state.player_x, state.player_y]]),
-                                                   ),
-                              lambda: jax.lax.cond(jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_EXPLOSION),
-                                                   lambda: jax.lax.cond(
-                                                       jax.lax.lt(jnp.mod(state.animation_cooldown, 8), 4),
-                                                       lambda: jr.render_at(raster, player_x, player_y,
-                                                                            self.SPRITE_PLAYER[1]),
-                                                       lambda: raster),
-                                                   lambda: jax.lax.cond(
-                                                       jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_FLAG),
-                                                       lambda: jax.lax.cond(
-                                                           jax.lax.lt(jnp.mod(state.animation_cooldown, 20), 10),
-                                                           lambda: jr.render_at(raster, player_x, player_y,
-                                                                                self.SPRITE_PLAYER[2]),
-                                                           lambda: raster),
-                                                       lambda: raster),
-                                                   )
-                              )
+        # 3. Determine Player Sprite Mask and render (Logic is largely preserved, but calls are updated)
 
-        raster = self.render_header(state.score, raster, self.SPRITE_SCORE,
-                               32, 16,
-                               3)
+        # Determine the correct sprite index (0-18)
+        sprite_idx = jax.lax.cond(jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_NONE),
+                                  lambda: jax.lax.cond(jax.lax.eq(state.is_checking, 0),
+                                                       lambda: 0,  # Index 0: Normal (SPRITE_PLAYER[0])
+                                                       lambda: state.field[state.player_x, state.player_y]
+                                                       # Index N: Clue/Bomb/Flag (SPRITE_PLAYER[N])
+                                                       ),
+                                  lambda: jax.lax.cond(
+                                      jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_EXPLOSION),
+                                      lambda: jax.lax.cond(
+                                          jax.lax.lt(jnp.mod(state.animation_cooldown, 8), 4),
+                                          lambda: 1,  # Index 1: Explosion (SPRITE_PLAYER[1]) - Blinking
+                                          lambda: -1),  # Invisible/Transparent
+                                      lambda: jax.lax.cond(
+                                          jax.lax.eq(state.animation_type, self.consts.ANIMATION_TYPE_FLAG),
+                                          lambda: jax.lax.cond(
+                                              jax.lax.lt(jnp.mod(state.animation_cooldown, 20), 10),
+                                              lambda: 2,  # Index 2: Flag (SPRITE_PLAYER[2]) - Blinking
+                                              lambda: -1),  # Invisible/Transparent
+                                          lambda: -1)  # Default invisible
+                                      )
+                                  )
 
-        raster = self.render_header(state.time // self.consts.STEPS_PER_SECOND, raster, self.SPRITE_TIMER, 112, 96, 3)
+        # Draw the Player sprite only if the index is valid (not -1 for transparent)
+        raster = jax.lax.cond(
+            sprite_idx >= 0,
+            lambda r: self.jr.render_at(
+                r,
+                player_x.astype(jnp.int32),
+                player_y.astype(jnp.int32),
+                self.SHAPE_MASKS["player_states"][sprite_idx],  # Use the ID mask
+                flip_offset=player_offset
+            ),
+            lambda r: r,  # Do nothing if transparent
+            operand=raster
+        )
 
+        # 4. Render Header (Score and Timer)
+        # The spacing is 16, max_digits=3 based on original code structure
+        raster = self._render_header(
+            state.score,
+            raster,
+            self.SHAPE_MASKS["score_digits"],
+            single_digit_x=32,
+            double_digit_x=16,
+            y=self.consts.SCORE_AND_TIMER_PADDING_TOP,
+            max_digits=3
+        )
+
+        raster = self._render_header(
+            state.time // self.consts.STEPS_PER_SECOND,
+            raster,
+            self.SHAPE_MASKS["timer_digits"],
+            single_digit_x=112,
+            double_digit_x=96,
+            y=self.consts.SCORE_AND_TIMER_PADDING_TOP,
+            max_digits=3
+        )
+
+        # 5. Final Palette Lookup
+        return self.jr.render_from_palette(raster, self.PALETTE)
+
+    @partial(jax.jit, static_argnums=(0, 4, 5, 6, 7))
+    def _render_header(self, number, raster, digit_masks, single_digit_x, double_digit_x, y, max_digits):
+        """Uses the new utility methods to render a score/timer header."""
+
+        digits = self.jr.int_to_digits(number, max_digits=max_digits)
+
+        num_to_render = jnp.where(number < 10, 1, jnp.where(number < 100, 2, max_digits))
+
+        start_index = max_digits - num_to_render
+
+        render_x = jnp.where(num_to_render == 1, single_digit_x, double_digit_x)
+
+        # Use the existing selective label renderer with korrekten Indizes
+        raster = self.jr.render_label_selective(
+            raster,
+            render_x,
+            y,
+            digits,
+            digit_masks,  # This is the full stack of ID masks (0-9)
+            start_index,
+            num_to_render,
+            spacing=16,
+            max_digits_to_render=max_digits
+        )
         return raster
 
-
-    def render_header(self,number, raster, sprites, single_digit_x, double_digit_x, y):
-        """
-        Renders the header (score or timer) on the screen.
-        Args:
-            number: The number to be rendered (score or timer).
-            raster: The raster to render on.
-            sprites: The sprite array for rendering the digits.
-            single_digit_x: X position for single-digit rendering.
-            double_digit_x: X position for double-digit rendering.
-            y: Y position for rendering.
-        """
-        digits = jr.int_to_digits(number, max_digits=2)
-
-        is_single_digit = number < 10
-        start_index = jax.lax.select(is_single_digit, 1, 0)
-        num_to_render = jax.lax.select(is_single_digit, 1, 2)
-        render_x = jax.lax.select(is_single_digit,
-                                  single_digit_x,
-                                  double_digit_x)
-
-        raster = jr.render_label_selective(raster, render_x, y,
-                                           digits, sprites,
-                                           start_index, num_to_render,
-                                           spacing=16)
-
-        return raster
