@@ -178,36 +178,6 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def reset(self, key) -> Tuple[DunkObservation, DunkGameState]:
         """Resets the environment to the initial state."""
-        
-        jax.debug.print("--- DOUBLE DUNK GAME MECHANICS & RULES ---")
-        jax.debug.print("Objective: Score points by getting the ball into the opponent's basket.")
-        jax.debug.print("Controls: Movement (Up/Down/Left/Right/Diagonals), Action (Fire).")
-        jax.debug.print("Teams: Player (Blue/Black) vs Enemy (Red/White).")
-        jax.debug.print("Scoring: 2 points for close shots, 3 points for shots from outside the key.")
-        jax.debug.print("An offensive or a defensive strategy must be selected for the game to start.")
-        jax.debug.print("Strategies are sequences of actions.")
-        jax.debug.print("If ball possession changes before the game resets, each team is assigned the strategy of the other team.")
-        
-        jax.debug.print("\n--- PLAY SELECTION (Hold direction + Fire during PLAY_SELECTION) ---")
-        jax.debug.print("1. When you have the ball, pick an OFFENSIVE strategy:")
-        jax.debug.print("    UP + FIRE    : PICK AND ROLL : Pass -> Jump & Shoot")
-        jax.debug.print("    DOWN + FIRE  : GIVE AND GO   : Pass -> Pass -> Jump & Shoot")
-        jax.debug.print("    RIGHT + FIRE : MR. OUTSIDE   : Jump & Shoot")
-        jax.debug.print("   Notes: 'Jump & Shoot' means press Fire to jump, then Fire again in mid-air to shoot.")
-        jax.debug.print("           After the strategy is exhausted, 'Jump & Shoot' is repeated until the next play selection.\n")
-
-        jax.debug.print("2. When opponent has the ball, pick a DEFENSIVE strategy:")
-        jax.debug.print("    UP + FIRE    : LANE DEFENSE  : Inside defender stays between the ball and the basket.")
-        jax.debug.print("    DOWN + FIRE  : TIGHT DEFENSE : Both defenders follow their respective opponents closely.")
-
-        jax.debug.print("\n--- PENALTIES (Only applies during OFFENSE) ---")
-        jax.debug.print("1. TRAVEL: Jumping and landing with the ball without shooting.")
-        jax.debug.print("2. OUT OF BOUNDS: Touching the screen edges with the ball.")
-        jax.debug.print("3. CLEARANCE: After a defensive rebound, the ball must be cleared (taken out to the 3 point area) before jumping and shooting again.")
-        
-        jax.debug.print("\n--- GAME START (The steps shown below represent how many times the Fire key is pressed) ---")
-        jax.debug.print("Note: To ensure a long keypress  is not counted as multiple presses, a delay of 0.1s is used.\n")
-
         state = self._init_state(key)
         obs = self._get_observation(state)
         return obs, state
@@ -287,7 +257,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _init_state(self, key, holder=PlayerID.PLAYER1_OUTSIDE) -> DunkGameState:
         """Creates the very first state of the game."""
         
-        is_p2_holder = (holder == PlayerID.PLAYER2_INSIDE) | (holder == PlayerID.PLAYER2_OUTSIDE)
+        is_p2_holder = jnp.logical_or((holder == PlayerID.PLAYER2_INSIDE), (holder == PlayerID.PLAYER2_OUTSIDE))
         
         p1_out_y = jax.lax.select(is_p2_holder, jnp.array(145, dtype=jnp.int32), jnp.array(155, dtype=jnp.int32))
         p2_out_y = jax.lax.select(is_p2_holder, jnp.array(155, dtype=jnp.int32), jnp.array(145, dtype=jnp.int32))
@@ -320,7 +290,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             acceleration_counter=0,
             game_mode=GameMode.PLAY_SELECTION,
             controlled_player_id = jax.lax.select(
-                (holder == PlayerID.PLAYER1_INSIDE) | (holder == PlayerID.PLAYER2_INSIDE),
+                jnp.logical_or((holder == PlayerID.PLAYER1_INSIDE), (holder == PlayerID.PLAYER2_INSIDE)),
                 PlayerID.PLAYER1_INSIDE,
                 PlayerID.PLAYER1_OUTSIDE
             ),
@@ -354,20 +324,20 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         updated_y = player.y + vel_y
         new_x = jax.lax.clamp(constants.PLAYER_X_MIN, updated_x, constants.PLAYER_X_MAX)
         new_y = jax.lax.clamp(constants.PLAYER_Y_MIN, updated_y, constants.PLAYER_Y_MAX)
-        touched_bound = (updated_x <= constants.PLAYER_X_MIN) | (updated_x >= constants.PLAYER_X_MAX) | (updated_y <= constants.PLAYER_Y_MIN)
+        touched_bound = jnp.logical_or(jnp.logical_or((updated_x <= constants.PLAYER_X_MIN), (updated_x >= constants.PLAYER_X_MAX)), (updated_y <= constants.PLAYER_Y_MIN))
 
         # Clearance Check: Check if player is "inside". If not, they have cleared the ball.
         # Inside Zone definition based on scoring logic:
         # 1. Rectangular Zone: x=[25, 135], y <= 90
-        in_rect_zone = (new_x >= 25) & (new_x <= 135) & (new_y <= 90)
+        in_rect_zone = jnp.logical_and(jnp.logical_and((new_x >= 25), (new_x <= 135)), (new_y <= 90))
         # 2. Elliptical Zone: Center(80, 80), Rx=55, Ry=45
         dx = new_x - 80.0
         dy = new_y - 80.0
         ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
-        in_ellipse_zone = (ellipse_val <= 1.0) & (new_y >= 80)
+        in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (new_y >= 80))
         
-        is_inside = in_rect_zone | in_ellipse_zone
-        is_outside = ~is_inside
+        is_inside = jnp.logical_or(in_rect_zone, in_ellipse_zone)
+        is_outside = jnp.logical_not(is_inside)
         
         new_clearance_needed = jax.lax.select(is_outside, False, player.clearance_needed)
 
@@ -384,9 +354,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Check if any of the players reach out of bounds while holding the ball
         ball_holder_id = state.ball.holder
-        p1_outside_out_of_bounds = updated_p1_outside.is_out_of_bounds & (updated_p1_outside.id == ball_holder_id)
-        p1_inside_out_of_bounds = updated_p1_inside.is_out_of_bounds & (updated_p1_inside.id == ball_holder_id)
-        p1_out_of_bounds = p1_inside_out_of_bounds | p1_outside_out_of_bounds # if Player 1 triggered out of bounds
+        p1_outside_out_of_bounds = jnp.logical_and(updated_p1_outside.is_out_of_bounds, (updated_p1_outside.id == ball_holder_id))
+        p1_inside_out_of_bounds = jnp.logical_and(updated_p1_inside.is_out_of_bounds, (updated_p1_inside.id == ball_holder_id))
+        p1_out_of_bounds = jnp.logical_or(p1_inside_out_of_bounds, p1_outside_out_of_bounds) # if Player 1 triggered out of bounds
 
         # --- Updated Game State ---
         updated_state = state.replace(
@@ -431,9 +401,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # But the ball holder hasn't changed yet in 'state'.
         ball_holder_id = state.ball.holder
         
-        p1_inside_out_of_bounds = state.player1_inside.is_out_of_bounds & (state.player1_inside.id == ball_holder_id)
-        p1_outside_out_of_bounds = state.player1_outside.is_out_of_bounds & (state.player1_outside.id == ball_holder_id)
-        p1_at_fault = p1_inside_out_of_bounds | p1_outside_out_of_bounds
+        p1_inside_out_of_bounds = jnp.logical_and(state.player1_inside.is_out_of_bounds, (state.player1_inside.id == ball_holder_id))
+        p1_outside_out_of_bounds = jnp.logical_and(state.player1_outside.is_out_of_bounds, (state.player1_outside.id == ball_holder_id))
+        p1_at_fault = jnp.logical_or(p1_inside_out_of_bounds, p1_outside_out_of_bounds)
 
         return jax.lax.cond(
             timer_expired,
@@ -448,13 +418,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_z = player.z + player.vel_z
         new_vel_z = player.vel_z - constants.GRAVITY
         has_landed = new_z <= 0 #check if the player is back on the ground
-        jump_start_with_ball = (player.z == 0) & has_ball #check if the player starts a jump while having the ball
+        jump_start_with_ball = jnp.logical_and((player.z == 0), has_ball) #check if the player starts a jump while having the ball
         new_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_z)
         new_vel_z = jax.lax.select(has_landed, jnp.array(0, dtype=jnp.int32), new_vel_z)
-        has_triggered_travel = has_landed & player.jumped_with_ball # True if the player lands while having the ball at the start of the jump
+        has_triggered_travel = jnp.logical_and(has_landed, player.jumped_with_ball) # True if the player lands while having the ball at the start of the jump
         # update PlayerState value jumped_with_ball
-        updated_jumped_with_ball = jax.lax.select(jump_start_with_ball, ~has_landed,
-                                    jax.lax.select(~has_landed,has_ball & player.jumped_with_ball, False))
+        updated_jumped_with_ball = jax.lax.select(jump_start_with_ball, jnp.logical_not(has_landed),
+                                    jax.lax.select(jnp.logical_not(has_landed), jnp.logical_and(has_ball, player.jumped_with_ball), False))
         # update PlayerState with new height and whether or not they started/finished the jump with the ball
         return player.replace(z=new_z, vel_z=new_vel_z, jumped_with_ball=updated_jumped_with_ball, triggered_travel=has_triggered_travel)
 
@@ -469,7 +439,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
         # check if any players triggered the travel rule
-        travel_triggered = updated_p1_outside.triggered_travel | updated_p1_inside.triggered_travel
+        travel_triggered = jnp.logical_or(updated_p1_outside.triggered_travel, updated_p1_inside.triggered_travel)
 
 
         # --- Updated Game State ---
@@ -548,10 +518,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             
             # 4. Apply Diagonals (Dual axis movement)
             # These override the cardinals if BOTH flags are true.
-            action = jax.lax.select(want_up & want_left, Action.UPLEFT, action)
-            action = jax.lax.select(want_up & want_right, Action.UPRIGHT, action)
-            action = jax.lax.select(want_down & want_left, Action.DOWNLEFT, action)
-            action = jax.lax.select(want_down & want_right, Action.DOWNRIGHT, action)
+            action = jax.lax.select(jnp.logical_and(want_up, want_left), Action.UPLEFT, action)
+            action = jax.lax.select(jnp.logical_and(want_up, want_right), Action.UPRIGHT, action)
+            action = jax.lax.select(jnp.logical_and(want_down, want_left), Action.DOWNLEFT, action)
+            action = jax.lax.select(jnp.logical_and(want_down, want_right), Action.DOWNRIGHT, action)
             
             return action
 
@@ -571,8 +541,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         ])
 
         # --- Strategy & Possession ---
-        p1_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE) | (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
-        p2_has_ball = (state.ball.holder == PlayerID.PLAYER2_INSIDE) | (state.ball.holder == PlayerID.PLAYER2_OUTSIDE)
+        p1_has_ball = jnp.logical_or((state.ball.holder == PlayerID.PLAYER1_INSIDE), (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
+        p2_has_ball = jnp.logical_or((state.ball.holder == PlayerID.PLAYER2_INSIDE), (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
         
         defensive_strat = state.strategy.defense_pattern
         basket_x, basket_y = self.constants.BASKET_POSITION
@@ -618,13 +588,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p2_out_def_action = get_move_to_target(state.player2_outside.x, state.player2_outside.y, p2_out_def_x, p2_out_def_y)
 
         # --- Teammate AI (Offensive/Random vs Defensive) ---
-        is_p1_inside_teammate_ai = ~is_p1_inside_controlled
-        is_p1_outside_teammate_ai = ~is_p1_outside_controlled
+        is_p1_inside_teammate_ai = jnp.logical_not(is_p1_inside_controlled)
+        is_p1_outside_teammate_ai = jnp.logical_not(is_p1_outside_controlled)
 
         # Move to Post Logic (Active if PREVIOUS step was MOVE_TO_POST)
         # The manual says "First press: Move to post". This implies the behavior lasts UNTIL the next press.
         prev_step = state.strategy.offense_step - 1
-        prev_action_was_move = (prev_step >= 0) & (state.strategy.offense_pattern[prev_step] == OffensiveAction.MOVE_TO_POST)
+        prev_action_was_move = jnp.logical_and((prev_step >= 0), (state.strategy.offense_pattern[prev_step] == OffensiveAction.MOVE_TO_POST))
         
         # Determine Post Position based on chosen direction
         # Left Post: 40, Right Post: 120, Center: 80 (y=60)
@@ -636,7 +606,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p1_at_post = p1_inside_dist_to_post < 5
         
         # If we are in the "Move to Post" phase, override random movement until we arrive
-        should_move_to_post = prev_action_was_move & ~p1_at_post
+        should_move_to_post = jnp.logical_and(prev_action_was_move, jnp.logical_not(p1_at_post))
         p1_move_to_post_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, post_x, post_y)
 
         # Random/Heuristic Offensive Moves (Existing logic)
@@ -656,7 +626,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Constraint check for P1 Inside Offense (Teammate)
         p1_dist_to_basket_x = jnp.abs(state.player1_inside.x - basket_x)
         p1_dist_to_basket_y = jnp.abs(state.player1_inside.y - basket_y)
-        p1_is_far = (p1_dist_to_basket_x > 20) | (p1_dist_to_basket_y > 80) # 40x80 area
+        p1_is_far = jnp.logical_or((p1_dist_to_basket_x > 20), (p1_dist_to_basket_y > 80)) # 40x80 area
         p1_return_to_basket_action = get_move_to_target(state.player1_inside.x, state.player1_inside.y, basket_x, basket_y)
         
         p1_inside_action = jax.lax.select(
@@ -698,7 +668,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Constraint check for P2 Inside Offense
         p2_dist_to_basket_x = jnp.abs(state.player2_inside.x - basket_x)
         p2_dist_to_basket_y = jnp.abs(state.player2_inside.y - basket_y)
-        p2_is_far = (p2_dist_to_basket_x > 20) | (p2_dist_to_basket_y > 40) # 40x80 area
+        p2_is_far = jnp.logical_or((p2_dist_to_basket_x > 20), (p2_dist_to_basket_y > 40)) # 40x80 area
         p2_return_to_basket_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, basket_x, basket_y)
 
         p2_in_off_action = jax.lax.select(
@@ -736,14 +706,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             dist_down = boundary_y - py_f
             
             # 3. Determine closest escape
-            go_left = (dist_left < dist_right) & (dist_left < dist_down)
-            go_right = (dist_right <= dist_left) & (dist_right < dist_down)
+            go_left = jnp.logical_and((dist_left < dist_right), (dist_left < dist_down))
+            go_right = jnp.logical_and((dist_right <= dist_left), (dist_right < dist_down))
             # go_down is implicit else
             
             tx = jax.lax.select(go_left, 20.0, jax.lax.select(go_right, 140.0, px_f))
-            ty = jax.lax.select(go_left | go_right, py_f, boundary_y + 10.0)
+            ty = jax.lax.select(jnp.logical_or(go_left, go_right), py_f, boundary_y + 10.0)
             
             return tx.astype(jnp.int32), ty.astype(jnp.int32)
+
 
         p2_in_tx, p2_in_ty = get_smart_clearance_target(state.player2_inside.x, state.player2_inside.y)
         p2_in_clearance_action = get_move_to_target(state.player2_inside.x, state.player2_inside.y, p2_in_tx, p2_in_ty)
@@ -804,7 +775,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions_stacked = jnp.stack(actions)
 
         def check_passing(pid, p_action):
-            is_passing = (state.timers.offense_cooldown == 0) & is_pass_step & (ball_state.holder == pid) & jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_PASS_ACTIONS)))
+            is_passing = jnp.logical_and(jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_pass_step), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_PASS_ACTIONS))))
             return is_passing
 
         passing_flags = jax.vmap(check_passing)(player_ids, actions_stacked)
@@ -849,7 +820,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions_stacked = jnp.stack(actions)
 
         def check_shooting(pid, p_z, p_action):
-            is_shooting = (state.timers.offense_cooldown == 0) & is_shoot_step & (p_z != 0) & (ball_state.holder == pid) & jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS)))
+            is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_shoot_step), (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
             return is_shooting
 
         shooting_flags = jax.vmap(check_shooting)(player_ids, players.z, actions_stacked)
@@ -860,8 +831,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         shooter_y = players.y[shooter_idx]
         shooter_z = players.z[shooter_idx]
 
-        is_inside_shooting = (shooter == PlayerID.PLAYER1_INSIDE) | (shooter == PlayerID.PLAYER2_INSIDE)
-        is_outside_shooting = (shooter == PlayerID.PLAYER1_OUTSIDE) | (shooter == PlayerID.PLAYER2_OUTSIDE)
+        is_inside_shooting = jnp.logical_or((shooter == PlayerID.PLAYER1_INSIDE), (shooter == PlayerID.PLAYER2_INSIDE))
+        is_outside_shooting = jnp.logical_or((shooter == PlayerID.PLAYER1_OUTSIDE), (shooter == PlayerID.PLAYER2_OUTSIDE))
 
         key, offset_key_x = random.split(key)
 
@@ -870,16 +841,16 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         dist_to_basket = jnp.sqrt(jnp.sum((shooter_pos - basket_pos) ** 2))
         
         # --- Dunk Logic ---
-        is_dunk = (dist_to_basket < self.constants.DUNK_RADIUS) & (shooter_z > 0)
+        is_dunk = jnp.logical_and((dist_to_basket < self.constants.DUNK_RADIUS), (shooter_z > 0))
         
         is_inside = dist_to_basket < self.constants.INSIDE_RADIUS
-        shot_bonus = jax.lax.select(is_inside & is_inside_shooting, 2, jax.lax.select(~is_inside & is_outside_shooting, 2, -2))
+        shot_bonus = jax.lax.select(jnp.logical_and(is_inside, is_inside_shooting), 2, jax.lax.select(jnp.logical_and(jnp.logical_not(is_inside), is_outside_shooting), 2, -2))
 
         offset_x = random.uniform(offset_key_x, shape=(), minval=-10 + shot_bonus, maxval=10 - shot_bonus)
         
         # If it's a dunk, no offset and guaranteed goal
         final_offset_x = jax.lax.select(is_dunk, 0.0, offset_x)
-        is_goal = jax.lax.select(is_dunk, True, (final_offset_x >= -5) & (final_offset_x <= 5))
+        is_goal = jax.lax.select(is_dunk, True, jnp.logical_and((final_offset_x >= -5), (final_offset_x <= 5)))
 
         target_pos = basket_pos + jnp.array([final_offset_x, 0.0])
 
@@ -892,7 +863,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Basic blocking
         def check_blocking():
             # opponents (if shooter is P1, opponents are P2; if shooter is P2, opponents are P1)
-            is_shooter_p1 = (shooter == PlayerID.PLAYER1_INSIDE) | (shooter == PlayerID.PLAYER1_OUTSIDE)
+            is_shooter_p1 = jnp.logical_or((shooter == PlayerID.PLAYER1_INSIDE), (shooter == PlayerID.PLAYER1_OUTSIDE))
             
             opp_indices = jax.lax.select(is_shooter_p1, jnp.array([2, 3]), jnp.array([0, 1]))
             opp_xs = players.x[opp_indices]
@@ -901,7 +872,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             opp_ids = player_ids[opp_indices]
 
             dists = jnp.sqrt((opp_xs - shooter_x)**2 + (opp_ys - shooter_y)**2)
-            can_blocks = (opp_zs > 0) & (dists < self.constants.BLOCK_RADIUS)
+            can_blocks = jnp.logical_and((opp_zs > 0), (dists < self.constants.BLOCK_RADIUS))
             
             blocked_by = jax.lax.select(can_blocks[0], opp_ids[0], jax.lax.select(can_blocks[1], opp_ids[1], PlayerID.NONE))
             return blocked_by
@@ -938,12 +909,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             # Can only steal if opponent has ball
             # Team 1: IDs 1, 2. Team 2: IDs 3, 4.
             is_p1_team = (pid <= 2)
-            holder_is_p1_team = (ball_state.holder == PlayerID.PLAYER1_INSIDE) | (ball_state.holder == PlayerID.PLAYER1_OUTSIDE)
-            holder_is_p2_team = (ball_state.holder == PlayerID.PLAYER2_INSIDE) | (ball_state.holder == PlayerID.PLAYER2_OUTSIDE)
+            holder_is_p1_team = jnp.logical_or((ball_state.holder == PlayerID.PLAYER1_INSIDE), (ball_state.holder == PlayerID.PLAYER1_OUTSIDE))
+            holder_is_p2_team = jnp.logical_or((ball_state.holder == PlayerID.PLAYER2_INSIDE), (ball_state.holder == PlayerID.PLAYER2_OUTSIDE))
             
-            can_steal = (is_p1_team & holder_is_p2_team) | (~is_p1_team & holder_is_p1_team)
+            can_steal = jnp.logical_or(jnp.logical_and(is_p1_team, holder_is_p2_team), jnp.logical_and(jnp.logical_not(is_p1_team), holder_is_p1_team))
             
-            return is_trying_to_steal & is_close_to_ball & can_steal
+            return jnp.logical_and(jnp.logical_and(is_trying_to_steal, is_close_to_ball), can_steal)
 
         steal_flags = jax.vmap(check_steal)(players, actions_stacked, player_ids)
         
@@ -961,15 +932,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
-        is_jump_step = (state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT) & (player.z == 0)
-        can_jump = (state.timers.offense_cooldown == 0) & is_jump_step & jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS)))
+        is_jump_step = jnp.logical_and((state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT), (player.z == 0))
+        can_jump = jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_jump_step), jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS))))
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
         did_jump = jax.lax.select(can_jump, 1, 0)
 
         # Clearance Penalty Check
         has_ball = (state.ball.holder == player.id)
-        triggered_clearance = can_jump & has_ball & player.clearance_needed
+        triggered_clearance = jnp.logical_and(jnp.logical_and(can_jump, has_ball), player.clearance_needed)
 
         return player.replace(vel_z=new_vel_z, triggered_clearance=triggered_clearance), did_jump
 
@@ -995,7 +966,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         is_fire_pressed = jnp.any(jnp.asarray(holder_action) == jnp.asarray(list(_PASS_ACTIONS)))
         
         move_inc = jax.lax.select(
-            is_move_step & is_fire_pressed & (state.timers.offense_cooldown == 0),
+            jnp.logical_and(jnp.logical_and(is_move_step, is_fire_pressed), (state.timers.offense_cooldown == 0)),
             1,
             0
         )
@@ -1003,7 +974,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Passing
         ball_state_after_pass, pass_inc, did_pass = self._handle_passing(state, actions)
         state = state.replace(ball=ball_state_after_pass)
-        state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_pass | (move_inc > 0), 6, state.timers.offense_cooldown)))
+        state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(jnp.logical_or(did_pass, (move_inc > 0)), 6, state.timers.offense_cooldown)))
 
         # Shooting
         ball_state_after_shot, key, shot_inc, did_shoot = self._handle_shooting(state, actions, key)
@@ -1060,13 +1031,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         """Handles ball movement, goals, misses, catches, and possession changes."""
         ball_in_flight = (state.ball.holder == PlayerID.NONE)
         dist_to_target = jnp.sqrt((state.ball.x - state.ball.target_x)**2 + (state.ball.y - state.ball.target_y)**2)
-        is_already_falling = (state.ball.vel_x == 0) & jnp.isclose(state.ball.vel_y, 2.0)
-        reached_target = ball_in_flight & (dist_to_target < 5.0) & ~is_already_falling
-        is_goal_scored = reached_target & state.ball.is_goal
+        is_already_falling = jnp.logical_and((state.ball.vel_x == 0), jnp.isclose(state.ball.vel_y, 2.0))
+        reached_target = jnp.logical_and(jnp.logical_and(ball_in_flight, (dist_to_target < 5.0)), jnp.logical_not(is_already_falling))
+        is_goal_scored = jnp.logical_and(reached_target, state.ball.is_goal)
 
         def on_goal(s):
             key, reset_key = random.split(s.key)
-            is_p1_scorer = (s.ball.shooter == PlayerID.PLAYER1_INSIDE) | (s.ball.shooter == PlayerID.PLAYER1_OUTSIDE)
+            is_p1_scorer = jnp.logical_or((s.ball.shooter == PlayerID.PLAYER1_INSIDE), (s.ball.shooter == PlayerID.PLAYER1_OUTSIDE))
 
             # --- 2 vs 3 Point Logic ---
             # Based on the background generation script geometry:
@@ -1078,7 +1049,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
             # Check 1: Rectangular Key Area
             # The script draws vertical lines at x=25 and x=135 down to y=90
-            in_rect_zone = (sx >= 25) & (sx <= 135) & (sy <= 90)
+            in_rect_zone = jnp.logical_and(jnp.logical_and((sx >= 25), (sx <= 135)), (sy <= 90))
 
             # Check 2: Elliptical Top of Key
             # Equation: ((x-h)/rx)^2 + ((y-k)/ry)^2 <= 1
@@ -1090,10 +1061,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
             
             # We only care about the ellipse part that extends below the center (y >= 80)
-            in_ellipse_zone = (ellipse_val <= 1.0) & (sy >= 80)
+            in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (sy >= 80))
 
             # A shot is 2 points if it is in EITHER zone. Otherwise, it's a 3-pointer.
-            is_2_point = in_rect_zone | in_ellipse_zone
+            is_2_point = jnp.logical_or(in_rect_zone, in_ellipse_zone)
             points = jax.lax.select(is_2_point, 2, 3)
 
             # --- Score Updates ---
@@ -1115,8 +1086,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         def continue_play(s):
             # Handle miss
             # Check if ball went past the basket line (Y < 10) while moving up
-            overshot = (s.ball.y < self.constants.BASKET_POSITION[1]) & (s.ball.vel_y < 0)
-            is_miss = (reached_target & ~s.ball.is_goal) | overshot
+            overshot = jnp.logical_and((s.ball.y < self.constants.BASKET_POSITION[1]), (s.ball.vel_y < 0))
+            is_miss = jnp.logical_or(jnp.logical_and(reached_target, jnp.logical_not(s.ball.is_goal)), overshot)
             
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
             b_state = s.ball
@@ -1143,10 +1114,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             b_state = jax.lax.cond(is_passing, update_pass_trajectory, lambda b: b, b_state)
 
             # Update ball flight physics
-            is_falling = (b_state.vel_x == 0) & jnp.isclose(b_state.vel_y, 2.0)
+            is_falling = jnp.logical_and((b_state.vel_x == 0), jnp.isclose(b_state.vel_y, 2.0))
             new_ball_x = b_state.x + b_state.vel_x
             new_ball_y = b_state.y + b_state.vel_y
-            has_landed = is_falling & (new_ball_y >= b_state.landing_y)
+            has_landed = jnp.logical_and(is_falling, (new_ball_y >= b_state.landing_y))
             final_y = jax.lax.select(has_landed, b_state.landing_y, new_ball_y)
             final_vel_y = jax.lax.select(has_landed, 0.0, b_state.vel_y)
             b_state = jax.lax.cond(
@@ -1162,7 +1133,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
             def check_catch_flag(px, py):
                 dist_sq = (b_state.x - px)**2 + (b_state.y - py)**2
-                return ball_in_flight_after_physics & (dist_sq < catch_radius_sq)
+                return jnp.logical_and(ball_in_flight_after_physics, (dist_sq < catch_radius_sq))
 
             catch_flags = jax.vmap(check_catch_flag)(players_stacked.x, players_stacked.y)
             any_caught = jnp.any(catch_flags)
@@ -1176,11 +1147,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 
                 # Check for clearance logic (Rebound)
                 shooter_id = curr_ball.shooter
-                is_rebound = (shooter_id != PlayerID.NONE) & curr_ball.missed_shot
+                is_rebound = jnp.logical_and((shooter_id != PlayerID.NONE), curr_ball.missed_shot)
                 
-                shooter_team_p1 = (shooter_id == PlayerID.PLAYER1_INSIDE) | (shooter_id == PlayerID.PLAYER1_OUTSIDE)
-                catcher_team_p1 = (pid == PlayerID.PLAYER1_INSIDE) | (pid == PlayerID.PLAYER1_OUTSIDE)
-                is_defensive_rebound = is_rebound & (shooter_team_p1 != catcher_team_p1)
+                shooter_team_p1 = jnp.logical_or((shooter_id == PlayerID.PLAYER1_INSIDE), (shooter_id == PlayerID.PLAYER1_OUTSIDE))
+                catcher_team_p1 = jnp.logical_or((pid == PlayerID.PLAYER1_INSIDE), (pid == PlayerID.PLAYER1_OUTSIDE))
+                is_defensive_rebound = jnp.logical_and(is_rebound, (shooter_team_p1 != catcher_team_p1))
                 
                 # Update ball
                 new_ball = curr_ball.replace(holder=pid, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE, shooter=PlayerID.NONE, missed_shot=False)
@@ -1189,7 +1160,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 players_stacked_catch = jax.tree_util.tree_map(lambda *args: jnp.stack(args), curr_state.player1_inside, curr_state.player1_outside, curr_state.player2_inside, curr_state.player2_outside)
                 
                 def update_clearance(player, p_id):
-                    should_set = (p_id == pid) & is_defensive_rebound
+                    should_set = jnp.logical_and((p_id == pid), is_defensive_rebound)
                     return jax.lax.cond(should_set, lambda p: p.replace(clearance_needed=True), lambda p: p, player)
 
                 updated_players = jax.vmap(update_clearance)(players_stacked_catch, player_ids)
@@ -1206,7 +1177,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
             # Update ball position if held
             players_stacked_new = jax.tree_util.tree_map(lambda *args: jnp.stack(args), s.player1_inside, s.player1_outside, s.player2_inside, s.player2_outside)
-            is_held = (b_state.holder >= PlayerID.PLAYER1_INSIDE) & (b_state.holder <= PlayerID.PLAYER2_OUTSIDE)
+            is_held = jnp.logical_and((b_state.holder >= PlayerID.PLAYER1_INSIDE), (b_state.holder <= PlayerID.PLAYER2_OUTSIDE))
             def update_held_pos(b):
                 idx = b.holder - 1
                 return b.replace(x=players_stacked_new.x[idx].astype(jnp.float32), y=players_stacked_new.y[idx].astype(jnp.float32))
@@ -1215,8 +1186,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
             # Update controlled player
             holder = b_state.holder
-            should_switch_to_inside = (holder == PlayerID.PLAYER1_INSIDE) | (holder == PlayerID.PLAYER2_INSIDE)
-            should_switch_to_outside = (holder == PlayerID.PLAYER1_OUTSIDE) | (holder == PlayerID.PLAYER2_OUTSIDE)
+            should_switch_to_inside = jnp.logical_or((holder == PlayerID.PLAYER1_INSIDE), (holder == PlayerID.PLAYER2_INSIDE))
+            should_switch_to_outside = jnp.logical_or((holder == PlayerID.PLAYER1_OUTSIDE), (holder == PlayerID.PLAYER2_OUTSIDE))
             
             new_controlled_player_id = jax.lax.select(
                 should_switch_to_inside,
@@ -1235,7 +1206,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _handle_play_selection(self, state: DunkGameState, action: int) -> DunkGameState:
         """Handles the play selection mode."""
-        p1_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE) | (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        p1_has_ball = jnp.logical_or((state.ball.holder == PlayerID.PLAYER1_INSIDE), (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
         
         key, strat_key = random.split(state.key)
 
@@ -1284,11 +1255,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             jax.lax.select(
                 is_down, MR_OUTSIDE_SHOOTS, 
                 jax.lax.select(
-                    is_left | is_right, GIVE_AND_GO,
+                    jnp.logical_or(is_left, is_right), GIVE_AND_GO,
                     jax.lax.select(
-                        is_up_left | is_up_right, PICK_AND_ROLL,
+                        jnp.logical_or(is_up_left, is_up_right), PICK_AND_ROLL,
                         jax.lax.select(
-                            is_down_left | is_down_right, PICK_PLAY,
+                            jnp.logical_or(is_down_left, is_down_right), PICK_PLAY,
                             state.strategy.offense_pattern
                         )
                     )
@@ -1300,14 +1271,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         # Left variants: LEFT, UP_LEFT, DOWN_LEFT
         # Right variants: RIGHT, UP_RIGHT, DOWN_RIGHT
         play_dir_p1 = jax.lax.select(
-            is_left | is_up_left | is_down_left, -1,
+            jnp.logical_or(jnp.logical_or(is_left, is_up_left), is_down_left), -1,
             jax.lax.select(
-                is_right | is_up_right | is_down_right, 1,
+                jnp.logical_or(jnp.logical_or(is_right, is_up_right), is_down_right), 1,
                 0 # UP and DOWN are center
             )
         )
         
-        valid_input_p1_off = is_up | is_down | is_right | is_left | is_up_left | is_up_right | is_down_left | is_down_right
+        valid_input_p1_off = jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(is_up, is_down), is_right), is_left), is_up_left), is_up_right), is_down_left), is_down_right)
         
         state_p1_ball = jax.lax.cond(
             valid_input_p1_off,
@@ -1318,9 +1289,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Case 2: P2 Has Ball (Enemy chooses Offense, User chooses Defense)
         def_p1 = jax.lax.select(
-            is_up | is_down_left | is_down_right, DefensiveStrategy.LANE_DEFENSE,
+            jnp.logical_or(jnp.logical_or(is_up, is_down_left), is_down_right), DefensiveStrategy.LANE_DEFENSE,
             jax.lax.select(
-                is_down | is_left | is_right | is_up_left | is_up_right, DefensiveStrategy.TIGHT_DEFENSE, 
+                jnp.logical_or(jnp.logical_or(jnp.logical_or(jnp.logical_or(is_down, is_left), is_right), is_up_left), is_up_right), DefensiveStrategy.TIGHT_DEFENSE, 
                 state.strategy.defense_pattern
             )
         )
@@ -1350,7 +1321,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.timers.travel - 1
         timer_expired = new_timer <= 0
 
-        p1_triggered = state.player1_inside.triggered_travel | state.player1_outside.triggered_travel
+        p1_triggered = jnp.logical_or(state.player1_inside.triggered_travel, state.player1_outside.triggered_travel)
 
         return jax.lax.cond(
             timer_expired,
@@ -1366,7 +1337,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.timers.clearance - 1
         timer_expired = new_timer <= 0
 
-        p1_triggered = state.player1_inside.triggered_clearance | state.player1_outside.triggered_clearance
+        p1_triggered = jnp.logical_or(state.player1_inside.triggered_clearance, state.player1_outside.triggered_clearance)
 
         return jax.lax.cond(
             timer_expired,
@@ -1430,9 +1401,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             s, key = self._handle_interactions(s, actions, key)
             
             # Check for Clearance Penalty Trigger (after jump)
-            p1_clearance = s.player1_inside.triggered_clearance | s.player1_outside.triggered_clearance
-            p2_clearance = s.player2_inside.triggered_clearance | s.player2_outside.triggered_clearance
-            clearance_triggered = p1_clearance | p2_clearance
+            p1_clearance = jnp.logical_or(s.player1_inside.triggered_clearance, s.player1_outside.triggered_clearance)
+            p2_clearance = jnp.logical_or(s.player2_inside.triggered_clearance, s.player2_outside.triggered_clearance)
+            clearance_triggered = jnp.logical_or(p1_clearance, p2_clearance)
             
             s = jax.lax.cond(
                 clearance_triggered,
@@ -1479,7 +1450,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_done(self, state: DunkGameState) -> bool:
         """Determines if the environment state is a terminal state"""
-        is_max_score_reached = (state.scores.player >= self.constants.MAX_SCORE) | (state.scores.enemy >= self.constants.MAX_SCORE)
+        is_max_score_reached = jnp.logical_or((state.scores.player >= self.constants.MAX_SCORE), (state.scores.enemy >= self.constants.MAX_SCORE))
         return is_max_score_reached
 
     def _get_info(self, state: DunkGameState, all_rewards: jnp.array = None) -> DunkInfo:
@@ -1556,9 +1527,9 @@ class DunkRenderer(JAXGameRenderer):
         ball_holder = state.ball.holder
         
         # Clearance Logic Check (needed early for status indicators)
-        p1_needs_clearance = (
-            ((ball_holder == PlayerID.PLAYER1_INSIDE) & state.player1_inside.clearance_needed) |
-            ((ball_holder == PlayerID.PLAYER1_OUTSIDE) & state.player1_outside.clearance_needed)
+        p1_needs_clearance = jnp.logical_or(
+            jnp.logical_and((ball_holder == PlayerID.PLAYER1_INSIDE), state.player1_inside.clearance_needed),
+            jnp.logical_and((ball_holder == PlayerID.PLAYER1_OUTSIDE), state.player1_outside.clearance_needed)
         )
 
         # --- Prepare player data for sorting ---
@@ -1580,8 +1551,8 @@ class DunkRenderer(JAXGameRenderer):
         ball_holder = state.ball.holder
         
         # Determine Possession/Defense Role
-        ball_holder_is_p1 = (ball_holder == PlayerID.PLAYER1_INSIDE) | (ball_holder == PlayerID.PLAYER1_OUTSIDE)
-        ball_holder_is_p2 = (ball_holder == PlayerID.PLAYER2_INSIDE) | (ball_holder == PlayerID.PLAYER2_OUTSIDE)
+        ball_holder_is_p1 = jnp.logical_or((ball_holder == PlayerID.PLAYER1_INSIDE), (ball_holder == PlayerID.PLAYER1_OUTSIDE))
+        ball_holder_is_p2 = jnp.logical_or((ball_holder == PlayerID.PLAYER2_INSIDE), (ball_holder == PlayerID.PLAYER2_OUTSIDE))
         
         # P1 Team (0, 1) defends if P2 has ball
         # P2 Team (2, 3) defends if P1 has ball
@@ -1642,24 +1613,24 @@ class DunkRenderer(JAXGameRenderer):
             # Determine complex possession including ball in flight
             # If no one holds the ball, check shooter or receiver
             
-            p1_active = ball_holder_is_p1 | (
-                (ball_holder == PlayerID.NONE) & (
-                    (state.ball.shooter == PlayerID.PLAYER1_INSIDE) | (state.ball.shooter == PlayerID.PLAYER1_OUTSIDE) |
-                    (state.ball.receiver == PlayerID.PLAYER1_INSIDE) | (state.ball.receiver == PlayerID.PLAYER1_OUTSIDE)
+            p1_active = jnp.logical_or(ball_holder_is_p1, jnp.logical_and(
+                (ball_holder == PlayerID.NONE), jnp.logical_or(jnp.logical_or(jnp.logical_or(
+                    (state.ball.shooter == PlayerID.PLAYER1_INSIDE), (state.ball.shooter == PlayerID.PLAYER1_OUTSIDE)),
+                    (state.ball.receiver == PlayerID.PLAYER1_INSIDE)), (state.ball.receiver == PlayerID.PLAYER1_OUTSIDE))
                 )
             )
             
-            p2_active = ball_holder_is_p2 | (
-                (ball_holder == PlayerID.NONE) & (
-                    (state.ball.shooter == PlayerID.PLAYER2_INSIDE) | (state.ball.shooter == PlayerID.PLAYER2_OUTSIDE) |
-                    (state.ball.receiver == PlayerID.PLAYER2_INSIDE) | (state.ball.receiver == PlayerID.PLAYER2_OUTSIDE)
+            p2_active = jnp.logical_or(ball_holder_is_p2, jnp.logical_and(
+                (ball_holder == PlayerID.NONE), jnp.logical_or(jnp.logical_or(jnp.logical_or(
+                    (state.ball.shooter == PlayerID.PLAYER2_INSIDE), (state.ball.shooter == PlayerID.PLAYER2_OUTSIDE)),
+                    (state.ball.receiver == PlayerID.PLAYER2_INSIDE)), (state.ball.receiver == PlayerID.PLAYER2_OUTSIDE))
                 )
             )
             
             # Logic: If P2 is active, P1 is DEF. Otherwise P1 is OFF.
             # This defaults to P1 OFF if both are false (start of game).
-            p1_is_off = ~p2_active
-            p2_is_off = ~p1_is_off # Complementary
+            p1_is_off = jnp.logical_not(p2_active)
+            p2_is_off = jnp.logical_not(p1_is_off) # Complementary
             
             p1_mask = jax.lax.select(p1_is_off, self.SHAPE_MASKS['player_off'], self.SHAPE_MASKS['player_def'])
             p2_mask = jax.lax.select(p2_is_off, self.SHAPE_MASKS['enemy_off'], self.SHAPE_MASKS['enemy_def'])
@@ -1670,9 +1641,9 @@ class DunkRenderer(JAXGameRenderer):
             p2_x = 100
             
             should_blink = (state.game_mode == GameMode.PLAY_SELECTION)
-            is_penalty = (state.game_mode == GameMode.TRAVEL_PENALTY) | (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY) | (state.game_mode == GameMode.CLEARANCE_PENALTY)
+            is_penalty = jnp.logical_or(jnp.logical_or((state.game_mode == GameMode.TRAVEL_PENALTY), (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY)), (state.game_mode == GameMode.CLEARANCE_PENALTY))
             # Added ~p1_needs_clearance to hide indicators during clearance warning
-            is_visible = (~is_penalty) & (~p1_needs_clearance) & (~should_blink | ((state.step_counter // 8) % 2 == 0))
+            is_visible = jnp.logical_and(jnp.logical_and(jnp.logical_not(is_penalty), jnp.logical_not(p1_needs_clearance)), jnp.logical_or(jnp.logical_not(should_blink), ((state.step_counter // 8) % 2 == 0)))
 
             current_raster = jax.lax.cond(
                 is_visible,
@@ -1775,13 +1746,14 @@ class DunkRenderer(JAXGameRenderer):
         is_oob_mode = (state.game_mode == GameMode.OUT_OF_BOUNDS_PENALTY)
         
         ball_holder = state.ball.holder
-        p1_needs_clearance = (
-            ((ball_holder == PlayerID.PLAYER1_INSIDE) & state.player1_inside.clearance_needed) |
-            ((ball_holder == PlayerID.PLAYER1_OUTSIDE) & state.player1_outside.clearance_needed)
+        p1_needs_clearance = jnp.logical_or(
+            jnp.logical_and((ball_holder == PlayerID.PLAYER1_INSIDE), state.player1_inside.clearance_needed),
+            jnp.logical_and((ball_holder == PlayerID.PLAYER1_OUTSIDE), state.player1_outside.clearance_needed)
         )
+        
         is_clearance_mode = (state.game_mode == GameMode.CLEARANCE_PENALTY)
         effective_clearance_timer = jax.lax.select(is_clearance_mode, state.timers.clearance, 60)
-        should_show_clearance = p1_needs_clearance | is_clearance_mode
+        should_show_clearance = jnp.logical_or(p1_needs_clearance, is_clearance_mode)
 
         return jax.lax.cond(
             is_travel_mode,
