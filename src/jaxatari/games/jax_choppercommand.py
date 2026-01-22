@@ -279,10 +279,9 @@ class ChopperCommandInfo(NamedTuple):
 
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
-    def __init__(self, consts: ChopperCommandConstants = None):
-        consts = consts or ChopperCommandConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -300,8 +299,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: ChopperCommandConstants = None):
+        consts = consts or ChopperCommandConstants()
+        super().__init__(consts)
 
         self.obs_size = (
             6  # player: x,y,o,width,height,active
@@ -1519,6 +1524,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: ChopperCommandState, action: chex.Array):
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         prev = state  # for reward/info
 
         def _match_state_dtypes(out_state, ref_state):

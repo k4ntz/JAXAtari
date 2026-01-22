@@ -502,6 +502,31 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
 
 # Main Environment Class
 class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienConstants]):
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            JAXAtariAction.NOOP,
+            JAXAtariAction.FIRE,
+            JAXAtariAction.UP,
+            JAXAtariAction.RIGHT,
+            JAXAtariAction.LEFT,
+            JAXAtariAction.DOWN,
+            JAXAtariAction.UPRIGHT,
+            JAXAtariAction.UPLEFT,
+            JAXAtariAction.DOWNRIGHT,
+            JAXAtariAction.DOWNLEFT,
+            JAXAtariAction.UPFIRE,
+            JAXAtariAction.RIGHTFIRE,
+            JAXAtariAction.LEFTFIRE,
+            JAXAtariAction.DOWNFIRE,
+            JAXAtariAction.UPRIGHTFIRE,
+            JAXAtariAction.UPLEFTFIRE,
+            JAXAtariAction.DOWNRIGHTFIRE,
+            JAXAtariAction.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: AlienConstants = None):
         consts = consts or AlienConstants()
         super().__init__(consts)
@@ -521,32 +546,12 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         self.level_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "bg", "map_sprite_collision_map.npy"), transpose=True)
         self.enemy_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "player_animation","player_sprite_collision_map.npy"), transpose=True)
         self.enemy_bonus_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path, "enemy_animation", "enemy_sprite_bonus_collision_map.npy"), transpose=True)
-
-        # Define action set
-        self.action_set = [
-            JAXAtariAction.NOOP,
-            JAXAtariAction.FIRE,
-            JAXAtariAction.UP,
-            JAXAtariAction.RIGHT,
-            JAXAtariAction.LEFT,
-            JAXAtariAction.DOWN,
-            JAXAtariAction.UPRIGHT,
-            JAXAtariAction.UPLEFT,
-            JAXAtariAction.DOWNRIGHT,
-            JAXAtariAction.DOWNLEFT,
-            JAXAtariAction.UPFIRE,
-            JAXAtariAction.RIGHTFIRE,
-            JAXAtariAction.LEFTFIRE,
-            JAXAtariAction.DOWNFIRE,
-            JAXAtariAction.UPRIGHTFIRE,
-            JAXAtariAction.UPLEFTFIRE,
-            JAXAtariAction.DOWNRIGHTFIRE,
-            JAXAtariAction.DOWNLEFTFIRE
-        ]
+    
     def render(self, state: AlienState) -> jnp.ndarray:
         return self.renderer.render(state)
+    
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
 
     def reset(self, rng_key: jArray) -> Tuple[AlienObservation, AlienState]:
@@ -1237,6 +1242,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         Returns:
             Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]: New state, observation and info
         """
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         # Choose Step here:
         is_in_bonus: jArray = state.level.bonus_flag
         is_in_regular: jArray = jnp.logical_and(1 - state.level.bonus_flag, jnp.greater(state.level.frame_count, 50))
@@ -1270,7 +1278,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
     def get_action_space(self) -> jnp.ndarray:
         # calls the action set
-        return jnp.array(self.action_set)
+        return self.ACTION_SET
 
     def image_space(self) -> spaces.Box:
         # Define the observation space for images

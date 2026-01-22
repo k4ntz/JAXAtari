@@ -99,30 +99,35 @@ class FlagCaptureInfo(NamedTuple):
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo,FlagCaptureConstants]):
+    # Minimal ALE action set for Flag Capture
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self,consts:FlagCaptureConstants = None):
         consts = consts or FlagCaptureConstants()
         super().__init__(consts)
         self.renderer = FlagCaptureRenderer(consts=consts)
-        self.action_set = [
-            JAXAtariAction.NOOP,
-            JAXAtariAction.FIRE,
-            JAXAtariAction.UP,
-            JAXAtariAction.RIGHT,
-            JAXAtariAction.LEFT,
-            JAXAtariAction.DOWN,
-            JAXAtariAction.UPRIGHT,
-            JAXAtariAction.UPLEFT,
-            JAXAtariAction.DOWNRIGHT,
-            JAXAtariAction.DOWNLEFT,
-            JAXAtariAction.UPFIRE,
-            JAXAtariAction.RIGHTFIRE,
-            JAXAtariAction.LEFTFIRE,
-            JAXAtariAction.DOWNFIRE,
-            JAXAtariAction.UPRIGHTFIRE,
-            JAXAtariAction.UPLEFTFIRE,
-            JAXAtariAction.DOWNRIGHTFIRE,
-            JAXAtariAction.DOWNLEFTFIRE
-        ]
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(187)) -> Tuple[
         FlagCaptureObservation, FlagCaptureState]:
@@ -189,8 +194,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
     def action_space(self) -> Space:
         """
-        Returns the action space of the environment as an array containing the actions that can be taken.
-        Returns: The action space of the environment as an array.
+        Returns the action space of the environment.
+        Returns: The action space of the environment as a Discrete space.
         """
         return spaces.Discrete(18)
 
@@ -241,6 +246,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             done: A boolean indicating if the game is over.
             info: Additional information about the game state.
         """
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         def player_step(player_x, player_y, is_checking, player_move_cooldown, animation_type, action):
             """
@@ -330,7 +337,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             state.is_checking,
             state.player_move_cooldown,
             state.animation_type,
-            action,
+            atari_action,
         )
 
         bomb_animation_over = jnp.logical_and(

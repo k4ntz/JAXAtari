@@ -4,7 +4,9 @@ from jaxatari.games.mods.kangaroo_mod_plugins import (
     AlwaysHighCoconutMod, PinChildMod, RenderDebugInfo, ReplaceChildWithMonkeyMod, ReplaceBellWithCactusMod,
     ReplaceBellWithFlameMod, ReplaceLadderWithRopeMod, ReplaceLadderWithChainMod, ReplaceMonkeyWithTankMod,
     LethalFlameMod, SpawnOnSecondFloorMod, FlameTrapMod, CenterLaddersMod, InvertLaddersMod,
-    FirstLevelOnlyMod, SecondLevelOnlyMod, ThirdLevelOnlyMod, FourLaddersMod
+    FirstLevelOnlyMod, SecondLevelOnlyMod, ThirdLevelOnlyMod, FourLaddersMod, ReplaceCoconutWithFireball,
+    ReplaceCoconutWithHoneyBee, ReplaceCoconutWithWasp, ReplaceMonkeyWithChickenMod, ReplaceMonkeyWithDragonMod,
+    ReplaceMonkeyWithDangerSignMod, ReplaceMonkeyWithPolarbearMod, ReplaceMonkeyWithSnakeMod, ReplaceBellWithDangerSignMod
 )
 # --- 3. The Registry ---
 KANGAROO_MOD_REGISTRY = {
@@ -20,15 +22,31 @@ KANGAROO_MOD_REGISTRY = {
     "replace_child_with_monkey": ReplaceChildWithMonkeyMod,
     "replace_bell_with_flame": ReplaceBellWithFlameMod,
     "replace_bell_with_cactus": ReplaceBellWithCactusMod,
+    "replace_bell_with_danger_sign": ReplaceBellWithDangerSignMod,
     "ropes": ReplaceLadderWithRopeMod,
     "chains": ReplaceLadderWithChainMod,
     "tanks": ReplaceMonkeyWithTankMod,
+    "replace_coconut_fireball": ReplaceCoconutWithFireball,
+    "replace_coconut_honey_bee": ReplaceCoconutWithHoneyBee,
+    "replace_coconut_wasp": ReplaceCoconutWithWasp,
+
+    "_chickens": ReplaceMonkeyWithChickenMod,
+    "_dragons": ReplaceMonkeyWithDragonMod,
+    # "_danger_signs": ReplaceMonkeyWithDangerSignMod,
+    "_polarbears": ReplaceMonkeyWithPolarbearMod,
+    "_snakes": ReplaceMonkeyWithSnakeMod,
+    "chickens": ["no_thrown_coconut", "_chickens"], # modpack
+    "dragons": ["replace_coconut_fireball", "_dragons"], # dragons throw fireballs
+    # "danger_signs": ["no_thrown_coconut", "_danger_signs"], # modpack
+    "polarbears": ["no_thrown_coconut", "_polarbears"], # modpack
+    "snakes": ["no_thrown_coconut", "_snakes"], # modpack
     "_lethal_bell": LethalFlameMod,
     "lethal_flame": ["_lethal_bell", "replace_bell_with_flame"], # bundle into a modpack
     "spawn_on_second_floor": SpawnOnSecondFloorMod,
     "_flame_trap": FlameTrapMod,
     "flame_trap": ["_lethal_bell", "replace_bell_with_flame", "_flame_trap"], # modpack
     "cactus_trap": ["_lethal_bell", "replace_bell_with_cactus", "_flame_trap"], # modpack
+    "danger_trap": ["_lethal_bell", "replace_bell_with_danger_sign", "_flame_trap"], # modpack
     "center_ladders": CenterLaddersMod,
     "invert_ladders": InvertLaddersMod,
     "four_ladders": FourLaddersMod,

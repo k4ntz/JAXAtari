@@ -272,21 +272,26 @@ class TimePilotInfo(NamedTuple):
     enemies_remaining: chex.Array
 
 class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilotInfo, TimePilotConstants]):
+    # Minimal ALE action set for Time Pilot (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: TimePilotConstants|None = None):
         consts = consts or TimePilotConstants()
         super().__init__(consts)
-        self.action_set = jnp.array([
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE
-        ])
         self.obs_size = 3*6 + self.consts.MAX_NUMBER_OF_ENEMIES*6 + self.consts.MAX_ENEMY_MISSILES*6 + 4
         self.renderer = TimePilotRenderer(consts)
 
@@ -859,6 +864,8 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
     def step(
         self, state: TimePilotState, action: chex.Array
     ) -> Tuple[TimePilotObservation, TimePilotState, float, bool, TimePilotInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         
         level_constants = self._get_level_constants(state.level)
         
@@ -873,13 +880,13 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         player_rotation = jax.lax.cond(
             jnp.logical_and(jnp.logical_and(state.player_active, state.respawn_timer <= 0), 
                             (state.step_counter + 2) % 8 == 0),
-            lambda: self.player_step(state.player_rotation, action),
+            lambda: self.player_step(state.player_rotation, atari_action),
             lambda: state.player_rotation
         )
 
         # update player missile (every step)
         player_missile_state, missile_rdy = self.player_missile_step(
-            state.player_missile_state, state.missile_rdy, player_rotation, action, 
+            state.player_missile_state, state.missile_rdy, player_rotation, atari_action, 
             jnp.logical_and(state.player_active, state.respawn_timer <= 0), state.step_counter
         )
 
@@ -1345,7 +1352,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Box: 
         """Returns the observation space for TimePilot.

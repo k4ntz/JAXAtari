@@ -254,25 +254,30 @@ class AsteroidsInfo(NamedTuple):
     step_counter: chex.Array
 
 class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, AsteroidsInfo, AsteroidsConstants]):
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: AsteroidsConstants = None):
         consts = consts or AsteroidsConstants()
         super().__init__(consts)
-        self.action_set = jnp.array([
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.UPRIGHT,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE
-        ])
         self.obs_size = 1*6 + 2*6 + self.consts.MAX_NUMBER_OF_ASTEROIDS*6 + 2
         self.renderer = AsteroidsRenderer(consts)
 
@@ -894,6 +899,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def step(
         self, state: AsteroidsState, action: chex.Array
     ) -> Tuple[AsteroidsObservation, AsteroidsState, float, bool, AsteroidsInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # update player position, speed and rotation
         player_x, player_y, player_speed_x, player_speed_y, player_rotation, respawn_timer, rng_key = self.player_step(
@@ -1143,7 +1150,7 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Box:
         """Returns the observation space for Asteroids.

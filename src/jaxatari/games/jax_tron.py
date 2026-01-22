@@ -1214,13 +1214,9 @@ def _select_door_for_spawn(
 
 
 class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants]):
-    def __init__(
-        self, consts: TronConstants = None
-    ) -> None:
-        consts = consts or TronConstants()
-        super().__init__(consts)
-        self.renderer = TronRenderer(consts)
-        self.action_set = [
+    # Minimal ALE action set for Tron (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -1239,7 +1235,16 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE,
-        ]
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(
+        self, consts: TronConstants = None
+    ) -> None:
+        consts = consts or TronConstants()
+        super().__init__(consts)
+        self.renderer = TronRenderer(consts)
 
         # Precompute static rects
         (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
@@ -2639,8 +2644,11 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
     def step(
         self, state: TronState, action: Array
     ) -> Tuple[TronObservation, TronState, float, bool, TronInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         previous_state = state
-        user_action: UserAction = parse_action(action)
+        user_action: UserAction = parse_action(atari_action)
         # pressed_fire should only be true, if in the previous frame it wasn't pressed
 
         # track whether fire was already pressed in the frame before
@@ -2960,7 +2968,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         c = self.consts

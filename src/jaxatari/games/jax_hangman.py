@@ -55,6 +55,15 @@ class HangmanConstants(NamedTuple):
 
 CONSTANTS = HangmanConstants()
 
+
+class HangmanConstants(NamedTuple):
+    MAX_MISSES: int = MAX_MISSES
+    STEP_PENALTY: float = STEP_PENALTY
+    DIFFICULTY_MODE: str = DIFFICULTY_MODE
+    TIMER_SECONDS: int = TIMER_SECONDS
+    STEPS_PER_SECOND: int = STEPS_PER_SECOND
+
+
 class HangmanState(NamedTuple):
     key: chex.Array
     word: chex.Array
@@ -102,15 +111,38 @@ def _compute_revealed(word: chex.Array, mask: chex.Array) -> chex.Array:
 
 
 def _action_delta_cursor(action: chex.Array) -> chex.Array:
-    up_like = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-    down_like = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+    # Actions that move cursor up: UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
+    up_like = jnp.logical_or(
+        jnp.logical_or(
+            jnp.logical_or(action == Action.UP, action == Action.UPRIGHT),
+            jnp.logical_or(action == Action.UPLEFT, action == Action.UPFIRE)
+        ),
+        jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)
+    )
+    # Actions that move cursor down: DOWN, DOWNRIGHT, DOWNLEFT, DOWNFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE
+    down_like = jnp.logical_or(
+        jnp.logical_or(
+            jnp.logical_or(action == Action.DOWN, action == Action.DOWNRIGHT),
+            jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNFIRE)
+        ),
+        jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE)
+    )
     return jnp.where(up_like, -1, jnp.where(down_like, 1, 0)).astype(jnp.int32)
 
 
 def _action_commit(action: chex.Array) -> chex.Array:
+    # All FIRE actions commit: FIRE, UPFIRE, DOWNFIRE, RIGHTFIRE, LEFTFIRE, 
+    # UPRIGHTFIRE, UPLEFTFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE
     return jnp.logical_or(
-        jnp.logical_or(action == Action.FIRE, action == Action.UPFIRE),
-        action == Action.DOWNFIRE
+        jnp.logical_or(
+            jnp.logical_or(action == Action.FIRE, action == Action.UPFIRE),
+            jnp.logical_or(action == Action.DOWNFIRE, action == Action.RIGHTFIRE)
+        ),
+        jnp.logical_or(
+            jnp.logical_or(action == Action.LEFTFIRE, action == Action.UPRIGHTFIRE),
+            jnp.logical_or(action == Action.UPLEFTFIRE, 
+                jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE))
+        )
     )
 
 
@@ -158,13 +190,20 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self.max_misses = self.consts.MAX_MISSES
         self.step_penalty = self.consts.STEP_PENALTY
 
-        self.timed = 1 if str(difficulty_mode).upper() == "A" else 0
-        self.timer_steps = int(timer_seconds * steps_per_second)
+    def __init__(self, consts: HangmanConstants = None):
+        consts = consts or HangmanConstants()
+        super().__init__(consts)
+        self.renderer = HangmanRenderer()
+        self.consts = consts
 
         self.action_set = [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.UPFIRE, Action.DOWNFIRE]
         # obs size depends on L_MAX
         self.obs_size = self.consts.L_MAX + self.consts.L_MAX + self.consts.ALPHABET_SIZE + 3
         self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
+
+        # Compute derived values from constants
+        self.timed = 1 if str(consts.DIFFICULTY_MODE).upper() == "A" else 0
+        self.timer_steps = int(consts.TIMER_SECONDS * consts.STEPS_PER_SECOND)
 
         self._rng_key = jrandom.PRNGKey(0)
 
@@ -367,7 +406,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         return obs, next_state, env_reward, done, info
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({

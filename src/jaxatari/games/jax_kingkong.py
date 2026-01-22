@@ -446,20 +446,23 @@ class KingKongInfo(NamedTuple):
 	time: chex.Array
 
 class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInfo, KingKongConstants]):
+	# Minimal ALE action set for King Kong (from scripts/action_space_helper.py)
+	ACTION_SET: jnp.ndarray = jnp.array(
+		[
+			Action.NOOP,
+			Action.FIRE,
+			Action.UP,
+			Action.RIGHT,
+			Action.LEFT,
+			Action.DOWN,
+		],
+		dtype=jnp.int32,
+	)
+
 	def __init__(self, consts: KingKongConstants = None):
 		consts = consts or KingKongConstants()
 		super().__init__(consts)
 		self.renderer = KingKongRenderer(self.consts)
-		self.action_set = [
-			Action.NOOP,
-			Action.LEFT,
-			Action.RIGHT,
-			Action.UP,
-			Action.DOWN,
-			Action.FIRE, # Fire is jump 
-			Action.LEFTFIRE, # running jumps, this is missing in the reference game 
-			Action.RIGHTFIRE
-		]
 		self.obs_size = 5 + 5 + 5 + (6 * self.consts.MAX_BOMBS) + 6  # player + kong + princess + bombs + game_info
 
 	def reset(self, key=None) -> Tuple[KingKongObservation, KingKongState]:
@@ -523,7 +526,10 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return initial_obs, state
 	
 	@partial(jax.jit, static_argnums=(0,))
-	def step(self, state: KingKongState, action: chex.Array) -> Tuple[KingKongObservation, KingKongState, float, bool, KingKongInfo]:		
+	def step(self, state: KingKongState, action: chex.Array) -> Tuple[KingKongObservation, KingKongState, float, bool, KingKongInfo]:
+		# Translate compact agent action index to ALE console action
+		atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+		
 		# Handle different game states with current stage_steps
 		if self.consts.DEBUG: jax.debug.print("gamestate={g} stage_steps={s}", g=state.gamestate, s=state.stage_steps)
 		new_state: KingKongState = jax.lax.switch(
@@ -536,7 +542,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 				lambda s, a: self._step_death(s, a),
 				lambda s, a: self._step_success(s, a),
 			],
-			state, action
+			state, atari_action
 		)
 
 		# Update princess movement here bc she always moves (except on success)
@@ -907,12 +913,12 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return jax.lax.cond(should_transition, do_transition, do_normal_step, operand=None)
 
 	def _update_player_gameplay(self, state: KingKongState, action: chex.Array) -> KingKongState:
-		# Intentions
-		move_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-		move_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+		# Intentions (only check actions in ALE minimal action set)
+		move_left = action == Action.LEFT
+		move_right = action == Action.RIGHT
 		move_up = action == Action.UP
 		move_down = action == Action.DOWN
-		jump = (action == Action.FIRE) | (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
+		jump = action == Action.FIRE
 
 		# Get floor bounds
 		current_floor_bounds = self.consts.FLOOR_BOUNDS[state.player_floor]
@@ -1077,21 +1083,13 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		# --- Jumping (disabled if climbing or already jumping) ---
 		can_jump = jnp.logical_and(jump, jnp.logical_and(state.player_floor < 8, jnp.logical_and(jnp.logical_not(is_climbing), jnp.logical_not(is_jumping))))
 		
-		# Initialize jump - only use direction if LEFTFIRE or RIGHTFIRE is pressed
+		# Initialize jump - use player's current direction (idle state) to determine jump direction
 		new_player_state = jax.lax.cond(
 			can_jump,
 			lambda: jax.lax.cond(
-				action == Action.LEFTFIRE,
+				state.player_state == self.consts.PLAYER_IDLE_LEFT,
 				lambda: self.consts.PLAYER_JUMP_LEFT,
-				lambda: jax.lax.cond(
-					action == Action.RIGHTFIRE,
-					lambda: self.consts.PLAYER_JUMP_RIGHT,
-					lambda: jax.lax.cond(
-						state.player_state == self.consts.PLAYER_IDLE_LEFT,
-						lambda: self.consts.PLAYER_JUMP_LEFT,
-						lambda: self.consts.PLAYER_JUMP_RIGHT  # Default to right if idle right or other states
-					)
-				)
+				lambda: self.consts.PLAYER_JUMP_RIGHT  # Default to right if idle right or other states
 			),
 			lambda: new_player_state
 		)
@@ -1112,17 +1110,13 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			)
 		)
 
-		# Set jump direction based on action when starting a jump
+		# Set jump direction based on player's current direction when starting a jump
 		new_player_dir = jax.lax.cond(
 			can_jump,
 			lambda: jax.lax.cond(
-				action == Action.LEFTFIRE,
-				lambda: -1,
-				lambda: jax.lax.cond(
-					action == Action.RIGHTFIRE,
-					lambda: 1,
-					lambda: 0
-				)
+				state.player_state == self.consts.PLAYER_IDLE_LEFT,
+				lambda: -1,  # Jump left if idle left
+				lambda: 1    # Jump right if idle right or other states
 			),
 			lambda: new_player_dir # Keep current direction if not jumping
 		)
@@ -2145,7 +2139,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		])
 
 	def action_space(self) -> spaces.Discrete:
-		return spaces.Discrete(len(self.action_set))
+		return spaces.Discrete(len(self.ACTION_SET))
 
 	def observation_space(self) -> spaces:
 		return spaces.Dict({

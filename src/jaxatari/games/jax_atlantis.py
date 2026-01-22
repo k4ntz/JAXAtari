@@ -254,6 +254,12 @@ class JaxAtlantis(
         reward_funcs (tuple): Tuple of reward functions for multi-objective RL
     """
 
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
+
     def __init__(
         self,
         consts: AtlantisConstants | None = None,
@@ -262,12 +268,6 @@ class JaxAtlantis(
         super().__init__(consts)
         self.config = GameConfig()  # Keep for backward compatibility if needed
         self.renderer = AtlantisRenderer(config=self.config)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-        ]
 
     def reset(
         self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
@@ -1148,6 +1148,9 @@ class JaxAtlantis(
     def step(
         self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         previous_state = state
 
         def _pause_step(s: AtlantisState) -> AtlantisState:
@@ -1396,7 +1399,7 @@ class JaxAtlantis(
         2: RIGHTFIRE
         3: LEFTFIRE
         """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def render(self, state: AtlantisState) -> jnp.ndarray:
         return self.renderer.render(state)

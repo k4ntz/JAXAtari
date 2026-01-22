@@ -267,19 +267,34 @@ def get_action_from_keyboard(state: RiverraidState) -> Action:
 
 
 class JaxRiverraid(JaxEnvironment):
+    # Minimal ALE action set for River Raid
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: RiverraidConstants = None):
         self.consts = consts or RiverraidConstants()
         super().__init__(self.consts)
-        self.action_set = {
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UP,
-            Action.DOWN
-        }
         self.renderer = RiverraidRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -819,7 +834,7 @@ class JaxRiverraid(JaxEnvironment):
             player_score=new_score)
 
     @partial(jax.jit, static_argnums=(0,))
-    def player_movement(self, state: RiverraidState, action: Action) -> RiverraidState:
+    def player_movement(self, state: RiverraidState, action: chex.Array) -> RiverraidState:
         #input
         press_right = jnp.any(jnp.array([
             action == Action.RIGHT,
@@ -888,7 +903,7 @@ class JaxRiverraid(JaxEnvironment):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def player_shooting(self, state, action):
+    def player_shooting(self, state, action: chex.Array):
         shooting = jnp.any(
             jnp.array([
                 action == Action.FIRE,
@@ -1425,7 +1440,7 @@ class JaxRiverraid(JaxEnvironment):
         return new_state._replace(master_key=spawn_key)
 
     @partial(jax.jit, static_argnums=(0,))
-    def adjust_player_speed(self, state: RiverraidState, action: Action) -> RiverraidState:
+    def adjust_player_speed(self, state: RiverraidState, action: chex.Array) -> RiverraidState:
         press_up = jnp.any(jnp.array([
             action == Action.UP,
             action == Action.UPFIRE,
@@ -1572,16 +1587,19 @@ class JaxRiverraid(JaxEnvironment):
         return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: RiverraidState, action: Action) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
+    def step(self, state: RiverraidState, action: int) -> Tuple[RiverraidObservation, RiverraidState, RiverraidInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+        
         def player_alive(state: RiverraidState) -> RiverraidState:
-            new_state = self.adjust_player_speed(state, action)
+            new_state = self.adjust_player_speed(state, atari_action)
             new_state = self.handle_dam(new_state)
             new_state = self.river_generation(new_state)
-            new_state = self.player_movement(new_state, action)
-            new_state = self.player_shooting(new_state, action)
+            new_state = self.player_movement(new_state, atari_action)
+            new_state = self.player_shooting(new_state, atari_action)
             new_state = self.spawn_entities(new_state)
             new_state = self.scroll_entities(new_state)
             new_state = self.enemy_collision(new_state)

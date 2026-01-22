@@ -527,11 +527,9 @@ LaserGatesConstants.ASSET_CONFIG = _get_default_asset_config()
 # -------- Game Logic --------
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
-
-    def __init__(self, consts: LaserGatesConstants = None):
-        consts = consts or LaserGatesConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set for Laser Gates
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -549,8 +547,14 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: LaserGatesConstants = None):
+        consts = consts or LaserGatesConstants()
+        super().__init__(consts)
         self.num_obs_slots = 23
         self.features_per_slot = 5  # x, y, w, h, active
         self.obs_size = self.num_obs_slots * self.features_per_slot
@@ -1938,7 +1942,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     @staticmethod
     @jax.jit
@@ -2407,16 +2411,18 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
     @partial(jax.jit, static_argnums=(0, ))
     def step(
-            self, state: LaserGatesState, action: Action
+            self, state: LaserGatesState, action: int
     ) -> Tuple[LaserGatesObservation, LaserGatesState, float, bool, LaserGatesInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # -------- Move player --------
-        new_player_x, new_player_y, new_player_facing_direction = self.player_step(state, action)
+        new_player_x, new_player_y, new_player_facing_direction = self.player_step(state, atari_action)
         player_animation_timer = state.animation_timer
         new_player_animation_timer = jnp.where(player_animation_timer != 0, player_animation_timer - 1, player_animation_timer)
 
         # -------- Move player missile --------
-        new_player_missile_state = self.player_missile_step(state, action)
+        new_player_missile_state = self.player_missile_step(state, atari_action)
 
         # -------- Move entities --------
         new_entities = self.all_entities_step(state)

@@ -213,29 +213,34 @@ class SpaceWarInfo(NamedTuple):
     step_counter: chex.Array
 
 class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInfo, SpaceWarConstants]):
+    # Minimal ALE action set for Space War (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: SpaceWarConstants = None):
         consts = consts or SpaceWarConstants()
         super().__init__(consts)
-        self.action_set = jnp.array([
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.UPRIGHT,
-            Action.DOWNLEFT,
-            Action.DOWNRIGHT,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ])
         self.obs_size = 6 + 5 + 4
         self.renderer = SpaceWarRenderer(consts)
 
@@ -555,10 +560,12 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
     def step(
         self, state: SpaceWarState, action: chex.Array
     ) -> Tuple[SpaceWarObservation, SpaceWarState, float, bool, SpaceWarInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # update player state and fuel stat and determine whether enemy gains a point
         player_state, player_fuel, enemy_point, rotation_timer = self.player_step(
-            state.player_state, state.player_fuel, action, state.h_space_rdy, state.rotation_timer, state.enemy_victory
+            state.player_state, state.player_fuel, atari_action, state.h_space_rdy, state.rotation_timer, state.enemy_victory
         )
 
         # player speed is updated in every 4th step only
@@ -576,7 +583,7 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
         )
 
         # making sure that hyperspace behaves correctly when down button is held
-        h_space_rdy = jnp.logical_not(jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE))
+        h_space_rdy = jnp.logical_not(jnp.logical_or(atari_action == Action.DOWN, atari_action == Action.DOWNFIRE))
 
         # rotate player after death and making sure player cannot die during death animation
         player_state, enemy_point = jax.lax.cond(
@@ -774,7 +781,7 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Box:
         """Returns the observation space for SpaceWar.

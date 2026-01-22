@@ -256,10 +256,9 @@ class CentipedeInfo(NamedTuple):
 # -------- Game Logic --------
 
 class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, CentipedeInfo, CentipedeConstants]):
-    def __init__(self, consts: CentipedeConstants = None):
-        consts = consts or CentipedeConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -277,8 +276,14 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: CentipedeConstants = None):
+        consts = consts or CentipedeConstants()
+        super().__init__(consts)
         self.obs_size = 6 + 304 * 5 + 9 * 5 + 5 + 5 + 5 + 5 + 1 + 1
         self.renderer = CentipedeRenderer(self.consts)
 
@@ -321,7 +326,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Centipede.
@@ -1866,6 +1871,8 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CentipedeState, action: chex.Array) -> tuple[
         CentipedeObservation, CentipedeState, float, bool, CentipedeInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         previous_state = state  # for reward/info
 

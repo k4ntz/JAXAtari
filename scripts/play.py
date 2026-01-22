@@ -161,6 +161,23 @@ def main():
 
     action_space = env.action_space()
 
+    def map_action_to_index(action_constant):
+        """Convert Action constant to action index for environment's ACTION_SET."""
+        if hasattr(env, 'ACTION_SET'):
+            # Find the index in ACTION_SET that matches the action constant
+            action_set = np.array(env.ACTION_SET)
+            action_int = int(action_constant)
+            # Find index where ACTION_SET[index] == action_int
+            matches = np.where(action_set == action_int)[0]
+            if len(matches) > 0:
+                return jax.numpy.array(matches[0], dtype=jax.numpy.int32)
+            else:
+                # If action not in ACTION_SET, default to NOOP (index 0)
+                return jax.numpy.array(0, dtype=jax.numpy.int32)
+        else:
+            # Fallback: use action constant directly (for environments without ACTION_SET)
+            return action_constant
+
     save_keys = {}
     running = True
     pause = False
@@ -248,8 +265,9 @@ def main():
             action = action_space.sample(action_key)
             action_key, _ = jax.random.split(action_key)
         else:
-            # get the pressed keys
-            action = get_human_action()
+            # get the pressed keys (returns Action constant) and map to action index
+            action_constant = get_human_action()
+            action = map_action_to_index(action_constant)
             # Save the action to the save_keys dictionary
             if args.record:
                 # Save the action to the save_keys dictionary
@@ -262,7 +280,8 @@ def main():
                 next_frame_asked = False
         else:
             # Need to get action to update event queue even if paused
-            action = get_human_action()
+            action_constant = get_human_action()
+            action = map_action_to_index(action_constant)
 
         if done:
             print(f"Done. Total return {total_return}")

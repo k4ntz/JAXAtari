@@ -8,7 +8,7 @@ import os
 import numpy as np
 import collections
 import jaxatari.rendering.jax_rendering_utils as render_utils 
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 
@@ -190,6 +190,13 @@ class SkiingInfo(NamedTuple):
 
 
 class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingConstants]):
+    # ALE minimal action set: [NOOP, RIGHT, LEFT]
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP,
+        Action.RIGHT,
+        Action.LEFT
+    ], dtype=jnp.int32)
+
     def __init__(self, consts: SkiingConstants | None = None):
         consts = consts or SkiingConstants()
         super().__init__(consts)
@@ -198,8 +205,8 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         self.renderer = SkiingRenderer(self.config)
 
     def action_space(self) -> spaces.Discrete:
-        # Aktionen sind bei dir: NOOP=0, LEFT=1, RIGHT=2
-        return spaces.Discrete(8)
+        # ALE actions: NOOP=0, RIGHT=1, LEFT=2
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self):
         c = self.config
@@ -514,13 +521,21 @@ class JaxSkiing(JaxEnvironment[GameState, SkiingObservation, SkiingInfo, SkiingC
         ROCK_X_DIST = jnp.float32(1.0)
         Y_HIT_DIST  = jnp.float32(1.0)
 
-        # 1) Eingabe -> Zielpose (Atari-like: 8 discrete headings + tap/auto-repeat)
-        # Normalize action from get_human_action(): accept only A/D (JAXAtariAction LEFT=4, RIGHT=3).
-        # Any other input (including SPACE/FIRE) becomes NOOP.
-        is_left  = jnp.equal(action, jnp.int32(4))  # external LEFT (A)
-        is_right = jnp.equal(action, jnp.int32(3))  # external RIGHT (D)
-        norm_action = jax.lax.select(is_left,  self.consts.LEFT,
-                        jax.lax.select(is_right, self.consts.RIGHT, self.consts.NOOP))
+        # Translate agent action (0,1,2) to ALE action
+        atari_action = jnp.take(self.ACTION_SET, action)
+        
+        # Map ALE action to internal constants (NOOP=0, LEFT=1, RIGHT=2)
+        # ALE set: [NOOP, RIGHT, LEFT] -> internal: [NOOP=0, RIGHT=2, LEFT=1]
+        norm_action = jnp.where(
+            atari_action == Action.NOOP, self.consts.NOOP,
+            jnp.where(
+                atari_action == Action.RIGHT, self.consts.RIGHT,
+                jnp.where(
+                    atari_action == Action.LEFT, self.consts.LEFT,
+                    self.consts.NOOP  # fallback to NOOP
+                )
+            )
+        )
 
         # Atari feel: stepwise heading with auto-repeat while holding the key.
         # We do NOT add new state fields; we re-use 'direction_change_counter' as a repeat timer.

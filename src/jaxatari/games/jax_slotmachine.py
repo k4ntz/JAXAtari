@@ -778,6 +778,19 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
     analysis tools, and the standard JAXAtari ecosystem.
 
     """
+    # Minimal ALE action set for Slot Machine (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,    # Player 2 increase wager
+            Action.DOWN,  # Player 2 decrease wager
+            Action.LEFT,  # Player 1 decrease wager
+            Action.RIGHT, # Player 1 increase wager
+            Action.UPLEFT, # Toggle jackpot mode
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(
             self,
@@ -788,17 +801,6 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         super().__init__(consts)
     
         self.renderer = SlotMachineRenderer(consts)
-
-        # Define available actions
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,    # Player 2 increase wager
-            Action.DOWN,  # Player 2 decrease wager
-            Action.LEFT,  # Player 1 decrease wager
-            Action.RIGHT, # Player 1 increase wager
-            Action.UPLEFT, # Toggle jackpot mode
-        ]
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[SlotMachineObservation, SlotMachineState]:
         """
@@ -900,16 +902,19 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             return obs, state, 0.0, True, info
             
         def continue_game():
+            # Translate compact agent action index to ALE console action
+            atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+            
             # Update RNG key EVERY step
             step_key, new_rng = jax.random.split(state.rng)
 
             # Process player input
-            fire_pressed = (action == Action.FIRE)
-            up_pressed = (action == Action.UP)        # Player 2 increase wager
-            down_pressed = (action == Action.DOWN)    # Player 2 decrease wager
-            left_pressed = (action == Action.LEFT)    # Player 1 decrease wager
-            right_pressed = (action == Action.RIGHT)  # Player 1 increase wager
-            j_pressed = (action == Action.UPLEFT)     # Jackpot mode toggle
+            fire_pressed = (atari_action == Action.FIRE)
+            up_pressed = (atari_action == Action.UP)        # Player 2 increase wager
+            down_pressed = (atari_action == Action.DOWN)    # Player 2 decrease wager
+            left_pressed = (atari_action == Action.LEFT)    # Player 1 decrease wager
+            right_pressed = (atari_action == Action.RIGHT)  # Player 1 increase wager
+            j_pressed = (atari_action == Action.UPLEFT)     # Jackpot mode toggle
 
             # Detect "just pressed" events to prevent button mashing
             fire_just_pressed = fire_pressed & (~state.spin_button_prev)
@@ -1418,8 +1423,9 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         3 = DOWN (Player 1 decrease wager)
         4 = LEFT (Player 2 decrease wager)
         5 = RIGHT (Player 2 increase wager)
+        6 = UPLEFT (Toggle jackpot mode)
         """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Space:
         """

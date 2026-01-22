@@ -762,7 +762,7 @@ class TestAdvancedWrapperFeatures:
         _, state_with_fire = env_with_fire.reset(key)
         
         # The state with first_fire should have a different prev_action
-        assert state_with_fire.prev_action == 1, "first_fire should set prev_action to FIRE (1)"
+        assert state_with_fire.prev_action == env_with_fire.fire_action_index, "first_fire should set prev_action to the FIRE action index"
         assert state_no_fire.prev_action == 0, "first_fire=False should set prev_action to NOOP (0)"
         
         # Test sticky_actions feature

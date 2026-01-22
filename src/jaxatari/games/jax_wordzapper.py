@@ -269,11 +269,9 @@ def choose_target_word(rng_key: jax.random.PRNGKey, lvl_word_len: chex.Array) ->
 
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
-    def __init__(self, consts: WordZapperConstants = None):
-        super().__init__(consts)
-        self.consts = consts or WordZapperConstants()
-
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -291,8 +289,15 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: WordZapperConstants = None):
+        super().__init__(consts)
+        self.consts = consts or WordZapperConstants()
+
         self.renderer = WordZapperRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1007,7 +1012,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return initial_obs, reset_state
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """
@@ -1684,6 +1689,9 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             bool,
             WordZapperInfo,
         ]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         previous_state = state
 
         state = jax.lax.switch(

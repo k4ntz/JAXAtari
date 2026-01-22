@@ -129,6 +129,19 @@ class JaxSurround(
     JaxEnvironment[SurroundState, SurroundObservation, SurroundInfo, SurroundConstants]
 ):
     """A very small two player Surround implementation."""
+    
+    # Minimal ALE action set for Surround (from scripts/action_space_helper.py)
+    # Note: FIRE is NOT in the ALE action set for this game
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(
         self,
@@ -137,14 +150,6 @@ class JaxSurround(
         consts = consts or SurroundConstants()
         super().__init__(consts)
         self.renderer = SurroundRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-        ]
 
     # --- Internal AI helper for P1 (left player) ---
 
@@ -362,8 +367,10 @@ class JaxSurround(
         do_logic = (substep % jnp.maximum(self.consts.MOVE_EVERY_N_STEPS, 1)) == 0
 
 
-        # Parse action(s)
+        # Parse action(s) - translate compact agent action indices to ALE console actions
         actions = jnp.asarray(actions, dtype=jnp.int32)
+        atari_actions = jnp.take(self.ACTION_SET, actions)
+        
         # Scalar -> treat as P2 only (human); compute AI for P1
         def _joint_from_scalar(a_scalar):
             ai = self._opponent_policy(state)
@@ -371,13 +378,13 @@ class JaxSurround(
         def _joint_from_array(a_array):
             a_array = jnp.reshape(a_array, (-1,))
             return jnp.where(a_array.shape[0] == 2, a_array, _joint_from_scalar(a_array[0]))
-        joint_action = jax.lax.cond(actions.ndim == 0, lambda: _joint_from_scalar(actions), lambda: _joint_from_array(actions))
+        joint_action = jax.lax.cond(atari_actions.ndim == 0, lambda: _joint_from_scalar(atari_actions), lambda: _joint_from_array(atari_actions))
 
-        # Movement vectors for each direction
+        # Movement vectors for each direction (mapped to Action constants)
+        # Index mapping: 0=NOOP, 1=UP, 2=RIGHT, 3=LEFT, 4=DOWN
         offsets = jnp.array(
             [
                 [0, 0],   # NOOP
-                [0, 0],   # FIRE -> no movement
                 [0, -1],  # UP
                 [1, 0],   # RIGHT
                 [-1, 0],  # LEFT
@@ -391,15 +398,19 @@ class JaxSurround(
             is_move = jnp.logical_and(action >= Action.UP, action <= Action.DOWN)
             candidate = jax.lax.select(is_move, action, curr_dir)
             if not self.consts.ALLOW_REVERSE:
-                opp = jnp.array([
-                    Action.NOOP,   # NOOP
-                    Action.NOOP,   # FIRE
-                    Action.DOWN,   # UP -> DOWN
-                    Action.LEFT,   # RIGHT -> LEFT
-                    Action.RIGHT,  # LEFT -> RIGHT
-                    Action.UP,     # DOWN -> UP
-                ], dtype=jnp.int32)
-                candidate = jax.lax.cond(candidate == opp[curr_dir], lambda: curr_dir, lambda: candidate)
+                # Map Action constants to their opposites (for reverse prevention)
+                # Check if candidate is opposite of current direction
+                is_opposite = jnp.logical_or(
+                    jnp.logical_and(curr_dir == Action.UP, candidate == Action.DOWN),
+                    jnp.logical_or(
+                        jnp.logical_and(curr_dir == Action.DOWN, candidate == Action.UP),
+                        jnp.logical_or(
+                            jnp.logical_and(curr_dir == Action.LEFT, candidate == Action.RIGHT),
+                            jnp.logical_and(curr_dir == Action.RIGHT, candidate == Action.LEFT)
+                        )
+                    )
+                )
+                candidate = jax.lax.cond(is_opposite, lambda: curr_dir, lambda: candidate)
             return candidate
 
         new_dir0 = update_dir(state.dir0, joint_action[0])
@@ -421,7 +432,6 @@ class JaxSurround(
             offsets = jnp.array(
                 [
                     [0, 0],   # NOOP
-                    [0, 0],   # FIRE
                     [0, -1],  # UP
                     [1, 0],   # RIGHT
                     [-1, 0],  # LEFT
@@ -553,7 +563,7 @@ class JaxSurround(
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for the controllable player."""
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         # Prefer per-dimension bounds; fall back to scalar bounds if unsupported by spaces.Box

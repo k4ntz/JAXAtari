@@ -282,18 +282,23 @@ def get_action_from_keyboard():
 
 
 class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInfo, GalaxianConstants]):
-    def __init__(self, consts: GalaxianConstants = None):
-        super().__init__()
-        self.consts = consts or GalaxianConstants()
-        self.renderer = GalaxianRenderer()
-        self.action_set = {
+    # Minimal ALE action set for Galaxian
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.RIGHT,
             Action.LEFT,
             Action.RIGHTFIRE,
-            Action.LEFTFIRE
-        }
+            Action.LEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
+    def __init__(self, consts: GalaxianConstants = None):
+        super().__init__()
+        self.consts = consts or GalaxianConstants()
+        self.renderer = GalaxianRenderer()
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1304,7 +1309,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
@@ -1362,9 +1367,11 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def step(
             self, state: GalaxianState, action: chex.Array
     ) -> Tuple[GalaxianObservation, GalaxianState, float, bool, GalaxianInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
-        new_state = self.update_player_position(state, action)
-        new_state = self.update_player_bullet(new_state, action)
+        new_state = self.update_player_position(state, atari_action)
+        new_state = self.update_player_bullet(new_state, atari_action)
         new_state = self.update_enemy_positions(new_state)
         new_state = self.bullet_collision(new_state)
         new_state = self.update_enemy_death_frames(new_state)

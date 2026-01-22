@@ -3,7 +3,7 @@ name = "jaxatari"
 version = "0.1.0"
 description = "GPU-accelerated, object-centric Atari environments for reinforcement learning with JAX."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "absl-py>=2.3",
     "ale-py>=0.11.1",
@@ -11,9 +11,9 @@ dependencies = [
     "flax>=0.10.6",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-    "jax>=0.7.0",
-    "ml-dtypes>=0.5.1",
-    "numpy>=2.2.6",
+    "jax",
+    "ml-dtypes",
+    "numpy",
     "opt-einsum>=3.4.0",
     "scipy>=1.15.3",
     "toolz>=1.0.0",
