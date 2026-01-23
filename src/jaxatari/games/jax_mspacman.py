@@ -891,15 +891,15 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
     def __init__(self):
         super().__init__()
-        self.sprites = MsPacmanRenderer.load_sprites()
+        self.SPRITES = MsPacmanRenderer.load_sprites()
+        self.BG_SPRITES = [MsPacmanMaze.load_background(i) for i in range(len(MsPacmanMaze.MAZES))]
 
     def render_background(self, level: chex.Array, lives: chex.Array, score: chex.Array):
         """Reset the background for a new level."""
         self.SPRITE_BG = MsPacmanMaze.load_background(get_level_maze(level))
-        self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.sprites["pacman"][1][1]) # Life sprite (right looking pacman)
-        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)), self.sprites["score"])
+        self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.SPRITES["pacman"][1][1]) # Life sprite (right looking pacman)
+        self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)), self.SPRITES["score"])
 
-    # TODO: Make this and all of its dependencies jittable
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
         """Renders the current game state on screen."""
@@ -924,7 +924,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                 raster = aj.render_at(raster, pellet_x, pellet_y, POWER_PELLET_SPRITE)
         # Render pacman
         orientation = state.player.action - 2 # convert action to direction
-        pacman_sprite = self.sprites["pacman"][orientation][((state.step_count & 0b1000) >> 2)]
+        pacman_sprite = self.SPRITES["pacman"][orientation][((state.step_count & 0b1000) >> 2)]
         raster = aj.render_at(raster, state.player.position[0], state.player.position[1], 
                               pacman_sprite)
         ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
@@ -932,54 +932,78 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         for i in range(len(state.ghosts.types)):
             # Render frightened ghost
             if not (state.ghosts.modes[i] == GhostMode.FRIGHTENED or state.ghosts.modes[i] == GhostMode.BLINKING):
-                g_sprite = self.sprites["ghost"][ghosts_orientation][i]
+                g_sprite = self.SPRITES["ghost"][ghosts_orientation][i]
             elif state.ghosts.modes[i] == GhostMode.BLINKING and ((state.step_count & 0b1000) >> 3):
-                g_sprite = self.sprites["ghost"][ghosts_orientation][5] # white blinking effect
+                g_sprite = self.SPRITES["ghost"][ghosts_orientation][5] # white blinking effect
             else:
-                g_sprite = self.sprites["ghost"][ghosts_orientation][4] # blue ghost
+                g_sprite = self.SPRITES["ghost"][ghosts_orientation][4] # blue ghost
             raster = aj.render_at(raster, state.ghosts.positions[i][0], state.ghosts.positions[i][1], g_sprite)
 
         # Render fruit if present
         if state.fruit.type != FruitType.NONE:
-            raster = MsPacmanRenderer.render_fruit(raster, state.fruit, self.sprites["fruit"])
+            raster = MsPacmanRenderer.render_fruit(raster, state.fruit, self.SPRITES["fruit"])
 
         # Render score if changed
         if jnp.any(state.score_changed):
-            self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.sprites["score"])
+            self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, state.score, state.score_changed, self.SPRITES["score"])
 
         # Remove one life if a life is lost
         if state.freeze_timer == RESET_TIMER-1:
-            self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, state.lives, self.sprites["pacman"][1][1])
+            self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, state.lives, self.SPRITES["pacman"][1][1])
         return raster
     
     @staticmethod
     def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0])):
         """Render the score on the raster at a fixed position. Only updates digits that have changed."""
         digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-        for idx in range(len(digits)):
-            if score_changed[idx]: 
+
+        def digit_loop(idx, rast):
+            def update_digit():
                 d_sprite    = digit_sprites[digits[idx]]
                 bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-                raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, bg_sprite)
-                raster      = aj.render_at(raster, score_x + idx * (d_sprite.shape[1] + spacing), score_y, d_sprite)
-        return raster
+                digit_x     = score_x + idx * (d_sprite.shape[1] + spacing)
+                new_raster  = aj.render_at(rast, digit_x, score_y, bg_sprite)
+                new_raster  = aj.render_at(new_raster, digit_x, score_y, d_sprite)
+                return new_raster
+            
+            return jax.lax.cond(
+                score_changed[idx],
+                update_digit,
+                lambda: rast
+            )
+        
+        return jax.lax.fori_loop(
+            0,
+            digits.shape[0],
+            digit_loop,
+            raster
+        )
 
     @staticmethod
     def render_lives(raster, current_lives, life_sprite, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0])):
         """Render the lives on the raster at a fixed position."""
         bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-        for i in range(MAX_LIVE_COUNT):
-            if i < current_lives:
-                raster = aj.render_at(raster, life_x + i * (life_sprite.shape[1] + spacing), life_y, life_sprite)
-            else:
-                raster = aj.render_at(raster, life_x + current_lives * (life_sprite.shape[1] + spacing), life_y, bg_sprite)            
-        return raster
+
+        def live_loop(idx, rast):
+            life_offset, this_sprite = jax.lax.cond(
+                idx < current_lives,
+                lambda: (idx, life_sprite),
+                lambda: (current_lives, bg_sprite)
+            )
+            this_life_x = life_x + life_offset * (life_sprite.shape[1] + spacing)
+            return aj.render_at(rast, this_life_x, life_y, this_sprite)
+        
+        return jax.lax.fori_loop(
+            0,
+            MAX_LIVE_COUNT,
+            live_loop,
+            raster
+        )
     
     @staticmethod
     def render_fruit(raster, fruit: FruitState, fruit_sprites):
         """Renders the fruit at its current position."""
-        raster = aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
-        return raster
+        return aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
     
     @staticmethod
     def load_sprites() -> dict[str, Any]:
