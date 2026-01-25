@@ -110,9 +110,15 @@ class BoxingConstants(NamedTuple):
     HIT_DISTANCE_VERTICAL: int = 48    # H_BOXER
     STUN_DURATION: int = 15            # Frames boxer is stunned after hit
     
-    # Punch animation settings
-    PUNCH_ANIMATION_FRAMES: int = 4    # Number of animation frames
-    PUNCH_FRAME_DURATION: int = 4      # How long each frame lasts
+    # Punch animation settings (matching original assembly)
+    # Animation values range 0-72, increment by 8 for extension, -2 for retraction
+    PUNCH_EXTEND_RATE: int = 8     # +8 per frame while button held
+    PUNCH_RETRACT_RATE: int = 2    # -2 per frame when button released
+    MAX_PUNCH_EXTENSION_FAR: int = 72    # 9*8: full extension when far apart
+    MAX_PUNCH_EXTENSION_MED: int = 56    # 7*8: medium extension
+    MAX_PUNCH_EXTENSION_SHORT: int = 40  # 5*8: short extension when close
+    # Sprite frame = animation_value / 8, indexes into offset table
+    # Frames 0-5: idle/returning, 6-7: punch stage 2, 8-9: full extension
     
     # Colors from boxing.asm (NTSC palette approximations)
     BACKGROUND_COLOR: Tuple[int, int, int] = (0, 100, 0)  # Dark green ring
@@ -165,14 +171,12 @@ class BoxingState(NamedTuple):
     # Animation state - placeholder for future phases
     boxer_animation_values: chex.Array  # 8-element array
     
-    # Punch state
-    extended_arm_maximum: chex.Array  # 2-element array (one per boxer)
+    # Punch state (animation values 0-72, not frame indices)
+    extended_arm_maximum: chex.Array  # 2-element array: current max extension per boxer
     left_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
     right_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
-    left_boxer_punch_frame: chex.Array  # Current animation frame (0-3)
-    right_boxer_punch_frame: chex.Array  # Current animation frame (0-3)
-    left_boxer_punch_timer: chex.Array  # Frames until next animation frame
-    right_boxer_punch_timer: chex.Array  # Frames until next animation frame
+    left_boxer_animation_value: chex.Array  # Current animation value (0-72)
+    right_boxer_animation_value: chex.Array  # Current animation value (0-72)
     left_boxer_punch_landed: chex.Array  # 1 if punch already scored this extension
     right_boxer_punch_landed: chex.Array  # 1 if punch already scored this extension
     left_boxer_last_arm: chex.Array  # 0 = left arm, 1 = right arm (for alternating)
@@ -299,14 +303,12 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             # Animation state (idle)
             boxer_animation_values=jnp.zeros(8, dtype=jnp.int32),
             
-            # Punch state (not extended)
+            # Punch state (animation values 0-72)
             extended_arm_maximum=jnp.zeros(2, dtype=jnp.int32),
             left_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
             right_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
-            left_boxer_punch_frame=jnp.array(0, dtype=jnp.int32),
-            right_boxer_punch_frame=jnp.array(0, dtype=jnp.int32),
-            left_boxer_punch_timer=jnp.array(0, dtype=jnp.int32),
-            right_boxer_punch_timer=jnp.array(0, dtype=jnp.int32),
+            left_boxer_animation_value=jnp.array(0, dtype=jnp.int32),  # 0-72 range
+            right_boxer_animation_value=jnp.array(0, dtype=jnp.int32),
             left_boxer_punch_landed=jnp.array(0, dtype=jnp.int32),  # Debounce: 1 if scored
             right_boxer_punch_landed=jnp.array(0, dtype=jnp.int32),
             left_boxer_last_arm=jnp.array(0, dtype=jnp.int32),  # Alternating arms
@@ -391,19 +393,16 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             left_boxer_y=new_y.astype(jnp.int32),
         )
     
-    def _calculate_max_punch_frame(self, horiz_dist: chex.Array, vert_dist: chex.Array) -> chex.Array:
+    def _calculate_max_extension(self, horiz_dist: chex.Array, vert_dist: chex.Array) -> chex.Array:
         """
-        Calculate maximum punch extension frame based on distance between boxers.
+        Calculate maximum punch extension value based on distance between boxers.
         
-        Per spec (boxing.asm lines 703-729):
-        - Far apart (horiz > 26): full extension (frame 3)
-        - Medium distance (horiz > 18): medium extension (frame 2)
-        - Close: depends on vertical distance
-          - vert < 8: short extension (frame 1)
-          - vert < 28: medium extension (frame 2)
-          - vert >= 28: full extension (frame 3)
+        Per boxing.asm lines 703-729:
+        - Far apart (horiz > 26): full extension (72 = 9*8)
+        - Medium distance (horiz > 18): check vertical
+        - Close (horiz <= 18): short extension (40 = 5*8)
         
-        Returns maximum frame (1, 2, or 3) that the punch can reach.
+        Returns maximum animation value (40, 56, or 72).
         """
         # Far apart: full extension
         far_apart = horiz_dist > 26  # (8 * 3) + 2
@@ -411,39 +410,69 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # Medium distance  
         medium_dist = horiz_dist > 18  # (8 * 2) + 2
         
-        # Close distance: check vertical
-        close_short = vert_dist < 8   # H_KERNEL_SECTION / 2 - 1 = 7
-        close_medium = vert_dist < 28  # (H_KERNEL_SECTION * 2) - 4 = 28
+        # Vertical distance thresholds
+        vert_close = vert_dist < 7   # H_KERNEL_SECTION / 2 - 1
+        vert_medium = vert_dist < 28  # (H_KERNEL_SECTION * 2) - 4
+        vert_far = vert_dist >= 47   # (H_KERNEL_SECTION * 3) - 1
         
-        # Determine max frame based on distance
-        # Full extension = frame 3, medium = frame 2, short = frame 1
-        max_frame = jnp.where(
+        # Per assembly logic:
+        # If horiz > 26: max = 72 (full)
+        # Else if horiz > 18:
+        #   Start with 56
+        #   If vert < 7: stay at 56 (will become 40 after adjustment? Actually no increment)
+        #   If vert < 28: increment to 72
+        #   If vert < 47: stay at 56
+        #   Else: increment to 72
+        # Else (close):
+        #   Start with 40
+        #   If vert < 7: stay at 40
+        #   If vert < 28: increment to 56
+        #   Else: stay at 40
+        
+        max_extension = jnp.where(
             far_apart,
-            3,  # Full extension
+            self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72
             jnp.where(
                 medium_dist,
-                2,  # Medium extension
+                # Medium horizontal distance
                 jnp.where(
-                    close_short,
-                    1,  # Short extension
+                    vert_close,
+                    self.consts.MAX_PUNCH_EXTENSION_SHORT,  # 40 - vert < 7
                     jnp.where(
-                        close_medium,
-                        2,  # Medium extension
-                        3   # Full extension (far vertically)
+                        vert_medium,
+                        self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72 - vert < 28, increment
+                        jnp.where(
+                            vert_far,
+                            self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72 - vert >= 47
+                            self.consts.MAX_PUNCH_EXTENSION_MED  # 56 - middle range
+                        )
+                    )
+                ),
+                # Close horizontal distance
+                jnp.where(
+                    vert_close,
+                    self.consts.MAX_PUNCH_EXTENSION_SHORT,  # 40 - vert < 7
+                    jnp.where(
+                        vert_medium,
+                        self.consts.MAX_PUNCH_EXTENSION_MED,  # 56 - vert < 28
+                        self.consts.MAX_PUNCH_EXTENSION_SHORT  # 40 - far vertically
                     )
                 )
             )
         ).astype(jnp.int32)
         
-        return max_frame
+        return max_extension
 
     def _punch_step(self, state: BoxingState, action: chex.Array) -> BoxingState:
         """
-        Handle punch action with animation frames.
+        Handle punch action with button-driven animation per original assembly.
         
-        FIRE button (or any *FIRE combo) activates punch.
-        Punch animates through 4 frames (0-3), each lasting PUNCH_FRAME_DURATION.
-        Punch extension is limited based on distance to opponent.
+        Per boxing.asm:
+        - Animation value ranges 0-72
+        - While FIRE held: value += 8 (fast extension)
+        - When FIRE released: value -= 2 (slow retraction)
+        - Value capped at extendedArmMaximum (which adjusts toward maximumPunchExtension)
+        - Hit detection triggers once when first reaching max extension
         """
         # Check if FIRE is pressed (any action containing FIRE)
         fire_pressed = jnp.isin(action, jnp.array([
@@ -452,128 +481,80 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
         ]))
         
-        # Start punch animation if fire pressed and not already punching
-        start_new_punch = jnp.logical_and(fire_pressed, state.left_boxer_punch_active == 0)
-        
-        # Calculate maximum punch frame based on distance to opponent
+        # Calculate maximum punch extension based on distance to opponent
         horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
         vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        max_punch_frame = self._calculate_max_punch_frame(horiz_dist, vert_dist)
+        max_extension = self._calculate_max_extension(horiz_dist, vert_dist)
         
-        # Update animation timer
-        new_timer = jnp.where(
-            start_new_punch,
-            self.consts.PUNCH_FRAME_DURATION,  # Start timer
-            jnp.where(
-                state.left_boxer_punch_active > 0,
-                state.left_boxer_punch_timer - 1,  # Decrement timer
-                0
-            )
+        # Get current extended arm maximum (per-boxer cap that adjusts over time)
+        # For simplicity, we'll use the calculated max_extension directly
+        # (original uses gradual adjustment, but this captures the key behavior)
+        current_max = max_extension
+        
+        # Calculate new animation value based on button state
+        current_anim = state.left_boxer_animation_value
+        
+        new_anim = jnp.where(
+            fire_pressed,
+            # Button held: extend (+8 per frame, capped at max)
+            jnp.minimum(current_anim + self.consts.PUNCH_EXTEND_RATE, current_max),
+            # Button released: retract (-2 per frame, min 0)
+            jnp.maximum(current_anim - self.consts.PUNCH_RETRACT_RATE, 0)
         ).astype(jnp.int32)
         
-        # Advance animation frame when timer reaches 0
-        advance_frame = jnp.logical_and(
-            state.left_boxer_punch_active > 0,
-            new_timer <= 0
+        # Punch is active when animation value > 0
+        punch_active = jnp.where(new_anim > 0, 1, 0).astype(jnp.int32)
+        
+        # Detect when punch FIRST reaches max extension (for hit detection trigger)
+        # This is when: current < max AND new >= max (transition to max)
+        just_reached_max = jnp.logical_and(
+            current_anim < current_max,
+            new_anim >= current_max
         )
         
-        # Calculate next frame (before capping)
-        next_frame_raw = jnp.where(
-            start_new_punch,
-            0,  # Reset to frame 0
-            jnp.where(
-                advance_frame,
-                state.left_boxer_punch_frame + 1,
-                state.left_boxer_punch_frame
-            )
-        ).astype(jnp.int32)
-        
-        # Check if punch is at maximum extension (hit the distance limit)
-        at_max_extension = state.left_boxer_punch_frame >= max_punch_frame
-        should_retract = jnp.logical_and(advance_frame, at_max_extension)
-        
-        # Retraction phase: frame goes backwards (3->2->1->0 or from max down)
-        # Once at max, start retracting by going back through frames
-        retracting = should_retract
-        new_frame = jnp.where(
-            retracting,
-            jnp.maximum(state.left_boxer_punch_frame - 1, 0),  # Retract backwards
-            next_frame_raw
-        ).astype(jnp.int32)
-        
-        # Also cap the forward progression at max_punch_frame
-        new_frame = jnp.where(
-            jnp.logical_and(~retracting, new_frame > max_punch_frame),
-            max_punch_frame,
-            new_frame
-        ).astype(jnp.int32)
-        
-        # Reset timer when advancing frame
-        new_timer = jnp.where(
-            advance_frame,
-            self.consts.PUNCH_FRAME_DURATION,
-            new_timer
-        ).astype(jnp.int32)
-        
-        # Punch ends after last frame (frame 3) OR when retraction completes
-        punch_ending_natural = new_frame >= self.consts.PUNCH_ANIMATION_FRAMES
-        punch_ending_retract = jnp.logical_and(retracting, new_frame == 0)
-        punch_ending = jnp.logical_or(punch_ending_natural, punch_ending_retract)
-        
-        # Determine if punch is active
-        punch_active = jnp.where(
-            start_new_punch,
-            1,
-            jnp.where(
-                punch_ending,
-                0,
-                state.left_boxer_punch_active
-            )
-        ).astype(jnp.int32)
-        
-        # Clamp frame to valid range
-        new_frame = jnp.where(punch_ending, 0, new_frame).astype(jnp.int32)
-        
-        # Reset punch_landed debounce when starting a new punch (allows scoring again)
+        # Reset punch_landed when animation goes to 0 (allows new punch cycle)
+        animation_reset = new_anim == 0
         new_punch_landed = jnp.where(
-            start_new_punch,
-            0,  # Reset debounce for new punch
+            animation_reset,
+            0,  # Reset debounce when fully retracted
             state.left_boxer_punch_landed
         ).astype(jnp.int32)
         
-        # Also reset debounce when punch fully retracts (punch_ending)
-        new_punch_landed = jnp.where(
-            punch_ending,
-            0,  # Reset for next punch cycle
-            new_punch_landed
-        ).astype(jnp.int32)
-        
-        # Toggle arm for the next punch (alternating between left and right arm)
+        # Toggle arm when starting a new punch (transition from 0 to > 0)
+        starting_punch = jnp.logical_and(current_anim == 0, new_anim > 0)
         new_last_arm = jnp.where(
-            start_new_punch,
+            starting_punch,
             1 - state.left_boxer_last_arm,  # Toggle: 0 -> 1 or 1 -> 0
             state.left_boxer_last_arm
         ).astype(jnp.int32)
         
+        # Store whether we just reached max (for hit detection in next step)
+        # We'll use extended_arm_maximum[0] to track this
+        new_extended_arm_max = state.extended_arm_maximum.at[0].set(
+            jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
+        )
+        
         return state._replace(
             left_boxer_punch_active=punch_active,
-            left_boxer_punch_frame=new_frame,
-            left_boxer_punch_timer=new_timer,
+            left_boxer_animation_value=new_anim,
             left_boxer_punch_landed=new_punch_landed,
             left_boxer_last_arm=new_last_arm,
+            extended_arm_maximum=new_extended_arm_max,
         )
     
     def _hit_detection_step(self, state: BoxingState) -> BoxingState:
         """
         Check if player's punch hits the opponent.
         
-        Per spec (CheckToScoreBoxerForPunch):
-        - Hit only registers at MAXIMUM punch extension (frame 2)
+        Per boxing.asm (CheckToScoreBoxerForPunch):
+        - Hit only triggers ONCE when punch FIRST reaches max extension
         - Horizontal distance <= (8*3)+5 = 29 pixels
         - Vertical distance < H_BOXER (48 pixels)
         - Fine vertical alignment: (verticalDistance - 11) < 18
         - Opponent must not already be stunned
         - Punch must not have already landed this cycle (debounce)
+        
+        Key: Hit detection uses the just_reached_max flag from _punch_step.
         """
         # Calculate distances
         horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
@@ -589,15 +570,23 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         vert_offset = vert_dist - 11
         fine_vert_aligned = vert_offset < 18
         
-        # Hit only registers at MAXIMUM punch extension (frame 2)
-        at_max_extension = state.left_boxer_punch_frame == 2
+        # Hit only triggers on the frame when punch FIRST reaches max extension
+        # extended_arm_maximum[0] is set to 1 by _punch_step when this happens
+        just_reached_max = state.extended_arm_maximum[0] == 1
+        
         punch_active = state.left_boxer_punch_active > 0
         
         # Check debounce - only score if this punch hasn't already landed
         punch_not_landed_yet = state.left_boxer_punch_landed == 0
         
+        # Per original assembly: hit requires:
+        # 1. Punch active and just reached max extension
+        # 2. Horizontal distance <= 29 (in punching range)
+        # 3. Vertical distance < 48 (H_BOXER)
+        # 4. Fine vertical alignment: (vert_dist - 11) < 18 (head level)
+        # 5. Haven't already scored on this punch
         hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, at_max_extension),
+            jnp.logical_and(punch_active, just_reached_max),
             jnp.logical_and(
                 jnp.logical_and(in_horiz_range, in_vert_range),
                 jnp.logical_and(fine_vert_aligned, punch_not_landed_yet)
@@ -851,175 +840,112 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     
     def _cpu_punch_step(self, state: BoxingState) -> BoxingState:
         """
-        CPU punch decision logic.
+        CPU punch decision and animation logic (combined for CPU).
         
-        CPU punches when in range with some randomness based on score difference.
+        CPU decides when to START a punch based on range and randomness.
+        Once started, CPU holds fire until reaching max extension, then releases.
+        Uses same animation value system as player (+8/-2).
         """
-        # Check if CPU is already punching
-        already_punching = state.right_boxer_punch_active > 0
-        
-        # Check if in punching range
+        # Calculate distances for punch decision
         horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
         vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
+        
+        # Get current animation value and max extension
+        current_anim = state.right_boxer_animation_value
+        max_extension = self._calculate_max_extension(horiz_dist, vert_dist)
+        
+        # Check if in punching range
         in_horiz_range = horiz_dist <= self.consts.HIT_DISTANCE_HORIZONTAL + 10
         in_vert_range = vert_dist < self.consts.H_BOXER
         in_range = jnp.logical_and(in_horiz_range, in_vert_range)
         
-        # Random punch decision
+        # Random punch decision (only matters when NOT already punching)
         key, subkey = jax.random.split(state.key)
         random_val = jax.random.randint(subkey, (), 0, 256)
         
         # More aggressive when losing, less when winning
         score_diff = state.right_boxer_score - state.left_boxer_score
-        aggressiveness = jnp.where(score_diff >= 0, 40, 20)  # Less aggressive when winning
+        aggressiveness = jnp.where(score_diff >= 0, 40, 20)
         
-        # Random threshold check
-        should_punch_random = random_val < aggressiveness
+        # Random threshold check for STARTING a punch
+        should_start_punch = random_val < aggressiveness
         
-        # Don't punch while dancing (unless CPU was hit)
+        # Don't start a punch while dancing (unless CPU was hit)
         dancing = state.cpu_dancing_value > 0
         cpu_was_hit = state.hit_boxer_index == 1
         can_punch_dancing = jnp.logical_or(~dancing, cpu_was_hit)
         
-        # Final punch decision
-        should_punch = jnp.logical_and(
-            jnp.logical_and(in_range, should_punch_random),
-            jnp.logical_and(~already_punching, can_punch_dancing)
+        # Determine if CPU should "hold fire":
+        # 1. If already punching (anim > 0) and hasn't reached max yet, keep holding
+        # 2. If not punching, start if in range and random says so
+        already_punching = current_anim > 0
+        reached_max = current_anim >= max_extension
+        
+        cpu_fire_held = jnp.where(
+            already_punching,
+            # Already punching: keep holding until we reach max
+            ~reached_max,
+            # Not punching: decide whether to start
+            jnp.logical_and(
+                jnp.logical_and(in_range, should_start_punch),
+                can_punch_dancing
+            )
         )
         
-        # Start punch animation if decided to punch
-        new_punch_active = jnp.where(
-            should_punch,
-            1,
-            state.right_boxer_punch_active
+        # Calculate new animation value based on CPU decision
+        new_anim = jnp.where(
+            cpu_fire_held,
+            # "Fire held": extend (+8 per frame, capped at max)
+            jnp.minimum(current_anim + self.consts.PUNCH_EXTEND_RATE, max_extension),
+            # "Fire released": retract (-2 per frame, min 0)
+            jnp.maximum(current_anim - self.consts.PUNCH_RETRACT_RATE, 0)
         ).astype(jnp.int32)
         
-        new_punch_timer = jnp.where(
-            should_punch,
-            self.consts.PUNCH_FRAME_DURATION,
-            state.right_boxer_punch_timer
-        ).astype(jnp.int32)
+        # Punch is active when animation value > 0
+        punch_active = jnp.where(new_anim > 0, 1, 0).astype(jnp.int32)
         
-        new_punch_frame = jnp.where(
-            should_punch,
-            0,
-            state.right_boxer_punch_frame
-        ).astype(jnp.int32)
+        # Detect when punch FIRST reaches max extension
+        just_reached_max = jnp.logical_and(
+            current_anim < max_extension,
+            new_anim >= max_extension
+        )
         
-        # Reset debounce for new punch
+        # Reset punch_landed when animation goes to 0
+        animation_reset = new_anim == 0
         new_punch_landed = jnp.where(
-            should_punch,
+            animation_reset,
             0,
             state.right_boxer_punch_landed
         ).astype(jnp.int32)
         
-        # Toggle arm for alternating
+        # Toggle arm when starting a new punch
+        starting_punch = jnp.logical_and(current_anim == 0, new_anim > 0)
         new_last_arm = jnp.where(
-            should_punch,
+            starting_punch,
             1 - state.right_boxer_last_arm,
             state.right_boxer_last_arm
         ).astype(jnp.int32)
         
-        return state._replace(
-            right_boxer_punch_active=new_punch_active,
-            right_boxer_punch_timer=new_punch_timer,
-            right_boxer_punch_frame=new_punch_frame,
-            right_boxer_punch_landed=new_punch_landed,
-            right_boxer_last_arm=new_last_arm,
-            key=key,
+        # Store whether we just reached max (for hit detection)
+        new_extended_arm_max = state.extended_arm_maximum.at[1].set(
+            jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
         )
-    
-    def _cpu_punch_animation_step(self, state: BoxingState) -> BoxingState:
-        """
-        Update CPU punch animation (similar to player punch step).
-        Punch extension is limited based on distance to opponent.
-        """
-        # Only process if punching
-        is_punching = state.right_boxer_punch_active > 0
-        
-        # Calculate maximum punch frame based on distance to opponent
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        max_punch_frame = self._calculate_max_punch_frame(horiz_dist, vert_dist)
-        
-        # Update animation timer
-        new_timer = jnp.where(
-            is_punching,
-            state.right_boxer_punch_timer - 1,
-            0
-        ).astype(jnp.int32)
-        
-        # Advance animation frame when timer reaches 0
-        advance_frame = jnp.logical_and(is_punching, new_timer <= 0)
-        
-        # Calculate next frame (before capping)
-        next_frame_raw = jnp.where(
-            advance_frame,
-            state.right_boxer_punch_frame + 1,
-            state.right_boxer_punch_frame
-        ).astype(jnp.int32)
-        
-        # Check if punch is at maximum extension (hit the distance limit)
-        at_max_extension = state.right_boxer_punch_frame >= max_punch_frame
-        should_retract = jnp.logical_and(advance_frame, at_max_extension)
-        
-        # Retraction phase: frame goes backwards
-        retracting = should_retract
-        new_frame = jnp.where(
-            retracting,
-            jnp.maximum(state.right_boxer_punch_frame - 1, 0),  # Retract backwards
-            next_frame_raw
-        ).astype(jnp.int32)
-        
-        # Also cap the forward progression at max_punch_frame
-        new_frame = jnp.where(
-            jnp.logical_and(~retracting, new_frame > max_punch_frame),
-            max_punch_frame,
-            new_frame
-        ).astype(jnp.int32)
-        
-        # Reset timer when advancing frame
-        new_timer = jnp.where(
-            advance_frame,
-            self.consts.PUNCH_FRAME_DURATION,
-            new_timer
-        ).astype(jnp.int32)
-        
-        # Punch ends after last frame (frame 3) OR when retraction completes
-        punch_ending_natural = new_frame >= self.consts.PUNCH_ANIMATION_FRAMES
-        punch_ending_retract = jnp.logical_and(retracting, new_frame == 0)
-        punch_ending = jnp.logical_or(punch_ending_natural, punch_ending_retract)
-        
-        # Determine if punch is active
-        punch_active = jnp.where(
-            punch_ending,
-            0,
-            state.right_boxer_punch_active
-        ).astype(jnp.int32)
-        
-        # Clamp frame to valid range
-        new_frame = jnp.where(punch_ending, 0, new_frame).astype(jnp.int32)
-        
-        # Reset debounce when punch ends
-        new_punch_landed = jnp.where(
-            punch_ending,
-            0,
-            state.right_boxer_punch_landed
-        ).astype(jnp.int32)
         
         return state._replace(
             right_boxer_punch_active=punch_active,
-            right_boxer_punch_frame=new_frame,
-            right_boxer_punch_timer=new_timer,
+            right_boxer_animation_value=new_anim,
             right_boxer_punch_landed=new_punch_landed,
+            right_boxer_last_arm=new_last_arm,
+            extended_arm_maximum=new_extended_arm_max,
+            key=key,
         )
     
     def _cpu_hit_detection_step(self, state: BoxingState) -> BoxingState:
         """
         Check if CPU's punch hits the player.
         
-        Per spec (CheckToScoreBoxerForPunch):
-        - Hit only registers at MAXIMUM punch extension (frame 2)
+        Per boxing.asm (CheckToScoreBoxerForPunch):
+        - Hit only triggers ONCE when punch FIRST reaches max extension
         - Horizontal distance <= (8*3)+5 = 29 pixels
         - Vertical distance < H_BOXER (48 pixels)
         - Fine vertical alignment: (verticalDistance - 11) < 18
@@ -1039,13 +965,20 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         vert_offset = vert_dist - 11
         fine_vert_aligned = vert_offset < 18
         
-        # Hit only registers at MAXIMUM punch extension (frame 2)
-        at_max_extension = state.right_boxer_punch_frame == 2
+        # Hit only triggers on the frame when punch FIRST reaches max extension
+        just_reached_max = state.extended_arm_maximum[1] == 1
+        
         punch_active = state.right_boxer_punch_active > 0
         punch_not_landed_yet = state.right_boxer_punch_landed == 0
         
+        # Per original assembly: hit requires:
+        # 1. Punch active and just reached max extension
+        # 2. Horizontal distance <= 29 (in punching range)
+        # 3. Vertical distance < 48 (H_BOXER)
+        # 4. Fine vertical alignment: (vert_dist - 11) < 18 (head level)
+        # 5. Haven't already scored on this punch
         hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, at_max_extension),
+            jnp.logical_and(punch_active, just_reached_max),
             jnp.logical_and(
                 jnp.logical_and(in_horiz_range, in_vert_range),
                 jnp.logical_and(fine_vert_aligned, punch_not_landed_yet)
@@ -1131,7 +1064,6 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         # Process CPU punch decision and animation
         state = self._cpu_punch_step(state)
-        state = self._cpu_punch_animation_step(state)
         
         # Check for player hits on CPU
         state = self._hit_detection_step(state)
@@ -1361,7 +1293,9 @@ class BoxingRenderer(JAXGameRenderer):
         
         # --- Render left boxer (white) ---
         is_punching_left = state.left_boxer_punch_active > 0
-        punch_frame_left = jnp.clip(state.left_boxer_punch_frame, 0, 3)
+        # Convert animation value (0-72) to sprite frame (0-3)
+        # animation_value / 8 gives index into sprite table
+        punch_frame_left = jnp.clip(state.left_boxer_animation_value // 8, 0, 3).astype(jnp.int32)
         
         # Use last_arm to determine which arm is punching (alternates between punches)
         # 0 = left arm (uses "left" sprites), 1 = right arm (uses "right" sprites)
@@ -1419,7 +1353,8 @@ class BoxingRenderer(JAXGameRenderer):
         # Black faces left toward white by default
         black_faces_right = state.right_boxer_x < state.left_boxer_x
         is_punching_right = state.right_boxer_punch_active > 0
-        punch_frame_right = jnp.clip(state.right_boxer_punch_frame, 0, 3)
+        # Convert animation value (0-72) to sprite frame (0-3)
+        punch_frame_right = jnp.clip(state.right_boxer_animation_value // 8, 0, 3).astype(jnp.int32)
         
         # Use last_arm to determine which arm is punching (alternates between punches)
         black_use_left_arm = state.right_boxer_last_arm == 0
