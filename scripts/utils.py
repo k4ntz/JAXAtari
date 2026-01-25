@@ -5,8 +5,10 @@ import importlib
 import inspect
 import os
 import sys
+import warnings
 
 from typing import Type, Tuple, Dict, Any, List, Callable
+from dataclasses import is_dataclass
 
 from functools import partial
 
@@ -253,33 +255,30 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
                 # Recreate env with modded constants
                 base_consts = env.consts
                 
-                # Separate NamedTuple fields from class attributes
-                # NamedTuple._replace() only works on actual fields, not class attributes
-                field_overrides = {}
-                class_attr_overrides = {}
+                # 1. Modern (.replace)
+                if hasattr(base_consts, 'replace'):
+                    modded_consts = base_consts.replace(**const_overrides)
                 
-                if hasattr(base_consts, '_fields'):
-                    for key, value in const_overrides.items():
-                        if key in base_consts._fields:
-                            field_overrides[key] = value
-                        else:
-                            class_attr_overrides[key] = value
-                else:
-                    # Not a NamedTuple, treat all as fields
-                    field_overrides = const_overrides
-                
-                # Apply field overrides using _replace()
-                if field_overrides:
+                # 2. Legacy (_replace)
+                elif hasattr(base_consts, '_replace'):
+                    warnings.warn(
+                        f"Unregistered Game '{game_name}': Using legacy '_replace()' for constants. "
+                        "Please migrate to 'flax.struct.PyTreeNode'.",
+                        UserWarning
+                    )
+                    valid_fields = base_consts._fields
+                    field_overrides = {k: v for k, v in const_overrides.items() if k in valid_fields}
                     modded_consts = base_consts._replace(**field_overrides)
+                    
+                    # Legacy attribute injection
+                    remaining = {k: v for k, v in const_overrides.items() if k not in valid_fields}
+                    if remaining:
+                        for k, v in remaining.items():
+                            setattr(type(base_consts), k, v)
                 else:
-                    modded_consts = base_consts
-                
-                # Handle class attributes by setting them on the class
-                # Python's attribute lookup will find class attributes when accessed via instance
-                if class_attr_overrides:
-                    consts_class = type(base_consts)
-                    for key, value in class_attr_overrides.items():
-                        setattr(consts_class, key, value)
+                     raise TypeError(
+                        f"Constants class {type(base_consts).__name__} must support .replace() or _replace()."
+                    )
                 
                 env = env.__class__(consts=modded_consts)
 

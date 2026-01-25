@@ -242,6 +242,9 @@ class AtariWrapper(JaxatariWrapper):
         if hasattr(infos, '_asdict'):
             # It's a namedtuple or similar, convert to dict
             info_items = infos._asdict().items()
+        elif is_dataclass(infos):
+            # It's a dataclass, convert to dict
+            info_items = asdict(infos).items()
         else:
             # It's already a dict
             info_items = infos.items()

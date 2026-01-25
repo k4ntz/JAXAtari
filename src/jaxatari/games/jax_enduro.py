@@ -7,13 +7,15 @@ import jax.random as jrandom
 import numpy as np
 import os
 from pathlib import Path
+from flax import struct
 
-from typing import Tuple, NamedTuple, Any, List, Dict
+from typing import Tuple, NamedTuple, Any, List, Dict, Optional
 
 # jaxatari
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 
 # +++ HELPER FUNCTIONS (for setup) +++
@@ -70,8 +72,7 @@ def _recolor_rgba_sprite_np(rgba_sprite_frame: np.ndarray, new_rgb: np.ndarray) 
 
     return recolored_frame
 
-def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int) -> tuple[
-    jnp.ndarray, jnp.ndarray]:
+def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int, left: bool) -> jnp.ndarray:
     """
     Precomputes all possible track curves using integer offsets.
 
@@ -132,7 +133,7 @@ def precompute_all_track_curves(max_offset: int, track_height: int, track_width:
 
     # print(f"Precomputed curves shape: {precomputed_left_curves.shape}") # Removed print
 
-    return precomputed_left_curves, precomputed_right_curves
+    return precomputed_left_curves if left else precomputed_right_curves
 
 def _create_static_procedural_sprites(car_palette: List[Tuple[int, int, int]]) -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
@@ -142,6 +143,37 @@ def _create_static_procedural_sprites(car_palette: List[Tuple[int, int, int]]) -
         color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
         sprites[f'car_color_{i}'] = color.reshape(1, 1, 4)
     return sprites
+
+def _get_weather_color_codes() -> jnp.ndarray:
+    """Returns the RGB color codes for each weather and each sprite scraped from the game."""
+    return jnp.array([
+        # sky,          gras,       mountains,      horizon 1,      horizon 2,  horizon 3 (highest)
+
+        # day
+        [[24, 26, 167], [0, 68, 0], [134, 134, 29], [24, 26, 167], [24, 26, 167], [24, 26, 167], ],  # day 1
+        [[45, 50, 184], [0, 68, 0], [136, 146, 62], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day 2
+        [[45, 50, 184], [0, 68, 0], [192, 192, 192], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day white mountain
+        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # snow
+
+        # Sunsets
+        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [24, 26, 167], [24, 26, 167], [24, 26, 167]],  # 1
+        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [104, 25, 154], [51, 26, 163], [24, 26, 167]],  # 2
+        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [151, 25, 122], [104, 25, 154], [51, 26, 163]],  # 3
+        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [167, 26, 26], [151, 25, 122], [104, 25, 154]],  # 4
+        [[104, 25, 154], [48, 56, 0], [0, 0, 0], [163, 57, 21], [167, 26, 26], [151, 25, 122]],  # 5
+        [[151, 25, 122], [48, 56, 0], [0, 0, 0], [181, 83, 40], [163, 57, 21], [167, 26, 26]],  # 6
+        [[167, 26, 26], [48, 56, 0], [0, 0, 0], [162, 98, 33], [181, 83, 40], [163, 57, 21]],  # 7
+        [[163, 57, 21], [48, 56, 0], [0, 0, 0], [134, 134, 29], [162, 98, 33], [181, 83, 40]],  # 8
+
+        # night
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 1
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # fog night
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 2
+
+        # dawn
+        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],  # dawn
+
+    ], dtype=jnp.int32)
 
 def _get_default_asset_config(
     weather_colors: np.ndarray, 
@@ -227,51 +259,49 @@ def _get_default_asset_config(
 
     return tuple(config_list)
 
-
-class EnduroConstants(NamedTuple):
+# TODO: what is framerate even doing? Can it be removed??
+class EnduroConstants(AutoDerivedConstants):
     """Game configuration parameters"""
     # Game runs at 60 frames per second. This is used to approximate the configs with values from play-testing the game.
     # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
-    frame_rate: int = 60
+    frame_rate: int = struct.field(pytree_node=False, default=60)
 
     # ====================
     # === Window Sizes ===
     # ====================
-    screen_width: int = 160
-    screen_height: int = 210
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
 
     # Enduro has a game window that is smaller
-    window_offset_left: int = 8
-    window_offset_bottom: int = 55
-    game_window_height: int = screen_height - window_offset_bottom
-    game_window_width: int = screen_width - window_offset_left
-    game_screen_middle: int = game_window_width // 2
+    window_offset_left: int = struct.field(pytree_node=False, default=8)
+    window_offset_bottom: int = struct.field(pytree_node=False, default=55)
+    game_window_height: Optional[int] = struct.field(pytree_node=False, default=None)
+    game_window_width: Optional[int] = struct.field(pytree_node=False, default=None)
+    game_screen_middle: Optional[int] = struct.field(pytree_node=False, default=None)
 
     # the track is in the game window below the sky
-    sky_height = 50
+    sky_height: int = struct.field(pytree_node=False, default=50)
 
     # ============
     # === Cars ===
     # ============
     # car sizes from close to far
-    car_width_0: int = 16
-    car_height_0: int = 11
+    car_width_0: int = struct.field(pytree_node=False, default=16)
+    car_height_0: int = struct.field(pytree_node=False, default=11)
 
     # for all different car sizes the widths and heights
-    car_widths = jnp.array([16, 12, 8, 6, 4, 4, 2], dtype=jnp.int32)
-    car_heights = jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32)
+    car_widths: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 12, 8, 6, 4, 4, 2], dtype=jnp.int32))
+    car_heights: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32))
 
     # player car start position
-    player_x_start: float = game_screen_middle
-    player_y_start: int = game_window_height - car_height_0 - 1
-
+    player_x_start: Optional[float] = struct.field(pytree_node=False, default=None)
+    player_y_start: Optional[int] = struct.field(pytree_node=False, default=None)
     
-
     # Static car color palette (16 colors)
 
     # Using a standard 16-color palette (e.g., CGA, Windows)
 
-    CAR_COLOR_PALETTE: List[Tuple[int, int, int]] = [
+    CAR_COLOR_PALETTE: List[Tuple[int, int, int]] = struct.field(pytree_node=False, default_factory=lambda: [
 
         (0, 0, 0),       # 0. Black (Player Color)
 
@@ -305,239 +335,282 @@ class EnduroConstants(NamedTuple):
 
         (255, 255, 255)  # 15. White
 
-    ]
+    ])
 
-    PLAYER_COLOR_INDEX: int = 15 # Player is White
+    PLAYER_COLOR_INDEX: int = struct.field(pytree_node=False, default=15) # Player is White
 
     # =============
     # === Track ===
     # =============
-    track_width: int = 98
-    track_height: int = game_window_height - sky_height - 1
-    max_track_length: float = 9999.9  # in km
-    track_seed: int = 42
-    straight_km_start: float = 5.0  # how many km the track goes straight at the start of the game
-    min_track_section_length = 1.0  # how long a curve or straight passage is at least
-    max_track_section_length = 15.0
-    track_x_start: int = player_x_start
-    track_max_curvature_width: int = 17
-    # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
-    track_max_top_x_offset: float = 50.0
-    # how fast the track curve starts to build in the game when going from a straight track into a curve
-    curve_rate: float = 0.05
-    curve_offset_base = int(track_max_top_x_offset)  # e.g., 50
+    track_width: int = struct.field(pytree_node=False, default=98)
+    track_height: Optional[int] = struct.field(pytree_node=False, default=None)
 
-    # Precompute all possible track curves during initialization
-    precomputed_left_curves, precomputed_right_curves = precompute_all_track_curves(curve_offset_base, track_height,
-                                                                                    track_width)
+    max_track_length: float = struct.field(pytree_node=False, default=9999.9) # in km
+    track_seed: int = struct.field(pytree_node=False, default=42)
+    straight_km_start: float = struct.field(pytree_node=False, default=5.0)  # how many km the track goes straight at the start of the game
+    min_track_section_length: float = struct.field(pytree_node=False, default=1.0)  # how long a curve or straight passage is at least
+    max_track_section_length:float = struct.field(pytree_node=False, default=15.0)
+    track_max_curvature_width: int = struct.field(pytree_node=False, default=17)
+    # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
+    track_max_top_x_offset: float = struct.field(pytree_node=False, default=50.0)
+    # how fast the track curve starts to build in the game when going from a straight track into a curve
+    curve_rate: float = struct.field(pytree_node=False, default=0.05)
+    
+    # Derived constants (dynamic calculation based on static fields)
+    track_x_start: Optional[int] = struct.field(pytree_node=False, default=None)
+    curve_offset_base: Optional[int] = struct.field(pytree_node=False, default=None)
+    precomputed_left_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    precomputed_right_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
 
     # Bumpers
-    track_bumper_max_length: int = 30  # the maximum bumper length at the bottom of the screen
-    track_bumper_min_length: int = 5  # the minimum bumper length at the top of the screen
-    track_bumper_max_width: float = 4.0  # the maximum bumper width pixels at bottom
-    track_bumper_min_width: float = 1.0  # the maximum bumper width pixels at top
-    track_bumper_smoothening_pixels: int = 4  # How many pixels are used to smoothen the bumper edges
-    bumper_perspective_speed: float = 2.0  # A factor for how much slower bumpers move at the top of the track
-    first_n_pixels_without_bumper: int = 5
+    track_bumper_max_length: int = struct.field(pytree_node=False, default=30)  # the maximum bumper length at the bottom of the screen
+    track_bumper_min_length: int = struct.field(pytree_node=False, default=5)  # the minimum bumper length at the top of the screen
+    track_bumper_max_width: float = struct.field(pytree_node=False, default=4.0)  # the maximum bumper width pixels at bottom
+    track_bumper_min_width: float = struct.field(pytree_node=False, default=1.0)  # the maximum bumper width pixels at top
+    track_bumper_smoothening_pixels: int = struct.field(pytree_node=False, default=4)  # How many pixels are used to smoothen the bumper edges
+    bumper_perspective_speed: float = struct.field(pytree_node=False, default=2.0)  # A factor for how much slower bumpers move at the top of the track
+    first_n_pixels_without_bumper: int = struct.field(pytree_node=False, default=5)
 
     # track colors
-    track_colors = jnp.array([
+    track_colors: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [74, 74, 74],  # top
         [111, 111, 111],  # moving top - movement range: track_move_range
         [170, 170, 170],  # moving bottom - spawns after track_moving_bottom_spawn_step
         [192, 192, 192],  # bottom - rest
-    ], dtype=jnp.int32)
-    track_top_min_length: int = 33  # or 32
-    track_moving_top_length: int = 13
-    track_moving_bottom_length: int = 18
-    track_move_range: int = 12
-    track_moving_bottom_spawn_step: int = 6
-    track_color_move_speed_per_speed: float = 0.05
-    track_speed_animation_factor: float = 0.085  # determines how fast the animation speed increases
+    ], dtype=jnp.int32))
+    track_top_min_length: int = struct.field(pytree_node=False, default=33)  # or 32
+    track_moving_top_length: int = struct.field(pytree_node=False, default=13)
+    track_moving_bottom_length: int = struct.field(pytree_node=False, default=18)
+    track_move_range: int = struct.field(pytree_node=False, default=12)
+    track_moving_bottom_spawn_step: int = struct.field(pytree_node=False, default=6)
+    track_color_move_speed_per_speed: float = struct.field(pytree_node=False, default=0.05)
+    track_speed_animation_factor: float = struct.field(pytree_node=False, default=0.085)  # determines how fast the animation speed increases
 
     # === Track collision ===
-    track_collision_kickback_pixels: float = 3.0
-    track_collision_speed_reduction_per_speed_unit: float = 0.25  # from RAM extraction
-    min_left_x: float = 58.0  # the minimum x value before a left side collision will be checked
-    max_right_x: float = 84.0  # the maximum x value before a right side collision will be checked
+    track_collision_kickback_pixels: float = struct.field(pytree_node=False, default=3.0)
+    track_collision_speed_reduction_per_speed_unit: float = struct.field(pytree_node=False, default=0.25)  # from RAM extraction
+    min_left_x: float = struct.field(pytree_node=False, default=58.0)  # the minimum x value before a left side collision will be checked
+    max_right_x: float = struct.field(pytree_node=False, default=84.0)  # the maximum x value before a right side collision will be checked
 
     # ======================
     # === Speed controls ===
     # ======================
-    min_speed: int = 6  # from RAM state 22
-    max_speed: int = 120  # from RAM state 22
+    min_speed: int = struct.field(pytree_node=False, default=6)  # from RAM state 22
+    max_speed: int = struct.field(pytree_node=False, default=120)  # from RAM state 22
     # measured by starting the original game and letting the car progress with min speed for 5 km --> 2:23 min
     # 1/ 143 seconds / 5 km =~ 0.035
-    km_per_second_per_speed_unit: float = 0.035 / min_speed
-    km_per_speed_unit_per_frame: float = km_per_second_per_speed_unit / frame_rate
-
-    # The acceleration per second (as frame rate)
-    acceleration_per_frame: float = 10.5 / frame_rate
-    slower_acceleration_per_frame: float = 3.75 / frame_rate
     # at which speed the slower_acceleration is applied
-    acceleration_slow_down_threshold: float = 46.0
-
-    breaking_per_second: float = 30.0  # controls how fast the car break
-    breaking_per_frame: float = breaking_per_second / frame_rate
+    acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=46.0)
+    breaking_per_second: float = struct.field(pytree_node=False, default=30.0)  # controls how fast the car break
+    
+    # Derived constants (dynamic calculation based on static fields)
+    km_per_second_per_speed_unit: Optional[float] = struct.field(pytree_node=False, default=None)
+    km_per_speed_unit_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
+    acceleration_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
+    slower_acceleration_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
+    breaking_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
 
     # ================
     # === Steering ===
     # ================
     # how many pixels the car can move from one edge of the track to the other one
-    steering_range_in_pixels: int = 28
-    # How much the car moves per steering input (absolute units)
-    steering_sensitivity: float = steering_range_in_pixels / 3.0 / frame_rate
-
+    steering_range_in_pixels: int = struct.field(pytree_node=False, default=28)
     # with increasing speed the car moves faster on the x-axis.
     # When moving faster than sensitivity_change_speed the sensitivity rate becomes lower
     # sensitivity(speed) = steering_range_in_pixels / (base_sensitivity + sensitivity_per_speed * speed) / frame_rate
-    slow_base_sensitivity: float = 8.0
-    fast_base_sensitivity: float = 4.86
-    slow_steering_sensitivity_per_speed_unit: float = -0.15  # speed <= 32
-    fast_steering_sensitivity_per_speed_unit: float = -0.056  # speed > 32
-    sensitivity_change_speed: int = 32
-    minimum_steering_sensitivity: float = 1.0  # from play-testing
-    steering_snow_factor: float = 2.0  # during snow the steering becomes much worse
-
-    drift_per_second_pixels: float = 2.5  # controls how much the car drifts in a curve
-    drift_per_frame: float = drift_per_second_pixels / frame_rate
+    slow_base_sensitivity: float = struct.field(pytree_node=False, default=8.0)
+    fast_base_sensitivity: float = struct.field(pytree_node=False, default=4.86)
+    slow_steering_sensitivity_per_speed_unit: float = struct.field(pytree_node=False, default=-0.15)  # speed <= 32
+    fast_steering_sensitivity_per_speed_unit: float = struct.field(pytree_node=False, default=-0.056)  # speed > 32
+    sensitivity_change_speed: int = struct.field(pytree_node=False, default=32)
+    minimum_steering_sensitivity: float = struct.field(pytree_node=False, default=1.0)  # from play-testing
+    steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)  # during snow the steering becomes much worse
+    drift_per_second_pixels: float = struct.field(pytree_node=False, default=2.5)  # controls how much the car drifts in a curve
+    
+    # Derived constants (dynamic calculation based on static fields)
+    steering_sensitivity: Optional[float] = struct.field(pytree_node=False, default=None)
+    drift_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
 
     # ===============
     # === Weather ===
     # ===============
-    # Start times in seconds for each phase. Written in a way to allow easy replacements.
-    weather_starts_s: jnp.ndarray = jnp.array([
-        34,  # day 1
-        34 + 34,  # day 2 (lighter)
-        34 + 34 + 34,  # day 3 (white mountains)
-        34 + 34 + 34 + 69,  # snow (steering is more difficult)
-        34 + 34 + 34 + 69 + 8 * 1,  # Sunset 1
-        34 + 34 + 34 + 69 + 8 * 2,  # Sunset 2
-        34 + 34 + 34 + 69 + 8 * 3,  # Sunset 3
-        34 + 34 + 34 + 69 + 8 * 4,  # Sunset 4
-        34 + 34 + 34 + 69 + 8 * 5,  # Sunset 5
-        34 + 34 + 34 + 69 + 8 * 6,  # Sunset 6
-        34 + 34 + 34 + 69 + 8 * 7,  # Sunset 7
-        34 + 34 + 34 + 69 + 8 * 8,  # Sunset 8
-        34 + 34 + 34 + 69 + 8 * 8 + 69,  # night 1
-        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
-        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
-        34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
-    ], dtype=jnp.int32)
-    # weather_starts_s: jnp.ndarray = jnp.arange(0, 64, 4, dtype=jnp.int32)  # for debugging
     # special events in the weather:
-    snow_weather_index: int = 3  # which part of the weather array is snow (reduced steering)
-    night_fog_index: int = 13  # which part of the weather array has the reduced visibility (fog)
-    fog_height: int = 103  # the height of the fog sprite
-    weather_with_night_car_sprite = jnp.array([12, 13, 14], dtype=jnp.int32)  # renders only the rear lights
-    day_cycle_time: int = weather_starts_s[15]
+    snow_weather_index: int = struct.field(pytree_node=False, default=3)  # which part of the weather array is snow (reduced steering)
+    night_fog_index: int = struct.field(pytree_node=False, default=13)  # which part of the weather array has the reduced visibility (fog)
+    fog_height: int = struct.field(pytree_node=False, default=103)  # the height of the fog sprite
+    weather_with_night_car_sprite: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 13, 14], dtype=jnp.int32))  # renders only the rear lights
+    
+    # Derived constants (dynamic calculation based on static fields)
+    weather_starts_s: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    day_cycle_time: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
 
     # The rgb color codes for each weather and each sprite scraped from the game
-    weather_color_codes: jnp.ndarray = jnp.array([
-        # sky,          gras,       mountains,      horizon 1,      horizon 2,  horizon 3 (highest)
-
-        # day
-        [[24, 26, 167], [0, 68, 0], [134, 134, 29], [24, 26, 167], [24, 26, 167], [24, 26, 167], ],  # day 1
-        [[45, 50, 184], [0, 68, 0], [136, 146, 62], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day 2
-        [[45, 50, 184], [0, 68, 0], [192, 192, 192], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day white mountain
-        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # snow
-
-        # Sunsets
-        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [24, 26, 167], [24, 26, 167], [24, 26, 167]],  # 1
-        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [104, 25, 154], [51, 26, 163], [24, 26, 167]],  # 2
-        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [151, 25, 122], [104, 25, 154], [51, 26, 163]],  # 3
-        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [167, 26, 26], [151, 25, 122], [104, 25, 154]],  # 4
-        [[104, 25, 154], [48, 56, 0], [0, 0, 0], [163, 57, 21], [167, 26, 26], [151, 25, 122]],  # 5
-        [[151, 25, 122], [48, 56, 0], [0, 0, 0], [181, 83, 40], [163, 57, 21], [167, 26, 26]],  # 6
-        [[167, 26, 26], [48, 56, 0], [0, 0, 0], [162, 98, 33], [181, 83, 40], [163, 57, 21]],  # 7
-        [[163, 57, 21], [48, 56, 0], [0, 0, 0], [134, 134, 29], [162, 98, 33], [181, 83, 40]],  # 8
-
-        # night
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 1
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # fog night
-        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 2
-
-        # dawn
-        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],  # dawn
-
-    ], dtype=jnp.int32)
+    weather_color_codes: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_weather_color_codes)
 
     
-
     # Asset config baked into constants (immutable default)
-
-    ASSET_CONFIG: tuple = _get_default_asset_config(weather_color_codes, CAR_COLOR_PALETTE)
+    # Derived constant (dynamic calculation based on static fields)
+    ASSET_CONFIG: Optional[tuple] = struct.field(pytree_node=False, default=None)
 
     # =================
     # === Opponents ===
     # =================
-    opponent_speed: int = 24  # measured from RAM state
+    opponent_speed: int = struct.field(pytree_node=False, default=24)  # measured from RAM state
     # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
-    opponent_relative_speed_factor: float = 2.5
-
-    opponent_spawn_seed: int = 42
-
-    length_of_opponent_array = 5000
-    opponent_density = 0.2
-    opponent_delay_slots = 10
-
+    opponent_relative_speed_factor: float = struct.field(pytree_node=False, default=2.5)
+    opponent_spawn_seed: int = struct.field(pytree_node=False, default=42)
+    length_of_opponent_array: int = struct.field(pytree_node=False, default=5000)
+    opponent_density: float = struct.field(pytree_node=False, default=0.2)
+    opponent_delay_slots: int = struct.field(pytree_node=False, default=10)
     # How many opponents to overtake to progress into the next level
-    cars_to_pass_per_level: int = 200
-    cars_increase_per_level: int = 100
-    max_level: int = 5
-
+    cars_to_pass_per_level: int = struct.field(pytree_node=False, default=200)
+    cars_increase_per_level: int = struct.field(pytree_node=False, default=100)
+    max_level: int = struct.field(pytree_node=False, default=5)
     # defines how many y pixels the car size will have size 0
-    car_zero_y_pixel_range = 20
-
-    # slots where the equivalent car size is rendered.
-    # It is written this way to easily see how many pixels each slot has and replacements are easier
-    opponent_slot_ys = jnp.array([
-        game_window_height - car_zero_y_pixel_range,
-        game_window_height - car_zero_y_pixel_range - 20,
-        game_window_height - car_zero_y_pixel_range - 20 - 20,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6,
-        game_window_height - car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
-    ], dtype=jnp.int32)
+    car_zero_y_pixel_range: int = struct.field(pytree_node=False, default=20)
+    
+    # Derived constants (dynamic calculation based on static fields)
+    opponent_slot_ys: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
     # Opponent lane position
     # The ratio of where in the track the opponents are rendered. From left, middle to right
-    lane_ratios = jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32)
+    lane_ratios: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32))
 
     # ===========================
     # === Opponents Collision ===
     # ===========================
-    car_crash_cooldown_seconds: float = 3.0
-    car_crash_cooldown_frames: int = jnp.array(car_crash_cooldown_seconds * frame_rate)
-    crash_kickback_speed_per_frame: float = track_width / car_crash_cooldown_seconds / frame_rate / 3
+    car_crash_cooldown_seconds: float = struct.field(pytree_node=False, default=3.0)
+    
+    # Derived constants (dynamic calculation based on static fields)
+    car_crash_cooldown_frames: Optional[int] = struct.field(pytree_node=False, default=None)
+    crash_kickback_speed_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
 
     # =================
     # === Cosmetics ===
     # =================
-    logo_x_position: int = 20
-    logo_y_position: int = 196
-
-    info_box_x_pos: int = 48
-    info_box_y_pos: int = 161
-
-    distance_odometer_start_x: int = 65
-    distance_odometer_start_y: int = game_window_height + 9
-
-    score_start_x: int = 81
-    score_start_y: int = game_window_height + 25
-
-    level_x: int = 57
-    level_y: int = score_start_y
-
-    mountain_left_x_pos: float = 40.0
-    mountain_right_x_pos: float = 120.0
-    mountain_pixel_movement_per_frame_per_speed_unit: float = 0.01
-
+    logo_x_position: int = struct.field(pytree_node=False, default=20)
+    logo_y_position: int = struct.field(pytree_node=False, default=196)
+    info_box_x_pos: int = struct.field(pytree_node=False, default=48)
+    info_box_y_pos: int = struct.field(pytree_node=False, default=161)
+    distance_odometer_start_x: int = struct.field(pytree_node=False, default=65)
+    score_start_x: int = struct.field(pytree_node=False, default=81)
+    level_x: int = struct.field(pytree_node=False, default=57)
+    mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
+    mountain_right_x_pos: float = struct.field(pytree_node=False, default=120.0)
+    mountain_pixel_movement_per_frame_per_speed_unit: float = struct.field(pytree_node=False, default=0.01)
     # how many steps per animation
-    opponent_animation_steps: int = 8
+    opponent_animation_steps: int = struct.field(pytree_node=False, default=8)
+    
+    # Derived constants (dynamic calculation based on static fields)
+    distance_odometer_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
+    score_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
+    level_y: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        # Level 1: Basic window calculations
+        game_window_height = self.screen_height - self.window_offset_bottom
+        game_window_width = self.screen_width - self.window_offset_left
+        game_screen_middle = game_window_width // 2
+        
+        # Level 2: Player position
+        player_x_start = float(game_screen_middle)
+        player_y_start = game_window_height - self.car_height_0 - 1
+        
+        # Level 3: Track calculations
+        track_height = game_window_height - self.sky_height - 1
+        track_x_start = int(player_x_start)
+        curve_offset_base = int(self.track_max_top_x_offset)
+        
+        # Level 4: Precomputed curves (depend on track_height and curve_offset_base)
+        precomputed_left_curves = precompute_all_track_curves(curve_offset_base, track_height, self.track_width, left=True)
+        precomputed_right_curves = precompute_all_track_curves(curve_offset_base, track_height, self.track_width, left=False)
+        
+        # Level 5: Speed calculations
+        km_per_second_per_speed_unit = 0.035 / self.min_speed
+        km_per_speed_unit_per_frame = km_per_second_per_speed_unit / self.frame_rate
+        acceleration_per_frame = 10.5 / self.frame_rate
+        slower_acceleration_per_frame = 3.75 / self.frame_rate
+        breaking_per_frame = self.breaking_per_second / self.frame_rate
+        
+        # Level 6: Steering calculations
+        steering_sensitivity = self.steering_range_in_pixels / 3.0 / self.frame_rate
+        drift_per_frame = self.drift_per_second_pixels / self.frame_rate
+        
+        # Level 7: Weather calculations
+        weather_starts_s = jnp.array([
+            34,  # day 1
+            34 + 34,  # day 2 (lighter)
+            34 + 34 + 34,  # day 3 (white mountains)
+            34 + 34 + 34 + 69,  # snow (steering is more difficult)
+            34 + 34 + 34 + 69 + 8 * 1,  # Sunset 1
+            34 + 34 + 34 + 69 + 8 * 2,  # Sunset 2
+            34 + 34 + 34 + 69 + 8 * 3,  # Sunset 3
+            34 + 34 + 34 + 69 + 8 * 4,  # Sunset 4
+            34 + 34 + 34 + 69 + 8 * 5,  # Sunset 5
+            34 + 34 + 34 + 69 + 8 * 6,  # Sunset 6
+            34 + 34 + 34 + 69 + 8 * 7,  # Sunset 7
+            34 + 34 + 34 + 69 + 8 * 8,  # Sunset 8
+            34 + 34 + 34 + 69 + 8 * 8 + 69,  # night 1
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
+        ], dtype=jnp.int32)
+        day_cycle_time = weather_starts_s[15]
+        
+        # Level 8: Asset config (depends on weather_color_codes and CAR_COLOR_PALETTE)
+        asset_config = _get_default_asset_config(self.weather_color_codes, self.CAR_COLOR_PALETTE)
+        
+        # Level 9: Opponent calculations (depend on game_window_height)
+        opponent_slot_ys = jnp.array([
+            game_window_height - self.car_zero_y_pixel_range,
+            game_window_height - self.car_zero_y_pixel_range - 20,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
+        ], dtype=jnp.int32)
+        
+        # Level 10: Collision calculations
+        car_crash_cooldown_frames = int(self.car_crash_cooldown_seconds * self.frame_rate)
+        crash_kickback_speed_per_frame = self.track_width / self.car_crash_cooldown_seconds / self.frame_rate / 3
+        
+        # Level 11: UI calculations (depend on game_window_height)
+        distance_odometer_start_y = game_window_height + 9
+        score_start_y = game_window_height + 25
+        level_y = score_start_y
+        
+        return {
+            'game_window_height': game_window_height,
+            'game_window_width': game_window_width,
+            'game_screen_middle': game_screen_middle,
+            'player_x_start': player_x_start,
+            'player_y_start': player_y_start,
+            'track_height': track_height,
+            'track_x_start': track_x_start,
+            'curve_offset_base': curve_offset_base,
+            'precomputed_left_curves': precomputed_left_curves,
+            'precomputed_right_curves': precomputed_right_curves,
+            'km_per_second_per_speed_unit': km_per_second_per_speed_unit,
+            'km_per_speed_unit_per_frame': km_per_speed_unit_per_frame,
+            'acceleration_per_frame': acceleration_per_frame,
+            'slower_acceleration_per_frame': slower_acceleration_per_frame,
+            'breaking_per_frame': breaking_per_frame,
+            'steering_sensitivity': steering_sensitivity,
+            'drift_per_frame': drift_per_frame,
+            'weather_starts_s': weather_starts_s,
+            'day_cycle_time': day_cycle_time,
+            'ASSET_CONFIG': asset_config,
+            'opponent_slot_ys': opponent_slot_ys,
+            'car_crash_cooldown_frames': car_crash_cooldown_frames,
+            'crash_kickback_speed_per_frame': crash_kickback_speed_per_frame,
+            'distance_odometer_start_y': distance_odometer_start_y,
+            'score_start_y': score_start_y,
+            'level_y': level_y,
+        }
 
-
-class EnduroGameState(NamedTuple):
+@struct.dataclass
+class EnduroGameState:
     """Represents the current state of the game"""
 
     step_count: jnp.int32  # incremented every step
@@ -638,8 +711,8 @@ class VehicleSpec:
         self.height = height
         self.width = width
 
-
-class EnduroObservation(NamedTuple):
+@struct.dataclass
+class EnduroObservation:
     # cars
     player_x: jnp.ndarray
     player_y: jnp.ndarray
@@ -661,7 +734,8 @@ class EnduroObservation(NamedTuple):
     weather_index: chex.Array
 
 
-class EnduroInfo(NamedTuple):
+@struct.dataclass
+class EnduroInfo:
     distance: jnp.ndarray
     level: jnp.ndarray
 
@@ -897,7 +971,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             logical_right_xs=logical_right_xs
         )
         # update the opponent array if the opponents would crash into the player
-        state = state._replace(opponent_pos_and_color=adjusted_opponents_pos)
+        state = state.replace(opponent_pos_and_color=adjusted_opponents_pos)
 
         # ===== OPPONENT COLLISION =====
         new_cooldown, new_cooldown_drift_direction, is_collision = self._step_opponent_collision(
@@ -926,7 +1000,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         )
 
         # Build new state with updated positions
-        new_state: EnduroGameState = state._replace(
+        new_state: EnduroGameState = state.replace(
             step_count=state.step_count + 1,
             day_count=new_day_count,
 

@@ -1,4 +1,5 @@
 import os
+from flax import struct
 import jax.numpy as jnp
 import jax
 from functools import partial
@@ -6,13 +7,13 @@ import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
 
-class RendererConfig(NamedTuple):
+class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""
     # TODO: uses HWC since everything does right now, but might be counterintuitive during usage
     # Target dimensions
-    game_dimensions: Tuple[int, int] = (210, 160)  # (height, width) this is normally constant except for some games (sir lancelot for example)
-    channels: int = 3  # 1 for grayscale, 3 for RGB
-    downscale: Tuple[int, int] = None  # (height, width) to downscale to, or None for no downscaling
+    game_dimensions: Tuple[int, int] = struct.field(pytree_node=False, default=(210, 160))  # (height, width) this is normally constant except for some games (sir lancelot for example)
+    channels: int = struct.field(pytree_node=False, default=3)  # 1 for grayscale, 3 for RGB
+    downscale: Tuple[int, int] = struct.field(pytree_node=False, default=None)  # (height, width) to downscale to, or None for no downscaling
 
     @property
     def width_scaling(self) -> float:

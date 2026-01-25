@@ -9,11 +9,13 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
-import jaxatari.spaces as spaces
+from flax import struct
 
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
@@ -69,10 +71,10 @@ def _get_default_asset_config() -> tuple:
         {'name': 'black', 'type': 'procedural', 'data': static_procedural['black']},
     )
 
-class SpaceWarConstants(NamedTuple):
+class SpaceWarConstants(AutoDerivedConstants):
     # Constants for game environment
-    WIDTH: int = 160
-    HEIGHT: int = 250
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=250)
 
     # Player position can be "in between" pixels.
     # This is not visible on screen but relevant for calculation.
@@ -81,44 +83,44 @@ class SpaceWarConstants(NamedTuple):
     # might not be visible in game if no pixel-boundary is crossed with said change.
 
     # Object sizes (width, height)
-    STAR_SHIP_SIZE: Tuple[int, int] = (5, 10)
-    STAR_BASE_SIZE: Tuple[int, int] = (2, 4)
-    MISSILE_SIZE: Tuple[int, int] = (2, 4)
+    STAR_SHIP_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (5, 10))
+    STAR_BASE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (2, 4))
+    MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (2, 4))
 
     # Rendering constants
-    PLAYER_STATS_COLOR: Tuple[int, int, int, int] = (111, 217, 158, 255)
-    ENEMY_STATS_COLOR: Tuple[int, int, int, int] = (104, 186, 220, 255)
-    WALL_TOP_HEIGHT: int = 12
-    BLACK_BORDER_TOP_HEIGHT: int = 29
-    BLACK_BORDER_BOTTOM_HEIGHT: int = 21
+    PLAYER_STATS_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (111, 217, 158, 255))
+    ENEMY_STATS_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (104, 186, 220, 255))
+    WALL_TOP_HEIGHT: int = struct.field(pytree_node=False, default=12)
+    BLACK_BORDER_TOP_HEIGHT: int = struct.field(pytree_node=False, default=29)
+    BLACK_BORDER_BOTTOM_HEIGHT: int = struct.field(pytree_node=False, default=21)
 
     # Positions
-    INITIAL_PLAYER_X: int = int(43 * 256/2)
-    INITIAL_PLAYER_Y: int = int((36 + BLACK_BORDER_TOP_HEIGHT) * 256/2)
-    INITIAL_PLAYER_ROTATION: int = 8
-    ENEMY_X: int = 109
-    ENEMY_Y: int = 169 + BLACK_BORDER_TOP_HEIGHT
-    STAR_BASE_X: int = 80
-    STAR_BASE_Y: int = 105 + BLACK_BORDER_TOP_HEIGHT
+    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=int(43 * 256/2))
+    INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    INITIAL_PLAYER_ROTATION: int = struct.field(pytree_node=False, default=8)
+    ENEMY_X: int = struct.field(pytree_node=False, default=109)
+    ENEMY_Y: int = struct.field(pytree_node=False, default=None)
+    STAR_BASE_X: int = struct.field(pytree_node=False, default=80)
+    STAR_BASE_Y: int = struct.field(pytree_node=False, default=None)
 
     # Game constants
-    MAX_FUEL: int = 8*256 - 1
-    MAX_AMMO: int = 8
-    POINTS_TO_WIN: int = 10
-    DEATH_DELAY: int = 64
-    H_SPACE_CONSUMPTION: int = 256
-    MAX_ENTITY_X: int = WIDTH - 1
-    MAX_ENTITY_Y: int = HEIGHT - BLACK_BORDER_BOTTOM_HEIGHT - 1
-    MIN_ENTITY_X: int = 0
-    MIN_ENTITY_Y: int = BLACK_BORDER_TOP_HEIGHT + WALL_TOP_HEIGHT
+    MAX_FUEL: int = struct.field(pytree_node=False, default=8*256 - 1)
+    MAX_AMMO: int = struct.field(pytree_node=False, default=8)
+    POINTS_TO_WIN: int = struct.field(pytree_node=False, default=10)
+    DEATH_DELAY: int = struct.field(pytree_node=False, default=64)
+    H_SPACE_CONSUMPTION: int = struct.field(pytree_node=False, default=256)
+    MAX_ENTITY_X: int = struct.field(pytree_node=False, default=None)
+    MAX_ENTITY_Y: int = struct.field(pytree_node=False, default=None)
+    MIN_ENTITY_X: int = struct.field(pytree_node=False, default=0)
+    MIN_ENTITY_Y: int = struct.field(pytree_node=False, default=None)
 
     # Player constants
-    MAX_PLAYER_SPEED: int = 63*256 + 255
-    MAX_PLAYER_X: int = int(((WIDTH - STAR_SHIP_SIZE[0])* 256 - 1)/2)
-    MAX_PLAYER_Y: int = int((((HEIGHT - BLACK_BORDER_BOTTOM_HEIGHT) - STAR_SHIP_SIZE[1]) * 256 - 1)/2)
-    MIN_PLAYER_X: int = 0
-    MIN_PLAYER_Y: int = int(((BLACK_BORDER_TOP_HEIGHT + WALL_TOP_HEIGHT) * 256 - 1)/2)
-    ACCEL_PER_ROTATION: chex.Array = jnp.array([
+    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=63*256 + 255)
+    MAX_PLAYER_X: int = struct.field(pytree_node=False, default=None)
+    MAX_PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    MIN_PLAYER_X: int = struct.field(pytree_node=False, default=0)
+    MIN_PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    ACCEL_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -72),
         (-27, -66),
         (-51, -51),
@@ -135,11 +137,11 @@ class SpaceWarConstants(NamedTuple):
         (66, -27),
         (51, -51),
         (27, -66)
-    ])
+    ]))
 
     # Missile constants
-    SHOOTING_COOLDOWN: int = 127
-    MISSILE_SPEED_PER_ROTATION: chex.Array = jnp.array([
+    SHOOTING_COOLDOWN: int = struct.field(pytree_node=False, default=127)
+    MISSILE_SPEED_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -578),
         (-208, -528),
         (-400, -416),
@@ -156,12 +158,27 @@ class SpaceWarConstants(NamedTuple):
         (528, -224),
         (416, -416),
         (224, -528)
-    ])
+    ]))
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'INITIAL_PLAYER_Y': int((self.BLACK_BORDER_TOP_HEIGHT + self.WALL_TOP_HEIGHT) * 256/2),
+            'ENEMY_Y': 169 + self.BLACK_BORDER_TOP_HEIGHT,
+            'STAR_BASE_Y': 105 + self.BLACK_BORDER_TOP_HEIGHT,
+            'MAX_ENTITY_X': self.WIDTH - 1,
+            'MAX_ENTITY_Y': self.HEIGHT - self.BLACK_BORDER_BOTTOM_HEIGHT - 1,
+            'MIN_ENTITY_Y': self.BLACK_BORDER_TOP_HEIGHT + self.WALL_TOP_HEIGHT,
+            'MAX_PLAYER_X': int(((self.WIDTH - self.STAR_SHIP_SIZE[0])* 256 - 1)/2),
+            'MAX_PLAYER_Y': int((((self.HEIGHT - self.BLACK_BORDER_BOTTOM_HEIGHT) - self.STAR_SHIP_SIZE[1]) * 256 - 1)/2),
+            'MIN_PLAYER_Y': int(((self.BLACK_BORDER_TOP_HEIGHT + self.WALL_TOP_HEIGHT) * 256 - 1)/2),
+        }
 
 # immutable state container
-class SpaceWarState(NamedTuple):
+@struct.dataclass
+class SpaceWarState:
 
     player_state: chex.Array # (6, ) array with (x, y, speed_x, speed_y, rotation, is_in_hyperspace)
     player_death_timer: chex.Array # for death animation and tracking if player is active
@@ -182,7 +199,8 @@ class SpaceWarState(NamedTuple):
 
     step_counter: chex.Array
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -190,14 +208,16 @@ class EntityPosition(NamedTuple):
     rotation: jnp.ndarray
     active: jnp.ndarray
 
-class MissilePosition(NamedTuple):
+@struct.dataclass
+class MissilePosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
     active: jnp.ndarray
 
-class SpaceWarObservation(NamedTuple):
+@struct.dataclass
+class SpaceWarObservation:
     player: EntityPosition # (x, y, width, height, rotation, active)
     player_missile: EntityPosition  # (x, y, width, height, active)
 
@@ -207,7 +227,8 @@ class SpaceWarObservation(NamedTuple):
 
     enemy_score: jnp.ndarray
 
-class SpaceWarInfo(NamedTuple):
+@struct.dataclass
+class SpaceWarInfo:
     player_score: chex.Array
     enemy_score: chex.Array
     step_counter: chex.Array

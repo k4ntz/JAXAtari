@@ -4,11 +4,13 @@ from typing import Tuple, NamedTuple, Dict, Any
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
@@ -70,24 +72,24 @@ def _get_default_asset_config() -> tuple:
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/{}.npy'},
     )
 
-class TurmoilConstants(NamedTuple):
+class TurmoilConstants(AutoDerivedConstants):
     # pre-defined movement lanes
-    VERTICAL_LANE = 76 # x value
-    HORIZONTAL_LANES = [37, 58, 79, 100, 121, 142, 163] # y values
+    VERTICAL_LANE: int = struct.field(pytree_node=False, default=76) # x value
+    HORIZONTAL_LANES: list[int] = struct.field(pytree_node=False, default_factory=lambda: [37, 58, 79, 100, 121, 142, 163]) # y values
 
     # boundaries
-    MIN_BOUND = (2, HORIZONTAL_LANES[0]) # (min x, min y)
-    MAX_BOUND = (150, HORIZONTAL_LANES[-1])
+    MIN_BOUND: tuple[int, int] = struct.field(pytree_node=False, default=None) # (min x, min y)
+    MAX_BOUND: tuple[int, int] = struct.field(pytree_node=False, default=None)
 
     # directions
-    FACE_LEFT = -1
-    FACE_RIGHT = 1   
+    FACE_LEFT: int = struct.field(pytree_node=False, default=-1)
+    FACE_RIGHT: int = struct.field(pytree_node=False, default=1)   
 
     # sizes
-    HORIZONTAL_LANE_GAP_SIZE = 17
-    PLAYER_SIZE = (8, 11) # (width, height)
-    BULLET_SIZE = (8, 3)
-    ENEMY_SIZE = (
+    HORIZONTAL_LANE_GAP_SIZE: int = struct.field(pytree_node=False, default=17)
+    PLAYER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 11)) # (width, height)
+    BULLET_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 3))
+    ENEMY_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: (
         (8, 5), # lines
         (8, 10), # arrow
         (8, 13), # tank
@@ -97,38 +99,28 @@ class TurmoilConstants(NamedTuple):
         (8, 13), # triangle_hollow
         (8, 11), # x_shape
         (4, 5), # sonic boom
-    )
-    ENEMY_SIZE_FOR_COLLISION = (8, 13)  # max values from ENEMY_SIZE
-    PRIZE_SIZE = (8, 9)
-    ENEMY_EXPLOSION_SIZE = (8, 13)
+    ))
+    ENEMY_SIZE_FOR_COLLISION: tuple[int, int] = struct.field(pytree_node=False, default=(8, 13))  # max values from ENEMY_SIZE
+    PRIZE_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 9))
+    ENEMY_EXPLOSION_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 13))
 
     # y offsets for finding the middle of the lane for each sprite
-    Y_OFFSET_PLAYER = (HORIZONTAL_LANE_GAP_SIZE - PLAYER_SIZE[1]) // 2
-    Y_OFFSET_PRIZE = (HORIZONTAL_LANE_GAP_SIZE - PRIZE_SIZE[1]) // 2
-    Y_OFFSET_ENEMY = (
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[0][1]) // 2, # lines
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[1][1]) // 2, # arrow
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[2][1]) // 2, # tank
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[3][1]) // 2, # L
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[4][1]) // 2, # T
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[5][1]) // 2, # rocket
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[6][1]) // 2, # triangle_hollow
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[7][1]) // 2, # x_shape
-        (HORIZONTAL_LANE_GAP_SIZE - ENEMY_SIZE[8][1]) // 2, # sonic boom
-    )
-    Y_OFFSET_ENEMY_EXPLOSION = (HORIZONTAL_LANE_GAP_SIZE - ENEMY_EXPLOSION_SIZE[1]) // 2
+    Y_OFFSET_PLAYER: tuple[int, int] = struct.field(pytree_node=False, default=None)
+    Y_OFFSET_PRIZE: tuple[int, int] = struct.field(pytree_node=False, default=None)
+    Y_OFFSET_ENEMY: tuple[int, int] = struct.field(pytree_node=False, default=None)
+    Y_OFFSET_ENEMY_EXPLOSION: tuple[int, int] = struct.field(pytree_node=False, default=None)
 
     # player
-    PLAYER_START_POS = (VERTICAL_LANE, HORIZONTAL_LANES[6] + Y_OFFSET_PLAYER) # (starting_x_pos, starting_y_pos)
-    PLAYER_STEP_COOLDOWN = (0, 5) # (x cooldown, y cooldown)
-    PLAYER_SPEED = (1, 21) # (x_step_size, y_step_size)
-    PLAYER_X_LANE_MOVEMENT_BUFFER = PLAYER_SIZE[1] // 2 # +/- this amount from VERTICAL_LANE player can move vertically
+    PLAYER_START_POS: tuple[int, int] = struct.field(pytree_node=False, default=None) # (starting_x_pos, starting_y_pos)
+    PLAYER_STEP_COOLDOWN: tuple[int, int] = struct.field(pytree_node=False, default=(0, 5)) # (x cooldown, y cooldown)
+    PLAYER_SPEED: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (1, 21)) # (x_step_size, y_step_size)
+    PLAYER_X_LANE_MOVEMENT_BUFFER: int = struct.field(pytree_node=False, default=None) # +/- this amount from VERTICAL_LANE player can move vertically
 
     # bullet
-    BULLET_SPEED = 5
+    BULLET_SPEED: int = struct.field(pytree_node=False, default=5)
 
     # enemy types, so it is easier to identify by name
-    ENEMY_TYPES = {
+    ENEMY_TYPES: dict[str, int] = struct.field(pytree_node=False, default_factory=lambda: {
         "3lines" : 0,
         "arrow" : 1,
         "tank" : 2,
@@ -138,9 +130,9 @@ class TurmoilConstants(NamedTuple):
         "triangle_hollow" : 6,
         "x_shape" : 7,
         "boom" : 8
-    }
+    })
 
-    ENEMY_SPEED = (
+    ENEMY_SPEED: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: (
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # lines
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # arrow
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # tank
@@ -150,27 +142,27 @@ class TurmoilConstants(NamedTuple):
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # triangle_hollow
         [1, 1, 1, 1, 2, 2, 2, 2, 3], # x_shape
         [5, 5, 5, 5, 7, 7, 7, 7, 9], # sonic boom
-    )
+    ))
 
-    ENEMY_LEFT_SPAWN_X = 3
-    ENEMY_RIGHT_SPAWN_X = 148
-    TANK_PUSH_BACK = 5 # tank displacement if shot from front
-    ENEMY_EXPLOSION_SPEED = 1 # enemy explosion movement speed
+    ENEMY_LEFT_SPAWN_X: int = struct.field(pytree_node=False, default=3)
+    ENEMY_RIGHT_SPAWN_X: int = struct.field(pytree_node=False, default=148)
+    TANK_PUSH_BACK: int = struct.field(pytree_node=False, default=5) # tank displacement if shot from front
+    ENEMY_EXPLOSION_SPEED: int = struct.field(pytree_node=False, default=1) # enemy explosion movement speed
 
     # probability of spawning when there is slot available for each level
-    ENEMY_SPAWN_PROBABILITY = [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15, 0.17]
-    PRIZE_SPAWN_PROBABILITY = [0.005, 0.007, 0.009, 0.011, 0.015, 0.017, 0.019, 0.021, 0.023]
+    ENEMY_SPAWN_PROBABILITY: list[float] = struct.field(pytree_node=False, default_factory=lambda: [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15, 0.17])
+    PRIZE_SPAWN_PROBABILITY: list[float] = struct.field(pytree_node=False, default_factory=lambda: [0.005, 0.007, 0.009, 0.011, 0.015, 0.017, 0.019, 0.021, 0.023])
     
     # prize
-    PRIZE_TO_BOOM_TIME = 300
-    PRIZE_SCORE_REWARD = 800
-    PRIZE_TILL_TRIANGLE_HOLLOW_TIMER = 40
+    PRIZE_TO_BOOM_TIME: int = struct.field(pytree_node=False, default=300)
+    PRIZE_SCORE_REWARD: int = struct.field(pytree_node=False, default=800)
+    PRIZE_TILL_TRIANGLE_HOLLOW_TIMER: int = struct.field(pytree_node=False, default=40)
 
     # game phases and control
-    STEP_COUNTER = 1024
-    LOADING_GAME_PHASE_TIME = 50
-    PLAYER_SHRINK_TIME = 120
-    LVL_CHANGE_SCORES = ( # lvl end scores
+    STEP_COUNTER: int = struct.field(pytree_node=False, default=1024)
+    LOADING_GAME_PHASE_TIME: int = struct.field(pytree_node=False, default=50)
+    PLAYER_SHRINK_TIME: int = struct.field(pytree_node=False, default=120)
+    LVL_CHANGE_SCORES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: ( # lvl end scores
         5000,  # lvl 1
         10000, # lvl 2
         15000, # lvl 3
@@ -180,20 +172,48 @@ class TurmoilConstants(NamedTuple):
         60000, # lvl 7
         80000, # lvl 8
         99999  # lvl 9
-    )
-    BG_APPER_PROBABILITY = 0.4 # after lvl 4, prob. of seeing lanes
+    ))
+    BG_APPER_PROBABILITY: float = struct.field(pytree_node=False, default=0.4) # after lvl 4, prob. of seeing lanes
     
     # rendering
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    MAX_ENEMIES: int = 7
-    MAX_EXPLOSIONS: int = 7
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=7)
+    MAX_EXPLOSIONS: int = struct.field(pytree_node=False, default=7)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple[dict, ...] = struct.field(pytree_node=False, default=_get_default_asset_config())
 
+    def compute_derived(self) -> dict[str, Any]:
+        """Compute derived constants based on static fields."""
 
-class TurmoilState(NamedTuple):
+        y_offset_enemy = (
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[0][1]) // 2, # lines
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[1][1]) // 2, # arrow
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[2][1]) // 2, # tank
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[3][1]) // 2, # L
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[4][1]) // 2, # T
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[5][1]) // 2, # rocket
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[6][1]) // 2, # triangle_hollow
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[7][1]) // 2, # x_shape
+            (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_SIZE[8][1]) // 2, # sonic boom
+        )
+
+        y_offset_player = (self.HORIZONTAL_LANE_GAP_SIZE - self.PLAYER_SIZE[1]) // 2
+
+        return {
+            'MIN_BOUND': (2, self.HORIZONTAL_LANES[0]),
+            'MAX_BOUND': (150, self.HORIZONTAL_LANES[-1]),
+            'Y_OFFSET_PLAYER': y_offset_player,
+            'Y_OFFSET_PRIZE': (self.HORIZONTAL_LANE_GAP_SIZE - self.PRIZE_SIZE[1]) // 2,
+            'Y_OFFSET_ENEMY': y_offset_enemy,
+            'Y_OFFSET_ENEMY_EXPLOSION': (self.HORIZONTAL_LANE_GAP_SIZE - self.ENEMY_EXPLOSION_SIZE[1]) // 2,
+            'PLAYER_START_POS': (self.VERTICAL_LANE, self.HORIZONTAL_LANES[6] + y_offset_player),
+            'PLAYER_X_LANE_MOVEMENT_BUFFER': self.PLAYER_SIZE[1] // 2,
+        }
+
+@struct.dataclass
+class TurmoilState:
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array
@@ -222,8 +242,8 @@ class TurmoilState(NamedTuple):
 
     bg_visible: chex.Array # if background is visible
 
-
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: jnp.ndarray
     y: jnp.ndarray
     direction: jnp.ndarray
@@ -231,7 +251,8 @@ class PlayerEntity(NamedTuple):
     height: jnp.ndarray
     active: jnp.ndarray
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -239,7 +260,8 @@ class EntityPosition(NamedTuple):
     active: jnp.ndarray
 
 
-class TurmoilObservation(NamedTuple):
+@struct.dataclass
+class TurmoilObservation:
     player: PlayerEntity
     ships: jnp.array
     enemy: jnp.array # (7, 6) -> type, x, y, active, width, height,
@@ -249,7 +271,8 @@ class TurmoilObservation(NamedTuple):
     game_phase: jnp.array
     level: jnp.array
 
-class TurmoilInfo(NamedTuple):
+@struct.dataclass
+class TurmoilInfo:
     step_counter: jnp.ndarray  # Current step count
     level: jnp.ndarray # current game level
 
@@ -1523,7 +1546,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             lambda : jax.random.bernoulli(bg_key, p=self.consts.BG_APPER_PROBABILITY).astype(jnp.int32)
         )
 
-        next_state = state._replace(
+        next_state = state.replace(
             player_x=jnp.array(self.consts.PLAYER_START_POS[0]),
             player_y=jnp.array(self.consts.PLAYER_START_POS[1]),
             player_direction=jnp.array(0),
@@ -1572,7 +1595,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             action
         )
 
-        new_state = state._replace(
+        new_state = state.replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_direction=new_player_direction,
@@ -1585,7 +1608,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             player_shrink=new_player_shrink,
             ships=new_ships, 
             enemy=new_enemy,
@@ -1597,7 +1620,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             action
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             bullet=new_bullet
         )
 
@@ -1606,7 +1629,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state
         )
         
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             bullet=new_bullet,
             enemy=new_enemy,
             score=new_score,
@@ -1618,7 +1641,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy=new_enemy
         )
 
@@ -1627,7 +1650,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state    
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy_explosion=new_enemy_explosion,
         )
 
@@ -1636,7 +1659,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy=new_enemy,
             rng_key=new_rng,
             spawn_triangle_hollow=new_spawn_triangle_hollow,
@@ -1645,7 +1668,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         # change types
         new_enemy, new_prize = self.change_type(new_state)
         
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy=new_enemy,
             prize=new_prize
         )
@@ -1657,7 +1680,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state.step_counter + 1,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             step_counter=new_step_counter
         )
         
@@ -1666,7 +1689,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             prize=new_prize,
             rng_key=rng_rest
         )
@@ -1674,7 +1697,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         # prize collision
         new_prize, new_score, new_spawn_triangle_hollow = self.prize_player_collision_step(new_state)
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             prize=new_prize,
             score=new_score,
             spawn_triangle_hollow=new_spawn_triangle_hollow,
@@ -1685,7 +1708,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
@@ -1710,7 +1733,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.step_counter + 1,
         )
 
-        new_state = state._replace(
+        new_state = state.replace(
             step_counter=new_step_counter
         )
 
@@ -1719,7 +1742,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
@@ -1740,7 +1763,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             state.step_counter + 1,
         )
 
-        new_state = state._replace(
+        new_state = state.replace(
             step_counter=new_step_counter
         )
 
@@ -1749,7 +1772,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             game_phase=new_game_phase,
             game_phase_timer=new_game_phase_timer,
             player_shrink=new_player_shrink,
@@ -1762,7 +1785,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             action
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             bullet=new_bullet
         )
 
@@ -1771,7 +1794,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state
         )
         
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             bullet=new_bullet,
             enemy=new_enemy,
             score=new_score,
@@ -1783,7 +1806,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy=new_enemy
         )
 
@@ -1792,14 +1815,14 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state    
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy_explosion=new_enemy_explosion,
         )
 
         # change types
         new_enemy, new_prize = self.change_type(new_state)
         
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             enemy=new_enemy,
             prize=new_prize
         )
@@ -1809,7 +1832,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             new_state,
         )
 
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             prize=new_prize,
             rng_key=rng_rest
         )

@@ -7,15 +7,17 @@ Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 import os
 from functools import partial
-from typing import Tuple, NamedTuple, Callable
+from typing import Tuple, NamedTuple, Callable, Optional
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
 import time
 
 def _create_static_procedural_sprites() -> dict:
@@ -71,107 +73,107 @@ def _get_default_asset_config() -> tuple:
         {'name': 'minimap_logo', 'type': 'single', 'file': 'minimap/activision_logo.npy'},
     )
 
-class ChopperCommandConstants:
+class ChopperCommandConstants(AutoDerivedConstants):
     # Game Constants
-    WINDOW_WIDTH = 160 * 3
-    WINDOW_HEIGHT = 210 * 3
-    DEATH_PAUSE_FRAMES = 60
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160 * 3)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
+    DEATH_PAUSE_FRAMES: int = struct.field(pytree_node=False, default=60)
 
-    WIDTH = 160
-    HEIGHT = 210
-    HEIGHT_ONLY_PLAYING_FIELD = 192
-    SCALING_FACTOR = 4
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    HEIGHT_ONLY_PLAYING_FIELD: int = struct.field(pytree_node=False, default=192)
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=4)
 
     # difficulty
-    GAME_DIFFICULTY = 2
+    GAME_DIFFICULTY: int = struct.field(pytree_node=False, default=2)
 
     # Chopper Constants TODO: Tweak these to match feeling of real game
-    ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
-    FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
-    MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
-    DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
-    LOCAL_PLAYER_OFFSET_SPEED = 1 # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
-    ALLOW_MOVE_OFFSET = 13 # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
-    PLAYER_ROTOR_SPEED = 3 # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
+    ACCEL: float = struct.field(pytree_node=False, default=0.03)  # DEFAULT: 0.05 | how fast the chopper accelerates
+    FRICTION: float = struct.field(pytree_node=False, default=0.02)  # DEFAULT: 0.02 | how fast the chopper decelerates
+    MAX_VELOCITY: float = struct.field(pytree_node=False, default=3.0)  # DEFAULT: 3.0 | maximum speed
+    DISTANCE_WHEN_FLYING: int = struct.field(pytree_node=False, default=10) # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
+    LOCAL_PLAYER_OFFSET_SPEED: int = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
+    ALLOW_MOVE_OFFSET: int = struct.field(pytree_node=False, default=13) # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
+    PLAYER_ROTOR_SPEED: int = struct.field(pytree_node=False, default=3) # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
 
     # Score
-    SCORE_PER_JET_KILL = 200
-    SCORE_PER_CHOPPER_KILL = 100
-    SCORE_PER_TRUCK_ALIVE = 100
+    SCORE_PER_JET_KILL: int = struct.field(pytree_node=False, default=200)
+    SCORE_PER_CHOPPER_KILL: int = struct.field(pytree_node=False, default=100)
+    SCORE_PER_TRUCK_ALIVE: int = struct.field(pytree_node=False, default=100)
 
     # Player Missile Constants
-    PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
-    MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
-    MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
-    MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
+    PLAYER_MISSILE_WIDTH: int = struct.field(pytree_node=False, default=80) # Sprite size_x
+    MISSILE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=8)  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+    MISSILE_SPEED: int = struct.field(pytree_node=False, default=10) # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+    MISSILE_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=6) # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
     # Enemy Missile Constants
-    ENEMY_MISSILE_SPAWN_PROBABILITY = 0.01 # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
-    ENEMY_MISSILE_SPLIT_PROBABILITY = 0.05 # The probability that an enemy missiles splits in a frame
-    ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT = 0.75 # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
-    ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 # TODO: Make match real game
+    ENEMY_MISSILE_SPAWN_PROBABILITY: float = struct.field(pytree_node=False, default=0.01) # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
+    ENEMY_MISSILE_SPLIT_PROBABILITY: float = struct.field(pytree_node=False, default=0.05) # The probability that an enemy missiles splits in a frame
+    ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT: float = struct.field(pytree_node=False, default=0.75) # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
+    ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT: float = struct.field(pytree_node=False, default=2.5) # TODO: Make match real game
 
     # Colors
-    BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
-    PLAYER_COLOR = (187, 187, 53)  # Yellow for player helicopter
-    ENEMY_COLOR = (170, 170, 170)  # Gray for enemy helicopters
-    MISSILE_COLOR = (255, 255, 255)  # White for missiles
-    SCORE_COLOR = (210, 210, 64)  # Score color
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 139))  # Dark blue for sky
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (187, 187, 53))  # Yellow for player helicopter
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (170, 170, 170))  # Gray for enemy helicopters
+    MISSILE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 255, 255))  # White for missiles
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (210, 210, 64))  # Score color
 
     # Object sizes and initial positions
-    PLAYER_SIZE = (16, 9)  # Width, Height
-    TRUCK_SIZE = (8, 7)
-    JET_SIZE = (8, 6)
-    CHOPPER_SIZE = (8, 9)
-    PLAYER_MISSILE_SIZE = (80, 1) #Default (80, 1)
-    ENEMY_MISSILE_SIZE = (2, 1)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 9))  # Width, Height
+    TRUCK_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 7))
+    JET_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    CHOPPER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 9))
+    PLAYER_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (80, 1)) #Default (80, 1)
+    ENEMY_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (2, 1))
 
-    PLAYER_START_X = 0
-    PLAYER_START_Y = 100
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=0)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=100)
 
-    X_BORDERS = (0, 160)
-    PLAYER_BOUNDS = (0, 160), (52, 150)
+    X_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 160))
+    PLAYER_BOUNDS: Tuple[Tuple[int, int], Tuple[int, int]] = struct.field(pytree_node=False, default_factory=lambda: ((0, 160), (52, 150)))
 
     # Maximum number of objects
-    MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
-    MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
-    MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
-    MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
-    MAX_PLAYER_MISSILES = 1 # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
-    MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
-    ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
+    MAX_TRUCKS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | How much trucks are spawned
+    MAX_JETS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of jets that can be spawned
+    MAX_CHOPPERS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of choppers that can be spawned
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the amount of enemies that are spawned
+    MAX_PLAYER_MISSILES: int = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
+    
+    MAX_ENEMY_MISSILES: Optional[int] = struct.field(pytree_node=False, default=None)  # Two missiles for every enemy (jets and choppers)
+    
+    ENEMY_LANE_SWITCH_PROBABILITY: float = struct.field(pytree_node=False, default=0.05) # DEFAULT: 7 | how likely is it that en enemy switches a lane
 
     # Enemy movement
-    JET_VELOCITY_LEFT = 1.5 # DEFAULT: 1.5 | How fast jets fly to the left
-    JET_VELOCITY_RIGHT = 1 # DEFAULT: 1 | How fast jets fly to the right
-    CHOPPER_VELOCITY_LEFT = 0.75 # DEFAULT: 0.75 | How fast choppers fly to the right
-    CHOPPER_VELOCITY_RIGHT = 0.5 # DEFAULT: 0.5 | How fast choppers fly to the right
-    ENEMY_OUT_OF_CYCLE_RIGHT = 64 # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
-    ENEMY_OUT_OF_CYCLE_LEFT = 64 # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
-    ENEMY_MAXIMUM_SPAWN_OFFSET = 64 # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
+    JET_VELOCITY_LEFT: float = struct.field(pytree_node=False, default=1.5) # DEFAULT: 1.5 | How fast jets fly to the left
+    JET_VELOCITY_RIGHT: float = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | How fast jets fly to the right
+    CHOPPER_VELOCITY_LEFT: float = struct.field(pytree_node=False, default=0.75) # DEFAULT: 0.75 | How fast choppers fly to the right
+    CHOPPER_VELOCITY_RIGHT: float = struct.field(pytree_node=False, default=0.5) # DEFAULT: 0.5 | How fast choppers fly to the right
+    ENEMY_OUT_OF_CYCLE_RIGHT: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
+    ENEMY_OUT_OF_CYCLE_LEFT: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
+    ENEMY_MAXIMUM_SPAWN_OFFSET: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
 
     # Enemy Lanes
 
-    ENEMY_LANE_OFFSET = 7 # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
+    ENEMY_LANE_OFFSET: int = struct.field(pytree_node=False, default=7) # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
 
-    ENEMY_LANE_7 = 66
-    ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_6 = ENEMY_LANE_7 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_7: int = struct.field(pytree_node=False, default=66)
+    ENEMY_LANE_8: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_6: Optional[int] = struct.field(pytree_node=False, default=None)
 
-    ENEMY_LANE_4 = 96
-    ENEMY_LANE_5 = ENEMY_LANE_4 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_3 = ENEMY_LANE_4 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_4: int = struct.field(pytree_node=False, default=96)
+    ENEMY_LANE_5: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_3: Optional[int] = struct.field(pytree_node=False, default=None)
 
-    ENEMY_LANE_1 = 126
-    ENEMY_LANE_2 = ENEMY_LANE_1 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_0 = ENEMY_LANE_1 + ENEMY_LANE_OFFSET
-
-    BOTTOM_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2])
-    MIDDLE_LANES = jnp.array([ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5])
-    TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
-
-    ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
-
+    ENEMY_LANE_1: int = struct.field(pytree_node=False, default=126)
+    ENEMY_LANE_2: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_0: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    BOTTOM_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    MIDDLE_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    TOP_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    ALL_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
     """
     Correct arrangement of lanes by height is:
     
@@ -190,44 +192,72 @@ class ChopperCommandConstants:
     """
 
     # Minimap
-    MINIMAP_WIDTH = 48
-    MINIMAP_HEIGHT = 16
+    MINIMAP_WIDTH: int = struct.field(pytree_node=False, default=48)
+    MINIMAP_HEIGHT: int = struct.field(pytree_node=False, default=16)
 
-    MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
-    MINIMAP_POSITION_Y = 165
+    MINIMAP_POSITION_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    MINIMAP_POSITION_Y: int = struct.field(pytree_node=False, default=165)
 
-    MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
+    MINIMAP_RENDER_TRUCK_REFRESH_RATE: int = struct.field(pytree_node=False, default=8) # Higher is slower (Does not fully work yet)
 
-    DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
-    DOWNSCALING_FACTOR_HEIGHT = HEIGHT_ONLY_PLAYING_FIELD // MINIMAP_HEIGHT
+    DOWNSCALING_FACTOR_WIDTH: Optional[int] = struct.field(pytree_node=False, default=None)
+    DOWNSCALING_FACTOR_HEIGHT: Optional[int] = struct.field(pytree_node=False, default=None)
 
     #Object rendering
-    TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
+    TRUCK_SPAWN_DISTANCE: int = struct.field(pytree_node=False, default=248) # distance 240px + truck width
 
-    FRAMES_DEATH_ANIMATION_ENEMY = 16
-    FRAMES_DEATH_ANIMATION_TRUCK = 32 # TODO: Make match real game
-    TRUCK_FLICKER_RATE = 3 # TODO: Make match real game
+    FRAMES_DEATH_ANIMATION_ENEMY: int = struct.field(pytree_node=False, default=16)
+    FRAMES_DEATH_ANIMATION_TRUCK: int = struct.field(pytree_node=False, default=32) # TODO: Make match real game
+    TRUCK_FLICKER_RATE: int = struct.field(pytree_node=False, default=3) # TODO: Make match real game
 
-    PLAYER_FADE_OUT_START_THRESHOLD_0 = 0.25
-    PLAYER_FADE_OUT_START_THRESHOLD_1 = 0.125
+    PLAYER_FADE_OUT_START_THRESHOLD_0: float = struct.field(pytree_node=False, default=0.25)
+    PLAYER_FADE_OUT_START_THRESHOLD_1: float = struct.field(pytree_node=False, default=0.125)
 
     # define object orientations
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
+    FACE_LEFT: int = struct.field(pytree_node=False, default=-1)
+    FACE_RIGHT: int = struct.field(pytree_node=False, default=1)
 
-    SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
-    TRUCK_SPAWN_POSITIONS = 156
+    SPAWN_POSITIONS_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([60, 90, 120]))
+    TRUCK_SPAWN_POSITIONS: int = struct.field(pytree_node=False, default=156)
 
     # Debugging
 
-    ENABLE_PLAYER_COLLISION = True
-    ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
+    ENABLE_PLAYER_COLLISION: bool = struct.field(pytree_node=False, default=True)
+    ENABLE_ENEMY_MISSILE_TRUCK_COLLISION: bool = struct.field(pytree_node=False, default=True)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        # Compute lane positions
+        enemy_lane_8 = self.ENEMY_LANE_7 - self.ENEMY_LANE_OFFSET
+        enemy_lane_6 = self.ENEMY_LANE_7 + self.ENEMY_LANE_OFFSET
+        enemy_lane_5 = self.ENEMY_LANE_4 - self.ENEMY_LANE_OFFSET
+        enemy_lane_3 = self.ENEMY_LANE_4 + self.ENEMY_LANE_OFFSET
+        enemy_lane_2 = self.ENEMY_LANE_1 - self.ENEMY_LANE_OFFSET
+        enemy_lane_0 = self.ENEMY_LANE_1 + self.ENEMY_LANE_OFFSET
+        
+        return {
+            'MAX_ENEMY_MISSILES': self.MAX_ENEMIES * 2 * 2,
+            'ENEMY_LANE_8': enemy_lane_8,
+            'ENEMY_LANE_6': enemy_lane_6,
+            'ENEMY_LANE_5': enemy_lane_5,
+            'ENEMY_LANE_3': enemy_lane_3,
+            'ENEMY_LANE_2': enemy_lane_2,
+            'ENEMY_LANE_0': enemy_lane_0,
+            'BOTTOM_LANES': jnp.array([enemy_lane_0, self.ENEMY_LANE_1, enemy_lane_2]),
+            'MIDDLE_LANES': jnp.array([enemy_lane_3, self.ENEMY_LANE_4, enemy_lane_5]),
+            'TOP_LANES': jnp.array([enemy_lane_6, self.ENEMY_LANE_7, enemy_lane_8]),
+            'ALL_LANES': jnp.array([enemy_lane_0, self.ENEMY_LANE_1, enemy_lane_2, enemy_lane_3, self.ENEMY_LANE_4, enemy_lane_5, enemy_lane_6, self.ENEMY_LANE_7, enemy_lane_8]),
+            'MINIMAP_POSITION_X': (self.WIDTH // 2) - (self.MINIMAP_WIDTH // 2),
+            'DOWNSCALING_FACTOR_WIDTH': self.WIDTH // self.MINIMAP_WIDTH,
+            'DOWNSCALING_FACTOR_HEIGHT': self.HEIGHT_ONLY_PLAYING_FIELD // self.MINIMAP_HEIGHT,
+        }
 
-
-class ChopperCommandState(NamedTuple):
+@struct.dataclass
+class ChopperCommandState:
     player_x: chex.Array                    # x-coordinate of the player’s chopper in world space
     player_y: chex.Array                    # y-coordinate of the player’s chopper in world space
     player_velocity_x: chex.Array           # horizontal velocity (momentum) of the player’s chopper; positive = moving right, negative = moving left
@@ -249,7 +279,8 @@ class ChopperCommandState(NamedTuple):
     difficulty: chex.Array                  # states the difficulty which can be either 1 or 2
     enemy_speed: chex.Array                 # states the speed of the enemies e.g. all enemies are killed
 
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: jnp.ndarray
     y: jnp.ndarray
     o: jnp.ndarray
@@ -257,14 +288,16 @@ class PlayerEntity(NamedTuple):
     height: jnp.ndarray
     active: jnp.ndarray
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
     active: jnp.ndarray
 
-class ChopperCommandObservation(NamedTuple):
+@struct.dataclass
+class ChopperCommandObservation:
     player: PlayerEntity
     trucks: jnp.ndarray # Shape (MAX_TRUCKS, 5) - MAX_TRUCKS enemies, each with x,y,w,h,active
     jets: jnp.ndarray  # Shape (MAX_JETS, 5) - MAX_JETS enemies, each with x,y,w,h,active
@@ -274,7 +307,8 @@ class ChopperCommandObservation(NamedTuple):
     player_score: jnp.ndarray
     lives: jnp.ndarray
 
-class ChopperCommandInfo(NamedTuple):
+@struct.dataclass
+class ChopperCommandInfo:
     step_counter: jnp.ndarray  # Current step count
 
 
@@ -353,7 +387,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         f32 = jnp.float32
@@ -1608,7 +1642,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             new_player_mis = new_player_mis.astype(state.player_missile_positions.dtype)
             new_loc_off = new_loc_off.astype(state.local_player_offset.dtype)
 
-            out = state._replace(
+            out = state.replace(
                 player_x=new_px,
                 player_y=new_py,
                 player_velocity_x=new_vx,
@@ -1694,7 +1728,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             fill_vec = jnp.asarray([0, 0, 0, 187], dtype=em_dtype)
             new_enemy_mis = jnp.full((self.consts.MAX_ENEMY_MISSILES, 4), fill_vec, dtype=em_dtype)
 
-            out = state._replace(
+            out = state.replace(
                 score=new_score,
                 truck_positions=new_trucks,
                 jet_positions=new_jet,
@@ -1721,7 +1755,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             keep_no_move = jnp.asarray(self.consts.DEATH_PAUSE_FRAMES + 1, dtype=pt_dtype)
             new_pause = jnp.where(jnp.logical_and(chopper_at_point, jnp.logical_not(no_input)), keep_no_move, state.pause_timer)
 
-            out = state._replace(local_player_offset=new_lpo, pause_timer=new_pause)
+            out = state.replace(local_player_offset=new_lpo, pause_timer=new_pause)
             return _match_state_dtypes(out, state)
 
         def do_respawn(_):
@@ -1790,7 +1824,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 center_left = nearest_left_fleet_center_x(soft.truck_positions, soft.player_x)
                 spawn_x = (center_left - jnp.asarray(156.0, dtype=soft.player_x.dtype)).astype(soft.player_x.dtype)
 
-                out = soft._replace(**_player_reset_fields(soft, spawn_x))
+                out = soft.replace(**_player_reset_fields(soft, spawn_x))
                 return _match_state_dtypes(out, state)
 
             def respawn_new_fleets():
@@ -1805,7 +1839,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 # spawn enemies already wrapped near spawn_x
                 new_jets, new_choppers = self.initialize_enemy_positions(rng_init, spawn_x)
 
-                out = soft._replace(
+                out = soft.replace(
                     **_player_reset_fields(soft, spawn_x),
                     jet_positions=new_jets.astype(soft.jet_positions.dtype),
                     chopper_positions=new_choppers.astype(soft.chopper_positions.dtype),
@@ -1827,7 +1861,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         all_dead  = jnp.all(step_state.jet_positions == 0) & jnp.all(step_state.chopper_positions == 0)
         just_died = step_state.player_collision & (step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES)
         init_pause = all_dead & (step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES)
-        step_state = step_state._replace(
+        step_state = step_state.replace(
             pause_timer=jnp.where(just_died | init_pause,
                                   jnp.asarray(self.consts.DEATH_PAUSE_FRAMES, dtype=step_state.pause_timer.dtype),
                                   step_state.pause_timer)

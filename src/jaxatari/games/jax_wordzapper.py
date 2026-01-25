@@ -5,12 +5,13 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -58,94 +59,110 @@ def _get_default_asset_config() -> tuple:
     return config
 
 
-class WordZapperConstants(NamedTuple) :
+class WordZapperConstants(AutoDerivedConstants) :
     # game consts
-    WIDTH = 160
-    HEIGHT = 210
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    X_BOUNDS = (10, 134) # (min X, max X)
-    Y_BOUNDS = (56, 135)
+    X_BOUNDS: tuple[int, int] = struct.field(pytree_node=False, default=(10, 134)) # (min X, max X)
+    Y_BOUNDS: tuple[int, int] = struct.field(pytree_node=False, default=(56, 135))
 
-    FPS = 60
-    TIME = 99
+    FPS: int = struct.field(pytree_node=False, default=60)
+    TIME: int = struct.field(pytree_node=False, default=99)
 
     # define object orientations
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
+    FACE_LEFT: int = struct.field(pytree_node=False, default=-1)
+    FACE_RIGHT: int = struct.field(pytree_node=False, default=1)
 
     # Object sizes (width, height)
-    PLAYER_SIZE = (16, 12)
-    MISSILE_SIZE = (8, 2)
-    ZAPPER_SIZE = (4, Y_BOUNDS[1])
-    LETTER_SIZE = (8, 8)
-    BONKER_SIZE = (5, 5)
-    ZONKER_SIZE = (7, 10)
+    PLAYER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(16, 12))
+    MISSILE_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 2))
+    ZAPPER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=None)
+    LETTER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(8, 8))
+    BONKER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(5, 5))
+    ZONKER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(7, 10))
 
     # Player 
-    PLAYER_START_X = 36
-    PLAYER_START_Y = 135
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=36)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=135)
     
     # letters 
-    LETTER_VISIBLE_MIN_X = 36   # Letters become visible at
-    LETTER_VISIBLE_MAX_X = 124  # Letters disappear at
-    LETTER_RESET_X = 5 # at this coordinate letters reset back to right ! only coordinates change not real reset
-    LETTERS_DISTANCE = 17 # spacing between letters
-    LETTERS_END = LETTER_VISIBLE_MIN_X + 26 * LETTERS_DISTANCE # 27 symbols (letters + special) but 26 gaps
-    LETTER_COOLDOWN = 200 # cooldown after letters zapperd till they reappear
-    LETTER_SCROLLING_SPEED = 1 # speed at which letters move left
+    LETTER_VISIBLE_MIN_X: int = struct.field(pytree_node=False, default=36)   # Letters become visible at
+    LETTER_VISIBLE_MAX_X: int = struct.field(pytree_node=False, default=124)  # Letters disappear at
+    LETTER_RESET_X: int = struct.field(pytree_node=False, default=5) # at this coordinate letters reset back to right ! only coordinates change not real reset
+    LETTERS_DISTANCE: int = struct.field(pytree_node=False, default=17) # spacing between letters
+    LETTERS_END: int = struct.field(pytree_node=False, default=None) # 27 symbols (letters + special) but 26 gaps
+    LETTER_COOLDOWN: int = struct.field(pytree_node=False, default=200) # cooldown after letters zapperd till they reappear
+    LETTER_SCROLLING_SPEED: int = struct.field(pytree_node=False, default=1) # speed at which letters move left
 
-    LETTER_EXPLOSION_FRAME_DURATION = 8
-    LETTER_EXPLOSION_FRAMES = 4
+    LETTER_EXPLOSION_FRAME_DURATION: int = struct.field(pytree_node=False, default=8)
+    LETTER_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=4)
 
-    SPECIAL_CHAR_INDEX = 26
+    SPECIAL_CHAR_INDEX: int = struct.field(pytree_node=False, default=26)
 
     # Enemies
-    MAX_ENEMIES = 6
-    ENEMY_MIN_X = -16
-    ENEMY_MAX_X = WIDTH + 16
-    ENEMY_Y_MIN = 55
-    ENEMY_Y_MAX = 133
-    ENEMY_ANIM_SWITCH_RATE = 2
-    ENEMY_Y_MIN_SEPARATION = 16
-    ENEMY_VISIBLE_X = (8, 151) # (min, max)
-    ENEMY_GAME_SPEED = 0.7
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=6)
+    ENEMY_MIN_X: int = struct.field(pytree_node=False, default=-16)
+    ENEMY_MAX_X: int = struct.field(pytree_node=False, default=None)
+    ENEMY_Y_MIN: int = struct.field(pytree_node=False, default=55)
+    ENEMY_Y_MAX: int = struct.field(pytree_node=False, default=133)
+    ENEMY_ANIM_SWITCH_RATE: int = struct.field(pytree_node=False, default=2)
+    ENEMY_Y_MIN_SEPARATION: int = struct.field(pytree_node=False, default=16)
+    ENEMY_VISIBLE_X: tuple[int, int] = struct.field(pytree_node=False, default=(8, 151)) # (min, max)
+    ENEMY_GAME_SPEED: float = struct.field(pytree_node=False, default=0.7)
 
-    ENEMY_EXPLOSION_FRAME_DURATION = 8  # Number of ticks per explosion frame
-    ENEMY_EXPLOSION_FRAMES = 4          # number of explosion frames/sprites
+    ENEMY_EXPLOSION_FRAME_DURATION: int = struct.field(pytree_node=False, default=8)  # Number of ticks per explosion frame
+    ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=4)          # number of explosion frames/sprites
 
     # zapper
-    ZAPPER_COLOR = (252,252,84,255)
-    MAX_ZAPPER_POS = 49
-    ZAPPER_SPR_WIDTH = ZAPPER_SIZE[0]
-    ZAPPER_SPR_HEIGHT = ZAPPER_SIZE[1] # we assume this max zapper height
-    ZAPPING_BOUNDS = (LETTER_VISIBLE_MIN_X, LETTER_VISIBLE_MAX_X - ZAPPER_SPR_WIDTH) # min x, max x
-    PLAYER_ZAPPER_COOLDOWN_TIME = 32 # amount letters stop moving and zapper is active
-    ZAPPER_BLOCK_TIME = 40 # dont allow zapper action during this time
+    ZAPPER_COLOR: tuple[int, int, int, int] = struct.field(pytree_node=False, default=(252,252,84,255))
+    MAX_ZAPPER_POS: int = struct.field(pytree_node=False, default=49)
+    ZAPPER_SPR_WIDTH: int = struct.field(pytree_node=False, default=None)
+    ZAPPER_SPR_HEIGHT: int = struct.field(pytree_node=False, default=None) # we assume this max zapper height
+    ZAPPING_BOUNDS: tuple[int, int] = struct.field(pytree_node=False, default=None) # min x, max x
+    PLAYER_ZAPPER_COOLDOWN_TIME: int = struct.field(pytree_node=False, default=32) # amount letters stop moving and zapper is active
+    ZAPPER_BLOCK_TIME: int = struct.field(pytree_node=False, default=40) # dont allow zapper action during this time
 
 
     # level
-    LEVEL_PAUSE_FRAMES = 3 * FPS
-    LEVEL_WORD_LENGTHS = (4, 5, 6)
-    LVL_COMPL_ANIM_TIME = 250  # level complete animation
-    LVL_COMPL_ANIM_X_BOUNDS = (X_BOUNDS[0], X_BOUNDS[1])
+    LEVEL_PAUSE_FRAMES: int = struct.field(pytree_node=False, default=None)
+    LEVEL_WORD_LENGTHS: tuple[int, int, int] = struct.field(pytree_node=False, default=(4, 5, 6))
+    LVL_COMPL_ANIM_TIME: int = struct.field(pytree_node=False, default=250)  # level complete animation
+    LVL_COMPL_ANIM_X_BOUNDS: tuple[int, int] = struct.field(pytree_node=False, default=None)
     
     # scores
-    SCORE_CORRECT_LETTER = 10
-    SCORE_LVL_CLEARED = 100
-    SCORE_EARLY_SPECIAL = 20
-    SCORE_SHOOT_ASTEROIDS = 5
+    SCORE_CORRECT_LETTER: int = struct.field(pytree_node=False, default=10)
+    SCORE_LVL_CLEARED: int = struct.field(pytree_node=False, default=100)
+    SCORE_EARLY_SPECIAL: int = struct.field(pytree_node=False, default=20)
+    SCORE_SHOOT_ASTEROIDS: int = struct.field(pytree_node=False, default=5)
 
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple[dict, ...] = struct.field(pytree_node=False, default=_get_default_asset_config())
 
-WORD_LIST = (
-    ("WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"),
-    ("PIXEL", "ROBOT", "LASER", "POWER", "SMART", "INPUT", "GHOST"),
-    ("BONKER","ZONKER", "ROCKET", "PLAYER", "VECTOR", "BINARY", "MATRIX")
-)
+    WORD_LIST = (
+        ("WAVE", "BYTE", "NODE", "BEAM", "SHIP", "CODE", "GRID"),
+        ("PIXEL", "ROBOT", "LASER", "POWER", "SMART", "INPUT", "GHOST"),
+        ("BONKER","ZONKER", "ROCKET", "PLAYER", "VECTOR", "BINARY", "MATRIX")
+    )
+
+    def compute_derived(self) -> Dict[str, Any]:
+        zapper_size = (4, self.Y_BOUNDS[1])
+        zapper_spr_width = zapper_size[0]
+
+        return {
+            'ZAPPER_SIZE': zapper_size,
+            'LETTERS_END': self.LETTER_VISIBLE_MIN_X + 26 * self.LETTERS_DISTANCE,
+            'ENEMY_MAX_X': self.WIDTH + 16,
+            'ZAPPER_SPR_WIDTH': zapper_spr_width,
+            'ZAPPER_SPR_HEIGHT': zapper_size[1],
+            'ZAPPING_BOUNDS': (self.LETTER_VISIBLE_MIN_X, self.LETTER_VISIBLE_MAX_X - zapper_spr_width),
+            'LVL_COMPL_ANIM_X_BOUNDS': (self.X_BOUNDS[0], self.X_BOUNDS[1]),
+            'LEVEL_PAUSE_FRAMES': 3 * self.FPS,
+        }
 
 
-class WordZapperState(NamedTuple):
+@struct.dataclass
+class WordZapperState:
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array
@@ -196,14 +213,16 @@ class WordZapperState(NamedTuple):
 
     word_complete_animation: chex.Array  # 0: off, 1: animating
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
     active: jnp.ndarray
 
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: jnp.ndarray
     y: jnp.ndarray
     direction: jnp.ndarray
@@ -211,7 +230,8 @@ class PlayerEntity(NamedTuple):
     height: jnp.ndarray
     active: jnp.ndarray
 
-class WordZapperObservation(NamedTuple):
+@struct.dataclass
+class WordZapperObservation:
     player: PlayerEntity
 
     player_missile: EntityPosition
@@ -229,43 +249,13 @@ class WordZapperObservation(NamedTuple):
     waiting_for_special: jnp.ndarray
 
 # Info container for debugging / logging
-class WordZapperInfo(NamedTuple):
+@struct.dataclass
+class WordZapperInfo:
     score: jnp.ndarray
     step_counter: jnp.ndarray
     timer: jnp.ndarray
     finished_level_count: jnp.ndarray
 
-
-@jax.jit
-def choose_target_word(rng_key: jax.random.PRNGKey, lvl_word_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
-    """
-    choose a word based on level with given word_list
-    """
-    def _encode_word(word, max_len=6):
-        vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
-        return jnp.array(vals, dtype=jnp.int32)
-
-
-    def pick_bank(lvl_word_len: chex.Array) -> chex.Array:
-        """
-        select encoded word list based on level
-        """
-        idx = jnp.where(lvl_word_len == 4, 0, jnp.where(lvl_word_len == 5, 1, 2))
-        return jax.lax.switch(
-            idx,
-            (
-                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[0]]),  # (7, 6)
-                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[1]]),  # (7, 6)
-                lambda: jnp.stack([_encode_word(w, 6) for w in WORD_LIST[2]]),  # (7, 6)
-            ),
-        )
-
-    bank = pick_bank(lvl_word_len)
-    n = bank.shape[0]
-    rng_key, sub = jax.random.split(rng_key)
-    idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
-
-    return bank[idx], rng_key
 
 
 class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZapperInfo, WordZapperConstants]) :
@@ -299,6 +289,37 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         self.consts = consts or WordZapperConstants()
 
         self.renderer = WordZapperRenderer(self.consts)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def choose_target_word(self, rng_key: jax.random.PRNGKey, lvl_word_len: chex.Array) -> tuple[chex.Array, jax.random.PRNGKey]:
+        """
+        choose a word based on level with given word_list
+        """
+        def _encode_word(word, max_len=6):
+            vals = [ord(c) - 65 for c in word] + [-1] * (max_len - len(word))
+            return jnp.array(vals, dtype=jnp.int32)
+
+
+        def pick_bank(lvl_word_len: chex.Array) -> chex.Array:
+            """
+            select encoded word list based on level
+            """
+            idx = jnp.where(lvl_word_len == 4, 0, jnp.where(lvl_word_len == 5, 1, 2))
+            return jax.lax.switch(
+                idx,
+                (
+                    lambda: jnp.stack([_encode_word(w, 6) for w in self.consts.WORD_LIST[0]]),  # (7, 6)
+                    lambda: jnp.stack([_encode_word(w, 6) for w in self.consts.WORD_LIST[1]]),  # (7, 6)
+                    lambda: jnp.stack([_encode_word(w, 6) for w in self.consts.WORD_LIST[2]]),  # (7, 6)
+                ),
+            )
+
+        bank = pick_bank(lvl_word_len)
+        n = bank.shape[0]
+        rng_key, sub = jax.random.split(rng_key)
+        idx = jax.random.randint(sub, (), 0, n, dtype=jnp.int32)
+
+        return bank[idx], rng_key
 
     @partial(jax.jit, static_argnums=(0,))
     def player_step(
@@ -956,7 +977,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[WordZapperObservation, WordZapperState]:
         key, next_key = jax.random.split(key, 2)
         level_len_init = jnp.array(self.consts.LEVEL_WORD_LENGTHS[0], dtype=jnp.int32)
-        encoded, next_key = choose_target_word(next_key, level_len_init)
+        encoded, next_key = self.choose_target_word(next_key, level_len_init)
 
         letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27)
         letters_y = jnp.full((27,), 30)
@@ -1267,7 +1288,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         phase, p_timer = self._advance_phase(state)
 
 
-        state = state._replace(
+        state = state.replace(
             step_counter=new_step_counter,
             game_phase=phase,
             phase_timer=p_timer,
@@ -1346,7 +1367,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             state.step_counter + 1
         )
 
-        state = state._replace(
+        state = state.replace(
             step_counter=new_step_counter,
             player_x=new_player_x,
             player_y=new_player_y,
@@ -1356,7 +1377,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         # Advance/carry phase-related state (start -> play -> animation)
         new_phase, new_phase_timer = self._advance_phase(state)
 
-        state = state._replace(
+        state = state.replace(
             game_phase=new_phase,
             phase_timer=new_phase_timer
 
@@ -1379,13 +1400,13 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         """
         next_lvl_word_len = state.level_word_len + 1
 
-        next_target_word, rng_rest = choose_target_word(state.rng_key, next_lvl_word_len)
+        next_target_word, rng_rest = self.choose_target_word(state.rng_key, next_lvl_word_len)
 
         letters_x = jnp.linspace(self.consts.LETTER_VISIBLE_MIN_X, self.consts.LETTERS_END, 27)
         letters_y = jnp.full((27,), 30)
 
         # reset state for new level
-        return state._replace(
+        return state.replace(
             player_x=jnp.array(self.consts.PLAYER_START_X),
             player_y=jnp.array(self.consts.PLAYER_START_Y),
             player_direction=jnp.array(0),
@@ -1637,7 +1658,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
             state.word_complete_animation
         )
 
-        updated_state = state._replace(
+        updated_state = state.replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_direction=new_player_direction,
@@ -1670,7 +1691,7 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         # Advance/carry phase-related state (start -> play -> animation)
         new_phase, new_phase_timer = self._advance_phase(updated_state)
 
-        updated_state = updated_state._replace(
+        updated_state = updated_state.replace(
             game_phase=new_phase,
             phase_timer=new_phase_timer,
         )

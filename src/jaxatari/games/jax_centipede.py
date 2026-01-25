@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import chex
+from flax import struct
 
 import jaxatari.rendering.jax_rendering_utils_legacy as jru
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -81,28 +82,28 @@ def _get_default_asset_config() -> tuple:
         {'name': 'digits', 'type': 'digits', 'pattern': 'big_numbers/{}.npy'},
     )
 
-class CentipedeConstants:
+class CentipedeConstants(struct.PyTreeNode):
     # -------- Game constants --------
-    WIDTH = 160
-    HEIGHT = 210
-    SCALING_FACTOR = 6
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=6)
 
     ## -------- Player constants --------
-    PLAYER_START_X = 76
-    PLAYER_START_Y = 172
-    PLAYER_BOUNDS = (16, 140), (141, 172)
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=76)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=172)
+    PLAYER_BOUNDS: Tuple[Tuple[int, int], Tuple[int, int]] = struct.field(pytree_node=False, default_factory=lambda: ((16, 140), (141, 172)))
 
-    PLAYER_SIZE = (4, 9)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 9))
 
-    PLAYER_Y_VALUES = jnp.array([141, 145, 147, 150, 154, 156, 159, 163, 165, 168, 172])      # Double to not need extra state value
+    PLAYER_Y_VALUES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([141, 145, 147, 150, 154, 156, 159, 163, 165, 168, 172]))      # Double to not need extra state value
 
     ## -------- Player spell constants --------
-    PLAYER_SPELL_SPEED = 9
+    PLAYER_SPELL_SPEED: int = struct.field(pytree_node=False, default=9)
 
-    PLAYER_SPELL_SIZE = (1, 8)
+    PLAYER_SPELL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (1, 8))
 
     ## -------- Starting Pattern (X -> placed, O -> not placed, P -> placed and poisoned) --------
-    MUSHROOM_STARTING_PATTERN = [
+    MUSHROOM_STARTING_PATTERN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: [
         "OOOOOOOOOOOOOOOO",
         "OOOOOOOOXOOOOXOO",
         "OOOOOOOOOXOOOOXO",
@@ -122,85 +123,86 @@ class CentipedeConstants:
         "OXOOOXOOOOOOOOOO",
         "OOOOXOOOOOOOOOOX",
         "OOOOOOOOOOOOOOOO",
-    ]
+    ])
 
     ## -------- Mushroom constants --------
-    MAX_MUSHROOMS = 304             # Default 304 (19*16) | Maximum number of mushrooms that can appear at the same time
-    MUSHROOM_NUMBER_OF_ROWS = 19    # Default 19 | Number of rows -> Determines value of MAX_MUSHROOMS
-    MUSHROOM_NUMBER_OF_COLS = 16    # Default 16 | Number of mushrooms per row -> Determines value of MAX_MUSHROOMS
-    MUSHROOM_X_SPACING = 8      #
-    MUSHROOM_Y_SPACING = 9
-    MUSHROOM_COLUMN_START_EVEN = 20
-    MUSHROOM_COLUMN_START_ODD = 16
-    MUSHROOM_SIZE = (4, 3)
-    MUSHROOM_HITBOX_Y_OFFSET = 6
+    MAX_MUSHROOMS: int = struct.field(pytree_node=False, default=304)             # Default 304 (19*16) | Maximum number of mushrooms that can appear at the same time
+    MUSHROOM_NUMBER_OF_ROWS: int = struct.field(pytree_node=False, default=19)    # Default 19 | Number of rows -> Determines value of MAX_MUSHROOMS
+    MUSHROOM_NUMBER_OF_COLS: int = struct.field(pytree_node=False, default=16)    # Default 16 | Number of mushrooms per row -> Determines value of MAX_MUSHROOMS
+    MUSHROOM_X_SPACING: int = struct.field(pytree_node=False, default=8)      #
+    MUSHROOM_Y_SPACING: int = struct.field(pytree_node=False, default=9)
+    MUSHROOM_COLUMN_START_EVEN: int = struct.field(pytree_node=False, default=20)
+    MUSHROOM_COLUMN_START_ODD: int = struct.field(pytree_node=False, default=16)
+    MUSHROOM_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 3))
+    MUSHROOM_HITBOX_Y_OFFSET: int = struct.field(pytree_node=False, default=6)
 
     ## -------- Centipede constants --------
-    MAX_SEGMENTS = 9
-    SEGMENT_SIZE = (4, 6)
+    MAX_SEGMENTS: int = struct.field(pytree_node=False, default=9)
+    SEGMENT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 6))
 
     ## -------- Spider constants --------
-    SPIDER_X_POSITIONS = jnp.array([16, 133])
-    SPIDER_Y_POSITIONS = jnp.array([115, 124, 133, 142, 151, 160, 169, 178])
-    SPIDER_MOVE_PROBABILITY = 0.2
-    SPIDER_MIN_SPAWN_FRAMES = 55
-    SPIDER_MAX_SPAWN_FRAMES = 355
-    SPIDER_SIZE = (8, 6)
-    SPIDER_CLOSE_RANGE = 16
-    SPIDER_MID_RANGE = 32
+    SPIDER_X_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 133]))
+    SPIDER_Y_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([115, 124, 133, 142, 151, 160, 169, 178]))
+    SPIDER_MOVE_PROBABILITY: float = struct.field(pytree_node=False, default=0.2)
+    SPIDER_MIN_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=55)
+    SPIDER_MAX_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=355)
+    SPIDER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    SPIDER_CLOSE_RANGE: int = struct.field(pytree_node=False, default=16)
+    SPIDER_MID_RANGE: int = struct.field(pytree_node=False, default=32)
 
     ## -------- Scorpion constants --------
-    SCORPION_X_POSITIONS = jnp.array([16, 133])
-    SCORPION_Y_POSITIONS = jnp.array([7, 16, 25, 34, 43, 52, 61, 70, 79, 88, 97, 106, 115, 124, 133])
-    SCORPION_MIN_SPAWN_FRAMES = 355
-    SCORPION_MAX_SPAWN_FRAMES = 2000
-    SCORPION_SIZE = (8, 6)
-    SCORPION_POINTS = 1000
+    SCORPION_X_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 133]))
+    SCORPION_Y_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([7, 16, 25, 34, 43, 52, 61, 70, 79, 88, 97, 106, 115, 124, 133]))
+    SCORPION_MIN_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=355)
+    SCORPION_MAX_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=2000)
+    SCORPION_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    SCORPION_POINTS: int = struct.field(pytree_node=False, default=1000)
 
     ## -------- Flea constants --------
-    FLEA_SIZE = (4, 6)
-    FLEA_SPAWN_MUSHROOM_PROBABILITY = 0.5
-    FLEA_POINTS = 200
+    FLEA_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 6))
+    FLEA_SPAWN_MUSHROOM_PROBABILITY: float = struct.field(pytree_node=False, default=0.5)
+    FLEA_POINTS: int = struct.field(pytree_node=False, default=200)
 
     ## -------- Death animation constants --------
-    DEATH_ANIMATION_MUSHROOM_THRESHOLD = 64        # 4 Frames * 4 Sprites * 4 Repetitions
+    DEATH_ANIMATION_MUSHROOM_THRESHOLD: int = struct.field(pytree_node=False, default=64)        # 4 Frames * 4 Sprites * 4 Repetitions
 
     ## -------- Color constants --------
-    ORANGE = jnp.array([181, 83, 40])#B55328    # Mushrooms lvl1
-    DARK_ORANGE = jnp.array([198, 108, 58])#C66C3A
-    PINK = jnp.array([184, 70, 162])#B846A2      # Centipede lvl1
-    GREEN = jnp.array([110, 156, 66])#6E9C42     # Border lvl1
-    LIGHT_PURPLE = jnp.array([188, 144, 252])#BC90FC  # UI Elements
-    PURPLE = jnp.array([146, 70, 192])#9246C0        # Spider
-    DARK_PURPLE = jnp.array([66, 72, 200])#4248C8
-    LIGHT_BLUE = jnp.array([84, 138, 210])#548AD2    # Border lvl2
-    DARK_BLUE = jnp.array([45, 50, 184])#2D32B8     # Mushrooms lvl2
-    LIGHT_RED = jnp.array([200, 72, 72])#C84848
-    RED = jnp.array([184, 50, 50])#B83232       # Centipede lvl2
-    YELLOW = jnp.array([187, 187, 53])#BBBB35
-    DARK_YELLOW = jnp.array([162, 162, 42])#A2A22A
+    ORANGE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(181, 83, 40))#B55328    # Mushrooms lvl1
+    DARK_ORANGE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(198, 108, 58))#C66C3A
+    PINK: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 70, 162))#B846A2      # Centipede lvl1
+    GREEN: Tuple[int, int, int] = struct.field(pytree_node=False, default=(110, 156, 66))#6E9C42     # Border lvl1
+    LIGHT_PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(188, 144, 252))#BC90FC  # UI Elements
+    PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(146, 70, 192))#9246C0        # Spider
+    DARK_PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(66, 72, 200))#4248C8
+    LIGHT_BLUE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(84, 138, 210))#548AD2    # Border lvl2
+    DARK_BLUE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(45, 50, 184))#2D32B8     # Mushrooms lvl2
+    LIGHT_RED: Tuple[int, int, int] = struct.field(pytree_node=False, default=(200, 72, 72))#C84848
+    RED: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 50, 50))#B83232       # Centipede lvl2
+    YELLOW: Tuple[int, int, int] = struct.field(pytree_node=False, default=(187, 187, 53))#BBBB35
+    DARK_YELLOW: Tuple[int, int, int] = struct.field(pytree_node=False, default=(162, 162, 42))#A2A22A
 
     ## -------- Sprite Frames --------
-    SPRITE_PLAYER_FRAMES = 1
-    SPRITE_PLAYER_SPELL_FRAMES = 1
-    SPRITE_CENTIPEDE_FRAMES = 1
-    SPRITE_MUSHROOM_FRAMES = 1
-    SPRITE_SPIDER_FRAMES = 4
-    SPRITE_SPIDER_300_FRAMES = 1
-    SPRITE_SPIDER_600_FRAMES = 1
-    SPRITE_SPIDER_900_FRAMES = 1
-    SPRITE_FLEA_FRAMES = 2
-    SPRITE_SCORPION_FRAMES = 2
-    SPRITE_SPARKS_FRAMES = 4
-    SPRITE_BOTTOM_BORDER_FRAMES = 1
-    SPRITE_POISONED_MUSHROOMS_FRAMES = 16
+    SPRITE_PLAYER_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_PLAYER_SPELL_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_CENTIPEDE_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_MUSHROOM_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_FRAMES: int = struct.field(pytree_node=False, default=4)
+    SPRITE_SPIDER_300_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_600_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_900_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_FLEA_FRAMES: int = struct.field(pytree_node=False, default=2)
+    SPRITE_SCORPION_FRAMES: int = struct.field(pytree_node=False, default=2)
+    SPRITE_SPARKS_FRAMES: int = struct.field(pytree_node=False, default=4)
+    SPRITE_BOTTOM_BORDER_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_POISONED_MUSHROOMS_FRAMES: int = struct.field(pytree_node=False, default=16)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
     # -------- Centipede States --------
 
-class CentipedeState(NamedTuple):
+@struct.dataclass
+class CentipedeState:
     player_x: chex.Array
     player_y: chex.Array
     player_velocity_x: chex.Array
@@ -223,7 +225,8 @@ class CentipedeState(NamedTuple):
     spark_position: chex.Array
     rng_key: chex.PRNGKey
 
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: jnp.ndarray
     y: jnp.ndarray
     o: jnp.ndarray
@@ -231,14 +234,17 @@ class PlayerEntity(NamedTuple):
     height: jnp.ndarray
     active: jnp.ndarray
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    
     active: jnp.ndarray
 
-class CentipedeObservation(NamedTuple):
+@struct.dataclass
+class CentipedeObservation:
     player: PlayerEntity
     mushrooms: jnp.ndarray      # Shape (MAX_MUSHROOMS, 5) - MAX_MUSHROOMS mushrooms, each with x,y,w,h,active
     centipede: jnp.ndarray      # Shape (MAX_SEGMENTS, 5) - MAX_SEGMENTS Centipede segments, each with x,y,w,h,active
@@ -249,7 +255,8 @@ class CentipedeObservation(NamedTuple):
     score: jnp.ndarray
     lives: jnp.ndarray
 
-class CentipedeInfo(NamedTuple):
+@struct.dataclass
+class CentipedeInfo:
     wave: jnp.ndarray
     step_counter: jnp.ndarray
 
@@ -1918,7 +1925,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                      self.consts.SCORPION_MAX_SPAWN_FRAMES + 1
                  )
 
-                 return state._replace(
+                 return state.replace(
                      player_x=jnp.array(self.consts.PLAYER_START_X),
                      player_y=jnp.array(self.consts.PLAYER_START_Y),
                      player_velocity_x=jnp.array(0.0),
@@ -1964,7 +1971,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                 lambda: jnp.zeros(2, dtype=jnp.int32)
             )
 
-            state_during_animation = state._replace(
+            state_during_animation = state.replace(
                 player_spell=jnp.zeros(3, dtype=jnp.int32),
                 spider_position=jnp.zeros(3, dtype=jnp.int32),
                 spider_points=jnp.array([0, 0]),
@@ -2142,7 +2149,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             new_centipede_timer = jnp.where(state.wave[0] == new_wave[0], new_centipede_timer, 0)
 
             # --- Return State ---
-            return state._replace(
+            return state.replace(
                 player_x=new_player_x,
                 player_y=new_player_y,
                 player_velocity_x=new_velocity_x,

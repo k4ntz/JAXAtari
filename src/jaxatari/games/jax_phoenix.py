@@ -7,9 +7,10 @@ import chex
 import jaxatari.spaces as spaces
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
+from flax import struct
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Space
-
+from jaxatari.modification import AutoDerivedConstants
 
 # Phoenix Game by: Florian Schmidt, Finn Keller
 
@@ -113,162 +114,204 @@ def _get_default_asset_config() -> tuple:
     )
 
 # new Constant class
-class PhoenixConstants(NamedTuple):
+class PhoenixConstants(AutoDerivedConstants):
     """Game constants for Phoenix."""
-    PLAYER_POSITION: Tuple[int, int] = (76, 175)
-    PLAYER_COLOR: Tuple[int, int, int] = (213, 130, 74)
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    WINDOW_WIDTH: int = 160 * 3
-    WINDOW_HEIGHT: int = 210 * 3
-    MAX_PLAYER: int = 1
-    MAX_PLAYER_PROJECTILE: int = 1
-    MAX_PHOENIX: int = 8
-    MAX_BATS: int = 7
-    MAX_BOSS: int = 1
-    MAX_BOSS_BLOCK_GREEN: int = 2
-    MAX_BOSS_BLOCK_BLUE: int = 24
-    MAX_BOSS_BLOCK_RED: int = 104
-    PROJECTILE_WIDTH: int = 2
-    PROJECTILE_HEIGHT: int = 4
-    ENEMY_WIDTH: int = 6
-    ENEMY_HEIGHT:int = 5
-    WING_WIDTH: int = 5
-    BAT_REGEN: int = 250
-    BLOCK_WIDTH:int = 4
-    BLOCK_HEIGHT:int = 4
-    SCORE_COLOR: Tuple[int, int, int] = (210, 210, 64)
-    PLAYER_BOUNDS: Tuple[int, int] = (0, 155)  # (left, right)
-    ENEMY_DEATH_DURATION: int = 30 # ca. 0,5 Sekunden bei 60 FPS
-    PLAYER_DEATH_DURATION: int = 90 # ca. 1,5 Sekunden bei 60 FPS
-    ENEMY_PROJECTILE_SPEED: int = 2
-    PLAYER_RESPAWN_DURATION: int = 360 # ca. 6 Sekunden bei 60 FPS
-    ABILITY_COOLDOWN: int = 600 # ca. 10 sekunden bei 60FPS
-    FIRE_CHANCE: float = 0.005
-    LEVEL_TRANSITION_DURATION: int = 240 # ca. 4 Sekunden bei 60 FPS
-    ENEMY_ANIMATION_SPEED: int = 30  # ca. 0,5 Sekunden bei 60 FPS
-    PLAYER_ANIMATION_SPEED: int = 6  # ca. 0,1 Sekunden bei 60 FPS
-    PLAYER_LIVES: int = 4 # Anzahl der Leben
-    ENEMY_POSITIONS_X_LIST = [
-        lambda: jnp.array(
-            [123 - 160 // 2, 123 - 160 // 2, 136 - 160 // 2, 136 - 160 // 2, 160 - 160 // 2, 160 - 160 // 2,
-             174 - 160 // 2, 174 - 160 // 2]).astype(jnp.float32),
-        lambda: jnp.array(
-            [141 - 160 // 2, 155 - 160 // 2, 127 - 160 // 2, 169 - 160 // 2, 134 - 160 // 2, 162 - 160 // 2,
-             120 - 160 // 2, 176 - 160 // 2]).astype(jnp.float32),
-        lambda: jnp.array(
-            [123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2,
-             123 - 160 // 2, -1]).astype(jnp.float32),
-        lambda: jnp.array(
-            [123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2,
-             123 - 160 // 2, -1]).astype(jnp.float32),
-        lambda: jnp.array([78, -1, -1, -1, -1, -1, -1, -1]).astype(jnp.float32),
-    ]
-    ENEMY_POSITIONS_Y_LIST = [
-        lambda: jnp.array(
-            [210 - 135, 210 - 153, 210 - 117, 210 - 171, 210 - 117, 210 - 171, 210 - 135,
-             210 - 153]).astype(jnp.float32),
-        lambda: jnp.array(
-            [210 - 171, 210 - 171, 210 - 135, 210 - 135, 210 - 153, 210 - 153, 210 - 117,
-             210 - 117]).astype(jnp.float32),
-        lambda: jnp.array(
-            [210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171, 210 - 63, 210 - 81,
-             210 + 20]).astype(jnp.float32),
-        lambda: jnp.array(
-            [210 - 63, 210 - 81, 210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171,
-             210 + 20]).astype(jnp.float32),
-        lambda: jnp.array([210 - 132, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20,
-                           210 + 20]).astype(jnp.float32),
-    ]
-    BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + 32, PLAYER_BOUNDS[1] - 32,
-                                24).astype(jnp.int32)
+    PLAYER_POSITION: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 175))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (213, 130, 74))
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 160 * 3)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default_factory=lambda: 210 * 3)
+    MAX_PLAYER: int = struct.field(pytree_node=False, default=1)
+    MAX_PLAYER_PROJECTILE: int = struct.field(pytree_node=False, default=1)
+    MAX_PHOENIX: int = struct.field(pytree_node=False, default=8)
+    MAX_BATS: int = struct.field(pytree_node=False, default=7)
+    MAX_BOSS: int = struct.field(pytree_node=False, default=1)
+    MAX_BOSS_BLOCK_GREEN: int = struct.field(pytree_node=False, default=2)
+    MAX_BOSS_BLOCK_BLUE: int = struct.field(pytree_node=False, default=24)
+    MAX_BOSS_BLOCK_RED: int = struct.field(pytree_node=False, default=104)
+    PROJECTILE_WIDTH: int = struct.field(pytree_node=False, default=2)
+    PROJECTILE_HEIGHT: int = struct.field(pytree_node=False, default=4) 
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=6)
+    ENEMY_HEIGHT:int = struct.field(pytree_node=False, default=5)
+    WING_WIDTH: int = struct.field(pytree_node=False, default=5)
+    BAT_REGEN: int = struct.field(pytree_node=False, default=250)
+    BLOCK_WIDTH:int = struct.field(pytree_node=False, default=4)
+    BLOCK_HEIGHT:int = struct.field(pytree_node=False, default=4)
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (210, 210, 64))
+    PLAYER_BOUNDS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 155))  # (left, right)
+    ENEMY_DEATH_DURATION: int = struct.field(pytree_node=False, default=30) # ca. 0,5 Sekunden bei 60 FPS
+    PLAYER_DEATH_DURATION: int = struct.field(pytree_node=False, default=90) # ca. 1,5 Sekunden bei 60 FPS
+    ENEMY_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=2)
+    PLAYER_RESPAWN_DURATION: int = struct.field(pytree_node=False, default=360) # ca. 6 Sekunden bei 60 FPS
+    ABILITY_COOLDOWN: int = struct.field(pytree_node=False, default=600) # ca. 10 sekunden bei 60FPS
+    FIRE_CHANCE: float = struct.field(pytree_node=False, default=0.005)
+    LEVEL_TRANSITION_DURATION: int = struct.field(pytree_node=False, default=240) # ca. 4 Sekunden bei 60 FPS
+    ENEMY_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=30)  # ca. 0,5 Sekunden bei 60 FPS
+    PLAYER_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=6)  # ca. 0,1 Sekunden bei 60 FPS
+    PLAYER_LIVES: int = struct.field(pytree_node=False, default=4) # Anzahl der Leben
+    ENEMY_POSITIONS_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [123 - 160 // 2, 123 - 160 // 2, 136 - 160 // 2, 136 - 160 // 2, 160 - 160 // 2, 160 - 160 // 2,
+         174 - 160 // 2, 174 - 160 // 2],
+        [141 - 160 // 2, 155 - 160 // 2, 127 - 160 // 2, 169 - 160 // 2, 134 - 160 // 2, 162 - 160 // 2,
+         120 - 160 // 2, 176 - 160 // 2],
+        [123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2,
+         123 - 160 // 2, -1],
+        [123 - 160 // 2, 180 - 160 // 2, 123 - 160 // 2, 170 - 160 // 2, 123 - 160 // 2, 180 - 160 // 2,
+         123 - 160 // 2, -1],
+        [78, -1, -1, -1, -1, -1, -1, -1],
+    ], dtype=jnp.float32))
+    ENEMY_POSITIONS_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [210 - 135, 210 - 153, 210 - 117, 210 - 171, 210 - 117, 210 - 171, 210 - 135, 210 - 153],
+        [210 - 171, 210 - 171, 210 - 135, 210 - 135, 210 - 153, 210 - 153, 210 - 117, 210 - 117],
+        [210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171, 210 - 63, 210 - 81, 210 + 20],
+        [210 - 63, 210 - 81, 210 - 99, 210 - 117, 210 - 135, 210 - 153, 210 - 171, 210 + 20],
+        [210 - 132, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20, 210 + 20],
+    ], dtype=jnp.float32))
 
-    BLUE_BLOCK_Y_1 = jnp.full((24,), HEIGHT - 115, dtype=jnp.int32)
-    BLUE_BLOCK_Y_2 = jnp.full((24,), HEIGHT - 117, dtype=jnp.int32)
-
-    BLUE_BLOCK_POSITIONS = jnp.concatenate([
-        jnp.stack((BLUE_BLOCK_X, BLUE_BLOCK_Y_1), axis=1),
-        jnp.stack((BLUE_BLOCK_X, BLUE_BLOCK_Y_2), axis=1),
-    ])
+    #BLUE_BLOCK_X = jnp.linspace(PLAYER_BOUNDS[0] + 32, PLAYER_BOUNDS[1] - 32,
+    #                            24).astype(jnp.int32)
+    BLUE_BLOCK_X: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    BLUE_BLOCK_Y_1: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    BLUE_BLOCK_Y_2: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    BLUE_BLOCK_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default=None)
 
     # 1 Line with Blocks the same amount as Blue Blocks
-    RED_BLOCK_X_1 = jnp.linspace(PLAYER_BOUNDS[0] + 32, PLAYER_BOUNDS[1] - 32, MAX_BOSS_BLOCK_BLUE).astype(jnp.int32)
-    RED_BLOCK_X_2 = jnp.linspace(PLAYER_BOUNDS[0] + 36, PLAYER_BOUNDS[1] - 36, MAX_BOSS_BLOCK_BLUE - 2).astype(
-        jnp.int32)
-    RED_BLOCK_X_3 = jnp.linspace(PLAYER_BOUNDS[0] + 40, PLAYER_BOUNDS[1] - 40, MAX_BOSS_BLOCK_BLUE - 4).astype(
-        jnp.int32)
-    RED_BLOCK_X_4 = jnp.linspace(PLAYER_BOUNDS[0] + 44, PLAYER_BOUNDS[1] - 44, MAX_BOSS_BLOCK_BLUE - 6).astype(
-        jnp.int32)
-    RED_BLOCK_X_5 = jnp.linspace(PLAYER_BOUNDS[0] + 48, PLAYER_BOUNDS[1] - 48, MAX_BOSS_BLOCK_BLUE - 8).astype(
-        jnp.int32)
-    RED_BLOCK_X_6 = jnp.linspace(PLAYER_BOUNDS[0] + 52, PLAYER_BOUNDS[1] - 52, MAX_BOSS_BLOCK_BLUE - 10).astype(
-        jnp.int32)
-    RED_BLOCK_X_7 = jnp.linspace(PLAYER_BOUNDS[0] + 56, PLAYER_BOUNDS[1] - 56, MAX_BOSS_BLOCK_BLUE - 12).astype(
-        jnp.int32)
-    RED_BLOCK_POSITIONS = jnp.concatenate(
-        [
-            jnp.stack((RED_BLOCK_X_1, jnp.full((MAX_BOSS_BLOCK_BLUE,), HEIGHT - 111, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_2, jnp.full((MAX_BOSS_BLOCK_BLUE - 2,), HEIGHT - 108, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_3, jnp.full((MAX_BOSS_BLOCK_BLUE - 4,), HEIGHT - 105, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_4, jnp.full((MAX_BOSS_BLOCK_BLUE - 6,), HEIGHT - 102, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_5, jnp.full((MAX_BOSS_BLOCK_BLUE - 8,), HEIGHT - 99, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_6, jnp.full((MAX_BOSS_BLOCK_BLUE - 10,), HEIGHT - 96, dtype=jnp.int32)), axis=1),
-            jnp.stack((RED_BLOCK_X_7, jnp.full((MAX_BOSS_BLOCK_BLUE - 12,), HEIGHT - 93, dtype=jnp.int32)), axis=1)
-        ],
-        axis=0
-    )
+    RED_BLOCK_X_1: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_2: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_3: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_4: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_5: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_6: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_X_7: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    RED_BLOCK_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default=None)
 
-    GREEN_BLOCK_Y_1 = jnp.linspace(HEIGHT - 120, HEIGHT - 128, 5).astype(jnp.int32)
-    GREEN_BLOCK_X_1 = jnp.full((5,), WIDTH // 2 + 8, dtype=jnp.int32)
-
-    GREEN_BLOCK_X_2 = jnp.full((4,), WIDTH // 2 + 12, dtype=jnp.int32)
-    GREEN_BLOCK_Y_2 = jnp.linspace(HEIGHT - 120, HEIGHT - 126, 4).astype(jnp.int32)
-
-    GREEN_BLOCK_X_3 = jnp.full((3,), WIDTH // 2 + 16, dtype=jnp.int32)
-    GREEN_BLOCK_Y_3 = jnp.linspace(HEIGHT - 120, HEIGHT - 124, 3).astype(jnp.int32)
-
-    GREEN_BLOCK_X_4 = jnp.full((2,), WIDTH // 2 + 20, dtype=jnp.int32)
-    GREEN_BLOCK_Y_4 = jnp.linspace(HEIGHT - 120, HEIGHT - 122, 2).astype(jnp.int32)
-
-    GREEN_BLOCK_X_5 = jnp.full((1,), WIDTH // 2 + 24, dtype=jnp.int32)
-    GREEN_BLOCK_Y_5 = jnp.linspace(HEIGHT - 120, HEIGHT - 120, 1).astype(jnp.int32)
-
+    GREEN_BLOCK_Y_1: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_1: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_2: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_2: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_3: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_3: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_4: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_4: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_5: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_5: jnp.ndarray = struct.field(pytree_node=False, default=None)
     # mirror the blocks to the left side
-    GREEN_BLOCK_Y_6 = jnp.linspace(HEIGHT - 120, HEIGHT - 128, 5).astype(jnp.int32)
-    GREEN_BLOCK_X_6 = jnp.full((5,), WIDTH // 2 - 8, dtype=jnp.int32)
+    GREEN_BLOCK_Y_6: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_6: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_7: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_7: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_8: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_8: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_9: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_9: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_X_10: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_Y_10: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    GREEN_BLOCK_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default=None)
 
-    GREEN_BLOCK_X_7 = jnp.full((4,), WIDTH // 2 - 12, dtype=jnp.int32)
-    GREEN_BLOCK_Y_7 = jnp.linspace(HEIGHT - 120, HEIGHT - 126, 4).astype(jnp.int32)
-
-    GREEN_BLOCK_X_8 = jnp.full((3,), WIDTH // 2 - 16, dtype=jnp.int32)
-    GREEN_BLOCK_Y_8 = jnp.linspace(HEIGHT - 120, HEIGHT - 124, 3).astype(jnp.int32)
-
-    GREEN_BLOCK_X_9 = jnp.full((2,), WIDTH // 2 - 20, dtype=jnp.int32)
-    GREEN_BLOCK_Y_9 = jnp.linspace(HEIGHT - 120, HEIGHT - 122, 2).astype(jnp.int32)
-
-    GREEN_BLOCK_X_10 = jnp.full((1,), WIDTH // 2 - 24, dtype=jnp.int32)
-    GREEN_BLOCK_Y_10 = jnp.linspace(HEIGHT - 120, HEIGHT - 120, 1).astype(jnp.int32)
-
-    GREEN_BLOCK_POSITIONS = jnp.concatenate(
-        [
-            jnp.stack((GREEN_BLOCK_X_1, GREEN_BLOCK_Y_1), axis=1),
-            jnp.stack((GREEN_BLOCK_X_2, GREEN_BLOCK_Y_2), axis=1),
-            jnp.stack((GREEN_BLOCK_X_3, GREEN_BLOCK_Y_3), axis=1),
-            jnp.stack((GREEN_BLOCK_X_4, GREEN_BLOCK_Y_4), axis=1),
-            jnp.stack((GREEN_BLOCK_X_5, GREEN_BLOCK_Y_5), axis=1),
-            jnp.stack((GREEN_BLOCK_X_6, GREEN_BLOCK_Y_1), axis=1),
-            jnp.stack((GREEN_BLOCK_X_7, GREEN_BLOCK_Y_2), axis=1),
-            jnp.stack((GREEN_BLOCK_X_8, GREEN_BLOCK_Y_3), axis=1),
-            jnp.stack((GREEN_BLOCK_X_9, GREEN_BLOCK_Y_4), axis=1),
-            jnp.stack((GREEN_BLOCK_X_10, GREEN_BLOCK_Y_5), axis=1)
-
-        ]
-    )
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
+
+    def compute_derived(self):
+        blue_block_x = jnp.linspace(self.PLAYER_BOUNDS[0] + 32, self.PLAYER_BOUNDS[1] - 32, 24).astype(jnp.int32)
+        blue_block_y_1 = jnp.full((24,), self.HEIGHT - 115, dtype=jnp.int32)
+        blue_block_y_2 = jnp.full((24,), self.HEIGHT - 117, dtype=jnp.int32)
+        blue_block_positions = jnp.concatenate([
+            jnp.stack((blue_block_x, blue_block_y_1), axis=1),
+            jnp.stack((blue_block_x, blue_block_y_2), axis=1),
+        ])
+
+        green_block_x_1 = jnp.full((5,), self.WIDTH // 2 + 8, dtype=jnp.int32)
+        green_block_y_1 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 128, 5).astype(jnp.int32)
+        green_block_x_2 = jnp.full((4,), self.WIDTH // 2 + 12, dtype=jnp.int32)
+        green_block_y_2 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 126, 4).astype(jnp.int32)
+        green_block_x_3 = jnp.full((3,), self.WIDTH // 2 + 16, dtype=jnp.int32)
+        green_block_y_3 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 124, 3).astype(jnp.int32)
+        green_block_x_4 = jnp.full((2,), self.WIDTH // 2 + 20, dtype=jnp.int32)
+        green_block_y_4 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 122, 2).astype(jnp.int32)
+        green_block_x_5 = jnp.full((1,), self.WIDTH // 2 + 24, dtype=jnp.int32)
+        green_block_y_5 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 120, 1).astype(jnp.int32)
+        green_block_x_6 = jnp.full((5,), self.WIDTH // 2 - 8, dtype=jnp.int32)
+        green_block_y_6 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 128, 5).astype(jnp.int32)
+        green_block_x_7 = jnp.full((4,), self.WIDTH // 2 - 12, dtype=jnp.int32)
+        green_block_y_7 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 126, 4).astype(jnp.int32)
+        green_block_x_8 = jnp.full((3,), self.WIDTH // 2 - 16, dtype=jnp.int32)
+        green_block_y_8 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 124, 3).astype(jnp.int32)
+        green_block_x_9 = jnp.full((2,), self.WIDTH // 2 - 20, dtype=jnp.int32)
+        green_block_y_9 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 122, 2).astype(jnp.int32)
+        green_block_x_10 = jnp.full((1,), self.WIDTH // 2 - 24, dtype=jnp.int32)
+        green_block_y_10 = jnp.linspace(self.HEIGHT - 120, self.HEIGHT - 120, 1).astype(jnp.int32)
+
+        # Compute RED_BLOCK_X values as local variables first
+        red_block_x_1 = jnp.linspace(self.PLAYER_BOUNDS[0] + 32, self.PLAYER_BOUNDS[1] - 32, self.MAX_BOSS_BLOCK_BLUE).astype(jnp.int32)
+        red_block_x_2 = jnp.linspace(self.PLAYER_BOUNDS[0] + 36, self.PLAYER_BOUNDS[1] - 36, self.MAX_BOSS_BLOCK_BLUE - 2).astype(jnp.int32)
+        red_block_x_3 = jnp.linspace(self.PLAYER_BOUNDS[0] + 40, self.PLAYER_BOUNDS[1] - 40, self.MAX_BOSS_BLOCK_BLUE - 4).astype(jnp.int32)
+        red_block_x_4 = jnp.linspace(self.PLAYER_BOUNDS[0] + 44, self.PLAYER_BOUNDS[1] - 44, self.MAX_BOSS_BLOCK_BLUE - 6).astype(jnp.int32)
+        red_block_x_5 = jnp.linspace(self.PLAYER_BOUNDS[0] + 48, self.PLAYER_BOUNDS[1] - 48, self.MAX_BOSS_BLOCK_BLUE - 8).astype(jnp.int32)
+        red_block_x_6 = jnp.linspace(self.PLAYER_BOUNDS[0] + 52, self.PLAYER_BOUNDS[1] - 52, self.MAX_BOSS_BLOCK_BLUE - 10).astype(jnp.int32)
+        red_block_x_7 = jnp.linspace(self.PLAYER_BOUNDS[0] + 56, self.PLAYER_BOUNDS[1] - 56, self.MAX_BOSS_BLOCK_BLUE - 12).astype(jnp.int32)
+        
+        red_block_positions = jnp.concatenate([
+            jnp.stack((red_block_x_1, jnp.full((self.MAX_BOSS_BLOCK_BLUE,), self.HEIGHT - 111, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_2, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 2,), self.HEIGHT - 108, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_3, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 4,), self.HEIGHT - 105, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_4, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 6,), self.HEIGHT - 102, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_5, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 8,), self.HEIGHT - 99, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_6, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 10,), self.HEIGHT - 96, dtype=jnp.int32)), axis=1),
+            jnp.stack((red_block_x_7, jnp.full((self.MAX_BOSS_BLOCK_BLUE - 12,), self.HEIGHT - 93, dtype=jnp.int32)), axis=1)
+        ], axis=0)
+
+        return {
+            "BLUE_BLOCK_X": blue_block_x,
+            "BLUE_BLOCK_Y_1": blue_block_y_1,
+            "BLUE_BLOCK_Y_2": blue_block_y_2,
+            "BLUE_BLOCK_POSITIONS": blue_block_positions,
+            "RED_BLOCK_X_1": red_block_x_1,
+            "RED_BLOCK_X_2": red_block_x_2,
+            "RED_BLOCK_X_3": red_block_x_3,
+            "RED_BLOCK_X_4": red_block_x_4,
+            "RED_BLOCK_X_5": red_block_x_5,
+            "RED_BLOCK_X_6": red_block_x_6,
+            "RED_BLOCK_X_7": red_block_x_7,
+            "RED_BLOCK_POSITIONS": red_block_positions,
+            "GREEN_BLOCK_X_1": green_block_x_1,
+            "GREEN_BLOCK_Y_1": green_block_y_1,
+            "GREEN_BLOCK_X_2": green_block_x_2,
+            "GREEN_BLOCK_Y_2": green_block_y_2,
+            "GREEN_BLOCK_X_3": green_block_x_3,
+            "GREEN_BLOCK_Y_3": green_block_y_3,
+            "GREEN_BLOCK_X_4": green_block_x_4,
+            "GREEN_BLOCK_Y_4": green_block_y_4,
+            "GREEN_BLOCK_X_5": green_block_x_5,
+            "GREEN_BLOCK_Y_5": green_block_y_5,
+            "GREEN_BLOCK_X_6": green_block_x_6,
+            "GREEN_BLOCK_Y_6": green_block_y_6,
+            "GREEN_BLOCK_X_7": green_block_x_7,
+            "GREEN_BLOCK_Y_7": green_block_y_7,
+            "GREEN_BLOCK_X_8": green_block_x_8,
+            "GREEN_BLOCK_Y_8": green_block_y_8,
+            "GREEN_BLOCK_X_9": green_block_x_9,
+            "GREEN_BLOCK_Y_9": green_block_y_9,
+            "GREEN_BLOCK_X_10": green_block_x_10,
+            "GREEN_BLOCK_Y_10": green_block_y_10,
+            "GREEN_BLOCK_POSITIONS": jnp.concatenate([
+                jnp.stack((green_block_x_1, green_block_y_1), axis=1),
+                jnp.stack((green_block_x_2, green_block_y_2), axis=1),
+                jnp.stack((green_block_x_3, green_block_y_3), axis=1),
+                jnp.stack((green_block_x_4, green_block_y_4), axis=1),
+                jnp.stack((green_block_x_5, green_block_y_5), axis=1),
+                jnp.stack((green_block_x_6, green_block_y_1), axis=1),
+                jnp.stack((green_block_x_7, green_block_y_2), axis=1),
+                jnp.stack((green_block_x_8, green_block_y_3), axis=1),
+                jnp.stack((green_block_x_9, green_block_y_4), axis=1),
+                jnp.stack((green_block_x_10, green_block_y_5), axis=1),
+            ])
+        }
+
 # === GAME STATE ===
-class PhoenixState(NamedTuple):
+@struct.dataclass
+class PhoenixState:
     player_x: chex.Array
     player_y: chex.Array
     step_counter: chex.Array
@@ -298,34 +341,38 @@ class PhoenixState(NamedTuple):
     phoenix_dying: chex.Array # Dying status of the Phoenix, (8,), bool
     phoenix_death_timer: chex.Array # Timer for Phoenix death animation, (8,), int
 
-    player_dying: chex.Array = jnp.array(False)  # Player dying status, bool
-    player_death_timer: chex.Array = jnp.array(0)  # Timer for player death animation, int
-    player_moving: chex.Array = jnp.array(False) # Player moving status, bool
+    player_dying: chex.Array = struct.field(default_factory=lambda: jnp.array(False))  # Player dying status, bool
+    player_death_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0))  # Timer for player death animation, int
+    player_moving: chex.Array = struct.field(default_factory=lambda: jnp.array(False)) # Player moving status, bool
 
-    projectile_x: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil
-    projectile_y: chex.Array = jnp.array(-1)  # Standardwert: kein Projektil # Gegner Y-Positionen
-    enemy_projectile_x: chex.Array = jnp.full((8,), -1) # Enemy projectile X-Positionen
-    enemy_projectile_y: chex.Array = jnp.full((8,), -1) # Enemy projectile Y-Positionen
+    projectile_x: chex.Array = struct.field(default_factory=lambda: jnp.array(-1))  # Standardwert: kein Projektil
+    projectile_y: chex.Array = struct.field(default_factory=lambda: jnp.array(-1))  # Standardwert: kein Projektil # Gegner Y-Positionen
+    enemy_projectile_x: chex.Array = struct.field(default_factory=lambda: jnp.full((8,), -1)) # Enemy projectile X-Positionen
+    enemy_projectile_y: chex.Array = struct.field(default_factory=lambda: jnp.full((8,), -1)) # Enemy projectile Y-Positionen
 
-    score: chex.Array = jnp.array(0)  # Score
-    lives: chex.Array = jnp.array(5) # Lives
-    player_respawn_timer: chex.Array = 0 # Invincibility timer
-    level: chex.Array = jnp.array(1)  # Level, starts at 1
-    level_transition_timer: chex.Array = jnp.array(0) # Timer for level transition
+    score: chex.Array = struct.field(default_factory=lambda: jnp.array(0))  # Score
+    lives: chex.Array = struct.field(default_factory=lambda: jnp.array(5)) # Lives
+    player_respawn_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0)) # Invincibility timer
+    level: chex.Array = struct.field(default_factory=lambda: jnp.array(1))  # Level, starts at 1
+    level_transition_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0)) # Timer for level transition
 
-class PhoenixObservation(NamedTuple):
+@struct.dataclass
+class PhoenixObservation:
     player_x: chex.Array
     player_y: chex.Array
     player_score: chex.Array
     lives: chex.Array
 
-class PhoenixInfo(NamedTuple):
+@struct.dataclass
+class PhoenixInfo:
     step_counter: jnp.ndarray
 
-class CarryState(NamedTuple):
+@struct.dataclass
+class CarryState:
     score: chex.Array
 
-class EntityPosition(NamedTuple):## not sure
+@struct.dataclass
+class EntityPosition:## not sure
     x: chex.Array
     y: chex.Array
 
@@ -355,8 +402,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
         player = EntityPosition(x=state.player_x, y=state.player_y)
         return PhoenixObservation(
-            player_x=player[0],
-            player_y=player[1],
+            player_x=player.x,
+            player_y=player.y,
             player_score=state.score,
             lives=state.lives
         )
@@ -450,7 +497,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         player_moved = jnp.not_equal(player_x.astype(jnp.int32), state.player_x.astype(jnp.int32))
         new_player_moving = player_moved.astype(jnp.bool_)
 
-        state = state._replace(player_x= player_x.astype(jnp.int32),
+        state = state.replace(player_x= player_x.astype(jnp.int32),
                                invincibility=new_invinsibility,
                                invincibility_timer=new_timer,
                                 player_moving=new_player_moving,
@@ -589,7 +636,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         new_phoenix_cooldown = jnp.where(new_phoenix_cooldown > 0, new_phoenix_cooldown - 1, 0)
 
 
-        state = state._replace(
+        state = state.replace(
             enemies_x=new_enemies_x.astype(jnp.float32),
             horizontal_direction_enemies=new_direction.astype(jnp.float32),
             enemies_y=new_enemies_y.astype(jnp.float32),
@@ -712,7 +759,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         new_bat_wings = jnp.where(regenerated, 2, new_bat_wings)
         new_regen_timer = jnp.where(regenerated, 0, new_regen_timer)
 
-        state = state._replace(
+        state = state.replace(
             enemies_x=new_enemies_x.astype(jnp.float32),
             enemies_y=new_enemies_y.astype(jnp.float32),
             horizontal_direction_enemies=new_directions.astype(jnp.float32),
@@ -818,7 +865,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         projectile_x = jnp.where(projectile_hit_detected, -1, state.projectile_x)
         projectile_y = jnp.where(projectile_hit_detected, -1, state.projectile_y)
 
-        state = state._replace(
+        state = state.replace(
             enemies_y=new_enemy_y.astype(jnp.float32),
             blue_blocks=new_blue_blocks.astype(jnp.float32),
             red_blocks=new_red_blocks.astype(jnp.float32),
@@ -835,8 +882,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_x=jnp.array(self.consts.PLAYER_POSITION[0], dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_POSITION[1], dtype=jnp.int32),
             step_counter=jnp.array(0),
-            enemies_x = self.consts.ENEMY_POSITIONS_X_LIST[0](),
-            enemies_y = self.consts.ENEMY_POSITIONS_Y_LIST[0](),
+            enemies_x = self.consts.ENEMY_POSITIONS_X[0],
+            enemies_y = self.consts.ENEMY_POSITIONS_Y[0],
             horizontal_direction_enemies = jnp.full((8,), -1.0),
             vertical_direction_enemies = jnp.full((8,), 1.0),
             enemy_projectile_x=jnp.full((8,), -1),
@@ -887,7 +934,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         new_respawn_timer = jnp.where(state.player_respawn_timer > 0, state.player_respawn_timer - 1, 0)
         respawn_ended = (state.player_respawn_timer > 0) & (new_respawn_timer == 0)
 
-        state = state._replace(player_respawn_timer=new_respawn_timer.astype(jnp.int32))
+        state = state.replace(player_respawn_timer=new_respawn_timer.astype(jnp.int32))
 
         state = jax.lax.cond(
             jnp.logical_or(state.player_dying, state.player_respawn_timer > 0),
@@ -1061,10 +1108,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         level = jnp.where(transition_ended, pending_next_level, state.level)
 
         # 3) Gegner-Formationen nur bei Timerende spawnen
-        next_enemies_x = jax.lax.switch((pending_next_level - 1) % 5, self.consts.ENEMY_POSITIONS_X_LIST).astype(
-            jnp.float32)
-        next_enemies_y = jax.lax.switch((pending_next_level - 1) % 5, self.consts.ENEMY_POSITIONS_Y_LIST).astype(
-            jnp.float32)
+        formation_idx = (pending_next_level - 1) % 5
+        next_enemies_x = self.consts.ENEMY_POSITIONS_X[formation_idx]
+        next_enemies_y = self.consts.ENEMY_POSITIONS_Y[formation_idx]
 
 
         reset_mask = transition_ended
@@ -1095,8 +1141,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         green_blocks = jnp.where(reset_blocks, self.consts.GREEN_BLOCK_POSITIONS.astype(jnp.float32), state.green_blocks)
 
         # Gegner-Respawn nach Spieler-Respawn nur, wenn kein Level-Übergang läuft
-        enemy_respawn_x = jax.lax.switch((level - 1) % 5, self.consts.ENEMY_POSITIONS_X_LIST).astype(jnp.float32)
-        enemy_respawn_y = jax.lax.switch((level - 1) % 5, self.consts.ENEMY_POSITIONS_Y_LIST).astype(jnp.float32)
+        respawn_formation_idx = (level - 1) % 5
+        enemy_respawn_x = self.consts.ENEMY_POSITIONS_X[respawn_formation_idx]
+        enemy_respawn_y = self.consts.ENEMY_POSITIONS_Y[respawn_formation_idx]
 
         enemy_respawn_mask = respawn_ended & (new_level_transition_timer == 0)
         enemy_alive_mask = (enemies_x > -1) & (enemies_y < self.consts.HEIGHT + 10)

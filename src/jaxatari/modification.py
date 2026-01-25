@@ -1,12 +1,86 @@
 import inspect
 import importlib
+from typing import Any, Dict
 import jax
 import chex
+import warnings
 from functools import partial
 from collections import defaultdict
 from abc import ABC, abstractmethod
+from dataclasses import is_dataclass
 from jaxatari.wrappers import JaxatariWrapper
 from jaxatari.environment import JaxEnvironment
+from flax import struct
+import dataclasses
+
+class AutoDerivedConstants(struct.PyTreeNode):
+    def __init_subclass__(cls, **kwargs):
+        """Override replace method after Flax's dataclass decorator runs."""
+        super().__init_subclass__(**kwargs)
+        
+        # Store the original replace method
+        original_replace = cls.replace
+        
+        def custom_replace(self, **updates):
+            """
+            1. Invalidation Logic:
+               If we are updating the object, reset all "Derived Fields" (fields with default=None)
+               back to None, UNLESS the update explicitly sets a new value for them.
+               This forces them to re-calculate using the new Base values.
+            """
+            # Track which derived fields need recomputation
+            derived_fields_to_reset = []
+            for field in dataclasses.fields(self):
+                # Identify derived fields by their signature: default is None
+                if field.default is None: 
+                    if field.name not in updates:
+                        # Mark for reset - we'll set to None after replace
+                        derived_fields_to_reset.append(field.name)
+            
+            # Create new instance via original replace()
+            new_instance = original_replace(self, **updates)
+            
+            # Explicitly set derived fields to None if they weren't in updates
+            # This ensures __post_init__ will recompute them
+            for field_name in derived_fields_to_reset:
+                object.__setattr__(new_instance, field_name, None)
+            
+            # Manually trigger __post_init__ to recompute derived fields
+            new_instance.__post_init__()
+            
+            return new_instance
+        
+        # Override the replace method
+        cls.replace = custom_replace
+
+    def __post_init__(self):
+        """
+        2. Calculation Logic:
+           Get the dictionary of math from the child class.
+           If a field is currently None (because it's new or was reset by replace),
+           fill it with the calculated value.
+        """
+   
+        # 1. Identify derived fields once (O(N))
+        derived_field_names = {
+            f.name for f in dataclasses.fields(self) 
+            if f.default is None
+        }
+
+        # 2. Compute math (O(1))
+        derived_values = self.compute_derived()
+        
+        # 3. Apply updates (O(N))
+        for key, value in derived_values.items():
+            if key in derived_field_names:
+                # Only overwrite if currently None (preserves manual overrides)
+                if getattr(self, key, None) is None:
+                    # Use object.__setattr__ to bypass PyTreeNode immutability
+                    object.__setattr__(self, key, value)
+
+    def compute_derived(self) -> Dict[str, Any]:
+        """Override this in your game class to define the math for derived constants (i.e. ones that are computed from other constants)."""
+        return {}
 
 
 def _load_from_string(path: str):
@@ -658,33 +732,45 @@ def apply_modifications(
         allow_conflicts
     )
 
-    # Separate NamedTuple fields from class attributes
-    # NamedTuple._replace() only works on actual fields, not class attributes
-    field_overrides = {}
-    class_attr_overrides = {}
+    # Handle constant overrides based on the type of constants class
+    # NamedTuple: _replace() only works on fields (with type annotations), not class attributes
+    # dataclass/Flax: .replace() works on all fields (all attributes with type annotations)
     
-    if hasattr(base_consts, '_fields'):
-        for key, value in const_overrides.items():
-            if key in base_consts._fields:
-                field_overrides[key] = value
-            else:
-                class_attr_overrides[key] = value
-    else:
-        # Not a NamedTuple, treat all as fields
-        field_overrides = const_overrides
-    
-    # Apply field overrides using _replace()
-    if field_overrides:
-        modded_consts = base_consts._replace(**field_overrides)
+    if const_overrides:
+        # 1. Try modern Flax/Dataclass .replace()
+        if hasattr(base_consts, 'replace'):
+            modded_consts = base_consts.replace(**const_overrides)
+            
+        # 2. Fallback to Legacy NamedTuple _replace()
+        elif hasattr(base_consts, '_replace'):
+            warnings.warn(
+                f"Modding System: Using legacy '_replace()' for '{game_name}' constants. "
+                "Please migrate constants to 'flax.struct.PyTreeNode' (and the state to flax.struct.dataclass/PyTreeNode) for better performance and future compatibility.",
+                UserWarning
+            )
+            # NamedTuple _replace only accepts fields that actually exist in the definition
+            # We must filter out any 'class attributes' that might be in const_overrides
+            # (though properly defined NamedTuples shouldn't have class attrs in overrides usually)
+            valid_fields = base_consts._fields
+            field_overrides = {k: v for k, v in const_overrides.items() if k in valid_fields}
+            
+            modded_consts = base_consts._replace(**field_overrides)
+            
+            # If there were overrides that weren't fields (e.g. injected class attributes),
+            # we try to set them on the class (hacky legacy support)
+            remaining_overrides = {k: v for k, v in const_overrides.items() if k not in valid_fields}
+            if remaining_overrides:
+                consts_class = type(base_consts)
+                for k, v in remaining_overrides.items():
+                    setattr(consts_class, k, v)
+        
+        else:
+             raise TypeError(
+                f"Constants class {type(base_consts).__name__} does not support replacement "
+                "(neither .replace() nor _replace()). Cannot apply mods."
+            )
     else:
         modded_consts = base_consts
-    
-    # Handle class attributes by setting them on the class
-    # Python's attribute lookup will find class attributes when accessed via instance
-    if class_attr_overrides:
-        consts_class = type(base_consts)
-        for key, value in class_attr_overrides.items():
-            setattr(consts_class, key, value)
 
     base_env = env_class(consts=modded_consts)
 

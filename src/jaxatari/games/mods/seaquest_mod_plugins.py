@@ -17,7 +17,7 @@ class DisableEnemiesMod(JaxAtariPostStepModPlugin):
         Access the environment via self._env (set by JaxAtariModWrapper).
         """
         # Zero out all enemy positions
-        return new_state._replace(
+        return new_state.replace(
             shark_positions=jnp.zeros_like(new_state.shark_positions),
             sub_positions=jnp.zeros_like(new_state.sub_positions),
             enemy_missile_positions=jnp.zeros_like(new_state.enemy_missile_positions),

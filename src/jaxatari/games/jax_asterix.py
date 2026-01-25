@@ -9,6 +9,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from flax import struct
+from jaxatari.modification import AutoDerivedConstants
 
 
 def min_delay(level, base_min=30, spawn_accel=2, min_delay_clamp=20, max_delay_clamp=120):
@@ -67,34 +69,16 @@ def _get_default_asset_config() -> tuple:
     
     return tuple(config_list)
 
-class AsterixConstants(NamedTuple):
-    screen_width: int = 160
-    screen_height: int = 210
-    player_width: int = 8
-    player_height: int = 8
-    num_stages: int = 8
-    stage_spacing: int = 16
-    stage_positions: List[int] = None
-    top_border: int = 23 # oberer Rand des Spielfelds
-    bottom_border: int = 8 * stage_spacing + top_border
-    cooldown_frames: int = 4 # Cooldown frames for lane changes # vorher 8
-    hit_frames: int = 60 # Anzahl Frames, die das Hit-Sprite angezeigt wird (2 Sekunden bei 30 FPS) # vorher 120
-    respawn_frames: int = 120 # Anzahl Frames, bis der Spieler nach einem hit respawned wird (4 Sekunden bei 30 FPS) # vorher 240
-    character_transition_frames:int = 120 # Anzahl Frames in denen Obelix wave angezeigt wird (4 Sekunden bei 30 FPS) # vorher 240
-    score_popup_frames: int = 240 # Anzahl Frames, die ein Score-Popup angezeigt wird (8 Sekunden bei 30 FPS) # vorher 480
-    num_lives: int = 3 # Anzahl der Leben
-    max_digits_score: int = 6 # Maximal anzuzeigende Ziffern im Score
-    entity_base_speed : float = 1.0 # Base Speed der Gegner und Collectibles # vorher 0.5
-    player_base_speed: float = 1.0 # Base Speed des Spielers # vorher 0.5
-    entity_character_speed_factor : float = 0.7 # Speed-Faktor der Gegner und Collectibles pro Charakterstufe (Asterix=0, Obelix=1)
-    player_character_speed_factor : float = 0.5 # Speed-Faktor des Spielers pro Charakterstufe (Asterix=0, Obelix=1) # vorher 0.5
-    entity_spawn_min_delay: int = 30 # Minimaler Spawn-Delay der Gegner und Collectibles
-    entity_spawn_max_delay: int = 60 # Maximaler Spawn-Delay der Gegner und Collectibles
-    ASTERIX_ITEM_POINTS = jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)  # Cauldron, Helmet, Shield, Lamp
-    OBELIX_ITEM_POINTS = jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
 
-    stage_positions = [
-        top_border, # TOP
+def _compute_bottom_border(stage_spacing: int = 16, top_border: int = 23) -> int:
+    """Compute bottom_border based on stage_spacing and top_border."""
+    return 8 * stage_spacing + top_border
+
+
+def _compute_stage_positions(stage_spacing: int = 16, top_border: int = 23) -> List[int]:
+    """Compute stage_positions list based on stage_spacing and top_border."""
+    return [
+        top_border,  # TOP
         1 * stage_spacing + top_border,  # Stage 1
         2 * stage_spacing + top_border,  # Stage 2
         3 * stage_spacing + top_border,  # Stage 3
@@ -104,28 +88,83 @@ class AsterixConstants(NamedTuple):
         7 * stage_spacing + top_border,  # Stage 7
         8 * stage_spacing + top_border,  # BOTTOM
     ]
-    # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
 
-class CollectibleEnt(NamedTuple):
+
+def _get_asterix_item_points() -> jnp.ndarray:
+    """Factory function for ASTERIX_ITEM_POINTS array."""
+    return jnp.array([50, 100, 200, 300, 0], dtype=jnp.int32)
+
+
+def _get_obelix_item_points() -> jnp.ndarray:
+    """Factory function for OBELIX_ITEM_POINTS array."""
+    return jnp.array([400, 500, 500, 500, 500], dtype=jnp.int32)
+
+class AsterixConstants(AutoDerivedConstants):
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
+    player_width: int = struct.field(pytree_node=False, default=8)
+    player_height: int = struct.field(pytree_node=False, default=8)
+    num_stages: int = struct.field(pytree_node=False, default=8)
+    stage_spacing: int = struct.field(pytree_node=False, default=16)
+    top_border: int = struct.field(pytree_node=False, default=23) # oberer Rand des Spielfelds
+    
+    # Derived constants (dynamic calculation based on static fields)
+    bottom_border: Optional[int] = struct.field(pytree_node=False, default=None)
+    stage_positions: Optional[List[int]] = struct.field(pytree_node=False, default=None)
+    cooldown_frames: int = struct.field(pytree_node=False, default=4) # Cooldown frames for lane changes # vorher 8
+    hit_frames: int = struct.field(pytree_node=False, default=60) # Anzahl Frames, die das Hit-Sprite angezeigt wird (2 Sekunden bei 30 FPS) # vorher 120
+    respawn_frames: int = struct.field(pytree_node=False, default=120) # Anzahl Frames, bis der Spieler nach einem hit respawned wird (4 Sekunden bei 30 FPS) # vorher 240
+    character_transition_frames:int = struct.field(pytree_node=False, default=120) # Anzahl Frames in denen Obelix wave angezeigt wird (4 Sekunden bei 30 FPS) # vorher 240
+    score_popup_frames: int = struct.field(pytree_node=False, default=240) # Anzahl Frames, die ein Score-Popup angezeigt wird (8 Sekunden bei 30 FPS) # vorher 480
+    num_lives: int = struct.field(pytree_node=False, default=3) # Anzahl der Leben
+    max_digits_score: int = struct.field(pytree_node=False, default=6) # Maximal anzuzeigende Ziffern im Score
+    entity_base_speed : float = struct.field(pytree_node=False, default=1.0) # Base Speed der Gegner und Collectibles # vorher 0.5
+    player_base_speed: float = struct.field(pytree_node=False, default=1.0) # Base Speed des Spielers # vorher 0.5
+    entity_character_speed_factor : float = struct.field(pytree_node=False, default=0.7) # Speed-Faktor der Gegner und Collectibles pro Charakterstufe (Asterix=0, Obelix=1)
+    player_character_speed_factor : float = struct.field(pytree_node=False, default=0.5) # Speed-Faktor des Spielers pro Charakterstufe (Asterix=0, Obelix=1) # vorher 0.5
+    entity_spawn_min_delay: int = struct.field(pytree_node=False, default=30) # Minimaler Spawn-Delay der Gegner und Collectibles
+    entity_spawn_max_delay: int = struct.field(pytree_node=False, default=60) # Maximaler Spawn-Delay der Gegner und Collectibles
+    ASTERIX_ITEM_POINTS: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_asterix_item_points)  # Cauldron, Helmet, Shield, Lamp
+    OBELIX_ITEM_POINTS: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_obelix_item_points)  # Apple, Fish, Wild Boar Leg, Mug, Cauldron
+    # Asset config baked into constants (immutable default) for asset overrides
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'bottom_border': 8 * self.stage_spacing + self.top_border,
+            'stage_positions': [
+                self.top_border,  # TOP
+                1 * self.stage_spacing + self.top_border,  # Stage 1
+                2 * self.stage_spacing + self.top_border,  # Stage 2
+                3 * self.stage_spacing + self.top_border,  # Stage 3
+                4 * self.stage_spacing + self.top_border,  # Stage 4
+                5 * self.stage_spacing + self.top_border,  # Stage 5
+                6 * self.stage_spacing + self.top_border,  # Stage 6
+                7 * self.stage_spacing + self.top_border,  # Stage 7
+                8 * self.stage_spacing + self.top_border,  # BOTTOM
+            ],
+        }
+
+class CollectibleEnt(struct.PyTreeNode):
     x: jnp.ndarray
     vx: jnp.ndarray
     alive: jnp.ndarray
     type_index: jnp.ndarray
 
-class Enemy(NamedTuple):
+class Enemy(struct.PyTreeNode):
     x: jnp.ndarray
     vx: jnp.ndarray
     alive: jnp.ndarray
 
-class ScorePopup(NamedTuple):
+class ScorePopup(struct.PyTreeNode):
     x: jnp.ndarray
     value: jnp.ndarray
     timer: jnp.ndarray
     active: jnp.ndarray
 
 
-class AsterixState(NamedTuple):
+class AsterixState(struct.PyTreeNode):
     """Represents the current state of the game"""
     player_x: chex.Array # X-Position des Spielers
     player_y: chex.Array # Y-Position des Spielers
@@ -150,18 +189,18 @@ class AsterixState(NamedTuple):
     character_transition_timer: chex.Array # Timer für Charakterwechsel Animation
 
 
-class EntityPosition(NamedTuple):
+class EntityPosition(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
 
-class AsterixObservation(NamedTuple):
+class AsterixObservation(struct.PyTreeNode):
     player: EntityPosition
 
 
-class AsterixInfo(NamedTuple):
+class AsterixInfo(struct.PyTreeNode):
     pass 
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
@@ -175,14 +214,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         if consts is None:
             consts = AsterixConstants()
         
-        consts = consts._replace(
-            stage_positions=jnp.array(consts.stage_positions, dtype=jnp.int32)
-        )
-        
         super().__init__(consts)
         self.renderer = AsterixRenderer()
 
-        stage_borders = self.consts.stage_positions
+        stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         lane_y_centers = (stage_borders[:-1] + stage_borders[1:]) // 2
         
         entity_height = 8
@@ -193,7 +228,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[AsterixObservation, AsterixState]:
         """Initialize a new game state"""
-        stage_borders = self.consts.stage_positions
+        stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         player_x = self.consts.screen_width // 2
         player_y = (stage_borders[3] + stage_borders[4]) // 2 - (self.consts.player_height // 2)
 
@@ -365,7 +400,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             occupied = enemies.alive[platform] | collectibles.alive[platform]
             
             def do_spawn():
-                return enemies._replace(
+                return enemies.replace(
                     x=enemies.x.at[platform].set(new_enemy.x),
                     vx=enemies.vx.at[platform].set(new_enemy.vx),
                     alive=enemies.alive.at[platform].set(True)
@@ -380,7 +415,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             occupied = enemies.alive[platform] | collectibles.alive[platform]
             
             def do_spawn():
-                return collectibles._replace(
+                return collectibles.replace(
                     x=collectibles.x.at[platform].set(new_item.x),
                     vx=collectibles.vx.at[platform].set(new_item.vx),
                     alive=collectibles.alive.at[platform].set(True),
@@ -457,7 +492,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             enemies.alive,
             (new_enemy_x >= -enemy_width) & (new_enemy_x <= screen_width + enemy_width) & enemies.alive
         )
-        enemies = enemies._replace(x=new_enemy_x, alive=alive_enemies)
+        enemies = enemies.replace(x=new_enemy_x, alive=alive_enemies)
 
         new_item_x = jnp.where(paused, collectibles.x, collectibles.x + collectibles.vx)
         alive_items = jnp.where(
@@ -465,7 +500,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             collectibles.alive,
             (new_item_x >= -item_w) & (new_item_x <= self.consts.screen_width + item_w) & collectibles.alive
         )
-        collectibles = collectibles._replace(x=new_item_x, alive=alive_items)
+        collectibles = collectibles.replace(x=new_item_x, alive=alive_items)
 
         # --- Kollisionen ---
         def check_collision(px, py, pw, ph, ex, ey, ew, eh):
@@ -478,7 +513,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                             enemies.x, lane_y_coords, enemy_w, enemy_h) & enemies.alive
         )
         any_collision_enemy = jnp.where(paused, False, jnp.any(collisions_enemy))
-        enemies = enemies._replace(alive=jnp.where(collisions_enemy, False, enemies.alive))
+        enemies = enemies.replace(alive=jnp.where(collisions_enemy, False, enemies.alive))
 
         collisions_item = jnp.where(
             paused,
@@ -489,7 +524,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
         any_collisions_item = jnp.sum(collisions_item) > 0
         hit_items_count = jnp.where(paused, jnp.int32(0), jnp.sum(collisions_item).astype(jnp.int32))
-        collectibles = collectibles._replace(alive=jnp.where(collisions_item & (~paused), False, collectibles.alive))
+        collectibles = collectibles.replace(alive=jnp.where(collisions_item & (~paused), False, collectibles.alive))
 
         # Punktevergabe (nur wenn nicht pausiert)
         char_id = state.character_id
@@ -546,7 +581,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                 is_free = ~popup.active[i]
                 should_spawn_here = should_spawn & is_free
                 value = points_array[collectibles.type_index[i]]
-                popup = popup._replace(
+                popup = popup.replace(
                     x=popup.x.at[i].set(jnp.where(should_spawn_here, collectibles.x[i], popup.x[i])),
                     value=popup.value.at[i].set(jnp.where(should_spawn_here, value, popup.value[i])),
                     timer=popup.timer.at[i].set(jnp.where(should_spawn_here, self.consts.score_popup_frames, popup.timer[i])),
@@ -580,12 +615,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         # Alle Entitäten beim Start der Obelix-Wave entfernen
         def _clear_entities(_):
-            cleared_enemies = enemies._replace(
+            cleared_enemies = enemies.replace(
                 x=jnp.full_like(enemies.x, -9999.0),
                 vx=jnp.zeros_like(enemies.vx),
                 alive=jnp.zeros_like(enemies.alive),
             )
-            cleared_collectibles = collectibles._replace(
+            cleared_collectibles = collectibles.replace(
                 x=jnp.full_like(collectibles.x, -9999.0),
                 vx=jnp.zeros_like(collectibles.vx),
                 alive=jnp.zeros_like(collectibles.alive),
@@ -635,7 +670,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         enemies = jax.lax.cond(
             just_finished_respawn,
-            lambda _: enemies._replace(
+            lambda _: enemies.replace(
                 x=jnp.full_like(enemies.x, -9999.0),
                 vx=jnp.zeros_like(enemies.vx),
                 alive=jnp.zeros_like(enemies.alive)
@@ -645,7 +680,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
         collectibles = jax.lax.cond(
             just_finished_respawn,
-            lambda _: collectibles._replace(
+            lambda _: collectibles.replace(
                 x=jnp.full_like(collectibles.x, -9999.0),
                 vx=jnp.zeros_like(collectibles.vx),
                 alive=jnp.zeros_like(collectibles.alive)
@@ -666,10 +701,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         def _update_popups(_):
             new_timer = jnp.maximum(score_popups.timer - 1, 0)
             new_active = score_popups.active & (new_timer > 0)
-            return score_popups._replace(timer=new_timer, active=new_active)
+            return score_popups.replace(timer=new_timer, active=new_active)
 
         def _clear_popups(_):
-            return score_popups._replace(
+            return score_popups.replace(
                 x=jnp.full_like(score_popups.x, -9999.0),
                 value=jnp.zeros_like(score_popups.value),
                 timer=jnp.zeros_like(score_popups.timer),
@@ -921,7 +956,8 @@ class AsterixRenderer(JAXGameRenderer):
         bottom_sprite = self.SHAPE_MASKS['BOTTOM']
         bottom_sprite_w_orig = int(jnp.maximum(1, jnp.round(bottom_sprite.shape[1] / width_scale)))
         bottom_x = (self.consts.screen_width - bottom_sprite_w_orig) // 2
-        bottom_y = self.consts.stage_positions[-1]
+        stage_positions = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
+        bottom_y = stage_positions[-1]
         raster = self.jr.render_at(raster, bottom_x, bottom_y, bottom_sprite)
 
         pre_rendered_background = raster
@@ -1061,7 +1097,8 @@ class AsterixRenderer(JAXGameRenderer):
 
         score_spacing = 8  # spacing in original game units
         score_x = (self.consts.screen_width - (num_digits * score_spacing)) // 2
-        bottom_y = self.consts.stage_positions[-1]
+        stage_positions = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
+        bottom_y = stage_positions[-1]
         width_scale = self.config.width_scaling
         height_scale = self.config.height_scaling
         bottom_sprite_height_scaled = self.SHAPE_MASKS['BOTTOM'].shape[0]

@@ -6,6 +6,7 @@ import jax
 from jax import tree_util
 import jax.numpy as jnp
 import jax.random as jrandom
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
@@ -43,157 +44,157 @@ def _get_default_asset_config() -> tuple:
 # CONSTANTS
 # ==========================================================================================
 
-class FrostbiteConstants(NamedTuple):
+class FrostbiteConstants(struct.PyTreeNode):
     """Complete constants"""
     
     # Screen dimensions
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
-    XMIN: int = 0
-    XMAX: int = 160
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    XMIN: int = struct.field(pytree_node=False, default=0)
+    XMAX: int = struct.field(pytree_node=False, default=160)
 
     # Playfield boundaries (screen is 0..160; playfield is 8..160)
-    PLAYFIELD_LEFT: int = 8
-    PLAYFIELD_RIGHT: int = 160
-    PLAYFIELD_WIDTH: int = 152  # PLAYFIELD_RIGHT - PLAYFIELD_LEFT
+    PLAYFIELD_LEFT: int = struct.field(pytree_node=False, default=8)
+    PLAYFIELD_RIGHT: int = struct.field(pytree_node=False, default=160)
+    PLAYFIELD_WIDTH: int = struct.field(pytree_node=False, default=152)  # PLAYFIELD_RIGHT - PLAYFIELD_LEFT
     
     # Bailey Y position boundaries
-    YMIN_BAILEY: int = 27 + 28 + 1   # Shore Y position
-    YMAX_BAILEY: int = 112 + 28  # Arctic Sea Y position
+    YMIN_BAILEY: int = struct.field(pytree_node=False, default_factory=lambda: 27 + 28 + 1)   # Shore Y position
+    YMAX_BAILEY: int = struct.field(pytree_node=False, default_factory=lambda: 112 + 28)  # Arctic Sea Y position
     
     # Ice row Y positions (for rendering the ice blocks)
-    ICE_ROW_Y: tuple = (98, 122, 147, 172)
+    ICE_ROW_Y: tuple = struct.field(pytree_node=False, default_factory=lambda: (98, 122, 147, 172))
     
     # Bailey X boundaries
-    SHORE_X_MIN: int = 8    # Allow Bailey to go all the way to the left edge for safe zone
-    SHORE_X_MAX: int = 150  # XMAX - 10
-    ICE_X_MIN: int = 8     # On ice blocks (XMIN + 8)
-    ICE_X_MAX: int = 150    # XMAX - 10
+    SHORE_X_MIN: int = struct.field(pytree_node=False, default=8)    # Allow Bailey to go all the way to the left edge for safe zone
+    SHORE_X_MAX: int = struct.field(pytree_node=False, default=150)  # XMAX - 10
+    ICE_X_MIN: int = struct.field(pytree_node=False, default=8)     # On ice blocks (XMIN + 8)
+    ICE_X_MAX: int = struct.field(pytree_node=False, default=150)    # XMAX - 10
     
     # Initial Values
-    INIT_BAILEY_HORIZ_POS: int = 64
-    INIT_POLAR_GRIZZLY_HORIZ_POS: int = 140
-    INIT_IGLOO_STATUS: int = 0
+    INIT_BAILEY_HORIZ_POS: int = struct.field(pytree_node=False, default=64)
+    INIT_POLAR_GRIZZLY_HORIZ_POS: int = struct.field(pytree_node=False, default=140)
+    INIT_IGLOO_STATUS: int = struct.field(pytree_node=False, default=0)
     
     # Debug/Testing
-    START_LEVEL: int = 1
+    START_LEVEL: int = struct.field(pytree_node=False, default=1)
     
     # Bailey jump offset tables (modified for symmetric jumping)
-    BAILEY_JUMP_OFFSETS: tuple = (
+    BAILEY_JUMP_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (
         6, 5, 5, 5, 4, 3, 2, 1, 0, 0, 0, 0, -1, -2, -3,
         0,
         2, 2, 1, 0, 0, 0, 0, 0, -1, -2, -3, -4, -5, -6, -9,
         0
-    )
+    ))
     
     
     # Speed reference values
-    BAILEY_WALK_SPEED_FRAC: int = 4
+    BAILEY_WALK_SPEED_FRAC: int = struct.field(pytree_node=False, default=4)
     
     # Colors
-    COLOR_ICE_WHITE: int = 0x0E
-    COLOR_ICE_BLUE: int = 0x98
+    COLOR_ICE_WHITE: int = struct.field(pytree_node=False, default=0x0E)
+    COLOR_ICE_BLUE: int = struct.field(pytree_node=False, default=0x98)
     
     # Igloo constants
-    IGLOO_X: int = 154  # X position of igloo (far right side of screen)
-    IGLOO_Y: int = 44   # Y position at top of Bailey's head when on shore
+    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
+    IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
     
     # Game Constants
-    MAX_IGLOO_INDEX: int = 15  # Complete igloo has 16 blocks (0-15)
-    MAX_EATEN_FISH: int = 12  # Max fish that can be eaten per level
-    MAX_RESERVED_LIVES: int = 9  # Maximum reserve lives
+    MAX_IGLOO_INDEX: int = struct.field(pytree_node=False, default=15)  # Complete igloo has 16 blocks (0-15)
+    MAX_EATEN_FISH: int = struct.field(pytree_node=False, default=12)  # Max fish that can be eaten per level
+    MAX_RESERVED_LIVES: int = struct.field(pytree_node=False, default=9)  # Maximum reserve lives
     
     # Status Masks
-    OBSTACLE_DIR_MASK: int = 0x80
-    ICE_BLOCK_DIR_MASK: int = 0x40
-    OBSTACLE_TYPE_MASK: int = 0x03
-    DEMO_MODE: int = 0x80
+    OBSTACLE_DIR_MASK: int = struct.field(pytree_node=False, default=0x80)
+    ICE_BLOCK_DIR_MASK: int = struct.field(pytree_node=False, default=0x40)
+    OBSTACLE_TYPE_MASK: int = struct.field(pytree_node=False, default=0x03)
+    DEMO_MODE: int = struct.field(pytree_node=False, default=0x80)
     
     # Level Status Flags
-    BAILEY_SINKING: int = 0x80
-    LEVEL_COMPLETE: int = 0x40
-    SWAP_PLAYERS: int = 0x20
-    INCREMENT_LEVEL: int = 0x08
+    BAILEY_SINKING: int = struct.field(pytree_node=False, default=0x80)
+    LEVEL_COMPLETE: int = struct.field(pytree_node=False, default=0x40)
+    SWAP_PLAYERS: int = struct.field(pytree_node=False, default=0x20)
+    INCREMENT_LEVEL: int = struct.field(pytree_node=False, default=0x08)
     
     # Special Levels
-    MAGIC_FISH_LEVEL: int = 20
-    POLAR_GRIZZLY_LEVEL: int = 3
+    MAGIC_FISH_LEVEL: int = struct.field(pytree_node=False, default=20)
+    POLAR_GRIZZLY_LEVEL: int = struct.field(pytree_node=False, default=3)
     
     # Frame delays (adjusted for 60fps)
     # Phase 1: 4 seconds for igloo blocks = 240 frames
     # Phase 2: Temperature countdown after blocks
 
     # Collision helpers
-    BAILEY_BOUNDING_WIDTH: int = 8
-    ICE_WIDE_LEFT_MARGIN: int = -2
-    ICE_WIDE_RIGHT_MARGIN: int = -4
-    ICE_NARROW_LEFT_MARGIN: int = -2
-    ICE_NARROW_RIGHT_MARGIN: int = 0
-    ICE_MIN_OVERLAP: int = 1
-    ICE_WRAP_OFFSETS: tuple = (-152, 0, 152)  # Use playfield width for wrapping
-    ICE_UNUSED_POS: int = -512
-    ICE_NARROW_SPACING: int = 16
-    ICE_WIDE_SPACING: int = 32
-    ICE_BREATH_MIN_LEVEL: int = 5
-    ICE_BREATH_BLEND_STEPS: tuple = (
+    BAILEY_BOUNDING_WIDTH: int = struct.field(pytree_node=False, default=8)
+    ICE_WIDE_LEFT_MARGIN: int = struct.field(pytree_node=False, default=-2)
+    ICE_WIDE_RIGHT_MARGIN: int = struct.field(pytree_node=False, default=-4)
+    ICE_NARROW_LEFT_MARGIN: int = struct.field(pytree_node=False, default=-2)
+    ICE_NARROW_RIGHT_MARGIN: int = struct.field(pytree_node=False, default=0)
+    ICE_MIN_OVERLAP: int = struct.field(pytree_node=False, default=1)
+    ICE_WRAP_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (-152, 0, 152))  # Use playfield width for wrapping
+    ICE_UNUSED_POS: int = struct.field(pytree_node=False, default=-512)
+    ICE_NARROW_SPACING: int = struct.field(pytree_node=False, default=16)
+    ICE_WIDE_SPACING: int = struct.field(pytree_node=False, default=32)
+    ICE_BREATH_MIN_LEVEL: int = struct.field(pytree_node=False, default=5)
+    ICE_BREATH_BLEND_STEPS: tuple = struct.field(pytree_node=False, default_factory=lambda: (
         0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1
-    )
-    REMOVED_FISH_MASKS: tuple = (3, 5, 6, 3, 3, 1, 5, 4, 6, 6, 4)
+    ))
+    REMOVED_FISH_MASKS: tuple = struct.field(pytree_node=False, default_factory=lambda: (3, 5, 6, 3, 3, 1, 5, 4, 6, 6, 4))
     
     # Temperature and lives
-    INIT_TEMPERATURE: int = 0x45  # Initial temperature 45°
-    INIT_LIVES: int = 3  # Starting reserve lives
+    INIT_TEMPERATURE: int = struct.field(pytree_node=False, default=0x45)  # Initial temperature 45°
+    INIT_LIVES: int = struct.field(pytree_node=False, default=3)  # Starting reserve lives
     
     # Obstacle constants
-    ID_SNOW_GOOSE: int = 0
-    ID_FISH: int = 1  # Fish obstacle type
-    ID_KING_CRAB: int = 2  # King crab obstacle type
-    ID_KILLER_CLAM: int = 3  # Killer clam obstacle type
+    ID_SNOW_GOOSE: int = struct.field(pytree_node=False, default=0)
+    ID_FISH: int = struct.field(pytree_node=False, default=1)  # Fish obstacle type
+    ID_KING_CRAB: int = struct.field(pytree_node=False, default=2)  # King crab obstacle type
+    ID_KILLER_CLAM: int = struct.field(pytree_node=False, default=3)  # Killer clam obstacle type
     
     # Obstacle Y positions (between ice rows)
-    OBSTACLE_Y: tuple = (82, 107, 132, 157)
+    OBSTACLE_Y: tuple = struct.field(pytree_node=False, default_factory=lambda: (82, 107, 132, 157))
     
     # Spawn and despawn boundaries
-    OBSTACLE_SPAWN_LEFT: int = -40  # Spawn outside left edge moving right
-    OBSTACLE_SPAWN_RIGHT: int = 168 # Spawn outside right edge moving left
-    OBSTACLE_DESPAWN_X: int = 40    # Despawn when 40 pixels off either side
+    OBSTACLE_SPAWN_LEFT: int = struct.field(pytree_node=False, default=-40)  # Spawn outside left edge moving right
+    OBSTACLE_SPAWN_RIGHT: int = struct.field(pytree_node=False, default=168) # Spawn outside right edge moving left
+    OBSTACLE_DESPAWN_X: int = struct.field(pytree_node=False, default=40)    # Despawn when 40 pixels off either side
     
     # Stutter movement logic for Level 5+
-    OBSTACLE_STUTTER_LEVEL: int = 5
-    OBSTACLE_STUTTER_MASK: int = 0x40  # Pause when (frame_count & 0x40) != 0
+    OBSTACLE_STUTTER_LEVEL: int = struct.field(pytree_node=False, default=5)
+    OBSTACLE_STUTTER_MASK: int = struct.field(pytree_node=False, default=0x40)  # Pause when (frame_count & 0x40) != 0
 
     # Floating obstacle animation
-    FLOATING_OBSTACLE_OFFSETS: tuple = (4, 3, 2, 1, 0, 0, 0, 1, 2, 3, 4, 3, 2, 1, 0, 0)
-    FLOATING_OBSTACLE_MAX_OFFSET: int = 4
-    FLOATING_OBSTACLE_PHASE_MASK: int = 0x1F  # 5-bit sawtooth mask after shifting frame count
-    FLOATING_OBSTACLE_PHASE_SHIFT: int = 3    # Divide frame count by 8 (>> 3)
-    OBSTACLE_ANIMATION_MASK_DEFAULT: int = 0x20  # Slower flip for geese/fish/crab (adjusted for halved step rate)
-    OBSTACLE_ANIMATION_MASK_CLAM: int = 0x40     # Clams animate even slower (double the default period)
+    FLOATING_OBSTACLE_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (4, 3, 2, 1, 0, 0, 0, 1, 2, 3, 4, 3, 2, 1, 0, 0))
+    FLOATING_OBSTACLE_MAX_OFFSET: int = struct.field(pytree_node=False, default=4)
+    FLOATING_OBSTACLE_PHASE_MASK: int = struct.field(pytree_node=False, default=0x1F)  # 5-bit sawtooth mask after shifting frame count
+    FLOATING_OBSTACLE_PHASE_SHIFT: int = struct.field(pytree_node=False, default=3)    # Divide frame count by 8 (>> 3)
+    OBSTACLE_ANIMATION_MASK_DEFAULT: int = struct.field(pytree_node=False, default=0x20)  # Slower flip for geese/fish/crab (adjusted for halved step rate)
+    OBSTACLE_ANIMATION_MASK_CLAM: int = struct.field(pytree_node=False, default=0x40)     # Clams animate even slower (double the default period)
 
     # Polar grizzly animation map - defines which sprite frame (0 or 1) to use for each animation step
-    POLAR_GRIZZLY_ANIM_MAP: tuple = (0, 0, 1, 1, 0, 0, 1, 1)
+    POLAR_GRIZZLY_ANIM_MAP: tuple = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 1, 1, 0, 0, 1, 1))
     
     # Frame delays for level progression
-    INIT_DELAY_ACTION_VALUE: int = 240  # 4 seconds for block removal only  
-    INCREMENT_SCORE_FRAME_DELAY: int = 15  # 240/16 = 15 frames per block
-    TEMP_DECREMENT_DELAY: int = 2  # 2 frames per temperature degree
+    INIT_DELAY_ACTION_VALUE: int = struct.field(pytree_node=False, default=240)  # 4 seconds for block removal only  
+    INCREMENT_SCORE_FRAME_DELAY: int = struct.field(pytree_node=False, default=15)  # 240/16 = 15 frames per block
+    TEMP_DECREMENT_DELAY: int = struct.field(pytree_node=False, default=2)  # 2 frames per temperature degree
 
     # Sprite duplication modes
-    SPRITE_SINGLE: int = 0b000
-    SPRITE_DOUBLE: int = 0b001
-    SPRITE_DOUBLE_SPACED: int = 0b010
-    SPRITE_TRIPLE: int = 0b011
-    SPRITE_DOUBLE_WIDE: int = 0b100
-    SPRITE_SIZE_2X: int = 0b101     # not used for geese here
-    SPRITE_TRIPLE_SPACED: int = 0b110
-    SPRITE_SIZE_4X: int = 0b111       # not used for geese here
+    SPRITE_SINGLE: int = struct.field(pytree_node=False, default=0b000)
+    SPRITE_DOUBLE: int = struct.field(pytree_node=False, default=0b001)
+    SPRITE_DOUBLE_SPACED: int = struct.field(pytree_node=False, default=0b010)
+    SPRITE_TRIPLE: int = struct.field(pytree_node=False, default=0b011)
+    SPRITE_DOUBLE_WIDE: int = struct.field(pytree_node=False, default=0b100)
+    SPRITE_SIZE_2X: int = struct.field(pytree_node=False, default=0b101)     # not used for geese here
+    SPRITE_TRIPLE_SPACED: int = struct.field(pytree_node=False, default=0b110)
+    SPRITE_SIZE_4X: int = struct.field(pytree_node=False, default=0b111)       # not used for geese here
 
     # Sprite spacing distances in pixels
-    SPACING_NARROW: int = 16
-    SPACING_MEDIUM: int = 32
-    SPACING_WIDE: int = 32
+    SPACING_NARROW: int = struct.field(pytree_node=False, default=16)
+    SPACING_MEDIUM: int = struct.field(pytree_node=False, default=32)
+    SPACING_WIDE: int = struct.field(pytree_node=False, default=32)
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 # ==========================================================================================
@@ -279,7 +280,10 @@ def _compute_row_segments(
         lambda: (positions_split, widths_split, mask_split),
         no_breathing
     )
-class FrostbiteState(NamedTuple):
+
+
+@struct.dataclass
+class FrostbiteState:
     """Game state including Bailey and ice blocks"""
     
     # Frame counter
@@ -393,8 +397,8 @@ class FrostbiteState(NamedTuple):
 # ==========================================================================================
 # OBSERVATION AND INFO
 # ==========================================================================================
-
-class FrostbiteObservation(NamedTuple):
+@struct.dataclass
+class FrostbiteObservation:
     """Simple observation"""
     bailey_x: jnp.ndarray
     bailey_y: jnp.ndarray
@@ -403,7 +407,8 @@ class FrostbiteObservation(NamedTuple):
     frame_count: jnp.ndarray
 
 
-class FrostbiteInfo(NamedTuple):
+@struct.dataclass
+class FrostbiteInfo:
     """Simple info"""
     level: jnp.ndarray
 
@@ -893,7 +898,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
                                       (jnp.int32(1) << max_copies) - 1,
                                       jnp.int32(0))
 
-        state = state._replace(
+        state = state.replace(
             obstacle_x=state.obstacle_x.at[obstacle_idx].set(new_x),
             obstacle_types=state.obstacle_types.at[obstacle_idx].set(new_type),
             obstacle_directions=state.obstacle_directions.at[obstacle_idx].set(new_dir),
@@ -962,7 +967,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # Apply per-lane updates only where spawn_mask is True
         def sel(old, new): return jnp.where(spawn_mask, new, old)
 
-        state = state._replace(
+        state = state.replace(
             obstacle_x=sel(state.obstacle_x, new_x),
             obstacle_types=sel(state.obstacle_types, new_type),
             obstacle_directions=sel(state.obstacle_directions, new_dir),
@@ -1025,7 +1030,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         prev_state = state
 
         # Increment frame counter for timing-based events
-        state = state._replace(frame_count=state.frame_count + 1)
+        state = state.replace(frame_count=state.frame_count + 1)
 
         # Ice wobble animation for high odd-numbered levels
         # Creates a visual "breathing" effect on ice blocks
@@ -1039,7 +1044,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             (state.ice_fine_motion_index - 1) % 16,  # Cycle through 16 animation frames
             state.ice_fine_motion_index
         )
-        state = state._replace(ice_fine_motion_index=new_fine_motion_index)
+        state = state.replace(ice_fine_motion_index=new_fine_motion_index)
 
         # Core game update sequence
         state = self._process_level_complete(state)  # Handle level completion animations
@@ -1083,7 +1088,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             should_decrease_temp & is_playing & ~is_entering_igloo & ~level_complete,
             lambda t: decrement_bcd(t), lambda t: t, state.temperature
         )
-        state = state._replace(temperature=new_temperature)
+        state = state.replace(temperature=new_temperature)
 
         # Check for collisions and special conditions
         state = self._check_collisions(state)  # Handle Bailey-ice collisions
@@ -1294,7 +1299,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         new_number_of_fish_eaten = jnp.where(level_reset_complete, jnp.int32(0), state.number_of_fish_eaten)
         new_fish_alive_mask = jnp.where(level_reset_complete, jnp.zeros(4, dtype=jnp.int32), state.fish_alive_mask)
 
-        next_state = state._replace(
+        next_state = state.replace(
             frame_delay=new_delay,
             building_igloo_idx=new_building_idx,
             score=new_score,
@@ -1508,7 +1513,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             jnp.where(is_jumping_sprite, 2, walk_frame)  # Jump sprite (2) or walk frame (0/1)
         )
         
-        return state._replace(
+        return state.replace(
             bailey_x=new_x,
             bailey_y=new_y,
             bailey_jumping_idx=new_jump_idx,
@@ -1740,7 +1745,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # Return updated state with new ice positions and directions
         new_block_counts = block_counts
-        return state._replace(
+        return state.replace(
             ice_x=new_ice_x,  # Leftmost position of each row
             ice_block_positions=updated_positions,  # All block positions
             ice_block_counts=new_block_counts,  # Blocks per row (3 or 6)
@@ -1811,7 +1816,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         should_respawn = (off_left | off_right) & (state.obstacle_active == 1)
 
         # Update state with new positions before respawning
-        state_after_move = state._replace(
+        state_after_move = state.replace(
             obstacle_x=new_x,
             obstacle_frac_accumulators=new_frac,
             obstacle_dx_last_frame=dx,  # Store for Bailey collision push
@@ -1911,7 +1916,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             self.consts.SPRITE_SINGLE
         )
         
-        return state._replace(
+        return state.replace(
             obstacle_duplication_mode=new_duplication_mode,
             obstacle_animation_idx=new_anim_idx,
             obstacle_float_offsets=float_offsets,
@@ -2216,7 +2221,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # Only update bailey_x if respawning
         # DO NOT overwrite bailey_x otherwise - bear push has already happened!
         
-        updated_state = state._replace(
+        updated_state = state.replace(
             bailey_x=jnp.where(should_respawn, 64, state.bailey_x),
             bailey_y=new_bailey_y,
             bailey_ice_collision_idx=new_collision_idx,
@@ -2504,7 +2509,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             jnp.where(has_hit, idx, jnp.int32(-1))
         )
 
-        return state._replace(
+        return state.replace(
             bailey_x=new_bailey_x,
             bailey_obstacle_collision_idx=new_collision_flag,
             obstacle_collision_index=jnp.where(has_hit & ~hit_is_fish, idx, state.obstacle_collision_index),
@@ -2613,7 +2618,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             chase_timer = state.bailey_grizzly_collision_timer + 1
             chase_anim_idx = ((chase_timer >> 3) & 7).astype(jnp.int32)  # 8-frame animation cycle, slower (every 8 frames)
 
-            return state._replace(
+            return state.replace(
                 polar_grizzly_active=new_active,
                 polar_grizzly_x=chase_bear_x,
                 polar_grizzly_direction=jnp.int32(1),
@@ -2693,7 +2698,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             # Update direction only when bear is active
             new_direction = jnp.where(is_active, desired_dir, state.polar_grizzly_direction)
 
-            return state._replace(
+            return state.replace(
                 polar_grizzly_active=new_active,
                 polar_grizzly_x=next_x,
                 polar_grizzly_direction=new_direction,
@@ -2768,7 +2773,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         new_level_status = jnp.where(completed_entry, self.consts.LEVEL_COMPLETE, state.current_level_status)
         new_frame_delay = jnp.where(completed_entry, self.consts.INIT_DELAY_ACTION_VALUE, state.frame_delay)
 
-        return state._replace(
+        return state.replace(
             bailey_visible=new_visible,
             igloo_entry_status=new_entry_status,
             current_level_status=new_level_status,

@@ -19,7 +19,7 @@ class LazyEnemyMod(JaxAtariInternalModPlugin):
         new_y = state.enemy_y + (direction * self._env.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
 
         final_y = jax.lax.cond(should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None)
-        return state._replace(enemy_y=final_y.astype(jnp.int32))
+        return state.replace(enemy_y=final_y.astype(jnp.int32))
 
 class RandomEnemyMod(JaxAtariInternalModPlugin):
     #conflicts_with = ["lazy_enemy"]
@@ -46,7 +46,7 @@ class RandomEnemyMod(JaxAtariInternalModPlugin):
 
         final_y = jax.lax.cond(random_cond, lambda _: new_y, lambda _: state.enemy_y, operand=None)
         # Return unused_key; step() will replace with new_state_key at the end
-        return state._replace(enemy_y=final_y.astype(jnp.int32), key=unused_key)
+        return state.replace(enemy_y=final_y.astype(jnp.int32), key=unused_key)
 
 
 
@@ -58,7 +58,7 @@ class AlwaysZeroScoreMod(JaxAtariPostStepModPlugin):
         the main step is complete.
         Access the environment via self._env (set by JaxAtariModWrapper).
         """
-        return new_state._replace(
+        return new_state.replace(
             player_score=jnp.array(0, dtype=jnp.int32),
             enemy_score=jnp.array(0, dtype=jnp.int32)
         )

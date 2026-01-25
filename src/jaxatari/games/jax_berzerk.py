@@ -4,11 +4,13 @@ from typing import List, NamedTuple, Tuple, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 from jax import Array
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 # Group: Kaan Yilmaz, Jonathan Frey
 # Game: Berzerk
@@ -93,70 +95,79 @@ def _get_default_asset_config() -> tuple:
     
     return config
 
-class BerzerkConstants(NamedTuple):
-    WIDTH = 160
-    HEIGHT = 210
-    SCALING_FACTOR = 3
+class BerzerkConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    PLAYER_SIZE = jnp.array((6, 20), dtype=jnp.float32)
-    PLAYER_SPEED = 0.4
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(6, 20))
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=0.4)
 
-    EXTRA_LIFE_AT = 1000
+    EXTRA_LIFE_AT: int = struct.field(pytree_node=False, default=1000)
 
-    ENEMY_SIZE = jnp.array((8, 16), dtype=jnp.float32)
-    MAX_NUM_ENEMIES = 7
-    MIN_NUM_ENEMIES = 5
-    MOVEMENT_PROB = 0.0025  # probability for enemy to move
-    ENEMY_SPEED = 0.1
-    ENEMY_SHOOT_PROB = 0.005
-    ENEMY_BULLET_SPEED = 0.47
+    ENEMY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 16))
+    MAX_NUM_ENEMIES: int = struct.field(pytree_node=False, default=7)
+    MIN_NUM_ENEMIES: int = struct.field(pytree_node=False, default=5)
+    MOVEMENT_PROB: float = struct.field(pytree_node=False, default=0.0025)  # probability for enemy to move
+    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.1)
+    ENEMY_SHOOT_PROB: float = struct.field(pytree_node=False, default=0.005)
+    ENEMY_BULLET_SPEED: float = struct.field(pytree_node=False, default=0.47)
 
-    BULLET_SIZE_HORIZONTAL = jnp.array((4, 2), dtype=jnp.float32)
-    BULLET_SIZE_VERTICAL = jnp.array((1, 6), dtype=jnp.float32)
-    BULLET_SPEED = 2
-    MAX_BULLETS = 1
+    BULLET_SIZE_HORIZONTAL: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 2))
+    BULLET_SIZE_VERTICAL: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 6))
+    BULLET_SPEED: int = struct.field(pytree_node=False, default=2)
+    MAX_BULLETS: int = struct.field(pytree_node=False, default=1)
 
-    WALL_THICKNESS = 4
-    WALL_OFFSET = (4, 4, 4, 30) # left, top, right, bottom
-    EXIT_WIDTH = 40
-    EXIT_HEIGHT = 64
+    WALL_THICKNESS: int = struct.field(pytree_node=False, default=4)
+    WALL_OFFSET: Tuple[int, int, int, int] = struct.field(pytree_node=False, default=(4, 4, 4, 30)) # left, top, right, bottom
+    EXIT_WIDTH: int = struct.field(pytree_node=False, default=40)
+    EXIT_HEIGHT: int = struct.field(pytree_node=False, default=64)
 
-    DEATH_ANIMATION_FRAMES = 128
-    ENEMY_DEATH_ANIMATION_FRAMES = 8
+    DEATH_ANIMATION_FRAMES: int = struct.field(pytree_node=False, default=128)
+    ENEMY_DEATH_ANIMATION_FRAMES: int = struct.field(pytree_node=False, default=8)
     
-    TRANSITION_ANIMATION_FRAMES = 64
+    TRANSITION_ANIMATION_FRAMES: int = struct.field(pytree_node=False, default=64)
 
-    GAME_OVER_FRAMES = 32
+    GAME_OVER_FRAMES: int = struct.field(pytree_node=False, default=32)
 
-    SCORE_OFFSET_X = WIDTH - 58 - 6  # window width - distance to the right - digit width 
-    SCORE_OFFSET_Y = HEIGHT - 20 - 7  # window height - distance to the bottom - digit height 
-
-    UI_OFFSET = 30  # pixels reserved for score at bottom
-    PLAYER_BOUNDS = (
-        (WALL_THICKNESS + WALL_OFFSET[0], WIDTH - WALL_THICKNESS - WALL_OFFSET[2]),
-        (WALL_THICKNESS + WALL_OFFSET[1], HEIGHT - WALL_THICKNESS - WALL_OFFSET[3])
-    )
+    UI_OFFSET: int = struct.field(pytree_node=False, default=30)  # pixels reserved for score at bottom
+    
+    # Derived constants (dynamic calculation based on static fields)
+    SCORE_OFFSET_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    SCORE_OFFSET_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    PLAYER_BOUNDS: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = struct.field(pytree_node=False, default=None)
 
     # Variations Evil Otto 
-    ENABLE_EVIL_OTTO = False    # Variation 1: enable immortal evil otto
-    MORTAL_EVIL_OTTO = False    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
-    EVIL_OTTO_SIZE = jnp.array((8, 7), dtype=jnp.float32)
-    EVIL_OTTO_SPEED = 0.4
-    EVIL_OTTO_SPEED_SLOW = 0.2  # Slower than player (0.4)
-    EVIL_OTTO_SPEED_FAST = 0.5  # "Amazing speed!" - faster than player
-    EVIL_OTTO_DELAY = 422
-    EVIL_OTTO_RESPAWN_DELAY = 222
+    ENABLE_EVIL_OTTO: bool = struct.field(pytree_node=False, default=False)    # Variation 1: enable immortal evil otto
+    MORTAL_EVIL_OTTO: bool = struct.field(pytree_node=False, default=False)    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
+    EVIL_OTTO_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
+    EVIL_OTTO_SPEED: float = struct.field(pytree_node=False, default=0.4)
+    EVIL_OTTO_SPEED_SLOW: float = struct.field(pytree_node=False, default=0.2)  # Slower than player (0.4)
+    EVIL_OTTO_SPEED_FAST: float = struct.field(pytree_node=False, default=0.5)  # "Amazing speed!" - faster than player
+    EVIL_OTTO_DELAY: int = struct.field(pytree_node=False, default=422)
+    EVIL_OTTO_RESPAWN_DELAY: int = struct.field(pytree_node=False, default=222)
     # Otto movement (bounce-phased) parameters
-    OTTO_BOUNCE_CYCLE = 30              # frames per bounce cycle
-    OTTO_BOUNCE_HEIGHT = 1.5            # pixels of peak vertical bounce 
-    OTTO_VERTICAL_DRIFT_SCALE = 0.2 # drift factor towards player's Y
-    OTTO_HORIZ_PHASE_START = 0.25       # start of horizontal move phase in cycle
-    OTTO_HORIZ_PHASE_END = 0.75         # end of horizontal move phase in cycle
+    OTTO_BOUNCE_CYCLE: int = struct.field(pytree_node=False, default=30)              # frames per bounce cycle
+    OTTO_BOUNCE_HEIGHT: float = struct.field(pytree_node=False, default=1.5)            # pixels of peak vertical bounce 
+    OTTO_VERTICAL_DRIFT_SCALE: float = struct.field(pytree_node=False, default=0.2) # drift factor towards player's Y
+    OTTO_HORIZ_PHASE_START: float = struct.field(pytree_node=False, default=0.25)       # start of horizontal move phase in cycle
+    OTTO_HORIZ_PHASE_END: float = struct.field(pytree_node=False, default=0.75)         # end of horizontal move phase in cycle
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: Tuple[dict, ...] = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
     
-class PlayerState(NamedTuple):
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'SCORE_OFFSET_X': self.WIDTH - 58 - 6,  # window width - distance to the right - digit width
+            'SCORE_OFFSET_Y': self.HEIGHT - 20 - 7,  # window height - distance to the bottom - digit height
+            'PLAYER_BOUNDS': (
+                (self.WALL_THICKNESS + self.WALL_OFFSET[0], self.WIDTH - self.WALL_THICKNESS - self.WALL_OFFSET[2]),
+                (self.WALL_THICKNESS + self.WALL_OFFSET[1], self.HEIGHT - self.WALL_THICKNESS - self.WALL_OFFSET[3])
+            ),
+        }
+
+@struct.dataclass
+class PlayerState:
     pos: chex.Array                     # (2,)
     last_dir: chex.Array                # (2,)
     animation_counter: chex.Array       # (1,)
@@ -166,7 +177,8 @@ class PlayerState(NamedTuple):
     bullet_active: chex.Array           # (1,)
     death_timer: chex.Array
 
-class EnemyState(NamedTuple):
+@struct.dataclass
+class EnemyState:
     pos: chex.Array                     # (NUM_ENEMIES, 2)
     move_axis: chex.Array               # (NUM_ENEMIES,)
     move_dir: chex.Array                # (NUM_ENEMIES,)
@@ -180,13 +192,15 @@ class EnemyState(NamedTuple):
     death_pos: chex.Array               # (NUM_ENEMIES,)
     animation_counter: chex.Array       # (NUM_ENEMIES,)
 
-class OttoState(NamedTuple):
+@struct.dataclass
+class OttoState:
     pos: chex.Array                     # (2,)
     active: chex.Array                  # (1,)
     timer: chex.Array                   # (1,)
     anim_counter: chex.Array            # (1,)
 
-class BerzerkState(NamedTuple):
+@struct.dataclass
+class BerzerkState:
     player: PlayerState             
     enemy: EnemyState
     otto: OttoState
@@ -201,7 +215,8 @@ class BerzerkState(NamedTuple):
     room_transition_timer: chex.Array   # (1,)
 
 
-class BerzerkObservation(NamedTuple):
+@struct.dataclass
+class BerzerkObservation:
     # Player
     player_pos: jnp.ndarray        # (2,)
     player_dir: jnp.ndarray        # (2,)
@@ -221,11 +236,13 @@ class BerzerkObservation(NamedTuple):
     lives: jnp.ndarray     
 
 
-class BerzerkInfo(NamedTuple):
+@struct.dataclass
+class BerzerkInfo:
     enemies_killed: chex.Array      # (1,)
     level_cleared: chex.Array       # (1,)
 
-class WallGeometry(NamedTuple):
+@struct.dataclass
+class WallGeometry:
     outer_walls: chex.Array
     door_blockers: chex.Array
     mid_walls: Tuple[chex.Array, ...]
@@ -847,8 +864,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         final_carry = jax.lax.fori_loop(0, num_enemies, body_fun, (placed_init, sub_spawn))
         placed_final, _ = final_carry
         enemy_alive = jnp.arange(self.consts.MAX_NUM_ENEMIES) < num_enemies
-        return state._replace(
-            enemy=state.enemy._replace(pos=placed_final, 
+        return state.replace(
+            enemy=state.enemy.replace(pos=placed_final, 
                                       alive=enemy_alive),
             num_enemies=num_enemies)
 
@@ -1085,7 +1102,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         game_over_timer = jnp.maximum(state.game_over_timer - 1, 0)
 
         def handle_game_over():
-            new_state = state._replace(game_over_timer=game_over_timer)
+            new_state = state.replace(game_over_timer=game_over_timer)
             return (
                 self._get_observation(new_state),
                 new_state,
@@ -1100,7 +1117,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         transition_timer = jnp.maximum(state.room_transition_timer - 1, 0)
 
         def handle_room_transition():
-            new_state = state._replace(room_transition_timer=transition_timer)
+            new_state = state.replace(room_transition_timer=transition_timer)
 
             def finished_transition():
                 player_spawn_pos = jax.lax.switch(
@@ -1134,8 +1151,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 # load new level
                 new_rng = jax.random.split(state.rng)[1]
                 obs, base_state = self.reset(new_rng)
-                base_state = base_state._replace(
-                    player=base_state.player._replace(pos=player_spawn_pos),
+                base_state = base_state.replace(
+                    player=base_state.player.replace(pos=player_spawn_pos),
                     room_counter=state.room_counter + 1,
                     lives=state.lives,
                     score=state.score,
