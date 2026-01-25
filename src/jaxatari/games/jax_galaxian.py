@@ -1,5 +1,5 @@
 import os
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Optional
 import jax.numpy as jnp
 import chex
 import pygame
@@ -7,12 +7,14 @@ from functools import partial
 from jax import lax
 import jax.lax
 import jax
+from flax import struct
 
 import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 """
 README
@@ -77,98 +79,101 @@ def _get_default_asset_config() -> tuple:
     return tuple(asset_list)
 
 
-class GalaxianConstants(NamedTuple):
+class GalaxianConstants(AutoDerivedConstants):
 # -------- Game constants --------
 # -------- Window constants --------
-    NATIVE_GAME_WIDTH: int = 160
-    NATIVE_GAME_HEIGHT: int = 210
-    PYGAME_SCALE_FACTOR: int = 3
-    PYGAME_WINDOW_WIDTH: int = NATIVE_GAME_WIDTH * PYGAME_SCALE_FACTOR
-    PYGAME_WINDOW_HEIGHT: int = NATIVE_GAME_HEIGHT * PYGAME_SCALE_FACTOR
-    START_X: int = NATIVE_GAME_WIDTH // 4
-    START_Y: int = NATIVE_GAME_HEIGHT
+    NATIVE_GAME_WIDTH: int = struct.field(pytree_node=False, default=160)
+    NATIVE_GAME_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    PYGAME_SCALE_FACTOR: int = struct.field(pytree_node=False, default=3)
+   
+    PYGAME_WINDOW_WIDTH: Optional[int] = struct.field(pytree_node=False, default=None)
+    PYGAME_WINDOW_HEIGHT: Optional[int] = struct.field(pytree_node=False, default=None)
+    START_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    START_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+  
     # -------- Player constants --------
-    BULLET_MOVE_SPEED: int = 5
-    LIVES: int = 2
-    EXTRA_LIFE_SCORE: int = 7000
-    PLAYER_RESPAWN_TIME: int = 16
-    PLAYER_BULLET_Y_OFFSET: int = 3
-    PLAYER_BULLET_X_OFFSET: int = 3
+    BULLET_MOVE_SPEED: int = struct.field(pytree_node=False, default=5)
+    LIVES: int = struct.field(pytree_node=False, default=2)
+    EXTRA_LIFE_SCORE: int = struct.field(pytree_node=False, default=7000)
+    PLAYER_RESPAWN_TIME: int = struct.field(pytree_node=False, default=16)
+    PLAYER_BULLET_Y_OFFSET: int = struct.field(pytree_node=False, default=3)
+    PLAYER_BULLET_X_OFFSET: int = struct.field(pytree_node=False, default=3)
     # -------- Grid constants --------
-    GRID_ROWS: int = 6
-    GRID_COLS: int = 7
-    ENEMY_SPACING_X: int = 16
-    ENEMY_SPACING_Y: int = 11
-    ENEMY_GRID_Y: int = 80
-    ENEMY_MOVE_FRAMES: int = 16
-    PURPLE_ROW: int = 3
-    RED_ROW: int = 4
-    WHITE_ROW: int = 5
+    GRID_ROWS: int = struct.field(pytree_node=False, default=6)
+    GRID_COLS: int = struct.field(pytree_node=False, default=7)
+    ENEMY_SPACING_X: int = struct.field(pytree_node=False, default=16)
+    ENEMY_SPACING_Y: int = struct.field(pytree_node=False, default=11)
+    ENEMY_GRID_Y: int = struct.field(pytree_node=False, default=80)
+    ENEMY_MOVE_FRAMES: int = struct.field(pytree_node=False, default=16)
+    PURPLE_ROW: int = struct.field(pytree_node=False, default=3)
+    RED_ROW: int = struct.field(pytree_node=False, default=4)
+    WHITE_ROW: int = struct.field(pytree_node=False, default=5)
     # -------- Enemy constants --------
-    ENEMY_ATTACK_SPEED: int = 2
-    ENEMY_ATTACK_TURN_TIME: int = 32
-    ENEMY_ATTACK_BULLET_SPEED: int = 3
-    ENEMY_ATTACK_BULLET_DELAY: int = 75
-    ENEMY_ATTACK_MAX_BULLETS: int = 2
-    ENEMY_LEFT_BOUND: int = 17
-    ENEMY_RIGHT_BOUND: int = NATIVE_GAME_WIDTH - 25
-    DIVE_KILL_Y: int = 175
-    DIVE_SPEED: int = 0.5
-    DIRECTION_CHANGE_RANGE: int = 10
-    MAX_DIVERS: int = 5
-    MAX_SUPPORT_CALLERS: int = 2
-    MAX_SUPPORTERS: int = 2
-    VOLLEY_SHOT_DELAY: int = 10
-    VOLLEY_PROBABILITIES: chex.Array = jnp.array([0.4, 0.3, 0.2, 0.1])
+    ENEMY_ATTACK_SPEED: int = struct.field(pytree_node=False, default=2)
+    ENEMY_ATTACK_TURN_TIME: int = struct.field(pytree_node=False, default=32)
+    ENEMY_ATTACK_BULLET_SPEED: int = struct.field(pytree_node=False, default=3)
+    ENEMY_ATTACK_BULLET_DELAY: int = struct.field(pytree_node=False, default=75)
+    ENEMY_ATTACK_MAX_BULLETS: int = struct.field(pytree_node=False, default=2)
+    ENEMY_LEFT_BOUND: int = struct.field(pytree_node=False, default=17)
+    ENEMY_RIGHT_BOUND: Optional[int] = struct.field(pytree_node=False, default=None)
+
+    DIVE_KILL_Y: int = struct.field(pytree_node=False, default=175)
+    DIVE_SPEED: int = struct.field(pytree_node=False, default=0.5)
+    DIRECTION_CHANGE_RANGE: int = struct.field(pytree_node=False, default=10)
+    MAX_DIVERS: int = struct.field(pytree_node=False, default=5)
+    MAX_SUPPORT_CALLERS: int = struct.field(pytree_node=False, default=2)
+    MAX_SUPPORTERS: int = struct.field(pytree_node=False, default=2)
+    VOLLEY_SHOT_DELAY: int = struct.field(pytree_node=False, default=10)
+    VOLLEY_PROBABILITIES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.4, 0.3, 0.2, 0.1]))
     # -------- Sprite sizes --------
-    ENEMY_HEIGHT: int = 9
-    ENEMY_WIDTH: int = 6
-    ENEMY_ATTACK_HEIGHT: int = 10
-    ENEMY_ATTACK_WIDTH: int = 8
-    PLAYER_HEIGHT: int = 14
-    PLAYER_WIDTH: int = 8
+    ENEMY_HEIGHT: int = struct.field(pytree_node=False, default=9)
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=6)
+    ENEMY_ATTACK_HEIGHT: int = struct.field(pytree_node=False, default=10)
+    ENEMY_ATTACK_WIDTH: int = struct.field(pytree_node=False, default=8)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=14)
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=8)
     # -------- SCORE constants --------
-    SCORES: chex.Array = jnp.array([30]*3+[40,50,60])
-    DIVE_MULTIPLIER: int = 2
+    SCORES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([30]*3+[40,50,60]))
+    DIVE_MULTIPLIER: int = struct.field(pytree_node=False, default=2)
     # -------- Value constants --------
-    ERROR_VALUE: int = -9999
+    ERROR_VALUE: int = struct.field(pytree_node=False, default=-9999)
     # --- Grid states ---
-    DEAD: int = 0
-    GRID: int = 1
-    ACTIVE: int = 2
+    DEAD: int = struct.field(pytree_node=False, default=0)
+    GRID: int = struct.field(pytree_node=False, default=1)
+    ACTIVE: int = struct.field(pytree_node=False, default=2)
     # --- Attack states ---
-    EMPTY: int = 0
-    ATTACK: int = 1
-    SUPPORT: int = 2
-    RESPAWN: int = 2
-    DEAD_CALLER: int = 3
-    DYING: int = 4
+    EMPTY: int = struct.field(pytree_node=False, default=0)
+    ATTACK: int = struct.field(pytree_node=False, default=1)
+    SUPPORT: int = struct.field(pytree_node=False, default=2)
+    RESPAWN: int = struct.field(pytree_node=False, default=2)
+    DEAD_CALLER: int = struct.field(pytree_node=False, default=3)
+    DYING: int = struct.field(pytree_node=False, default=4)
     # --- Directions ---
-    LEFT: int = -1
-    RIGHT: int = 1
-    TURNING_LEFT: int = -1
-    TURNING_RIGHT: int = 1
-    NO_TURNING: int = 0
+    LEFT: int = struct.field(pytree_node=False, default=-1)
+    RIGHT: int = struct.field(pytree_node=False, default=1)
+    TURNING_LEFT: int = struct.field(pytree_node=False, default=-1)
+    TURNING_RIGHT: int = struct.field(pytree_node=False, default=1)
+    NO_TURNING: int = struct.field(pytree_node=False, default=0)
     # -------- Pattern constants --------
-    ENEMY_GRID: chex.Array = jnp.array([
+    ENEMY_GRID: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [1,1,1,1,1,1,1],
         [1,1,1,1,1,1,1],
         [1,1,1,1,1,1,1],
         [1,1,1,1,1,1,1],
         [0,1,1,1,1,1,0],
         [0,0,1,0,1,0,0],
-    ]).astype(jnp.float32)
+    ]).astype(jnp.float32))
 
-    ATTACK_MOVE_PATTERN: chex.Array = jnp.array([
+    ATTACK_MOVE_PATTERN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [
             [1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1],[1,1],[1,1],[1,1],[0,1],[1,1],[1,1],[0,1]
         ],
         [
             [2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1],[2,1]
         ]
-    ])
+    ]))
 
-    ATTACK_TURN_PATTERN: chex.Array = jnp.array([
+    ATTACK_TURN_PATTERN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [
             [-1,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[-1,1],[0,1],[0,1],[0,1],
             [0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[0,1],[1,1],[0,1],[1,1]
@@ -177,16 +182,27 @@ class GalaxianConstants(NamedTuple):
             [-1,1],[-1,1],[-2,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[-1,1],[0,1],[-1,1],[0,1],[0,1],[0,1],[0,1],
             [0,1],[0,1],[0,1],[0,1],[1,1],[0,1],[1,1],[1,1],[1,1],[1,1],[1,1],[1,1],[1,1],[2,1],[1,1],[1,1]
         ]
-    ])
+    ]))
 
-    ATTACK_PAUSE_PATTERN: chex.Array = jnp.array([
+    ATTACK_PAUSE_PATTERN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         1,0,1,0,1,1,1,0
-    ])
+    ]))
     
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'PYGAME_WINDOW_WIDTH': self.NATIVE_GAME_WIDTH * self.PYGAME_SCALE_FACTOR,
+            'PYGAME_WINDOW_HEIGHT': self.NATIVE_GAME_HEIGHT * self.PYGAME_SCALE_FACTOR,
+            'START_X': self.NATIVE_GAME_WIDTH // 4,
+            'START_Y': self.NATIVE_GAME_HEIGHT,
+            'ENEMY_RIGHT_BOUND': self.NATIVE_GAME_WIDTH - 25,
+        }
 
-class GalaxianState(NamedTuple):
+@struct.dataclass
+class GalaxianState:
     player_x: chex.Array
     player_y: chex.Array
     player_respawn_timer: chex.Array
@@ -232,7 +248,8 @@ class GalaxianState(NamedTuple):
     enemy_attack_shots_fired: chex.Array
     enemy_attack_volley_size: chex.Array
 
-class GalaxianObservation(NamedTuple):
+@struct.dataclass
+class GalaxianObservation:
     player_x: chex.Array
     player_y: chex.Array
     bullet_x: chex.Array
@@ -249,7 +266,8 @@ class GalaxianObservation(NamedTuple):
     enemy_attack_bullet_x: chex.Array
     enemy_attack_bullet_y: chex.Array
 
-class GalaxianInfo(NamedTuple):
+@struct.dataclass
+class GalaxianInfo:
     time: jnp.ndarray
     lives: chex.Array
     score: chex.Array
@@ -321,7 +339,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
         # clamp zwischen 0 und (SCREEN_WIDTH − PLAYER_WIDTH)
         new_x = jnp.clip(new_x, 17, self.consts.NATIVE_GAME_WIDTH - 25)
-        return state._replace(player_x=new_x)
+        return state.replace(player_x=new_x)
 
     @partial(jax.jit, static_argnums=(0,))
     def update_enemy_positions(self, state: GalaxianState) -> GalaxianState:
@@ -347,7 +365,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_dir = jnp.where(hit_left, 1,
                             jnp.where(hit_right, -1, state.enemy_grid_direction))
 
-        return state._replace(
+        return state.replace(
             enemy_grid_move_frames=new_move_frames,
             enemy_grid_x=new_x,
             enemy_grid_direction=new_dir
@@ -515,7 +533,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                             new_enemy_grid
                         )
 
-                    return state._replace(
+                    return state.replace(
                         enemy_support_caller_idx=new_enemy_support_caller_idx,
                         enemy_support_states=new_enemy_support_states,
                         enemy_support_pos=new_enemy_support_pos,
@@ -539,7 +557,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 new_grid_state = state.enemy_grid_state.at[chosen_enemy_row, chosen_enemy_col].set(
                     self.consts.ACTIVE)
 
-                return state._replace(
+                return state.replace(
                     enemy_attack_states=new_attack_states,
                     enemy_attack_pos=new_attack_pos,
                     enemy_attack_x=new_attack_x,
@@ -557,7 +575,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             return jax.lax.cond(
                 chosen_enemy_row > -1,
                 lambda state: initialise(state, diver_idx),
-                lambda state: state._replace(),
+                lambda state: state.replace(),
                 state)
 
         def continue_active_dives(state: GalaxianState) -> GalaxianState:
@@ -627,7 +645,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                         state
                     )
 
-                    return state._replace(
+                    return state.replace(
                         enemy_attack_direction=new_enemy_attack_direction,
                         enemy_attack_turning=new_enemy_attack_turning,
                         enemy_attack_turn_step=new_enemy_attack_turn_step,
@@ -686,7 +704,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                                                          self.consts.MAX_SUPPORTERS),
                                                 jnp.zeros(self.consts.MAX_SUPPORTERS))
 
-                    return state._replace(
+                    return state.replace(
                         enemy_attack_x=curr_x + delta_x,
                         enemy_attack_y=curr_y + delta_y,
                         enemy_support_x=curr_support_x + delta_x_support,
@@ -704,7 +722,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 0
             )
 
-            state = state._replace(
+            state = state.replace(
                 enemy_attack_pause_step=new_pause_step,
             )
 
@@ -726,7 +744,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
                 new_state = jax.lax.cond(
                     respawn_condition,
-                    lambda state: state._replace(
+                    lambda state: state.replace(
                         enemy_attack_states=state.enemy_attack_states.at[i].set(self.consts.RESPAWN),
                         enemy_attack_x=state.enemy_attack_x.at[i].set(
                             state.enemy_grid_x[state.enemy_attack_pos[i, 0], state.enemy_attack_pos[i, 1]]
@@ -740,7 +758,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 # continue respawnende diver
                 new_state = jax.lax.cond(
                     new_state.enemy_attack_states[i] == self.consts.RESPAWN,
-                    lambda state: state._replace(
+                    lambda state: state.replace(
                         enemy_attack_y=state.enemy_attack_y.at[i].set(
                             lax.clamp(
                                 jnp.array(-10, dtype=state.enemy_attack_y.dtype),
@@ -767,13 +785,13 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                         new_state.enemy_attack_pos[i, 0], new_state.enemy_attack_pos[i, 1]]),
                     lambda state: jax.lax.cond(
                         is_caller,
-                        lambda state: state._replace(
+                        lambda state: state.replace(
                             enemy_support_caller_idx=jnp.array(self.consts.ERROR_VALUE, dtype=jnp.int32),
                             enemy_attack_states=state.enemy_attack_states.at[i].set(self.consts.EMPTY),
                             enemy_grid_state=state.enemy_grid_state.at[tuple(state.enemy_attack_pos[i])].set(
                                 self.consts.GRID)
                         ),
-                        lambda state: state._replace(
+                        lambda state: state.replace(
                             enemy_attack_states=state.enemy_attack_states.at[i].set(self.consts.EMPTY),
                             enemy_grid_state=state.enemy_grid_state.at[tuple(state.enemy_attack_pos[i])].set(
                                 self.consts.GRID)
@@ -796,7 +814,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
                 new_state = jax.lax.cond(
                     respawn_condition,
-                    lambda state: state._replace(
+                    lambda state: state.replace(
                         enemy_support_states=state.enemy_support_states.at[i].set(self.consts.RESPAWN),
                         enemy_support_x=state.enemy_support_x.at[i].set(
                             state.enemy_grid_x[state.enemy_support_pos[i, 0], state.enemy_support_pos[i, 1]]
@@ -810,7 +828,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                 # continue respawnende diver
                 new_state = jax.lax.cond(
                     new_state.enemy_support_states[i] == self.consts.RESPAWN,
-                    lambda state: state._replace(
+                    lambda state: state.replace(
                         enemy_support_y=state.enemy_support_y.at[i].set(
                             lax.clamp(
                                 jnp.array(-10, dtype=state.enemy_support_y.dtype),
@@ -833,7 +851,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
                         new_state.enemy_support_pos[i, 0], new_state.enemy_support_pos[i, 1]]) &
                     (new_state.enemy_support_y[i] == new_state.enemy_grid_y[
                         new_state.enemy_support_pos[i, 0], new_state.enemy_support_pos[i, 1]]),
-                    lambda state: state._replace(
+                    lambda state: state.replace(
                         enemy_support_states=state.enemy_support_states.at[i].set(self.consts.EMPTY),
                         enemy_grid_state=state.enemy_grid_state.at[tuple(state.enemy_support_pos[i])].set(
                             self.consts.GRID)
@@ -919,7 +937,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         final_carry, _ = lax.scan(scan_spawn_one_shot, initial_carry, jnp.arange(self.consts.MAX_DIVERS))
         final_bullet_x, final_bullet_y, final_shots_fired, final_timers = final_carry
 
-        return state._replace(
+        return state.replace(
             enemy_attack_bullet_x=final_bullet_x.astype(jnp.float32),
             enemy_attack_bullet_y=final_bullet_y.astype(jnp.float32),
             enemy_attack_shots_fired=final_shots_fired,
@@ -939,7 +957,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         bullet_is_inactive = state.bullet_y < 0
 
         def fire_new_bullet(state: GalaxianState) -> GalaxianState:
-            return state._replace(
+            return state.replace(
                 bullet_x=state.player_x + self.consts.PLAYER_BULLET_X_OFFSET,
                 bullet_y=state.player_y - self.consts.PLAYER_BULLET_Y_OFFSET
             )
@@ -947,7 +965,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         def move_active_bullet(state: GalaxianState) -> GalaxianState:
             new_y = state.bullet_y - self.consts.BULLET_MOVE_SPEED
 
-            return state._replace(
+            return state.replace(
                 bullet_x=jnp.where(new_y < 0, -1.0, state.bullet_x),
                 bullet_y=jnp.where(new_y < 0, -1.0, new_y)
             )
@@ -991,7 +1009,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             0,
             state.enemy_support_states
         )
-        return state._replace(
+        return state.replace(
             enemy_death_frame_grid=new_frames_grid,
             enemy_death_frame_attack=new_frames_attack,
             enemy_death_frame_support=new_frames_support,
@@ -1037,7 +1055,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             new_death = state.enemy_death_frame_grid.at[hit_row, hit_col].set(1)
             new_alive = state.enemy_grid_state.at[hit_row, hit_col].set(self.consts.DEAD)
 
-            return state._replace(
+            return state.replace(
                 enemy_grid_state=new_alive,
                 enemy_death_frame_grid=new_death,
                 bullet_x=jnp.array(self.consts.ERROR_VALUE, dtype=state.bullet_y.dtype),
@@ -1059,7 +1077,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             score_multiplier = jnp.where(state.enemy_attack_states[hit_idx] == self.consts.ATTACK,
                                          self.consts.DIVE_MULTIPLIER, 1)
 
-            return state._replace(
+            return state.replace(
                 enemy_grid_state=new_grid,
                 enemy_death_frame_attack=new_death,
                 bullet_x=jnp.array(self.consts.ERROR_VALUE, dtype=state.bullet_y.dtype),
@@ -1078,7 +1096,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             new_death = state.enemy_death_frame_support.at[hit_idx].set(1)
             new_support_states = state.enemy_support_states.at[hit_idx].set(self.consts.DYING)
 
-            return state._replace(
+            return state.replace(
                 enemy_grid_state=new_grid,
                 enemy_death_frame_support=new_death,
                 bullet_x=jnp.array(self.consts.ERROR_VALUE, dtype=state.bullet_y.dtype),
@@ -1120,7 +1138,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             score_multiplier = jnp.where(state.enemy_attack_states[hit_idx] == self.consts.ATTACK,
                                          self.consts.DIVE_MULTIPLIER, 1)
 
-            return current_state._replace(
+            return current_state.replace(
                 player_alive=jnp.array(False),
                 enemy_grid_state=new_enemy_grid_state,
                 enemy_attack_states=new_attack_states,
@@ -1151,7 +1169,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             new_support_states = current_state.enemy_support_states.at[hit_idx].set(self.consts.DYING)
             new_death = current_state.enemy_death_frame_support.at[hit_idx].set(1)
 
-            return current_state._replace(
+            return current_state.replace(
                 player_alive=jnp.array(False),
                 enemy_grid_state=new_enemy_grid_state,
                 enemy_support_states=new_support_states,
@@ -1178,7 +1196,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             new_bullet_x = current_state.enemy_attack_bullet_x.at[hit_indices].set(-1.0)
             new_bullet_y = current_state.enemy_attack_bullet_y.at[hit_indices].set(-1.0)
 
-            return current_state._replace(
+            return current_state.replace(
                 player_alive=jnp.array(False),
                 enemy_attack_bullet_x=new_bullet_x,
                 enemy_attack_bullet_y=new_bullet_y
@@ -1193,7 +1211,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             0,
             state.player_respawn_timer + 1,
         )
-        return state._replace(
+        return state.replace(
             player_respawn_timer=timer,
         )
 
@@ -1201,7 +1219,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def try_respawn_player(self, state: GalaxianState) -> GalaxianState:
         return jax.lax.cond(
             state.player_respawn_timer >= self.consts.PLAYER_RESPAWN_TIME,
-            lambda s: s._replace(
+            lambda s: s.replace(
                 player_alive=jnp.array(True),
                 lives=state.lives - 1
             ),
@@ -1213,7 +1231,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def enter_new_wave(self, state: GalaxianState) -> GalaxianState:
         new_grid = self.consts.ENEMY_GRID
         new_level = state.level + 1
-        return state._replace(enemy_grid_state=new_grid,
+        return state.replace(enemy_grid_state=new_grid,
                               level=new_level, )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1383,8 +1401,8 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         new_state = self.increase_player_respawn_timer(new_state)
         new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == self.consts.ACTIVE)), state.player_alive == False), lambda new_state: self.try_respawn_player(new_state), lambda s: s, new_state)
         new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(jnp.any(state.enemy_grid_state == self.consts.GRID)), jnp.logical_not(jnp.any(state.enemy_attack_states != 0))), lambda new_state: self.enter_new_wave(new_state), lambda s: s, new_state)
-        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(state.got_extra_life),state.score >= self.consts.EXTRA_LIFE_SCORE), lambda s: s._replace(lives=s.lives + 1, got_extra_life=jnp.array(True)), lambda s: s, new_state)
-        new_state = new_state._replace(turn_step=new_state.turn_step + 1)
+        new_state = jax.lax.cond(jnp.logical_and(jnp.logical_not(state.got_extra_life),state.score >= self.consts.EXTRA_LIFE_SCORE), lambda s: s.replace(lives=s.lives + 1, got_extra_life=jnp.array(True)), lambda s: s, new_state)
+        new_state = new_state.replace(turn_step=new_state.turn_step + 1)
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
         info = self._get_info(new_state)

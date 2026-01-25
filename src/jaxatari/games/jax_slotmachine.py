@@ -71,12 +71,13 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import jax.random
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils_legacy as aj
 import jaxatari.spaces as spaces
-
+from jaxatari.modification import AutoDerivedConstants
 
 SLOT_MACHINE_SYMBOL_NAMES: Tuple[str, ...] = (
     "Cactus",
@@ -88,68 +89,47 @@ SLOT_MACHINE_SYMBOL_NAMES: Tuple[str, ...] = (
     "Empty",
 )
 
-
-def _get_default_asset_config() -> tuple:
-    """
-    Returns the default declarative asset manifest for Slot Machine.
-    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
-    """
-    assets = []
-    for idx, symbol_name in enumerate(SLOT_MACHINE_SYMBOL_NAMES):
-        assets.append(
-            {
-                "name": f"symbol_{idx}",
-                "type": "single",
-                "file": f"{symbol_name}.npy",
-            }
-        )
-    return tuple(assets)
-
-
-@dataclass(frozen=True)
-class SlotMachineConstants:
+class SlotMachineConstants(AutoDerivedConstants):
     """
     Unified constants for Slot Machine game parameters and assets.
     """
     # Screen dimensions
-    screen_width: int = 160
-    screen_height: int = 210
-    scaling_factor: int = 3
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
+    scaling_factor: int = struct.field(pytree_node=False, default=3)
     
     # Reel layout
-    num_reels: int = 3
-    reel_width: int = 40
-    reel_height: int = 120
-    reel_spacing: int = 10
-    symbols_per_reel: int = 3
-    total_symbols_per_reel: int = 20
+    num_reels: int = struct.field(pytree_node=False, default=3)
+    reel_width: int = struct.field(pytree_node=False, default=40)
+    reel_height: int = struct.field(pytree_node=False, default=120)
+    reel_spacing: int = struct.field(pytree_node=False, default=10)
+    symbols_per_reel: int = struct.field(pytree_node=False, default=3)
+    total_symbols_per_reel: int = struct.field(pytree_node=False, default=20)
     
     # Symbol configuration
-    num_symbol_types: int = 6
-    symbol_height: int = 28
-    symbol_width: int = 28
+    num_symbol_types: int = struct.field(pytree_node=False, default=6)
+    symbol_height: int = struct.field(pytree_node=False, default=28)
+    symbol_width: int = struct.field(pytree_node=False, default=28)
     
     # Game start finances
-    starting_credits: int = 25
-    bet_amount: int = 1
-    min_wager: int = 1
-    max_wager: int = 5
+    starting_credits: int = struct.field(pytree_node=False, default=25)
+    bet_amount: int = struct.field(pytree_node=False, default=1)
+    min_wager: int = struct.field(pytree_node=False, default=1)
+    max_wager: int = struct.field(pytree_node=False, default=5)
     
     # Reel timing
-    min_spin_duration: int = 60
-    max_spin_duration: int = 120
-    reel_stop_delay: int = 30
+    min_spin_duration: int = struct.field(pytree_node=False, default=60)
+    max_spin_duration: int = struct.field(pytree_node=False, default=120)
+    reel_stop_delay: int = struct.field(pytree_node=False, default=30)
     
-    reel_layouts: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([
+    reel_layouts: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
             [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
             [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
             [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1],
         ], dtype=jnp.int32)
     )
     
-    reel_layouts_jackpot: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([
+    reel_layouts_jackpot: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
             [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
             [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
             [0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
@@ -157,11 +137,11 @@ class SlotMachineConstants:
     )
     
     # Reel positions - UI layout coordinates
-    reel_start_x: int = 11
-    reel_start_y: int = 50
+    reel_start_x: int = struct.field(pytree_node=False, default=11)
+    reel_start_y: int = struct.field(pytree_node=False, default=50)
     
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = field(default_factory=lambda: tuple([
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: tuple([
         {
             'name': 'symbols',
             'type': 'group',
@@ -178,10 +158,10 @@ class SlotMachineConstants:
         },
         # Background and reel frame are added procedurally in the renderer init
     ]))
-    sprite_scale_factor: float = 0.7
+    sprite_scale_factor: float = struct.field(pytree_node=False, default=0.7)
 
-
-class SlotMachineState(NamedTuple):
+@struct.dataclass
+class SlotMachineState:
     """
     Complete immutable game state for Slot Machine.
     """
@@ -233,8 +213,8 @@ class SlotMachineState(NamedTuple):
     # RNG key that keeps the spins honest
     rng: chex.Array
 
-
-class SlotMachineObservation(NamedTuple):
+@struct.dataclass
+class SlotMachineObservation:
     """Observation returned to the agent each step."""
 
     player1_credits: jnp.ndarray          # Player 1 current credits
@@ -252,7 +232,8 @@ class SlotMachineObservation(NamedTuple):
     winner: jnp.ndarray           # Who won (0=none, 1=player1, 2=player2)
 
 
-class SlotMachineInfo(NamedTuple):
+@struct.dataclass
+class SlotMachineInfo:
     """
     Information about the game state.
     """
@@ -264,14 +245,6 @@ class SlotMachineInfo(NamedTuple):
     # Total number of spins altogether, not currently needed. Introduced for debug and win statistics.
     player1_spins_played: jnp.ndarray
     player2_spins_played: jnp.ndarray
-
-
-class SlotMachineConstantsRuntime(NamedTuple):
-    """
-    Symbol names and any runtime constants that are convenience only.
-    """
-    symbol_names: tuple = SLOT_MACHINE_SYMBOL_NAMES
-
 
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -296,7 +269,6 @@ class SlotMachineRenderer(JAXGameRenderer):
     
         super().__init__()
         self.consts = consts or SlotMachineConstants()
-        self.runtime = SlotMachineConstantsRuntime()
         self.sprite_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/slotmachine"
         # Configure new render utils
         self.ru_config = render_utils.RendererConfig(
@@ -903,7 +875,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             
         def continue_game():
             # Translate compact agent action index to ALE console action
-            atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+            atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
             
             # Update RNG key EVERY step
             step_key, new_rng = jax.random.split(state.rng)
@@ -980,7 +952,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             )
 
             # Update state with input tracking, wager changes and new RNG
-            new_state = state._replace(
+            new_state = state.replace(
                 spin_button_prev=fire_pressed,
                 up_button_prev=up_pressed,
                 down_button_prev=down_pressed,
@@ -1026,7 +998,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             )
 
             # Update reward in state for display purposes
-            new_state = new_state._replace(
+            new_state = new_state.replace(
                 last_reward_p1=jnp.where(
                     (new_state.last_payout_p1 > 0) & (state.last_payout_p1 == 0),
                     new_state.last_payout_p1.astype(jnp.float32),
@@ -1106,7 +1078,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         stagger_delays = jnp.arange(cfg.num_reels) * cfg.reel_stop_delay
         final_durations = durations + stagger_delays
 
-        return state._replace(
+        return state.replace(
             player1_credits=new_p1_credits,
             player2_credits=new_p2_credits,
             player1_spins_played=new_p1_spins,
@@ -1149,7 +1121,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             state.reel_positions
         )
 
-        return state._replace(
+        return state.replace(
             spin_timers=new_timers,
             reel_spinning=new_spinning,
             reel_positions=animated_positions,
@@ -1272,7 +1244,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             # Determine flash timer - flash if either player wins
             flash_timer = jnp.where((payout_p1 > 0) | (payout_p2 > 0), 60, 0)
 
-            return s._replace(
+            return s.replace(
                 player1_credits=s.player1_credits + payout_p1,
                 player2_credits=s.player2_credits + payout_p2,
                 player1_total_winnings=s.player1_total_winnings + payout_p1,
@@ -1302,7 +1274,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
         new_win_display_timer = jnp.maximum(state.win_display_timer - 1, 0)
         new_jackpot_message_timer = jnp.maximum(state.jackpot_message_timer - 1, 0)
 
-        return state._replace(
+        return state.replace(
             spin_cooldown=new_cooldown,
             win_flash_timer=new_flash_timer,
             win_display_timer=new_win_display_timer,
@@ -1369,7 +1341,7 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             lambda: state.win_display_timer
         )
         
-        return state._replace(
+        return state.replace(
             game_over=should_end,
             winner=winner,
             win_display_timer=display_timer

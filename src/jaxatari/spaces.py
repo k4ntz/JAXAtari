@@ -261,10 +261,13 @@ class Tuple(Space):
         """
         Check whether the given Pytree is contained in the space.
         """
-        # Handle named tuples by converting to tuple
+        # Handle named tuples and dataclasses by converting to tuple
         if hasattr(x, '_asdict'):
             # Convert named tuple to regular tuple
             x = tuple(x._asdict().values())
+        elif is_dataclass(x):
+            # Convert dataclass to regular tuple
+            x = tuple(asdict(x).values())
         
         # 1. Initial validation: check if x is a tuple of the correct length.
         if not isinstance(x, (tuple, list)) or len(x) != len(self.spaces):

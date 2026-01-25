@@ -17,15 +17,15 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-import numpy as np  # Import numpy for precomputation
+import numpy as np
+from flax import struct
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
-# Import the new rendering utils
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space, Discrete, Box, Dict
-
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -87,14 +87,14 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class VideoCubeConstants(NamedTuple):
-    WIDTH = 160
-    HEIGHT = 210
-    SELECTED_CUBE = 1
+class VideoCubeConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    SELECTED_CUBE: int = struct.field(pytree_node=False, default=1)
     """ The selected cube. 1 - 50 are the standard cubes and 51 a random generated cube """
-    GAME_VARIATION = 0
+    GAME_VARIATION: int = struct.field(pytree_node=False, default=0)
     """ The selected game variation: 0 = normal game, 1 = all tiles are blacked out, 2 = only up and right are allowed """
-    CUBES = [
+    CUBES: list[list[int]] = struct.field(pytree_node=False, default_factory=lambda: [
         # Cube 1
         [2, 4, 1, 3, 5, 1, 0, 5, 4, 1, 4, 3, 0, 0, 1, 3, 0, 5, 4, 2, 1, 3, 1, 2, 3, 0, 1, 4, 2, 2, 5, 4, 0, 0, 5, 4, 5,
          4, 2, 2, 1, 0, 3, 3, 5, 5, 0, 3, 2, 3, 5, 4, 1, 2],
@@ -246,9 +246,9 @@ class VideoCubeConstants(NamedTuple):
         [2, 0, 1, 5, 3, 4, 0, 1, 4, 1, 3, 3, 0, 5, 1, 3, 3, 5, 4, 4, 1, 5, 5, 4, 5, 4, 2, 0, 1, 0, 1, 2, 3, 0, 1, 4, 5,
          0, 2, 2, 2, 0, 3, 1, 5, 5, 3, 3, 4, 0, 2, 4, 2, 2],
         # Cube 51 (randomly generated) in reset!
-    ]
+    ])
     """ The color values of the 50 standard cubes """
-    PLAYER_COLORS = [
+    PLAYER_COLORS: list[int] = struct.field(pytree_node=False, default_factory=lambda: [
         # Cube 1
         2,
         # Cube 2
@@ -350,36 +350,39 @@ class VideoCubeConstants(NamedTuple):
         # Cube 50
         1,
         # Cube 51 (randomly generated) in reset!
-    ]
+    ])
     """ The color of the player, depending on the selected cube """
-    INITIAL_PLAYER_POS = 49
+    INITIAL_PLAYER_POS: int = struct.field(pytree_node=False, default=49)
     """ The initial player position
     Important: the initial player position and the initial current side must fit together
     """
-    INITIAL_CURRENT_SIDE = 1
+    INITIAL_CURRENT_SIDE: int = struct.field(pytree_node=False, default=1)
     """ The initial side the player is starting on 
     Important: the initial player position and the initial current side must fit together
     """
-    INITIAL_ORIENTATION = 0
+    INITIAL_ORIENTATION: int = struct.field(pytree_node=False, default=0)
     """ The initial orientation of the player """
-    INITIAL_PLAYER_SCORE = 0
+    INITIAL_PLAYER_SCORE: int = struct.field(pytree_node=False, default=0)
     """ The initial score of the player """
-    INITIAL_PLAYER_LOOKING_DIRECTION = jnp.array(Action.RIGHT)
+    INITIAL_PLAYER_LOOKING_DIRECTION: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(Action.RIGHT))
     """ The initial looking direction of the player 
     Only up, down, right and left are possible
     """
-    CUBE_SIDES = jnp.array([
+    CUBE_SIDES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [24, 25, 26, 14, 2, 1, 0, 12, 13],
         [60, 61, 62, 50, 38, 37, 36, 48, 49],
         [63, 64, 65, 53, 41, 40, 39, 51, 52],
         [66, 67, 68, 56, 44, 43, 42, 54, 55],
         [69, 70, 71, 59, 47, 46, 45, 57, 58],
         [96, 97, 98, 86, 74, 73, 72, 84, 85]
-    ])
+    ]))
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple[dict, ...] = struct.field(pytree_node=False, default=_get_default_asset_config())
 
-class MovementState(NamedTuple):
+
+
+@struct.dataclass
+class MovementState:
     is_moving_on_one_side: chex.Numeric
     """ Tells if the player is moving on one side of the cube """
     is_moving_between_two_sides: chex.Numeric
@@ -388,7 +391,8 @@ class MovementState(NamedTuple):
     """ The counter for the animation of the player if he is moving """
 
 
-class VideoCubeState(NamedTuple):
+@struct.dataclass
+class VideoCubeState:
     player_pos: chex.Numeric
     """ The global position of the player """
     player_color: chex.Numeric
@@ -436,7 +440,8 @@ class VideoCubeState(NamedTuple):
     """ Contains a target tick count. The game will not continue until the tick count is reached """
 
 
-class VideoCubeObservation(NamedTuple):
+@struct.dataclass
+class VideoCubeObservation:
     cube_current_view: jnp.ndarray
     """ The current view on the cube """
     player_score: jnp.ndarray
@@ -449,7 +454,8 @@ class VideoCubeObservation(NamedTuple):
     """ The y coordinate of the player """
 
 
-class VideoCubeInfo(NamedTuple):
+@struct.dataclass
+class VideoCubeInfo:
     time: jnp.ndarray
 
 

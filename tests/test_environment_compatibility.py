@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 import collections
+from dataclasses import is_dataclass, asdict
 
 # --- Import Core Components ---
 from jaxatari.environment import JaxEnvironment
@@ -45,14 +46,30 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
+def to_dict(obj: any) -> dict:
+    """
+    Convert a NamedTuple or dataclass to a dict.
+    Handles both legacy NamedTuple and modern dataclass.
+    """
+    if hasattr(obj, '_asdict'): # It's a namedtuple
+        return obj._asdict()
+    elif is_dataclass(obj): # It's a dataclass
+        return asdict(obj)
+    else:
+        raise TypeError(f"Object {type(obj)} is neither a NamedTuple nor a dataclass")
+
 def deep_asdict(obj: any) -> any:
     """
-    Recursively converts a Pytree of namedtuples into a Pytree of standard dicts.
-    This is needed because obs is a namedtuple but the space is a Dict.
+    Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of standard dicts.
+    This is needed because obs might be a namedtuple or dataclass but the space is a Dict.
     """
     if hasattr(obj, '_asdict'): # It's a namedtuple
         return collections.OrderedDict(
             (key, deep_asdict(value)) for key, value in obj._asdict().items()
+        )
+    elif is_dataclass(obj): # It's a dataclass
+        return collections.OrderedDict(
+            (key, deep_asdict(value)) for key, value in asdict(obj).items()
         )
     elif isinstance(obj, (list, tuple)):
         return type(obj)(deep_asdict(item) for item in obj)
@@ -343,15 +360,15 @@ class TestWrapperCompatibility:
                 # Handle named tuples and other complex structures
                 if hasattr(obs_part, 'shape'):
                     assert obs_part.shape == space_part.shape, f"Observation part shape {obs_part.shape} should match space shape {space_part.shape}"
-                elif hasattr(obs_part, '_asdict'):
-                    # For named tuples, check that the structure matches the space
-                    obs_dict = obs_part._asdict()
+                elif hasattr(obs_part, '_asdict') or is_dataclass(obs_part):
+                    # For named tuples or dataclasses, check that the structure matches the space
+                    obs_dict = to_dict(obs_part)
                     # The space_part might be a string key or a space object
                     if isinstance(space_part, str):
                         # This is a key in a Dict space, skip shape checking
                         pass
                     elif isinstance(space_part, spaces.Dict):
-                        assert set(obs_dict.keys()) == set(space_part.spaces.keys()), f"Named tuple keys should match space keys"
+                        assert set(obs_dict.keys()) == set(space_part.spaces.keys()), f"Observation keys should match space keys"
                     else:
                         # For other space types, just verify the observation is valid
                         assert obs_part is not None, f"Observation part should not be None"
@@ -363,11 +380,11 @@ class TestWrapperCompatibility:
             if hasattr(obs, 'shape'):
                 assert obs.shape == obs_space.shape, f"Observation shape {obs.shape} should match space shape {obs_space.shape}"
                 assert obs.dtype == obs_space.dtype, f"Observation dtype {obs.dtype} should match space dtype {obs_space.dtype}"
-            elif hasattr(obs, '_asdict'):
-                # For named tuples, check that the structure matches the space
-                obs_dict = obs._asdict()
-                assert isinstance(obs_space, spaces.Dict), f"Space should be Dict for named tuple observation"
-                assert set(obs_dict.keys()) == set(obs_space.spaces.keys()), f"Named tuple keys should match space keys"
+            elif hasattr(obs, '_asdict') or is_dataclass(obs):
+                # For named tuples or dataclasses, check that the structure matches the space
+                obs_dict = to_dict(obs)
+                assert isinstance(obs_space, spaces.Dict), f"Space should be Dict for named tuple/dataclass observation"
+                assert set(obs_dict.keys()) == set(obs_space.spaces.keys()), f"Observation keys should match space keys"
             else:
                 # For other structures, just verify they're not None
                 assert obs is not None, f"Observation should not be None"
@@ -383,15 +400,15 @@ class TestWrapperCompatibility:
                 # Handle named tuples and other complex structures
                 if hasattr(obs_part, 'shape'):
                     assert obs_part.shape == space_part.shape, f"Step observation part shape {obs_part.shape} should match space shape {space_part.shape}"
-                elif hasattr(obs_part, '_asdict'):
-                    # For named tuples, check that the structure matches the space
-                    obs_dict = obs_part._asdict()
+                elif hasattr(obs_part, '_asdict') or is_dataclass(obs_part):
+                    # For named tuples or dataclasses, check that the structure matches the space
+                    obs_dict = to_dict(obs_part)
                     # The space_part might be a string key or a space object
                     if isinstance(space_part, str):
                         # This is a key in a Dict space, skip shape checking
                         pass
                     elif isinstance(space_part, spaces.Dict):
-                        assert set(obs_dict.keys()) == set(space_part.spaces.keys()), f"Named tuple step keys should match space keys"
+                        assert set(obs_dict.keys()) == set(space_part.spaces.keys()), f"Step observation keys should match space keys"
                     else:
                         # For other space types, just verify the observation is valid
                         assert obs_part is not None, f"Step observation part should not be None"
@@ -401,11 +418,11 @@ class TestWrapperCompatibility:
         else:
             if hasattr(obs_step, 'shape'):
                 assert obs_step.shape == obs_space.shape, f"Step observation shape {obs_step.shape} should match space shape {obs_space.shape}"
-            elif hasattr(obs_step, '_asdict'):
-                # For named tuples, check that the structure matches the space
-                obs_dict = obs_step._asdict()
-                assert isinstance(obs_space, spaces.Dict), f"Space should be Dict for named tuple step observation"
-                assert set(obs_dict.keys()) == set(obs_space.spaces.keys()), f"Named tuple step keys should match space keys"
+            elif hasattr(obs_step, '_asdict') or is_dataclass(obs_step):
+                # For named tuples or dataclasses, check that the structure matches the space
+                obs_dict = to_dict(obs_step)
+                assert isinstance(obs_space, spaces.Dict), f"Space should be Dict for named tuple/dataclass step observation"
+                assert set(obs_dict.keys()) == set(obs_space.spaces.keys()), f"Step observation keys should match space keys"
             else:
                 # For other structures, just verify they're not None
                 assert obs_step is not None, f"Step observation should not be None"
@@ -472,9 +489,10 @@ class TestJaxTransforms:
         if hasattr(obj, 'shape'):
             # Direct jnp.ndarray
             assert obj.shape[0] == expected_batch_size, f"{context_name} should have batch dimension {expected_batch_size}, got {obj.shape[0]}"
-        elif hasattr(obj, '_asdict'):
-            # NamedTuple - recursively check all fields
-            for field_name, field_value in obj._asdict().items():
+        elif hasattr(obj, '_asdict') or is_dataclass(obj):
+            # NamedTuple or dataclass - recursively check all fields
+            obj_dict = to_dict(obj)
+            for field_name, field_value in obj_dict.items():
                 self._check_batch_dimension_recursive(field_value, expected_batch_size, f"{context_name}.{field_name}")
         elif isinstance(obj, (tuple, list)):
             # Tuple or list - recursively check all elements
@@ -929,12 +947,13 @@ class TestEdgeCasesAndErrorHandling:
         def extract_arrays(state):
             """Extract all JAX arrays from a state object."""
             arrays = {}
-            if hasattr(state, '_asdict'):
-                # For named tuples
-                for k, v in state._asdict().items():
+            if hasattr(state, '_asdict') or is_dataclass(state):
+                # For named tuples or dataclasses
+                state_dict = to_dict(state)
+                for k, v in state_dict.items():
                     if isinstance(v, jnp.ndarray):
                         arrays[k] = v
-                    elif hasattr(v, '_asdict'):
+                    elif hasattr(v, '_asdict') or is_dataclass(v):
                         # Recursively extract from nested objects
                         nested_arrays = extract_arrays(v)
                         for nk, nv in nested_arrays.items():

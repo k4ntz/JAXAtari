@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 import jaxatari
+from dataclasses import is_dataclass
 from jaxatari.environment import EnvInfo, EnvObs, EnvState
 from jaxatari.wrappers import (
     NormalizeObservationWrapper,
@@ -401,12 +402,17 @@ def test_flatten_observation_wrapper_space_structure(raw_env):
 
     def deep_asdict(obj: any) -> any:
         """
-        Recursively converts a Pytree of namedtuples into a Pytree of standard dicts.
-        This is needed because obs is a namedtuple but the space is a Dict.
+        Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of standard dicts.
+        This is needed because obs might be a namedtuple or dataclass but the space is a Dict.
         """
         if hasattr(obj, '_asdict'): # It's a namedtuple
             return collections.OrderedDict(
                 (key, deep_asdict(value)) for key, value in obj._asdict().items()
+            )
+        elif is_dataclass(obj): # It's a dataclass
+            from dataclasses import asdict
+            return collections.OrderedDict(
+                (key, deep_asdict(value)) for key, value in asdict(obj).items()
             )
         elif isinstance(obj, (list, tuple)):
             return type(obj)(deep_asdict(item) for item in obj)

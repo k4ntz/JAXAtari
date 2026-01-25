@@ -7,12 +7,14 @@ import jax.numpy as jnp
 import chex
 from jax import lax
 from jax import random as jrandom
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.rendering import jax_rendering_utils as render_utils
 import numpy as np
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -29,31 +31,31 @@ def _get_default_asset_config() -> tuple:
         {'name': 'banner_tetris', 'type': 'single', 'file': 'text_tetris.npy'},
     )
 
-class TetrisConstants(NamedTuple):
+class TetrisConstants(AutoDerivedConstants):
     # logical grid (Board)
-    BOARD_WIDTH: int = 10
-    BOARD_HEIGHT: int = 22
+    BOARD_WIDTH: int = struct.field(pytree_node=False, default=10)
+    BOARD_HEIGHT: int = struct.field(pytree_node=False, default=22)
 
     # Env timing – in "env frames" (number of step() calls)
-    GRAVITY_FRAMES: int = 30      # auto-fall cadence
-    DAS_FRAMES: int = 10          # delayed auto shift for horiz
-    ARR_FRAMES: int = 3           # auto-repeat rate for horiz
-    ROT_DAS_FRAMES: int = 12      # rotate auto-repeat cadence
-    SOFT_PACE_FRAMES: int = 4     # paced soft-drop while held
-    SOFT_DROP_SCORE_PER_CELL = 1
-    LINE_CLEAR_SCORE = (0, 1, 2, 3, 4)  # 0 -> if no row is cleared, 1 -> only 1 row, 2 -> 2 rows, 3-> 3 rows, 4 -> 4 rows, just like the original game
+    GRAVITY_FRAMES: int = struct.field(pytree_node=False, default=30)      # auto-fall cadence
+    DAS_FRAMES: int = struct.field(pytree_node=False, default=10)          # delayed auto shift for horiz
+    ARR_FRAMES: int = struct.field(pytree_node=False, default=3)           # auto-repeat rate for horiz
+    ROT_DAS_FRAMES: int = struct.field(pytree_node=False, default=12)      # rotate auto-repeat cadence
+    SOFT_PACE_FRAMES: int = struct.field(pytree_node=False, default=4)     # paced soft-drop while held
+    SOFT_DROP_SCORE_PER_CELL: int = struct.field(pytree_node=False, default=1)
+    LINE_CLEAR_SCORE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, 2, 3, 4], dtype=jnp.int32))  # 0 -> if no row is cleared, 1 -> only 1 row, 2 -> 2 rows, 3-> 3 rows, 4 -> 4 rows, just like the original game
 
     # Render tiling
-    BOARD_X: int = 21       # left margin
-    BOARD_Y: int = 27       # top margin
-    BOARD_PADDING: int = 2
-    CELL_WIDTH: int = 3
-    CELL_HEIGHT: int = 7
-    DIGIT_X: int = 95
-    DIGIT_Y: int = 27
-    WINDOW_WIDTH: int = 160 * 3
-    WINDOW_HEIGHT: int = 210 * 3
-    TETROMINOS = jnp.array([
+    BOARD_X: int = struct.field(pytree_node=False, default=21)       # left margin
+    BOARD_Y: int = struct.field(pytree_node=False, default=27)       # top margin
+    BOARD_PADDING: int = struct.field(pytree_node=False, default=2)
+    CELL_WIDTH: int = struct.field(pytree_node=False, default=3)
+    CELL_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    DIGIT_X: int = struct.field(pytree_node=False, default=95)
+    DIGIT_Y: int = struct.field(pytree_node=False, default=27)
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160 * 3)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
+    TETROMINOS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # I
         [
             [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
@@ -103,15 +105,15 @@ class TetrisConstants(NamedTuple):
             [[0, 0, 0, 0], [1, 1, 1, 0], [1, 0, 0, 0], [0, 0, 0, 0]],
             [[0, 1, 0, 0], [0, 1, 0, 0], [0, 1, 1, 0], [0, 0, 0, 0]],
         ],
-    ], dtype=jnp.int32)
-    RESET: int = Action.DOWNLEFTFIRE  # keep a reserved reset action
+    ], dtype=jnp.int32))
+    RESET: int = struct.field(pytree_node=False, default=Action.DOWNLEFTFIRE)  # keep a reserved reset action
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
 
 # ======================== State/Obs/Info =================
-class TetrisState(NamedTuple):
-
+@struct.dataclass
+class TetrisState:
     """ Environment state, Fields are given in arrays to keep everything compatible"""
     board: chex.Array        # (H,W) int32 {0,1}
     piece_type: chex.Array   # () int32 0..6
@@ -136,7 +138,8 @@ class TetrisState(NamedTuple):
     banner_timer: chex.Array  # fields for the one, two, triple, tetris sprites
     banner_code: chex.Array
 
-class TetrisObservation(NamedTuple):
+@struct.dataclass
+class TetrisObservation:
     """ Observation returned by state"""
     board: chex.Array
     piece_type: chex.Array
@@ -144,7 +147,8 @@ class TetrisObservation(NamedTuple):
     rot: chex.Array
     next_piece: chex.Array
 
-class TetrisInfo(NamedTuple):
+@struct.dataclass
+class TetrisInfo:
     score: chex.Array
     cleared: chex.Array
     game_over: chex.Array
@@ -345,7 +349,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         game_over = self.check_collision(board_cleared, new_piece_grid, pos)  # Check if game over
         next_piece, _, _, key2 = self.spawn_piece(s.key)
 
-        new_state = s._replace(board=board_cleared, piece_type=current_piece, pos=pos, rot=rot,
+        new_state = s.replace(board=board_cleared, piece_type=current_piece, pos=pos, rot=rot,
                         next_piece=next_piece, score=total_score, game_over=game_over, key=key2, tick=tick_next,
                         banner_timer=banner_timer,  # new row for banners
                         banner_code=banner_code
@@ -485,13 +489,13 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             lambda _: (state.pos, state.rot),
             operand=None
         )
-        state = state._replace(pos=pos_r, rot=rot_r)
+        state = state.replace(pos=pos_r, rot=rot_r)
 
         # ---- Horizontal move ----
         grid = self.piece_grid(state.piece_type, state.rot)
         pos_h = state.pos + jnp.array([0, jnp.int32(jnp.where(do_move_now, new_move_dir, 0))], dtype=jnp.int32)
         coll_h = self.check_collision(state.board, grid, pos_h)
-        state = lax.cond(coll_h, lambda s: s, lambda s: s._replace(pos=pos_h), state)
+        state = lax.cond(coll_h, lambda s: s, lambda s: s.replace(pos=pos_h), state)
 
         # ---- Vertical movement / lock ----
         def do_hard(s: TetrisState):
@@ -502,7 +506,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
                 return ~self.check_collision(t.board, g, pnext)
 
             def body_fun(t):
-                return t._replace(pos=t.pos + jnp.array([1, 0], jnp.int32))
+                return t.replace(pos=t.pos + jnp.array([1, 0], jnp.int32))
 
             s2 = lax.while_loop(cond_fun, body_fun, s)
             return self._lock_spawn(s2, g, tick_next, soft_points=jnp.int32(0))
@@ -514,7 +518,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
             return lax.cond(
                 coll_v,
                 lambda ss: self._lock_spawn(ss, grid, tick_next, soft_points=jnp.int32(0)),
-                lambda ss: (ss._replace(pos=pos_v, tick=tick_next),
+                lambda ss: (ss.replace(pos=pos_v, tick=tick_next),
                             jnp.float32(0.0), jnp.bool_(False),
                             TetrisInfo(score=ss.score, cleared=jnp.int32(0), game_over=ss.game_over)),
                 s
@@ -542,7 +546,7 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         # ---- Timers & book-keeping ----
         next_banner_timer = jnp.maximum(0, state.banner_timer - 1)
 
-        state = state._replace(
+        state = state.replace(
             das_timer=das,
             arr_timer=arr,
             move_dir=new_move_dir,

@@ -8,13 +8,14 @@ from functools import partial
 from jax import lax
 import jax.lax
 import jax
+from flax import struct
 
 import jaxatari.spaces as spaces
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
-
+from jaxatari.modification import AutoDerivedConstants
 
 # -------- Game constants --------
 def _get_default_asset_config() -> tuple:
@@ -79,42 +80,43 @@ def _get_default_asset_config() -> tuple:
     ]
     return tuple(asset_list)
 
-class RiverraidConstants(NamedTuple):
+class RiverraidConstants(AutoDerivedConstants):
     """Complete constants for Riverraid game"""
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
-    DEFAULT_RIVER_WIDTH: int = 80
-    MIN_RIVER_WIDTH: int = 40
-    MAX_RIVER_WIDTH: int = 160
-    MAX_ENEMIES: int = 10
-    MAX_HOUSE_TREES: int = 10
-    MINIMUM_SPAWN_COOLDOWN: int = 20
-    MAX_FUEL: int = 30
-    UI_HEIGHT: int = 35
-    SEGMENT_LENGTH: int = 400
-    DAM_OFFSET: int = 25
-    PLAYER_WIDTH: int = 7
-    PLAYER_HEIGHT: int = 14
-    DEATH_COOLDOWN: int = 50  # longer in real game
-    BUFFER: int = 50
-    ISLAND_SPAWN_PROB: float = 0.3
-    STRAIGHT_PROP: float = 0.6
-    EXPANSE_PROP: float = 0.2
-    SHRINK_PROP: float = 0.2
-    MIN_ALTERNATION_LENGTH: int = 3
-    MAX_ALTERNATION_LENGTH: int = 10
-    ENTITY_SPAWN_PROP: float = 0.2  # includes fuel, only checked if constraints met (cant be higher than 0.33)
-    FUEL_SPAWN_PROP: float = 0.1  # percentage of spawned entity being fuel
-    PLAYER_ACCELERATION: float = 0.06
-    PLAYER_MAX_SPEED: float = 4.0
-    ENEMY_START_MOVING_PROP: float = 0.01  # (cant be higher than 0.33)
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    DEFAULT_RIVER_WIDTH: int = struct.field(pytree_node=False, default=80)
+    MIN_RIVER_WIDTH: int = struct.field(pytree_node=False, default=40)
+    MAX_RIVER_WIDTH: int = struct.field(pytree_node=False, default=160)
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=10)
+    MAX_HOUSE_TREES: int = struct.field(pytree_node=False, default=10)
+    MINIMUM_SPAWN_COOLDOWN: int = struct.field(pytree_node=False, default=20)
+    MAX_FUEL: int = struct.field(pytree_node=False, default=30)
+    UI_HEIGHT: int = struct.field(pytree_node=False, default=35)
+    SEGMENT_LENGTH: int = struct.field(pytree_node=False, default=400)
+    DAM_OFFSET: int = struct.field(pytree_node=False, default=25)
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=14)
+    DEATH_COOLDOWN: int = struct.field(pytree_node=False, default=50)  # longer in real game
+    BUFFER: int = struct.field(pytree_node=False, default=50)
+    ISLAND_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.3)
+    STRAIGHT_PROP: float = struct.field(pytree_node=False, default=0.6)
+    EXPANSE_PROP: float = struct.field(pytree_node=False, default=0.2)
+    SHRINK_PROP: float = struct.field(pytree_node=False, default=0.2)
+    MIN_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=3)
+    MAX_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=10)
+    ENTITY_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.2)  # includes fuel, only checked if constraints met (cant be higher than 0.33)
+    FUEL_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.1)  # percentage of spawned entity being fuel
+    PLAYER_ACCELERATION: float = struct.field(pytree_node=False, default=0.06)
+    PLAYER_MAX_SPEED: float = struct.field(pytree_node=False, default=4.0)
+    ENEMY_START_MOVING_PROP: float = struct.field(pytree_node=False, default=0.01)  # (cant be higher than 0.33)
     # 0.33 limit due to prop * player_speed and player speed being <= 3 -> prop cant be higher than 1
-    SPEED_CHANGE_COOLDOWN: int = 20
-    MAX_SCORE_DIGITS: int = 8
+    SPEED_CHANGE_COOLDOWN: int = struct.field(pytree_node=False, default=20)
+    MAX_SCORE_DIGITS: int = struct.field(pytree_node=False, default=8)
     # Asset config
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
 
-class RiverraidState(NamedTuple):
+@struct.dataclass
+class RiverraidState:
     turn_step: chex.Array
     turn_step_linear: chex.Array
     master_key: chex.Array
@@ -169,12 +171,13 @@ class RiverraidState(NamedTuple):
     dam_explosion_cooldown: chex.Array
 
 
-
-class RiverraidInfo(NamedTuple):
+@struct.dataclass
+class RiverraidInfo:
     time: jnp.ndarray
 
 
-class RiverraidObservation(NamedTuple):
+@struct.dataclass
+class RiverraidObservation:
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array
@@ -313,7 +316,7 @@ class JaxRiverraid(JaxEnvironment):
         # so we need to clear the history of the island
         scrolled_inner_left = scrolled_inner_left.at[0].set(-1)
         scrolled_inner_right = scrolled_inner_right.at[0].set(-1)
-        state = state._replace(river_left=scrolled_left,
+        state = state.replace(river_left=scrolled_left,
                                river_right=scrolled_right,
                                river_inner_left=scrolled_inner_left,
                                river_inner_right=scrolled_inner_right)
@@ -343,7 +346,7 @@ class JaxRiverraid(JaxEnvironment):
             operand=state
         )
 
-        state = state._replace( river_alternation_length=new_alternation_length,
+        state = state.replace( river_alternation_length=new_alternation_length,
                                 river_state=new_river_state,
                                 alternation_cooldown=new_alternation_cooldown)
 
@@ -354,7 +357,7 @@ class JaxRiverraid(JaxEnvironment):
             new_river_right = state.river_right.at[0].set(state.river_right[1])
             new_river_inner_left = state.river_inner_left.at[0].set(state.river_inner_left[1])
             new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1])
-            return state._replace(river_left=new_river_left,
+            return state.replace(river_left=new_river_left,
                                   river_right=new_river_right,
                                   river_inner_left=new_river_inner_left,
                                   river_inner_right=new_river_inner_right)
@@ -369,14 +372,14 @@ class JaxRiverraid(JaxEnvironment):
                                                     new_river_right[0] - new_river_left[0] > 50)
                 new_island_present = jax.lax.select(should_set_island, jnp.array(2), state.river_island_present)
 
-                return state._replace(river_left=new_river_left,
+                return state.replace(river_left=new_river_left,
                                       river_right=new_river_right,
                                       river_island_present=new_island_present)
 
             def shrink(state: RiverraidState) -> RiverraidState:
                 new_river_left = state.river_left.at[0].set(state.river_left[1] + 3)
                 new_river_right = state.river_right.at[0].set(state.river_right[1] - 3)
-                return state._replace(river_left=new_river_left,
+                return state.replace(river_left=new_river_left,
                                       river_right=new_river_right)
 
             return lax.switch(
@@ -392,7 +395,7 @@ class JaxRiverraid(JaxEnvironment):
                 new_river_inner_right = state.river_inner_right.at[0].set(state.river_inner_right[1] + 3)
                 new_left = state.river_left.at[0].set(state.river_left[1])
                 new_right = state.river_right.at[0].set(state.river_right[1])
-                return state._replace(river_inner_left=new_river_inner_left,
+                return state.replace(river_inner_left=new_river_inner_left,
                                       river_inner_right=new_river_inner_right,
                                       river_left=new_left,
                                       river_right=new_right)
@@ -418,7 +421,7 @@ class JaxRiverraid(JaxEnvironment):
                 new_left = state.river_left.at[0].set(state.river_left[1])
                 new_right = state.river_right.at[0].set(state.river_right[1])
 
-                return state._replace(river_inner_left=new_river_inner_left,
+                return state.replace(river_inner_left=new_river_inner_left,
                                       river_inner_right=new_river_inner_right,
                                       river_left=new_left,
                                       river_right=new_right,
@@ -456,7 +459,7 @@ class JaxRiverraid(JaxEnvironment):
                             ],
                             state
                         ))
-                    return state._replace(river_left=new_river_left,
+                    return state.replace(river_left=new_river_left,
                                           river_right=new_river_right,
                                           river_alternation_length= new_alternation_length,
                                           island_transition_state=new_island_transition_state)
@@ -472,7 +475,7 @@ class JaxRiverraid(JaxEnvironment):
                     new_river_state = jnp.array(1)
                     new_island_present = jnp.array(1)
 
-                    return state._replace(river_inner_left=new_river_inner_left,
+                    return state.replace(river_inner_left=new_river_inner_left,
                                           river_inner_right=new_river_inner_right,
                                           river_left=new_river_left,
                                           river_right=new_river_right,
@@ -502,7 +505,7 @@ class JaxRiverraid(JaxEnvironment):
                     )
 
 
-                    return state._replace(
+                    return state.replace(
                         river_inner_left=new_river_inner_left,
                         river_inner_right=new_river_inner_right,
                         river_left=new_left,
@@ -530,7 +533,7 @@ class JaxRiverraid(JaxEnvironment):
                         operand=None
                     )
 
-                    return state._replace(river_left=new_river_left,
+                    return state.replace(river_left=new_river_left,
                                           river_right=new_river_right,
                                           island_transition_state=new_island_transition_state,
                                           river_alternation_length=new_alternation_length,
@@ -563,7 +566,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda state: state.river_island_present,
             operand=state
         )
-        state = state._replace(river_island_present=new_river_island_present)
+        state = state.replace(river_island_present=new_river_island_present)
 
         # main handler for what branch to use
         state = jax.lax.cond(
@@ -599,7 +602,7 @@ class JaxRiverraid(JaxEnvironment):
             new_left = state.river_left.at[0].set(final_left)
             new_right = state.river_right.at[0].set(final_right)
 
-            return state._replace(
+            return state.replace(
                 river_left=new_left,
                 river_right=new_right,
             )
@@ -625,7 +628,7 @@ class JaxRiverraid(JaxEnvironment):
                 operand=state
             )
 
-            return state._replace(
+            return state.replace(
                 river_inner_left=new_inner_left,
                 river_inner_right=new_inner_right,
             )
@@ -635,7 +638,7 @@ class JaxRiverraid(JaxEnvironment):
                             lambda state: yes_island_clamping(state),
                             operand=state
                             )
-        return state._replace(master_key=key)
+        return state.replace(master_key=key)
 
     @partial(jax.jit, static_argnums=(0,))
     def generate_straight_river(self, state: RiverraidState) -> RiverraidState:
@@ -654,7 +657,7 @@ class JaxRiverraid(JaxEnvironment):
         new_river_left = scrolled_left.at[0].set(new_top_left)
         new_river_right = scrolled_right.at[0].set(new_top_right)
 
-        return state._replace(
+        return state.replace(
             river_left=new_river_left,
             river_right=new_river_right,
             river_inner_left=scrolled_inner_left,
@@ -669,7 +672,7 @@ class JaxRiverraid(JaxEnvironment):
             scrolled_inner_right = jnp.roll(state.river_inner_right, 1)
             scrolled_inner_left = scrolled_inner_left.at[0].set(-1)
             scrolled_inner_right = scrolled_inner_right.at[0].set(-1)
-            return state._replace(river_inner_left=scrolled_inner_left,
+            return state.replace(river_inner_left=scrolled_inner_left,
                                     river_inner_right=scrolled_inner_right)
 
         def first_call(state: RiverraidState) -> RiverraidState:
@@ -678,7 +681,7 @@ class JaxRiverraid(JaxEnvironment):
                                             lambda state: (jnp.array(3), jnp.array(1)),
                                             operand=state)
             # let the island removale be done by main river method by hard coding the river_island_present state to 3 (remove)
-            return self.generate_altering_river(state._replace(river_island_present=new_island_present,
+            return self.generate_altering_river(state.replace(river_island_present=new_island_present,
                                                   segment_transition_state=new_segment_transition_state))
 
         # let main method handle as explained above
@@ -688,7 +691,7 @@ class JaxRiverraid(JaxEnvironment):
                                                         lambda state: jnp.array(2),
                                                         lambda state: state.segment_transition_state,
                                                         operand=state)
-            return new_state._replace(segment_transition_state=new_segment_transition_state)
+            return new_state.replace(segment_transition_state=new_segment_transition_state)
 
         def shrink_to_damsize(state: RiverraidState) -> RiverraidState:
             scrolled_left = jnp.roll(state.river_left, 1)
@@ -703,7 +706,7 @@ class JaxRiverraid(JaxEnvironment):
                                                         operand=state
                                                         )
             new_state = scroll_empty_island(state)
-            return new_state._replace(river_left=new_river_left,
+            return new_state.replace(river_left=new_river_left,
                                     river_right=new_river_right,
                                     segment_transition_state=new_segment_transition_state)
 
@@ -718,7 +721,7 @@ class JaxRiverraid(JaxEnvironment):
                                                         lambda state: state.segment_transition_state,
                                                         operand=state)
             new_state = scroll_empty_island(state)
-            return new_state._replace(river_left=new_river_left,
+            return new_state.replace(river_left=new_river_left,
                                   river_right=new_river_right,
                                   segment_straigt_counter=new_segment_straight_counter,
                                   segment_transition_state=new_transition_state)
@@ -734,7 +737,7 @@ class JaxRiverraid(JaxEnvironment):
             new_alternation_cooldown = jnp.array(0)
             new_segment_state = state.segment_state + 1
             new_segment_transition_state = jnp.array(0)
-            return new_state._replace(segment_state=new_segment_state,
+            return new_state.replace(segment_state=new_segment_state,
                                   segment_transition_state=new_segment_transition_state,
                                   dam_position=dam_position,
                                   segment_straigt_counter=new_segment_straight_counter,
@@ -767,7 +770,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda state: state.segment_state,
             operand=state
         )
-        new_state = state._replace(segment_state=new_segment_state % 4)
+        new_state = state.replace(segment_state=new_segment_state % 4)
         new_state = jax.lax.fori_loop(0, new_state.player_speed, lambda i, new_state: self.update_river_banks(new_state),
                                       new_state)
         new_turn_step = jax.lax.cond(new_state.turn_step % self.consts.SEGMENT_LENGTH < self.consts.SEGMENT_LENGTH - 15,
@@ -775,7 +778,7 @@ class JaxRiverraid(JaxEnvironment):
                                      lambda state: state.turn_step,
                                      operand=new_state
                                      )
-        new_state = new_state._replace(turn_step=new_turn_step)
+        new_state = new_state.replace(turn_step=new_turn_step)
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -826,7 +829,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda state: state.player_score,
             operand=state
         )
-        return state._replace(
+        return state.replace(
             dam_position=new_dam_position,
             player_bullet_x=new_bullet_x,
             player_bullet_y=new_bullet_y,
@@ -895,7 +898,7 @@ class JaxRiverraid(JaxEnvironment):
         # kill player if collision
         new_player_state = jnp.where(any_collision, 1, state.player_state)
 
-        return state._replace(
+        return state.replace(
             player_x=new_x,
             player_velocity=new_velocity,
             player_state=new_player_state,
@@ -944,7 +947,7 @@ class JaxRiverraid(JaxEnvironment):
             operand=state
         )
 
-        return state._replace(player_bullet_x=new_bullet_x,
+        return state.replace(player_bullet_x=new_bullet_x,
                                   player_bullet_y=new_bullet_y)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1004,7 +1007,7 @@ class JaxRiverraid(JaxEnvironment):
 
         new_state = jax.lax.cond(
             free_enemy_idx >= 0,
-            lambda new_state: new_state._replace(
+            lambda new_state: new_state.replace(
                 enemy_x=state.enemy_x.at[free_enemy_idx].set(new_enemy_x.astype(jnp.float32)),
                 enemy_y=state.enemy_y.at[free_enemy_idx].set(new_enemy_y.astype(jnp.float32)),
                 enemy_direction=state.enemy_direction.at[free_enemy_idx].set(new_enemy_direction),
@@ -1052,7 +1055,7 @@ class JaxRiverraid(JaxEnvironment):
             operand=None
         )
 
-        return state._replace(fuel_state=new_fuel_state,
+        return state.replace(fuel_state=new_fuel_state,
                                 fuel_x=state.fuel_x.at[free_fuel_idx].set(new_fuel_x.astype(jnp.float32)),
                                 fuel_y=state.fuel_y.at[free_fuel_idx].set(new_fuel_y.astype(jnp.float32)),
                                 master_key=key)
@@ -1090,7 +1093,7 @@ class JaxRiverraid(JaxEnvironment):
             operand=None
         )
 
-        return new_state._replace(master_key=key,
+        return new_state.replace(master_key=key,
                                   spawn_cooldown=new_spawn_cooldown)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1103,7 +1106,7 @@ class JaxRiverraid(JaxEnvironment):
         new_fuel_state = jnp.where(new_fuel_y > self.consts.SCREEN_HEIGHT + 1, 0, state.fuel_state)
         new_fuel_x = jnp.where(new_fuel_y > self.consts.SCREEN_HEIGHT + 1, -1, state.fuel_x)
 
-        return state._replace(
+        return state.replace(
             enemy_y=new_enemy_y,
             enemy_state=new_enemy_state,
             enemy_x=new_enemy_x,
@@ -1165,7 +1168,7 @@ class JaxRiverraid(JaxEnvironment):
             new_bullet_x = jnp.where(collision_present, -1.0, state.player_bullet_x)
             new_bullet_y = jnp.where(collision_present, -1.0, state.player_bullet_y)
 
-            return state._replace(
+            return state.replace(
                 enemy_state=new_enemy_state,
                 player_bullet_x=new_bullet_x,
                 player_bullet_y=new_bullet_y,
@@ -1189,7 +1192,7 @@ class JaxRiverraid(JaxEnvironment):
 
         collision_present = jnp.any(collision_mask)
         new_player_state = jnp.where(collision_present, 1, new_state.player_state)
-        return new_state._replace(player_state=new_player_state)
+        return new_state.replace(player_state=new_player_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def handle_animations(self, state: RiverraidState) -> RiverraidState:
@@ -1225,7 +1228,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda: state.dam_explosion_cooldown
         )
 
-        return state._replace(
+        return state.replace(
             enemy_state=new_enemy_state,
             enemy_animation_cooldowns=new_enemy_cooldowns,
             fuel_state=new_fuel_state,
@@ -1286,7 +1289,7 @@ class JaxRiverraid(JaxEnvironment):
                                         lambda state: state.player_state,
                                         operand=state)
 
-        return state._replace(
+        return state.replace(
             fuel_state=new_fuel_state,
             player_bullet_x=new_bullet_x,
             player_bullet_y=new_bullet_y,
@@ -1323,7 +1326,7 @@ class JaxRiverraid(JaxEnvironment):
             state.enemy_direction
         )
 
-        return state._replace(enemy_direction=updated_direction, master_key=key)
+        return state.replace(enemy_direction=updated_direction, master_key=key)
 
     @partial(jax.jit, static_argnums=(0,))
     def enemy_movement(self, state: RiverraidState) -> RiverraidState:
@@ -1378,7 +1381,7 @@ class JaxRiverraid(JaxEnvironment):
             jnp.where(state.enemy_direction == 2, 3, 2),  # Flip direction from left (2) to right (3) or vice-versa
             state.enemy_direction
         )
-        return state._replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
+        return state.replace(enemy_x=new_enemy_x, enemy_direction=new_enemy_direction)
 
     @partial(jax.jit, static_argnums=(0,))
     def handle_housetree(self, state: RiverraidState) -> RiverraidState:
@@ -1388,7 +1391,7 @@ class JaxRiverraid(JaxEnvironment):
         off_screen_mask = new_housetree_y > self.consts.SCREEN_HEIGHT
         new_housetree_state = jnp.where(off_screen_mask, 0, state.housetree_state)
 
-        new_state = state._replace(
+        new_state = state.replace(
             housetree_y=new_housetree_y,
             housetree_state=new_housetree_state,
             housetree_cooldown=state.housetree_cooldown - 1 * state.player_speed
@@ -1412,7 +1415,7 @@ class JaxRiverraid(JaxEnvironment):
             updated_side = state.housetree_side.at[free_idx].set(side)
             updated_direction = state.housetree_direction.at[free_idx].set(direction)
 
-            return state._replace(
+            return state.replace(
                 housetree_x=updated_x,
                 housetree_y=updated_y,
                 housetree_state=updated_state,
@@ -1437,7 +1440,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda state: state,
             operand=new_state
         )
-        return new_state._replace(master_key=spawn_key)
+        return new_state.replace(master_key=spawn_key)
 
     @partial(jax.jit, static_argnums=(0,))
     def adjust_player_speed(self, state: RiverraidState, action: chex.Array) -> RiverraidState:
@@ -1483,7 +1486,7 @@ class JaxRiverraid(JaxEnvironment):
             lambda: jnp.maximum(state.player_speedchange_cooldown - 1, 0)
         )
 
-        return state._replace(
+        return state.replace(
             player_speed=new_speed,
             player_speedchange_cooldown=new_cooldown
         )
@@ -1614,7 +1617,7 @@ class JaxRiverraid(JaxEnvironment):
             current_life_threshold = new_state.player_score // 10000
             earned_extra_life = current_life_threshold > previous_life_threshold
             new_player_lives = jnp.where(earned_extra_life, state.player_lives + 1, state.player_lives)
-            new_state = new_state._replace(player_lives=new_player_lives)
+            new_state = new_state.replace(player_lives=new_player_lives)
             return new_state
 
         def respawn(state: RiverraidState) -> RiverraidState:
@@ -1685,11 +1688,11 @@ class JaxRiverraid(JaxEnvironment):
             return jax.lax.cond(
                 new_death_cooldown <= 0,
                 lambda state: respawn(state),
-                lambda state: state._replace(death_cooldown=new_death_cooldown),
+                lambda state: state.replace(death_cooldown=new_death_cooldown),
                 operand=state
             )
 
-        new_state = state._replace(turn_step=state.turn_step + 1,
+        new_state = state.replace(turn_step=state.turn_step + 1,
                                    turn_step_linear=state.turn_step_linear + 1)
 
         new_player_state = jax.lax.cond(state.player_lives <= 0,
@@ -1697,7 +1700,7 @@ class JaxRiverraid(JaxEnvironment):
                                         lambda _: new_state.player_state,
                                         operand=None
                                         )
-        new_state = new_state._replace(player_state=new_player_state)  # game over
+        new_state = new_state.replace(player_state=new_player_state)  # game over
 
         new_state = jax.lax.cond(
             new_state.player_state == 0,

@@ -4,70 +4,79 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space
+from jaxatari.environment import JAXAtariAction as Action
 
 
 #
 # by Tim Morgner and Jan Larionow
 #
 
-class FlagCaptureConstants:
-    WIDTH = 160
-    HEIGHT = 210
+class FlagCaptureConstants(struct.PyTreeNode):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    SCALING_FACTOR = 3
-    WINDOW_WIDTH = WIDTH * SCALING_FACTOR
-    WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=3)
 
-    PLAYER_STATUS_ALIVE = 0
-    PLAYER_STATUS_BOMB = 1
-    PLAYER_STATUS_FLAG = 2
-    PLAYER_STATUS_NUMBER_1 = 3
-    PLAYER_STATUS_NUMBER_2 = 4
-    PLAYER_STATUS_NUMBER_3 = 5
-    PLAYER_STATUS_NUMBER_4 = 6
-    PLAYER_STATUS_NUMBER_5 = 7
-    PLAYER_STATUS_NUMBER_6 = 8
-    PLAYER_STATUS_NUMBER_7 = 9
-    PLAYER_STATUS_NUMBER_8 = 10
-    PLAYER_STATUS_DIRECTION_UP = 11
-    PLAYER_STATUS_DIRECTION_RIGHT = 12
-    PLAYER_STATUS_DIRECTION_DOWN = 13
-    PLAYER_STATUS_DIRECTION_LEFT = 14
-    PLAYER_STATUS_DIRECTION_UPRIGHT = 15
-    PLAYER_STATUS_DIRECTION_UPLEFT = 16
-    PLAYER_STATUS_DIRECTION_DOWNRIGHT = 17
-    PLAYER_STATUS_DIRECTION_DOWNLEFT = 18
-    PLAYER_STATUS_CLUE_PLACEHOLDER_NUMBER = 19
-    PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION = 20
+    @property
+    def WINDOW_WIDTH(self) -> int:
+        return self.WIDTH * self.SCALING_FACTOR
 
-    NUM_FIELDS_X = 9
-    NUM_FIELDS_Y = 7
+    @property
+    def WINDOW_HEIGHT(self) -> int:
+        return self.HEIGHT * self.SCALING_FACTOR
 
-    FIELD_PADDING_LEFT = 12
-    FIELD_PADDING_TOP = 26
-    FIELD_GAP_X = 8
-    FIELD_GAP_Y = 8
-    FIELD_WIDTH = 8
-    FIELD_HEIGHT = 16
-    SCORE_AND_TIMER_PADDING_TOP = 7
+    PLAYER_STATUS_ALIVE: int = struct.field(pytree_node=False, default=0)
+    PLAYER_STATUS_BOMB: int = struct.field(pytree_node=False, default=1)
+    PLAYER_STATUS_FLAG: int = struct.field(pytree_node=False, default=2)
+    PLAYER_STATUS_NUMBER_1: int = struct.field(pytree_node=False, default=3)
+    PLAYER_STATUS_NUMBER_2: int = struct.field(pytree_node=False, default=4)
+    PLAYER_STATUS_NUMBER_3: int = struct.field(pytree_node=False, default=5)
+    PLAYER_STATUS_NUMBER_4: int = struct.field(pytree_node=False, default=6)
+    PLAYER_STATUS_NUMBER_5: int = struct.field(pytree_node=False, default=7)
+    PLAYER_STATUS_NUMBER_6: int = struct.field(pytree_node=False, default=8)
+    PLAYER_STATUS_NUMBER_7: int = struct.field(pytree_node=False, default=9)
+    PLAYER_STATUS_NUMBER_8: int = struct.field(pytree_node=False, default=10)
+    PLAYER_STATUS_DIRECTION_UP: int = struct.field(pytree_node=False, default=11)
+    PLAYER_STATUS_DIRECTION_RIGHT: int = struct.field(pytree_node=False, default=12)
+    PLAYER_STATUS_DIRECTION_DOWN: int = struct.field(pytree_node=False, default=13)
+    PLAYER_STATUS_DIRECTION_LEFT: int = struct.field(pytree_node=False, default=14)
+    PLAYER_STATUS_DIRECTION_UPRIGHT: int = struct.field(pytree_node=False, default=15)
+    PLAYER_STATUS_DIRECTION_UPLEFT: int = struct.field(pytree_node=False, default=16)
+    PLAYER_STATUS_DIRECTION_DOWNRIGHT: int = struct.field(pytree_node=False, default=17)
+    PLAYER_STATUS_DIRECTION_DOWNLEFT: int = struct.field(pytree_node=False, default=18)
+    PLAYER_STATUS_CLUE_PLACEHOLDER_NUMBER: int = struct.field(pytree_node=False, default=19)
+    PLAYER_STATUS_CLUE_PLACEHOLDER_DIRECTION: int = struct.field(pytree_node=False, default=20)
 
-    NUM_BOMBS = 3
-    NUM_NUMBER_CLUES = 30
-    NUM_DIRECTION_CLUES = 30
-    MOVE_COOLDOWN = 15
-    STEPS_PER_SECOND = 60
+    NUM_FIELDS_X: int = struct.field(pytree_node=False, default=9)
+    NUM_FIELDS_Y: int = struct.field(pytree_node=False, default=7)
 
-    ANIMATION_TYPE_NONE = 0
-    ANIMATION_TYPE_EXPLOSION = 1
-    ANIMATION_TYPE_FLAG = 2
+    FIELD_PADDING_LEFT: int = struct.field(pytree_node=False, default=12)
+    FIELD_PADDING_TOP: int = struct.field(pytree_node=False, default=26)
+    FIELD_GAP_X: int = struct.field(pytree_node=False, default=8)
+    FIELD_GAP_Y: int = struct.field(pytree_node=False, default=8)
+    FIELD_WIDTH: int = struct.field(pytree_node=False, default=8)
+    FIELD_HEIGHT: int = struct.field(pytree_node=False, default=16)
+    SCORE_AND_TIMER_PADDING_TOP: int = struct.field(pytree_node=False, default=7)
 
-class FlagCaptureState(NamedTuple):
+    NUM_BOMBS: int = struct.field(pytree_node=False, default=3)
+    NUM_NUMBER_CLUES: int = struct.field(pytree_node=False, default=30)
+    NUM_DIRECTION_CLUES: int = struct.field(pytree_node=False, default=30)
+    MOVE_COOLDOWN: int = struct.field(pytree_node=False, default=15)
+    STEPS_PER_SECOND: int = struct.field(pytree_node=False, default=60)
+
+    ANIMATION_TYPE_NONE: int = struct.field(pytree_node=False, default=0)
+    ANIMATION_TYPE_EXPLOSION: int = struct.field(pytree_node=False, default=1)
+    ANIMATION_TYPE_FLAG: int = struct.field(pytree_node=False, default=2)
+
+@struct.dataclass
+class FlagCaptureState:
     player_x: chex.Array
     player_y: chex.Array
     time: chex.Array
@@ -79,8 +88,8 @@ class FlagCaptureState(NamedTuple):
     animation_type: chex.Array
     rng_key: chex.PRNGKey
 
-
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: chex.Array
     y: chex.Array
     width: chex.Array
@@ -88,12 +97,14 @@ class PlayerEntity(NamedTuple):
     status: chex.Array
 
 
-class FlagCaptureObservation(NamedTuple):
+@struct.dataclass
+class FlagCaptureObservation:
     player: PlayerEntity
     score: chex.Array
 
 
-class FlagCaptureInfo(NamedTuple):
+@struct.dataclass
+class FlagCaptureInfo:
     time: chex.Array
     score: chex.Array
 

@@ -139,6 +139,32 @@ def build_ale_action_map(env: gym.Env) -> Dict[str, int]:
         print(f"Warning: Could not get ALE action meanings: {e}. Defaulting to NOOP.")
         return {"NOOP": 0}
 
+def map_action_to_index(env: JaxEnvironment, action_constant: int) -> jnp.ndarray:
+    """
+    Convert JAXAtariAction constant to action index for environment's ACTION_SET.
+    
+    Args:
+        env: The JAXAtari environment instance
+        action_constant: The JAXAtariAction constant (e.g., JAXAtariAction.NOOP)
+    
+    Returns:
+        A JAX array containing the action index (0, 1, 2, ...) to pass to env.step()
+    """
+    if hasattr(env, "ACTION_SET"):
+        # Find the index in ACTION_SET that matches the action constant
+        action_set = np.array(env.ACTION_SET)
+        action_int = int(action_constant)
+        # Find index where ACTION_SET[index] == action_int
+        matches = np.where(action_set == action_int)[0]
+        if len(matches) > 0:
+            return jnp.array(matches[0], dtype=jnp.int32)
+        else:
+            # If action not in ACTION_SET, default to NOOP (index 0)
+            return jnp.array(0, dtype=jnp.int32)
+    else:
+        # Fallback: use action constant directly (for environments without ACTION_SET)
+        return jnp.array(action_constant, dtype=jnp.int32)
+
 def get_semantic_action_from_keys(pressed_keys: pygame.key.ScancodeWrapper) -> str:
     """
     Maps pygame keys to a single semantic action string.
@@ -345,11 +371,12 @@ def run_parallel_mode(
         semantic_action = get_semantic_action_from_keys(pressed_keys)
 
         # --- Map Actions ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
         ale_action = ale_action_map.get(semantic_action, 0)  # 0 is NOOP
 
         # --- Step Environments ---
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
         ale_done = ale_term or ale_trunc
 
@@ -456,8 +483,9 @@ def run_record_replay_mode(
         recorded_actions.append(semantic_action)
         
         # --- Map & Step JAX ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+        jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         
         # --- Render JAX ---
         jax_frame = np.array(jitted_render(jax_state))
@@ -546,11 +574,12 @@ def run_record_replay_mode(
         semantic_action = recorded_actions[replay_idx]
          
         # --- Map Actions ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
         ale_action = ale_action_map.get(semantic_action, 0)
          
         # --- Step Environments ---
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
         # --- Render Frames ---
         jax_frame = np.array(jitted_render(jax_state))

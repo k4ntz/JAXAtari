@@ -403,12 +403,12 @@ class PinChildMod(JaxAtariPostStepModPlugin):
         level_constants = self._env._get_level_constants(new_state.current_level)
         
         # Pin the child's position and velocity
-        pinned_level_state = new_state.level._replace(
+        pinned_level_state = new_state.level.replace(
             child_position=level_constants.child_position, #
             child_velocity=jnp.array(0) # Also stop its velocity
         )
         
-        return new_state._replace(level=pinned_level_state)
+        return new_state.replace(level=pinned_level_state)
 
 
 class RenderDebugInfo(JaxAtariInternalModPlugin):
@@ -977,7 +977,7 @@ class LethalFlameMod(JaxAtariPostStepModPlugin):
         and the life count decremented.
         """
         # 1. Set the player to crashing
-        crashed_player_state = state.player._replace(
+        crashed_player_state = state.player.replace(
             is_crashing=jnp.array(True)
         )
         
@@ -985,7 +985,7 @@ class LethalFlameMod(JaxAtariPostStepModPlugin):
         new_lives = state.lives - 1
         
         # 3. Return the new state with both changes
-        return state._replace(
+        return state.replace(
             player=crashed_player_state,
             lives=new_lives
         )

@@ -5,11 +5,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -30,12 +32,12 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class SeaquestConstants(NamedTuple):
+class SeaquestConstants(AutoDerivedConstants):
     # Colors
-    BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for water
-    PLAYER_COLOR = (187, 187, 53)  # Yellow for player sub
-    DIVER_COLOR = (66, 72, 200)  # Pink for divers
-    SHARK_DIFFICULTY_COLORS = jnp.array(
+    BACKGROUND_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 139]))  # Dark blue for water
+    PLAYER_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([187, 187, 53]))  # Yellow for player sub
+    DIVER_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([66, 72, 200]))  # Pink for divers
+    SHARK_DIFFICULTY_COLORS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
         [
             [92, 186, 92],  # Level 0: Base green
             [213, 130, 74],  # Level 1: Orange (adjusted from original ROM)
@@ -47,52 +49,53 @@ class SeaquestConstants(NamedTuple):
             [213, 92, 130],  # Level 3: Pink (adjusted from original ROM)
             [186, 92, 92],  # Level 4: Red (adjusted from original ROM)
         ]
-    )
-    ENEMY_SUB_COLOR = (170, 170, 170)  # Gray for enemy subs
-    OXYGEN_BAR_COLOR = (214, 214, 214, 255)  # White for oxygen
-    SCORE_COLOR = (210, 210, 64)  # Score color
-    OXYGEN_TEXT_COLOR = (0, 0, 0)  # Black for oxygen text
+    ))
+    ENEMY_SUB_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([170, 170, 170]))  # Gray for enemy subs
+    OXYGEN_BAR_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([214, 214, 214, 255]))  # White for oxygen
+    SCORE_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 210, 64]))  # Score color
+    OXYGEN_TEXT_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 0]))  # Black for oxygen text
 
     # Object sizes and initial positions from RAM state
-    PLAYER_SIZE = (16, 11)  # Width, Height
-    DIVER_SIZE = (8, 11)
-    SHARK_SIZE = (8, 7)
-    ENEMY_SUB_SIZE = (8, 11)
-    MISSILE_SIZE = (8, 1)
+    PLAYER_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 11]))  # Width, Height
+    DIVER_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 11]))
+    SHARK_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 7]))
+    ENEMY_SUB_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 11]))
+    MISSILE_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 1]))
 
-    PLAYER_START_X = 76
-    PLAYER_START_Y = 46
+    PLAYER_START_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(76))
+    PLAYER_START_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(46))
 
-    X_BORDERS = (0, 160)
-    PLAYER_BOUNDS = (21, 134), (46, 141)
+    X_BORDERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 160]))
+    PLAYER_BOUNDS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[21, 134], [46, 141]]))
 
     # Maximum number of objects (from MAX_NB_OBJECTS)
-    MAX_DIVERS = 4
-    MAX_SHARKS = 12
-    MAX_SUBS = 12
-    MAX_ENEMY_MISSILES = 4
-    MAX_PLAYER_TORPS = 1
-    MAX_SURFACE_SUBS = 1
-    MAX_COLLECTED_DIVERS = 6
+    MAX_DIVERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(4))
+    MAX_SHARKS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(12))
+    MAX_SUBS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(12))
+    MAX_ENEMY_MISSILES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(4))
+    MAX_PLAYER_TORPS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    MAX_SURFACE_SUBS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    MAX_COLLECTED_DIVERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(6))
 
     # define object orientations
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
+    FACE_LEFT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(-1))
+    FACE_RIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
-    SPAWN_POSITIONS_Y = jnp.array([71, 95, 119, 139])  # submarines at y=69?
-    SUBMARINE_Y_OFFSET = 2
-    ENEMY_MISSILE_Y = jnp.array([73, 97, 121, 141])  # missile x = submarine.x + 4
-    DIVER_SPAWN_POSITIONS = jnp.array([69, 93, 117, 141])
+    SPAWN_POSITIONS_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([71, 95, 119, 139]))  # submarines at y=69?
+    SUBMARINE_Y_OFFSET: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(2))
+    ENEMY_MISSILE_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([73, 97, 121, 141]))  # missile x = submarine.x + 4
+    DIVER_SPAWN_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([69, 93, 117, 141]))
 
-    MISSILE_SPAWN_POSITIONS = jnp.array([39, 126])  # Right, Left
+    MISSILE_SPAWN_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([39, 126]))  # Right, Left
 
     # First wave directions from original code
-    FIRST_WAVE_DIRS = jnp.array([False, False, False, True])
+    FIRST_WAVE_DIRS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, False, False, True]))
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
 
-class SpawnState(NamedTuple):
+@struct.dataclass
+class SpawnState:
     difficulty: chex.Array  # Current difficulty level (0-7)
     lane_dependent_pattern: chex.Array  # Track waves independently per lane [4 lanes]
     to_be_spawned: (
@@ -113,7 +116,8 @@ class SpawnState(NamedTuple):
 
 
 # Game state container
-class SeaquestState(NamedTuple):
+@struct.dataclass
+class SeaquestState:
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array  # 0 for right, 1 for left
@@ -145,7 +149,8 @@ class SeaquestState(NamedTuple):
     rng_key: chex.PRNGKey
 
 
-class PlayerEntity(NamedTuple):
+@struct.dataclass
+class PlayerEntity:
     x: jnp.ndarray
     y: jnp.ndarray
     o: jnp.ndarray
@@ -153,7 +158,8 @@ class PlayerEntity(NamedTuple):
     height: jnp.ndarray
     active: jnp.ndarray
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -161,7 +167,8 @@ class EntityPosition(NamedTuple):
     active: jnp.ndarray
 
 
-class SeaquestObservation(NamedTuple):
+@struct.dataclass
+class SeaquestObservation:
     player: PlayerEntity
     sharks: jnp.ndarray  # Shape (12, 5) - 12 sharks, each with x,y,w,h,active
     submarines: jnp.ndarray  # Shape (12, 5)
@@ -174,13 +181,15 @@ class SeaquestObservation(NamedTuple):
     lives: jnp.ndarray
     oxygen_level: jnp.ndarray  # Oxygen level (0-255)
 
-class SeaquestInfo(NamedTuple):
+@struct.dataclass
+class SeaquestInfo:
     difficulty: jnp.ndarray  # Current difficulty level
     successful_rescues: jnp.ndarray  # Number of successful rescues
     step_counter: jnp.ndarray  # Current step count
 
 
-class CarryState(NamedTuple):
+@struct.dataclass
+class CarryState:
     missile_pos: chex.Array
     shark_pos: chex.Array
     sub_pos: chex.Array
@@ -230,7 +239,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
     def soft_reset_spawn_state(self, spawn_state: SpawnState) -> SpawnState:
         """Reset spawn_times"""
-        return spawn_state._replace(
+        return spawn_state.replace(
             spawn_timers=jnp.array([277, 277, 277, 277], dtype=jnp.int32)
         )
 
@@ -366,7 +375,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             lane_had_collision_4, random_directions, spawn_state.lane_directions
         )
 
-        new_spawn_state = spawn_state._replace(
+        new_spawn_state = spawn_state.replace(
             survived=new_survived,
             spawn_timers=new_spawn_timers,
             lane_directions=new_lane_directions,
@@ -566,7 +575,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             spawn_state.spawn_timers - 1,
             spawn_state.spawn_timers,
         )
-        new_state = spawn_state._replace(spawn_timers=new_spawn_timers)
+        new_state = spawn_state.replace(spawn_timers=new_spawn_timers)
 
         # --- START of new vectorized calculation ---
         # 1. Vectorized check for empty lanes across all 4 lanes
@@ -1095,7 +1104,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         # 5. Update state with merged results and split positions back into sharks and subs
-        new_spawn_state = spawn_state._replace(
+        new_spawn_state = spawn_state.replace(
             survived=new_survived,
             lane_directions=new_lane_directions,
             diver_array=new_diver_array,
@@ -1191,7 +1200,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             spawn_state.diver_array
         )
 
-        return new_diver_positions, spawn_state._replace(diver_array=new_diver_array)
+        return new_diver_positions, spawn_state.replace(diver_array=new_diver_array)
 
     @partial(jax.jit, static_argnums=(0,))
     def step_diver_movement(
@@ -1535,7 +1544,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         # Create updated spawn state
-        updated_spawn_state = spawn_state._replace(diver_array=reset_array)
+        updated_spawn_state = spawn_state.replace(diver_array=reset_array)
 
         return final_positions, final_collected, updated_spawn_state, rng
 
@@ -2307,7 +2316,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     shark_y_positions[:, 1]
                 )
                 should_hide_player = state.death_counter <= 45
-                return state._replace(
+                return state.replace(
                     death_counter=state.death_counter - 1,
                     shark_positions=new_shark_positions,
                     sub_positions=state.sub_positions,
@@ -2326,7 +2335,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     # If this is the final life, return the TRUE final state of the game
                     # while setting lives to -1 to trigger done=True.
                     # This is what your snapshot test needs to see.
-                    return state._replace(
+                    return state.replace(
                         lives=state.lives - 1,
                         death_counter=0,
                     )
@@ -2334,7 +2343,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 def handle_stage_reset():
                     # If the player still has lives left, perform the original stage reset.
                     # This preserves the mechanic of resetting the level after losing a life.
-                    return reset_state._replace(
+                    return reset_state.replace(
                         lives=state.lives - 1,
                         score=state.score,
                         successful_rescues=state.successful_rescues,
@@ -2383,7 +2392,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # Return either final reset or animation frame
             return jax.lax.cond(
                 state.death_counter >= -1,
-                lambda _: reset_state._replace(
+                lambda _: reset_state.replace(
                     player_x=state.player_x,
                     player_y=state.player_y,
                     player_direction=state.player_direction,
@@ -2395,7 +2404,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     surface_sub_position=state.surface_sub_position,
                     oxygen=jnp.array(0),
                 ),
-                lambda _: state._replace(
+                lambda _: state.replace(
                     death_counter=state.death_counter + 1,
                     shark_positions=new_shark_positions,
                     sub_positions=state.sub_positions,
@@ -2417,13 +2426,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # while player is frozen, keep resetting the spawn counter
             new_spawn_state = jax.lax.cond(
                 should_block,
-                lambda: state.spawn_state._replace(
+                lambda: state.spawn_state.replace(
                     spawn_timers=jnp.array([80, 80, 80, 120], dtype=jnp.int32)
                 ),
                 lambda: state.spawn_state,
             )
 
-            state_updated = state._replace(spawn_state=new_spawn_state)
+            state_updated = state.replace(spawn_state=new_spawn_state)
 
             # If blocked, force position and disable actions
             player_x = jnp.where(should_block, state.player_x, state.player_x)
@@ -2434,7 +2443,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
             # Now calculate movement using potentially modified positions and action
             next_x, next_y, player_direction = self.player_step(
-                state._replace(player_x=player_x, player_y=player_y), action_mod
+                state.replace(player_x=player_x, player_y=player_y), action_mod
             )
             player_missile_position = self.player_missile_step(
                 state, next_x, next_y, action_mod
@@ -2455,12 +2464,12 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             ) = self.update_oxygen(state, next_x, next_y, player_missile_position)
 
             # Update divers collected count from oxygen mechanics
-            state_updated = state_updated._replace(
+            state_updated = state_updated.replace(
                 divers_collected=new_divers_collected
             )
 
             # update the spawn state with the new difficulty
-            new_spawn_state = state_updated.spawn_state._replace(
+            new_spawn_state = state_updated.spawn_state.replace(
                 difficulty=new_difficulty
             )
 
@@ -2513,7 +2522,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
             new_surface_sub_pos = self.surface_sub_step(state_updated)
 
-            state_updated._replace(surface_sub_position=new_surface_sub_pos)
+            state_updated.replace(surface_sub_position=new_surface_sub_pos)
 
             # update the enemy missile positions
             new_enemy_missile_positions = self.enemy_missiles_step(
@@ -2541,7 +2550,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             )
 
             # Start death animation but keep divers intact during animation
-            death_animation_state = state_updated._replace(
+            death_animation_state = state_updated.replace(
                 score=state.score + collision_points,
                 death_counter=jnp.array(90),
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state),
@@ -2567,14 +2576,14 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # TODO: somewhere the oxygen is depleted on surfacing, this currently blocks the slow draining of oxygen (which is not gameplay relevant -> low priority)
             # scoring freeze, 16 ticks per diver i.e. 6 * 16 and also 2 ticks per remaining oxygen (which is drained!)
             # Create the scoring state
-            scoring_state = state_updated._replace(
+            scoring_state = state_updated.replace(
                 player_x=player_x,
                 player_y=player_y,
                 player_direction=player_direction,
                 lives=state_updated.lives,
                 score=state_updated.score + total_rescue_points,
                 successful_rescues=state_updated.successful_rescues + 1,
-                spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state)._replace(
+                spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state).replace(
                     difficulty=state_updated.spawn_state.difficulty + 1,
                     survived=state_updated.spawn_state.survived.astype(jnp.int32)
                 ),
@@ -2597,7 +2606,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 divers_collected=new_divers_collected,
                 score=new_score,
                 lives=state_updated.lives,
-                spawn_state=new_spawn_state._replace(
+                spawn_state=new_spawn_state.replace(
                     survived=new_spawn_state.survived.astype(jnp.int32)
                 ),
                 diver_positions=new_diver_positions,
@@ -2634,7 +2643,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             new_lives = jnp.minimum(final_state.lives + additional_lives, 6) # max 6 lives possible
 
             # Update the final state with new lives
-            final_state = final_state._replace(lives=new_lives)
+            final_state = final_state.replace(lives=new_lives)
 
             # Check if the game is over
             game_over = final_state.lives <= -1
@@ -2642,7 +2651,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # Handle game over state
             return jax.lax.cond(
                 game_over,
-                lambda _: state._replace(
+                lambda _: state.replace(
                     score=final_state.score,
                     lives=jnp.array(-1),
                     death_counter=jnp.array(0),
@@ -2704,6 +2713,10 @@ class SeaquestRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # Pre-compute oxygen bar color ID (convert JAX array to numpy, then tuple for dict lookup)
+        oxygen_color_rgb = np.asarray(self.consts.OXYGEN_BAR_COLOR[:3])
+        self.OXYGEN_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_color_rgb), 0)
         
         self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
 
@@ -2816,8 +2829,7 @@ class SeaquestRenderer(JAXGameRenderer):
         raster = self.jr.render_indicator(raster, 14, 28, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=10, max_value=3)
         raster = self.jr.render_indicator(raster, 49, 178, state.divers_collected, self.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
 
-        oxygen_color_id = self.COLOR_TO_ID[tuple(np.array(self.consts.OXYGEN_BAR_COLOR[:3]))]
-        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, oxygen_color_id, self.jr.TRANSPARENT_ID)
+        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.jr.TRANSPARENT_ID)
 
         raster = self.jr.draw_rects(
             raster,

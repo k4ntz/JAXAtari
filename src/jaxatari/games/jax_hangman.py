@@ -3,68 +3,220 @@ import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
 from functools import partial
-from typing import NamedTuple, Tuple, Optional
+from typing import Any, NamedTuple, Tuple, Optional
 import os
 
 import chex
+from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
-class HangmanConstants(NamedTuple):
+class HangmanConstants(AutoDerivedConstants):
     # Dimensions
-    WIDTH: int = 160
-    HEIGHT: int = 210
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # Game Logic
-    ALPHABET_SIZE: int = 26
-    SEPARATOR_IDX: int = 26
-    CYCLE_SIZE: int = 27 # 26 letters + divider
-    PAD_TOKEN: int = 26
-    L_MAX: int = 6 # only use words with max 6 letter, because 7 underscores don't fit in
-    MAX_MISSES: int = 11
-    STEP_PENALTY: float = 0.0
+    ALPHABET_SIZE: int = struct.field(pytree_node=False, default=26)
+    SEPARATOR_IDX: int = struct.field(pytree_node=False, default=26)
+    CYCLE_SIZE: int = struct.field(pytree_node=False, default=27) # 26 letters + divider
+    PAD_TOKEN: int = struct.field(pytree_node=False, default=26)
+    L_MAX: int = struct.field(pytree_node=False, default=6) # only use words with max 6 letter, because 7 underscores don't fit in
+    MAX_MISSES: int = struct.field(pytree_node=False, default=11)
+    STEP_PENALTY: float = struct.field(pytree_node=False, default=0.0)
+    DIFFICULTY_MODE: str = struct.field(pytree_node=False, default="B")
+    TIMER_SECONDS: int = struct.field(pytree_node=False, default=20)
+    STEPS_PER_SECOND: int = struct.field(pytree_node=False, default=30)
 
     # Background Color
-    BG_COLOR: Tuple[int, int, int] = (167, 26, 26)
+    BG_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (167, 26, 26))
 
     # Layout - Underscores & Letters
-    UND_W: int = 20
-    UND_H: int = 8
-    UND_GAP: int = 4
-    UND_Y: int = 181
-    UND_START_X: int = 9
-    LETTER_DIST: int = 8  # Distance between underscore top and letter bottom
+    UND_W: int = struct.field(pytree_node=False, default=20)
+    UND_H: int = struct.field(pytree_node=False, default=8)
+    UND_GAP: int = struct.field(pytree_node=False, default=4)
+    UND_Y: int = struct.field(pytree_node=False, default=181)
+    UND_START_X: int = struct.field(pytree_node=False, default=9)
+    LETTER_DIST: int = struct.field(pytree_node=False, default=8)  # Distance between underscore top and letter bottom
 
     # Layout - Hangman
-    HANGMAN_X: int = 17
-    HANGMAN_Y: int = 37
+    HANGMAN_X: int = struct.field(pytree_node=False, default=17)
+    HANGMAN_Y: int = struct.field(pytree_node=False, default=37)
 
     # Layout - Score
-    SCORE_Y: int = 7
-    SCORE_P_X: int = 33
-    SCORE_C_X: int = 112
-    SCORE_DIGITS: int = 1
+    SCORE_Y: int = struct.field(pytree_node=False, default=7)
+    SCORE_P_X: int = struct.field(pytree_node=False, default=33)
+    SCORE_C_X: int = struct.field(pytree_node=False, default=112)
+    SCORE_DIGITS: int = struct.field(pytree_node=False, default=1)
 
     # Layout - Preview Letters
-    PREVIEW_X: int = 108
-    PREVIEW_Y: int = 72
+    PREVIEW_X: int = struct.field(pytree_node=False, default=108)
+    PREVIEW_Y: int = struct.field(pytree_node=False, default=72)
 
-CONSTANTS = HangmanConstants()
+    RAW_WORDS: tuple[str, ...] = struct.field(pytree_node=False, default_factory=lambda: (
+        "ABLE", "ABOUT", "ABOVE", "ABSORB", "ABUSE", "ACADEMY", "ACTION", "ACTOR", "ACUTE", "ADAPT", "ADDER", "ADDON",
+        "ADEPT", "ADJUST", "ADMIRE", "ADOBE", "ADOPT", "ADORE", "ADULT", "AFFAIR", "AFFORD", "AFRAID", "AFRESH",
+        "AGENT", "AGILE", "AGING", "AGREE", "AHEAD", "AIDED", "AIMED", "AIR", "AIRPORT", "AISLE", "ALARM", "ALBUM",
+        "ALERT", "ALGAE", "ALIBI", "ALLEY", "ALLOY", "ALMOND", "ALMOST", "ALONE", "ALONG", "ALPHA", "ALTAR", "ALTER",
+        "ALWAYS", "AMBER", "AMBLE", "AMEND", "AMONG", "AMOUNT", "AMPLE", "ANCHOR", "ANCIENT", "ANGLE", "ANGRY",
+        "ANIMAL", "ANKLE", "ANNEX", "ANNUAL", "ANSWER", "ANT", "ANTELOPE", "ANTLER", "ANVIL", "AORTA", "APART",
+        "APE", "APEX", "APPLE", "APPLY", "APRIL", "APRON", "ARCADE", "ARCH", "ARCTIC", "ARENA", "ARGUE", "ARISE",
+        "ARM", "ARMOR", "ARMY", "AROMA", "ARROW", "ART", "ARTERY", "ARTIST", "ASCEND", "ASH", "ASIDE", "ASK",
+        "ASLEEP", "ASPECT", "ASPEN", "ASSIST", "ASSORT", "ASSURE", "ASTRAL", "ATLAS", "ATOM", "ATOMIC", "ATONCE",
+        "ATTACH", "ATTIC", "AUDIO", "AUGUST", "AUNT", "AURORA", "AUTHORS", "AUTO", "AUTUMN", "AUX", "AVENUE", "AVID",
+        "AVOID", "AWAKE", "AWARE", "AWARD", "AWOKE", "AXIS", "AZURE", "BABY", "BACK", "BACON", "BADGER", "BAG",
+        "BAKER", "BALANCE", "BALD", "BALLET", "BALLOON", "BALMY", "BAMBOO", "BANANA", "BAND", "BANDIT", "BANK",
+        "BAR", "BARB", "BARBER", "BARE", "BARGE", "BARN", "BARRACK", "BARREL", "BASALT", "BASE", "BASIC", "BASIL",
+        "BASKET", "BASS", "BATCH", "BATON", "BAT", "BATTLE", "BAY", "BEACH", "BEACON", "BEAD", "BEAK", "BEAM",
+        "BEAN", "BEAR", "BEAVER", "BECOME", "BED", "BEE", "BEEF", "BEET", "BEETLE", "BEGAN", "BEGIN", "BEGUN",
+        "BEING", "BELIEF", "BELL", "BELLY", "BELT", "BENCH", "BERRY", "BERTH", "BEST", "BET", "BETA", "BETTER",
+        "BEYOND", "BIBLE", "BICYCLE", "BID", "BIG", "BIGGER", "BIKE", "BILL", "BIN", "BIND", "BIRD", "BIRTH",
+        "BISON", "BISTRO", "BIT", "BITE", "BITTER", "BLACK", "BLADE", "BLAME", "BLANK", "BLAST", "BLAZE", "BLEAK",
+        "BLEED", "BLEND", "BLESS", "BLIMP", "BLIND", "BLINK", "BLIP", "BLISS", "BLOOM", "BLOSSOM", "BLOW", "BLUE",
+        "BLUFF", "BLUNT", "BLUR", "BOARD", "BOAT", "BODY", "BOIL", "BOLD", "BOLT", "BOMB", "BOND", "BONE", "BONUS",
+        "BOOK", "BOOST", "BOOT", "BOOTH", "BOOTS", "BORDER", "BORE", "BORN", "BORROW", "BOSS", "BOTANY", "BOTH",
+        "BOTTLE", "BOTTOM", "BOUNCE", "BOUND", "BOUT", "BOWL", "BOX", "BOXER", "BOY", "BRACE", "BRANCH", "BRAND",
+        "BRASS", "BRAVE", "BRAVO", "BREAD", "BREAK", "BREAST", "BREATH", "BREEZE", "BREW", "BRICK", "BRIDE",
+        "BRIDGE", "BRIEF", "BRIGHT", "BRIM", "BRING", "BRISK", "BRISTLE", "BROAD", "BROIL", "BROKE", "BRONZE",
+        "BROOK", "BROOM", "BROWN", "BROWSE", "BRUSH", "BRUTE", "BUBBLE", "BUCK", "BUD", "BUDGET", "BUFF",
+        "BUFFET", "BUG", "BUGGY", "BUILD", "BUILT", "BULB", "BULGE", "BULK", "BULL", "BULLET", "BUMPER", "BUNCH",
+        "BUNDLE", "BUNNY", "BUNT", "BURDEN", "BURGER", "BURROW", "BURST", "BUS", "BUSH", "BUSY", "BUTCHER", "BUTTER",
+        "BUTTON", "BUY", "BUZZ", "CAB", "CABIN", "CABLE", "CACHE", "CACTUS", "CAGE", "CAKE", "CALF", "CALL",
+        "CALM", "CAMEL", "CAMP", "CANAL", "CANARY", "CANCEL", "CANDLE", "CANDY", "CANOE", "CANON", "CANOPY",
+        "CANTEEN", "CANVAS", "CANYON", "CAP", "CAPABLE", "CAPE", "CAPTAIN", "CAR", "CARBON", "CARD", "CARE",
+        "CARGO", "CARPET", "CARRIAGE", "CARRY", "CARROT", "CART", "CARVE", "CASE", "CASH", "CASINO", "CASK",
+        "CAST", "CASTLE", "CASUAL", "CAT", "CATCH", "CATER", "CATTLE", "CAUSE", "CAVE", "CEASE", "CEDAR", "CEILING",
+        "CELERY", "CELL", "CEMENT", "CENSUS", "CENTER", "CENTRE", "CHAIN", "CHAIR", "CHALK", "CHAMP", "CHANCE",
+        "CHANGE", "CHAOS", "CHAPEL", "CHARM", "CHART", "CHASE", "CHASM", "CHEAP", "CHEAT", "CHEESE", "CHEF",
+        "CHEMIST", "CHERRY", "CHEST", "CHEW", "CHICK", "CHIEF", "CHILD", "CHILI", "CHILL", "CHIME", "CHIN",
+        "CHINA", "CHIP", "CHOCOL", "CHOICE", "CHOKE", "CHORD", "CHORE", "CHOSE", "CHOSEN", "CHUCK", "CHUNK",
+        "CHURCH", "CIDER", "CINEMA", "CIPHER", "CIRCLE", "CIRCUIT", "CIRCUS", "CITY", "CIVIC", "CLAIM", "CLAM",
+        "CLAMP", "CLAN", "CLASH", "CLASP", "CLASS", "CLAUSE", "CLAW", "CLAY", "CLEAN", "CLEAR", "CLERK", "CLICK",
+        "CLIFF", "CLIMB", "CLINIC", "CLIP", "CLOCK", "CLOSE", "CLOSET", "CLOUD", "CLOUT", "CLOVE", "CLOWN", "CLUB",
+        "CLUE", "CLUMP", "COACH", "COAL", "COAST", "COAT", "COAX", "COBALT", "COBRA", "COCOA", "COCONUT", "CODE",
+        "CODER", "COFFEE", "COIL", "COIN", "CONE", "CONFIRM", "CONGA", "CONIC", "CONN", "CONTOUR", "CONTRA",
+        "CONTROL", "CONVEY", "COOK", "COOKIE", "COOL", "COOP", "COPPER", "COPY", "CORAL", "CORD", "CORE",
+        "CORK", "CORN", "CORNER", "CORRAL", "COST", "COTTON", "COUCH", "COUGAR", "COUNT", "COUNTRY", "COUPLE",
+        "COURSE", "COURT", "COVER", "COW", "COWBOY", "COYOTE", "CRAB", "CRACK", "CRAFT", "CRANE", "CRASH",
+        "CRATE", "CRAWL", "CRAYON", "CRAZE", "CRAZY", "CREAM", "CREATE", "CREDIT", "CREEK", "CREEP", "CREST",
+        "CREW", "CRIB", "CRICKET", "CRIME", "CRISP", "CROOK", "CROP", "CROSS", "CROWD", "CROWN", "CRUDE",
+        "CRUEL", "CRUISE", "CRUMB", "CRUSH", "CRUST", "CRY", "CUBE", "CUBIC", "CUBS", "CUFF", "CUISINE",
+        "CULT", "CULTURE", "CUP", "CURB", "CURE", "CURL", "CURRENCY", "CURRY", "CURSE", "CURVE", "CUSHION",
+        "CUSTOM", "CUT", "CYCLE", "CYCLER", "CYCLIC", "CYLINDER", "DAD", "DAILY", "DAIRY", "DAISY", "DAMAGE",
+        "DANCE", "DANCER", "DANGER", "DARING", "DARK", "DARLING", "DART", "DATA", "DATE", "DAWN", "DAY",
+        "DEAL", "DEAR", "DEBRIS", "DEBT", "DEBUG", "DEBUT", "DECENT", "DECIDE", "DECK", "DECOR", "DEED",
+        "DEEP", "DEER", "DEFEND", "DEFER", "DEFINE", "DEGREE", "DELAY", "DELTA", "DELVE", "DEMAND", "DEMN",
+        "DEMO", "DENT", "DENTAL", "DENTIST", "DENY", "DEPART", "DEPEND", "DEPLOY", "DEPOSIT", "DEPTH",
+        "DEPUTY", "DERBY", "DESERT", "DESIGN", "DESK", "DESPITE", "DETAIL", "DETOUR", "DEUCE", "DEVICE", "DEVIL",
+        "DEVOTE", "DIARY", "DICE", "DIE", "DIET", "DIG", "DIGEST", "DIGIT", "DILUTE", "DIM", "DINER", "DINGO",
+        "DINGY", "DIODE", "DIP", "DIPPER", "DIRECT", "DIRT", "DIRTY", "DISCO", "DISH", "DISK", "DIVE",
+        "DIVER", "DIVIDE", "DIVING", "DIZZY", "DOCK", "DOCTOR", "DODGE", "DOG", "DOGMA", "DOLL", "DOLPHIN",
+        "DOMAIN", "DOME", "DOMINO", "DONE", "DONKEY", "DONOR", "DOOR", "DOSE", "DOT", "DOUBLE", "DOUGH",
+        "DOVE", "DOWN", "DOZEN", "DRAB", "DRAFT", "DRAGON", "DRAIN", "DRAMA", "DRANK", "DRAPE", "DRAW",
+        "DRAWN", "DREAD", "DREAM", "DRESS", "DRIED", "DRIFT", "DRILL", "DRINK", "DRIVE", "DRIVER", "DROID",
+        "DROOP", "DROP", "DROVE", "DROWN", "DRUG", "DRUM", "DRY", "DUCK", "DUCT", "DUKE", "DULL", "DUMB",
+        "DUNE", "DUNK", "DUO", "DUSK", "DUST", "DUTY", "DWELL", "DWINDLE", "EACH", "EAGER", "EAGLE", "EAR",
+        "EARLY", "EARN", "EARTH", "EASE", "EASILY", "EAST", "EASY", "EAT", "EBONY", "ECHO", "ECLIPSE", "ECO",
+        "EDGE", "EDIT", "EDITOR", "EEL", "EFFECT", "EFFORT", "EGG", "EIGHT", "EITHER", "ELBOW", "ELDER",
+        "ELECT", "ELEGANT", "ELEMENT", "ELEPHANT", "ELEVATE", "ELITE", "ELK", "ELM", "ELSE", "EMBED", "EMBER",
+        "EMBRACE", "EMIT", "EMOTION", "EMPLOY", "EMPTY", "EMU", "ENABLE", "ENACT", "END", "ENDURE", "ENEMY",
+        "ENERGY", "ENJOY", "ENLIST", "ENORMOUS", "ENOUGH", "ENROLL", "ENSURE", "ENTER", "ENTIRE", "ENTRY",
+        "ENVOY", "ENZYME", "EPOCH", "EQUAL", "EQUIP", "ERA", "ERASE", "ERECT", "ERODE", "ERROR", "ESCAPE",
+        "ESSAY", "ESTATE", "ETC", "ETHIC", "ETHOS", "EURO", "EVADE", "EVEN", "EVENT", "EVER", "EVICT", "EVIL",
+        "EVOLVE", "EXACT", "EXAM", "EXCEL", "EXHALE", "EXIST", "EXIT", "EXOTIC", "EXPAND", "EXPECT", "EXPENSE",
+        "EXPERT", "EXPIRE", "EXPORT", "EXPOSE", "EXTEND", "EXTRA", "EYE", "FABRIC", "FACE", "FACT", "FACTOR",
+        "FACTORY", "FADE", "FAIL", "FAIR", "FAITH", "FAKE", "FALL", "FALSE", "FAME", "FAMOUS", "FAN", "FANCY",
+        "FANG", "FARM", "FARMER", "FARMS", "FAST", "FATAL", "FATE", "FAULT", "FAUNA", "FAVOR", "FAX", "FEAST",
+        "FEED", "FEEL", "FELT", "FENCE", "FERN", "FERRY", "FERTILE", "FEST", "FETCH", "FEVER", "FEW", "FIBER",
+        "FICTION", "FIELD", "FIERCE", "FIFTH", "FIFTY", "FIG", "FIGHT", "FIGURE", "FILE", "FILL", "FILM", "FILTER",
+        "FINAL", "FINCH", "FIND", "FINE", "FINISH", "FIRE", "FIRM", "FIRST", "FISH", "FISHER", "FIST", "FIT",
+        "FIVE", "FIX", "FIXED", "FLAG", "FLAKY", "FLAME", "FLANK", "FLASH", "FLAT", "FLAW", "FLEA", "FLEET",
+        "FLESH", "FLICK", "FLIER", "FLIGHT", "FLING", "FLINT", "FLIP", "FLOAT", "FLOCK", "FLOOD", "FLOOR", "FLOUR",
+        "FLOW", "FLOWER", "FLU", "FLUFF", "FLUID", "FLUTE", "FLUX", "FLY", "FOAM", "FOCUS", "FOG", "FOGGY",
+        "FOOD", "FOOL", "FOOT", "FORCE", "FORD", "FOREST", "FORGET", "FORK", "FORM", "FORMAT", "FORT", "FORUM",
+        "FOSSIL", "FOUND", "FOUR", "FOX", "FRAME", "FRANK", "FRAUD", "FRESH", "FRIAR", "FRIDAY", "FRIED",
+        "FRIEND", "FRIES", "FROG", "FROM", "FRONT", "FROST", "FROZE", "FRUIT", "FUEL", "FULL", "FUN", "FUNCTION",
+        "FUND", "FUNNY", "FUR", "FUSION", "FUTURE", "GADGET", "GALE", "GALLON", "GAMBLE", "GAME", "GAMER",
+        "GAMMA", "GANG", "GARDEN", "GARLIC", "GASH", "GATE", "GATHER", "GAUGE", "GAUNT", "GAZE", "GEAR", "GECKO",
+        "GEL", "GEM", "GENE", "GENERIC", "GENIUS", "GENRE", "GENTLE", "GENTLY", "GENUS", "GERM", "GET", "GHOST",
+        "GIANT", "GIFT", "GIG", "GIGGLE", "GIRAFFE", "GIRL", "GIST", "GIVE", "GLACIER", "GLAD", "GLANCE", "GLASS",
+        "GLAZE", "GLEAM", "GLIDE", "GLINT", "GLOBE", "GLOOM", "GLORY", "GLOVE", "GLOW", "GLUE", "GOAL", "GOAT",
+        "GOBLIN", "GOD", "GODS", "GOING", "GOLD", "GOLF", "GONDOLA", "GONE", "GOOD", "GOOSE", "GOPHER", "GORILLA",
+        "GOSPEL", "GOT", "GOURD", "GOWN", "GRACE", "GRADE", "GRAIN", "GRAND", "GRANT", "GRAPE", "GRAPH", "GRASP",
+        "GRASS", "GRATE", "GRAVEL", "GRAVY", "GREAT", "GREED", "GREEN", "GREET", "GREY", "GRID", "GRIEF", "GRILL",
+        "GRIN", "GRIND", "GRIP", "GRIT", "GROOM", "GROSS", "GROUP", "GROVE", "GROW", "GROWN", "GRUB", "GRUNT",
+        "GUARD", "GUAVA", "GUESS", "GUEST", "GUIDE", "GUILD", "GUILT", "GUITAR", "GULL", "GULP", "GUM", "GUMBO",
+        "GUST", "GUT", "GUY", "GYM", "GYPSY", "HABIT", "HACK", "HAIL", "HAIR", "HALF", "HALL", "HALO", "HALT",
+        "HAM", "HAMLET", "HAND", "HANDLE", "HANG", "HARBOR", "HARD", "HARE", "HARM", "HARP", "HARSH", "HARVEST",
+        "HAS", "HASH", "HASTE", "HAT", "HATCH", "HATE", "HAVE", "HAWK", "HAY", "HAZEL", "HAZY", "HEAD", "HEAL",
+        "HEAP", "HEAR", "HEARD", "HEART", "HEAT", "HEAVY", "HEDGE", "HEEL", "HEFT", "HEIGHT", "HEIR", "HELD",
+        "HELIX", "HELLO", "HELM", "HELMET", "HELP", "HEMP", "HEN", "HERB", "HERD", "HERON", "HERO", "HESSIAN",
+        "HIDDEN", "HIDE", "HIGH", "HIKER", "HILL", "HILT", "HIND", "HINGE", "HINT", "HIP", "HIRE", "HIS", "HIT",
+        "HIVE", "HOBBY", "HOG", "HOLD", "HOLE", "HOLIDAY", "HOLLY", "HOME", "HONEST", "HONEY", "HONOR", "HOOD",
+        "HOOK", "HOOP", "HOP", "HOPPER", "HORN", "HORNET", "HORSE", "HOSE", "HOST", "HOT", "HOTEL", "HOUR", "HOUSE",
+        "HOVER", "HUGE", "HUMAN", "HUMBLE", "HUMID", "HUMOR", "HUNGER", "HUNT", "HURRY", "HURT", "HUSK", "HUSKY",
+        "HUT", "HYBRID", "HYDRA", "HYENA", "HYMNS", "ICE", "ICING", "ICON", "IDEA", "IDEAL", "IDENTITY", "IDLE",
+        "IDOL", "IGLOO", "IGNITE", "IGUANA", "ILL", "IMAGE", "IMPACT", "IMPORT", "IN", "INCH", "INDEX", "INDIGO",
+        "INDOOR", "INEPT", "INFER", "INFO", "INGOT", "INJECT", "INK", "INLAY", "INLET", "INN", "INNER", "INPUT",
+        "INSIDE", "INSIGHT", "INSPIRE", "INSTANCE", "INTAKE", "INTENT", "INTERN", "INTO", "INVENT", "INVEST",
+        "ION", "IRON", "ISLAND", "IVORY", "IVY", "JACK", "JACKET", "JAIL", "JAM", "JAR", "JASMINE", "JAW", "JAZZ",
+        "JEANS", "JEEP", "JELLY", "JERKY", "JET", "JEWEL", "JIG", "JINX", "JOB", "JOG", "JOIN", "JOINT", "JOKE",
+        "JOLLY", "JOURNAL", "JOY", "JUICE", "JUICY", "JULY", "JUMP", "JUMPER", "JUNE", "JUNGLE", "JUNIOR", "JUNK",
+        "JUROR", "JUST", "KAYAK", "KEEN", "KEEP", "KELP", "KERNEL", "KETTLE", "KEY", "KEYBOARD", "KICK", "KID",
+        "KIDNEY", "KILO", "KIND", "KING", "KIOSK", "KISS", "KIT", "KITE", "KITTEN", "KIWI", "KNEAD", "KNEE",
+        "KNIFE", "KNIT", "KNOB", "KNOT", "KNOW", "KOALA", "LABEL", "LABOR", "LACE", "LACK", "LADDER", "LADLE",
+        "LADY", "LAGOON", "LAKE", "LAMB", "LAMP", "LANCE", "LAND", "LANE", "LAP", "LAPTOP", "LARGE", "LARK",
+        "LASER", "LAST", "LATCH", "LATE", "LAUGH", "LAUNCH", "LAVA", "LAWN", "LAWSUIT", "LAWYER", "LAYER", "LAZY",
+        "LEAF", "LEAGUE", "LEAK", "LEAN", "LEARN", "LEASE", "LEASH", "LEAVE", "LED", "LEFT", "LEG", "LEGAL",
+        "LEGEND", "LEMON", "LEND", "LENS", "LEOPARD", "LESS", "LETTUCE", "LEVEL", "LEVER", "LIAR", "LID", "LIE",
+        "LIFE", "LIFT", "LIGHT", "LIKE", "LILAC", "LILY", "LIMB", "LIME", "LIMIT", "LINE", "LINK", "LION",
+        "LIP", "LIQUID", "LIST", "LIT", "LITER", "LITTLE", "LIVE", "LIVER", "LIZARD", "LOAD", "LOAF", "LOAN",
+        "LOBSTER", "LOCAL", "LOCK", "LODGE", "LOFT", "LOG", "LOOM", "LOON", "LOOP", "LOOSE", "LOOT", "LORD",
+        "LORRY", "LOSE", "LOSS", "LOST", "LOTION", "LOTUS", "LOUD", "LOUNGE", "LOVE", "LOW", "LOYAL", "LUCK",
+        "LUCID", "LUMP", "LUNCH", "LUNGE", "LUSH", "LUST", "LUTE", "LUXURY", "LYCHEE", "LYRIC", "MAGENTA", "MAGIC",
+        "MAID", "MAIL", "MAJOR", "MAKER", "MALE", "MALL", "MAMMAL", "MAN", "MANGO", "MANTIS", "MAP", "MAPLE",
+        "MARBLE", "MARCH", "MARE", "MARGIN", "MARINE", "MARK", "MARKET", "MARROW", "MARRY", "MARS", "MART",
+        "MASK", "MASS", "MASTER", "MATCH", "MATE", "MATH", "MATRIX", "MAY", "MAYOR", "MAZE", "MEADOW", "MEAL",
+        "MEAN", "MEASURE", "MEAT", "MECHANIC", "MEDAL", "MEDIA", "MEDIC", "MEET", "MELON", "MELT", "MEMBER",
+        "MEMORY", "MEND", "MENU", "MERCY", "MERGE", "MERIT", "MERRY", "MESS", "METAL", "METER", "METRO", "MICRO",
+        "MIDDLE", "MIGHT", "MILD", "MILE", "MILK", "MILL", "MIMIC", "MINCE", "MIND", "MINER", "MINI", "MINOR",
+        "MINT", "MINUTE", "MIRROR", "MIRTH", "MIX", "MIXER", "MIXED", "MIXTURE", "MOBILE", "MODEL", "MODEM",
+        "MODERN", "MODIFY", "MODULE", "MOIST", "MOLD", "MOLAR", "MOM", "MONITOR", "MONKEY", "MONTH", "MOOD",
+        "MOON", "MOOR", "MOOSE", "MOP", "MORAL", "MORE", "MORNING", "MORPH", "MOSS", "MOST", "MOTH", "MOTHER",
+        "MOTION", "MOTOR", "MOTTO", "MOUND", "MOUNT", "MOURN", "MOUSE", "MOUTH", "MOVE", "MOVIE", "MUFFIN",
+        "MULE", "MUSE", "MUSIC", "MUSK", "MUSSEL", "MUST", "MUTE", "MUTTER", "MUTTON", "NACHO", "NAIL", "NAME",
+        "NAPKIN", "NARROW", "NASTY", "NATION", "NATIVE", "NATURE", "NAVY", "NEAR", "NEAT", "NECK", "NEED", "NEON",
+        "NERVE", "NEST", "NET", "NETWORK", "NEURAL", "NEATLY", "NEVER", "NEW", "NEWS", "NEXT", "NICE", "NICKEL",
+        "NIECE", "NIGHT", "NINE", "NINJA", "NINTH", "NOBLE", "NOD", "NOISE", "NOISY", "NONE", "NOODLE", "NORTH",
+        "NOSE", "NOTCH", "NOTE", "NOTIFY", "NOTION", "NOVEL", "NOVICE", "NOW", "NUANCE", "NUCLEAR", "NUDGE",
+        "NULL", "NUMBER", "NUMB", "NURSE", "NUT", "NYLON", "OAK", "OAR", "OASIS", "OAT", "OATH", "OBEY", "OBJECT",
+        "OBLIGE", "OCEAN", "OCTAVE", "OCTET", "ODD", "ODOR", "OFF", "OFFER", "OFFICE", "OFFSET", "OFTEN", "OIL",
+        "OINK", "OLD", "OLIVE", "OMEGA", "OMELET", "OMEN", "OMICRON", "ONCE", "ONE", "ONION", "ONLINE", "ONLY",
+        "ONTO", "ONYX", "OPEN", "OPERA", "OPINE", "OPTIC", "OPTION", "ORANGE", "ORBIT", "ORCHID", "ORDER",
+        "ORE", "ORGAN", "ORIGIN", "ORION", "ORNATE", "ORPHAN", "OSPREY", "OSTRICH", "OTHER", "OTTER", "OUNCE",
+        "OUR", "OUT", "OVAL", "OVEN", "OVER", "OWL", "OX", "OYSTER", "OZONE", "PACE", "PACK", "PAD", "PADDLE",
+        "PAGE", "PAID", "PAIL", "PAIN", "PAINT", "PAIR", "PALACE", "PALE", "PALM", "PANDA", "PANEL", "PANTRY",
+        "PANTS", "PAPA", "PAPER", "PARADE", "PARCEL", "PARDON", "PARENT", "PARK", "PARROT", "PART", "PARTY",
+        "PASTA", "PASTE", "PASTOR", "PASTRY", "PATCH", "PATH", "PATIENT", "PATROL", "PATIO", "PATSY", "PAUSE",
+        "PAY", "PEACE", "PEACH", "PEAR", "PEARL", "PEAS", "PECK", "PEDAL", "PEEL", "PEEP", "PEER", "PELICAN",
+        "PEN", "PENALTY", "PENCIL", "PEND", "PENGUIN", "PENNY", "PEOPLE", "PEPPER", "PERCH", "PERFECT", "PERIL",
+        "PERK", "PERMIT", "PERSON", "PEST", "PET", "PHASE", "PHONE", "PHOTO", "PHYSIC", "PICK", "PICKUP",
+        "PICNIC", "PIE", "PIECE", "PIER", "PIGEON", "PIGMENT", "PILOT", "PIN", "PINCH", "PINE", "PING", "PINK",
+        "PINT", "PIONEER", "PIPE", "PIPELINE", "PIRATE", "PISTOL", "PITCH", "PIVOT", "PIXEL", "PIZZA", "PLACE",
+        "PLAID", "PLAIN", "PLAN", "PLANE", "PLANET", "PLANT", "PLASMA", "PLATE", "PLAY", "PLAYER", "PLEAD",
+        "PLEASE", "PLEDGE", "PLENTY", "PLIERS", "PLIGHT", "PLOD", "PLOW", "PLUCK", "PLUG", "PLUMB", "PLUME",
+        "PLUMP", "PLUM",
+    ))
+    
+    ADDITIONAL_WORDS: tuple[str, ...] = struct.field(pytree_node=False, default_factory=tuple)
 
-
-class HangmanConstants(NamedTuple):
-    MAX_MISSES: int = MAX_MISSES
-    STEP_PENALTY: float = STEP_PENALTY
-    DIFFICULTY_MODE: str = DIFFICULTY_MODE
-    TIMER_SECONDS: int = TIMER_SECONDS
-    STEPS_PER_SECOND: int = STEPS_PER_SECOND
-
-
-class HangmanState(NamedTuple):
+@struct.dataclass
+class HangmanState:
     key: chex.Array
     word: chex.Array
     length: chex.Array
@@ -84,7 +236,8 @@ class HangmanState(NamedTuple):
     last_commit: chex.Array
 
 
-class HangmanObservation(NamedTuple):
+@struct.dataclass
+class HangmanObservation:
     revealed: chex.Array
     mask: chex.Array
     guessed: chex.Array
@@ -93,21 +246,12 @@ class HangmanObservation(NamedTuple):
     cursor_idx: chex.Array
 
 
-class HangmanInfo(NamedTuple):
+@struct.dataclass
+class HangmanInfo:
     time: chex.Array
 
 
 # helpers functions
-@jax.jit
-def _sample_word(key: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array]:
-    key, sub = jrandom.split(key)
-    idx = jrandom.randint(sub, shape=(), minval=0, maxval=N_WORDS, dtype=jnp.int32)
-    return key, WORDS_ENC[idx], WORDS_LEN[idx]
-
-
-@jax.jit
-def _compute_revealed(word: chex.Array, mask: chex.Array) -> chex.Array:
-    return jnp.where(mask.astype(bool), word, CONSTANTS.PAD_TOKEN)
 
 
 def _action_delta_cursor(action: chex.Array) -> chex.Array:
@@ -146,66 +290,96 @@ def _action_commit(action: chex.Array) -> chex.Array:
     )
 
 
-@jax.jit
-def _advance_cursor_skip_guessed(cursor: chex.Array,
-                                 delta: chex.Array,
-                                 guessed: chex.Array) -> chex.Array:
-    """Move one step in delta direction. Cycle size is 27 (letters + divider)."""
-    step = jnp.where(delta > 0, 1, jnp.where(delta < 0, -1, 0)).astype(jnp.int32)
-
-    cur0 = jnp.where(step == 0, cursor, (cursor + step) % CONSTANTS.CYCLE_SIZE)
-
-    def cond_fun(carry):
-        cur, n = carry
-        is_guessed = jnp.logical_and(cur < CONSTANTS.ALPHABET_SIZE, guessed[cur] == 1)
-
-        need_move = jnp.logical_and(step != 0, is_guessed)
-        return jnp.logical_and(n < CONSTANTS.CYCLE_SIZE, need_move)
-
-    def body_fun(carry):
-        cur, n = carry
-        return ((cur + step) % CONSTANTS.CYCLE_SIZE, n + 1)
-
-    cur, _ = lax.while_loop(cond_fun, body_fun, (cur0, jnp.int32(0)))
-    return cur
-
-
 # environment
 class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, Action]):
-    def __init__(self, reward_funcs: Optional[list] = None, *,
-                 max_misses: int = 11,
-                 step_penalty: float = 0.0,
-                 difficulty_mode: str = "B",
-                 timer_seconds: int = 20,
-                 steps_per_second: int = 30):
-        super().__init__()
-
-        # Init Constants
-        self.consts = HangmanConstants(
-            MAX_MISSES=int(max_misses),
-            STEP_PENALTY=float(step_penalty)
-        )
-
-        self.renderer = HangmanRenderer(self.consts)
-        self.max_misses = self.consts.MAX_MISSES
-        self.step_penalty = self.consts.STEP_PENALTY
-
+    # Full action set (all 18 actions)
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP,
+        Action.FIRE,
+        Action.UP,
+        Action.RIGHT,
+        Action.LEFT,
+        Action.DOWN,
+        Action.UPRIGHT,
+        Action.UPLEFT,
+        Action.DOWNRIGHT,
+        Action.DOWNLEFT,
+        Action.UPFIRE,
+        Action.RIGHTFIRE,
+        Action.LEFTFIRE,
+        Action.DOWNFIRE,
+        Action.UPRIGHTFIRE,
+        Action.UPLEFTFIRE,
+        Action.DOWNRIGHTFIRE,
+        Action.DOWNLEFTFIRE,
+    ], dtype=jnp.int32)
+    
     def __init__(self, consts: HangmanConstants = None):
         consts = consts or HangmanConstants()
         super().__init__(consts)
         self.renderer = HangmanRenderer()
         self.consts = consts
 
-        self.action_set = [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.UPFIRE, Action.DOWNFIRE]
+        # Combine base words with additional words from constants
+        all_words = list(consts.RAW_WORDS)
+        if consts.ADDITIONAL_WORDS:
+            all_words.extend(consts.ADDITIONAL_WORDS)
+        
+        # Process word list
+        raw_max = max(len(w) for w in all_words)
+        raw_encoded = jnp.array([
+            [ord(c) - 65 for c in w.upper()] + [self.consts.PAD_TOKEN] * (raw_max - len(w))
+            for w in all_words
+        ], dtype=jnp.int32)
+        
+        raw_lens = jnp.sum(raw_encoded != self.consts.PAD_TOKEN, axis=1)
+        valid_mask = raw_lens <= self.consts.L_MAX
+        filtered_enc = raw_encoded[valid_mask]
+        
+        self.words_enc = filtered_enc[:, :self.consts.L_MAX]
+        self.words_len = raw_lens[valid_mask]
+        self.n_words = self.words_enc.shape[0]
         # obs size depends on L_MAX
         self.obs_size = self.consts.L_MAX + self.consts.L_MAX + self.consts.ALPHABET_SIZE + 3
-        self.reward_funcs = tuple(reward_funcs) if reward_funcs is not None else None
 
         # Compute derived values from constants
-        self.timed = 1 if str(consts.DIFFICULTY_MODE).upper() == "A" else 0
-        self.timer_steps = int(consts.TIMER_SECONDS * consts.STEPS_PER_SECOND)
+        self.timed = 1 if str(self.consts.DIFFICULTY_MODE).upper() == "A" else 0
+        self.timer_steps = int(self.consts.TIMER_SECONDS * self.consts.STEPS_PER_SECOND)
 
         self._rng_key = jrandom.PRNGKey(0)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_revealed(self, word: chex.Array, mask: chex.Array) -> chex.Array:
+        return jnp.where(mask.astype(bool), word, self.consts.PAD_TOKEN)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _advance_cursor_skip_guessed(self, cursor: chex.Array,
+                                    delta: chex.Array,
+                                    guessed: chex.Array) -> chex.Array:
+        """Move one step in delta direction. Cycle size is 27 (letters + divider)."""
+        step = jnp.where(delta > 0, 1, jnp.where(delta < 0, -1, 0)).astype(jnp.int32)
+
+        cur0 = jnp.where(step == 0, cursor, (cursor + step) % self.consts.CYCLE_SIZE)
+
+        def cond_fun(carry):
+            cur, n = carry
+            is_guessed = jnp.logical_and(cur < self.consts.ALPHABET_SIZE, guessed[cur] == 1)
+
+            need_move = jnp.logical_and(step != 0, is_guessed)
+            return jnp.logical_and(n < self.consts.CYCLE_SIZE, need_move)
+
+        def body_fun(carry):
+            cur, n = carry
+            return ((cur + step) % self.consts.CYCLE_SIZE, n + 1)
+
+        cur, _ = lax.while_loop(cond_fun, body_fun, (cur0, jnp.int32(0)))
+        return cur
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _sample_word(self, key: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array]:
+        key, sub = jrandom.split(key)
+        idx = jrandom.randint(sub, shape=(), minval=0, maxval=self.n_words, dtype=jnp.int32)
+        return key, self.words_enc[idx], self.words_len[idx]
 
     def seed(self, seed: int | chex.Array) -> chex.Array:
         if isinstance(seed, int):
@@ -221,7 +395,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         if key is None:
             key = self._rng_key
 
-        key, word, length = _sample_word(key)
+        key, word, length = self._sample_word(key)
 
         self._rng_key = key
         # init round timer
@@ -267,7 +441,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
         def _get_new_round_state(s: HangmanState, step_reward: chex.Array, score_delta: chex.Array,
                                  cpu_delta: chex.Array, current_commit_val: chex.Array) -> HangmanState:
-            key, word, length = _sample_word(s.key)
+            key, word, length = self._sample_word(s.key)
             time0 = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
             tmax = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
 
@@ -290,7 +464,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
             )
 
         def _continue_round(s: HangmanState) -> HangmanState:
-            cursor = _advance_cursor_skip_guessed(s.cursor_idx, delta, s.guessed)
+            cursor = self._advance_cursor_skip_guessed(s.cursor_idx, delta, s.guessed)
 
             # Timer logic
             t0 = s.time_left_steps
@@ -317,7 +491,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 lost = misses >= self.consts.MAX_MISSES
 
                 mask_final = jnp.where(lost, jnp.where(within, 1, mask), mask)
-                step_reward = jnp.where(all_revealed, 1.0, jnp.where(lost, -1.0, self.step_penalty)).astype(jnp.float32)
+                step_reward = jnp.where(all_revealed, 1.0, jnp.where(lost, -1.0, self.consts.STEP_PENALTY)).astype(jnp.float32)
 
                 round_ended = jnp.logical_or(all_revealed, lost)
 
@@ -358,7 +532,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
                 t_next = jnp.where(timed_out, jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32),
                                    t1)
-                step_reward = jnp.where(lost, -1.0, self.step_penalty).astype(jnp.float32)
+                step_reward = jnp.where(lost, -1.0, self.consts.STEP_PENALTY).astype(jnp.float32)
 
                 base = HangmanState(
                     key=s2.key, word=s2.word, length=s2.length,
@@ -423,7 +597,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: HangmanState) -> HangmanObservation:
-        revealed = _compute_revealed(state.word, state.mask)
+        revealed = self._compute_revealed(state.word, state.mask)
         return HangmanObservation(
             revealed=revealed, mask=state.mask, guessed=state.guessed,
             misses=state.misses, lives=state.lives, cursor_idx=state.cursor_idx,
@@ -464,7 +638,8 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
 # render
 class HangmanRenderer(JAXGameRenderer):
-    def __init__(self, consts: HangmanConstants = CONSTANTS):
+    def __init__(self, consts: HangmanConstants = None):
+        consts = consts or HangmanConstants()
         super().__init__()
         self.consts = consts
         self.config = render_utils.RendererConfig(
@@ -603,177 +778,3 @@ class HangmanRenderer(JAXGameRenderer):
 
         # --- Final Palette Lookup ---
         return self.jr.render_from_palette(raster, self.PALETTE)
-
-
-
-
-# --- Word List Processing ---
-
-_RAW_WORDS: tuple[str, ...] = (
-    "ABLE", "ABOUT", "ABOVE", "ABSORB", "ABUSE", "ACADEMY", "ACTION", "ACTOR", "ACUTE", "ADAPT", "ADDER", "ADDON",
-    "ADEPT", "ADJUST", "ADMIRE", "ADOBE", "ADOPT", "ADORE", "ADULT", "AFFAIR", "AFFORD", "AFRAID", "AFRESH",
-    "AGENT", "AGILE", "AGING", "AGREE", "AHEAD", "AIDED", "AIMED", "AIR", "AIRPORT", "AISLE", "ALARM", "ALBUM",
-    "ALERT", "ALGAE", "ALIBI", "ALLEY", "ALLOY", "ALMOND", "ALMOST", "ALONE", "ALONG", "ALPHA", "ALTAR", "ALTER",
-    "ALWAYS", "AMBER", "AMBLE", "AMEND", "AMONG", "AMOUNT", "AMPLE", "ANCHOR", "ANCIENT", "ANGLE", "ANGRY",
-    "ANIMAL", "ANKLE", "ANNEX", "ANNUAL", "ANSWER", "ANT", "ANTELOPE", "ANTLER", "ANVIL", "AORTA", "APART",
-    "APE", "APEX", "APPLE", "APPLY", "APRIL", "APRON", "ARCADE", "ARCH", "ARCTIC", "ARENA", "ARGUE", "ARISE",
-    "ARM", "ARMOR", "ARMY", "AROMA", "ARROW", "ART", "ARTERY", "ARTIST", "ASCEND", "ASH", "ASIDE", "ASK",
-    "ASLEEP", "ASPECT", "ASPEN", "ASSIST", "ASSORT", "ASSURE", "ASTRAL", "ATLAS", "ATOM", "ATOMIC", "ATONCE",
-    "ATTACH", "ATTIC", "AUDIO", "AUGUST", "AUNT", "AURORA", "AUTHORS", "AUTO", "AUTUMN", "AUX", "AVENUE", "AVID",
-    "AVOID", "AWAKE", "AWARE", "AWARD", "AWOKE", "AXIS", "AZURE", "BABY", "BACK", "BACON", "BADGER", "BAG",
-    "BAKER", "BALANCE", "BALD", "BALLET", "BALLOON", "BALMY", "BAMBOO", "BANANA", "BAND", "BANDIT", "BANK",
-    "BAR", "BARB", "BARBER", "BARE", "BARGE", "BARN", "BARRACK", "BARREL", "BASALT", "BASE", "BASIC", "BASIL",
-    "BASKET", "BASS", "BATCH", "BATON", "BAT", "BATTLE", "BAY", "BEACH", "BEACON", "BEAD", "BEAK", "BEAM",
-    "BEAN", "BEAR", "BEAVER", "BECOME", "BED", "BEE", "BEEF", "BEET", "BEETLE", "BEGAN", "BEGIN", "BEGUN",
-    "BEING", "BELIEF", "BELL", "BELLY", "BELT", "BENCH", "BERRY", "BERTH", "BEST", "BET", "BETA", "BETTER",
-    "BEYOND", "BIBLE", "BICYCLE", "BID", "BIG", "BIGGER", "BIKE", "BILL", "BIN", "BIND", "BIRD", "BIRTH",
-    "BISON", "BISTRO", "BIT", "BITE", "BITTER", "BLACK", "BLADE", "BLAME", "BLANK", "BLAST", "BLAZE", "BLEAK",
-    "BLEED", "BLEND", "BLESS", "BLIMP", "BLIND", "BLINK", "BLIP", "BLISS", "BLOOM", "BLOSSOM", "BLOW", "BLUE",
-    "BLUFF", "BLUNT", "BLUR", "BOARD", "BOAT", "BODY", "BOIL", "BOLD", "BOLT", "BOMB", "BOND", "BONE", "BONUS",
-    "BOOK", "BOOST", "BOOT", "BOOTH", "BOOTS", "BORDER", "BORE", "BORN", "BORROW", "BOSS", "BOTANY", "BOTH",
-    "BOTTLE", "BOTTOM", "BOUNCE", "BOUND", "BOUT", "BOWL", "BOX", "BOXER", "BOY", "BRACE", "BRANCH", "BRAND",
-    "BRASS", "BRAVE", "BRAVO", "BREAD", "BREAK", "BREAST", "BREATH", "BREEZE", "BREW", "BRICK", "BRIDE",
-    "BRIDGE", "BRIEF", "BRIGHT", "BRIM", "BRING", "BRISK", "BRISTLE", "BROAD", "BROIL", "BROKE", "BRONZE",
-    "BROOK", "BROOM", "BROWN", "BROWSE", "BRUSH", "BRUTE", "BUBBLE", "BUCK", "BUD", "BUDGET", "BUFF",
-    "BUFFET", "BUG", "BUGGY", "BUILD", "BUILT", "BULB", "BULGE", "BULK", "BULL", "BULLET", "BUMPER", "BUNCH",
-    "BUNDLE", "BUNNY", "BUNT", "BURDEN", "BURGER", "BURROW", "BURST", "BUS", "BUSH", "BUSY", "BUTCHER", "BUTTER",
-    "BUTTON", "BUY", "BUZZ", "CAB", "CABIN", "CABLE", "CACHE", "CACTUS", "CAGE", "CAKE", "CALF", "CALL",
-    "CALM", "CAMEL", "CAMP", "CANAL", "CANARY", "CANCEL", "CANDLE", "CANDY", "CANOE", "CANON", "CANOPY",
-    "CANTEEN", "CANVAS", "CANYON", "CAP", "CAPABLE", "CAPE", "CAPTAIN", "CAR", "CARBON", "CARD", "CARE",
-    "CARGO", "CARPET", "CARRIAGE", "CARRY", "CARROT", "CART", "CARVE", "CASE", "CASH", "CASINO", "CASK",
-    "CAST", "CASTLE", "CASUAL", "CAT", "CATCH", "CATER", "CATTLE", "CAUSE", "CAVE", "CEASE", "CEDAR", "CEILING",
-    "CELERY", "CELL", "CEMENT", "CENSUS", "CENTER", "CENTRE", "CHAIN", "CHAIR", "CHALK", "CHAMP", "CHANCE",
-    "CHANGE", "CHAOS", "CHAPEL", "CHARM", "CHART", "CHASE", "CHASM", "CHEAP", "CHEAT", "CHEESE", "CHEF",
-    "CHEMIST", "CHERRY", "CHEST", "CHEW", "CHICK", "CHIEF", "CHILD", "CHILI", "CHILL", "CHIME", "CHIN",
-    "CHINA", "CHIP", "CHOCOL", "CHOICE", "CHOKE", "CHORD", "CHORE", "CHOSE", "CHOSEN", "CHUCK", "CHUNK",
-    "CHURCH", "CIDER", "CINEMA", "CIPHER", "CIRCLE", "CIRCUIT", "CIRCUS", "CITY", "CIVIC", "CLAIM", "CLAM",
-    "CLAMP", "CLAN", "CLASH", "CLASP", "CLASS", "CLAUSE", "CLAW", "CLAY", "CLEAN", "CLEAR", "CLERK", "CLICK",
-    "CLIFF", "CLIMB", "CLINIC", "CLIP", "CLOCK", "CLOSE", "CLOSET", "CLOUD", "CLOUT", "CLOVE", "CLOWN", "CLUB",
-    "CLUE", "CLUMP", "COACH", "COAL", "COAST", "COAT", "COAX", "COBALT", "COBRA", "COCOA", "COCONUT", "CODE",
-    "CODER", "COFFEE", "COIL", "COIN", "CONE", "CONFIRM", "CONGA", "CONIC", "CONN", "CONTOUR", "CONTRA",
-    "CONTROL", "CONVEY", "COOK", "COOKIE", "COOL", "COOP", "COPPER", "COPY", "CORAL", "CORD", "CORE",
-    "CORK", "CORN", "CORNER", "CORRAL", "COST", "COTTON", "COUCH", "COUGAR", "COUNT", "COUNTRY", "COUPLE",
-    "COURSE", "COURT", "COVER", "COW", "COWBOY", "COYOTE", "CRAB", "CRACK", "CRAFT", "CRANE", "CRASH",
-    "CRATE", "CRAWL", "CRAYON", "CRAZE", "CRAZY", "CREAM", "CREATE", "CREDIT", "CREEK", "CREEP", "CREST",
-    "CREW", "CRIB", "CRICKET", "CRIME", "CRISP", "CROOK", "CROP", "CROSS", "CROWD", "CROWN", "CRUDE",
-    "CRUEL", "CRUISE", "CRUMB", "CRUSH", "CRUST", "CRY", "CUBE", "CUBIC", "CUBS", "CUFF", "CUISINE",
-    "CULT", "CULTURE", "CUP", "CURB", "CURE", "CURL", "CURRENCY", "CURRY", "CURSE", "CURVE", "CUSHION",
-    "CUSTOM", "CUT", "CYCLE", "CYCLER", "CYCLIC", "CYLINDER", "DAD", "DAILY", "DAIRY", "DAISY", "DAMAGE",
-    "DANCE", "DANCER", "DANGER", "DARING", "DARK", "DARLING", "DART", "DATA", "DATE", "DAWN", "DAY",
-    "DEAL", "DEAR", "DEBRIS", "DEBT", "DEBUG", "DEBUT", "DECENT", "DECIDE", "DECK", "DECOR", "DEED",
-    "DEEP", "DEER", "DEFEND", "DEFER", "DEFINE", "DEGREE", "DELAY", "DELTA", "DELVE", "DEMAND", "DEMN",
-    "DEMO", "DENT", "DENTAL", "DENTIST", "DENY", "DEPART", "DEPEND", "DEPLOY", "DEPOSIT", "DEPTH",
-    "DEPUTY", "DERBY", "DESERT", "DESIGN", "DESK", "DESPITE", "DETAIL", "DETOUR", "DEUCE", "DEVICE", "DEVIL",
-    "DEVOTE", "DIARY", "DICE", "DIE", "DIET", "DIG", "DIGEST", "DIGIT", "DILUTE", "DIM", "DINER", "DINGO",
-    "DINGY", "DIODE", "DIP", "DIPPER", "DIRECT", "DIRT", "DIRTY", "DISCO", "DISH", "DISK", "DIVE",
-    "DIVER", "DIVIDE", "DIVING", "DIZZY", "DOCK", "DOCTOR", "DODGE", "DOG", "DOGMA", "DOLL", "DOLPHIN",
-    "DOMAIN", "DOME", "DOMINO", "DONE", "DONKEY", "DONOR", "DOOR", "DOSE", "DOT", "DOUBLE", "DOUGH",
-    "DOVE", "DOWN", "DOZEN", "DRAB", "DRAFT", "DRAGON", "DRAIN", "DRAMA", "DRANK", "DRAPE", "DRAW",
-    "DRAWN", "DREAD", "DREAM", "DRESS", "DRIED", "DRIFT", "DRILL", "DRINK", "DRIVE", "DRIVER", "DROID",
-    "DROOP", "DROP", "DROVE", "DROWN", "DRUG", "DRUM", "DRY", "DUCK", "DUCT", "DUKE", "DULL", "DUMB",
-    "DUNE", "DUNK", "DUO", "DUSK", "DUST", "DUTY", "DWELL", "DWINDLE", "EACH", "EAGER", "EAGLE", "EAR",
-    "EARLY", "EARN", "EARTH", "EASE", "EASILY", "EAST", "EASY", "EAT", "EBONY", "ECHO", "ECLIPSE", "ECO",
-    "EDGE", "EDIT", "EDITOR", "EEL", "EFFECT", "EFFORT", "EGG", "EIGHT", "EITHER", "ELBOW", "ELDER",
-    "ELECT", "ELEGANT", "ELEMENT", "ELEPHANT", "ELEVATE", "ELITE", "ELK", "ELM", "ELSE", "EMBED", "EMBER",
-    "EMBRACE", "EMIT", "EMOTION", "EMPLOY", "EMPTY", "EMU", "ENABLE", "ENACT", "END", "ENDURE", "ENEMY",
-    "ENERGY", "ENJOY", "ENLIST", "ENORMOUS", "ENOUGH", "ENROLL", "ENSURE", "ENTER", "ENTIRE", "ENTRY",
-    "ENVOY", "ENZYME", "EPOCH", "EQUAL", "EQUIP", "ERA", "ERASE", "ERECT", "ERODE", "ERROR", "ESCAPE",
-    "ESSAY", "ESTATE", "ETC", "ETHIC", "ETHOS", "EURO", "EVADE", "EVEN", "EVENT", "EVER", "EVICT", "EVIL",
-    "EVOLVE", "EXACT", "EXAM", "EXCEL", "EXHALE", "EXIST", "EXIT", "EXOTIC", "EXPAND", "EXPECT", "EXPENSE",
-    "EXPERT", "EXPIRE", "EXPORT", "EXPOSE", "EXTEND", "EXTRA", "EYE", "FABRIC", "FACE", "FACT", "FACTOR",
-    "FACTORY", "FADE", "FAIL", "FAIR", "FAITH", "FAKE", "FALL", "FALSE", "FAME", "FAMOUS", "FAN", "FANCY",
-    "FANG", "FARM", "FARMER", "FARMS", "FAST", "FATAL", "FATE", "FAULT", "FAUNA", "FAVOR", "FAX", "FEAST",
-    "FEED", "FEEL", "FELT", "FENCE", "FERN", "FERRY", "FERTILE", "FEST", "FETCH", "FEVER", "FEW", "FIBER",
-    "FICTION", "FIELD", "FIERCE", "FIFTH", "FIFTY", "FIG", "FIGHT", "FIGURE", "FILE", "FILL", "FILM", "FILTER",
-    "FINAL", "FINCH", "FIND", "FINE", "FINISH", "FIRE", "FIRM", "FIRST", "FISH", "FISHER", "FIST", "FIT",
-    "FIVE", "FIX", "FIXED", "FLAG", "FLAKY", "FLAME", "FLANK", "FLASH", "FLAT", "FLAW", "FLEA", "FLEET",
-    "FLESH", "FLICK", "FLIER", "FLIGHT", "FLING", "FLINT", "FLIP", "FLOAT", "FLOCK", "FLOOD", "FLOOR", "FLOUR",
-    "FLOW", "FLOWER", "FLU", "FLUFF", "FLUID", "FLUTE", "FLUX", "FLY", "FOAM", "FOCUS", "FOG", "FOGGY",
-    "FOOD", "FOOL", "FOOT", "FORCE", "FORD", "FOREST", "FORGET", "FORK", "FORM", "FORMAT", "FORT", "FORUM",
-    "FOSSIL", "FOUND", "FOUR", "FOX", "FRAME", "FRANK", "FRAUD", "FRESH", "FRIAR", "FRIDAY", "FRIED",
-    "FRIEND", "FRIES", "FROG", "FROM", "FRONT", "FROST", "FROZE", "FRUIT", "FUEL", "FULL", "FUN", "FUNCTION",
-    "FUND", "FUNNY", "FUR", "FUSION", "FUTURE", "GADGET", "GALE", "GALLON", "GAMBLE", "GAME", "GAMER",
-    "GAMMA", "GANG", "GARDEN", "GARLIC", "GASH", "GATE", "GATHER", "GAUGE", "GAUNT", "GAZE", "GEAR", "GECKO",
-    "GEL", "GEM", "GENE", "GENERIC", "GENIUS", "GENRE", "GENTLE", "GENTLY", "GENUS", "GERM", "GET", "GHOST",
-    "GIANT", "GIFT", "GIG", "GIGGLE", "GIRAFFE", "GIRL", "GIST", "GIVE", "GLACIER", "GLAD", "GLANCE", "GLASS",
-    "GLAZE", "GLEAM", "GLIDE", "GLINT", "GLOBE", "GLOOM", "GLORY", "GLOVE", "GLOW", "GLUE", "GOAL", "GOAT",
-    "GOBLIN", "GOD", "GODS", "GOING", "GOLD", "GOLF", "GONDOLA", "GONE", "GOOD", "GOOSE", "GOPHER", "GORILLA",
-    "GOSPEL", "GOT", "GOURD", "GOWN", "GRACE", "GRADE", "GRAIN", "GRAND", "GRANT", "GRAPE", "GRAPH", "GRASP",
-    "GRASS", "GRATE", "GRAVEL", "GRAVY", "GREAT", "GREED", "GREEN", "GREET", "GREY", "GRID", "GRIEF", "GRILL",
-    "GRIN", "GRIND", "GRIP", "GRIT", "GROOM", "GROSS", "GROUP", "GROVE", "GROW", "GROWN", "GRUB", "GRUNT",
-    "GUARD", "GUAVA", "GUESS", "GUEST", "GUIDE", "GUILD", "GUILT", "GUITAR", "GULL", "GULP", "GUM", "GUMBO",
-    "GUST", "GUT", "GUY", "GYM", "GYPSY", "HABIT", "HACK", "HAIL", "HAIR", "HALF", "HALL", "HALO", "HALT",
-    "HAM", "HAMLET", "HAND", "HANDLE", "HANG", "HARBOR", "HARD", "HARE", "HARM", "HARP", "HARSH", "HARVEST",
-    "HAS", "HASH", "HASTE", "HAT", "HATCH", "HATE", "HAVE", "HAWK", "HAY", "HAZEL", "HAZY", "HEAD", "HEAL",
-    "HEAP", "HEAR", "HEARD", "HEART", "HEAT", "HEAVY", "HEDGE", "HEEL", "HEFT", "HEIGHT", "HEIR", "HELD",
-    "HELIX", "HELLO", "HELM", "HELMET", "HELP", "HEMP", "HEN", "HERB", "HERD", "HERON", "HERO", "HESSIAN",
-    "HIDDEN", "HIDE", "HIGH", "HIKER", "HILL", "HILT", "HIND", "HINGE", "HINT", "HIP", "HIRE", "HIS", "HIT",
-    "HIVE", "HOBBY", "HOG", "HOLD", "HOLE", "HOLIDAY", "HOLLY", "HOME", "HONEST", "HONEY", "HONOR", "HOOD",
-    "HOOK", "HOOP", "HOP", "HOPPER", "HORN", "HORNET", "HORSE", "HOSE", "HOST", "HOT", "HOTEL", "HOUR", "HOUSE",
-    "HOVER", "HUGE", "HUMAN", "HUMBLE", "HUMID", "HUMOR", "HUNGER", "HUNT", "HURRY", "HURT", "HUSK", "HUSKY",
-    "HUT", "HYBRID", "HYDRA", "HYENA", "HYMNS", "ICE", "ICING", "ICON", "IDEA", "IDEAL", "IDENTITY", "IDLE",
-    "IDOL", "IGLOO", "IGNITE", "IGUANA", "ILL", "IMAGE", "IMPACT", "IMPORT", "IN", "INCH", "INDEX", "INDIGO",
-    "INDOOR", "INEPT", "INFER", "INFO", "INGOT", "INJECT", "INK", "INLAY", "INLET", "INN", "INNER", "INPUT",
-    "INSIDE", "INSIGHT", "INSPIRE", "INSTANCE", "INTAKE", "INTENT", "INTERN", "INTO", "INVENT", "INVEST",
-    "ION", "IRON", "ISLAND", "IVORY", "IVY", "JACK", "JACKET", "JAIL", "JAM", "JAR", "JASMINE", "JAW", "JAZZ",
-    "JEANS", "JEEP", "JELLY", "JERKY", "JET", "JEWEL", "JIG", "JINX", "JOB", "JOG", "JOIN", "JOINT", "JOKE",
-    "JOLLY", "JOURNAL", "JOY", "JUICE", "JUICY", "JULY", "JUMP", "JUMPER", "JUNE", "JUNGLE", "JUNIOR", "JUNK",
-    "JUROR", "JUST", "KAYAK", "KEEN", "KEEP", "KELP", "KERNEL", "KETTLE", "KEY", "KEYBOARD", "KICK", "KID",
-    "KIDNEY", "KILO", "KIND", "KING", "KIOSK", "KISS", "KIT", "KITE", "KITTEN", "KIWI", "KNEAD", "KNEE",
-    "KNIFE", "KNIT", "KNOB", "KNOT", "KNOW", "KOALA", "LABEL", "LABOR", "LACE", "LACK", "LADDER", "LADLE",
-    "LADY", "LAGOON", "LAKE", "LAMB", "LAMP", "LANCE", "LAND", "LANE", "LAP", "LAPTOP", "LARGE", "LARK",
-    "LASER", "LAST", "LATCH", "LATE", "LAUGH", "LAUNCH", "LAVA", "LAWN", "LAWSUIT", "LAWYER", "LAYER", "LAZY",
-    "LEAF", "LEAGUE", "LEAK", "LEAN", "LEARN", "LEASE", "LEASH", "LEAVE", "LED", "LEFT", "LEG", "LEGAL",
-    "LEGEND", "LEMON", "LEND", "LENS", "LEOPARD", "LESS", "LETTUCE", "LEVEL", "LEVER", "LIAR", "LID", "LIE",
-    "LIFE", "LIFT", "LIGHT", "LIKE", "LILAC", "LILY", "LIMB", "LIME", "LIMIT", "LINE", "LINK", "LION",
-    "LIP", "LIQUID", "LIST", "LIT", "LITER", "LITTLE", "LIVE", "LIVER", "LIZARD", "LOAD", "LOAF", "LOAN",
-    "LOBSTER", "LOCAL", "LOCK", "LODGE", "LOFT", "LOG", "LOOM", "LOON", "LOOP", "LOOSE", "LOOT", "LORD",
-    "LORRY", "LOSE", "LOSS", "LOST", "LOTION", "LOTUS", "LOUD", "LOUNGE", "LOVE", "LOW", "LOYAL", "LUCK",
-    "LUCID", "LUMP", "LUNCH", "LUNGE", "LUSH", "LUST", "LUTE", "LUXURY", "LYCHEE", "LYRIC", "MAGENTA", "MAGIC",
-    "MAID", "MAIL", "MAJOR", "MAKER", "MALE", "MALL", "MAMMAL", "MAN", "MANGO", "MANTIS", "MAP", "MAPLE",
-    "MARBLE", "MARCH", "MARE", "MARGIN", "MARINE", "MARK", "MARKET", "MARROW", "MARRY", "MARS", "MART",
-    "MASK", "MASS", "MASTER", "MATCH", "MATE", "MATH", "MATRIX", "MAY", "MAYOR", "MAZE", "MEADOW", "MEAL",
-    "MEAN", "MEASURE", "MEAT", "MECHANIC", "MEDAL", "MEDIA", "MEDIC", "MEET", "MELON", "MELT", "MEMBER",
-    "MEMORY", "MEND", "MENU", "MERCY", "MERGE", "MERIT", "MERRY", "MESS", "METAL", "METER", "METRO", "MICRO",
-    "MIDDLE", "MIGHT", "MILD", "MILE", "MILK", "MILL", "MIMIC", "MINCE", "MIND", "MINER", "MINI", "MINOR",
-    "MINT", "MINUTE", "MIRROR", "MIRTH", "MIX", "MIXER", "MIXED", "MIXTURE", "MOBILE", "MODEL", "MODEM",
-    "MODERN", "MODIFY", "MODULE", "MOIST", "MOLD", "MOLAR", "MOM", "MONITOR", "MONKEY", "MONTH", "MOOD",
-    "MOON", "MOOR", "MOOSE", "MOP", "MORAL", "MORE", "MORNING", "MORPH", "MOSS", "MOST", "MOTH", "MOTHER",
-    "MOTION", "MOTOR", "MOTTO", "MOUND", "MOUNT", "MOURN", "MOUSE", "MOUTH", "MOVE", "MOVIE", "MUFFIN",
-    "MULE", "MUSE", "MUSIC", "MUSK", "MUSSEL", "MUST", "MUTE", "MUTTER", "MUTTON", "NACHO", "NAIL", "NAME",
-    "NAPKIN", "NARROW", "NASTY", "NATION", "NATIVE", "NATURE", "NAVY", "NEAR", "NEAT", "NECK", "NEED", "NEON",
-    "NERVE", "NEST", "NET", "NETWORK", "NEURAL", "NEATLY", "NEVER", "NEW", "NEWS", "NEXT", "NICE", "NICKEL",
-    "NIECE", "NIGHT", "NINE", "NINJA", "NINTH", "NOBLE", "NOD", "NOISE", "NOISY", "NONE", "NOODLE", "NORTH",
-    "NOSE", "NOTCH", "NOTE", "NOTIFY", "NOTION", "NOVEL", "NOVICE", "NOW", "NUANCE", "NUCLEAR", "NUDGE",
-    "NULL", "NUMBER", "NUMB", "NURSE", "NUT", "NYLON", "OAK", "OAR", "OASIS", "OAT", "OATH", "OBEY", "OBJECT",
-    "OBLIGE", "OCEAN", "OCTAVE", "OCTET", "ODD", "ODOR", "OFF", "OFFER", "OFFICE", "OFFSET", "OFTEN", "OIL",
-    "OINK", "OLD", "OLIVE", "OMEGA", "OMELET", "OMEN", "OMICRON", "ONCE", "ONE", "ONION", "ONLINE", "ONLY",
-    "ONTO", "ONYX", "OPEN", "OPERA", "OPINE", "OPTIC", "OPTION", "ORANGE", "ORBIT", "ORCHID", "ORDER",
-    "ORE", "ORGAN", "ORIGIN", "ORION", "ORNATE", "ORPHAN", "OSPREY", "OSTRICH", "OTHER", "OTTER", "OUNCE",
-    "OUR", "OUT", "OVAL", "OVEN", "OVER", "OWL", "OX", "OYSTER", "OZONE", "PACE", "PACK", "PAD", "PADDLE",
-    "PAGE", "PAID", "PAIL", "PAIN", "PAINT", "PAIR", "PALACE", "PALE", "PALM", "PANDA", "PANEL", "PANTRY",
-    "PANTS", "PAPA", "PAPER", "PARADE", "PARCEL", "PARDON", "PARENT", "PARK", "PARROT", "PART", "PARTY",
-    "PASTA", "PASTE", "PASTOR", "PASTRY", "PATCH", "PATH", "PATIENT", "PATROL", "PATIO", "PATSY", "PAUSE",
-    "PAY", "PEACE", "PEACH", "PEAR", "PEARL", "PEAS", "PECK", "PEDAL", "PEEL", "PEEP", "PEER", "PELICAN",
-    "PEN", "PENALTY", "PENCIL", "PEND", "PENGUIN", "PENNY", "PEOPLE", "PEPPER", "PERCH", "PERFECT", "PERIL",
-    "PERK", "PERMIT", "PERSON", "PEST", "PET", "PHASE", "PHONE", "PHOTO", "PHYSIC", "PICK", "PICKUP",
-    "PICNIC", "PIE", "PIECE", "PIER", "PIGEON", "PIGMENT", "PILOT", "PIN", "PINCH", "PINE", "PING", "PINK",
-    "PINT", "PIONEER", "PIPE", "PIPELINE", "PIRATE", "PISTOL", "PITCH", "PIVOT", "PIXEL", "PIZZA", "PLACE",
-    "PLAID", "PLAIN", "PLAN", "PLANE", "PLANET", "PLANT", "PLASMA", "PLATE", "PLAY", "PLAYER", "PLEAD",
-    "PLEASE", "PLEDGE", "PLENTY", "PLIERS", "PLIGHT", "PLOD", "PLOW", "PLUCK", "PLUG", "PLUMB", "PLUME",
-    "PLUMP", "PLUM",
-)
-
-_raw_max = max(len(w) for w in _RAW_WORDS)
-_raw_encoded = jnp.array([
-    [ord(c) - 65 for c in w.upper()] + [CONSTANTS.PAD_TOKEN] * (_raw_max - len(w))
-    for w in _RAW_WORDS
-], dtype=jnp.int32)
-
-_raw_lens = jnp.sum(_raw_encoded != CONSTANTS.PAD_TOKEN, axis=1)
-_valid_mask = _raw_lens <= CONSTANTS.L_MAX
-_filtered_enc = _raw_encoded[_valid_mask]
-
-WORDS_ENC = _filtered_enc[:, :CONSTANTS.L_MAX]
-WORDS_LEN = _raw_lens[_valid_mask]
-N_WORDS = WORDS_ENC.shape[0]

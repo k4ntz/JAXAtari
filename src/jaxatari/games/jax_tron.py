@@ -1,11 +1,15 @@
+import chex
 from jaxatari.renderers import JAXGameRenderer
 from typing import NamedTuple, Tuple, TypeVar, Dict, Any
 from jax import Array, jit, random, numpy as jnp, vmap
 import jax
 from functools import partial
+from flax import struct
+
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
+from jaxatari.modification import AutoDerivedConstants
 import jax.lax
 import os
 
@@ -34,42 +38,43 @@ def _get_default_asset_config() -> tuple:
     # This allows the structure to be in constants while keeping file-dependent logic in renderer
     return ()
 
-class TronConstants(NamedTuple):
-    screen_width: int = 160
-    screen_height: int = 210
-    scaling_factor: int = 3
+class TronConstants(AutoDerivedConstants):
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
+    scaling_factor: int = struct.field(pytree_node=False, default=3)
 
     # Player
-    player_speed: int = 1  # Player speed in pixels per frame
-    player_lives: int = 5  # starting number of lives
+    player_speed: int = struct.field(pytree_node=False, default=1)  # Player speed in pixels per frame
+    player_lives: int = struct.field(pytree_node=False, default=5)  # starting number of lives
     # Player color progression by number of hits taken (index 0..5)
     # 0 = freshly spawned (5/5 lives), 1 = after first hit, ... 4 = fourth hit (1/5),
     # 5 = fifth hit color (0/5) used for death blink alternating with index 4.
-    player_life_colors_rgba: Tuple[Tuple[int, int, int, int], ...] = (
+    player_life_colors_rgba: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (18, 19, 157, 255),  # fresh
         (114, 39, 164, 255),  # 1st hit
         (160, 39, 132, 255),  # 2nd hit
         (210, 81, 80, 255),  # 3rd hit
         (189, 134, 50, 255),  # 4th hit
         (205, 155, 62, 255),  # 5th hit (blink color, alternates vs index 4)
-    )
+    ]))
     # Death blink: 5 blinks, each “half” lasts this many frames
-    player_blink_cycles: int = 5
-    player_blink_period_frames: int = 6
-    player_animation_steps: int = (
-        6  # interval for changing the animation-sprite of the walking player
-    )
+    player_blink_cycles: int = struct.field(pytree_node=False, default=5)
+    player_blink_period_frames: int = struct.field(pytree_node=False, default=6)
+    player_animation_steps: int = struct.field(pytree_node=False, default=6)
 
     # discs
-    max_discs: int = 2  # Number of disc slots (one for player, one enemy)
-    disc_size_out: Tuple[int, int] = (
+    max_discs: int = struct.field(pytree_node=False, default=2)  # Number of disc slots (one for player, one enemy)
+    disc_size_out: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         4,
         2,
-    )  # size for the outbound discs: width 4, height 2
-    disc_size_ret: Tuple[int, int] = (2, 4)  # size for the returning discs
-    disc_speed: int = 2  # outbound (thrown) speed
-    enemy_disc_speed: int = 2  # 1px/step
-    inbound_disc_speed: int = 3
+    ]))  # size for the outbound discs: width 4, height 2
+    disc_size_ret: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        2,
+        4,
+    ]))  # size for the returning discs
+    disc_speed: int = struct.field(pytree_node=False, default=2)  # outbound (thrown) speed
+    enemy_disc_speed: int = struct.field(pytree_node=False, default=2)  # 1px/step
+    inbound_disc_speed: int = struct.field(pytree_node=False, default=3)
 
     """
     Origin (0,0) is the top-left of the full screen.
@@ -93,89 +98,65 @@ class TronConstants(NamedTuple):
             game_w - (bord_left + bord_right),
             game_h - (score_h + score_gap + bord_top + bord_bot),
     """
-    game_x: int = 8  # Gamefield top-left X (creates a black left margin)
-    game_y: int = 18  # Gamefield top-left Y (creates a black top margin)
-    game_w: int = (
-        160 - 8
-    )  # Gamefield width; aligns right edge with the screens right edge
-    game_h: int = 164  # Gamefield height in pixels
+    game_x: int = struct.field(pytree_node=False, default=8)  # Gamefield top-left X (creates a black left margin)
+    game_y: int = struct.field(pytree_node=False, default=18)  # Gamefield top-left Y (creates a black top margin)
+    game_w: int = struct.field(pytree_node=False, default=160 - 8)  # Gamefield width; aligns right edge with the screens right edge
+    game_h: int = struct.field(pytree_node=False, default=164)  # Gamefield height in pixels
 
     # Scorebar
-    score_h: int = 10  # Scorebar height in pixels
-    score_gap: int = 1  # Vertical gap between scorebar bottom and the top purple border
-    score_digits: int = 6
-    score_spacing: int = 2  # horizontal spacing between digits
-    score_y_offset: int = 5
+    score_h: int = struct.field(pytree_node=False, default=10)  # Scorebar height in pixels
+    score_gap: int = struct.field(pytree_node=False, default=1)  # Vertical gap between scorebar bottom and the top purple border
+    score_digits: int = struct.field(pytree_node=False, default=6)
+    score_spacing: int = struct.field(pytree_node=False, default=2)  # horizontal spacing between digits
+    score_y_offset: int = struct.field(pytree_node=False, default=5)
 
     # purple border (thickness per side in pixels)
-    bord_top: int = 16  # Height of the top purple band
-    bord_bot: int = 16  # height of the bottom purple band
-    bord_left: int = 8  # Width of the left purple band
-    bord_right: int = 8  # Width of the right purple band
+    bord_top: int = struct.field(pytree_node=False, default=16)  # Height of the top purple band
+    bord_bot: int = struct.field(pytree_node=False, default=16)  # height of the bottom purple band
+    bord_left: int = struct.field(pytree_node=False, default=8)  # Width of the left purple band
+    bord_right: int = struct.field(pytree_node=False, default=8)  # Width of the right purple band
 
     # doors
-    max_doors: int = 12  # 4 top, 4 bottom, 2 left, 2 right
-    door_w: int = 8  # door width (matche sidebar width)
-    door_h: int = 16  # door height (matches top/bottom bar height)
-    door_respawn_cooldown: int = 120  # frames until a closed door may spawn again
-    create_new_door_prob: float = (
-        0.5  # probability that a new door gets created on spawn
-    )
+    max_doors: int = struct.field(pytree_node=False, default=12)  # 4 top, 4 bottom, 2 left, 2 right
+    door_w: int = struct.field(pytree_node=False, default=8)  # door width (matche sidebar width)
+    door_h: int = struct.field(pytree_node=False, default=16)  # door height (matches top/bottom bar height)
+    door_respawn_cooldown: int = struct.field(pytree_node=False, default=120)  # frames until a closed door may spawn again
+    create_new_door_prob: float = struct.field(pytree_node=False, default=0.5)  # probability that a new door gets created on spawn
 
     # enemies
-    max_enemies: int = 3  # simultaneously there can only be three enemies in the arena
-    enemy_spawn_offset: int = 3  # distance in pixels from when spawning
-    enemy_respawn_timer: int = 200  # time in frames until the next enemy spawns
-    enemy_recalc_target: Tuple[int, int] = (
-        200,
-        350,
-    )  # After how many frames should the target be recalculated? min,max
-    enemy_speed: int = 3  # inversed: move envery third frame
-    enemy_target_radius: int = (
-        50  # radius (px) around player to sample target (where to walk)
-    )
+    max_enemies: int = struct.field(pytree_node=False, default=3)  # simultaneously there can only be three enemies in the arena
+    enemy_spawn_offset: int = struct.field(pytree_node=False, default=3)  # distance in pixels from when spawning
+    enemy_respawn_timer: int = struct.field(pytree_node=False, default=200)  # time in frames until the next enemy spawns
+    enemy_recalc_target: Tuple[int, int] = struct.field(pytree_node=False, default=(200, 350))  # After how many frames should the target be recalculated? min,max
+    enemy_speed: int = struct.field(pytree_node=False, default=3)  # inversed: move envery third frame
+    enemy_target_radius: int = struct.field(pytree_node=False, default=50)  # radius (px) around player to sample target (where to walk)
 
     # Asset config baked into constants (immutable default) for asset overrides
     # Note: Tron's assets are mostly procedurally generated from loaded sprites,
     # so the renderer builds the full config from loaded files
-    ASSET_CONFIG: tuple = _get_default_asset_config()
-    enemy_min_dist: int = 32  # min distance between the enemies
-    enemy_firing_cooldown_range: Tuple[int, int] = (
-        30,
-        60,
-    )  # frames until the enemy can fire again
-    enemy_animation_steps: int = (
-        6  # interval for changing the animation-sprite of walking enemies
-    )
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+    enemy_min_dist: int = struct.field(pytree_node=False, default=32)  # min distance between the enemies
+    enemy_firing_cooldown_range: Tuple[int, int] = struct.field(pytree_node=False, default=(30, 60))  # frames until the enemy can fire again
+    enemy_animation_steps: int = struct.field(pytree_node=False, default=6)  # interval for changing the animation-sprite of walking enemies
 
     # gameplay
-    wave_timeout: int = 200  # frames between enemy waves
+    wave_timeout: int = struct.field(pytree_node=False, default=200)  # frames between enemy waves
 
     # Colors (RGBA, 0–255 each)
-    rgba_purple: Tuple[int, int, int, int] = (93, 61, 191, 255)  # Border color
-    rgba_green: Tuple[int, int, int, int] = (82, 121, 42, 255)  # Scorebar color
-    rgba_gray: Tuple[int, int, int, int] = (
-        132,
-        132,
-        131,
-        255,
-    )  # Gamefield background color
-    rgba_door_spawn: Tuple[int, int, int, int] = (210, 81, 80, 255)  # visible door
-    rgba_door_locked: Tuple[int, int, int, int] = (
-        151,
-        163,
-        67,
-        255,
-    )  # locked open (teleportable)
-    rgba_score_color: Tuple[int, int, int, int] = (151, 163, 67, 255)
+    rgba_purple: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([93, 61, 191, 255]))  # Border color
+    rgba_green: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([82, 121, 42, 255]))  # Scorebar color
+    rgba_gray: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([132, 132, 131, 255]))  # Gamefield background color
+    rgba_door_spawn: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 81, 80, 255]))  # visible door
+    rgba_door_locked: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([151, 163, 67, 255]))  # locked open (teleportable)
+    rgba_score_color: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([151, 163, 67, 255]))
 
     # waves
-    num_waves: int = 8  # How many distinct waves/colors exist
-    wave_points: Tuple[int, ...] = (10, 20, 40, 75, 150, 300, 500, 800)
+    num_waves: int = struct.field(pytree_node=False, default=8)  # How many distinct waves/colors exist
+    wave_points: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([10, 20, 40, 75, 150, 300, 500, 800]))
     # Enemy tint per wave/color (RGBA)
     #  LIGHT GREEN,  DARK GREEN,     BLUE,           WHITE,
     #  YELLOW,       BLACK,          RED,            GOLD
-    wave_enemy_colors_rgba: Tuple[Tuple[int, int, int, int], ...] = (
+    wave_enemy_colors_rgba: Tuple[Tuple[int, int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (151, 163, 67, 255),  # light green
         (0, 100, 0, 255),  # dark  green
         (0, 128, 255, 255),  # blue
@@ -184,17 +165,18 @@ class TronConstants(NamedTuple):
         (16, 16, 16, 255),  # black
         (220, 20, 60, 255),  # red (crimson)
         (255, 215, 0, 255),  # gold
-    )
+    ]))
 
-
-class Rect(NamedTuple):
+@struct.dataclass
+class Rect:
     x: int
     y: int
     w: int
     h: int
 
 
-class Player(NamedTuple):
+@struct.dataclass
+class Player:
     x: Array  # (N,) int32: X-Position
     y: Array  # (N,) int32: Y-Position
     vx: Array  # (N,) int32: velocity in x-direction
@@ -208,7 +190,8 @@ class Player(NamedTuple):
     fy: Array  # float32 sub-pixel y
 
 
-class Enemies(NamedTuple):
+@struct.dataclass
+class Enemies:
     x: Array  # (N,) int32: X-Position
     y: Array  # (N,) int32: Y-Position
     vx: Array  # (N,) int32: velocity in x-direction
@@ -221,7 +204,8 @@ class Enemies(NamedTuple):
     goal_ttl: Array  # (N,) int32: time until the target gets recalculated
 
 
-class Discs(NamedTuple):
+@struct.dataclass
+class Discs:
     x: Array  # (N,) int32: X-Position
     y: Array  # (N,) int32: Y-Position
     vx: Array  # (N,) int32: velocity in x-direction
@@ -240,7 +224,8 @@ class Discs(NamedTuple):
     shooter_id: Array  # int32: -1 for player discs, else enemy index 0..max-enemies-1
 
 
-class Doors(NamedTuple):
+@struct.dataclass
+class Doors:
     x: Array  # int 32
     y: Array  # int32
     w: Array  # int32
@@ -254,7 +239,8 @@ class Doors(NamedTuple):
     pair: Array  # int32: index of the opposite door for teleporting
 
 
-class TronState(NamedTuple):
+@struct.dataclass
+class TronState:
     score: Array
     player: Player  # N = 1
     # enemies: Actors # N = MAX_ENEMIES
@@ -282,14 +268,16 @@ class TronState(NamedTuple):
     player_gone: Array  # bool: player has disappeared after blink
 
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: Array
     y: Array
     width: Array
     height: Array
 
 
-class TronObservation(NamedTuple):
+@struct.dataclass
+class TronObservation:
     score: Array  # int32 scalar
     wave_index: Array  # () int32
 
@@ -313,7 +301,8 @@ class TronObservation(NamedTuple):
     door_locked: Array  # (max_doors,) bool (locked-open / teleportable)
 
 
-class TronInfo(NamedTuple):
+@struct.dataclass
+class TronInfo:
     score: Array
     wave_index: Array
     # Counts
@@ -620,7 +609,7 @@ class _ArenaOps:
     @jit
     def tick_door_lockdown(doors: Doors) -> Doors:
         """Decrement per-door spawn cooldown timers (floored at 0)."""
-        return doors._replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
+        return doors.replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
 
 
 Actor = TypeVar("Actor", Player, Discs)
@@ -818,13 +807,13 @@ class TronRenderer(JAXGameRenderer):
         enemy_frames_by_wave = _precompute_tints(enemy_seq, wave_colors)  # (W, F, H, W, 4)
         tinted_digits = vmap(lambda fr: _tint_rgba(fr, score_color))(base_digits)  # (10, H, W, 4)
         player_disc_out = _make_solid_sprites(
-            player_colors, c.disc_size_out[1], c.disc_size_out[0]
+            player_colors, int(c.disc_size_out[1]), int(c.disc_size_out[0])
         )  # (C, H, W, 4)
         player_disc_ret = _make_solid_sprites(
-            player_colors, c.disc_size_ret[1], c.disc_size_ret[0]
+            player_colors, int(c.disc_size_ret[1]), int(c.disc_size_ret[0])
         )  # (C, H, W, 4)
         enemy_disc_out = _make_solid_sprites(
-            wave_colors, c.disc_size_out[1], c.disc_size_out[0]
+            wave_colors, int(c.disc_size_out[1]), int(c.disc_size_out[0])
         )  # (W, H, W, 4)
         door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
         door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
@@ -1197,7 +1186,7 @@ def _select_door_for_spawn(
 
     def _pick_new(_):
         idx = _sample(new_mask, new_cnt, k_pick_new)
-        upd = doors._replace(is_spawned=doors.is_spawned.at[idx].set(True))
+        upd = doors.replace(is_spawned=doors.is_spawned.at[idx].set(True))
         return True, idx, upd, rng_key
 
     def _fallback(_):
@@ -1415,7 +1404,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             # remember last non-zero horizontal input for sprite facing
             facing_dx = jnp.where(raw_dx_i != 0, raw_dx_i, s.facing_dx)
 
-            player2 = s.player._replace(
+            player2 = s.player.replace(
                 x=s.player.x.at[0].set(x_next),
                 y=s.player.y.at[0].set(y_next),
                 vx=vx_int,
@@ -1424,7 +1413,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 fy=s.player.fy.at[0].set(fy_next),
             )
 
-            return s._replace(
+            return s.replace(
                 player=player2, aim_dx=aim_dx, aim_dy=aim_dy, facing_dx=facing_dx
             )
 
@@ -1473,7 +1462,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             fvy = dy_f * inv * speed_f
 
             # writes in the free slot
-            new_discs: Discs = s.discs._replace(
+            new_discs: Discs = s.discs.replace(
                 x=s.discs.x.at[free_indices].set(px),
                 y=s.discs.y.at[free_indices].set(py),
                 vx=s.discs.vx.at[free_indices].set(jnp.int32(0)),
@@ -1486,7 +1475,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 fvy=s.discs.fvy.at[free_indices].set(fvy),
                 shooter_id=s.discs.shooter_id.at[free_indices].set(jnp.int32(-1)),
             )
-            return s._replace(discs=new_discs)
+            return s.replace(discs=new_discs)
 
         def no_spawn(s: TronState) -> TronState:
             return s
@@ -1583,7 +1572,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         final_vx = jnp.where(final_phase == jnp.int32(0), jnp.int32(0), final_vx)
         final_vy = jnp.where(final_phase == jnp.int32(0), jnp.int32(0), final_vy)
 
-        new_discs = discs._replace(
+        new_discs = discs.replace(
             x=x_next,
             y=y_next,
             vx=final_vx,
@@ -1594,7 +1583,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             fvx=fvx_next,
             fvy=fvy_next,
         )
-        return state._replace(discs=new_discs)
+        return state.replace(discs=new_discs)
 
     @partial(jit, static_argnums=(0,))
     def _spawn_pos_from_door(self, doors: Doors, idx: Array, ew: Array, eh: Array):
@@ -1668,7 +1657,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 ex, ey = self._spawn_pos_from_door(doors2, door_idx, ew, eh)
 
                 # Activate enemy in that slot
-                enemies2 = s_in.enemies._replace(
+                enemies2 = s_in.enemies.replace(
                     x=s_in.enemies.x.at[slot].set(ex),
                     y=s_in.enemies.y.at[slot].set(ey),
                     vx=s_in.enemies.vx.at[slot].set(jnp.int32(0)),
@@ -1680,17 +1669,17 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 )
 
                 # Start cooldown on the used door
-                doors3 = doors2._replace(
+                doors3 = doors2.replace(
                     spawn_lockdown=doors2.spawn_lockdown.at[door_idx].set(
                         jnp.int32(self.consts.door_respawn_cooldown)
                     )
                 )
 
-                return s_in._replace(enemies=enemies2, doors=doors3)
+                return s_in.replace(enemies=enemies2, doors=doors3)
 
             # If no valid door, still update doors returned by the selector
             def no_spawn(s_in):
-                return s_in._replace(doors=doors2)
+                return s_in.replace(doors=doors2)
 
             return jax.lax.cond(has, do_spawn, no_spawn, s)
 
@@ -1980,7 +1969,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             x_next, y_next, vx_final, vy_final = wall_slide(en, vx, vy)
 
             # Write back: positions, velocities, and goal bookkeeping; advance RNG key.
-            en2 = en._replace(
+            en2 = en.replace(
                 x=x_next,
                 y=y_next,
                 vx=vx_final,
@@ -1989,7 +1978,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 goal_dy=gdy,
                 goal_ttl=gttl,
             )
-            return s._replace(enemies=en2, rng_key=key)
+            return s.replace(enemies=en2, rng_key=key)
 
         return jax.lax.cond(any_alive, _do_move, _no_op, operand=state)
 
@@ -2048,7 +2037,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
             # Kill enemies on hit; discs remain unchanged.
             new_alive = e2.alive & (~enemy_hit)
-            e3 = e2._replace(alive=new_alive)
+            e3 = e2.replace(alive=new_alive)
 
             # wave points
             wave_pts_tbl = jnp.asarray(self.consts.wave_points, dtype=jnp.int32)
@@ -2056,7 +2045,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             pts_per = wave_pts_tbl[widx]
             new_score = s.score + pts_per * kills
             # debug.print("score {s}", s=new_score)
-            return s._replace(enemies=e3, score=new_score)
+            return s.replace(enemies=e3, score=new_score)
 
         return jax.lax.cond(do_check, _check_and_kill, _no_hit, operand=state)
 
@@ -2073,7 +2062,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             start_cd, jnp.int32(self.consts.enemy_respawn_timer), state.inwave_spawn_cd
         )
 
-        return state._replace(
+        return state.replace(
             inwave_spawn_cd=new_cd,
             enemies_alive_last=alive_now,  # keep this updated every frame
         )
@@ -2103,10 +2092,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 jnp.int32(self.consts.enemy_respawn_timer),
                 jnp.int32(0),
             )
-            return s2._replace(inwave_spawn_cd=next_cd)
+            return s2.replace(inwave_spawn_cd=next_cd)
 
         def _no_spawn(s: TronState) -> TronState:
-            return s._replace(inwave_spawn_cd=cd_next)
+            return s.replace(inwave_spawn_cd=cd_next)
 
         return jax.lax.cond(can_spawn, _spawn_one, _no_spawn, state)
 
@@ -2208,10 +2197,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
             lock_hit = hit_top_any | hit_bot_any | hit_lft_any | hit_rgt_any
 
-            new_doors = doors2._replace(
+            new_doors = doors2.replace(
                 is_locked_open=(doors2.is_locked_open | lock_hit)
             )
-            return s._replace(doors=new_doors)
+            return s.replace(doors=new_doors)
 
         return jax.lax.cond(any_disc_might_hit, _do_lock, _no_lock, state)
 
@@ -2271,7 +2260,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             )
 
             # Move player
-            player3 = player2._replace(
+            player3 = player2.replace(
                 x=player2.x.at[0].set(ex),
                 y=player2.y.at[0].set(ey),
                 fx=player2.fx.at[0].set(ex.astype(jnp.float32)),
@@ -2281,12 +2270,12 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             )
 
             # Consume the entry door: deactivate and unlock it
-            doors3 = doors2._replace(
+            doors3 = doors2.replace(
                 is_spawned=doors2.is_spawned.at[idx].set(False),
                 is_locked_open=doors2.is_locked_open.at[idx].set(False),
             )
 
-            return s._replace(player=player3, doors=doors3)
+            return s.replace(player=player3, doors=doors3)
 
         return jax.lax.cond(has, do_tp, lambda s: s, state)
 
@@ -2319,8 +2308,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 jnp.minimum(cur + jnp.int32(1), jnp.int32(self.consts.player_lives)),
                 cur,
             )
-            player2 = s.player._replace(lives=s.player.lives.at[0].set(healed))
-            return s._replace(
+            player2 = s.player.replace(lives=s.player.lives.at[0].set(healed))
+            return s.replace(
                 wave_end_cooldown_remaining=jnp.int32(self.consts.wave_timeout),
                 inwave_spawn_cd=jnp.int32(0),  # freeze in-wave respawns during pause
                 wave_index=next_idx,  # advance color/points (saturates at GOLD)
@@ -2351,8 +2340,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 became_zero, total_ticks, s.player_blink_ticks_remaining
             )
 
-            player2 = s.player._replace(lives=s.player.lives.at[0].set(new_lives))
-            return s._replace(player=player2, player_blink_ticks_remaining=new_ticks)
+            player2 = s.player.replace(lives=s.player.lives.at[0].set(new_lives))
+            return s.replace(player=player2, player_blink_ticks_remaining=new_ticks)
 
         return jax.lax.cond(state.player_gone, noop, apply, state)
 
@@ -2404,8 +2393,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             new_fy = jnp.where(hit, jnp.float32(0), d2.fy)
             new_fvx = jnp.where(hit, jnp.float32(0), d2.fvx)
             new_fvy = jnp.where(hit, jnp.float32(0), d2.fvy)
-            s2 = s._replace(
-                discs=d2._replace(
+            s2 = s.replace(
+                discs=d2.replace(
                     phase=new_phase,
                     vx=new_vx,
                     vy=new_vy,
@@ -2478,7 +2467,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             # Map the chosen position back to the actual enemy index
             next_shooter = alive_idx[pos]
 
-            return s._replace(
+            return s.replace(
                 enemy_global_fire_cd=delay,
                 enemy_next_shooter=next_shooter,
                 rng_key=key,
@@ -2489,7 +2478,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         state = jax.lax.cond(
             (~enemy_active_now) & (state.enemy_global_fire_cd > jnp.int32(0)),
-            lambda s: s._replace(enemy_global_fire_cd=tick_cd(s.enemy_global_fire_cd)),
+            lambda s: s.replace(enemy_global_fire_cd=tick_cd(s.enemy_global_fire_cd)),
             lambda s: s,
             state,
         )
@@ -2527,7 +2516,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 shooter = jnp.where(alive[stored], stored, picked)
 
                 def return_without_spawning(sin: TronState) -> TronState:
-                    return sin._replace(rng_key=key)
+                    return sin.replace(rng_key=key)
 
                 def really_spawn(sin: TronState) -> TronState:
                     d, e = sin.discs, sin.enemies
@@ -2599,7 +2588,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                     #
                     # Enemy bullets use (fx, fy, fvx, fvy) for movement, the integer (vx, vy) is unised
                     # but kept at 0 to keep the structure uniform with player discs
-                    d2 = d._replace(
+                    d2 = d.replace(
                         # Integer top-left for raster/collision: round the float spawn position
                         x=d.x.at[slot].set(jnp.round(fx0).astype(jnp.int32)),
                         y=d.y.at[slot].set(jnp.round(fy0).astype(jnp.int32)),
@@ -2616,7 +2605,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                         shooter_id=d.shooter_id.at[slot].set(shooter),
                     )
 
-                    return sin._replace(discs=d2, rng_key=key)
+                    return sin.replace(discs=d2, rng_key=key)
 
                 # We only get here if there's a free disc slot (checked outside).
                 # If at least one enemy is alive, spawn the disc; otherwise return the state unchanged
@@ -2638,7 +2627,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         enemy_active_final = jnp.any(
             (state.discs.owner == jnp.int32(1)) & (state.discs.phase == jnp.int32(1))
         )
-        return state._replace(enemy_disc_active_prev=enemy_active_final)
+        return state.replace(enemy_disc_active_prev=enemy_active_final)
 
     @partial(jit, static_argnums=(0,))
     def step(
@@ -2662,7 +2651,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
         # Advance global frame counter (used to throttle enemy movement)
-        state = state._replace(frame_idx=state.frame_idx + jnp.int32(1))
+        state = state.replace(frame_idx=state.frame_idx + jnp.int32(1))
 
         # Was there a player-owned active disc BEFORE changing s?
         # we cannot pass the same pressed_fire_change to both spawn and move disc
@@ -2683,10 +2672,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         state: TronState = self._lock_doors_from_disc_hits(state)
         state: TronState = self._move_discs(state, recall_edge)
 
-        state = state._replace(fire_down_prev=user_action.fire)
+        state = state.replace(fire_down_prev=user_action.fire)
 
         # tick door cooldowns so used doors eventually become available again
-        state = state._replace(doors=_ArenaOps.tick_door_lockdown(state.doors))
+        state = state.replace(doors=_ArenaOps.tick_door_lockdown(state.doors))
 
         # on the first input movement, spawn up to max_enemies once
         def _spawn_initial_wave(s: TronState) -> TronState:
@@ -2694,7 +2683,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             alive_now = jnp.sum(s.enemies.alive.astype(jnp.int32))
             need = jnp.maximum(jnp.int32(self.consts.max_enemies) - alive_now, 0)
             s2 = self._spawn_enemies_up_to(s, need, jnp.float32(0.4))
-            return s2._replace(
+            return s2.replace(
                 game_started=jnp.array(True),
                 inwave_spawn_cd=jnp.int32(self.consts.enemy_respawn_timer),
             )
@@ -2707,7 +2696,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
         def _pause_step(s: TronState) -> TronState:
-            return s._replace(
+            return s.replace(
                 wave_end_cooldown_remaining=tick_cd(s.wave_end_cooldown_remaining)
             )
 
@@ -2739,7 +2728,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                         jnp.int32(self.consts.max_enemies),
                         jnp.float32(self.consts.create_new_door_prob),
                     )
-                    return s2._replace(
+                    return s2.replace(
                         inwave_spawn_cd=jnp.int32(self.consts.enemy_respawn_timer)
                     )
 
@@ -2789,7 +2778,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             gone_now = s.player_gone | (
                 (ticks == 0) & (s.player.lives[0] == jnp.int32(0))
             )
-            return s._replace(player_blink_ticks_remaining=ticks, player_gone=gone_now)
+            return s.replace(player_blink_ticks_remaining=ticks, player_gone=gone_now)
 
         state = jax.lax.cond(
             state.player_blink_ticks_remaining > jnp.int32(0),
