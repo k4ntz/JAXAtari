@@ -169,7 +169,7 @@ _MOVE_DOWN_ACTIONS = {Action.DOWN, Action.DOWNLEFT, Action.DOWNRIGHT}
 _JUMP_ACTIONS = {Action.FIRE} 
 _PASS_ACTIONS = {Action.FIRE} 
 _SHOOT_ACTIONS = {Action.FIRE}
-STEAL_ACTIONS = {Action.UPFIRE}
+STEAL_ACTIONS = {Action.FIRE}
 
 
 class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkConstants]):
@@ -950,18 +950,23 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         step_increment = jax.lax.select(is_shooting, 1, 0)
         return new_ball_state, key, step_increment, is_shooting
 
-    def _handle_stealing(self, state: DunkGameState, actions: Tuple[int, ...]) -> BallState:
-        """Handles the logic for stealing the ball."""
+    def _handle_stealing(self, state: DunkGameState, actions: Tuple[int, ...]) -> Tuple[BallState, chex.Array, chex.Array]:
+        """Handles the logic for stealing the ball. Returns ball state, success flags, and attempt flags."""
         ball_state = state.ball
         
         players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
         actions_stacked = jnp.stack(actions)
         player_ids = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
 
+        # Get ball holder Z position to check for dribbling
+        holder_idx = jnp.clip(ball_state.holder - 1, 0, 3)
+        holder_z = players.z[holder_idx]
+        is_dribbling = (holder_z == 0)
+
         def check_steal(player, action, pid):
             is_trying_to_steal = jnp.any(jnp.asarray(action) == jnp.asarray(list(STEAL_ACTIONS)))
             dist_sq = (player.x - ball_state.x)**2 + (player.y - ball_state.y)**2
-            is_close_to_ball = dist_sq < 2401.0 # 49^2
+            is_close_to_ball = dist_sq < 25.0
             
             # Can only steal if opponent has ball
             # Team 1: IDs 1, 2. Team 2: IDs 3, 4.
@@ -969,11 +974,20 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             holder_is_p1_team = jnp.logical_or((ball_state.holder == PlayerID.PLAYER1_INSIDE), (ball_state.holder == PlayerID.PLAYER1_OUTSIDE))
             holder_is_p2_team = jnp.logical_or((ball_state.holder == PlayerID.PLAYER2_INSIDE), (ball_state.holder == PlayerID.PLAYER2_OUTSIDE))
             
-            can_steal = jnp.logical_or(jnp.logical_and(is_p1_team, holder_is_p2_team), jnp.logical_and(jnp.logical_not(is_p1_team), holder_is_p1_team))
+            opponent_has_ball = jnp.logical_or(jnp.logical_and(is_p1_team, holder_is_p2_team), jnp.logical_and(jnp.logical_not(is_p1_team), holder_is_p1_team))
             
-            return jnp.logical_and(jnp.logical_and(is_trying_to_steal, is_close_to_ball), can_steal)
+            # Steal Mode is active if opponent has ball AND is dribbling (grounded)
+            steal_mode_active = jnp.logical_and(opponent_has_ball, is_dribbling)
+            
+            # Attempt is valid if mode is active AND button is pressed
+            is_attempt = jnp.logical_and(steal_mode_active, is_trying_to_steal)
+            
+            # Success requires attempt AND close distance
+            is_success = jnp.logical_and(is_attempt, is_close_to_ball)
 
-        steal_flags = jax.vmap(check_steal)(players, actions_stacked, player_ids)
+            return is_success, is_attempt
+
+        steal_flags, attempt_flags = jax.vmap(check_steal)(players, actions_stacked, player_ids)
         
         is_stealing = jnp.any(steal_flags)
         stealer_idx = jnp.argmax(steal_flags)
@@ -985,7 +999,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             lambda b: b,
             ball_state
         )
-        return new_ball_state
+        return new_ball_state, steal_flags, attempt_flags
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
         """Calculates the vertical impulse for a jump."""
@@ -1041,18 +1055,32 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         step_increment = pass_inc + shot_inc + move_inc
         return state, key, step_increment
 
-    def _handle_defense_actions(self, state: DunkGameState, actions: Tuple[int, ...]) -> DunkGameState:
-        """Handles defensive actions: stealing."""
-        ball_state_after_steal = self._handle_stealing(state, actions)
-        state = state.replace(ball=ball_state_after_steal)
-        return state
-
     def _handle_interactions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey]:
         """Handles all player interactions: jump, pass, shoot, steal."""
         players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
         actions_stacked = jnp.stack(actions)
 
-        updated_players, jumped_flags = jax.vmap(self._handle_jump, in_axes=(None, 0, 0, None))(state, players, actions_stacked, self.constants)
+        # 1. Handle Stealing FIRST
+        ball_state_after_steal, steal_flags, attempt_flags = self._handle_stealing(state, actions)
+        state = state.replace(ball=ball_state_after_steal)
+        
+        # Set a cooldown if a steal was successful to prevent immediate jump/shoot
+        is_stolen = jnp.any(steal_flags)
+        state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(is_stolen, 6, state.timers.offense_cooldown)))
+
+        # Mask actions for players who ATTEMPTED to steal so they don't Jump/Pass/Shoot
+        # If attempt_flag is true, it means Fire was pressed in Steal Mode.
+        # We should mask it to NOOP to prevent it from triggering a Jump.
+        def mask_action(act, did_attempt):
+             return jax.lax.select(did_attempt, Action.NOOP, act)
+        masked_actions_stacked = jax.vmap(mask_action)(actions_stacked, attempt_flags)
+        
+        # Convert masked stack back to tuple for other functions if needed, 
+        # but _handle_jump uses stack, _handle_offense uses tuple.
+        masked_actions = tuple([masked_actions_stacked[i] for i in range(4)])
+
+        # 2. Handle Jump (using masked actions)
+        updated_players, jumped_flags = jax.vmap(self._handle_jump, in_axes=(None, 0, 0, None))(state, players, masked_actions_stacked, self.constants)
         
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
@@ -1066,14 +1094,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
         state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_jump > 0, 6, state.timers.offense_cooldown)))
 
-        # 2. Handle ball actions
-        state, key, offense_increment = self._handle_offense_actions(state, actions, key)
-        state = self._handle_defense_actions(state, actions)
+        # 3. Handle Offense (Pass/Shoot) using masked actions
+        state, key, offense_increment = self._handle_offense_actions(state, masked_actions, key)
+        # _handle_defense_actions removed as it is handled in step 1
 
-        # 3. Update offensive_strategy_step
+        # 4. Update offensive_strategy_step
         new_offensive_strategy_step = jnp.minimum(state.strategy.offense_step + offense_increment, len(state.strategy.offense_pattern)-1)
         
-        # 4. Print if changed
+        # 5. Print if changed
         # We use jax.lax.cond to ensure we only print when an action actually occurred
         jax.lax.cond(
             offense_increment > 0,
@@ -1185,7 +1213,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             )
 
             # Handle interceptions and catches
-            catch_radius_sq = 49.0 # optimal value: tried different values
+            catch_radius_sq = 25.0 
             ball_in_flight_after_physics = (b_state.holder == PlayerID.NONE)
 
             def check_catch_flag(px, py):
@@ -1376,12 +1404,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
         
         # Enemy picks a direction (Randomly)
-        enemy_play_dir = random.randint(strat_key, shape=(), minval=-1, maxval=2) # -1, 0, 1 (Actually randint maxval is exclusive? No, JAX is usually exclusive for high. Wait. randint minval (inclusive), maxval (exclusive). So -1 to 2 gives -1, 0, 1.)
-        # Need to check jax.random.randint docs or convention. 
-        # Usually [minval, maxval). So -1 to 2 -> -1, 0, 1. Correct.
+        enemy_play_dir = random.randint(strat_key, shape=(), minval=-1, maxval=2) # -1, 0, 1 
         
         valid_input_p1_def = valid_input_p1_off
-        # Prompt says: "whoever has the ball (User or enemy) must choose an offensive strategy and the other team chooses a defensive strategy"
 
         state_p2_ball = jax.lax.cond(
              valid_input_p1_def,
