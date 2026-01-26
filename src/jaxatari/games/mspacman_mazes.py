@@ -218,10 +218,10 @@ class MsPacmanMaze:
        ], dtype=bool)
 
        MAZES = [MAZE0, MAZE1, MAZE2, MAZE3]
-       TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]]) # y coordinates of every tunnel - 0 means no tunnel
        HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
-       TILE_HEIGHT, TILE_WIDTH = MAZE0.shape # Height and width of the maze in number of tiles
+       TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]]) # y coordinates of every tunnel - 0 means no tunnel
 
+       # TODO: Make jit-compatible
        @staticmethod
        def precompute_dof(maze: np.ndarray):
               """
@@ -239,30 +239,22 @@ class MsPacmanMaze:
               return jnp.array(dof_grid)
 
        @staticmethod
-       def load_background(maze: int, mazes = MAZES, pellets = BASE_PELLETS,
-                           scale = TILE_SCALE, height = TILE_HEIGHT, width = TILE_WIDTH,
+       def load_background(maze: int, mazes = MAZES, scale = TILE_SCALE,
                            wall_color = WALL_COLOR, path_color = PATH_COLOR):
               """
               Constructs the background based on the level.
               """
-              maze_grid = mazes[maze]
-			  
-              # Initialize RGB image
-              background = np.zeros((210, width * scale, 3), dtype=jnp.uint8)
-
-              # Fill background
-              for y in range(height):
-                     for x in range(width):
-                            color = wall_color if maze_grid[y, x] == 1 else path_color
-                            background[1+y*scale: (y+2)*scale, x*scale: (x+1)*scale, :] = color
-              # Render pellets
-              for px in range(18):
-                     x_offset = 8 if px < 9 else 12
-                     for py in range(14):
-                            if pellets[px, py] > 0:
-                                   pellet_x = px * 8 + x_offset
-                                   pellet_y = py * 12 + 10
-                                   for i in range(4):
-              	                     for j in range(2):
-                                                 background[pellet_y+j, pellet_x+i] = wall_color
+              maze_grid = jnp.array(mazes[maze])  # shape (height, width)
+              maze_grid_expanded = jnp.repeat(jnp.repeat(maze_grid, scale, axis=0), scale, axis=1)  # shape (height*scale, width*scale)
+              
+              # Choose color for each pixel
+              background = jnp.where(
+                  maze_grid_expanded[..., None],  # shape (height*scale, width*scale, 1)
+                  wall_color,                     # shape (3,)
+                  path_color                      # shape (3,)
+              )
+              
+              # Pad to a height of 210 to accomodate UI
+              pad_height = 210 - background.shape[0]
+              background = jnp.pad(background, ((0, pad_height), (0, 0), (0, 0)))
               return jnp.swapaxes(jnp.array(background), 0, 1)
