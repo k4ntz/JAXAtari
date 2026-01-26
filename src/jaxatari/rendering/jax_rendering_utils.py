@@ -672,6 +672,19 @@ class JaxRenderingUtils:
                 padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
             PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
 
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
         # 3. Mask Generation
         SHAPE_MASKS = self._create_shape_masks(raw_sprites_dict, COLOR_TO_ID)
 

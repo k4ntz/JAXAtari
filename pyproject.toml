@@ -11,7 +11,7 @@ dependencies = [
     "flax>=0.10.6",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-    "jax",
+    "jax[cuda12]",
     "ml-dtypes",
     "numpy",
     "opt-einsum>=3.4.0",
@@ -39,4 +39,11 @@ gh_ci = [
   "pytest-xdist",
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
+]
+training = [
+  "tyro",
+  "torch",
+  "tensorboard",
+  "rtpt>=0.0.4",
+  "wandb[media]>=0.24.0",
 ]

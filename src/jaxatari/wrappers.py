@@ -281,7 +281,8 @@ class AtariWrapper(JaxatariWrapper):
         new_obs_stack = jax.tree.map(lambda stack, obs_leaf: jnp.concatenate([stack[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0), state.obs_stack, latest_obs)
 
         reward = jnp.sum(rewards)
-        done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        real_done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        done = real_done
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
@@ -311,14 +312,34 @@ class AtariWrapper(JaxatariWrapper):
         def _reset_fn(_):
             # When done, reset. The new state will contain the properly advanced next_state_key.
             return self.reset(next_state_key)
+        
+        def _softreset_fn(_):
+            # When just done (not real_done, episodic_life) we keep the env_state but reset the step counter
+            next_state = AtariState(new_env_state, next_state_key, 0, new_action, new_obs_stack)
+            return new_obs_stack, next_state
 
         def _step_fn(_):
             # When not done, create the next state, passing next_state_key for the *next* step.
             next_state = AtariState(new_env_state, next_state_key, state.step + 1, new_action, new_obs_stack)
             return new_obs_stack, next_state
 
-        new_obs, new_state = jax.lax.cond(done, _reset_fn, _step_fn, operand=None)
+        #Note: Using real_done here, since we don't want to reset the game if it's just a life lost. (only send done signal)
+        new_obs, new_state = jax.lax.cond(
+            real_done,
+            _reset_fn,
+            lambda _: jax.lax.cond(
+                done, # done, but not real_done
+                _softreset_fn,
+                _step_fn, # not done at all
+                operand=None
+            ),
+            operand=None)
 
+        # store actual done - not affected by episodic life
+        info_dict["env_done"] = real_done
+
+        # store actual reward in info dict before clipping
+        info_dict["env_reward"] = reward
         reward = jax.lax.cond(
             self.clip_reward,
             lambda reward: jnp.sign(reward),
@@ -850,7 +871,9 @@ class LogState:
     returned_episode_lengths: int
 
 class LogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths."""
+    """Log the episode returns and lengths.
+    Please NOTE: This logs environment rewards and dones, which are NOT affected by episodic life or reward clipping.
+    """
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
@@ -867,20 +890,23 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return = state.episode_returns + reward
+        # use env_done (not affected by episodic life) for logging
+        env_done = info.get("env_done", done)
+        # use env_reward (not clipped) for logging
+        new_episode_return = state.episode_returns + info.get("env_reward", reward) 
         new_episode_length = state.episode_lengths + 1
         state = LogState(
             atari_state=atari_state,
-            episode_returns=new_episode_return * (1 - done),
-            episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
+            episode_returns=new_episode_return * (1 - env_done),
+            episode_lengths=new_episode_length * (1 - env_done),
+            returned_episode_returns=state.returned_episode_returns * (1 - env_done)
+            + new_episode_return * env_done,
+            returned_episode_lengths=state.returned_episode_lengths * (1 - env_done)
+            + new_episode_length * env_done,
         )
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = done
+        info["returned_episode"] = env_done
         return obs, state, reward, done, info
 
 @struct.dataclass
@@ -897,6 +923,7 @@ class MultiRewardLogWrapper(JaxatariWrapper):
     """Log the episode returns and lengths for multiple rewards.
     Make sure to apply MultiRewardWrapper to the core env when using this wrapper.
     The final logs will be 'returned_episode_returns_0', ... for each reward function provided.
+    Please NOTE: This logs environment rewards and dones, which are NOT affected by episodic life or reward clipping.
     """
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -918,26 +945,29 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return_env = state.episode_returns_env + reward
+        # use env_done (not affected by episodic life) for logging
+        env_done = info.get("env_done", done)
+        # use env_reward (not clipped) for logging
+        new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward) 
         # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
         all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
         new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
         state = MultiRewardLogState(
             atari_state=atari_state,
-            episode_returns_env=new_episode_return_env * (1 - done),
-            episode_returns=new_episode_return * (1 - done),
-            episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns_env=state.returned_episode_returns_env * (1 - done)
-            + new_episode_return_env * done,
-            returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
+            episode_returns_env=new_episode_return_env * (1 - env_done),
+            episode_returns=new_episode_return * (1 - env_done),
+            episode_lengths=new_episode_length * (1 - env_done),
+            returned_episode_returns_env=state.returned_episode_returns_env * (1 - env_done)
+            + new_episode_return_env * env_done,
+            returned_episode_returns=state.returned_episode_returns * (1 - env_done)
+            + new_episode_return * env_done,
+            returned_episode_lengths=state.returned_episode_lengths * (1 - env_done)
+            + new_episode_length * env_done,
         )
         info["returned_episode_env_returns"] = state.returned_episode_returns_env
         for i, r in enumerate(new_episode_return):
             info[f"returned_episode_returns_{i}"] = state.returned_episode_returns[i]
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = done
+        info["returned_episode"] = env_done
         return obs, state, reward, done, info
