@@ -1002,9 +1002,23 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return new_ball_state, steal_flags, attempt_flags
 
     def _handle_jump(self, state: DunkGameState, player: PlayerState, action: int, constants: DunkConstants) -> chex.Array:
-        """Calculates the vertical impulse for a jump."""
-        is_jump_step = jnp.logical_and((state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT), (player.z == 0))
-        can_jump = jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_jump_step), jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS))))
+        """Calculates the vertical impulse for a jump. Players can jump freely for defense or during offensive plays."""
+        # Allow jumping in two cases:
+        # 1. During JUMPSHOOT offensive step (original behavior for shooting/dunking)
+        # 2. Always during defensive plays (when opposing team has ball)
+        is_jump_step = (state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT)
+        
+        # Determine if player's team has ball
+        is_p1_player = (player.id <= 2)
+        p1_has_ball = jnp.logical_or((state.ball.holder == PlayerID.PLAYER1_INSIDE), (state.ball.holder == PlayerID.PLAYER1_OUTSIDE))
+        player_team_has_ball = jax.lax.select(is_p1_player, p1_has_ball, jnp.logical_not(p1_has_ball))
+        
+        # Allow jump if: (offensive player during jumpshoot step) OR (defensive player always)
+        can_jump_offensively = jnp.logical_and((state.timers.offense_cooldown == 0), is_jump_step)
+        can_jump_defensively = jnp.logical_not(player_team_has_ball)
+        can_jump = jnp.logical_and((player.z == 0), jnp.logical_or(can_jump_offensively, can_jump_defensively))
+        can_jump = jnp.logical_and(can_jump, jnp.any(jnp.asarray(action) == jnp.asarray(list(_JUMP_ACTIONS))))
+        
         vel_z = jax.lax.select(can_jump, constants.JUMP_STRENGTH, jnp.array(0, dtype=jnp.int32))
         new_vel_z = jax.lax.select(vel_z > 0, vel_z, player.vel_z)
         did_jump = jax.lax.select(can_jump, 1, 0)
@@ -1014,6 +1028,71 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         triggered_clearance = jnp.logical_and(jnp.logical_and(can_jump, has_ball), player.clearance_needed)
 
         return player.replace(vel_z=new_vel_z, triggered_clearance=triggered_clearance), did_jump
+
+    def _handle_interception(self, state: DunkGameState, players: PlayerState, player_ids: chex.Array) -> Tuple[BallState, chex.Array]:
+        """Handles interception of passes by defenders in the air. Returns updated ball state and interception flags."""
+        ball_state = state.ball
+        
+        # Only check for interceptions if ball is in flight and there's a receiver
+        ball_in_flight = (ball_state.holder == PlayerID.NONE)
+        has_receiver = (ball_state.receiver != PlayerID.NONE)
+        is_pass = jnp.logical_and(ball_in_flight, has_receiver)
+        
+        # Find receiver position
+        receiver_idx = jnp.clip(ball_state.receiver - 1, 0, 3)
+        receiver_x = players.x[receiver_idx]
+        receiver_y = players.y[receiver_idx]
+        receiver_pos = jnp.array([receiver_x, receiver_y], dtype=jnp.float32)
+        
+        # Ball position
+        ball_pos = jnp.array([ball_state.x, ball_state.y], dtype=jnp.float32)
+        
+        # Interception radius - defenders can intercept if they're in the path
+        interception_radius = 20.0
+        
+        def check_interception(player_idx, player, pid):
+            # Only defending players can intercept (not the receiver)
+            is_receiver = (pid == ball_state.receiver)
+            
+            # Only defenders in the air can intercept
+            in_air = (player.z > 0)
+            
+            # Check if defender is on the passing lane
+            # Distance from player to line segment from ball to receiver
+            to_receiver = receiver_pos - ball_pos
+            to_player = jnp.array([player.x, player.y], dtype=jnp.float32) - ball_pos
+            
+            # Project player position onto passing line
+            norm_sq = jnp.sum(to_receiver**2)
+            safe_norm_sq = jnp.where(norm_sq == 0, 1.0, norm_sq)
+            t = jnp.sum(to_player * to_receiver) / safe_norm_sq
+            t_clamped = jnp.clip(t, 0.0, 1.0)
+            
+            closest_point = ball_pos + t_clamped * to_receiver
+            dist_to_path = jnp.sqrt(jnp.sum((jnp.array([player.x, player.y], dtype=jnp.float32) - closest_point)**2))
+            
+            # Interception is possible if player is close to the path and in the air
+            can_intercept = jnp.logical_and(jnp.logical_and(in_air, (dist_to_path < interception_radius)), jnp.logical_not(is_receiver))
+            
+            return can_intercept
+        
+        interception_flags = jax.vmap(check_interception)(jnp.arange(4), players, player_ids)
+        is_intercepted = jnp.logical_and(is_pass, jnp.any(interception_flags))
+        
+        # Get interceptor ID (last one wins in case of multiple)
+        reversed_idx = jnp.argmax(interception_flags[::-1])
+        interceptor_idx = 3 - reversed_idx
+        interceptor_id = player_ids[interceptor_idx]
+        
+        # Update ball state if intercepted
+        new_ball_state = jax.lax.cond(
+            is_intercepted,
+            lambda b: b.replace(holder=interceptor_id, vel_x=0.0, vel_y=0.0, receiver=PlayerID.NONE),
+            lambda b: b,
+            ball_state
+        )
+        
+        return new_ball_state, interception_flags
 
     def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey, chex.Array]:
         """Handles offensive actions: passing, shooting, and move commands."""
@@ -1211,6 +1290,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                 lambda b: b,
                 b_state
             )
+
+            # Handle interceptions (defenders in air can intercept passes)
+            players_stacked_for_intercept = jax.tree_util.tree_map(lambda *args: jnp.stack(args), s.player1_inside, s.player1_outside, s.player2_inside, s.player2_outside)
+            player_ids_for_intercept = jnp.array([PlayerID.PLAYER1_INSIDE, PlayerID.PLAYER1_OUTSIDE, PlayerID.PLAYER2_INSIDE, PlayerID.PLAYER2_OUTSIDE])
+            b_state_after_intercept, interception_flags = self._handle_interception(s.replace(ball=b_state), players_stacked_for_intercept, player_ids_for_intercept)
+            b_state = b_state_after_intercept
 
             # Handle interceptions and catches
             catch_radius_sq = 25.0 
