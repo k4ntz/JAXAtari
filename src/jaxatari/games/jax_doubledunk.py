@@ -360,6 +360,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p1_outside_out_of_bounds = jnp.logical_and(updated_p1_outside.is_out_of_bounds, (updated_p1_outside.id == ball_holder_id))
         p1_inside_out_of_bounds = jnp.logical_and(updated_p1_inside.is_out_of_bounds, (updated_p1_inside.id == ball_holder_id))
         p1_out_of_bounds = jnp.logical_or(p1_inside_out_of_bounds, p1_outside_out_of_bounds) # if Player 1 triggered out of bounds
+        
+        # Also check P2 for out of bounds violations
+        p2_outside_out_of_bounds = jnp.logical_and(updated_p2_outside.is_out_of_bounds, (updated_p2_outside.id == ball_holder_id))
+        p2_inside_out_of_bounds = jnp.logical_and(updated_p2_inside.is_out_of_bounds, (updated_p2_inside.id == ball_holder_id))
+        p2_out_of_bounds = jnp.logical_or(p2_inside_out_of_bounds, p2_outside_out_of_bounds) # if Player 2 triggered out of bounds
+        
+        any_out_of_bounds = jnp.logical_or(p1_out_of_bounds, p2_out_of_bounds)
+        # Determine who is at fault
+        p1_at_fault = jax.lax.select(p1_out_of_bounds, True, jax.lax.select(p2_out_of_bounds, False, False))
 
         # --- Updated Game State ---
         updated_state = state.replace(
@@ -374,9 +383,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         penalty_state = updated_state.replace(
             game_mode=GameMode.OUT_OF_BOUNDS_PENALTY,
             timers=updated_state.timers.replace(out_of_bounds=60),
+            # Store who is at fault so _handle_out_of_bounds_penalty knows who to penalize
+            strategy=updated_state.strategy.replace(play_direction=jax.lax.select(p1_at_fault, -2, -1))  # Use play_direction as a temp storage: -2 for P1, -1 for P2
         )
 
-        new_state = jax.lax.cond(p1_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
+        new_state = jax.lax.cond(any_out_of_bounds, lambda x: penalty_state, lambda x: updated_state, None)
 
         return new_state
 
@@ -400,13 +411,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.timers.out_of_bounds - 1
         timer_expired = new_timer <= 0
 
-        # We need to know who held the ball to know who triggered it.
-        # But the ball holder hasn't changed yet in 'state'.
-        ball_holder_id = state.ball.holder
-        
-        p1_inside_out_of_bounds = jnp.logical_and(state.player1_inside.is_out_of_bounds, (state.player1_inside.id == ball_holder_id))
-        p1_outside_out_of_bounds = jnp.logical_and(state.player1_outside.is_out_of_bounds, (state.player1_outside.id == ball_holder_id))
-        p1_at_fault = jnp.logical_or(p1_inside_out_of_bounds, p1_outside_out_of_bounds)
+        # Determine who was at fault from stored play_direction: -2 for P1, -1 for P2
+        p1_at_fault = (state.strategy.play_direction == -2)
 
         return jax.lax.cond(
             timer_expired,
@@ -442,8 +448,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
         # check if any players triggered the travel rule
-        travel_triggered = jnp.logical_or(updated_p1_outside.triggered_travel, updated_p1_inside.triggered_travel)
-
+        p1_travel = jnp.logical_or(updated_p1_outside.triggered_travel, updated_p1_inside.triggered_travel)
+        p2_travel = jnp.logical_or(updated_p2_outside.triggered_travel, updated_p2_inside.triggered_travel)
+        travel_triggered = jnp.logical_or(p1_travel, p2_travel)
+        # Determine who is at fault
+        p1_at_fault = jax.lax.select(p1_travel, True, jax.lax.select(p2_travel, False, False))
 
         # --- Updated Game State ---
         updated_state = state.replace(
@@ -455,9 +464,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Instead of resetting immediately, we switch to TRAVEL_PENALTY mode
         # Freeze for ~1 second (60 frames)
+        # Use play_direction to store fault info: -2 for P1, -1 for P2
         penalty_state = updated_state.replace(
             game_mode=GameMode.TRAVEL_PENALTY,
-            timers=updated_state.timers.replace(travel=60)
+            timers=updated_state.timers.replace(travel=60),
+            strategy=updated_state.strategy.replace(play_direction=jax.lax.select(p1_at_fault, -2, -1))
         )
 
         new_state = jax.lax.cond(travel_triggered, lambda x: penalty_state, lambda x: updated_state, None)
@@ -1509,11 +1520,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_timer = state.timers.travel - 1
         timer_expired = new_timer <= 0
 
-        p1_triggered = jnp.logical_or(state.player1_inside.triggered_travel, state.player1_outside.triggered_travel)
+        # Determine who was at fault from stored play_direction: -2 for P1, -1 for P2
+        p1_at_fault = (state.strategy.play_direction == -2)
 
         return jax.lax.cond(
             timer_expired,
-            lambda s: self._resolve_penalty_and_reset(s, p1_triggered),
+            lambda s: self._resolve_penalty_and_reset(s, p1_at_fault),
             lambda s: s.replace(timers=s.timers.replace(travel=new_timer)),
             state
         )
