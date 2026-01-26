@@ -1165,16 +1165,19 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         return state.player_lives <= 0
 
 class SpaceInvadersRenderer(JAXGameRenderer):
-    def __init__(self, consts: SpaceInvadersConstants = None):
-        super().__init__()
+    def __init__(self, consts: SpaceInvadersConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SpaceInvadersConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160), # H, W
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160), # H, W
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path

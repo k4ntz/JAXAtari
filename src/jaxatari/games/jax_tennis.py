@@ -2387,15 +2387,20 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
 class TennisRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: TennisConstants = None):
-        super().__init__()
+    def __init__(self, consts: TennisConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or TennisConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tennis"
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Load and pad background
         background_rgba = self.jr.loadFrame(os.path.join(self.sprite_path, 'background.npy'))

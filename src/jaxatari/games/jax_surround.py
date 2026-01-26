@@ -600,13 +600,19 @@ class JaxSurround(
 
 
 class SurroundRenderer(JAXGameRenderer):
-    def __init__(self, consts: Optional[SurroundConstants] = None):
-        super().__init__()
+    def __init__(self, consts: Optional[SurroundConstants] = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SurroundConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0]),
-            channels=3,
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0]),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         self.P1_HEAD_COLOR_TUPLE = (214, 214, 42)    # Yellow

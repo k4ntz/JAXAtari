@@ -112,8 +112,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         self.renderer = PongRenderer(self.consts)
 
     def _player_step(self, state: PongState, action: chex.Array) -> PongState:
-        up = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        down = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
 
         acceleration_array = jnp.array(self.consts.PLAYER_ACCELERATION, dtype=jnp.int32)
         acceleration = acceleration_array[state.acceleration_counter]
@@ -594,14 +594,20 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         )
 
 class PongRenderer(JAXGameRenderer):
-    def __init__(self, consts: PongConstants = None):
+    def __init__(self, consts: PongConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
         self.consts = consts or PongConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Start from (possibly modded) asset config provided via constants

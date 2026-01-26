@@ -771,16 +771,20 @@ def _precompute_tints(seq: Array, colors: Array) -> Array:
 
 class TronRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: TronConstants = None) -> None:
-        super().__init__()
+    def __init__(self, consts: TronConstants = None, config: render_utils.RendererConfig = None) -> None:
         self.consts = consts or TronConstants()
+        super().__init__(self.consts)
         c = self.consts
         
-        # 1. Configure the new renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(c.screen_height, c.screen_width),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(c.screen_height, c.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tron"
         

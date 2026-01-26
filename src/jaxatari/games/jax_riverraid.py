@@ -1793,15 +1793,18 @@ class JaxRiverraid(JaxEnvironment):
 
 
 class RiverraidRenderer(JAXGameRenderer):
-    def __init__(self, consts: RiverraidConstants = None):
-        super().__init__()
+    def __init__(self, consts: RiverraidConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or RiverraidConstants()
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path

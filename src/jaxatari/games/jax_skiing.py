@@ -929,17 +929,21 @@ def _enforce_min_sep_x(x_init: jnp.ndarray, taken_xs: jnp.ndarray, min_sep: jnp.
 
 
 class SkiingRenderer(JAXGameRenderer):
-    def __init__(self, consts: SkiingConstants = None):
-        super().__init__()
+    def __init__(self, consts: SkiingConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SkiingConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/skiing"
         
-        # 1. Configure the rendering utility
-        self.render_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.render_config)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

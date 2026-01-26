@@ -817,15 +817,20 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 class HumanCannonballRenderer(JAXGameRenderer):
     """Render Human Cannonball using the modern render_utils pipeline."""
 
-    def __init__(self, consts: HumanCannonballConstants = None):
-        super().__init__()
+    def __init__(self, consts: HumanCannonballConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HumanCannonballConstants()
+        super().__init__(self.consts)
         self.sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/human_cannonball")
-        self.ru_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         asset_config = list(self.consts.ASSET_CONFIG)
         (
             self.PALETTE,

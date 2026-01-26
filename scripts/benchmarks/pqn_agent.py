@@ -147,7 +147,7 @@ def make_train(config):
     mod_env = env
     if config.get("MOD_NAME", None) is not None:
         mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
-    renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
+    renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)

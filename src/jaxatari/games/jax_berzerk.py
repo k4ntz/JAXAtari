@@ -1705,22 +1705,25 @@ class BerzerkRenderer(JAXGameRenderer):
     sprite_indices: Dict[str, int]
     group_offsets: Dict[str, chex.Array]
 
-    def __init__(self, consts: BerzerkConstants = None):
+    def __init__(self, consts: BerzerkConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading sprites using the
         new palette-based pipeline.
         """
-        super().__init__()
-
         self.consts = consts or BerzerkConstants()
+        super().__init__(self.consts)
 
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/berzerk"
 
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants
