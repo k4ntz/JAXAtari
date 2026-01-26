@@ -1,6 +1,7 @@
 """Jaxatari Wrappers"""
 
 import functools
+import types
 from typing import Any, Dict, Tuple, Union, Optional, Callable
 from dataclasses import is_dataclass, asdict
 
@@ -12,6 +13,7 @@ import jax.numpy as jnp
 from jaxatari.environment import EnvState, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 import numpy as np
+from jaxatari.rendering.jax_rendering_utils import RendererConfig
 
 class JaxatariWrapper(object):
     """Base class for JAXAtark wrappers."""
@@ -22,6 +24,60 @@ class JaxatariWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
+
+
+def _apply_native_downscaling_hotswap(
+    base_env,
+    pixel_resize_shape: tuple[int, int],
+    grayscale: bool
+) -> tuple[bool, bool]:
+    """
+    Helper function to hot-swap the renderer and image_space method on a base environment
+    to enable native downscaling.
+    
+    This function performs two "hot-swaps":
+    1. Replaces the renderer instance with a new one configured for downscaling
+    2. Replaces the image_space method on the instance to return the correct shape
+    
+    Args:
+        base_env: The base environment instance (not wrapped)
+        pixel_resize_shape: Target (height, width) for downscaling
+        grayscale: Whether to use grayscale (1 channel) or RGB (3 channels)
+    
+    Returns:
+        Tuple of (do_pixel_resize, grayscale) flags indicating whether wrapper-side
+        processing should be disabled (both False if native downscaling was applied).
+    """
+    # Create new config with downscaling
+    new_config = RendererConfig(
+        game_dimensions=base_env.renderer.config.game_dimensions,
+        channels=1 if grayscale else 3,
+        downscale=pixel_resize_shape
+    )
+    
+    # Hot-swap 1: Re-initialize the renderer with the new config
+    # This triggers the asset loading with the correct downscaling
+    # Reruns the __init__, but there was no better way since this is set in a wrapper and wrappers run after the env is first initialized
+    new_renderer = type(base_env.renderer)(
+        consts=base_env.consts,
+        config=new_config
+    )
+    base_env.renderer = new_renderer
+    
+    # Hot-swap 2: Replace the image_space method on the instance
+    def _native_image_space(self_env) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(pixel_resize_shape[0], pixel_resize_shape[1], new_config.channels),
+            dtype=jnp.uint8
+        )
+    
+    # Bind this function to the instance, overshadowing the class method
+    base_env.image_space = types.MethodType(_native_image_space, base_env)
+    
+    # Return flags indicating wrapper-side processing should be disabled
+    return False, False
     
 class MultiRewardWrapper(JaxatariWrapper):
     """
@@ -75,7 +131,7 @@ class AtariWrapper(JaxatariWrapper):
         frame_skip: The number of frames to skip.
     """
     # TODO: change sticky_actions to float
-    def __init__(self, env, sticky_actions: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_episode_length: int = 10_000, episodic_life: bool = True, first_fire: bool = True, noop_reset: int = 0, clip_reward: bool = False, max_pooling: bool = False):
+    def __init__(self, env, sticky_actions: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_episode_length: int = 10_000, episodic_life: bool = True, first_fire: bool = True, noop_reset: int = 0, clip_reward: bool = False, max_pooling: bool = False, full_action_space: bool = False,):
         super().__init__(env)
         self._env = env
         self.sticky_actions = sticky_actions
@@ -88,6 +144,30 @@ class AtariWrapper(JaxatariWrapper):
         self.noop_max = noop_reset
         self.clip_reward = clip_reward
         self.max_pooling = max_pooling
+        self.full_action_space = full_action_space
+
+        # --- 1) HANDLE FULL ACTION SPACE LOGIC ---
+        # If requested, swap the environment's (minimal) action set for the full identity set.
+        # This keeps each game env "clean" while enabling a central switch for experimentation.
+        if self.full_action_space and hasattr(self._env, "ACTION_SET"):
+            # Overwrite the instance attribute with [0, 1, ... 17]
+            self._env.ACTION_SET = jnp.arange(18, dtype=jnp.int32)
+
+        # --- 2) RESOLVE CORRECT 'FIRE' ACTION INDEX ---
+        # The wrapped env expects an *index* into ACTION_SET (agent action), not the ALE action constant.
+        self.fire_action_index: int = int(Action.FIRE)  # fallback if env doesn't expose ACTION_SET
+        self.first_fire = first_fire
+
+        if hasattr(self._env, "ACTION_SET"):
+            # Convert to numpy for search (safe in __init__)
+            action_set_np = np.array(self._env.ACTION_SET)
+            fire_indices = np.where(action_set_np == int(Action.FIRE))[0]
+            if len(fire_indices) > 0:
+                self.fire_action_index = int(fire_indices[0])
+            else:
+                # Game has no FIRE action (e.g. Freeway).
+                # Disable first_fire to prevent sending a random command by mistake.
+                self.first_fire = False
 
         self._observation_space = spaces.stack_space(self._env.observation_space(), self.frame_stack_size)
 
@@ -142,8 +222,8 @@ class AtariWrapper(JaxatariWrapper):
         # ========== FIRST FIRE ==========
         def perform_first_fire(carry):
             env_state, obs, step, _ = carry
-            fire_obs, fire_env_state, _, _, _ = self._env.step(env_state, Action.FIRE)
-            return fire_env_state, fire_obs, step + 1, Action.FIRE
+            fire_obs, fire_env_state, _, _, _ = self._env.step(env_state, self.fire_action_index)
+            return fire_env_state, fire_obs, step + 1, self.fire_action_index
 
         def identity_fire(carry):
             return carry
@@ -219,6 +299,9 @@ class AtariWrapper(JaxatariWrapper):
         if hasattr(infos, '_asdict'):
             # It's a namedtuple or similar, convert to dict
             info_items = infos._asdict().items()
+        elif is_dataclass(infos):
+            # It's a dataclass, convert to dict
+            info_items = asdict(infos).items()
         else:
             # It's already a dict
             info_items = infos.items()
@@ -350,25 +433,35 @@ class PixelObsWrapper(JaxatariWrapper):
     Wrapper for Atari environments that returns the flattened pixel observations.
     Apply this wrapper after the AtariWrapper!
     """
-
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False):
+    # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
 
-        self.do_pixel_resize = do_pixel_resize
-        self.pixel_resize_shape = pixel_resize_shape
-        self.grayscale = grayscale
+        # Access the Base Environment
+        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
+
+        if do_pixel_resize and use_native_downscaling:
+            # Apply hot-swap logic via helper function
+            self.do_pixel_resize, self.grayscale = _apply_native_downscaling_hotswap(
+                base_env, pixel_resize_shape, grayscale
+            )
+            self.pixel_resize_shape = pixel_resize_shape
+        else:
+            self.do_pixel_resize = do_pixel_resize
+            self.pixel_resize_shape = pixel_resize_shape
+            self.grayscale = grayscale
 
         # Dynamically calculate the final observation space shape
-        base_shape = self._env.image_space().shape
-        height, width, channels = base_shape
-
+        # If we hot-swapped, image_space() will now return the correct small size automatically
+        final_shape = self._env.image_space().shape
+        
+        # If we are doing wrapper-side resizing (legacy), we still calculate manually
         if self.do_pixel_resize:
             height, width = self.pixel_resize_shape
-        if self.grayscale:
-            channels = 1
-        
-        final_shape = (height, width, channels)
+            channels = 1 if self.grayscale else final_shape[2]
+            final_shape = (height, width, channels)
+
         # Create the space for a single preprocessed frame
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         # Stack the single-frame space
@@ -436,22 +529,34 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelAndObjectCentricWrapper must be applied after AtariWrapper"
         
-        # Part 1: Define the stacked image space.
-        self.do_pixel_resize = do_pixel_resize
-        self.pixel_resize_shape = pixel_resize_shape
-        self.grayscale = grayscale
+        # Access the Base Environment
+        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
 
-        base_shape = self._env.image_space().shape
-        height, width, channels = base_shape
+        if do_pixel_resize and use_native_downscaling:
+            # Apply hot-swap logic via helper function
+            self.do_pixel_resize, self.grayscale = _apply_native_downscaling_hotswap(
+                base_env, pixel_resize_shape, grayscale
+            )
+            self.pixel_resize_shape = pixel_resize_shape
+        else:
+            self.do_pixel_resize = do_pixel_resize
+            self.pixel_resize_shape = pixel_resize_shape
+            self.grayscale = grayscale
+
+        # Part 1: Define the stacked image space.
+        # If we hot-swapped, image_space() will now return the correct small size automatically
+        final_shape = self._env.image_space().shape
+        
+        # If we are doing wrapper-side resizing (legacy), we still calculate manually
         if self.do_pixel_resize:
             height, width = self.pixel_resize_shape
-        if self.grayscale:
-            channels = 1
-        final_shape = (height, width, channels)
+            channels = 1 if self.grayscale else final_shape[2]
+            final_shape = (height, width, channels)
+        
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         stacked_image_space = spaces.stack_space(image_space, self._env.frame_stack_size)
 

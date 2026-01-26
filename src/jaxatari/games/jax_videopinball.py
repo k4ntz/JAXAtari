@@ -171,6 +171,22 @@ class JaxVideoPinball(
         VideoPinballConstants,
     ]
 ):
+    # Minimal ALE action set for Video Pinball (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(
         self,
         consts: VideoPinballConstants | None = None,
@@ -211,16 +227,6 @@ class JaxVideoPinball(
         """
         consts = consts or VideoPinballConstants()
         super().__init__(consts)
-        self.action_set = {
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.LEFTFIRE,
-            Action.RIGHTFIRE,
-        }
         self.renderer = VideoPinballRenderer(consts=consts)
 
     def reset(self, key) -> Tuple[VideoPinballObservation, VideoPinballState]:
@@ -344,6 +350,9 @@ class JaxVideoPinball(
         - Accepting the full `state` (including rng_key) ensures deterministic,
             reproducible randomness when splitting keys inside the step.
         """
+
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # Give different rng keys to different stochastic parts of the environment
         rng_key, ball_step_key = jrandom.split(state.rng_key)
@@ -997,12 +1006,15 @@ class JaxVideoPinball(
         Actions are:
         0: NOOP
         1: FIRE
-        2: RIGHT
-        3: LEFT
-        4: RIGHTFIRE
-        5: LEFTFIRE
+        2: UP
+        3: RIGHT
+        4: LEFT
+        5: DOWN
+        6: UPFIRE
+        7: RIGHTFIRE
+        8: LEFTFIRE
         """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """
@@ -4208,18 +4220,22 @@ class JaxVideoPinball(
 class VideoPinballRenderer(JAXGameRenderer):
     """JAX-based Video Pinball game renderer, optimized with JIT compilation."""
 
-    def __init__(self, consts: VideoPinballConstants = None):
+    def __init__(self, consts: VideoPinballConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading and pre-processing all assets.
         """
-        super().__init__()
         self.consts = consts or VideoPinballConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videopinball"

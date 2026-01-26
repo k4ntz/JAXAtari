@@ -6,6 +6,7 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
 import jax.lax
+from flax import struct
 import jax.numpy as jnp
 import chex
 import jaxatari.spaces as spaces
@@ -13,6 +14,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
@@ -60,45 +62,19 @@ def _get_default_asset_config() -> tuple:
     
     return config
 
-class AsteroidsConstants(NamedTuple):
-    # Constants for game environment
-    WIDTH: int = 160
-    HEIGHT: int = 210
-
-    # Player position can be "in between" pixels.
-    # This is not visible on screen but relevant for calculation.
-    # Internal representations of the player position must first be converted to screen coordinates.
-    # A change of a coordinate value of this internal position by any value below 256
-    # might not be visible in game if no pixel-boundary is crossed with said change.
-
-    # Object sizes (width, height)
-    PLAYER_SIZE: Tuple[int, int] = (5, 10)
-    MISSILE_SIZE: Tuple[int, int] = (1, 2)
-    ASTEROID_SIZE_L: Tuple[int, int] = (16, 28)
-    ASTEROID_SIZE_M: Tuple[int, int] = (8, 15)
-    ASTEROID_SIZE_S: Tuple[int, int] = (4, 8)
-
-    # Asteroid color and size constants
-    BROWN: int = 0 # 180, 122, 48
-    GREY: int = 1 # 214, 214, 214 
-    LIGHT_BLUE: int = 2 # 117, 181, 239
-    LIGHT_YELLOW: int = 3 # 187, 187, 53
-    PINK: int = 4 # 184, 70, 162
-    PURPLE: int = 5 # 104, 72, 198
-    RED: int = 6 # 184, 50, 50
-    YELLOW: int = 7 # 136, 146, 62
-
-    INACTIVE: int = 0
-    LARGE_1: int = 1
-    LARGE_2: int = 2
-    MEDIUM: int = 3
-    SMALL: int = 4
-
-    # Start positions
-    INITIAL_PLAYER_X: int = int(256/4 * (WIDTH - PLAYER_SIZE[0]))
-    INITIAL_PLAYER_Y: int = int(256/4 * (HEIGHT - PLAYER_SIZE[1]))
-    INITIAL_PLAYER_ROTATION: int = 0
-    INITIAL_ASTEROID_STATES: chex.Array = jnp.array([
+def _get_initial_asteroid_states() -> chex.Array:
+    """
+    Returns the initial asteroid states array.
+    Calculated outside of AsteroidsConstants to avoid referencing class attributes in defaults.
+    """
+    # Default constant values (matching AsteroidsConstants defaults)
+    INACTIVE = 0
+    LARGE_1 = 1
+    LARGE_2 = 2
+    BROWN = 0
+    GREY = 1
+    
+    return jnp.array([
         [36, 24, 1, LARGE_2, BROWN],
         [124, 153, 3, LARGE_2, GREY],
         [48, 148, 1, LARGE_1, GREY],
@@ -118,31 +94,77 @@ class AsteroidsConstants(NamedTuple):
         [0, 0, 0, INACTIVE, GREY]
     ])
 
+class AsteroidsConstants(AutoDerivedConstants):
+    # Constants for game environment
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+
+    # Player position can be "in between" pixels.
+    # This is not visible on screen but relevant for calculation.
+    # Internal representations of the player position must first be converted to screen coordinates.
+    # A change of a coordinate value of this internal position by any value below 256
+    # might not be visible in game if no pixel-boundary is crossed with said change.
+
+    # Object sizes (width, height)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(5, 10))
+    MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 2))
+    ASTEROID_SIZE_L: Tuple[int, int] = struct.field(pytree_node=False, default=(16, 28))
+    ASTEROID_SIZE_M: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 15))
+    ASTEROID_SIZE_S: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 8))
+
+    # Asteroid color and size constants
+    BROWN: int = struct.field(pytree_node=False, default=0) # 180, 122, 48
+    GREY: int = struct.field(pytree_node=False, default=1) # 214, 214, 214 
+    LIGHT_BLUE: int = struct.field(pytree_node=False, default=2) # 117, 181, 239
+    LIGHT_YELLOW: int = struct.field(pytree_node=False, default=3) # 187, 187, 53
+    PINK: int = struct.field(pytree_node=False, default=4) # 184, 70, 162
+    PURPLE: int = struct.field(pytree_node=False, default=5) # 104, 72, 198
+    RED: int = struct.field(pytree_node=False, default=6) # 184, 50, 50
+    YELLOW: int = struct.field(pytree_node=False, default=7) # 136, 146, 62
+
+    INACTIVE: int = struct.field(pytree_node=False, default=0)
+    LARGE_1: int = struct.field(pytree_node=False, default=1)
+    LARGE_2: int = struct.field(pytree_node=False, default=2)
+    MEDIUM: int = struct.field(pytree_node=False, default=3)
+    SMALL: int = struct.field(pytree_node=False, default=4)
+
+    # Start positions
+    INITIAL_PLAYER_ROTATION: int = struct.field(pytree_node=False, default=0)
+    INITIAL_ASTEROID_STATES: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_initial_asteroid_states)
+
     # Rendering constants
-    WALL_COLOR: Tuple[int, int, int] = (0, 0, 0)
-    WALL_TOP_HEIGHT: int = 18
-    WALL_BOTTOM_HEIGHT: int = 15
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
+    WALL_TOP_HEIGHT: int = struct.field(pytree_node=False, default=18)
+    WALL_BOTTOM_HEIGHT: int = struct.field(pytree_node=False, default=15)
 
     # Game constants
-    STARTING_LIVES: int = 4
-    POINTS_PER_LIFE: int = 5000
-    MAX_LIVES: int = 9
-    MAX_SCORE: int = 100000
-    SAFE_ZONE = (20, 34)
-    MAX_ENTITY_X: int = WIDTH - 1
-    MAX_ENTITY_Y: int = HEIGHT - WALL_BOTTOM_HEIGHT
-    MIN_ENTITY_X: int = 0
-    MIN_ENTITY_Y: int = WALL_TOP_HEIGHT
+    STARTING_LIVES: int = struct.field(pytree_node=False, default=4)
+    POINTS_PER_LIFE: int = struct.field(pytree_node=False, default=5000)
+    MAX_LIVES: int = struct.field(pytree_node=False, default=9)
+    MAX_SCORE: int = struct.field(pytree_node=False, default=100000)
+    SAFE_ZONE: Tuple[int, int] = struct.field(pytree_node=False, default=(20, 34))
+    MIN_ENTITY_X: int = struct.field(pytree_node=False, default=0)
 
     # Player constants
-    MAX_PLAYER_SPEED: int = 64 * 256 - 1
-    MAX_PLAYER_X: int = int((WIDTH * 256 - 1)/2)
-    MAX_PLAYER_Y: int = int(((HEIGHT - WALL_BOTTOM_HEIGHT) * 256 - 1)/2)
-    MIN_PLAYER_X: int = 0
-    MIN_PLAYER_Y: int = int((WALL_TOP_HEIGHT * 256 - 1)/2)
-    RESPAWN_DELAY: int = 136
-    H_SPACE_DELAY: int = 62
-    ACCEL_PER_ROTATION: chex.Array = jnp.array([
+    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=64 * 256 - 1)
+    MIN_PLAYER_X: int = struct.field(pytree_node=False, default=0)
+
+    # --- DERIVED CONSTANTS (Converted to Optional Fields) ---
+    INITIAL_PLAYER_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    INITIAL_PLAYER_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    MAX_ENTITY_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    MAX_ENTITY_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    MIN_ENTITY_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    MAX_PLAYER_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    MAX_PLAYER_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    MIN_PLAYER_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+
+    # --- OTHER CONSTANTS ---
+    RESPAWN_DELAY: int = struct.field(pytree_node=False, default=136)
+    H_SPACE_DELAY: int = struct.field(pytree_node=False, default=62)
+    ACCEL_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -127),
         (-49, -117),
         (-90, -90),
@@ -159,11 +181,11 @@ class AsteroidsConstants(NamedTuple):
         (117, -49),
         (90, -90),
         (49, -117)
-    ])
+    ]))
 
     # Missile constants
-    MISSILE_LIFESPAN: int = 24
-    MISSILE_OFFSET_PER_ROTATION: chex.Array = jnp.array([
+    MISSILE_LIFESPAN: int = struct.field(pytree_node=False, default=24)
+    MISSILE_OFFSET_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, 1),
         (-1, 0),
         (-3, 0),
@@ -180,8 +202,8 @@ class AsteroidsConstants(NamedTuple):
         (4, 2),
         (4, 0),
         (2, 0)
-        ])
-    MISSILE_SPEED_PER_ROTATION: chex.Array = jnp.array([
+        ]))
+    MISSILE_SPEED_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -4),
         (-1, -3),
         (-3, -3),
@@ -198,20 +220,59 @@ class AsteroidsConstants(NamedTuple):
         (3, -1),
         (3, -3),
         (1, -3)
-    ])
+    ]))
 
     # Asteroid constants
-    ASTEROID_SPEED: Tuple[int, int] = (2, 1)
-    ASTEROID_BORDER_LEFT: int = int(MIN_ENTITY_X + (MAX_ENTITY_X-MIN_ENTITY_X)/3)
-    ASTEROID_BORDER_RIGHT: int = int(MAX_ENTITY_X - (MAX_ENTITY_X-MIN_ENTITY_X)/3)
-    MAX_NUMBER_OF_ASTEROIDS: int = 17
-    NEW_ASTEROIDS_COUNT: int = 6
+    ASTEROID_SPEED: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 1))
+    
+    # Derived Asteroid Borders
+    ASTEROID_BORDER_LEFT: Optional[int] = struct.field(pytree_node=False, default=None)
+    ASTEROID_BORDER_RIGHT: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    MAX_NUMBER_OF_ASTEROIDS: int = struct.field(pytree_node=False, default=17)
+    NEW_ASTEROIDS_COUNT: int = struct.field(pytree_node=False, default=6)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+
+    def compute_derived(self):
+        """
+        Compute derived constants safely, handling nested dependencies.
+        """
+        # --- LEVEL 1 RESOLUTION: Resolve 'Middle' Dependencies first ---
+        
+        # 1. Resolve MAX_ENTITY_X
+        # Logic: If user manually set it (self.MAX_ENTITY_X is not None), respect it.
+        #        Otherwise, calculate it from WIDTH.
+        if self.MAX_ENTITY_X is not None:
+            _max_entity_x = self.MAX_ENTITY_X
+        else:
+            _max_entity_x = self.WIDTH - 1
+
+        # --- LEVEL 2 RESOLUTION: Calculate Dependent Constants ---
+
+        return {
+            # Standard independent calculations
+            'INITIAL_PLAYER_X': int(256/4 * (self.WIDTH - self.PLAYER_SIZE[0])),
+            'INITIAL_PLAYER_Y': int(256/4 * (self.HEIGHT - self.PLAYER_SIZE[1])),
+            
+            # Return the resolved Level 1 value
+            'MAX_ENTITY_X': int(_max_entity_x),
+            
+            # Use the local variable for calculations dependent on Level 1
+            'ASTEROID_BORDER_LEFT': int(self.MIN_ENTITY_X + (_max_entity_x - self.MIN_ENTITY_X)/3),
+            'ASTEROID_BORDER_RIGHT': int(_max_entity_x - (_max_entity_x - self.MIN_ENTITY_X)/3),
+            
+            # ... rest of your constants
+            'MAX_ENTITY_Y': int(self.HEIGHT - self.WALL_BOTTOM_HEIGHT),
+            'MIN_ENTITY_Y': int(self.WALL_TOP_HEIGHT),
+            'MAX_PLAYER_X': int((self.WIDTH * 256 - 1)/2),
+            'MAX_PLAYER_Y': int(((self.HEIGHT - self.WALL_BOTTOM_HEIGHT) * 256 - 1)/2),
+            'MIN_PLAYER_Y': int((self.WALL_TOP_HEIGHT * 256 - 1)/2),
+        }
 
 # immutable state container
-class AsteroidsState(NamedTuple):
+class AsteroidsState(struct.PyTreeNode):
 
     player_x: chex.Array
     player_y: chex.Array
@@ -233,7 +294,7 @@ class AsteroidsState(NamedTuple):
     step_counter: chex.Array
     rng_key: chex.PRNGKey
 
-class EntityPosition(NamedTuple):
+class EntityPosition(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -241,7 +302,7 @@ class EntityPosition(NamedTuple):
     rotation: jnp.ndarray
     active: jnp.ndarray
 
-class AsteroidsObservation(NamedTuple):
+class AsteroidsObservation(struct.PyTreeNode):
     player: EntityPosition # (x, y, width, height, rotation, active)
     missiles: jnp.ndarray  # shape (2, 6) - 2 missiles, each with (x, y, width, height, rotation, active)
     asteroids: jnp.ndarray # shape (17, 6) - 17 asteroids, each with (x, y, width, height, rotation, active)
@@ -249,30 +310,35 @@ class AsteroidsObservation(NamedTuple):
     score: jnp.ndarray
     lives: jnp.ndarray
 
-class AsteroidsInfo(NamedTuple):
+class AsteroidsInfo(struct.PyTreeNode):
     score: chex.Array
     step_counter: chex.Array
 
 class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, AsteroidsInfo, AsteroidsConstants]):
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: AsteroidsConstants = None):
         consts = consts or AsteroidsConstants()
         super().__init__(consts)
-        self.action_set = jnp.array([
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.UPRIGHT,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE
-        ])
         self.obs_size = 1*6 + 2*6 + self.consts.MAX_NUMBER_OF_ASTEROIDS*6 + 2
         self.renderer = AsteroidsRenderer(consts)
 
@@ -398,8 +464,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         displace_y = self.speed_func(player_speed_y)
 
         # calculate new player position
-        player_x = self.final_pos(self.consts.MIN_PLAYER_X, self.consts.MAX_PLAYER_X, player_x + displace_x)
-        player_y = self.final_pos(self.consts.MIN_PLAYER_Y, self.consts.MAX_PLAYER_Y, player_y + displace_y)
+        player_x = jnp.int32(self.final_pos(self.consts.MIN_PLAYER_X, self.consts.MAX_PLAYER_X, player_x + displace_x))
+        player_y = jnp.int32(self.final_pos(self.consts.MIN_PLAYER_Y, self.consts.MAX_PLAYER_Y, player_y + displace_y))
 
         # hyperspace
         key, subkey_x = jax.random.split(rng_key)
@@ -894,6 +960,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def step(
         self, state: AsteroidsState, action: chex.Array
     ) -> Tuple[AsteroidsObservation, AsteroidsState, float, bool, AsteroidsInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # update player position, speed and rotation
         player_x, player_y, player_speed_x, player_speed_y, player_rotation, respawn_timer, rng_key = self.player_step(
@@ -1143,7 +1211,7 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Box:
         """Returns the observation space for Asteroids.
@@ -1195,13 +1263,20 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
 class AsteroidsRenderer(JAXGameRenderer):
     """JAX-based Asteroids game renderer, optimized with the declarative asset pipeline."""
 
-    def __init__(self, consts: AsteroidsConstants = None):
+    def __init__(self, consts: AsteroidsConstants = None, config: render_utils.RendererConfig = None):
         """Initializes the renderer by loading and processing all assets."""
-        super().__init__()
         self.consts = consts or AsteroidsConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH)
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Start from (possibly modded) asset config provided via constants

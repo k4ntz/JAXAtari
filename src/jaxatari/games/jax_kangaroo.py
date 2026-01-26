@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import chex
 from jax import Array
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -16,6 +17,7 @@ from jaxatari.games.kangaroo_levels import (
     Kangaroo_Level_2,
     Kangaroo_Level_3,
 )
+from jaxatari.modification import AutoDerivedConstants
 
 
 def get_default_asset_config() -> tuple:
@@ -57,69 +59,71 @@ def get_default_asset_config() -> tuple:
         return asset_config
 
 
-class KangarooConstants(NamedTuple):
-    RESET: int = 18
-    RENDER_SCALE_FACTOR: int = 4
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
-    PLAYER_WIDTH: int = 8
-    PLAYER_HEIGHT: int = 24
-    ENEMY_WIDTH: int = 8
-    ENEMY_HEIGHT: int = 24
-    FRUIT_WIDTH: int = 8
-    FRUIT_HEIGHT: int = 12
-    MAX_PLATFORMS: int = 10
-    BELL_WIDTH: int = 6
-    BELL_HEIGHT: int = 11
-    CHILD_WIDTH: int = 8
-    CHILD_HEIGHT: int = 15
-    MONKEY_WIDTH: int = 6
-    MONKEY_HEIGHT: int = 15
-    MONKEY_COLOR: Tuple[int, int, int] = (227, 159, 89)
-    PLAYER_COLOR: Tuple[int, int, int] = (223, 183, 85)
-    ENEMY_COLOR: Tuple[int, int, int] = (227, 151, 89)
-    FRUIT_COLOR_STATE_1: Tuple[int, int, int] = (214, 92, 92)
-    FRUIT_COLOR_STATE_2: Tuple[int, int, int] = (230, 250, 92)
-    FRUIT_COLOR_STATE_3: Tuple[int, int, int] = (255, 92, 250)
-    FRUIT_COLOR_STATE_4: Tuple[int, int, int] = (0, 92, 250)
-    FRUIT_COLOR: list = [
+class KangarooConstants(AutoDerivedConstants):
+    RESET: int = struct.field(pytree_node=False, default=18)
+    RENDER_SCALE_FACTOR: int = struct.field(pytree_node=False, default=4)
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=8)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=8)
+    ENEMY_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    FRUIT_WIDTH: int = struct.field(pytree_node=False, default=8)
+    FRUIT_HEIGHT: int = struct.field(pytree_node=False, default=12)
+    MAX_PLATFORMS: int = struct.field(pytree_node=False, default=10)
+    BELL_WIDTH: int = struct.field(pytree_node=False, default=6)
+    BELL_HEIGHT: int = struct.field(pytree_node=False, default=11)
+    CHILD_WIDTH: int = struct.field(pytree_node=False, default=8)
+    CHILD_HEIGHT: int = struct.field(pytree_node=False, default=15)
+    MONKEY_WIDTH: int = struct.field(pytree_node=False, default=6)
+    MONKEY_HEIGHT: int = struct.field(pytree_node=False, default=15)
+    MONKEY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (227, 159, 89))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (223, 183, 85))
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (227, 151, 89))
+    FRUIT_COLOR_STATE_1: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (214, 92, 92))
+    FRUIT_COLOR_STATE_2: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (230, 250, 92))
+    FRUIT_COLOR_STATE_3: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 92, 250))
+    FRUIT_COLOR_STATE_4: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 92, 250))
+    FRUIT_COLOR: list = struct.field(pytree_node=False, default_factory=lambda: [
         (214, 92, 92),
         (230, 250, 92),
         (255, 92, 250),
         (0, 92, 250),
-    ]
-    COCONUT_COLOR: Tuple[int, int, int] = (162, 98, 33)
-    PLATFORM_COLOR: Tuple[int, int, int] = (162, 98, 33)
-    LADDER_COLOR: Tuple[int, int, int] = (129, 78, 26)
-    BELL_COLOR: Tuple[int, int, int] = (210, 164, 74)
-    PLAYER_START_X: int = 23
-    PLAYER_START_Y: int = 148
-    MOVEMENT_SPEED: int = 1
-    LEFT_CLIP: int = 16
-    RIGHT_CLIP: int = 144
-    FALLING_COCONUT_WIDTH: int = 2
-    FALLING_COCONUT_HEIGHT: int = 3
-    THROWN_COCONUT_WIDTH: int = 2
-    THROWN_COCONUT_HEIGHT: int = 3
-    LADDER_HEIGHT: chex.Array = jnp.array(35)
-    LADDER_WIDTH: chex.Array = jnp.array(8)
-    P_HEIGHT: chex.Array = jnp.array(4)
-    LEVEL_1: LevelConstants = Kangaroo_Level_1
-    LEVEL_2: LevelConstants = Kangaroo_Level_2
-    LEVEL_3: LevelConstants = Kangaroo_Level_3
+    ])
+    COCONUT_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (162, 98, 33))
+    PLATFORM_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (162, 98, 33))
+    LADDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (129, 78, 26))
+    BELL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (210, 164, 74))
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=23)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=148)
+    MOVEMENT_SPEED: int = struct.field(pytree_node=False, default=1)
+    LEFT_CLIP: int = struct.field(pytree_node=False, default=16)    
+    RIGHT_CLIP: int = struct.field(pytree_node=False, default=144)
+    FALLING_COCONUT_WIDTH: int = struct.field(pytree_node=False, default=2)
+    FALLING_COCONUT_HEIGHT: int = struct.field(pytree_node=False, default=3)
+    THROWN_COCONUT_WIDTH: int = struct.field(pytree_node=False, default=2)
+    THROWN_COCONUT_HEIGHT: int = struct.field(pytree_node=False, default=3)
+    LADDER_HEIGHT: chex.Array = struct.field(pytree_node=False, default=35)
+    LADDER_WIDTH: chex.Array = struct.field(pytree_node=False, default=8)
+    P_HEIGHT: chex.Array = struct.field(pytree_node=False, default=4)
+    LEVEL_1: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_1)
+    LEVEL_2: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_2)
+    LEVEL_3: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_3)
     # sprites to enable asset overrides
-    ASSET_CONFIG: tuple = get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_default_asset_config)
 
 
 # -------- Entity Classes --------
-class Entity(NamedTuple):
+@struct.dataclass
+class Entity:
     x: chex.Array
     y: chex.Array
     w: chex.Array
     h: chex.Array
 
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     # Player position
     x: chex.Array
     y: chex.Array
@@ -150,7 +154,8 @@ class PlayerState(NamedTuple):
     needs_release: chex.Array  # New field to track if spacebar needs to be released
 
 
-class LevelState(NamedTuple):
+@struct.dataclass
+class LevelState:
     """All level related state variables."""
 
     timer: chex.Array
@@ -199,7 +204,8 @@ class LevelState(NamedTuple):
     bell_animation: chex.Array
 
 
-class KangarooState(NamedTuple):
+@struct.dataclass
+class KangarooState:
     player: PlayerState
     level: LevelState
     score: chex.Array
@@ -211,7 +217,8 @@ class KangarooState(NamedTuple):
     lives: chex.Array
 
 
-class KangarooObservation(NamedTuple):
+@struct.dataclass
+class KangarooObservation:
     player_x: chex.Array
     player_y: chex.Array
     player_o: chex.Array
@@ -225,15 +232,16 @@ class KangarooObservation(NamedTuple):
     coco_positions: chex.Array
 
 
-class KangarooInfo(NamedTuple):
+@struct.dataclass
+class KangarooInfo:
     score: chex.Array
     level: chex.Array
 
 
 class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo, KangarooConstants]):
-    def __init__(self, consts: KangarooConstants = None):
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -251,8 +259,13 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: KangarooConstants = None):
+        super().__init__(consts)
         self.consts = consts or KangarooConstants()
         self.obs_size = 111
         self.renderer = KangarooRenderer(self.consts)
@@ -1676,7 +1689,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Kangaroo.
@@ -1815,6 +1828,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def step(self, state: KangarooState, action: chex.Array) -> Tuple[KangarooObservation, KangarooState, float, bool, KangarooInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         reset_cond = jnp.any(jnp.array([action == self.consts.RESET]))
 
         (
@@ -2084,7 +2100,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    def __init__(self, consts: KangarooConstants = None):
+    def __init__(self, consts: KangarooConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
 
@@ -2092,13 +2108,19 @@ class KangarooRenderer(JAXGameRenderer):
             sprite_path: Path to the directory containing sprite .npy files.
         """
         self.consts = consts or KangarooConstants()
+        super().__init__(self.consts)
 
-        self.rendering_config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and process all sprites
         (

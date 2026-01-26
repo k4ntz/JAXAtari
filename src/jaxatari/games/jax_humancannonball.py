@@ -5,11 +5,13 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.modification import AutoDerivedConstants
 
 
 def _get_default_asset_config() -> tuple:
@@ -41,88 +43,87 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-@dataclass(frozen=True)
-class HumanCannonballConstants:
-    WIDTH: int = 160
-    HEIGHT: int = 210
+class HumanCannonballConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    GROUND_LEVEL: int = 152
+    GROUND_LEVEL: int = struct.field(pytree_node=False, default=152)
 
     # Game constants
-    MISS_LIMIT: int = 7
-    SCORE_LIMIT: int = 7
+    MISS_LIMIT: int = struct.field(pytree_node=False, default=7)
+    SCORE_LIMIT: int = struct.field(pytree_node=False, default=7)
 
     # Game physics constants
-    DT: float = 1.0 / 15.0  # time step between frames
-    GRAVITY: float = 10.0
-    WALL_RESTITUTION: float = 0.3  # Coefficient of restitution for the wall collision
+    DT: float = struct.field(pytree_node=False, default_factory=lambda: 1.0 / 15.0)  # time step between frames
+    GRAVITY: float = struct.field(pytree_node=False, default=10.0)
+    WALL_RESTITUTION: float = struct.field(pytree_node=False, default=0.3)  # Coefficient of restitution for the wall collision
 
     # MPH constraints
-    MPH_MIN: int = 28
-    MPH_MAX: int = 45
-    MPH_START: int = 43
+    MPH_MIN: int = struct.field(pytree_node=False, default=28)
+    MPH_MAX: int = struct.field(pytree_node=False, default=45)
+    MPH_START: int = struct.field(pytree_node=False, default=43)
 
     # Angle constants
-    ANGLE_START: int = 30
-    ANGLE_MAX: int = 80
-    ANGLE_MIN: int = 20
+    ANGLE_START: int = struct.field(pytree_node=False, default=30)
+    ANGLE_MAX: int = struct.field(pytree_node=False, default=80)
+    ANGLE_MIN: int = struct.field(pytree_node=False, default=20)
 
     # The cannon aims low if angle <37, medium if 37 <= angle < 59, and high if angle >= 59
-    ANGLE_LOW_THRESHOLD: int = 37
-    ANGLE_HIGH_THRESHOLD: int = 59
+    ANGLE_LOW_THRESHOLD: int = struct.field(pytree_node=False, default=37)
+    ANGLE_HIGH_THRESHOLD: int = struct.field(pytree_node=False, default=59)
 
     ANGLE_BUFFER: int = 16   # Only update the angle if the action is held for this many steps
 
     # Starting positions of the human
-    HUMAN_START_LOW: chex.Array = field(
-        default_factory=lambda: jnp.array([84.0, 128.0], dtype=jnp.float32)
-    )
-    HUMAN_START_MED: chex.Array = field(
-        default_factory=lambda: jnp.array([84.0, 121.0], dtype=jnp.float32)
-    )
-    HUMAN_START_HIGH: chex.Array = field(
-        default_factory=lambda: jnp.array([80.0, 118.0], dtype=jnp.float32)
-    )
+    HUMAN_START_LOW: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([84.0, 128.0], dtype=jnp.float32))
+    HUMAN_START_MED: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([84.0, 121.0], dtype=jnp.float32))
+    HUMAN_START_HIGH: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([80.0, 118.0], dtype=jnp.float32))
 
     # Top left corner of the low-aiming cannon
-    CANNON_X: int = 68
-    CANNON_Y: int = 130
+    CANNON_X: int = struct.field(pytree_node=False, default=68)
+    CANNON_Y: int = struct.field(pytree_node=False, default=130)
 
     # Bottom left corner of the water tower
-    WATER_TOWER_X: int = 132
-    WATER_TOWER_Y: int = 151
+    WATER_TOWER_X: int = struct.field(pytree_node=False, default=132)
+    WATER_TOWER_Y: int = struct.field(pytree_node=False, default=151)
 
     # Object hit-box sizes
-    HUMAN_SIZE: Tuple[int,int] = (4, 4)
-    WATER_SIZE: Tuple[int,int] = (8, 3)
+    HUMAN_SIZE: Tuple[int,int] = struct.field(pytree_node=False, default_factory=lambda: (4, 4))
+    WATER_SIZE: Tuple[int,int] = struct.field(pytree_node=False, default_factory=lambda: (8, 3))
 
     # Water tower dimensions
-    WATER_TOWER_WIDTH: int = 10
-    WATER_TOWER_HUMAN_HEIGHT: int = 35
-    WATER_TOWER_WALL_HEIGHT: int = 30
+    WATER_TOWER_WIDTH: int = struct.field(pytree_node=False, default=10)
+    WATER_TOWER_HUMAN_HEIGHT: int = struct.field(pytree_node=False, default=35)
+    WATER_TOWER_WALL_HEIGHT: int = struct.field(pytree_node=False, default=30)
 
     # Water tower movement constraints
-    WATER_TOWER_X_MIN: int = 109
-    WATER_TOWER_X_MAX: int = 160 - WATER_TOWER_WIDTH + 1
+    WATER_TOWER_X_MIN: int = struct.field(pytree_node=False, default=109)
+    WATER_TOWER_X_MAX: int = struct.field(pytree_node=False, default=None)
 
     # Position of the digits
-    SCORE_X: int = 31
-    MISS_X: int = 111
-    SCORE_MISS_Y: int = 5
+    SCORE_X: int = struct.field(pytree_node=False, default=31)
+    MISS_X: int = struct.field(pytree_node=False, default=111)
+    SCORE_MISS_Y: int = struct.field(pytree_node=False, default=5)
 
-    MPH_ANGLE_X: Tuple[int, int] = (95, 111)
-    MPH_Y: int = 20
-    ANGLE_Y: int = 35
+    MPH_ANGLE_X: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (95, 111))
+    MPH_Y: int = struct.field(pytree_node=False, default=20)
+    ANGLE_Y: int = struct.field(pytree_node=False, default=35)
 
     # Animation constants
-    ANIMATION_MISS_LENGTH: int = 128
-    ANIMATION_HIT_LENGTH: int = 248
+    ANIMATION_MISS_LENGTH: int = struct.field(pytree_node=False, default=128)
+    ANIMATION_HIT_LENGTH: int = struct.field(pytree_node=False, default=248)
 
     # Asset config
-    ASSET_CONFIG: tuple = field(default_factory=_get_default_asset_config)
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
+
+    def compute_derived(self):
+        return {
+            'WATER_TOWER_X_MAX': self.WIDTH - self.WATER_TOWER_WIDTH + 1,
+        }
 
 # Immutable state container
-class HumanCannonballState(NamedTuple):
+@struct.dataclass
+class HumanCannonballState:
     human_x: chex.Array
     human_y: chex.Array
     human_x_vel: chex.Array
@@ -142,7 +143,8 @@ class HumanCannonballState(NamedTuple):
 
 
 # Position of the human and the water tower
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -150,7 +152,8 @@ class EntityPosition(NamedTuple):
 
 
 # The state of the game
-class HumanCannonballObservation(NamedTuple):
+@struct.dataclass
+class HumanCannonballObservation:
     human: EntityPosition
     water_tower: EntityPosition
     angle: jnp.ndarray
@@ -159,24 +162,40 @@ class HumanCannonballObservation(NamedTuple):
     misses: jnp.ndarray
 
 
-class HumanCannonballInfo(NamedTuple):
+@struct.dataclass
+class HumanCannonballInfo:
     time: jnp.ndarray
 
 class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObservation, HumanCannonballInfo, HumanCannonballConstants]):
+    # Minimal ALE action set for Human Cannonball
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: HumanCannonballConstants = None):
         consts = consts or HumanCannonballConstants()
         super().__init__(consts)
         self.renderer = HumanCannonballRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.DOWNLEFT
-        ]
         self.obs_size = 4+4+1+1+1+1
 
     # Determines the starting position of the human based on the angle
@@ -453,16 +472,18 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
     def step(
         self, state: HumanCannonballState, action: chex.Array
     ) -> Tuple[HumanCannonballObservation, HumanCannonballState, float, bool, HumanCannonballInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # Step 1: Update the angle of the cannon
         new_angle_counter = jax.lax.cond(
             jnp.logical_or(         # If the action is UP, DOWN, UPLEFT or DOWNLEFT
                 jnp.logical_or(
-                    action == Action.UP,
-                    action == Action.DOWN),
+                    atari_action == Action.UP,
+                    atari_action == Action.DOWN),
                 jnp.logical_or(
-                    action == Action.UPLEFT,
-                    action == Action.DOWNLEFT
+                    atari_action == Action.UPLEFT,
+                    atari_action == Action.DOWNLEFT
                 )
             ),
             lambda s: s + 1,  # Increment the angle counter
@@ -474,13 +495,13 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
             state.angle,
             state.human_launched,
             new_angle_counter,
-            action
+            atari_action
         )
 
         # Step 2: Update the position of the human projectile
         new_human_x, new_human_y, new_human_x_vel, new_human_y_vel, human_launched, tower_wall_hit = jax.lax.cond(
             jnp.logical_and(    # If human is in flight or the current action is FIRE
-                jnp.logical_or(state.human_launched, action == Action.FIRE),
+                jnp.logical_or(state.human_launched, atari_action == Action.FIRE),
                 jnp.mod(state.step_counter, 2) == 0,    # Only execute human_step on even steps (base implementation only moves the projectile every second tick)
             ),
             lambda _: self.human_step(   # Calculate the new position/velocity of the human via human_step
@@ -514,7 +535,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
                 state.water_tower_x,
                 tower_wall_hit,
                 state.human_launched,
-                action
+                atari_action
             ),
             lambda _: state.water_tower_x,  # Else, leave it unchanged
             operand=None
@@ -744,7 +765,7 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({
@@ -796,15 +817,20 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 class HumanCannonballRenderer(JAXGameRenderer):
     """Render Human Cannonball using the modern render_utils pipeline."""
 
-    def __init__(self, consts: HumanCannonballConstants = None):
-        super().__init__()
+    def __init__(self, consts: HumanCannonballConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HumanCannonballConstants()
+        super().__init__(self.consts)
         self.sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/human_cannonball")
-        self.ru_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         asset_config = list(self.consts.ASSET_CONFIG)
         (
             self.PALETTE,

@@ -53,7 +53,7 @@ class BallDriftMod(JaxAtariPostStepModPlugin):
         # This affects the next step
         return jax.lax.cond(
             new_state.step_counter % self._drift_buffer == 0,
-            lambda s: s._replace(ball_x=s.ball_x + self._direction),
+            lambda s: s.replace(ball_x=s.ball_x + self._direction),
             lambda s: s,
             operand=new_state
         )
@@ -79,7 +79,7 @@ class BallGravityMod(JaxAtariPostStepModPlugin):
         # This affects the next step
         return jax.lax.cond(
             new_state.step_counter % self._gravity_buffer == 0,
-            lambda s: s._replace(ball_y=s.ball_y + self._direction),
+            lambda s: s.replace(ball_y=s.ball_y + self._direction),
             lambda s: s,
             operand=new_state
         )

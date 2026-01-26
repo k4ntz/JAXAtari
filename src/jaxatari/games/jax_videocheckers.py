@@ -5,13 +5,14 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 from jaxatari.spaces import Space
-
+from jaxatari.modification import AutoDerivedConstants
 
 #
 # by Tim Morgner and Jan Larionow
@@ -51,61 +52,67 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class VideoCheckersConstants:
-    MAX_PIECES = 12
+class VideoCheckersConstants(AutoDerivedConstants):
+    MAX_PIECES: int = struct.field(pytree_node=False, default=12)
 
-    COLOUR_WHITE: int = 0
-    COLOUR_BLACK: int = 1
+    COLOUR_WHITE: int = struct.field(pytree_node=False, default=0)
+    COLOUR_BLACK: int = struct.field(pytree_node=False, default=1)
 
-    WIDTH: int = 160
-    HEIGHT: int = 210
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    SCALING_FACTOR = 3
-    WINDOW_WIDTH = WIDTH * SCALING_FACTOR
-    WINDOW_HEIGHT = HEIGHT * SCALING_FACTOR
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=3)
 
-    OFFSET_X_BOARD = 12
-    OFFSET_Y_BOARD = 50
+    OFFSET_X_BOARD: int = struct.field(pytree_node=False, default=12)
+    OFFSET_Y_BOARD: int = struct.field(pytree_node=False, default=50)
 
-    MOVES = jnp.array([
-        [1, 1],  # UPRIGHT
-        [-1, 1],  # DOWNRIGHT
-        [-1, -1],  # DOWNLEFT
-        [1, -1],  # UPLEFT
-    ])
+    # MOVES array order: 0=DownRight, 1=UpRight, 2=UpLeft, 3=DownLeft
+    # This order is used by AI heuristics and must match the order expected by get_global_legality
+    MOVES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [1, 1],   # 0: DownRight (row+1, col+1)
+        [-1, 1],  # 1: UpRight (row-1, col+1)
+        [-1, -1], # 2: UpLeft (row-1, col-1)
+        [1, -1],  # 3: DownLeft (row+1, col-1)
+    ]))
 
     # Opponent move scoring
-    CAPTURE_W = 10.0  # capturing opponent piece
-    UPGRADE_W = 5  # upgrading piece
-    ADVANCE_W = 1.0  # moving forward
-    CENTER_FWD = 0.5  # moving towards center
-    CENTER_BWD = -2.0  # moving away from center
-    NO_MOVE = -jnp.inf  # avoid standing still
+    CAPTURE_W: float = struct.field(pytree_node=False, default=10.0)  # capturing opponent piece
+    UPGRADE_W: int = struct.field(pytree_node=False, default=5)  # upgrading piece
+    ADVANCE_W: float = struct.field(pytree_node=False, default=1.0)  # moving forward
+    CENTER_FWD: float = struct.field(pytree_node=False, default=0.5)  # moving towards center
+    CENTER_BWD: float = struct.field(pytree_node=False, default=-2.0)  # moving away from center
+    NO_MOVE: float = struct.field(pytree_node=False, default=-jnp.inf)  # avoid standing still
 
-    EMPTY_TILE = 0
-    WHITE_PIECE = 1
-    BLACK_PIECE = 2
-    WHITE_KING = 3
-    BLACK_KING = 4
-    WHITE_CURSOR = 5
-    BLACK_CURSOR = 6
+    EMPTY_TILE: int = struct.field(pytree_node=False, default=0)
+    WHITE_PIECE: int = struct.field(pytree_node=False, default=1)
+    BLACK_PIECE: int = struct.field(pytree_node=False, default=2)
+    WHITE_KING: int = struct.field(pytree_node=False, default=3)
+    BLACK_KING: int = struct.field(pytree_node=False, default=4)
+    WHITE_CURSOR: int = struct.field(pytree_node=False, default=5)
+    BLACK_CURSOR: int = struct.field(pytree_node=False, default=6)
 
-    NUM_FIELDS_X = 8
-    NUM_FIELDS_Y = 8
-    CENTER = 3.5
+    NUM_FIELDS_X: int = struct.field(pytree_node=False, default=8)
+    NUM_FIELDS_Y: int = struct.field(pytree_node=False, default=8)
+    CENTER: float = struct.field(pytree_node=False, default=3.5)
 
-    SELECT_PIECE_PHASE = 0
-    MOVE_PIECE_PHASE = 1
-    SHOW_OPPONENT_MOVE_PHASE = 2
-    GAME_OVER_PHASE = 3
+    SELECT_PIECE_PHASE: int = struct.field(pytree_node=False, default=0)
+    MOVE_PIECE_PHASE: int = struct.field(pytree_node=False, default=1)
+    SHOW_OPPONENT_MOVE_PHASE: int = struct.field(pytree_node=False, default=2)
+    GAME_OVER_PHASE: int = struct.field(pytree_node=False, default=3)
 
-    ANIMATION_FRAME_RATE = 30
+    ANIMATION_FRAME_RATE: int = struct.field(pytree_node=False, default=30)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple[dict, ...] = struct.field(pytree_node=False, default=_get_default_asset_config())
 
+    def compute_derived(self) -> dict[str, Any]:
+        return {
+            'WINDOW_WIDTH': self.WIDTH * self.SCALING_FACTOR,
+            'WINDOW_HEIGHT': self.HEIGHT * self.SCALING_FACTOR,
+        }
 
-class OpponentMove(NamedTuple):
+@struct.dataclass
+class OpponentMove:
     start_pos: chex.Array  # Start position of the opponent's piece
     end_pos: chex.Array  # End position of the opponent's piece
     piece_type: int  # Type of the piece at the end position (king or normal)
@@ -113,39 +120,19 @@ class OpponentMove(NamedTuple):
     resulting_board: chex.Array  # New board with all moves applied
 
 
-class OpponentMoveHandler:
-    """
-    Handles modifications to the opponent's move. All methods should be of type OpponentMove, args -> OpponentMove.
-    """
-
-    @staticmethod
-    def add_captured_position(opponent_move: OpponentMove, position: chex.Array) -> OpponentMove:
-        # 1. find empty slot in array to store the new position
-        matches = jnp.all(opponent_move.captured_positions == jnp.array([-1, -1]), axis=1)
-        first_index = jnp.argmax(matches)
-        has_match = jnp.any(matches)
-
-        # 2. get new opponent move, if an empty slot was found (guaranteed), do nothing if not
-        return jax.lax.cond(
-            has_match,
-            lambda o: o._replace(captured_positions=o.captured_positions.at[first_index].set(position)),
-            lambda o: o,
-            opponent_move
-        )
-
-    @staticmethod
-    def clear_captured_positions(opponent_move: OpponentMove) -> OpponentMove:
-        """
-        Resets the array containing the captured positions back to only sentinel positions.
-        Args:
-            opponent_move: opponent move with the captured positions array to be reset.
-        Returns:
-            new OpponentMove with a clean captures positions array.
-        """
-        return opponent_move._replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
+@struct.dataclass
+class LegalityMap:
+    """Pre-computed legality information for the entire board."""
+    can_move: chex.Array  # (8, 8) bool - can move from this square
+    can_jump: chex.Array  # (8, 8) bool - can jump from this square
+    any_jump: bool  # Whether any jump is available
+    move_dirs: chex.Array  # (4, 8, 8) bool - which of the 4 directions are valid moves
+    jump_dirs: chex.Array  # (4, 8, 8) bool - which of the 4 directions are valid jumps
+    moves: chex.Array  # (4, 8, 8, 2) - stacked [move_dirs, jump_dirs] for easy indexing
 
 
-class VideoCheckersState(NamedTuple):
+@struct.dataclass
+class VideoCheckersState:
     board: chex.Array  # Shape (NUM_FIELDS_Y, NUM_FIELDS_X)
     game_phase: int
     cursor_pos: chex.Array
@@ -159,7 +146,8 @@ class VideoCheckersState(NamedTuple):
     rng_key: chex.PRNGKey
 
 
-class VideoCheckersObservation(NamedTuple):
+@struct.dataclass
+class VideoCheckersObservation:
     board: chex.Array
     start_pos: chex.Array
     end_pos: chex.Array
@@ -167,22 +155,43 @@ class VideoCheckersObservation(NamedTuple):
     cursor_pos: chex.Array
 
 
-class VideoCheckersInfo(NamedTuple):
+@struct.dataclass
+class VideoCheckersInfo:
     pass
 
-class BoardHandler:
-    """Handles modifications to the board, as well as board reliant operations."""
+class JaxVideoCheckers(
+    JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
+    # Minimal ALE action set for Video Checkers (from scripts/action_space_helper.py)
+    # Note: NOOP is NOT in the ALE action set for this game
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.FIRE,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+        ],
+        dtype=jnp.int32,
+    )
 
-    @staticmethod
-    def reset_board():
+    def __init__(self, consts: VideoCheckersConstants = None):
+        consts = consts or VideoCheckersConstants()
+        super().__init__(consts)
+        self.renderer = VideoCheckersRenderer(self.consts)
+
+    def render(self, state: VideoCheckersState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+    # BoardHandler methods moved into class
+    def reset_board(self):
         """
         Returns a clean board with all pieces in their initial position.
         Returns:
             new board with all pieces in their initial position.
         """
         # Initialize the board with pieces, this is a placeholder
-        board = jnp.zeros((VideoCheckersConstants.NUM_FIELDS_X,
-                           VideoCheckersConstants.NUM_FIELDS_Y), dtype=jnp.int32)
+        board = jnp.zeros((self.consts.NUM_FIELDS_X,
+                           self.consts.NUM_FIELDS_Y), dtype=jnp.int32)
         # Set up the initial pieces on the board
         white_rows = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
         white_cols = jnp.array([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7])
@@ -190,13 +199,12 @@ class BoardHandler:
         black_rows = jnp.array([5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7])
         black_cols = jnp.array([0, 2, 4, 6, 1, 3, 5, 7, 0, 2, 4, 6])
 
-        board = board.at[white_rows, white_cols].set(VideoCheckersConstants.WHITE_PIECE)
-        board = board.at[black_rows, black_cols].set(VideoCheckersConstants.BLACK_PIECE)
+        board = board.at[white_rows, white_cols].set(self.consts.WHITE_PIECE)
+        board = board.at[black_rows, black_cols].set(self.consts.BLACK_PIECE)
 
         return board
 
-    @staticmethod
-    def move_piece(row, col, drow, dcol, board) -> (jnp.ndarray, int, bool, int, int):
+    def move_piece(self, row, col, drow, dcol, board) -> (jnp.ndarray, int, bool, int, int):
         """
         Moves a piece and handles all side effects (upgrading pieces, capturing).
         Args:
@@ -215,19 +223,19 @@ class BoardHandler:
         new_row = row + drow
         new_col = col + dcol
 
-        upgrade_white = piece == VideoCheckersConstants.WHITE_PIECE & (new_row == 7)
-        upgrade_black = piece == VideoCheckersConstants.BLACK_PIECE & (new_row == 0)
+        upgrade_white = (piece == self.consts.WHITE_PIECE) & (new_row == 7)
+        upgrade_black = (piece == self.consts.BLACK_PIECE) & (new_row == 0)
         new_piece = jax.lax.cond(
             upgrade_white,
-            lambda: VideoCheckersConstants.WHITE_KING,
+            lambda: self.consts.WHITE_KING,
             lambda: jax.lax.cond(
                 upgrade_black,
-                lambda: VideoCheckersConstants.BLACK_KING,
+                lambda: self.consts.BLACK_KING,
                 lambda: piece)
         )
 
         new_board = (board
-                     .at[(row, col)].set(VideoCheckersConstants.EMPTY_TILE)
+                     .at[(row, col)].set(self.consts.EMPTY_TILE)
                      .at[(new_row, new_col)].set(new_piece))
 
         # 2. handle capture
@@ -236,7 +244,7 @@ class BoardHandler:
         def _handle_capture(board):
             captured_row = row + drow // 2
             captured_col = col + dcol // 2
-            return (board.at[(captured_row, captured_col)].set(VideoCheckersConstants.EMPTY_TILE),
+            return (board.at[(captured_row, captured_col)].set(self.consts.EMPTY_TILE),
                     captured_row, captured_col)
 
         new_board, captured_row, captured_col = jax.lax.cond(
@@ -248,18 +256,16 @@ class BoardHandler:
 
         return new_board, new_piece, is_jump, captured_row, captured_col
 
-    @staticmethod
-    def tile_is_free(row, col, board):
+    def tile_is_free(self, row, col, board):
         """
         Args:
             row: row of tile to check
             col: column of tile to check
             board: current game board
         """
-        return board[row, col] == VideoCheckersConstants.EMPTY_TILE
+        return board[row, col] == self.consts.EMPTY_TILE
 
-    @staticmethod
-    def move_in_bounds(row, col, drow, dcol):
+    def move_in_bounds(self, row, col, drow, dcol):
         """
         Checks if move can be made in the given direction.
         Args:
@@ -270,11 +276,10 @@ class BoardHandler:
 
         Returns: True, if cursor can be moved in the given direction, False otherwise.
         """
-        return (((0 <= row + drow) & (row + drow < VideoCheckersConstants.NUM_FIELDS_Y))
-                & ((0 <= col + dcol) & (col + dcol < VideoCheckersConstants.NUM_FIELDS_X)))
+        return (((0 <= row + drow) & (row + drow < self.consts.NUM_FIELDS_Y))
+                & ((0 <= col + dcol) & (col + dcol < self.consts.NUM_FIELDS_X)))
 
-    @staticmethod
-    def get_possible_moves_for_piece(row, col, board: chex.Array):
+    def get_possible_moves_for_piece(self, row, col, board: chex.Array):
         """
         Get all possible moves for a piece at position (row,col)
         Args:
@@ -285,7 +290,7 @@ class BoardHandler:
         Returns: array of all possible moves. If a move in a given direction is not possible, it returns [0,0]
         """
 
-        is_not_a_piece = (BoardHandler.tile_is_free(row, col, board)) | (row == -1)
+        is_not_a_piece = (self.tile_is_free(row, col, board)) | (row == -1)
 
         def _get_moves():
             def prune_possible_moves_for_jumps(possible_moves):
@@ -307,9 +312,9 @@ class BoardHandler:
 
             def check_move(move):
                 drow, dcol = move
-                jump_available = BoardHandler.move_is_available(row=row, col=col, drow=2 * drow, dcol=2 * dcol,
+                jump_available = self.move_is_available(row=row, col=col, drow=2 * drow, dcol=2 * dcol,
                                                                 board=board)  # check jump
-                move_available = BoardHandler.move_is_available(row=row, col=col, drow=drow, dcol=dcol,
+                move_available = self.move_is_available(row=row, col=col, drow=drow, dcol=dcol,
                                                                 board=board)  # check normal move
 
                 # Return jump move if available, else normal move if available, else [0,0]
@@ -323,7 +328,7 @@ class BoardHandler:
                     ),
                 )
 
-            possible_moves = jax.vmap(check_move)(VideoCheckersConstants.MOVES)
+            possible_moves = jax.vmap(check_move)(self.consts.MOVES)
             # if there is a jump in the possible moves, make non jump moves [0,0]
             has_jump = jnp.any(jnp.all(jnp.abs(possible_moves) == 2, axis=1))
             possible_moves = jax.lax.cond(
@@ -336,128 +341,80 @@ class BoardHandler:
 
         return jax.lax.cond(is_not_a_piece, lambda: jnp.zeros((4, 2), dtype=jnp.int32), _get_moves)
 
-    @staticmethod
-    def count_pieces(board: jnp.ndarray) -> (float, float):
+    def count_pieces(self, board: jnp.ndarray) -> (float, float):
         cnt_white = jnp.sum(board == 1) + jnp.sum(board == 3)
         cnt_black = jnp.sum(board == 2) + jnp.sum(board == 4)
         return cnt_white, cnt_black
 
-    @staticmethod
-    def move_is_available(row, col, drow, dcol, board: chex.Array):
+    def move_is_available(self, row, col, drow, dcol, board: chex.Array):
         """
-    Checks if a piece can be moved in the given direction. Checks for both, simple moves and jumps.
-    Simple move is available if
-            - destination is in bounds
-            - destination is free
-            - destination is forwards (unless king piece)
-    Args:
-        row: row index of the piece
-        col: column index of the piece
-        drow: movement in y direction
-        dcol: movement in x direction
-        board: current game board
-
-    Returns:
-        True, if a piece can be moved in the given direction, False otherwise.
-    """
-        landing_in_bounds = BoardHandler.move_in_bounds(row=row, col=col, drow=drow, dcol=dcol)
-
-        def handle_jump():
-            """
-            Handle moves with |dx|=2 and |dy|=2
-            jump is not possible if the jumped piece is of the same color as the jumping one
-            BE SURE not just to check if the jumped pice is the same piece, but the same colour. (A white piece still cant jump a white king)
-            jump movement for normal, non-king pieces is only possible forwards (row - 2 for black, row + 2 for white)
-            Returns:
-                True if that movement is available, False otherwise.
-            """
-            piece = board[row, col]
-            jumped_piece = board[row + drow // 2, col + dcol // 2]
-            piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
-            drow_forward = jax.lax.cond(
-                (piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
-                lambda: 2, lambda: -2)
-            is_forward = (drow == drow_forward)
-            can_jump_in_direction = piece_is_king | is_forward
-            tile_is_free = BoardHandler.tile_is_free(row + drow, col + dcol, board)
-            jumped_piece_is_opponent = jax.lax.cond(
-                jnp.logical_or(piece == VideoCheckersConstants.WHITE_PIECE, piece == VideoCheckersConstants.WHITE_KING),
-                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.BLACK_PIECE,
-                                       jumped_piece == VideoCheckersConstants.BLACK_KING),
-                lambda: jnp.logical_or(jumped_piece == VideoCheckersConstants.WHITE_PIECE,
-                                       jumped_piece == VideoCheckersConstants.WHITE_KING),
-            )
-            return landing_in_bounds & tile_is_free & jumped_piece_is_opponent & can_jump_in_direction
-
-        def handle_move():
-            """
-            Handle moves with |dx|=1 and |dy|=1
-            Returns: True if that movement is available, False otherwise.
-            """
-            piece = board[row, col]
-            piece_is_king = (piece == VideoCheckersConstants.WHITE_KING) | (piece == VideoCheckersConstants.BLACK_KING)
-
-            drow_forward = jax.lax.cond(
-                (piece == VideoCheckersConstants.WHITE_PIECE) | (piece == VideoCheckersConstants.WHITE_KING),
-                lambda: 1, lambda: -1)
-            is_forward = (drow == drow_forward)
-            can_move_in_direction = piece_is_king | is_forward
-
-            tile_is_free = BoardHandler.tile_is_free(row + drow, col + dcol, board)
-            return landing_in_bounds & tile_is_free & can_move_in_direction
-
-        is_jump = (jnp.abs(dcol) == 2) & (jnp.abs(drow) == 2)
-        return jax.lax.cond(is_jump, handle_jump, handle_move)
-
-    @staticmethod
-    def get_movable_pieces(colour, board: chex.Array) -> (jnp.ndarray, bool):
-        """
-        For the given colour, return the position of pieces that can perform a legal move. This method therefore enforces
-        the "must jump if possible" rule, returning only the positions of pieces with a jump available.
+        Checks if a piece can be moved in the given direction. Checks for both, simple moves and jumps.
+        Refactored to use boolean math instead of lax.cond to speed up compilation.
         Args:
-            colour: Piece's colour
-            board: Current game board
+            row: row index of the piece
+            col: column index of the piece
+            drow: movement in y direction
+            dcol: movement in x direction
+            board: current game board
 
         Returns:
-            Array of size (MAX_PIECES, 2), containing the positions of pieces that can perform a legal move. If no legal
-            move is available for a piece, it is instead padded with [-1, -1]. Also returns a flag if any of the pieces
-            can jump.
+            True, if a piece can be moved in the given direction, False otherwise.
         """
-        if colour == VideoCheckersConstants.COLOUR_WHITE:
-            own_pieces = [VideoCheckersConstants.WHITE_PIECE, VideoCheckersConstants.WHITE_KING]
-        else:
-            own_pieces = [VideoCheckersConstants.BLACK_PIECE, VideoCheckersConstants.BLACK_KING]
-        own_pieces_mask = jnp.zeros_like(board, dtype=bool)
-        for piece in own_pieces:
-            own_pieces_mask |= (board == piece)
+        new_row, new_col = row + drow, col + dcol
+        in_bounds = (new_row >= 0) & (new_row < self.consts.NUM_FIELDS_Y) & (new_col >= 0) & (new_col < self.consts.NUM_FIELDS_X)
+        
+        piece = board[row, col]
+        # Use simple clipping to prevent OOB access during check, relies on in_bounds to validate result
+        check_row = jnp.clip(new_row, 0, 7)
+        check_col = jnp.clip(new_col, 0, 7)
+        target_tile = board[check_row, check_col]
+        
+        is_white = (piece == self.consts.WHITE_PIECE) | (piece == self.consts.WHITE_KING)
+        is_king = (piece == self.consts.WHITE_KING) | (piece == self.consts.BLACK_KING)
+        
+        is_jump = (jnp.abs(drow) == 2) & (jnp.abs(dcol) == 2)
+        # Fix logic direction: White(0-2) moves + (down?), Black(5-7) moves - (up?) 
+        # Note: In reset_board white is 0-2, black is 5-7.
+        # If White moves 0->7, drow is positive.
+        expected_drow_jump = jnp.where(is_white, 2, -2)
+        expected_drow_move = jnp.where(is_white, 1, -1)
+        
+        is_fwd_jump = is_jump & (drow == expected_drow_jump)
+        is_fwd_move = (~is_jump) & (drow == expected_drow_move)
+        can_move_dir = is_king | is_fwd_jump | is_fwd_move
 
-        # get positions of own pieces. static output shape, which is required for jit compilation.
-        rows, cols = jnp.where(own_pieces_mask, size=VideoCheckersConstants.MAX_PIECES, fill_value=-1)
-        positions = jnp.stack([rows, cols], axis=1)
+        # Jump check
+        j_row, j_col = row + drow // 2, col + dcol // 2
+        j_in_bounds = (j_row >= 0) & (j_row < 8) & (j_col >= 0) & (j_col < 8)
+        check_j_row = jnp.clip(j_row, 0, 7)
+        check_j_col = jnp.clip(j_col, 0, 7)
+        jumped_piece = board[check_j_row, check_j_col]
 
-        # vectorise function and apply to all positions
-        vmapped_get_possible_moves = jax.vmap(BoardHandler.get_possible_moves_for_piece, in_axes=(0, 0, None))
-        all_possible_moves = vmapped_get_possible_moves(rows, cols, board)
+        is_opp = jnp.where(is_white, 
+                           (jumped_piece == self.consts.BLACK_PIECE) | (jumped_piece == self.consts.BLACK_KING),
+                           (jumped_piece == self.consts.WHITE_PIECE) | (jumped_piece == self.consts.WHITE_KING))
 
-        # masks for each piece
-        can_move_mask = jnp.any(all_possible_moves != 0, axis=(1, 2))  # any move available
-        can_jump_mask = jnp.any(jnp.all(jnp.abs(all_possible_moves) == 2, axis=2), axis=1)  # jump available
-        any_jump_available = jnp.any(can_jump_mask)
+        valid_jump = is_jump & is_opp & (target_tile == self.consts.EMPTY_TILE) & j_in_bounds
+        valid_move = (~is_jump) & (target_tile == self.consts.EMPTY_TILE)
 
-        movable_mask = jnp.where(any_jump_available,
-                                 can_jump_mask,
-                                 can_move_mask)  # this is just an if statement (cond, x ,y)
+        return in_bounds & can_move_dir & (valid_jump | valid_move)
 
-        movable_positions = jnp.where(
-            movable_mask[:, None],  # Reshape mask to (MAX_PIECES, 1) for broadcasting
-            positions,
-            jnp.array([-1, -1])
-        )
+    def get_movable_pieces(self, colour, board: chex.Array) -> (jnp.ndarray, bool):
+        """
+        Refactored: Uses get_global_legality instead of expensive per-piece vmaps.
+        """
+        leg = self.get_global_legality(board, colour)
+        
+        # Select mask based on rule "Must Jump"
+        movable_mask = jnp.where(leg.any_jump, leg.can_jump, leg.can_move)
+        
+        # Get indices
+        rows, cols = jnp.where(movable_mask, size=self.consts.MAX_PIECES, fill_value=-1)
+        movable_positions = jnp.stack([rows, cols], axis=1)
+        
+        return movable_positions, leg.any_jump
 
-        return movable_positions, any_jump_available
-
-    @staticmethod
-    def is_movable_piece(colour, position, board: chex.Array):
+    def is_movable_piece(self, colour, position, board: chex.Array):
         """
         check if position is in return set of get_movable_pieces. This is used to check if a piece can be selected in the select piece phase.
         Args:
@@ -467,27 +424,93 @@ class BoardHandler:
         Returns:
             True, if the piece is movable, False otherwise.
         """
-        movable_pieces, _ = BoardHandler.get_movable_pieces(colour, board)
+        movable_pieces, _ = self.get_movable_pieces(colour, board)
         is_movable = jnp.any(jnp.all(movable_pieces == position, axis=1))
         return is_movable
 
+    @partial(jax.jit, static_argnums=(0,))
+    def get_global_legality(self, board: chex.Array, colour: int) -> LegalityMap:
+        """
+        Calculates legality for the ENTIRE board in one SIMD sweep.
+        No indices, no size=MAX_PIECES, no vmap overhead.
+        This replaces multiple calls to get_movable_pieces with a single pre-computation.
+        """
+        rows, cols = jnp.indices((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X))
+        
+        # Get piece mask for this colour
+        own_pieces_mask = jnp.where(
+            colour == self.consts.COLOUR_WHITE,
+            (board == self.consts.WHITE_PIECE) | (board == self.consts.WHITE_KING),
+            (board == self.consts.BLACK_PIECE) | (board == self.consts.BLACK_KING)
+        )
+        
+        # Check all 4 directions for every tile at once
+        def check_dir(drow, dcol):
+            # Check 1-step move
+            can_move_1 = jax.vmap(jax.vmap(
+                lambda r, c: self.move_is_available(r, c, drow, dcol, board)
+            ))(rows, cols)
+            # Check 2-step jump
+            can_jump_2 = jax.vmap(jax.vmap(
+                lambda r, c: self.move_is_available(r, c, 2*drow, 2*dcol, board)
+            ))(rows, cols)
+            return can_move_1, can_jump_2
+        
+        # Vectorize over the 4 move directions
+        move_results, jump_results = jax.vmap(
+            lambda d: check_dir(d[0], d[1])
+        )(self.consts.MOVES)
+        
+        # Extract move and jump masks (shape: (4, 8, 8))
+        move_dirs = move_results  # (4, 8, 8) bool
+        jump_dirs = jump_results  # (4, 8, 8) bool
+        
+        # Mask by own pieces
+        move_dirs = move_dirs & own_pieces_mask[None, :, :]  # (4, 8, 8)
+        jump_dirs = jump_dirs & own_pieces_mask[None, :, :]  # (4, 8, 8)
+        
+        # Aggregate: can move/jump from any direction
+        can_move_mask = jnp.any(move_dirs, axis=0)  # (8, 8)
+        can_jump_mask = jnp.any(jump_dirs, axis=0)  # (8, 8)
+        any_jump = jnp.any(can_jump_mask)
+        
+        # Stack move and jump directions for easy indexing: (4, 8, 8, 2)
+        # moves[..., 0] = move_dirs, moves[..., 1] = jump_dirs
+        moves_stacked = jnp.stack([move_dirs, jump_dirs], axis=-1)
+        
+        return LegalityMap(
+            can_move=can_move_mask,
+            can_jump=can_jump_mask,
+            any_jump=any_jump,
+            move_dirs=move_dirs,
+            jump_dirs=jump_dirs,
+            moves=moves_stacked
+        )
 
-class JaxVideoCheckers(
-    JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
-    def __init__(self, consts: VideoCheckersConstants = None):
-        consts = consts or VideoCheckersConstants()
-        super().__init__(consts)
-        self.renderer = VideoCheckersRenderer(self.consts)
-        self.action_set = {
-            Action.FIRE,
-            Action.UPRIGHT,
-            Action.UPLEFT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT
-        }
+    # OpponentMoveHandler methods moved into class
+    def add_captured_position(self, opponent_move: OpponentMove, position: chex.Array) -> OpponentMove:
+        # 1. find empty slot in array to store the new position
+        matches = jnp.all(opponent_move.captured_positions == jnp.array([-1, -1]), axis=1)
+        first_index = jnp.argmax(matches)
+        has_match = jnp.any(matches)
 
-    def render(self, state: VideoCheckersState) -> jnp.ndarray:
-        return self.renderer.render(state)
+        # 2. get new opponent move, if an empty slot was found (guaranteed), do nothing if not
+        return jax.lax.cond(
+            has_match,
+            lambda o: o.replace(captured_positions=o.captured_positions.at[first_index].set(position)),
+            lambda o: o,
+            opponent_move
+        )
+
+    def clear_captured_positions(self, opponent_move: OpponentMove) -> OpponentMove:
+        """
+        Resets the array containing the captured positions back to only sentinel positions.
+        Args:
+            opponent_move: opponent move with the captured positions array to be reset.
+        Returns:
+            new OpponentMove with a clean captures positions array.
+        """
+        return opponent_move.replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: VideoCheckersObservation) -> jnp.ndarray:
@@ -512,25 +535,22 @@ class JaxVideoCheckers(
             state: Initial game state.
         """
         # Initialize the board with pieces, this is a placeholder
-        board = BoardHandler.reset_board()
-
-        # Calculate initial must_jump
-        _, must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, board)
+        board = self.reset_board()
+        
+        # Calculate initial must_jump using get_global_legality
+        leg = self.get_global_legality(board, self.consts.COLOUR_BLACK)
 
         # Default state
-        state = VideoCheckersState(cursor_pos=jnp.array([6, 7]), board=board, game_phase=self.consts.SELECT_PIECE_PHASE,
-                                   selected_piece=jnp.array([-1, -1]), frame_counter=jnp.array(0), winner=-1,
-                                   additional_jump=False,
-                                   opponent_move=OpponentMove(start_pos=jnp.array([-1, -1]),
-                                                              end_pos=jnp.array([-1, -1]),
-                                                              piece_type=-1,
-                                                              captured_positions=jnp.full((12, 2), -1),
-                                                              # total of 12 pieces per side
-                                                              resulting_board=board
-                                                              ),
-                                   rng_key=key,
-                                   has_jumped=False,
-                                   must_jump=must_jump)
+        state = VideoCheckersState(
+            cursor_pos=jnp.array([6, 7]), board=board, game_phase=self.consts.SELECT_PIECE_PHASE,
+            selected_piece=jnp.array([-1, -1]), frame_counter=jnp.array(0), winner=-1,
+            additional_jump=False,
+            opponent_move=OpponentMove(
+                start_pos=jnp.array([-1, -1]), end_pos=jnp.array([-1, -1]), piece_type=-1,
+                captured_positions=jnp.full((12, 2), -1), resulting_board=board
+            ),
+            rng_key=key, has_jumped=False, must_jump=leg.any_jump
+        )
         """
         testboard = jnp.zeros((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X), dtype=jnp.int32)
         # Debug
@@ -588,59 +608,56 @@ class JaxVideoCheckers(
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def step_select_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
+    def step_select_piece_phase(self, state: VideoCheckersState, action: chex.Array, leg: LegalityMap) -> VideoCheckersState:
         """
         Handles moving the cursor and selecting a piece in the select piece phase.
         After a piece is selected, the game phase changes to MOVE_PIECE_PHASE.
         Args:
             state: The current game state.
             action: The action taken by the player.
+            leg: Pre-computed legality map for the current board.
         Returns:
             VideoCheckersState: The new game state after the action.
         """
 
-        def select_piece(state: VideoCheckersState) -> VideoCheckersState:
-            """
-            Selects a piece at the current cursor position and changes the game phase to MOVE_PIECE_PHASE.
-            """
-            row, col = state.cursor_pos
-            piece = state.board[row, col]
+        def select_piece(s):
+            r, c = s.cursor_pos
+            # CRITICAL FIX: Ensure we aren't accessing out of bounds (though cursor should be bounded)
+            # leg.can_jump is (8, 8) bool.
+            valid_selection = jnp.where(leg.any_jump, leg.can_jump[r, c], leg.can_move[r, c])
+            
+            # Also check if there is actually a piece there belonging to us (BLACK)
+            # The legality map handles piece ownership, so valid_selection is enough.
             return jax.lax.cond(
-                (piece != self.consts.EMPTY_TILE)
-                & BoardHandler.is_movable_piece(self.consts.COLOUR_BLACK, state.cursor_pos, state.board),
-                lambda s: s._replace(
-                    selected_piece=s.cursor_pos,
-                    game_phase=self.consts.MOVE_PIECE_PHASE,
-                ),
-                lambda s: s,
-                operand=state
+                valid_selection,
+                lambda: s.replace(selected_piece=s.cursor_pos, game_phase=self.consts.MOVE_PIECE_PHASE),
+                lambda: s
             )
 
-        def move_cursor(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
-            """
-            Moves the cursor based on the action taken.
-            """
-            up = jnp.logical_or(action == Action.UPLEFT, action == Action.UPRIGHT)
-            right = jnp.logical_or(action == Action.DOWNRIGHT, action == Action.UPRIGHT)
-            donw_left = (
-                    action == Action.DOWNLEFT)  # this is to prevent illegal pure ordinal inputs to move it down left.
+        def move_cursor(s, act):
+            # Reverted to explicit direction logic for reliability
+            up = (act == Action.UPLEFT) | (act == Action.UPRIGHT)
+            right = (act == Action.DOWNRIGHT) | (act == Action.UPRIGHT)
+            
+            drow = jnp.where(up, -1, 1)
+            dcol = jnp.where(right, 1, -1)
+            
+            # Calculate new pos
+            nr = s.cursor_pos[0] + drow
+            nc = s.cursor_pos[1] + dcol
+            
+            # Bounds check
+            in_bounds = (nr >= 0) & (nr < self.consts.NUM_FIELDS_Y) & (nc >= 0) & (nc < self.consts.NUM_FIELDS_X)
+            
+            # Prevent movement on FIRE or NOOP
+            is_move_action = (act == Action.UPLEFT) | (act == Action.UPRIGHT) | \
+                             (act == Action.DOWNRIGHT) | (act == Action.DOWNLEFT)
 
-            drow = jax.lax.cond(up, lambda: -1, lambda: 1, )  # -1 for up, 1 for down
-            dcol = jax.lax.cond(right, lambda: 1, lambda: -1, )  # 1 for right, -1 for left
-
-            new_cursor_pos = state.cursor_pos + jnp.array([drow, dcol])
-            # Check if the new position is within bounds
-            in_bounds = BoardHandler.move_in_bounds(row=state.cursor_pos[0],
-                                                    col=state.cursor_pos[1],
-                                                    drow=drow,
-                                                    dcol=dcol)
-            new_cursor_pos = jax.lax.cond(
-                in_bounds & jnp.logical_or(up, jnp.logical_or(right, donw_left)),
-                lambda: new_cursor_pos,
-                lambda: state.cursor_pos,
-
+            return jax.lax.cond(
+                in_bounds & is_move_action,
+                lambda: s.replace(cursor_pos=jnp.array([nr, nc])),
+                lambda: s
             )
-            return state._replace(cursor_pos=new_cursor_pos)
 
         new_state = jax.lax.cond(
             action == Action.FIRE,
@@ -649,6 +666,65 @@ class JaxVideoCheckers(
             operand=state)
 
         return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_heuristic_scores(self, state: VideoCheckersState, leg: LegalityMap) -> jnp.ndarray:
+        """
+        Computes scores for all 8x8x4 possible moves in a single tensor sweep.
+        No loops, no branching, near-instant compilation.
+        Returns: (4, 8, 8) score tensor
+        """
+        rows, cols = jnp.indices((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X))
+        board = state.board
+        
+        # 1. Capture Score
+        # leg.moves[..., 1] is the jump-legality mask (shape: 4, 8, 8)
+        capture_scores = leg.moves[..., 1].astype(jnp.float32) * self.consts.CAPTURE_W
+
+        # 2. Advance Score (White pieces want to increase row index, so positive drow)
+        # d_rows is the first element of our direction vectors
+        d_rows = self.consts.MOVES[:, 0]  # Shape (4,)
+        advance_mask = d_rows[:, None, None] > 0  # Shape (4, 1, 1) -> broadcasts to (4, 8, 8)
+        advance_scores = advance_mask.astype(jnp.float32) * self.consts.ADVANCE_W
+
+        # 3. Toward-Center Score
+        # Distance from center for all 64 tiles
+        dist_sq = (rows - self.consts.CENTER)**2 + (cols - self.consts.CENTER)**2  # (8, 8)
+        
+        # Calculate new distance for every possible move direction
+        # We add direction vectors to current indices
+        new_rows = rows[None, :, :] + self.consts.MOVES[:, 0, None, None]  # (4, 8, 8)
+        new_cols = cols[None, :, :] + self.consts.MOVES[:, 1, None, None]  # (4, 8, 8)
+        
+        # Clip indices to keep them in-bounds for the distance lookup
+        new_rows_clipped = jnp.clip(new_rows, 0, self.consts.NUM_FIELDS_Y - 1)
+        new_cols_clipped = jnp.clip(new_cols, 0, self.consts.NUM_FIELDS_X - 1)
+        
+        new_dist_sq = (new_rows_clipped - self.consts.CENTER)**2 + (new_cols_clipped - self.consts.CENTER)**2
+        toward_center = new_dist_sq < dist_sq[None, :, :]  # (4, 8, 8)
+        center_scores = jnp.where(toward_center, self.consts.CENTER_FWD, self.consts.CENTER_BWD)
+
+        # 4. Upgrade Score
+        # If a white piece reaches row 7 (last row for white)
+        is_white_piece = (board == self.consts.WHITE_PIECE)[None, :, :]  # (1, 8, 8) -> broadcasts
+        reaches_edge = (new_rows == (self.consts.NUM_FIELDS_Y - 1)) & is_white_piece  # (4, 8, 8)
+        upgrade_scores = reaches_edge.astype(jnp.float32) * self.consts.UPGRADE_W
+
+        # 5. Total Score & Masking
+        # Sum all tensors (Broadcasting handles the (4, 8, 8) shapes)
+        total_scores = capture_scores + advance_scores + center_scores + upgrade_scores
+        
+        # Critically: Mask out illegal moves and non-AI pieces
+        is_ai = ((board == self.consts.WHITE_PIECE) | (board == self.consts.WHITE_KING))[None, :, :]  # (1, 8, 8)
+        # Legal moves: if any_jump, use jump_dirs, else use move_dirs
+        legal_mask = jnp.where(
+            leg.any_jump,
+            leg.moves[..., 1],  # jump_dirs (4, 8, 8)
+            leg.moves[..., 0]   # move_dirs (4, 8, 8)
+        )
+        
+        final_mask = is_ai & legal_mask  # (4, 8, 8)
+        return jnp.where(final_mask, total_scores, -1e9)
 
     def calculate_best_move_per_piece(self, piece: chex.Array, key, board: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """
@@ -664,7 +740,7 @@ class JaxVideoCheckers(
         row, col = piece
         piece_type = board[row, col]
 
-        moves = BoardHandler.get_possible_moves_for_piece(row, col, board)
+        moves = self.get_possible_moves_for_piece(row, col, board)
         drow, dcol = moves[:, 0], moves[:, 1]
         is_jump = jnp.all(jnp.abs(moves) == 2, axis=1)
 
@@ -705,7 +781,7 @@ class JaxVideoCheckers(
         noise = 0.01 * jax.random.normal(subkey, scores.shape, dtype=scores.dtype)
         scores = jnp.where(~no_move, scores + noise, scores)
 
-        all_illegal = jnp.all(~~no_move)
+        all_illegal = jnp.all(no_move)
         # When all illegal, argmax will be 0; preserve score -inf and return dummy move
         best_idx = jnp.argmax(scores)
         best_move = jnp.where(all_illegal, jnp.array([0, 0], moves.dtype), moves[best_idx])
@@ -716,100 +792,115 @@ class JaxVideoCheckers(
     def calculate_best_first_opponent_move(self, movable_pieces: chex.Array, state: VideoCheckersState) \
             -> VideoCheckersState:
         """
-        Computes the first move (of potentially multiple) based on simple heuristics. Doesn't apply them (this gets done
-        in step_show_opponent_move_phase)
+        Computes the first move (of potentially multiple) using vectorized heuristic scoring.
         Args:
             movable_pieces: array of size MAX_PIECES containing row and col position for movable pieces and -1,-1 for imovable
             state: current game state
         Returns:
             new state with updated opponent_move and has_jumped fields
         """
+        # Pre-compute legality for AI (white)
+        leg = self.get_global_legality(state.board, self.consts.COLOUR_WHITE)
+        
+        # Compute scores for all moves at once
+        scores = self._compute_heuristic_scores(state, leg)  # (4, 8, 8)
+        
+        # Add tie-breaker noise
+        rng_key, subkey = jax.random.split(state.rng_key)
+        noise = 0.01 * jax.random.normal(subkey, scores.shape, dtype=scores.dtype)
+        scores = scores + noise
+        
+        # Find best move across all (direction, row, col)
+        flat_idx = jnp.argmax(scores.flatten())
+        best_dir, best_row, best_col = jnp.unravel_index(flat_idx, scores.shape)
+        
+        move_vec = self.consts.MOVES[best_dir]
+        is_jump = leg.jump_dirs[best_dir, best_row, best_col]
+        
+        # Check validity logic handled by -1e9 mask in _compute_heuristic_scores
+        final_move = jnp.where(leg.any_jump & is_jump, move_vec * 2, move_vec)
+        start_pos = jnp.array([best_row, best_col])
 
-        # Supply an independent RNG key per piece
-        rng_key, splitkey = jax.random.split(state.rng_key)
-        # Generate a separate key for each of the MAX_PIECES
-        splitkeys = jax.random.split(splitkey, self.consts.MAX_PIECES)
-        # vmap over (piece, key, board). 'self' is implicit.
-        # in_axes=(0, 0, None) corresponds to (movable_pieces, splitkeys, state.board)
-        best_moves, best_scores = jax.vmap(
-            self.calculate_best_move_per_piece, in_axes=(0, 0, None)
-        )(movable_pieces, splitkeys, state.board)
-
-        # Choose the overall best move among all pieces
-        top_piece_idx = jnp.argmax(best_scores)
-        piece_to_move = movable_pieces[top_piece_idx]  # (row, col)
-        move_to_play = best_moves[top_piece_idx]  # (drow, dcol)
-
-        # Record the move and return the new state
-        new_pos = piece_to_move + move_to_play
-        new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
-            row=piece_to_move[0], col=piece_to_move[1], drow=move_to_play[0], dcol=move_to_play[1], board=state.board)
-
-        new_opponent_move = state.opponent_move._replace(start_pos=piece_to_move,
-                                                         end_pos=new_pos,
-                                                         piece_type=new_piece,
-                                                         resulting_board=new_board)
-
-        newest_opponent_move = jax.lax.cond(is_jump,
-                                            lambda: OpponentMoveHandler.add_captured_position(new_opponent_move,
-                                                                                              jnp.array((c_row, c_col),
-                                                                                                        dtype=jnp.int32)),
-                                            lambda: new_opponent_move)
-
-        return state._replace(has_jumped=is_jump, opponent_move=newest_opponent_move)
+        # Execute
+        new_board, new_piece, did_jump, c_r, c_c = self.move_piece(
+            best_row, best_col, final_move[0], final_move[1], state.board)
+        
+        opp_move = state.opponent_move.replace(
+            start_pos=start_pos, end_pos=start_pos + final_move, piece_type=new_piece, resulting_board=new_board
+        )
+        
+        opp_move = jax.lax.cond(did_jump, 
+            lambda: self.add_captured_position(opp_move, jnp.array([c_r, c_c])),
+            lambda: opp_move)
+        
+        return state.replace(has_jumped=did_jump, opponent_move=opp_move, rng_key=rng_key)
 
     def calculate_best_further_opponent_move(self, state: VideoCheckersState) \
             -> VideoCheckersState:
         """
-        Handles the case where the opponent has already jumped and can jump again. He can only jump again with the same piece.
-        So only check if the piece on end_pos can jump again.
+        Handles the case where the opponent has already jumped and can jump again.
+        Uses static unrolled loop (max 4 jumps) for faster compilation.
         Args:
             state: current game state
         Returns:
             new state with updated opponent_move and has_jumped fields
         """
-        def while_cond_fun(state: VideoCheckersState) -> bool:
-            # Continue looping as long as the AI has a jump
-            return state.has_jumped
+        def jump_step(i, s: VideoCheckersState) -> VideoCheckersState:
+            # Only process if we still have a jump available
+            def process_jump(s_inner):
+                # Calculate legality for the current board state
+                leg = self.get_global_legality(s_inner.opponent_move.resulting_board, self.consts.COLOUR_WHITE)
+                
+                # Only check the piece that just moved
+                curr_pos = s_inner.opponent_move.end_pos
+                can_jump_again = leg.can_jump[curr_pos[0], curr_pos[1]]
+                
+                def perform_jump():
+                    # Create a temporary state for scoring
+                    temp_state = s_inner.replace(board=s_inner.opponent_move.resulting_board)
+                    scores = self._compute_heuristic_scores(temp_state, leg)  # (4, 8, 8)
+                    
+                    # Mask to only the current piece position
+                    piece_scores = scores[:, curr_pos[0], curr_pos[1]]  # (4,)
+                    # Only consider jump moves
+                    jump_scores = jnp.where(leg.jump_dirs[:, curr_pos[0], curr_pos[1]], piece_scores, -1e9)
+                    
+                    # Add noise for tie-breaking
+                    rng_key, subkey = jax.random.split(s_inner.rng_key)
+                    noise = 0.01 * jax.random.normal(subkey, jump_scores.shape, dtype=jump_scores.dtype)
+                    jump_scores = jump_scores + noise
+                    
+                    best_dir = jnp.argmax(jump_scores)
+                    best_move = self.consts.MOVES[best_dir] * 2  # Jump is 2x move
+                    
+                    new_board, new_piece, is_jump, c_row, c_col = self.move_piece(
+                        row=curr_pos[0], col=curr_pos[1], drow=best_move[0], dcol=best_move[1],
+                        board=s_inner.opponent_move.resulting_board)
+                    new_pos = curr_pos + best_move
 
-        def while_body_fun(state: VideoCheckersState) -> VideoCheckersState:
-            # This is the logic from the old 'calc_further_move'
-            piece = state.opponent_move.end_pos
-            rng_key, splitkey = jax.random.split(state.rng_key)
-            board = state.opponent_move.resulting_board
+                    new_opponent_move = s_inner.opponent_move.replace(end_pos=new_pos, piece_type=new_piece,
+                                                                     resulting_board=new_board)
+                    new_opponent_move = self.add_captured_position(new_opponent_move,
+                                                                  jnp.array((c_row, c_col), dtype=jnp.int32))
+                    return s_inner.replace(
+                        has_jumped=is_jump,
+                        opponent_move=new_opponent_move,
+                        rng_key=rng_key
+                    )
+                
+                def skip_jump():
+                    return s_inner.replace(has_jumped=False)
+                
+                return jax.lax.cond(can_jump_again, perform_jump, skip_jump)
+            
+            def skip_step(s_inner):
+                return s_inner.replace(has_jumped=False)
+            
+            return jax.lax.cond(s.has_jumped, process_jump, skip_step, s)
 
-            best_move, best_score = self.calculate_best_move_per_piece(piece, splitkey, board)
-            new_board, new_piece, is_jump, c_row, c_col = BoardHandler.move_piece(
-                row=piece[0], col=piece[1], drow=best_move[0], dcol=best_move[1], board=board)
-            new_pos = piece + best_move
+        return jax.lax.fori_loop(0, 4, jump_step, state)
 
-            new_opponent_move = state.opponent_move._replace(end_pos=new_pos, piece_type=new_piece,
-                                                             resulting_board=new_board)
-            new_opponent_move = OpponentMoveHandler.add_captured_position(new_opponent_move,
-                                                                          jnp.array((c_row, c_col),
-                                                                                    dtype=jnp.int32))
-            # This condition now controls the loop
-            return jax.lax.cond(
-                is_jump,
-                lambda: state._replace(
-                    has_jumped=True,  # Loop will continue
-                    opponent_move=new_opponent_move,
-                    rng_key=rng_key
-                ),
-                lambda: state._replace(
-                    has_jumped=False,  # Loop will terminate
-                    rng_key=rng_key
-                )
-            )
-
-        # Replace the fori_loop with while_loop
-        return jax.lax.while_loop(
-            while_cond_fun,
-            while_body_fun,
-            state
-        )
-
-    def step_move_piece_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
+    def step_move_piece_phase(self, state: VideoCheckersState, action: chex.Array, leg: LegalityMap) -> VideoCheckersState:
         """
         Handles moving a piece in the move piece phase.
         Args:
@@ -838,7 +929,7 @@ class JaxVideoCheckers(
                     lambda: new_state.opponent_move,
                 )
 
-                return state._replace(
+                return state.replace(
                     game_phase=self.consts.SHOW_OPPONENT_MOVE_PHASE,
                     has_jumped=False,
                     opponent_move=opponent_move,
@@ -846,244 +937,158 @@ class JaxVideoCheckers(
                     rng_key=new_state.rng_key,
                 )
 
-            movable_pieces, _ = BoardHandler.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
+            # For AI (white), still use get_movable_pieces since it's called less frequently
+            # The player legality is pre-computed, but AI moves are calculated on-demand
+            movable_pieces, _ = self.get_movable_pieces(self.consts.COLOUR_WHITE, state.board)
 
             return jax.lax.cond(
                 jnp.all(movable_pieces == jnp.array([-1, -1])),
-                lambda: state._replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_BLACK),
+                lambda: state.replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_BLACK),
                 lambda: moves_available(movable_pieces, state)
             )
 
-        def move_cursor(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
-            """
-            Moves the cursor based on the action taken.
-            a normal piece can either move forward (upleft/upright) one tile or jump over an opponent's piece up two tiles.
-            a king can move in all four directions one tile or jump over an opponent's piece up two tiles.
-            (this is returend by get_possible_moves_for_piece)
-            when the cursor is not on the selected piece the only valid move is back to the selected piece.
-            The check if the only move is to return to the selected piece is NOT DONE in get_possible_moves_for_piece, we have to do it here.
-            """
+        def move_cursor_logic(s, act):
+            is_on_selected = jnp.all(s.selected_piece == s.cursor_pos)
+            
+            def move_back(s_in, action):
+                # Calculate vector back to selected piece
+                diff = s_in.selected_piece - s_in.cursor_pos
+                
+                # Determine input vector based on Action
+                input_vec = jnp.array([0, 0])
+                input_vec = jnp.where(action == Action.UPRIGHT, jnp.array([-1, 1]), input_vec)
+                input_vec = jnp.where(action == Action.UPLEFT, jnp.array([-1, -1]), input_vec)
+                input_vec = jnp.where(action == Action.DOWNRIGHT, jnp.array([1, 1]), input_vec)
+                input_vec = jnp.where(action == Action.DOWNLEFT, jnp.array([1, -1]), input_vec)
 
-            def _move_cursor_back(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
-                """
-                Moves the cursor back to the selected piece.
-                For this we need to check what direction it is from the cursor to the selected piece.
-                Then check if the user input is in the same direction.
-                """
-                row_diff = state.selected_piece[0] - state.cursor_pos[0]
-                col_diff = state.selected_piece[1] - state.cursor_pos[1]
+                # Normalize diff to unit direction (1 step)
+                # If diff is +/- 2 (jump), we divide by 2. If +/- 1, divide by 1.
+                dist = jnp.max(jnp.abs(diff)) # Will be 1 or 2
+                norm_diff = diff // dist 
+                
+                # Check if input matches the direction back
+                is_correct_dir = jnp.all(input_vec == norm_diff) & (jnp.any(input_vec != 0))
+                
+                return jax.lax.cond(is_correct_dir, lambda: s_in.replace(cursor_pos=s_in.selected_piece), lambda: s_in)
 
-                # Prüfe, ob die Aktion in Richtung des ausgewählten Steins geht
-                up = jnp.logical_or(action == Action.UPLEFT, action == Action.UPRIGHT)
-                right = jnp.logical_or(action == Action.DOWNRIGHT, action == Action.UPRIGHT)
-
-                is_jump = (jnp.abs(row_diff) == 2) & (jnp.abs(col_diff) == 2)
-                drow = jax.lax.cond(is_jump,
-                                    lambda: jax.lax.cond(up, lambda: -2, lambda: 2),
-                                    lambda: jax.lax.cond(up, lambda: -1, lambda: 1),
-                                    )
-                dcol = jax.lax.cond(is_jump,
-                                    lambda: jax.lax.cond(right, lambda: 2, lambda: -2, ),
-                                    lambda: jax.lax.cond(right, lambda: 1, lambda: -1, ),
-                                    )
-
-                # Prüfe, ob die Richtung ein Sprung ist (2 Felder Unterschied)
-                is_correct_direction = (row_diff == drow) & (col_diff == dcol)
-
-                # If the action is in the correct direction, move the cursor back to the selected piece
+            def move_away(s_in, action):
+                # FIX: Manual mapping of Action -> Vector
+                # Row is Y (Down is +), Col is X (Right is +)
+                # UPRIGHT: Row -1, Col +1
+                # UPLEFT:  Row -1, Col -1
+                # DOWNRIGHT: Row +1, Col +1
+                # DOWNLEFT:  Row +1, Col -1
+                
+                vec_move = jnp.array([0, 0]) # Default
+                vec_move = jnp.where(action == Action.UPRIGHT, jnp.array([-1, 1]), vec_move)
+                vec_move = jnp.where(action == Action.UPLEFT, jnp.array([-1, -1]), vec_move)
+                vec_move = jnp.where(action == Action.DOWNRIGHT, jnp.array([1, 1]), vec_move)
+                vec_move = jnp.where(action == Action.DOWNLEFT, jnp.array([1, -1]), vec_move)
+                
+                is_move_action = jnp.any(vec_move != 0)
+                
+                # Check legality via the map
+                # We need to find WHICH index in leg.moves corresponds to this vector
+                # The MOVES constant is: [[1, 1], [-1, 1], [-1, -1], [1, -1]]
+                # 0: DownRight, 1: UpRight, 2: UpLeft, 3: DownLeft
+                
+                # Let's map Action -> Index manually
+                idx = -1
+                idx = jnp.where(action == Action.DOWNRIGHT, 0, idx)
+                idx = jnp.where(action == Action.UPRIGHT, 1, idx)
+                idx = jnp.where(action == Action.UPLEFT, 2, idx)
+                idx = jnp.where(action == Action.DOWNLEFT, 3, idx)
+                
+                r, c = s_in.selected_piece
+                
+                # If idx is -1 (invalid action), valid_* will be false (safe access via clip or condition)
+                # Safe access trick: use idx 0 if invalid, but gate with is_move_action
+                safe_idx = jnp.maximum(idx, 0)
+                
+                can_move_dir = leg.moves[safe_idx, r, c, 0]
+                can_jump_dir = leg.moves[safe_idx, r, c, 1]
+                
+                # Apply
+                new_pos_move = s_in.cursor_pos + vec_move
+                new_pos_jump = s_in.cursor_pos + (vec_move * 2)
+                
                 return jax.lax.cond(
-                    is_correct_direction,
-                    lambda s: s._replace(cursor_pos=s.selected_piece),
-                    lambda s: s,  # If not in the correct direction, do nothing
-                    operand=state
-                )
-
-            def _move_cursor_away(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
-                """
-                Moves the cursor away from the selected piece. THIS CAN BE JUMPS.
-                For the we need to use get_possible_moves_for_piece!
-                Action can be one of the four directions (UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT). which are not Movement vectors but just enumerated values.
-                """
-
-                # Ermittle die möglichen Züge für die ausgewählte Figur
-                possible_moves = BoardHandler.get_possible_moves_for_piece(state.selected_piece[0],
-                                                                           state.selected_piece[1],
-                                                                           state.board)
-
-                move_vector, jump_vector = jax.lax.cond(
-                    action == Action.UPRIGHT,
-                    lambda: (jnp.array([-1, 1]), jnp.array([-2, 2])),
+                    is_move_action & (idx != -1) & can_jump_dir,
+                    lambda: s_in.replace(cursor_pos=new_pos_jump),
                     lambda: jax.lax.cond(
-                        action == Action.UPLEFT,
-                        lambda: (jnp.array([-1, -1]), jnp.array([-2, -2])),
-                        lambda: jax.lax.cond(
-                            action == Action.DOWNRIGHT,
-                            lambda: (jnp.array([1, 1]), jnp.array([2, 2])),
-                            lambda: jax.lax.cond(
-                                action == Action.DOWNLEFT,
-                                lambda: (jnp.array([1, -1]), jnp.array([2, -2])),
-                                lambda: (jnp.array([0, 0]), jnp.array([0, 0])),  # Default case
-                            ),
-                        ),
-                    ),
+                        is_move_action & (idx != -1) & can_move_dir,
+                        lambda: s_in.replace(cursor_pos=new_pos_move),
+                        lambda: s_in
+                    )
                 )
 
-                # Prüfe, ob der Zug gültig ist
-                is_valid_move = jnp.logical_or(
-                    jnp.any(jnp.all(possible_moves == move_vector, axis=1)),
-                    jnp.any(jnp.all(possible_moves == jump_vector, axis=1))
-                )
+            return jax.lax.cond(is_on_selected, lambda: move_away(s, act), lambda: move_back(s, act))
 
-                jump_available = jnp.any(jnp.all(possible_moves == jump_vector, axis=1))
-
-                # If the move is valid, update the cursor position
+        def place_piece(s):
+            cursor_on_sel = jnp.all(s.selected_piece == s.cursor_pos)
+            
+            def deselect(s_in):
                 return jax.lax.cond(
-                    is_valid_move,
-                    lambda s: jax.lax.cond(
-                        jump_available,
-                        lambda s: s._replace(cursor_pos=s.cursor_pos + jump_vector),
-                        lambda s: s._replace(cursor_pos=s.cursor_pos + move_vector),
-                        operand=s),
-                    lambda s: s,  # If not a valid move, do nothing
-                    operand=state
+                    s_in.has_jumped, 
+                    lambda: s_in, 
+                    lambda: s_in.replace(selected_piece=jnp.array([-1,-1]), game_phase=self.consts.SELECT_PIECE_PHASE)
                 )
-
-            def _move_cursor(state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
+            
+            def commit_move(s_in):
+                piece = s_in.board[s_in.selected_piece[0], s_in.selected_piece[1]]
+                move = s_in.cursor_pos - s_in.selected_piece
+                is_jump = jnp.max(jnp.abs(move)) > 1
+                
+                # Crown King logic
+                is_king_row = s_in.cursor_pos[0] == 0
+                # Ensure we only crown WHITE_PIECE (1) -> WHITE_KING (3) or BLACK_PIECE (2) -> BLACK_KING (4)
+                # Here we are Black player (row 0 is our target)
+                new_piece = jnp.where(
+                    (piece == self.consts.BLACK_PIECE) & is_king_row, 
+                    self.consts.BLACK_KING, 
+                    piece
+                )
+                
+                new_board = s_in.board.at[tuple(s_in.selected_piece)].set(0).at[tuple(s_in.cursor_pos)].set(new_piece)
+                
+                # Handle capture
+                cap_pos = s_in.selected_piece + (move // 2)
+                new_board = jax.lax.cond(is_jump, lambda: new_board.at[tuple(cap_pos)].set(0), lambda: new_board)
+                
+                # Check for double jump possibility
+                new_leg = self.get_global_legality(new_board, self.consts.COLOUR_BLACK)
+                can_jump_again = new_leg.can_jump[s_in.cursor_pos[0], s_in.cursor_pos[1]]
+                
                 return jax.lax.cond(
-                    jnp.all(state.selected_piece == state.cursor_pos),
-                    lambda s: _move_cursor_away(s, action),
-                    lambda s: _move_cursor_back(s, action),
-                    operand=state
+                    is_jump & can_jump_again,
+                    lambda: s_in.replace(board=new_board, selected_piece=s_in.cursor_pos, has_jumped=True, must_jump=True),
+                    lambda: prepare_opponent_move(s_in.replace(board=new_board))
                 )
 
-            return jax.lax.cond(
-                action == Action.NOOP,
-                lambda s: s,  # No action taken, return the same state
-                lambda s: _move_cursor(s, action),
-                operand=state
-            )
-
-        def place_piece(state: VideoCheckersState) -> VideoCheckersState:
-            """
-            Places the selected piece at the destination and updates the game phase.
-            Updating the game phase can be:
-            A. If no further jumps are available, change to SHOW_OPPONENT_MOVE_PHASE.
-            B. If further jumps are available, stay in MOVE_PIECE_PHASE but the destination is reset to [-1, -1].
-            Or if the piece has not been moved (put back down), return to the select piece phase.
-            """
-
-            def _deselect_piece(state: VideoCheckersState) -> VideoCheckersState:
-                """
-                Only allows deselecting the piece if it has not jumped.
-                """
-                return jax.lax.cond(
-                    state.has_jumped,
-                    lambda s: state,
-                    lambda s: s._replace(selected_piece=jnp.array([-1, -1]), game_phase=self.consts.SELECT_PIECE_PHASE),
-                    operand=state
-                )
-
-            def _place_piece(state: VideoCheckersState) -> VideoCheckersState:
-                piece_type = state.board[state.selected_piece[0], state.selected_piece[1]]
-                move = state.cursor_pos - state.selected_piece
-                jumped = (jnp.abs(move[0]) > 1) & (jnp.abs(move[1]) > 1)
-
-                new_piece = jax.lax.cond((state.cursor_pos[0] == 0),
-                                         lambda: self.consts.BLACK_KING,
-                                         lambda: piece_type)
-
-                # move piece
-                new_board = state.board \
-                    .at[tuple(state.selected_piece)].set(self.consts.EMPTY_TILE) \
-                    .at[tuple(state.cursor_pos)].set(new_piece)
-
-                # capture piece (determine the piece between state.selected_piece and state.cursor_pos
-                captured_piece = state.selected_piece + (move // 2)
-                new_board = jax.lax.cond(
-                    jumped,
-                    lambda: new_board.at[tuple(captured_piece)].set(self.consts.EMPTY_TILE),
-                    lambda: new_board
-                )
-
-                # get new state
-                new_state = state._replace(board=new_board)
-                captured_piece = state.selected_piece + (
-                        move // 2)  # mid position for jumped piece if jumps are available from new pos
-                new_moves = BoardHandler.get_possible_moves_for_piece(row=new_state.cursor_pos[0],
-                                                                      col=new_state.cursor_pos[1],
-                                                                      board=new_state.board)
-                move_distances = jnp.abs(new_moves)  # Shape: (n_moves, 2)
-                max_distances = jnp.max(move_distances, axis=1)  # Max distance per move
-                has_jump_from_new_pos = jnp.any(max_distances > 1)
-
-                # stay in same phase and reselect piece if jumped and can continue jumping, change phase if not
-                return jax.lax.cond(
-                    jumped & has_jump_from_new_pos,
-                    lambda s: s._replace(selected_piece=s.cursor_pos, has_jumped=True),
-                    lambda s: prepare_opponent_move(s),
-                    new_state
-                )
-
-            cursor_on_selected_piece = jnp.all(state.selected_piece == state.cursor_pos)
-
-            return jax.lax.cond(cursor_on_selected_piece,
-                                lambda s: _deselect_piece(s),
-                                # deselect piece
-                                lambda s: _place_piece(s),  # move piece + side effects
-                                state
-                                )
+            return jax.lax.cond(cursor_on_sel, lambda: deselect(s), lambda: commit_move(s))
 
         new_state = jax.lax.cond(
             action == Action.FIRE,
             lambda s: place_piece(s),
-            lambda s: move_cursor(s, action),
+            lambda s: move_cursor_logic(s, action),
             operand=state
         )
 
         return new_state
 
-    def step_show_opponent_move_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
-        """
-        Handles showing the opponent's move in the show opponent move phase.
-        This is interrupted by the player making any input, which then returns to the select piece phase.
-        Args:
-            state: The current game state.
-            action: The action taken by the player.
-        Returns:
-            VideoCheckersState: The new game state after the action.
-        """
-
-        def apply_opponent_move(state: VideoCheckersState) -> VideoCheckersState:
-            """
-            Applies the opponent's move to the game state.
-            """
-            # Get the opponent's move
-            opponent_move = state.opponent_move
-
-            # Update the game state with the new board and reset cursor position and opponent move
-            return state._replace(
-                board=opponent_move.resulting_board,
-                opponent_move=OpponentMoveHandler.clear_captured_positions(opponent_move),
-                game_phase=self.consts.SELECT_PIECE_PHASE,  # Change phase back to select piece phase
-                selected_piece=jnp.array([-1, -1]),  # Reset selected piece
-            )
-
-        new_state = jax.lax.cond(
+    def step_show_opponent_move_phase(self, state, action):
+        # Applies stored move
+        return jax.lax.cond(
             action == Action.NOOP,
-            lambda s: s,  # No action taken, return the same state
-            apply_opponent_move,
-            operand=state
+            lambda: state,
+            lambda: jax.lax.cond(
+                self.count_pieces(state.opponent_move.resulting_board)[1] == 0, # Check black count
+                lambda: state.replace(board=state.opponent_move.resulting_board, game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_WHITE),
+                lambda: state.replace(board=state.opponent_move.resulting_board, 
+                                      opponent_move=self.clear_captured_positions(state.opponent_move),
+                                      game_phase=self.consts.SELECT_PIECE_PHASE, selected_piece=jnp.array([-1,-1]))
+            )
         )
-
-        # check if player lost
-        new_state = jax.lax.cond(
-            BoardHandler.count_pieces(new_state.board)[1] == 0,
-            lambda s: s._replace(game_phase=self.consts.GAME_OVER_PHASE, winner=self.consts.COLOUR_WHITE),
-            lambda s: s,
-            new_state
-        )
-
-        return new_state
 
     def step_game_over_phase(self, state: VideoCheckersState, action: chex.Array) -> VideoCheckersState:
         """
@@ -1111,46 +1116,35 @@ class JaxVideoCheckers(
             done: A boolean indicating if the game is over.
             info: Additional information about the game state.
         """
-        # Switch between game phases to choose which function handles the step
-        # So separate function for each game phase
-        def _run_phase_logic(state, action):
-            # Define operands to pass to the branch functions
-            # Note: We create simple lambda wrappers to match the required
-            # function signature for jax.lax.switch, which is (operand,).
-            # Here, our "operand" is the tuple (state, action).
-            
-            # We pass 'state' and 'action' as a tuple (the operand)
-            operands = (state, action)
-            # List of functions to call based on the index (game_phase)
-            # Each function must accept the (state, action) operand
-            phase_functions = [
-                lambda op: self.step_select_piece_phase(op[0], op[1]),
-                lambda op: self.step_move_piece_phase(op[0], op[1]),
-                lambda op: self.step_show_opponent_move_phase(op[0], op[1]),
-                lambda op: self.step_game_over_phase(op[0], op[1]),
-            ]
-            
-            return jax.lax.switch(state.game_phase, phase_functions, operands)
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
+        # Calculate legality ONCE at top of step
+        leg = self.get_global_legality(state.board, self.consts.COLOUR_BLACK)
+        
+        def process_frame(s):
+            return jax.lax.switch(s.game_phase, [
+                lambda: self.step_select_piece_phase(s, atari_action, leg),
+                lambda: self.step_move_piece_phase(s, atari_action, leg),
+                lambda: self.step_show_opponent_move_phase(s, atari_action),
+                lambda: s # Game over
+            ])
 
-        new_state = jax.lax.cond(
-            (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (action != Action.NOOP),
-            lambda: _run_phase_logic(state, action),  # Call the new switch logic
-            lambda: state,
-        )
-
-        new_state = new_state._replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
-
-        # Re-calculate and store must_jump for the *new* state
-        _, new_must_jump = BoardHandler.get_movable_pieces(self.consts.COLOUR_BLACK, new_state.board)
-        new_state = new_state._replace(must_jump=new_must_jump)
-
-        done = self._get_done(new_state)
-        env_reward = self._get_env_reward(state, new_state)
-        info = self._get_info(new_state)
-
-        observation = self._get_observation(new_state)
-
-        return observation, new_state, env_reward, done, info
+        should_act = (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (atari_action != Action.NOOP)
+        new_state = jax.lax.cond(should_act, lambda: process_frame(state), lambda: state)
+        
+        new_state = new_state.replace(frame_counter=(new_state.frame_counter + 1) % self.consts.ANIMATION_FRAME_RATE)
+        
+        # Update must_jump for obs
+        # If board changed, strictly we should re-calc legality, but for Observation purposes 
+        # using the legality of the start of next frame is correct.
+        # We can optimize by only calc'ing if phase is SELECT or MOVE
+        final_leg = self.get_global_legality(new_state.board, self.consts.COLOUR_BLACK)
+        new_state = new_state.replace(must_jump=final_leg.any_jump)
+        
+        done = new_state.game_phase == self.consts.GAME_OVER_PHASE
+        reward = self._get_env_reward(state, new_state)
+        
+        return self._get_observation(new_state), new_state, reward, done, self._get_info(new_state)
 
     def action_space(self):
         """
@@ -1158,7 +1152,7 @@ class JaxVideoCheckers(
         Returns:
             action_space: The action space of the game environment.
         """
-        return spaces.Discrete(5)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -1179,7 +1173,7 @@ class JaxVideoCheckers(
         """
         return VideoCheckersInfo()
 
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
         """
         Returns the observation space of the game environment.
         The observation contains:
@@ -1199,32 +1193,15 @@ class JaxVideoCheckers(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoCheckersState):
-        """
-        Returns the observation of the game state.
-        Args:
-            state: The current game state.
-        Returns:
-            VideoCheckersObservation: The observation of the game state.
-        """
-        # Read must_jump from state instead of recalculating
-        return VideoCheckersObservation(board=state.board,
-                                        start_pos=state.cursor_pos,
-                                        end_pos=state.selected_piece,
-                                        must_jump=state.must_jump.astype(jnp.int32),
+        return VideoCheckersObservation(board=state.board, start_pos=state.cursor_pos,
+                                        end_pos=state.selected_piece, must_jump=state.must_jump.astype(jnp.int32),
                                         cursor_pos=state.cursor_pos)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
-        """
-        Returns the environment reward based on the game state.
-        Args:
-            previous_state: The previous game state.
-        """
-        previous_counts = BoardHandler.count_pieces(previous_state.board)
-        previous_lead_black = previous_counts[1] - previous_counts[0]
-        new_counts = BoardHandler.count_pieces(state.board)
-        new_lead_black = new_counts[1] - new_counts[0]
-        return new_lead_black - previous_lead_black
+        p_c = self.count_pieces(previous_state.board)
+        n_c = self.count_pieces(state.board)
+        return (n_c[1] - n_c[0]) - (p_c[1] - p_c[0])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:
@@ -1244,22 +1221,25 @@ class JaxVideoCheckers(
         Args:
             state: The current game state.
         """
-        return state.game_phase == VideoCheckersConstants.GAME_OVER_PHASE
+        return state.game_phase == self.consts.GAME_OVER_PHASE
 
 
 
 
 class VideoCheckersRenderer(JAXGameRenderer):
-    def __init__(self, consts: VideoCheckersConstants = None):
-        super().__init__()
+    def __init__(self, consts: VideoCheckersConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or VideoCheckersConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path
@@ -1322,146 +1302,93 @@ class VideoCheckersRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _calculate_piece_grid(self, state: VideoCheckersState) -> jnp.ndarray:
         """
-        Vectorized function to compute the 8x8 grid of piece *indices* to be rendered.
-        This contains all the complex game phase logic.
+        Replaced 64-way vmap+switch with global board masking.
         """
+        rows, cols = jnp.indices((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X))
+        board = state.board
         
-        # --- Helper functions (internal to the JIT-ted function) ---
-        def determine_piece_type_select_phase(row, col, state):
-            is_cursor = (state.cursor_pos[0] == row) & (state.cursor_pos[1] == col)
-            is_flashing = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
-            return jax.lax.cond(
-                is_cursor & is_flashing,
-                lambda: self.consts.BLACK_CURSOR,
-                lambda: state.board[row, col],
-            )
-
-        def determine_piece_type_move_phase(row, col, state):
-            is_selected_piece = (state.selected_piece[0] == row) & (state.selected_piece[1] == col)
-            is_cursor_pos = (state.cursor_pos[0] == row) & (state.cursor_pos[1] == col)
-            is_unmoved = is_selected_piece & is_cursor_pos
-
-            def f_unmoved():
-                frame_mod = state.frame_counter % self.consts.ANIMATION_FRAME_RATE
-                is_flashing_off = ((frame_mod >= 5) & (frame_mod < 10)) | (frame_mod >= 15)
-                return jax.lax.cond(
-                    is_flashing_off,
-                    lambda: self.consts.EMPTY_TILE,
-                    lambda: state.board[row, col],
-                )
-
-            def f_selected():
-                is_flashing_off = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
-                return jax.lax.cond(
-                    is_flashing_off,
-                    lambda: self.consts.BLACK_CURSOR,
-                    lambda: state.board[row, col],
-                )
-
-            def f_cursor():
-                is_flashing_off = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
-                selected_piece_type = state.board[state.selected_piece[0], state.selected_piece[1]]
-                return jax.lax.cond(
-                    is_flashing_off,
-                    lambda: selected_piece_type,
-                    lambda: self.consts.EMPTY_TILE,
-                )
-
-            return jax.lax.cond(
-                is_unmoved, f_unmoved,
-                lambda: jax.lax.cond(is_selected_piece, f_selected,
-                    lambda: jax.lax.cond(is_cursor_pos, f_cursor,
-                        lambda: state.board[row, col]
-                    )
-                )
-            )
-
-        def determine_piece_type_show_opponent_move_phase(row, col, state):
-            is_start_pos = (state.opponent_move.start_pos[0] == row) & (state.opponent_move.start_pos[1] == col)
-            is_end_pos = (state.opponent_move.end_pos[0] == row) & (state.opponent_move.end_pos[1] == col)
-            
-            # Vectorized check for captured position
-            captured_matches = (state.opponent_move.captured_positions[:, 0] == row) & \
-                               (state.opponent_move.captured_positions[:, 1] == col)
-            is_captured_pos = jnp.any(captured_matches)
-
-            is_before_move = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE / 2)
-
-            def f_before_move():
-                return jax.lax.cond(
-                    is_start_pos, lambda: self.consts.WHITE_CURSOR,
-                    lambda: jax.lax.cond(is_end_pos, lambda: self.consts.EMPTY_TILE,
-                        lambda: state.board[row, col]
-                    )
-                )
-
-            def f_after_move():
-                return jax.lax.cond(
-                    is_start_pos, lambda: self.consts.EMPTY_TILE,
-                    lambda: jax.lax.cond(is_end_pos, lambda: state.opponent_move.piece_type,
-                        lambda: jax.lax.cond(is_captured_pos, lambda: self.consts.BLACK_CURSOR,
-                            lambda: state.board[row, col]
-                        )
-                    )
-                )
-
-            return jax.lax.cond(is_before_move, f_before_move, f_after_move)
+        # Common masks
+        is_cursor = (rows == state.cursor_pos[0]) & (cols == state.cursor_pos[1])
+        is_selected = (rows == state.selected_piece[0]) & (cols == state.selected_piece[1])
+        flash_on = state.frame_counter < (self.consts.ANIMATION_FRAME_RATE // 2)
         
-        def determine_piece_type_game_over_phase(row, col, state):
-            return state.board[row, col]
+        # SELECT PHASE LOGIC
+        select_grid = jnp.where(is_cursor & flash_on, self.consts.BLACK_CURSOR, board)
 
-        # --- Main Vmapped Logic ---
-        def get_piece_for_square(row, col):
-            # This function is vmapped over all 64 squares
-            return jax.lax.switch(
-                state.game_phase,
-                [
-                    lambda s: determine_piece_type_select_phase(row, col, s),
-                    lambda s: determine_piece_type_move_phase(row, col, s),
-                    lambda s: determine_piece_type_show_opponent_move_phase(row, col, s),
-                    lambda s: determine_piece_type_game_over_phase(row, col, s),
-                ],
-                state
-            )
+        # MOVE PHASE LOGIC
+        # Flash the cursor position with the piece that is currently being "held"
+        # Safe access: check if selected_piece is valid (not [-1, -1])
+        selected_valid = (state.selected_piece[0] >= 0) & (state.selected_piece[1] >= 0)
+        selected_piece_type = jnp.where(
+            selected_valid,
+            board[state.selected_piece[0], state.selected_piece[1]],
+            self.consts.EMPTY_TILE
+        )
+        move_grid = jnp.where(is_selected & flash_on & selected_valid, self.consts.BLACK_CURSOR, board)
+        move_grid = jnp.where(is_cursor & flash_on & selected_valid, selected_piece_type, move_grid)
+        # If cursor is ON selected piece (unmoved), handle special triple-flash or similar
+        is_unmoved = is_selected & is_cursor
+        frame_mod = state.frame_counter % self.consts.ANIMATION_FRAME_RATE
+        is_flashing_off_unmoved = ((frame_mod >= 5) & (frame_mod < 10)) | (frame_mod >= 15)
+        move_grid = jnp.where(is_unmoved & is_flashing_off_unmoved, self.consts.EMPTY_TILE, move_grid)
 
-        # Create 1D arrays of row and col indices
-        rows = jnp.arange(self.consts.NUM_FIELDS_Y)
-        cols = jnp.arange(self.consts.NUM_FIELDS_X)
+        # OPPONENT MOVE LOGIC
+        opp = state.opponent_move
+        is_start = (rows == opp.start_pos[0]) & (cols == opp.start_pos[1])
+        is_end = (rows == opp.end_pos[0]) & (cols == opp.end_pos[1])
         
-        # Run the logic in parallel for all 64 squares using nested vmaps
-        piece_grid = jax.vmap(lambda r: jax.vmap(lambda c: get_piece_for_square(r, c))(cols))(rows)
+        # Check all captured slots at once
+        captured_mask = jnp.any(
+            (opp.captured_positions[:, 0, None, None] == rows) & 
+            (opp.captured_positions[:, 1, None, None] == cols), axis=0
+        )
+
+        opp_grid_before = jnp.where(is_start, self.consts.WHITE_CURSOR, 
+                                   jnp.where(is_end, self.consts.EMPTY_TILE, board))
+        opp_grid_after = jnp.where(is_start, self.consts.EMPTY_TILE,
+                                  jnp.where(is_end, opp.piece_type,
+                                           jnp.where(captured_mask, self.consts.BLACK_CURSOR, board)))
         
-        return piece_grid
+        opp_grid = jnp.where(flash_on, opp_grid_before, opp_grid_after)
+
+        # Switch ONCE for the whole board
+        return jax.lax.switch(
+            state.game_phase,
+            [lambda: select_grid, lambda: move_grid, lambda: opp_grid, lambda: board]
+        )
 
     # --- JIT-ted Render Helpers ---
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_pieces_on_board(self, piece_grid: jnp.ndarray, raster: jnp.ndarray) -> jnp.ndarray:
         """
-        Renders the 8x8 piece grid onto the raster.
-        Assumes piece_grid is an 8x8 array of sprite indices.
+        OPTIMIZED: Instead of 64 loops, we only loop over actually occupied dark squares.
         """
+        # Flatten the grid for easier iteration
+        flat_grid = piece_grid.flatten()
         
-        def render_piece(row, col, r):
-            piece_index = piece_grid[row, col]
+        # Checkered pattern mask
+        rows, cols = jnp.indices((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X))
+        dark_squares = ((rows + cols) % 2 == 1).flatten()
+        
+        def draw_step(i, current_raster):
+            row, col = i // self.consts.NUM_FIELDS_X, i % self.consts.NUM_FIELDS_X
+            piece_idx = flat_grid[i]
             
-            def draw(r_in):
-                piece_mask = self.PIECE_STACK[piece_index]
+            # Use data-driven check instead of nested lax.cond where possible
+            should_draw = dark_squares[i] & (piece_idx != self.consts.EMPTY_TILE)
+            
+            def perform_draw(r):
                 x = self.consts.OFFSET_X_BOARD + 4 + col * 17
                 y = self.consts.OFFSET_Y_BOARD + 2 + row * 13
-                # Use render_at, not clipped, as pieces are always on their square
-                return self.jr.render_at(r_in, x, y, piece_mask)
+                return self.jr.render_at(r, x, y, self.PIECE_STACK[piece_idx])
             
-            # Only render on dark squares and if not an empty tile
-            is_dark_square = (row + col) % 2 == 1
-            is_not_empty = piece_index != self.consts.EMPTY_TILE
-            
-            return jax.lax.cond(is_dark_square & is_not_empty, draw, lambda r_in: r_in, r)
+            return jax.lax.cond(should_draw, perform_draw, lambda r: r, current_raster)
 
-        def render_row(row, r):
-            return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_X, lambda col, r_in: render_piece(row, col, r_in), r)
-
-        return jax.lax.fori_loop(0, self.consts.NUM_FIELDS_Y, render_row, raster)
+        # Still a loop, but much lighter because the logic inside perform_draw 
+        # is now a simple array update rather than complex logic.
+        total_squares = self.consts.NUM_FIELDS_Y * self.consts.NUM_FIELDS_X
+        return jax.lax.fori_loop(0, total_squares, draw_step, raster)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_jump_indicator(self, must_jump: bool, raster: jnp.ndarray) -> jnp.ndarray:

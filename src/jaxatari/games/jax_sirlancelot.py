@@ -6,11 +6,13 @@ import jax
 import jax.numpy as jnp
 import chex
 from jax.image import resize
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -46,223 +48,224 @@ def _get_default_asset_config() -> tuple:
 # CONSTANTS
 # -----------------------------------------------------------------------------
 
-class SirLancelotConstants(NamedTuple):
+class SirLancelotConstants(AutoDerivedConstants):
     # Screen dimensions
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 250
+    SCREEN_WIDTH: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(160))
+    SCREEN_HEIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(250))
     
     # Play area boundaries
-    TOP_BLACK_BAR_HEIGHT: int = 24
-    PLAY_AREA_TOP: int = 24
-    PLAY_AREA_BOTTOM: int = 193  # Ground level for Sir Lancelot (3 pixels down from 190)
+    TOP_BLACK_BAR_HEIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(24))
+    PLAY_AREA_TOP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(24))
+    PLAY_AREA_BOTTOM: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(193))  # Ground level for Sir Lancelot (3 pixels down from 190)
     
     # Player constants
-    PLAYER_WIDTH: int = 8
-    PLAYER_HEIGHT: int = 12
-    PLAYER_START_X: int = 141  # Sir Lancelot spawn position
-    PLAYER_START_Y: int = 180  # On ground level (PLAY_AREA_BOTTOM - PLAYER_HEIGHT = 193 - 13)
+    PLAYER_WIDTH: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(8))
+    PLAYER_HEIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(12))
+    PLAYER_START_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(141))  # Sir Lancelot spawn position
+    PLAYER_START_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(180))  # On ground level (PLAY_AREA_BOTTOM - PLAYER_HEIGHT = 193 - 13)
     
     # =========================================================================
     # FLYING PHYSICS CONFIGURATION - TWEAK ALL FLYING PARAMETERS HERE
     # =========================================================================
     
     # VERTICAL PHYSICS (Up/Down movement)
-    GRAVITY: float = 0.008              # Slower fall for moon-like physics
-    FLAP_IMPULSE: float = -0.30         # Upward boost per flap (adds to velocity)
-    FLAP_COOLDOWN: int = 5              # Frames to wait between flaps (60 FPS)
-    MAX_VEL_Y_UP: float = -0.96         # Reduced by 50% from -1.92 (60% total from original)
-    MAX_VEL_Y_DOWN: float = 0.48        # Reduced by 50% from 0.96 (60% total from original)
+    GRAVITY: float = struct.field(pytree_node=False, default_factory=lambda: 0.008)              # Slower fall for moon-like physics
+    FLAP_IMPULSE: float = struct.field(pytree_node=False, default_factory=lambda: -0.30)         # Upward boost per flap (adds to velocity)
+    FLAP_COOLDOWN: int = struct.field(pytree_node=False, default_factory=lambda: 5)              # Frames to wait between flaps (60 FPS)
+    MAX_VEL_Y_UP: float = struct.field(pytree_node=False, default_factory=lambda: -0.96)         # Reduced by 50% from -1.92 (60% total from original)
+    MAX_VEL_Y_DOWN: float = struct.field(pytree_node=False, default_factory=lambda: 0.48)        # Reduced by 50% from 0.96 (60% total from original)
     
     # HORIZONTAL PHYSICS (Left/Right movement)
-    HORIZONTAL_FLAP_IMPULSE: float = 0.25  # Stronger side-kick per LEFTFIRE/RIGHTFIRE
-    HORIZONTAL_DECAY: float = 0.995        # Less decay, retains momentum longer
-    MAX_VEL_X: float = 2.0                 # Reduced by 50% from 4.0 (60% total from original)
+    HORIZONTAL_FLAP_IMPULSE: float = struct.field(pytree_node=False, default_factory=lambda: 0.25)  # Stronger side-kick per LEFTFIRE/RIGHTFIRE
+    HORIZONTAL_DECAY: float = struct.field(pytree_node=False, default_factory=lambda: 0.995)        # Less decay, retains momentum longer
+    MAX_VEL_X: float = struct.field(pytree_node=False, default_factory=lambda: 2.0)                 # Reduced by 50% from 4.0 (60% total from original)
     
     # ANIMATION
-    FLAP_ANIM_FRAMES: int = 5              # Longer flap animation (~83ms)
+    FLAP_ANIM_FRAMES: int = struct.field(pytree_node=False, default_factory=lambda: 5)              # Longer flap animation (~83ms)
     
     # LANDING PHYSICS
-    GROUND_STICK: bool = True           # Stick to ground when landing
-    LANDING_VELOCITY_KILL: float = 0.8  # Horizontal momentum kept on landing (0-1)
+    GROUND_STICK: bool = struct.field(pytree_node=False, default_factory=lambda: True)           # Stick to ground when landing
+    LANDING_VELOCITY_KILL: float = struct.field(pytree_node=False, default_factory=lambda: 0.8)  # Horizontal momentum kept on landing (0-1)
     
     # =========================================================================
     # END OF FLYING PHYSICS CONSTANTS
     # =========================================================================
     
     # Enemy constants (Quest 1: Basic Flyers)
-    ENEMY_WIDTH: int = 12
-    ENEMY_HEIGHT: int = 10
-    NUM_ENEMIES: int = 4  # Quest 1 has 4 beasts as requested
-    ENEMY_HORIZONTAL_SPEED: float = 0.6  # Slower horizontal movement
-    ENEMY_VERTICAL_OSCILLATION: float = 0.3  # Gentler vertical drift
-    ENEMY_SPAWN_Y: chex.Array = jnp.array([50, 80, 110, 140], dtype=jnp.float32)
-    ENEMY_MIN_Y: int = 140  # Lowest beast position from Level 1 (ground safety)
-    ENEMY_ANIMATION_SPEED: int = 60  # Animation switches every second (60 frames at 60 FPS)
+    ENEMY_WIDTH: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(12))
+    ENEMY_HEIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(10))
+    NUM_ENEMIES: int = struct.field(pytree_node=False, default_factory=lambda: 4)  # Quest 1 has 4 beasts as requested
+    ENEMY_HORIZONTAL_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.6)  # Slower horizontal movement
+    ENEMY_VERTICAL_OSCILLATION: float = struct.field(pytree_node=False, default_factory=lambda: 0.3)  # Gentler vertical drift
+    ENEMY_SPAWN_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([50, 80, 110, 140], dtype=jnp.float32))
+    ENEMY_MIN_Y: int = struct.field(pytree_node=False, default_factory=lambda: 140)  # Lowest beast position from Level 1 (ground safety)
+    ENEMY_ANIMATION_SPEED: int = struct.field(pytree_node=False, default_factory=lambda: 60)  # Animation switches every second (60 frames at 60 FPS)
     
     # Quest/Level progression
-    INITIAL_QUEST: int = 1
-    MAX_QUEST: int = 4
-    INITIAL_LEVEL: int = 1  # Start at level 1
-    MAX_LEVEL: int = 8  # 8 levels total (4 beast levels, 4 dragon levels)
+    INITIAL_QUEST: int = struct.field(pytree_node=False, default_factory=lambda: 1)
+    MAX_QUEST: int = struct.field(pytree_node=False, default_factory=lambda: 4)
+    INITIAL_LEVEL: int = struct.field(pytree_node=False, default_factory=lambda: 1)  # Start at level 1
+    MAX_LEVEL: int = struct.field(pytree_node=False, default_factory=lambda: 8)  # 8 levels total (4 beast levels, 4 dragon levels)
     
     # Scoring per level - Beast levels (odd levels)
-    POINTS_LEVEL_1_BEAST: int = 250      # Flying Snakes
-    POINTS_LEVEL_3_BEAST: int = 750      # Monster Bees
-    POINTS_LEVEL_5_BEAST: int = 1500     # Killer Dragonflies
-    POINTS_LEVEL_7_BEAST: int = 3000     # Invisible Invincibles
+    POINTS_LEVEL_1_BEAST: int = struct.field(pytree_node=False, default_factory=lambda: 250)      # Flying Snakes
+    POINTS_LEVEL_3_BEAST: int = struct.field(pytree_node=False, default_factory=lambda: 750)      # Monster Bees
+    POINTS_LEVEL_5_BEAST: int = struct.field(pytree_node=False, default_factory=lambda: 1500)     # Killer Dragonflies
+    POINTS_LEVEL_7_BEAST: int = struct.field(pytree_node=False, default_factory=lambda: 3000)     # Invisible Invincibles
     
     # Quick kill bonuses for beast levels
     # Level 1 (Flying Snakes)
-    QUICK_KILL_BONUS_1_L1: int = 1000    # 1st quick kill
-    QUICK_KILL_BONUS_2_L1: int = 2000    # 2nd quick kill  
-    QUICK_KILL_BONUS_3_L1: int = 5000    # 3rd quick kill
+    QUICK_KILL_BONUS_1_L1: int = struct.field(pytree_node=False, default_factory=lambda: 1000)    # 1st quick kill
+    QUICK_KILL_BONUS_2_L1: int = struct.field(pytree_node=False, default_factory=lambda: 2000)    # 2nd quick kill  
+    QUICK_KILL_BONUS_3_L1: int = struct.field(pytree_node=False, default_factory=lambda: 5000)    # 3rd quick kill
     # Level 3 (Monster Bees)
-    QUICK_KILL_BONUS_1_L3: int = 1750    # 1st quick kill
-    QUICK_KILL_BONUS_2_L3: int = 4000    # 2nd quick kill  
-    QUICK_KILL_BONUS_3_L3: int = 10000   # 3rd quick kill
+    QUICK_KILL_BONUS_1_L3: int = struct.field(pytree_node=False, default_factory=lambda: 1750)    # 1st quick kill
+    QUICK_KILL_BONUS_2_L3: int = struct.field(pytree_node=False, default_factory=lambda: 4000)    # 2nd quick kill  
+    QUICK_KILL_BONUS_3_L3: int = struct.field(pytree_node=False, default_factory=lambda: 10000)    # 3rd quick kill
     # Level 5 (Killer Dragonflies)
-    QUICK_KILL_BONUS_1_L5: int = 3500    # 1st quick kill
-    QUICK_KILL_BONUS_2_L5: int = 6000    # 2nd quick kill  
-    QUICK_KILL_BONUS_3_L5: int = 15000   # 3rd quick kill
+    QUICK_KILL_BONUS_1_L5: int = struct.field(pytree_node=False, default_factory=lambda: 3500)    # 1st quick kill
+    QUICK_KILL_BONUS_2_L5: int = struct.field(pytree_node=False, default_factory=lambda: 6000)    # 2nd quick kill  
+    QUICK_KILL_BONUS_3_L5: int = struct.field(pytree_node=False, default_factory=lambda: 15000)   # 3rd quick kill
     # Level 7 (Invisible Invincibles)
-    QUICK_KILL_BONUS_1_L7: int = 5000    # 1st quick kill
-    QUICK_KILL_BONUS_2_L7: int = 8000    # 2nd quick kill  
+    QUICK_KILL_BONUS_1_L7: int = struct.field(pytree_node=False, default_factory=lambda: 5000)    # 1st quick kill
+    QUICK_KILL_BONUS_2_L7: int = struct.field(pytree_node=False, default_factory=lambda: 8000)    # 2nd quick kill  
     QUICK_KILL_BONUS_3_L7: int = 20000   # 3rd quick kill
     
     # Dragon level scoring
     # Level 2 (Old Dragon)
-    POINTS_DRAGON_SURVIVE_L2: int = 10    # Per 1.5 seconds
-    POINTS_DRAGON_KILL_L2: int = 2500     # For killing dragon
-    POINTS_DRAGON_SAVE_L2: int = 10000    # For saving Carolyn
+    POINTS_DRAGON_SURVIVE_L2: int = struct.field(pytree_node=False, default_factory=lambda: 10)    # Per 1.5 seconds
+    POINTS_DRAGON_KILL_L2: int = struct.field(pytree_node=False, default_factory=lambda: 2500)     # For killing dragon
+    POINTS_DRAGON_SAVE_L2: int = struct.field(pytree_node=False, default_factory=lambda: 10000)    # For saving Carolyn
     # Level 4 (Young Grok)
-    POINTS_DRAGON_SURVIVE_L4: int = 20    # Per 1.5 seconds
-    POINTS_DRAGON_KILL_L4: int = 5000     # For killing dragon
-    POINTS_DRAGON_SAVE_L4: int = 20000    # For saving Sarah
+    POINTS_DRAGON_SURVIVE_L4: int = struct.field(pytree_node=False, default_factory=lambda: 20)    # Per 1.5 seconds
+    POINTS_DRAGON_KILL_L4: int = struct.field(pytree_node=False, default_factory=lambda: 5000)     # For killing dragon
+    POINTS_DRAGON_SAVE_L4: int = struct.field(pytree_node=False, default_factory=lambda: 20000)    # For saving Sarah
     # Level 6 (Jarek the Speedy)
-    POINTS_DRAGON_SURVIVE_L6: int = 30    # Per 1.5 seconds
-    POINTS_DRAGON_KILL_L6: int = 7500     # For killing dragon
-    POINTS_DRAGON_SAVE_L6: int = 40000    # For saving Lauren
+    POINTS_DRAGON_SURVIVE_L6: int = struct.field(pytree_node=False, default_factory=lambda: 30)    # Per 1.5 seconds
+    POINTS_DRAGON_KILL_L6: int = struct.field(pytree_node=False, default_factory=lambda: 7500)     # For killing dragon
+    POINTS_DRAGON_SAVE_L6: int = struct.field(pytree_node=False, default_factory=lambda: 40000)    # For saving Lauren
     # Level 8 (Hanek the Horrible)
-    POINTS_DRAGON_SURVIVE_L8: int = 40    # Per 1.5 seconds
-    POINTS_DRAGON_KILL_L8: int = 10000    # For killing dragon
-    POINTS_DRAGON_SAVE_L8: int = 80000    # For saving Elisabeth
+    POINTS_DRAGON_SURVIVE_L8: int = struct.field(pytree_node=False, default_factory=lambda: 40)    # Per 1.5 seconds
+    POINTS_DRAGON_KILL_L8: int = struct.field(pytree_node=False, default_factory=lambda: 10000)    # For killing dragon
+    POINTS_DRAGON_SAVE_L8: int = struct.field(pytree_node=False, default_factory=lambda: 80000)    # For saving Elisabeth
     
-    EXTRA_LIFE_POINTS: int = 100000  # Get extra life every 100k points
-    QUICK_KILL_TIME_LIMIT: int = 60  # Frames to qualify for quick kill
+    EXTRA_LIFE_POINTS: int = struct.field(pytree_node=False, default_factory=lambda: 100000)  # Get extra life every 100k points
+    QUICK_KILL_TIME_LIMIT: int = struct.field(pytree_node=False, default_factory=lambda: 60)  # Frames to qualify for quick kill
     
     # Game mechanics
-    INITIAL_LIVES: int = 3
-    MAX_LIVES: int = 6  # Maximum total lives (not 3 + 6)
-    DEATH_ANIMATION_FRAMES: int = 60
-    STUN_DURATION_FRAMES: int = 180  # 3 seconds stun from fireball
+    INITIAL_LIVES: int = struct.field(pytree_node=False, default_factory=lambda: 3)
+    MAX_LIVES: int = struct.field(pytree_node=False, default= 6)  # Maximum total lives (not 3 + 6)
+    DEATH_ANIMATION_FRAMES: int = struct.field(pytree_node=False, default_factory=lambda: 60)
+    STUN_DURATION_FRAMES: int = struct.field(pytree_node=False, default_factory=lambda: 180)  # 3 seconds stun from fireball
     # No flap cooldown needed - using continuous thrust model
     
     # Enemy mechanics per level
-    ENEMY_BASE_SPEED: float = 0.4  # Base horizontal speed
-    ENEMY_SPEED_VARIATION: float = 0.15  # Speed variation for randomized speeds
-    ENEMY_ANIMATION_VARIATION: int = 15  # Random animation timing variation (±15 frames)
-    ENEMY_VERTICAL_SPEED: float = 0.3  # For level 3,5,7
-    ENEMY_RANDOM_SPEED_RANGE: float = 0.6  # For level 5,7 random movement
-    ENEMY_SPEED_QUEST_MULTIPLIER: float = 0.25  # Speed increase per quest
+    ENEMY_BASE_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.4)  # Base horizontal speed
+    ENEMY_SPEED_VARIATION: float = struct.field(pytree_node=False, default_factory=lambda: 0.15)  # Speed variation for randomized speeds
+    ENEMY_ANIMATION_VARIATION: int = struct.field(pytree_node=False, default_factory=lambda: 15)  # Random animation timing variation (±15 frames)
+    ENEMY_VERTICAL_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.3)  # For level 3,5,7
+    ENEMY_RANDOM_SPEED_RANGE: float = struct.field(pytree_node=False, default_factory=lambda: 0.6)  # For level 5,7 random movement
+    ENEMY_SPEED_QUEST_MULTIPLIER: float = struct.field(pytree_node=False, default_factory=lambda: 0.25)  # Speed increase per quest
     
     # Level 7 invisibility
-    INVISIBILITY_DURATION: int = 90  # 1.5 seconds at 60 FPS
-    VISIBILITY_DURATION: int = 120  # 2 seconds visible
-    INVISIBILITY_QUEST_MULTIPLIER: float = 0.5  # Invisibility lasts 50% longer per quest
+    INVISIBILITY_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 90)  # 1.5 seconds at 60 FPS
+    VISIBILITY_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 120)  # 2 seconds visible
+    INVISIBILITY_QUEST_MULTIPLIER: float = struct.field(pytree_node=False, default_factory=lambda: 0.5)  # Invisibility lasts 50% longer per quest
     
     # Quick kill timing (frames)
-    QUICK_KILL_TIME_LIMIT_1: int = 60  # Within 1 second for 1st bonus
-    QUICK_KILL_TIME_LIMIT_2: int = 40  # Within 2/3 second for 2nd bonus  
-    QUICK_KILL_TIME_LIMIT_3: int = 20  # Within 1/3 second for 3rd bonus
+    QUICK_KILL_TIME_LIMIT_1: int = struct.field(pytree_node=False, default_factory=lambda: 60)  # Within 1 second for 1st bonus
+    QUICK_KILL_TIME_LIMIT_2: int = struct.field(pytree_node=False, default_factory=lambda: 40)  # Within 2/3 second for 2nd bonus  
+    QUICK_KILL_TIME_LIMIT_3: int = struct.field(pytree_node=False, default_factory=lambda: 20)  # Within 1/3 second for 3rd bonus
     
     # Player states
-    PLAYER_STATE_IDLE: int = 0
-    PLAYER_STATE_FLYING: int = 1
-    PLAYER_STATE_STUNNED: int = 2
-    PLAYER_STATE_DEATH: int = 3
+    PLAYER_STATE_IDLE: int = struct.field(pytree_node=False, default_factory=lambda: 0)
+    PLAYER_STATE_FLYING: int = struct.field(pytree_node=False, default_factory=lambda: 1)
+    PLAYER_STATE_STUNNED: int = struct.field(pytree_node=False, default_factory=lambda: 2)
+    PLAYER_STATE_DEATH: int = struct.field(pytree_node=False, default_factory=lambda: 3)
     
     # HUD - positioned at bottom like the real cartridge
-    SCORE_X: int = 58   # Score starting X position
-    SCORE_Y: int = 200  # Score Y position
-    LIVES_X: int = 57   # Lives starting X position (1 pixel to the left of score)
-    LIVES_Y: int = 213  # Lives Y position (4 pixels from bottom of numbers to top of lives)
+    SCORE_X: int = struct.field(pytree_node=False, default_factory=lambda: 58)   # Score starting X position
+    SCORE_Y: int = struct.field(pytree_node=False, default_factory=lambda: 200)  # Score Y position
+    LIVES_X: int = struct.field(pytree_node=False, default_factory=lambda: 57)   # Lives starting X position (1 pixel to the left of score)
+    LIVES_Y: int = struct.field(pytree_node=False, default_factory=lambda: 213)  # Lives Y position (4 pixels from bottom of numbers to top of lives)
     
     # Altitude tick marks on left edge
-    TICK_Y_START: int = 32  # First altitude mark
-    TICK_Y_STEP: int = 38   # Distance between marks
-    TICK_LEN: int = 24      # Length of each mark
+    TICK_Y_START: int = struct.field(pytree_node=False, default_factory=lambda: 32)  # First altitude mark
+    TICK_Y_STEP: int = struct.field(pytree_node=False, default_factory=lambda: 38)   # Distance between marks
+    TICK_LEN: int = struct.field(pytree_node=False, default_factory=lambda: 24)      # Length of each mark
     
     # Colors
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 128)  # Dark blue for sky
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 128))  # Dark blue for sky
     
     # Dragon constants (for all dragon levels: 2, 4, 6, 8)
-    DRAGON_WIDTH: int = 24
-    DRAGON_HEIGHT: int = 20
-    DRAGON_START_X: int = 80
-    DRAGON_Y: int = 28  # Move down 3 pixels (25 + 3)
-    DRAGON_SPEED: float = 0.4  # Half speed
-    DRAGON_MIN_X: int = 10
-    DRAGON_MAX_X: int = 130
-    DRAGON_WING_CYCLE_FRAMES: int = 30  # 0.5 seconds per wing position (30 frames at 60 FPS)
+    DRAGON_WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 24)
+    DRAGON_HEIGHT: int = struct.field(pytree_node=False, default_factory=lambda: 20)
+    DRAGON_START_X: int = struct.field(pytree_node=False, default_factory=lambda: 80)
+    DRAGON_Y: int = struct.field(pytree_node=False, default_factory=lambda: 28)  # Move down 3 pixels (25 + 3)
+    DRAGON_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.4)  # Half speed
+    DRAGON_MIN_X: int = struct.field(pytree_node=False, default_factory=lambda: 10)
+    DRAGON_MAX_X: int = struct.field(pytree_node=False, default_factory=lambda: 130)
+    DRAGON_WING_CYCLE_FRAMES: int = struct.field(pytree_node=False, default_factory=lambda: 30)  # 0.5 seconds per wing position (30 frames at 60 FPS)
     
     # Fireball constants (dragons only shoot on levels 2 and 8)
-    MAX_FIREBALLS: int = 3  # Maximum simultaneous fireballs on screen
-    FIREBALL_WIDTH: int = 4
-    FIREBALL_HEIGHT: int = 8
-    FIREBALL_SPEED: float = 0.8  # Slower falling speed
-    FIREBALL_SHOOT_COOLDOWN: int = 240  # 4 seconds at 60 FPS
-    FIREBALL_SHOOT_ZONE: int = 40  # Dragon shoots when player is within this X distance
+    MAX_FIREBALLS: int = struct.field(pytree_node=False, default=3)  # Maximum simultaneous fireballs on screen
+    FIREBALL_WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 4)
+    FIREBALL_HEIGHT: int = struct.field(pytree_node=False, default_factory=lambda: 8)
+    FIREBALL_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.8)  # Slower falling speed
+    FIREBALL_SHOOT_COOLDOWN: int = struct.field(pytree_node=False, default_factory=lambda: 240)  # 4 seconds at 60 FPS
+    FIREBALL_SHOOT_ZONE: int = struct.field(pytree_node=False, default_factory=lambda: 40)  # Dragon shoots when player is within this X distance
     
     # Lava constants (appears in castle levels)
-    LAVA_START_Y: int = 169  # Fixed lava position (moved down 1 pixel)
-    LAVA_RISE_SPEED: float = 0.0  # Lava doesn't rise
+    LAVA_START_Y: int = struct.field(pytree_node=False, default_factory=lambda: 169)  # Fixed lava position (moved down 1 pixel)
+    LAVA_RISE_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: 0.0)  # Lava doesn't rise
     
     # Magic wall (barrier in castle levels)
-    MAGIC_WALL_Y: int = 46  # Y position of magic wall barrier
+    MAGIC_WALL_Y: int = struct.field(pytree_node=False, default_factory=lambda: 46)  # Y position of magic wall barrier
     
     # Castle ground layout
-    GROUND_Y: int = 157  # Where player can stand (moved down one more pixel)
-    LEFT_WALL_WIDTH: int = 4  # Left wall thickness
-    RIGHT_WALL_WIDTH: int = 4  # Right wall thickness
-    GROUND_LEFT_EDGE: int = 17  # Ground starts 17 pixels from left
-    GROUND_RIGHT_EDGE: int = 143  # Ground ends 17 pixels from right (160-17)
-    DRAGON_DEFEAT_RADIUS: int = 15  # Dragon must be within this radius when player hits wall
+    GROUND_Y: int = struct.field(pytree_node=False, default_factory=lambda: 157)  # Where player can stand (moved down one more pixel)
+    LEFT_WALL_WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 4)  # Left wall thickness
+    RIGHT_WALL_WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 4)  # Right wall thickness
+    GROUND_LEFT_EDGE: int = struct.field(pytree_node=False, default_factory=lambda: 17)  # Ground starts 17 pixels from left
+    GROUND_RIGHT_EDGE: int = struct.field(pytree_node=False, default_factory=lambda: 143)  # Ground ends 17 pixels from right (160-17)
+    DRAGON_DEFEAT_RADIUS: int = struct.field(pytree_node=False, default_factory=lambda: 15)  # Dragon must be within this radius when player hits wall
     
     # Dragon difficulty scaling
-    DRAGON_SPEED_LEVEL_4: float = 1.0  # 2.5x speed
-    DRAGON_SPEED_LEVEL_6: float = 1.6  # 4x speed
-    DRAGON_SPEED_LEVEL_8: float = 2.4  # 6x speed (Hanek the Horrible)
-    DRAGON_COOLDOWN_LEVEL_4: int = 120  # Half cooldown
-    DRAGON_COOLDOWN_LEVEL_6: int = 80  # 1/3 cooldown
-    DRAGON_COOLDOWN_LEVEL_8: int = 60  # 1/4 cooldown (fastest)
-    DRAGON_TARGET_ZONE_LEVEL_4: int = 30  # Closer targeting
-    DRAGON_TARGET_ZONE_LEVEL_6: int = 20  # Even closer
-    DRAGON_TARGET_ZONE_LEVEL_8: int = 15  # Tightest targeting
+    DRAGON_SPEED_LEVEL_4: float = struct.field(pytree_node=False, default_factory=lambda: 1.0)  # 2.5x speed
+    DRAGON_SPEED_LEVEL_6: float = struct.field(pytree_node=False, default_factory=lambda: 1.6)  # 4x speed
+    DRAGON_SPEED_LEVEL_8: float = struct.field(pytree_node=False, default_factory=lambda: 2.4)  # 6x speed (Hanek the Horrible)
+    DRAGON_COOLDOWN_LEVEL_4: int = struct.field(pytree_node=False, default_factory=lambda: 120)  # Half cooldown
+    DRAGON_COOLDOWN_LEVEL_6: int = struct.field(pytree_node=False, default_factory=lambda: 80)  # 1/3 cooldown
+    DRAGON_COOLDOWN_LEVEL_8: int = struct.field(pytree_node=False, default_factory=lambda: 60)  # 1/4 cooldown (fastest)
+    DRAGON_TARGET_ZONE_LEVEL_4: int = struct.field(pytree_node=False, default_factory=lambda: 30)  # Closer targeting
+    DRAGON_TARGET_ZONE_LEVEL_6: int = struct.field(pytree_node=False, default_factory=lambda: 20)  # Even closer
+    DRAGON_TARGET_ZONE_LEVEL_8: int = struct.field(pytree_node=False, default_factory=lambda: 15)  # Tightest targeting
     
     # Dragon survival scoring
-    DRAGON_SURVIVAL_TIMER: int = 90  # 1.5 seconds at 60 FPS
+    DRAGON_SURVIVAL_TIMER: int = struct.field(pytree_node=False, default_factory=lambda: 90)  # 1.5 seconds at 60 FPS
     
     # Fireball animation
-    FIREBALL_ANIMATION_SPEED: int = 7  # Change frame every 0.5 seconds (30 frames at 60 FPS)
+    FIREBALL_ANIMATION_SPEED: int = struct.field(pytree_node=False, default_factory=lambda: 7)  # Change frame every 0.5 seconds (30 frames at 60 FPS)
     
     # Castle levels - Player start position (applies to all castle levels: 2, 4, 6, 8)
-    PLAYER_START_X_CASTLE: int = 152  # Right side, just inside wall (160 - 4 - 4)
-    PLAYER_START_Y_CASTLE: int = 145  # Standing on ground (157 - 12)
+    PLAYER_START_X_CASTLE: int = struct.field(pytree_node=False, default_factory=lambda: 152)  # Right side, just inside wall (160 - 4 - 4)
+    PLAYER_START_Y_CASTLE: int = struct.field(pytree_node=False, default_factory=lambda: 145)  # Standing on ground (157 - 12)
 
     # Testing helpers (turn off when done)
-    DEBUG_EASY_VERTICAL_BOUNCE: bool = False  # Makes vertical bounces much easier to trigger for testing
+    DEBUG_EASY_VERTICAL_BOUNCE: bool = struct.field(pytree_node=False, default_factory=lambda: False)  # Makes vertical bounces much easier to trigger for testing
 
     # Starting level
-    START_LEVEL: int = 1  # Start at level 1
+    START_LEVEL: int = struct.field(pytree_node=False, default_factory=lambda: 1)  # Start at level 1
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
 
 
 # -----------------------------------------------------------------------------
 # STATE REPRESENTATIONS
 # -----------------------------------------------------------------------------
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     x: chex.Array
     y: chex.Array
     vel_x: chex.Array  # Horizontal velocity
@@ -278,7 +281,8 @@ class PlayerState(NamedTuple):
     tie_cooldown: chex.Array  # Brief invulnerability after ties to prevent double-hits
 
 
-class EnemyState(NamedTuple):
+@struct.dataclass
+class EnemyState:
     # Shape (NUM_ENEMIES, 2) for x,y positions
     positions: chex.Array
     # Shape (NUM_ENEMIES,) for velocities
@@ -301,7 +305,8 @@ class EnemyState(NamedTuple):
     bounce_timer: chex.Array  # Timer for smooth transition (0 = no bounce)
 
 
-class DragonState(NamedTuple):
+@struct.dataclass
+class DragonState:
     x: chex.Array
     vel_x: chex.Array  # +1 = moving right, -1 = moving left
     facing_left: chex.Array  # True if dragon faces left
@@ -311,7 +316,8 @@ class DragonState(NamedTuple):
     is_active: chex.Array  # Dragon active in castle levels (2, 4, 6, 8)
 
 
-class FireballState(NamedTuple):
+@struct.dataclass
+class FireballState:
     # Shape (MAX_FIREBALLS, 2) for x,y positions
     positions: chex.Array
     # Shape (MAX_FIREBALLS,) for active flags
@@ -322,7 +328,8 @@ class FireballState(NamedTuple):
     animation_timer: chex.Array
 
 
-class SirLancelotState(NamedTuple):
+@struct.dataclass
+class SirLancelotState:
     player: PlayerState
     enemies: EnemyState
     dragon: DragonState
@@ -351,14 +358,16 @@ class SirLancelotState(NamedTuple):
 # OBSERVATION / INFO
 # -----------------------------------------------------------------------------
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
 
-class SirLancelotObservation(NamedTuple):
+@struct.dataclass
+class SirLancelotObservation:
     player: EntityPosition
     enemies: jnp.ndarray  # Shape (NUM_ENEMIES, 5) for x,y,w,h,active
     dragon: jnp.ndarray  # Shape (5,) for x,y,w,h,active
@@ -368,7 +377,8 @@ class SirLancelotObservation(NamedTuple):
     stage: jnp.ndarray  # Current stage (1=aerial, 2=dragon)
 
 
-class SirLancelotInfo(NamedTuple):
+@struct.dataclass
+class SirLancelotInfo:
     time: jnp.ndarray
     level_complete: jnp.ndarray
     consecutive_kills: jnp.ndarray
@@ -396,11 +406,17 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         - 3 starting lives, max 6 total lives
         - Extra life every 100k points (up to max)
     """
+
+    # Minimal ALE action set for Sir Lancelot:
+    # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
     
     def __init__(self, consts: SirLancelotConstants = None):
         consts = consts or SirLancelotConstants()
         super().__init__(consts)
-        self.action_set = Action.get_all_values()
         self.renderer = SirLancelotRenderer(consts)
         
     def reset(self, key: jax.random.PRNGKey = None):
@@ -556,21 +572,24 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         
         Args:
             state: Current game state
-            action: Player action from action set
+            action: Player action index from action set
             
         Returns:
             Tuple of (observation, new_state, reward, done, info)
         """
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         new_time = state.time + 1
         
         # Update player based on current state
-        new_player = self._update_player_state_machine(state.player, action)
+        new_player = self._update_player_state_machine(state.player, atari_action)
         
         # Apply bouncy wall constraints for castle levels (even levels: 2, 4, 6, 8)
         is_castle_level = (state.level % 2) == 0
         new_player = jax.lax.cond(
             is_castle_level,
-            lambda p: p._replace(
+            lambda p: p.replace(
                 x=jnp.clip(
                     p.x,
                     self.consts.LEFT_WALL_WIDTH,
@@ -621,7 +640,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
                 wall_constrained_player.y >= self.consts.GROUND_Y - self.consts.PLAYER_HEIGHT
             )
             
-            ground_constrained_player = wall_constrained_player._replace(
+            ground_constrained_player = wall_constrained_player.replace(
                 y=jnp.where(
                     can_stand_on_ground,
                     self.consts.GROUND_Y - self.consts.PLAYER_HEIGHT,
@@ -640,7 +659,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             )
             
             # Apply magic wall constraint - bounce when hitting magic wall
-            magic_wall_player = ground_constrained_player._replace(
+            magic_wall_player = ground_constrained_player.replace(
                 y=jnp.maximum(ground_constrained_player.y, self.consts.MAGIC_WALL_Y),
                 vel_y=jnp.where(
                     jnp.logical_and(ground_constrained_player.y <= self.consts.MAGIC_WALL_Y, ground_constrained_player.vel_y < 0),
@@ -707,7 +726,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             )
             
             # Deactivate dragon if defeated
-            final_dragon = updated_dragon._replace(
+            final_dragon = updated_dragon.replace(
                 is_active=jnp.logical_and(
                     updated_dragon.is_active,
                     jnp.logical_not(dragon_defeated)
@@ -807,7 +826,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         # Cancel any in-progress bounce animations and rewind Y position to hide bounce
         new_enemies = jax.lax.cond(
             died_this_frame,
-            lambda e: e._replace(
+            lambda e: e.replace(
                 # Rewind just Y to last frame's Y so any in-progress bounce this frame is invisible
                 positions=e.positions.at[:, 1].set(state.enemies.positions[:, 1]),
                 bounce_timer=jnp.zeros_like(e.bounce_timer),  # Stop bounce animation
@@ -946,7 +965,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         )
         
         # Reset or activate dragon based on stage
-        new_dragon = state.dragon._replace(
+        new_dragon = state.dragon.replace(
             x=jnp.array(self.consts.DRAGON_START_X, dtype=jnp.float32),
             vel_x=jnp.array(self.consts.DRAGON_SPEED, dtype=jnp.float32),
             facing_left=jnp.array(False),
@@ -1015,7 +1034,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             [lambda: 5000, lambda: 0, lambda: 7500, lambda: 0, lambda: 10000, lambda: 0, lambda: 15000, lambda: 0]  # Bonuses for completing levels 1,3,5,7 (0 for dragon levels 2,4,6,8)
         )
         
-        return state._replace(
+        return state.replace(
             player=new_player,
             enemies=new_enemies,
             dragon=new_dragon,
@@ -1190,7 +1209,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             self.consts.PLAYER_STATE_FLYING
         )
         
-        return player._replace(
+        return player.replace(
             x=new_x,
             y=new_y,
             vel_x=new_vel_x,
@@ -1260,7 +1279,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             self.consts.PLAYER_STATE_STUNNED
         )
         
-        return player._replace(
+        return player.replace(
             x=player.x,  # Keep x as float32
             y=new_y,
             vel_x=jnp.array(0.0, dtype=jnp.float32),
@@ -1301,7 +1320,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         
         new_death_timer = player.death_timer + 1
         
-        return player._replace(
+        return player.replace(
             x=player.x,  # Keep x as float32
             y=new_y,
             vel_x=jnp.array(0.0, dtype=jnp.float32),
@@ -1701,7 +1720,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             new_shoot_cooldown
         )
         
-        return dragon._replace(
+        return dragon.replace(
             x=new_x,
             vel_x=new_vel_x,
             facing_left=new_facing_left,
@@ -1858,11 +1877,11 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             jnp.logical_not(collision_mask)
         )
         
-        updated_fireballs = fireballs._replace(
+        updated_fireballs = fireballs.replace(
             active=new_fireballs_active
         )
         
-        return player._replace(
+        return player.replace(
             state=new_state,
             state_timer=new_state_timer
         ), updated_fireballs
@@ -2172,14 +2191,14 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         # Apply bounce and separation to player ONLY if not dying
         player = jax.lax.cond(
             should_bounce,
-            lambda p: p._replace(
+            lambda p: p.replace(
                 x=new_player_x,
                 y=new_player_y,
                 vel_x=bounce_vel_x,
                 vel_y=bounce_vel_y,
                 tie_cooldown=new_tie_cooldown
             ),
-            lambda p: p._replace(tie_cooldown=jnp.maximum(0, p.tie_cooldown - 1)),  # Decrement cooldown even if no bounce
+            lambda p: p.replace(tie_cooldown=jnp.maximum(0, p.tie_cooldown - 1)),  # Decrement cooldown even if no bounce
             player
         )
 
@@ -2302,7 +2321,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             enemies.bounce_timer    # Keep existing
         )
 
-        new_enemies = enemies._replace(
+        new_enemies = enemies.replace(
             active=new_enemy_active,
             vel_x=final_vel_x,
             vel_y=final_vel_y,
@@ -2374,7 +2393,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         # Update player (start death animation if hit)
         new_player = jax.lax.cond(
             player_hit,
-            lambda p: p._replace(
+            lambda p: p.replace(
                 state=self.consts.PLAYER_STATE_DEATH,
                 state_timer=0,
                 death_timer=1,
@@ -2602,7 +2621,7 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         ])
     
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(18)  # Full Atari action space
+        return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
@@ -2669,15 +2688,20 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
 # -----------------------------------------------------------------------------
 
 class SirLancelotRenderer(JAXGameRenderer):
-    def __init__(self, consts: SirLancelotConstants = None):
+    def __init__(self, consts: SirLancelotConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SirLancelotConstants()
         super().__init__(self.consts)
         
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "sir_lancelot")

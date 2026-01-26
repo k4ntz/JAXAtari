@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Tuple, Generic, TypeVar
 import jax.numpy as jnp
 import jax.random as jrandom
+import warnings
 from jaxatari.spaces import Space
 
 
@@ -55,6 +56,27 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
     """
 
     def __init__(self, consts: EnvConstants = None):
+        if consts is not None:
+            # Check for legacy NamedTuple usage (has _fields but is not a PyTreeNode)
+            is_named_tuple = isinstance(consts, tuple) and hasattr(consts, '_fields')
+            # Check if it's a Flax PyTreeNode (flax.struct.dataclass instances)
+            try:
+                from flax import struct
+                is_flax_node = isinstance(consts, struct.PyTreeNode)
+            except (ImportError, AttributeError):
+                # If flax is not available or PyTreeNode check fails, assume False
+                is_flax_node = False
+
+            if is_named_tuple and not is_flax_node:
+                warnings.warn(
+                    f"Performance Warning: {self.__class__.__name__}.consts is a 'NamedTuple'. "
+                    "This prevents JAX from treating constants as static metadata, potentially causing excessive recompilation. "
+                    "Future versions will require 'flax.struct.PyTreeNode' (and the states/observations/info to flax.struct.dataclass/PyTreeNode). "
+                    "Please refactor your constants class.",
+                    UserWarning,
+                    stacklevel=2
+                )
+
         self.consts = consts
 
     def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:

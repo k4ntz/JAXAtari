@@ -27,7 +27,7 @@ class StopAllCarsMod(JaxAtariPostStepModPlugin):
             operand=None
         )
         
-        return new_state._replace(cars=new_cars)
+        return new_state.replace(cars=new_cars)
 
 
 class StaticCarsMod(JaxAtariPostStepModPlugin):
@@ -41,7 +41,7 @@ class StaticCarsMod(JaxAtariPostStepModPlugin):
         Access the environment via self._env (set by JaxAtariModWrapper).
         """
         # Always keep the previous cars' x positions
-        return new_state._replace(cars=prev_state.cars)
+        return new_state.replace(cars=prev_state.cars)
 
 class HallOfFameMod(JaxAtariInternalModPlugin):
     """
@@ -136,5 +136,5 @@ class CenterCarsOnResetMod(JaxAtariPostStepModPlugin):
         centered_cars = state.cars.at[:, 0].set(center_x)
         
         # Return modified observation and state
-        modified_state = state._replace(cars=centered_cars)
+        modified_state = state.replace(cars=centered_cars)
         return obs, modified_state

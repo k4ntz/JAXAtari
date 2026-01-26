@@ -7,213 +7,333 @@ import os
 from functools import partial
 from typing import Tuple, NamedTuple, Callable
 import chex
+from flax import struct
 import jax
 import jax.numpy as jnp
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
+
+# -------- Asset Configuration --------
+def _get_static_asset_config() -> Tuple[dict, ...]:
+    """Only returns the file-based assets. Procedural assets are added by the Renderer."""
+    densepack_files = [f"enemies/densepack/{i}.npy" for i in range(5, 0, -1)]
+    radar_mortar_files = [f"enemies/radar_mortar/{i}.npy" for i in range(1, 4)]
+    byte_bat_files = [f"enemies/byte_bat/{i}.npy" for i in range(1, 4)]
+    rock_muncher_files = [f"enemies/rock_muncher/{i}.npy" for i in range(1, 4)]
+    upper_death_files = [f"enemies/enemy_death/top/{i}.npy" for i in range(1, 13)]
+    lower_death_files = [f"enemies/enemy_death/bottom/{i}.npy" for i in range(1, 13)]
+
+    return (
+        {"name": "upper_brown_bg", "type": "single", "file": "background/upper_brown_bg.npy"},
+        {"name": "lower_brown_bg", "type": "single", "file": "background/lower_brown_bg.npy"},
+        {"name": "playing_field_bg", "type": "single", "file": "background/playing_field_bg.npy"},
+        {"name": "playing_field_small_bg", "type": "single", "file": "background/mountains/playing_field_small_bg.npy"},
+        {"name": "gray_gui_bg", "type": "single", "file": "background/gray_gui_bg.npy"},
+        {"name": "lower_mountain", "type": "single", "file": "background/mountains/lower_mountain.npy"},
+        {"name": "upper_mountain", "type": "single", "file": "background/mountains/upper_mountain.npy"},
+        {"name": "black_stripe", "type": "single", "file": "background/black_stripe.npy"},
+        {"name": "player", "type": "single", "file": "player/player.npy"},
+        {"name": "player_missile", "type": "single", "file": "missiles/player_missile.npy"},
+        {"name": "gui_colored_background", "type": "single", "file": "gui/colored_background.npy"},
+        {"name": "gui_black_background", "type": "single", "file": "gui/black_background.npy"},
+        {"name": "gui_text_score", "type": "single", "file": "gui/text/score.npy"},
+        {"name": "gui_text_energy", "type": "single", "file": "gui/text/energy.npy"},
+        {"name": "gui_text_shields", "type": "single", "file": "gui/text/shields.npy"},
+        {"name": "gui_text_dtime", "type": "single", "file": "gui/text/dtime.npy"},
+        {"name": "gui_score_digits", "type": "digits", "pattern": "gui/score_numbers/{}.npy"},
+        {"name": "gui_score_comma", "type": "single", "file": "gui/score_numbers/comma.npy"},
+        {"name": "entity_missile", "type": "single", "file": "missiles/enemy_missile.npy"},
+        {"name": "homing_missile", "type": "single", "file": "enemies/homing_missile/homing_missile.npy"},
+        {"name": "forcefield", "type": "single", "file": "enemies/forcefield/forcefield.npy"},
+        {"name": "detonator", "type": "single", "file": "enemies/detonator/detonator.npy"},
+        {"name": "detonator_6507", "type": "single", "file": "enemies/detonator/6507.npy"},
+        {"name": "energy_pod", "type": "single", "file": "enemies/energy_pod/energy_pod.npy"},
+        {"name": "upper_death_frames", "type": "group", "files": upper_death_files},
+        {"name": "lower_death_frames", "type": "group", "files": lower_death_files},
+        {"name": "death_number_325", "type": "single", "file": "enemies/enemy_death/numbers/325.npy"},
+        {"name": "death_number_525", "type": "single", "file": "enemies/enemy_death/numbers/525.npy"},
+        {"name": "death_number_bg", "type": "single", "file": "enemies/enemy_death/numbers/background.npy"},
+        {"name": "radar_mortar_frames", "type": "group", "files": radar_mortar_files},
+        {"name": "byte_bat_frames", "type": "group", "files": byte_bat_files},
+        {"name": "rock_muncher_frames", "type": "group", "files": rock_muncher_files},
+        {"name": "densepack_frames", "type": "group", "files": densepack_files},
+    )
 
 # -------- Game constants --------
-class LaserGatesConstants:
-    WIDTH = 160
-    HEIGHT = 250
-    SCALING_FACTOR = 5
+class LaserGatesConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=250)
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=5)
 
-    SCROLL_SPEED = 0.8 # Normal scroll speed
-    SCROLL_MULTIPLIER = 2 # When at the right player bound, multiply scroll speed by this constant
-
-    # -------- Mountains constants --------
-    PLAYING_FIELD_BG_COLLISION_COLOR = (255, 255, 255, 255)
-    PLAYING_FILED_BG_COLOR_FADE_SPEED = 0.2  # Higher = faster fade out, exponential
+    SCROLL_SPEED: float = struct.field(pytree_node=False, default=0.8) # Normal scroll speed
+    SCROLL_MULTIPLIER: int = struct.field(pytree_node=False, default=2) # When at the right player bound, multiply scroll speed by this constant
 
     # -------- Mountains constants --------
-    MOUNTAIN_SIZE = (60, 12)  # Width, Height
+    PLAYING_FIELD_BG_COLLISION_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 255, 255, 255))
+    PLAYING_FILED_BG_COLOR_FADE_SPEED: float = struct.field(pytree_node=False, default=0.2)  # Higher = faster fade out, exponential
 
-    LOWER_MOUNTAINS_Y = 80  # Y Spawn position of lower mountains. This does not change
-    UPPER_MOUNTAINS_Y = 19  # Y Spawn position of upper mountains. This does not change
+    # -------- Mountains constants --------
+    MOUNTAIN_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (60, 12))  # Width, Height
 
-    LOWER_MOUNTAINS_START_X = -44  # X Spawn position of lower mountains.
-    UPPER_MOUNTAINS_START_X = -4  # X Spawn position of upper mountains.
+    LOWER_MOUNTAINS_Y: int = struct.field(pytree_node=False, default=80)  # Y Spawn position of lower mountains. This does not change
+    UPPER_MOUNTAINS_Y: int = struct.field(pytree_node=False, default=19)  # Y Spawn position of upper mountains. This does not change
 
-    MOUNTAINS_DISTANCE = 20  # Distance between two given mountains
+    LOWER_MOUNTAINS_START_X: int = struct.field(pytree_node=False, default=-44)  # X Spawn position of lower mountains.
+    UPPER_MOUNTAINS_START_X: int = struct.field(pytree_node=False, default=-4)  # X Spawn position of upper mountains.
 
-    UPDATE_EVERY = 4  # The mountain position is updated every UPDATE_EVERY-th frame.
+    MOUNTAINS_DISTANCE: int = struct.field(pytree_node=False, default=20)  # Distance between two given mountains
+
+    UPDATE_EVERY: int = struct.field(pytree_node=False, default=4)  # The mountain position is updated every UPDATE_EVERY-th frame.
 
     # -------- Player constants --------
-    PLAYER_SIZE = (8, 6)  # Width, Height
-    PLAYER_NORMAL_COLOR = (99, 138, 196, 255)  # Normal color of the player
-    PLAYER_COLLISION_COLOR = (137, 81, 26,255)  # Players color for PLAYER_COLOR_CHANGE_DURATION frames after a collision
-    PLAYER_COLOR_CHANGE_DURATION = 10  # How long (in frames) the player changes its color to PLAYER_COLLISION_COLOR if a collision occurs
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))  # Width, Height
+    PLAYER_NORMAL_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (99, 138, 196, 255))  # Normal color of the player
+    PLAYER_COLLISION_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (137, 81, 26,255))  # Players color for PLAYER_COLOR_CHANGE_DURATION frames after a collision
+    PLAYER_COLOR_CHANGE_DURATION: int = struct.field(pytree_node=False, default=10)  # How long (in frames) the player changes its color to PLAYER_COLLISION_COLOR if a collision occurs
 
-    PLAYER_BOUNDS = (20, WIDTH - 20 - PLAYER_SIZE[0]), (19, 80 + PLAYER_SIZE[1])  # left x, right x, upper y and lower y bound of player
+    PLAYER_BOUNDS: Tuple[Tuple[int, int], Tuple[int, int]] = struct.field(pytree_node=False, default=None)  # left x, right x, upper y and lower y bound of player
 
-    PLAYER_START_X = 20  # X Spawn position of player
-    PLAYER_START_Y = 52  # Y Spawn position of player
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=20)  # X Spawn position of player
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=52)  # Y Spawn position of player
 
-    PLAYER_VELOCITY_Y = 2  # Y Velocity of player
-    PLAYER_VELOCITY_X = 2  # X Velocity of player
+    PLAYER_VELOCITY_Y: float = struct.field(pytree_node=False, default=2)  # Y Velocity of player
+    PLAYER_VELOCITY_X: float = struct.field(pytree_node=False, default=2)  # X Velocity of player
 
     # -------- Player missile constants --------
-    PLAYER_MISSILE_SIZE = (16, 1)  # Width, Height
-    PLAYER_MISSILE_BASE_COLOR = (140, 79, 24, 255)  # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
-    PLAYER_MISSILE_COLOR_CHANGE_SPEED = 10  # Defines how fast the player missile changes its color towards white.
+    PLAYER_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 1))  # Width, Height
+    PLAYER_MISSILE_BASE_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (140, 79, 24, 255))  # Initial color of player missile. Every value except for transparency is incremented by the missiles velocity * PLAYER_MISSILE_COLOR_CHANGE_SPEED
+    PLAYER_MISSILE_COLOR_CHANGE_SPEED: int = struct.field(pytree_node=False, default=10)  # Defines how fast the player missile changes its color towards white.
 
-    PLAYER_MISSILE_INITIAL_VELOCITY = 9  # Starting speed of player missile
-    PLAYER_MISSILE_VELOCITY_MULTIPLIER = 1.1  # Multiply the current speed at a given moment of the player missile by this number
+    PLAYER_MISSILE_INITIAL_VELOCITY: int = struct.field(pytree_node=False, default=9)  # Starting speed of player missile
+    PLAYER_MISSILE_VELOCITY_MULTIPLIER: float = struct.field(pytree_node=False, default=1.1)  # Multiply the current speed at a given moment of the player missile by this number
 
     # -------- Entity constants (constants that apply to all entity types --------
-    ENTITY_DEATH_SPRITES_SIZE = (8, 45)  # Width, Height
-    ENTITY_MISSILE_SIZE = (4, 1)  # Width, Height
+    ENTITY_DEATH_SPRITES_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 45))  # Width, Height
+    ENTITY_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 1))  # Width, Height
 
-    NUM_ENTITY_TYPES = 8  # How many different (!) entity types there are
-    ENTITY_DEATH_SPRITE_Y_OFFSET = 7  # Y offset to add to the death sprite (the constant is being added to the y coordinate)
-    ENTITY_DEATH_ANIMATION_TIMER = 100  # Duration of death sprite animation in frames
-    ENTITY_DEATH_SPRITES_NUMBER_COLOR = (117, 117, 213, 255)
+    NUM_ENTITY_TYPES: int = struct.field(pytree_node=False, default=8)  # How many different (!) entity types there are
+    ENTITY_DEATH_SPRITE_Y_OFFSET: int = struct.field(pytree_node=False, default=7)  # Y offset to add to the death sprite (the constant is being added to the y coordinate)
+    ENTITY_DEATH_ANIMATION_TIMER: int = struct.field(pytree_node=False, default=100)  # Duration of death sprite animation in frames
+    ENTITY_DEATH_SPRITES_NUMBER_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (117, 117, 213, 255))
 
     # -------- Radar mortar constants --------
-    RADAR_MORTAR_SIZE = (8, 26)  # Width, Height
-    RADAR_MORTAR_COLOR_BLUE = (96, 162, 228, 255)
-    RADAR_MORTAR_COLOR_GRAY = (155, 155, 155, 255)
+    RADAR_MORTAR_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 26))  # Width, Height
+    RADAR_MORTAR_COLOR_BLUE: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (96, 162, 228, 255))
+    RADAR_MORTAR_COLOR_GRAY: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (155, 155, 155, 255))
 
-    RADAR_MORTAR_SPAWN_X = WIDTH  # Spawn barely outside of bounds
-    RADAR_MORTAR_SPAWN_BOTTOM_Y = 66
-    RADAR_MORTAR_SPAWN_UPPER_Y = 19  # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
+    RADAR_MORTAR_SPAWN_X: int = struct.field(pytree_node=False, default=None)  # Spawn barely outside screen
+    RADAR_MORTAR_SPAWN_BOTTOM_Y: int = struct.field(pytree_node=False, default=66)
+    RADAR_MORTAR_SPAWN_UPPER_Y: int = struct.field(pytree_node=False, default=19)  # Since the radar mortar can spawn at the top or at the bottom of the screen, we define two y positions.
 
-    RADAR_MORTAR_MISSILE_COLOR = (85, 92, 197, 255)
-    RADAR_MORTAR_MISSILE_SPAWN_EVERY = 100  # A missile is spawned every RADAR_MORTAR_MISSILE_SPAWN_EVERY-th frame.
-    RADAR_MORTAR_MISSILE_SPEED = 3  # Speed of radar mortar missile
-    RADAR_MORTAR_MISSILE_SHOOT_NUMBER = 3  # How often the missile gets teleported back before final shot (exept when shooting up or down)
-    RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD = 50  # How far the missile needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be teleported back to the mortar (to be shot again)
-    RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD = 10  # This defines how far the player needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be shot diagonally
+    RADAR_MORTAR_MISSILE_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (85, 92, 197, 255))
+    RADAR_MORTAR_MISSILE_SPAWN_EVERY: int = struct.field(pytree_node=False, default=100)  # A missile is spawned every RADAR_MORTAR_MISSILE_SPAWN_EVERY-th frame.
+    RADAR_MORTAR_MISSILE_SPEED: int = struct.field(pytree_node=False, default=3)  # Speed of radar mortar missile
+    RADAR_MORTAR_MISSILE_SHOOT_NUMBER: int = struct.field(pytree_node=False, default=3)  # How often the missile gets teleported back before final shot (exept when shooting up or down)
+    RADAR_MORTAR_MISSILE_SMALL_OUT_OF_BOUNDS_THRESHOLD: int = struct.field(pytree_node=False, default=50)  # How far the missile needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be teleported back to the mortar (to be shot again)
+    RADAR_MORTAR_SHOOT_STRAIGHT_THRESHOLD: int = struct.field(pytree_node=False, default=10)  # This defines how far the player needs to be away from the radar mortar (vertically or/and horizontally) for the missile to be shot diagonally
 
     # -------- Byte bat constants --------
-    BYTE_BAT_SIZE = (7, 8)  # Width, Height
-    BYTE_BAT_COLOR = (90, 169, 99, 255)
+    BYTE_BAT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (7, 8))  # Width, Height
+    BYTE_BAT_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (90, 169, 99, 255))
 
-    BYTE_BAT_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 2  # Upper border where byte bat inverts the direction
-    BYTE_BAT_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1]  # Lower border where byte bat inverts the direction
-    BYTE_BAT_SUBTRACT_FROM_BORDER = 20
-    BYTE_BAT_PLAYER_DIST_TRIGGER = 50
+    BYTE_BAT_UPPER_BORDER_Y: int = struct.field(pytree_node=False, default=None)  # Upper border where byte bat inverts the direction
+    BYTE_BAT_BOTTOM_BORDER_Y: int = struct.field(pytree_node=False, default=None)  # Lower border where byte bat inverts the direction
+    BYTE_BAT_SUBTRACT_FROM_BORDER: int = struct.field(pytree_node=False, default=20)
+    BYTE_BAT_PLAYER_DIST_TRIGGER: int = struct.field(pytree_node=False, default=50)
 
-    BYTE_BAT_SPAWN_X = WIDTH  # Spawn barely outside screen
-    BYTE_BAT_SPAWN_Y = BYTE_BAT_UPPER_BORDER_Y + 1
+    BYTE_BAT_SPAWN_X: int = struct.field(pytree_node=False, default=None)  # Spawn barely outside screen
+    BYTE_BAT_SPAWN_Y: int = struct.field(pytree_node=False, default=None)  # Spawn barely outside screen
 
-    BYTE_BAT_X_SPEED = 1  # Speed of byte bat in x direction
-    BYTE_BAT_Y_SPEED = 1.8  # Speed of byte bat in y direction
+    BYTE_BAT_X_SPEED: float = struct.field(pytree_node=False, default=1)  # Speed of byte bat in x direction
+    BYTE_BAT_Y_SPEED: float = struct.field(pytree_node=False, default=1.8)  # Speed of byte bat in y direction
 
     # -------- Rock muncher constants --------
-    ROCK_MUNCHER_SIZE = (8, 11)  # Width, Height
+    ROCK_MUNCHER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 11))  # Width, Height
 
-    ROCK_MUNCHER_UPPER_BORDER_Y = UPPER_MOUNTAINS_Y + MOUNTAIN_SIZE[1] + 5 + 10  # Upper border where rock muncher inverts the direction
-    ROCK_MUNCHER_BOTTOM_BORDER_Y = LOWER_MOUNTAINS_Y - MOUNTAIN_SIZE[1] - 3  # Lower border where rock muncher inverts the direction
+    ROCK_MUNCHER_UPPER_BORDER_Y: int = struct.field(pytree_node=False, default=None)  # Upper border where rock muncher inverts the direction
+    ROCK_MUNCHER_BOTTOM_BORDER_Y: int = struct.field(pytree_node=False, default=None)  # Lower border where rock muncher inverts the direction
 
-    ROCK_MUNCHER_SPAWN_X = WIDTH  # Spawn barely outside of screen
-    ROCK_MUNCHER_SPAWN_Y = ROCK_MUNCHER_UPPER_BORDER_Y + 1
+    ROCK_MUNCHER_SPAWN_X: int = struct.field(pytree_node=False, default=None)  # Spawn barely outside of screen
+    ROCK_MUNCHER_SPAWN_Y: int = struct.field(pytree_node=False, default=None)  # Spawn barely outside screen
 
-    ROCK_MUNCHER_X_SPEED = 0.7  # Speed of rock muncher in x direction
-    ROCK_MUNCHER_Y_SPEED = 1  # Speed of rock muncher in y direction
+    ROCK_MUNCHER_X_SPEED: float = struct.field(pytree_node=False, default=0.7)  # Speed of rock muncher in x direction
+    ROCK_MUNCHER_Y_SPEED: float = struct.field(pytree_node=False, default=1)  # Speed of rock muncher in y direction
 
-    ROCK_MUNCHER_MISSILE_COLOR = (85, 92, 197, 255)
-    ROCK_MUNCHER_MISSILE_SPAWN_EVERY = 50  # Rock muncher shoots a new missile every ROCK_MUNCHER_MISSILE_SPAWN_EVERY frames
-    ROCK_MUNCHER_MISSILE_SPEED = 4  # Speed of rock muncher missile
+    ROCK_MUNCHER_MISSILE_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (85, 92, 197, 255))
+    ROCK_MUNCHER_MISSILE_SPAWN_EVERY: int = struct.field(pytree_node=False, default=50)  # Rock muncher shoots a new missile every ROCK_MUNCHER_MISSILE_SPAWN_EVERY frames
+    ROCK_MUNCHER_MISSILE_SPEED: int = struct.field(pytree_node=False, default=4)  # Speed of rock muncher missile
 
     # -------- Homing Missile constants --------
-    HOMING_MISSILE_SIZE = (8, 5)  # Width, Height
+    HOMING_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 5))  # Width, Height
 
-    HOMING_MISSILE_Y_BOUNDS = (32, 74)
-    HOMING_MISSILE_PLAYER_TRACKING_RANGE = 15  # The minimum y position difference between player and homing missile needed for the homing missile to start tracking the player
-    HOMING_MISSILE_Y_PLAYER_OFFSET = 2  # Sets the y position this many pixels above the player (for positive numbers) or below the player (for negative numbers)
-    HOMING_MISSILE_X_SPEED = 2.5
-    HOMING_MISSILE_Y_SPEED = 1
+    HOMING_MISSILE_Y_BOUNDS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (32, 74))
+    HOMING_MISSILE_PLAYER_TRACKING_RANGE: int = struct.field(pytree_node=False, default=15)  # The minimum y position difference between player and homing missile needed for the homing missile to start tracking the player
+    HOMING_MISSILE_Y_PLAYER_OFFSET: int = struct.field(pytree_node=False, default=2)  # Sets the y position this many pixels above the player (for positive numbers) or below the player (for negative numbers)
+    HOMING_MISSILE_X_SPEED: float = struct.field(pytree_node=False, default=2.5)
+    HOMING_MISSILE_Y_SPEED: float = struct.field(pytree_node=False, default=1)
 
     # -------- Forcefield constants --------
-    FORCEFIELD_SIZE = (8, 73)  # Width, Height of a single normal forcefield column
-    FORCEFIELD_WIDE_SIZE = (16, 73)  # Width, Height of a single wide forcefield column
+    FORCEFIELD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 73))  # Width, Height of a single normal forcefield column
+    FORCEFIELD_WIDE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 73))  # Width, Height of a single wide forcefield column
 
-    FORCEFIELD_IS_WIDE_PROBABILITY = 0.2  # Probability that a forcefield is wide
+    FORCEFIELD_IS_WIDE_PROBABILITY: float = struct.field(pytree_node=False, default=0.2)  # Probability that a forcefield is wide
 
-    FORCEFIELD_FLASHING_SPACING = 32  # x spacing between the forcefields when in flashing mode
-    FORCEFIELD_FLASHING_SPEED = 35  # Forcefield changes state from on to off or from off to on every FORCEFIELD_FLASHING_SPEED frames
+    FORCEFIELD_FLASHING_SPACING: int = struct.field(pytree_node=False, default=32)  # x spacing between the forcefields when in flashing mode
+    FORCEFIELD_FLASHING_SPEED: int = struct.field(pytree_node=False, default=35)  # Forcefield changes state from on to off or from off to on every FORCEFIELD_FLASHING_SPEED frames
 
-    FORCEFIELD_FLEXING_SPACING = 64  # x spacing between the forcefields when in flexing mode
-    FORCEFIELD_FLEXING_SPEED = 0.6  # Flexing (Crushing motion) speed
-    FORCEFIELD_FLEXING_MINIMUM_DISTANCE = 2  # Minimum y distance between the upper and lower forcefields when flexing
-    FORCEFIELD_FLEXING_MAXIMUM_DISTANCE = 32  # Maximum y distance between the upper and lower forcefields when flexing
+    FORCEFIELD_FLEXING_SPACING: int = struct.field(pytree_node=False, default=64)  # x spacing between the forcefields when in flexing mode
+    FORCEFIELD_FLEXING_SPEED: float = struct.field(pytree_node=False, default=0.6)  # Flexing (Crushing motion) speed
+    FORCEFIELD_FLEXING_MINIMUM_DISTANCE: int = struct.field(pytree_node=False, default=2)  # Minimum y distance between the upper and lower forcefields when flexing
+    FORCEFIELD_FLEXING_MAXIMUM_DISTANCE: int = struct.field(pytree_node=False, default=32)  # Maximum y distance between the upper and lower forcefields when flexing
 
-    FORCEFIELD_FIXED_SPACING = 64  # x spacing between the forcefields when in fixed mode
-    FORCEFIELD_FIXED_SPEED = 0.3  # Fixed (up and down movement) speed
-    FORCEFIELD_FIXED_UPPER_BOUND = -FORCEFIELD_SIZE[1] + 33  # Highest allowed y position for forcefields while fixed
-    FORCEFIELD_FIXED_LOWER_BOUND = -FORCEFIELD_SIZE[1] + 68  # Lowest allowed y position for forcefields while fixed
+    FORCEFIELD_FIXED_SPACING: int = struct.field(pytree_node=False, default=64)  # x spacing between the forcefields when in fixed mode
+    FORCEFIELD_FIXED_SPEED: float = struct.field(pytree_node=False, default=0.3)  # Fixed (up and down movement) speed
+    FORCEFIELD_FIXED_UPPER_BOUND: int = struct.field(pytree_node=False, default=None)  # Highest allowed y position for forcefields while fixed
+    FORCEFIELD_FIXED_LOWER_BOUND: int = struct.field(pytree_node=False, default=None)  # Lowest allowed y position for forcefields while fixed
 
     # -------- Densepack constants --------
-    DENSEPACK_NORMAL_PART_SIZE = (8, 4)  # Width, Height of a single, normal densepack part in a normal densepack column
-    DENSEPACK_WIDE_PART_SIZE = (16, 4)  # Width, Height of a single, wide densepack part in a wide densepack column
-    DENSEPACK_COLOR = (142, 142, 142, 255)
+    DENSEPACK_NORMAL_PART_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 4))  # Width, Height of a single, normal densepack part in a normal densepack column
+    DENSEPACK_WIDE_PART_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 4))  # Width, Height of a single, wide densepack part in a wide densepack column
+    DENSEPACK_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (142, 142, 142, 255))
 
-    DENSEPACK_NUMBER_OF_PARTS = 19  # number of segments in the densepack
-    DENSEPACK_IS_WIDE_PROBABILITY = 0.4  # Probability that a spawned densepack is wide
+    DENSEPACK_NUMBER_OF_PARTS: int = struct.field(pytree_node=False, default=19)  # number of segments in the densepack
+    DENSEPACK_IS_WIDE_PROBABILITY: float = struct.field(pytree_node=False, default=0.4)  # Probability that a spawned densepack is wide
 
     # -------- Detonator constants --------
-    DETONATOR_SIZE = (8, 73)
-    DETONATOR_COLOR = (142, 142, 142, 255)
+    DETONATOR_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 73))
+    DETONATOR_COLOR: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (142, 142, 142, 255))
 
     # -------- Energy pod constants --------
-    ENERGY_POD_SIZE = (6, 4)  # Width, Height
-    ENERGY_POD_COLOR_GREEN = (84, 171, 96, 255)  # Energy pod color in green frame
-    ENERGY_POD_COLOR_GRAY = (142, 142, 142, 255)  # Energy pod color in gray frame
+    ENERGY_POD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (6, 4))  # Width, Height
+    ENERGY_POD_COLOR_GREEN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (84, 171, 96, 255))  # Energy pod color in green frame
+    ENERGY_POD_COLOR_GRAY: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (142, 142, 142, 255))  # Energy pod color in gray frame
 
-    ENERGY_POD_ANIMATION_SPEED = 16  # Higher is slower
+    ENERGY_POD_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=16)  # Higher is slower
 
     # -------- Probability constants --------
 
-    ALLOW_ENERGY_POD_PERCENTAGE = 0.3  # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
-    ALLOW_DETONATOR_PERCENTAGE = 0.3  # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
+    ALLOW_ENERGY_POD_PERCENTAGE: float = struct.field(pytree_node=False, default=0.3)  # The energy pod is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_ENERGY_POD_PERCENTAGE * MAX_ENERGY
+    ALLOW_DETONATOR_PERCENTAGE: float = struct.field(pytree_node=False, default=0.3)  # The detonator is allowed to spawn (one in 7 to 8 chance) when current energy is smaller than ALLOW_DETONATOR_PERCENTAGE * MAX_DTIME
 
-    ENERGY_POD_SPAWN_PROBABILITY = 0.4  # If energy pod spawning is allowed, this is the probability for the energy pod to be the next entity spawned.
-    DETONATOR_SPAWN_PROBABILITY = 0.4  # If detonator spawning is allowed, this is the probability for the detonator to be the next entity spawned.
+    ENERGY_POD_SPAWN_PROBABILITY: float = struct.field(pytree_node=False, default=0.4)  # If energy pod spawning is allowed, this is the probability for the energy pod to be the next entity spawned.
+    DETONATOR_SPAWN_PROBABILITY: float = struct.field(pytree_node=False, default=0.4)  # If detonator spawning is allowed, this is the probability for the detonator to be the next entity spawned.
 
-    ENERGY_START_BLINKING_PERCENTAGE = 0.2 # see below
-    SHIELDS_START_BLINKING_PERCENTAGE = 0.2 # see below
-    DTIME_START_BLINKING_PERCENTAGE = 0.2 # The Field in the instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
+    ENERGY_START_BLINKING_PERCENTAGE: float = struct.field(pytree_node=False, default=0.2) # see below
+    SHIELDS_START_BLINKING_PERCENTAGE: float = struct.field(pytree_node=False, default=0.2) # see below
+    DTIME_START_BLINKING_PERCENTAGE: float = struct.field(pytree_node=False, default=0.2) # The Field in the instrument panel starts blinking when the current value is smaller than VALUE_START_BLINKING_PERCENTAGE * MAX_VALUE.
 
     # -------- Instrument panel constants --------
 
-    INSTRUMENT_PANEL_ANIMATION_SPEED = 14 # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
+    INSTRUMENT_PANEL_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=14) # Blinking speed when energy, shields or dtime is low. Lower is faster. Should ideally be an even number.
 
-    MAX_ENERGY = 5100  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100)
-    MAX_SHIELDS = 24  # As the manual says, the Dante Dart starts with 24 shield units
-    MAX_DTIME = 10200  # Same idea as energy.
+    MAX_ENERGY: int = struct.field(pytree_node=False, default=5100)  # As the manual says, energy is consumed at a regular pace. We use 5100 for the initial value and subtract one for every frame to match the timing of the real game. (It takes 85 seconds for the energy to run out. 85 * 60 (fps) = 5100)
+    MAX_SHIELDS: int = struct.field(pytree_node=False, default=24)  # As the manual says, the Dante Dart starts with 24 shield units
+    MAX_DTIME: int = struct.field(pytree_node=False, default=10200)  # Same idea as energy.
 
-    SHIELD_LOSS_COL_SMALL = 1  # See is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
-    SHIELD_LOSS_COL_BIG = 6
+    SHIELD_LOSS_COL_SMALL: int = struct.field(pytree_node=False, default=1)  # See is_big_collision entry in CollisionPropertiesState for extensive explanation. This constant defines the shield points to lose
+    SHIELD_LOSS_COL_BIG: int = struct.field(pytree_node=False, default=6)
 
     # -------- GUI constants --------
-    GUI_COLORED_BACKGROUND_SIZE = (128, 12)  # Width, Height of colored background of black rectangle background
-    GUI_BLACK_BACKGROUND_SIZE = (56, 10)  # Width, Height of black background of the text
-    GUI_TEXT_SCORE_SIZE = (21, 7)  # Width, Height of "Score" text
-    GUI_TEXT_ENERGY_SIZE = (23, 5)  # Width, Height of "Energy" text
-    GUI_TEXT_SHIELDS_SIZE = (23, 5)  # Width, Height of "Shields" text
-    GUI_TEXT_DTIME_SIZE = (23, 5)  # Width, Height of "Dtime" text
+    GUI_COLORED_BACKGROUND_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (128, 12))  # Width, Height of colored background of black rectangle background
+    GUI_BLACK_BACKGROUND_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (56, 10))  # Width, Height of black background of the text
+    GUI_TEXT_SCORE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (21, 7))  # Width, Height of "Score" text
+    GUI_TEXT_ENERGY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (23, 5))  # Width, Height of "Energy" text
+    GUI_TEXT_SHIELDS_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (23, 5))  # Width, Height of "Shields" text
+    GUI_TEXT_DTIME_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (23, 5))  # Width, Height of "Dtime" text
 
-    GUI_COLORED_BACKGROUND_COLOR_BLUE = (47, 90, 160, 255)
-    GUI_COLORED_BACKGROUND_COLOR_GREEN = (50, 152, 82, 255)
-    GUI_COLORED_BACKGROUND_COLOR_BEIGE = (160, 107, 50, 255)
-    GUI_COLORED_BACKGROUND_COLOR_GRAY = (182, 182, 182, 255)
-    GUI_TEXT_COLOR_GRAY = (118, 118, 118, 255)
-    GUI_TEXT_COLOR_BEIGE = (160, 107, 50, 255)
+    GUI_COLORED_BACKGROUND_COLOR_BLUE: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (47, 90, 160, 255))
+    GUI_COLORED_BACKGROUND_COLOR_GREEN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (50, 152, 82, 255))
+    GUI_COLORED_BACKGROUND_COLOR_BEIGE: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (160, 107, 50, 255))
+    GUI_COLORED_BACKGROUND_COLOR_GRAY: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (182, 182, 182, 255))
+    GUI_TEXT_COLOR_GRAY: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (118, 118, 118, 255))
+    GUI_TEXT_COLOR_BEIGE: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (160, 107, 50, 255))
 
-    GUI_BLACK_BACKGROUND_X_OFFSET = 36
-    GUI_Y_BASE = 117
-    GUI_X_BASE = 16
-    GUI_Y_SPACE_BETWEEN_PANELS = 21
+    GUI_BLACK_BACKGROUND_X_OFFSET: int = struct.field(pytree_node=False, default=36)
+    GUI_Y_BASE: int = struct.field(pytree_node=False, default=117)
+    GUI_X_BASE: int = struct.field(pytree_node=False, default=16)
+    GUI_Y_SPACE_BETWEEN_PANELS: int = struct.field(pytree_node=False, default=21)
+
+    # -------- Render Asset Configuration constants --------
+    RADAR_MORTAR_SPRITE_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=15)
+    BYTE_BAT_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=16)
+    ROCK_MUNCHER_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=10)
+
+    PROCEDURAL_COLORS: dict = struct.field(
+        pytree_node=False,
+        default_factory=lambda: {
+            "PFB_BASE_COLOR": (0, 0, 0, 255),
+            "PFB_COLLISION_COLOR": (104, 104, 0, 255),
+            "DEATH_NUMBER_COLOR": (208, 208, 0, 255),
+            "RADAR_MORTAR_COLOR_GRAY": (104, 104, 104, 255),
+            "RADAR_MORTAR_COLOR_BLUE": (0, 0, 172, 255),
+            "RADAR_MORTAR_MISSILE_COLOR": (85, 92, 197, 255),
+            "BYTE_BAT_COLOR": (0, 88, 0, 255),
+            "ROCK_MUNCHER_MISSILE_COLOR": (208, 208, 0, 255),
+            "DENSEPACK_COLOR": (0, 88, 0, 255),
+            "DETONATOR_COLOR": (104, 104, 104, 255),
+            "ENERGY_POD_COLOR_GREEN": (0, 172, 0, 255),
+            "ENERGY_POD_COLOR_GRAY": (104, 104, 104, 255),
+            "GUI_COLORED_BACKGROUND_COLOR_BLUE": (0, 0, 172, 255),
+            "GUI_COLORED_BACKGROUND_COLOR_GREEN": (0, 172, 0, 255),
+            "GUI_COLORED_BACKGROUND_COLOR_BEIGE": (208, 208, 0, 255),
+            "GUI_COLORED_BACKGROUND_COLOR_GRAY": (104, 104, 104, 255),
+            "GUI_TEXT_COLOR_GRAY": (104, 104, 104, 255),
+            "GUI_TEXT_COLOR_BEIGE": (208, 208, 0, 255),
+            "GUI_BAR_EMPTY_COLOR": (0, 0, 0, 0),
+            "PLAYER_NORMAL_COLOR": (208, 208, 0, 255),
+            "PLAYER_COLLISION_COLOR": (172, 0, 0, 255),
+            "PLAYER_MISSILE_BASE_COLOR": (208, 208, 0, 255),
+            "RASTER_BACKGROUND": (0, 0, 0, 255),
+            "FORCEFIELD_COLOR_0": (255, 0, 0, 255),
+            "FORCEFIELD_COLOR_1": (255, 128, 0, 255),
+            "FORCEFIELD_COLOR_2": (255, 255, 0, 255),
+            "FORCEFIELD_COLOR_3": (128, 255, 0, 255),
+            "FORCEFIELD_COLOR_4": (0, 255, 0, 255),
+            "FORCEFIELD_COLOR_5": (0, 255, 128, 255),
+            "FORCEFIELD_COLOR_6": (0, 255, 255, 255),
+            "FORCEFIELD_COLOR_7": (0, 128, 255, 255),
+            "FORCEFIELD_COLOR_8": (0, 0, 255, 255),
+            "FORCEFIELD_COLOR_9": (128, 0, 255, 255),
+            "FORCEFIELD_COLOR_10": (255, 0, 255, 255),
+            "FORCEFIELD_COLOR_11": (255, 0, 128, 255),
+            "FORCEFIELD_COLOR_12": (255, 255, 255, 255),
+            "FORCEFIELD_COLOR_13": (192, 192, 192, 255),
+            "FORCEFIELD_COLOR_14": (128, 128, 128, 255),
+            "FORCEFIELD_COLOR_15": (255, 255, 255, 255),
+        }
+    )
 
     # -------- Debug constants --------
-    DEBUG_ACTIVATE_MOUNTAINS_SCROLL = jnp.bool(True)
+    DEBUG_ACTIVATE_MOUNTAINS_SCROLL: bool = struct.field(pytree_node=False, default=True)
+
+    # -------- Asset config --------
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_static_asset_config)
+
+    def compute_derived(self):
+        byte_bat_upper = self.UPPER_MOUNTAINS_Y + self.MOUNTAIN_SIZE[1] + 2
+        rock_muncher_upper = self.UPPER_MOUNTAINS_Y + self.MOUNTAIN_SIZE[1] + 15  # (5 + 10)
+        return {
+            "PLAYER_BOUNDS": ((20, self.WIDTH - 20 - self.PLAYER_SIZE[0]), (19, 80 + self.PLAYER_SIZE[1])),
+            "RADAR_MORTAR_SPAWN_X": self.WIDTH,
+            "BYTE_BAT_UPPER_BORDER_Y": self.UPPER_MOUNTAINS_Y + self.MOUNTAIN_SIZE[1] + 2,
+            "BYTE_BAT_BOTTOM_BORDER_Y": self.LOWER_MOUNTAINS_Y - self.MOUNTAIN_SIZE[1],
+            "BYTE_BAT_SPAWN_X": self.WIDTH,
+            "BYTE_BAT_SPAWN_Y": byte_bat_upper + 1,
+            "ROCK_MUNCHER_UPPER_BORDER_Y": self.UPPER_MOUNTAINS_Y + self.MOUNTAIN_SIZE[1] + 5 + 10,
+            "ROCK_MUNCHER_BOTTOM_BORDER_Y": self.LOWER_MOUNTAINS_Y - self.MOUNTAIN_SIZE[1] - 3,
+            "ROCK_MUNCHER_SPAWN_X": self.WIDTH,
+            "ROCK_MUNCHER_SPAWN_Y": rock_muncher_upper + 1,
+            "FORCEFIELD_FIXED_UPPER_BOUND": -self.FORCEFIELD_SIZE[1] + 33,
+            "FORCEFIELD_FIXED_LOWER_BOUND": -self.FORCEFIELD_SIZE[1] + 68,
+        }
 
 
 # -------- States --------
-class RadarMortarState(NamedTuple):
+@struct.dataclass
+class RadarMortarState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
@@ -223,7 +343,8 @@ class RadarMortarState(NamedTuple):
     missile_direction: chex.Array
     shoot_again_timer: chex.Array
 
-class ByteBatState(NamedTuple):
+@struct.dataclass
+class ByteBatState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
@@ -231,7 +352,8 @@ class ByteBatState(NamedTuple):
     direction_is_up: jnp.bool
     direction_is_left: jnp.bool
 
-class RockMuncherState(NamedTuple):
+@struct.dataclass
+class RockMuncherState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
@@ -241,14 +363,16 @@ class RockMuncherState(NamedTuple):
     missile_x: chex.Array
     missile_y: chex.Array
 
-class HomingMissileState(NamedTuple):
+@struct.dataclass
+class HomingMissileState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
     is_tracking_player: jnp.bool
 
-class ForceFieldState(NamedTuple):
+@struct.dataclass
+class ForceFieldState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x0: chex.Array
@@ -272,7 +396,8 @@ class ForceFieldState(NamedTuple):
     flex_upper_direction_is_up: jnp.bool
     fixed_upper_direction_is_up: jnp.bool
 
-class DensepackState(NamedTuple):
+@struct.dataclass
+class DensepackState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
@@ -281,21 +406,24 @@ class DensepackState(NamedTuple):
     number_of_parts: chex.Array
     broken_states: chex.Array
 
-class DetonatorState(NamedTuple):
+@struct.dataclass
+class DetonatorState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
     collision_is_pin: jnp.bool
 
-class EnergyPodState(NamedTuple):
+@struct.dataclass
+class EnergyPodState:
     is_in_current_event: jnp.bool
     is_alive: jnp.bool
     x: chex.Array
     y: chex.Array
     animation_timer: chex.Array
 
-class CollisionPropertiesState(NamedTuple):
+@struct.dataclass
+class CollisionPropertiesState:
     collision_with_player: jnp.bool             # Player collision with entity
     collision_with_player_missile: jnp.bool     # Player missile collision with entity
     is_big_collision: jnp.bool                  # If 1 or 6 shield points should be subtracted at collision.
@@ -307,7 +435,8 @@ class CollisionPropertiesState(NamedTuple):
     score_to_add: chex.Array                    # Score to add to the current score at collision. Radar Mortar: 115, Rock Muncher: 325, Byte Bat: 330, Pass Forcefield: 400, Homing Missile: 525, Detonator: 6507
     death_timer: chex.Array                     # Animation timer used for entity death animations. Change the speed with ENTITY_DEATH_ANIMATION_TIMER
 
-class EntitiesState(NamedTuple):
+@struct.dataclass
+class EntitiesState:
     radar_mortar_state: RadarMortarState        # Radar mortars appear along the top and bottom of the Computer passage. Avoid Mortar fire. Demolish Radar Mortars with laser fire.
     byte_bat_state: ByteBatState                # Green bat looking entity flying at you without warning.
     rock_muncher_state: RockMuncherState        # Pink brown green entity flying at you without warning. Shoots missiles.
@@ -319,19 +448,22 @@ class EntitiesState(NamedTuple):
 
     collision_properties_state: CollisionPropertiesState # Holds attributes relevant for collision logic
 
-class MountainState(NamedTuple):
+@struct.dataclass
+class MountainState:
     x1: chex.Array
     x2: chex.Array
     x3: chex.Array
     y: chex.Array
 
-class PlayerMissileState(NamedTuple):
+@struct.dataclass
+class PlayerMissileState:
     x: chex.Array
     y: chex.Array
     direction: chex.Array
     velocity: chex.Array
 
-class LaserGatesState(NamedTuple):
+@struct.dataclass
+class LaserGatesState:
     player_x: chex.Array
     player_y: chex.Array
     player_facing_direction: chex.Array
@@ -348,14 +480,16 @@ class LaserGatesState(NamedTuple):
     rng_key:  chex.PRNGKey
     step_counter: chex.Array
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
     active: jnp.ndarray
 
-class LaserGatesObservation(NamedTuple):
+@struct.dataclass
+class LaserGatesObservation:
     # Player + Player Missile
     player: EntityPosition
     player_missile: EntityPosition
@@ -390,148 +524,17 @@ class LaserGatesObservation(NamedTuple):
     lower_mountain_2: EntityPosition
 
 
-class LaserGatesInfo(NamedTuple):
+@struct.dataclass
+class LaserGatesInfo:
     # difficulty: jnp.ndarray # add if necessary
     step_counter: jnp.ndarray
-
-# -------- Render Asset Configuration --------
-RADAR_MORTAR_SPRITE_ANIMATION_SPEED = 15
-BYTE_BAT_ANIMATION_SPEED = 16
-ROCK_MUNCHER_ANIMATION_SPEED = 10
-
-PROCEDURAL_COLORS = {
-    "PFB_BASE_COLOR": (0, 0, 0, 255),
-    "PFB_COLLISION_COLOR": (104, 104, 0, 255),
-    "DEATH_NUMBER_COLOR": (208, 208, 0, 255),
-    "RADAR_MORTAR_COLOR_GRAY": (104, 104, 104, 255),
-    "RADAR_MORTAR_COLOR_BLUE": (0, 0, 172, 255),
-    "RADAR_MORTAR_MISSILE_COLOR": (85, 92, 197, 255),
-    "BYTE_BAT_COLOR": (0, 88, 0, 255),
-    "ROCK_MUNCHER_MISSILE_COLOR": (208, 208, 0, 255),
-    "DENSEPACK_COLOR": (0, 88, 0, 255),
-    "DETONATOR_COLOR": (104, 104, 104, 255),
-    "ENERGY_POD_COLOR_GREEN": (0, 172, 0, 255),
-    "ENERGY_POD_COLOR_GRAY": (104, 104, 104, 255),
-    "GUI_COLORED_BACKGROUND_COLOR_BLUE": (0, 0, 172, 255),
-    "GUI_COLORED_BACKGROUND_COLOR_GREEN": (0, 172, 0, 255),
-    "GUI_COLORED_BACKGROUND_COLOR_BEIGE": (208, 208, 0, 255),
-    "GUI_COLORED_BACKGROUND_COLOR_GRAY": (104, 104, 104, 255),
-    "GUI_TEXT_COLOR_GRAY": (104, 104, 104, 255),
-    "GUI_TEXT_COLOR_BEIGE": (208, 208, 0, 255),
-    "GUI_BAR_EMPTY_COLOR": (0, 0, 0, 0),
-    "PLAYER_NORMAL_COLOR": (208, 208, 0, 255),
-    "PLAYER_COLLISION_COLOR": (172, 0, 0, 255),
-    "PLAYER_MISSILE_BASE_COLOR": (208, 208, 0, 255),
-    "RASTER_BACKGROUND": (0, 0, 0, 255),
-    "FORCEFIELD_COLOR_0": (255, 0, 0, 255),
-    "FORCEFIELD_COLOR_1": (255, 128, 0, 255),
-    "FORCEFIELD_COLOR_2": (255, 255, 0, 255),
-    "FORCEFIELD_COLOR_3": (128, 255, 0, 255),
-    "FORCEFIELD_COLOR_4": (0, 255, 0, 255),
-    "FORCEFIELD_COLOR_5": (0, 255, 128, 255),
-    "FORCEFIELD_COLOR_6": (0, 255, 255, 255),
-    "FORCEFIELD_COLOR_7": (0, 128, 255, 255),
-    "FORCEFIELD_COLOR_8": (0, 0, 255, 255),
-    "FORCEFIELD_COLOR_9": (128, 0, 255, 255),
-    "FORCEFIELD_COLOR_10": (255, 0, 255, 255),
-    "FORCEFIELD_COLOR_11": (255, 0, 128, 255),
-    "FORCEFIELD_COLOR_12": (255, 255, 255, 255),
-    "FORCEFIELD_COLOR_13": (192, 192, 192, 255),
-    "FORCEFIELD_COLOR_14": (128, 128, 128, 255),
-    "FORCEFIELD_COLOR_15": (255, 255, 255, 255),
-}
-
-
-def _procedural_sprite(color: Tuple[int, int, int, int]) -> jnp.ndarray:
-    return jnp.array(color, dtype=jnp.uint8).reshape(1, 1, 4)
-
-
-def _build_background(height: int, width: int) -> jnp.ndarray:
-    color = jnp.array(PROCEDURAL_COLORS["RASTER_BACKGROUND"], dtype=jnp.uint8).reshape(1, 1, 4)
-    return jnp.tile(color, (height, width, 1))
-
-
-def _get_default_asset_config() -> Tuple[dict, ...]:
-    densepack_files = [f"enemies/densepack/{i}.npy" for i in range(5, 0, -1)]
-    radar_mortar_files = [
-        "enemies/radar_mortar/1.npy",
-        "enemies/radar_mortar/2.npy",
-        "enemies/radar_mortar/3.npy",
-    ]
-    byte_bat_files = [
-        "enemies/byte_bat/1.npy",
-        "enemies/byte_bat/2.npy",
-        "enemies/byte_bat/3.npy",
-    ]
-    rock_muncher_files = [
-        "enemies/rock_muncher/1.npy",
-        "enemies/rock_muncher/2.npy",
-        "enemies/rock_muncher/3.npy",
-    ]
-    upper_death_files = [f"enemies/enemy_death/top/{i}.npy" for i in range(1, 13)]
-    lower_death_files = [f"enemies/enemy_death/bottom/{i}.npy" for i in range(1, 13)]
-
-    config = [
-        {
-            "name": "base_background",
-            "type": "background",
-            "data": _build_background(LaserGatesConstants.HEIGHT, LaserGatesConstants.WIDTH),
-        },
-        {"name": "upper_brown_bg", "type": "single", "file": "background/upper_brown_bg.npy"},
-        {"name": "lower_brown_bg", "type": "single", "file": "background/lower_brown_bg.npy"},
-        {"name": "playing_field_bg", "type": "single", "file": "background/playing_field_bg.npy"},
-        {
-            "name": "playing_field_small_bg",
-            "type": "single",
-            "file": "background/mountains/playing_field_small_bg.npy",
-        },
-        {"name": "gray_gui_bg", "type": "single", "file": "background/gray_gui_bg.npy"},
-        {"name": "lower_mountain", "type": "single", "file": "background/mountains/lower_mountain.npy"},
-        {"name": "upper_mountain", "type": "single", "file": "background/mountains/upper_mountain.npy"},
-        {"name": "black_stripe", "type": "single", "file": "background/black_stripe.npy"},
-        {"name": "player", "type": "single", "file": "player/player.npy"},
-        {"name": "player_missile", "type": "single", "file": "missiles/player_missile.npy"},
-        {"name": "gui_colored_background", "type": "single", "file": "gui/colored_background.npy"},
-        {"name": "gui_black_background", "type": "single", "file": "gui/black_background.npy"},
-        {"name": "gui_text_score", "type": "single", "file": "gui/text/score.npy"},
-        {"name": "gui_text_energy", "type": "single", "file": "gui/text/energy.npy"},
-        {"name": "gui_text_shields", "type": "single", "file": "gui/text/shields.npy"},
-        {"name": "gui_text_dtime", "type": "single", "file": "gui/text/dtime.npy"},
-        {"name": "gui_score_digits", "type": "digits", "pattern": "gui/score_numbers/{}.npy"},
-        {"name": "gui_score_comma", "type": "single", "file": "gui/score_numbers/comma.npy"},
-        {"name": "entity_missile", "type": "single", "file": "missiles/enemy_missile.npy"},
-        {"name": "homing_missile", "type": "single", "file": "enemies/homing_missile/homing_missile.npy"},
-        {"name": "forcefield", "type": "single", "file": "enemies/forcefield/forcefield.npy"},
-        {"name": "detonator", "type": "single", "file": "enemies/detonator/detonator.npy"},
-        {"name": "detonator_6507", "type": "single", "file": "enemies/detonator/6507.npy"},
-        {"name": "energy_pod", "type": "single", "file": "enemies/energy_pod/energy_pod.npy"},
-        {"name": "upper_death_frames", "type": "group", "files": upper_death_files},
-        {"name": "lower_death_frames", "type": "group", "files": lower_death_files},
-        {"name": "death_number_325", "type": "single", "file": "enemies/enemy_death/numbers/325.npy"},
-        {"name": "death_number_525", "type": "single", "file": "enemies/enemy_death/numbers/525.npy"},
-        {"name": "death_number_bg", "type": "single", "file": "enemies/enemy_death/numbers/background.npy"},
-        {"name": "radar_mortar_frames", "type": "group", "files": radar_mortar_files},
-        {"name": "byte_bat_frames", "type": "group", "files": byte_bat_files},
-        {"name": "rock_muncher_frames", "type": "group", "files": rock_muncher_files},
-        {"name": "densepack_frames", "type": "group", "files": densepack_files},
-    ]
-
-    for name, color in PROCEDURAL_COLORS.items():
-        config.append({"name": name, "type": "procedural", "data": _procedural_sprite(color)})
-
-    return tuple(config)
-
-
-LaserGatesConstants.ASSET_CONFIG = _get_default_asset_config()
 
 # -------- Game Logic --------
 
 class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, LaserGatesInfo, LaserGatesConstants]):
-
-    def __init__(self, consts: LaserGatesConstants = None):
-        consts = consts or LaserGatesConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set for Laser Gates
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -549,8 +552,14 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: LaserGatesConstants = None):
+        consts = consts or LaserGatesConstants()
+        super().__init__(consts)
         self.num_obs_slots = 23
         self.features_per_slot = 5  # x, y, w, h, active
         self.obs_size = self.num_obs_slots * self.features_per_slot
@@ -594,7 +603,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 missile_direction = jnp.array((0, 0)),
                 shoot_again_timer = jnp.array(0),
             )
-            return entities._replace(radar_mortar_state=new_radar_mortar_state)
+            return entities.replace(radar_mortar_state=new_radar_mortar_state)
 
         def initialize_byte_bat(entities):
             initial_direction_is_up = jnp.bool(self.consts.BYTE_BAT_SPAWN_Y < self.consts.BYTE_BAT_UPPER_BORDER_Y)
@@ -606,7 +615,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 direction_is_up=initial_direction_is_up,
                 direction_is_left=jnp.bool(True)
             )
-            return entities._replace(byte_bat_state=new_byte_bat_state)
+            return entities.replace(byte_bat_state=new_byte_bat_state)
 
         def initialize_rock_muncher(entities):
             initial_direction_is_up = jnp.bool(self.consts.ROCK_MUNCHER_SPAWN_Y < self.consts.ROCK_MUNCHER_UPPER_BORDER_Y)
@@ -620,7 +629,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 missile_x=jnp.array(0),
                 missile_y=jnp.array(0),
             )
-            return entities._replace(rock_muncher_state=new_rock_muncher_state)
+            return entities.replace(rock_muncher_state=new_rock_muncher_state)
 
         def initialize_homing_missile(entities):
             initial_y_position = jax.random.randint(key_intern, (), self.consts.HOMING_MISSILE_Y_BOUNDS[0], self.consts.HOMING_MISSILE_Y_BOUNDS[1])
@@ -631,7 +640,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 y=initial_y_position,
                 is_tracking_player=jnp.bool(False),
             )
-            return entities._replace(homing_missile_state=new_homing_missile_state)
+            return entities.replace(homing_missile_state=new_homing_missile_state)
 
         def initialize_forcefield(entities):
             key_num_of_ff, key_type_of_ff, key_is_wide = jax.random.split(key_intern, 3)
@@ -645,7 +654,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
             number_of_forcefields = jnp.where(init_is_wide, 1, number_of_forcefields)
 
-            new_forcefield_state = entities.forcefield_state._replace(
+            new_forcefield_state = entities.forcefield_state.replace(
                 is_in_current_event=jnp.bool(True),
                 is_alive=jnp.bool(True),
                 x0=jnp.array(self.consts.WIDTH, dtype=jnp.float32),
@@ -669,12 +678,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 flex_upper_direction_is_up=jnp.array(True),
                 fixed_upper_direction_is_up=jnp.array(True),
             )
-            return entities._replace(forcefield_state=new_forcefield_state)
+            return entities.replace(forcefield_state=new_forcefield_state)
 
         def initialize_densepack(entities):
             initial_is_wide = jax.random.bernoulli(key_intern, p=self.consts.DENSEPACK_IS_WIDE_PROBABILITY)
 
-            new_densepack_state = entities.dense_pack_state._replace(
+            new_densepack_state = entities.dense_pack_state.replace(
                 is_in_current_event=jnp.bool(True),
                 is_alive=jnp.bool(True),
                 x=jnp.array(self.consts.WIDTH).astype(jnp.float32),
@@ -683,27 +692,27 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 number_of_parts=jnp.array(self.consts.DENSEPACK_NUMBER_OF_PARTS).astype(jnp.int32),
                 broken_states=jnp.full(self.consts.DENSEPACK_NUMBER_OF_PARTS, 4, jnp.int32),
             )
-            return entities._replace(dense_pack_state=new_densepack_state)
+            return entities.replace(dense_pack_state=new_densepack_state)
 
         def initialize_detonator(entities):
-            new_detonator_state = entities.detonator_state._replace(
+            new_detonator_state = entities.detonator_state.replace(
                 is_in_current_event=jnp.bool(True),
                 is_alive=jnp.bool(True),
                 x=jnp.array(self.consts.WIDTH).astype(jnp.float32),
                 y=jnp.array(19).astype(jnp.float32),
                 collision_is_pin=jnp.bool(False),
             )
-            return entities._replace(detonator_state=new_detonator_state)
+            return entities.replace(detonator_state=new_detonator_state)
 
         def initialize_energy_pod(entities):
-            new_energy_pod_state = entities.energy_pod_state._replace(
+            new_energy_pod_state = entities.energy_pod_state.replace(
                 is_in_current_event=jnp.bool(True),
                 is_alive=jnp.bool(True),
                 x=jnp.array(self.consts.WIDTH).astype(jnp.float32),
                 y=jnp.array(73).astype(jnp.float32),
                 animation_timer=jnp.array(0),
             )
-            return entities._replace(energy_pod_state=new_energy_pod_state)
+            return entities.replace(energy_pod_state=new_energy_pod_state)
 
         init_fns = [
             initialize_radar_mortar,
@@ -906,7 +915,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
             collision_with_player = jnp.logical_or(collision_with_player, rm_missile_collision_with_player)
 
-            return rm._replace(
+            return rm.replace(
                 is_in_current_event=jnp.logical_and(new_is_in_current_event, rm.x > 0),
                 is_alive=new_is_alive,
                 x=new_x,
@@ -914,7 +923,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 missile_y=missile_y,
                 missile_direction=missile_dir,
                 shoot_again_timer=new_timer
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
@@ -1012,14 +1021,14 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             # Update is_in_current_event for player collision
             new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
 
-            return bb._replace(
+            return bb.replace(
                 is_in_current_event=new_is_in_current_event,
                 is_alive=new_is_alive,
                 x=new_x,
                 y=new_y,
                 direction_is_up=new_direction_is_up,
                 direction_is_left=new_direction_is_left,
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.bool(True),
@@ -1101,7 +1110,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
             collision_with_player = jnp.logical_or(collision_with_player, rm_missile_collision_with_player)
 
-            return rm._replace(
+            return rm.replace(
                 is_in_current_event=new_is_in_current_event,
                 is_alive=new_is_alive,
                 x=new_x,
@@ -1110,7 +1119,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 direction_is_left=new_direction_is_left,
                 missile_x=new_missile_x.astype(rm.missile_x.dtype),
                 missile_y=new_missile_y.astype(rm.missile_y.dtype),
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.logical_not(rm_missile_collision_with_player),
@@ -1171,13 +1180,13 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             # Update is_in_current_event for player collision
             new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
 
-            return hm._replace(
+            return hm.replace(
                 is_in_current_event=jnp.logical_and(new_is_in_current_event, hm.x > 0),
                 is_alive=new_is_alive,
                 x=new_x,
                 y=new_y,
                 is_tracking_player=new_is_tracking_player,
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.bool(True),
@@ -1295,7 +1304,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             # Update is_in_current_event for player collision
             new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
 
-            return ff._replace(
+            return ff.replace(
                 is_in_current_event=jnp.logical_and(new_is_in_current_event, rightmost_x > 0),
                 is_alive=new_is_alive,
                 x0=new_x0.astype(ff.x0.dtype),
@@ -1314,7 +1323,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
                 flash_on=new_flash_on,
                 flex_upper_direction_is_up=new_flex_upper_direction_is_up,
                 fixed_upper_direction_is_up=new_fixed_upper_direction_is_up,
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.bool(True),
@@ -1425,12 +1434,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
             new_is_in_current_event = jnp.where(base_x > 0, new_is_in_current_event, jnp.bool(False))
 
-            return dp._replace(
+            return dp.replace(
                 is_in_current_event=new_is_in_current_event,
                 is_alive=new_is_alive,
                 x=base_x,
                 broken_states=new_broken_states,
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.bool(True),
@@ -1498,12 +1507,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
             collision_player_missile_pin = jnp.logical_or(collision_player_missile_pin, collision_player_missile_detonator)
 
-            return state.entities.detonator_state._replace(
+            return state.entities.detonator_state.replace(
                 is_in_current_event=jnp.logical_and(new_is_in_current_event, base_x > 0), # Second condition should never happen, since you can only collide or destroy the detonator
                 is_alive=new_is_alive,
                 x=base_x.astype(jnp.float32),
                 collision_is_pin=new_collision_is_pin,
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_player_missile_pin,
                 is_big_collision=jnp.bool(True),
@@ -1552,12 +1561,12 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             # Update is_in_current_event for player collision
             new_is_in_current_event = jnp.where(collision_with_player, jnp.bool(True), new_is_in_current_event)
 
-            return state.entities.energy_pod_state._replace(
+            return state.entities.energy_pod_state.replace(
                 is_in_current_event=jnp.logical_and(new_is_in_current_event, new_x > 0),
                 is_alive=new_is_alive,
                 x=new_x.astype(jnp.float32),
                 animation_timer=new_animation_timer.astype(jnp.int32),
-            ), state.entities.collision_properties_state._replace(
+            ), state.entities.collision_properties_state.replace(
                 collision_with_player=collision_with_player,
                 collision_with_player_missile=collision_with_player_missile,
                 is_big_collision=jnp.bool(False),
@@ -1938,7 +1947,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     @staticmethod
     @jax.jit
@@ -2340,7 +2349,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         """
 
         """
-        initial_entities = initial_entities._replace(
+        initial_entities = initial_entities.replace(
             forcefield_state=ForceFieldState(
             is_in_current_event=jnp.bool(False),
             is_alive=jnp.bool(False),
@@ -2407,16 +2416,18 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
 
     @partial(jax.jit, static_argnums=(0, ))
     def step(
-            self, state: LaserGatesState, action: Action
+            self, state: LaserGatesState, action: int
     ) -> Tuple[LaserGatesObservation, LaserGatesState, float, bool, LaserGatesInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # -------- Move player --------
-        new_player_x, new_player_y, new_player_facing_direction = self.player_step(state, action)
+        new_player_x, new_player_y, new_player_facing_direction = self.player_step(state, atari_action)
         player_animation_timer = state.animation_timer
         new_player_animation_timer = jnp.where(player_animation_timer != 0, player_animation_timer - 1, player_animation_timer)
 
         # -------- Move player missile --------
-        new_player_missile_state = self.player_missile_step(state, action)
+        new_player_missile_state = self.player_missile_step(state, atari_action)
 
         # -------- Move entities --------
         new_entities = self.all_entities_step(state)
@@ -2497,7 +2508,7 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         # -------- New rng key --------
         new_rng_key, new_key = jax.random.split(state.rng_key)
 
-        return_state = state._replace(
+        return_state = state.replace(
             player_x=new_player_x.astype(jnp.int32),
             player_y=new_player_y.astype(jnp.int32),
             player_facing_direction=new_player_facing_direction.astype(jnp.int32),
@@ -2533,18 +2544,50 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         return obs, return_state, 0.0, False, info
 
 class LaserGatesRenderer(JAXGameRenderer):
-    def __init__(self, consts: LaserGatesConstants = None):
-        super().__init__()
+    def __init__(self, consts: LaserGatesConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or LaserGatesConstants()
+        super().__init__(self.consts)
 
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/lasergates")
+        # 1. Helper to generate 1x1 pixel for masks
+        def _procedural_sprite(color: Tuple[int, int, int, int]) -> jnp.ndarray:
+            return jnp.array(color, dtype=jnp.uint8).reshape(1, 1, 4)
+
+        # 2. Helper to generate the large background based on current constants
+        def _build_background() -> jnp.ndarray:
+            color = jnp.array(self.consts.PROCEDURAL_COLORS["RASTER_BACKGROUND"], dtype=jnp.uint8).reshape(1, 1, 4)
+            return jnp.tile(color, (self.consts.HEIGHT, self.consts.WIDTH, 1))
+
+        # 3. Start with static file assets
         final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 4. Append the dynamic Background
+        final_asset_config.append({
+            "name": "base_background", 
+            "type": "background", 
+            "data": _build_background()
+        })
+
+        # 5. Append all the 1x1 color sprites from constants
+        for name, color in self.consts.PROCEDURAL_COLORS.items():
+            final_asset_config.append({
+                "name": name, 
+                "type": "procedural", 
+                "data": _procedural_sprite(color)
+            })
+
+        # 6. Load everything
+        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/lasergates")
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -2569,7 +2612,7 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         self.COLOR_IDS = {
             name: self.COLOR_TO_ID.get(tuple(color[:3]), self.jr.TRANSPARENT_ID)
-            for name, color in PROCEDURAL_COLORS.items()
+            for name, color in self.consts.PROCEDURAL_COLORS.items()
         }
         self.FORCEFIELD_COLOR_IDS = jnp.array(
             [self.COLOR_IDS[f"FORCEFIELD_COLOR_{i}"] for i in range(16)],
@@ -2595,30 +2638,30 @@ class LaserGatesRenderer(JAXGameRenderer):
         rms = self.SHAPE_MASKS["radar_mortar_frames"]
         self.SPRITE_RADAR_MORTAR = jnp.concatenate(
             [
-                jnp.repeat(rms[0][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rms[2][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rms[1][None], RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[0][None], self.consts.RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[1][None], self.consts.RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[2][None], self.consts.RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rms[1][None], self.consts.RADAR_MORTAR_SPRITE_ANIMATION_SPEED, axis=0),
             ]
         )
 
         bbs = self.SHAPE_MASKS["byte_bat_frames"]
         self.SPRITE_BYTE_BAT = jnp.concatenate(
             [
-                jnp.repeat(bbs[0][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-                jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-                jnp.repeat(bbs[2][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
-                jnp.repeat(bbs[1][None], BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[0][None], self.consts.BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[1][None], self.consts.BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[2][None], self.consts.BYTE_BAT_ANIMATION_SPEED, axis=0),
+                jnp.repeat(bbs[1][None], self.consts.BYTE_BAT_ANIMATION_SPEED, axis=0),
             ]
         )
 
         rmus = self.SHAPE_MASKS["rock_muncher_frames"]
         self.SPRITE_ROCK_MUNCHER = jnp.concatenate(
             [
-                jnp.repeat(rmus[0][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rmus[2][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
-                jnp.repeat(rmus[1][None], ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[0][None], self.consts.ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[1][None], self.consts.ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[2][None], self.consts.ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
+                jnp.repeat(rmus[1][None], self.consts.ROCK_MUNCHER_ANIMATION_SPEED, axis=0),
             ]
         )
 
@@ -2677,7 +2720,7 @@ class LaserGatesRenderer(JAXGameRenderer):
 
         # Color lookup table (name -> palette ID)
         self.color_ids = {}
-        for name, rgba in PROCEDURAL_COLORS.items():
+        for name, rgba in self.consts.PROCEDURAL_COLORS.items():
             rgb_key = (rgba[0], rgba[1], rgba[2])
             # All procedural colors are part of the palette; fall back to 0 if missing.
             self.color_ids[name] = int(self.COLOR_TO_ID.get(rgb_key, 0))

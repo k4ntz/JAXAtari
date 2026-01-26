@@ -4,47 +4,48 @@ import jax
 import jax.numpy as jnp
 import chex
 import os
+from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
-
-class KlaxConstants(NamedTuple):
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+class KlaxConstants(AutoDerivedConstants):
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # Tiles
-    N_TILE_TYPES: int = 7
-    TILE_SIZE: Tuple[int, int] = (7, 4)  # (width, height)
-    MAX_TILES: int = 50
-    STEPS_PER_SECOND: int = 60
-    SPAWN_INTERVAL_SECONDS: int = 6
-    FALL_DURATION_SECONDS: int = 9
-    SPEED_FACTOR: int = 10  # speed factor if down key is pressed
+    N_TILE_TYPES: int = struct.field(pytree_node=False, default=7)
+    TILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 4))  # (width, height)
+    MAX_TILES: int = struct.field(pytree_node=False, default=50)
+    STEPS_PER_SECOND: int = struct.field(pytree_node=False, default=60)
+    SPAWN_INTERVAL_SECONDS: int = struct.field(pytree_node=False, default=6)
+    FALL_DURATION_SECONDS: int = struct.field(pytree_node=False, default=9)
+    SPEED_FACTOR: int = struct.field(pytree_node=False, default=10)  # speed factor if down key is pressed
 
-    SPAWN_START_Y: int = 44
-    SHOOT_UP_Y: int = 62
-    DESPAWN_Y: int = 115
+    SPAWN_START_Y: int = struct.field(pytree_node=False, default=44)
+    SHOOT_UP_Y: int = struct.field(pytree_node=False, default=62)
+    DESPAWN_Y: int = struct.field(pytree_node=False, default=115)
 
-    BOARD_ROWS: int = 5
-    BOARD_COLS: int = 5
-    BOARD_BOTTOM_Y: int = 179
-    BOARD_GAP: int = 1
-    COLUMN_START_X: int = 60
-    COLUMN_STEP_X: int = 8
+    BOARD_ROWS: int = struct.field(pytree_node=False, default=5)
+    BOARD_COLS: int = struct.field(pytree_node=False, default=5)
+    BOARD_BOTTOM_Y: int = struct.field(pytree_node=False, default=179)
+    BOARD_GAP: int = struct.field(pytree_node=False, default=1)
+    COLUMN_START_X: int = struct.field(pytree_node=False, default=60)
+    COLUMN_STEP_X: int = struct.field(pytree_node=False, default=8)
 
     # Player
-    PLAYER_WIDTH: int = 7
-    PLAYER_HEIGHT: int = 4
-    PLAYER_Y: int = DESPAWN_Y + 6
-    RESPONSIVENESS: int = 1            # can be tuned; pixels per step when player moving left/right
-    PLAYER_BACKPACK_MAX: int = 5
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=4)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    RESPONSIVENESS: int = struct.field(pytree_node=False, default=1)            # can be tuned; pixels per step when player moving left/right
+    PLAYER_BACKPACK_MAX: int = struct.field(pytree_node=False, default=5)
 
     # Waves
-    WAVES_COOLDOWN_SECONDS: int = 5
+    WAVES_COOLDOWN_SECONDS: int = struct.field(pytree_node=False, default=5)
     # Task for each wave: [task_id, amount]
-    klax_waves = [
+    klax_waves: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [0, 3],  # 1
         [0, 5],  # 2
         [1, 3],  # 3
@@ -164,7 +165,7 @@ class KlaxConstants(NamedTuple):
         [2, 50],  # 98
         [2, 6],  # 99
         [3, 250000],  # 100
-    ]
+    ]))
     # ID-Task-Mapping
     # 0 = KLAX → X Klaxes (any)
     # 1 = DIAGONAL → X diagonal Klaxes
@@ -172,15 +173,21 @@ class KlaxConstants(NamedTuple):
     # 3 = POINTS → Score X points
     # 4 = HORIZONTAL → X horizontal Klaxes
 
+    def compute_derived(self):
+        return {
+            "PLAYER_Y": self.DESPAWN_Y + 6
+        }
 
-class TilesObservation(NamedTuple):
+@struct.dataclass
+class TilesObservation:
     x: chex.Array
     y: chex.Array
     color: chex.Array
     active: chex.Array
 
 
-class KlaxObservation(NamedTuple):
+@struct.dataclass
+class KlaxObservation:
     player_x: chex.Array
     tiles: TilesObservation
     board: chex.Array
@@ -193,11 +200,13 @@ class KlaxObservation(NamedTuple):
     backpack_colors: chex.Array
 
 
-class KlaxInfo(NamedTuple):
+@struct.dataclass
+class KlaxInfo:
     time: chex.Array
 
 
-class KlaxState(NamedTuple):
+@struct.dataclass
+class KlaxState:
     player_x: chex.Array
     player_col: chex.Array
     player_target_col: chex.Array
@@ -242,27 +251,9 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
     ORIENT_D1: int = 2    # diagonal down-right
     ORIENT_D2: int = 3    # diagonal up-right
 
-
-    def __init__(self, consts: KlaxConstants = None):
-        consts = consts or KlaxConstants()
-        super().__init__(consts)
-        self.renderer = KlaxRenderer(self.consts)
-
-        # --- WAVES ---
-        self._waves = jnp.array(KlaxConstants.klax_waves, dtype=jnp.int32)
-        self._n_waves = int(self._waves.shape[0])
-
-        # Default: no reward functions (handled by wrapper)
-        rf = tuple()
-        self._rf_count: int = 0
-        self._rf_eff_len: int = 1
-
-        rf_branches = tuple()
-        fallback_branch = (lambda op: op[2].astype(jnp.float32),)
-
-        self._rf_branches = rf_branches + fallback_branch
-
-        self.action_set = [
+    # Minimal ALE action set for Klax
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -281,7 +272,28 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE,
-        ]
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: KlaxConstants = None):
+        consts = consts or KlaxConstants()
+        super().__init__(consts)
+        self.renderer = KlaxRenderer(self.consts)
+
+        # --- WAVES ---
+        self._waves = jnp.array(self.consts.klax_waves, dtype=jnp.int32)
+        self._n_waves = int(self._waves.shape[0])
+
+        # Default: no reward functions (handled by wrapper)
+        rf = tuple()
+        self._rf_count: int = 0
+        self._rf_eff_len: int = 1
+
+        rf_branches = tuple()
+        fallback_branch = (lambda op: op[2].astype(jnp.float32),)
+
+        self._rf_branches = rf_branches + fallback_branch
 
         self._kernels = {
             3: (jnp.ones((1, 3), dtype=jnp.int32), jnp.ones((3, 1), dtype=jnp.int32),
@@ -470,7 +482,9 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: KlaxState, action: chex.Array):
-        new_state = self._advance_state(state, action)
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+        new_state = self._advance_state(state, atari_action)
         base_reward = self._get_reward(state, new_state).astype(jnp.float32)
         operand = (state, new_state, base_reward)
 
@@ -840,7 +854,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         wave_idx_final = wave_idx_after
         spawn_accum_final = jax.lax.select(wave_done_now, jnp.int32(0), spawn_accum_after)
 
-        return state._replace(
+        return state.replace(
             step_counter=step_counter, rng_key=k_after, tiles_x=tiles_x, tiles_y=tiles_y, tiles_color=tiles_color,
             tiles_active=tiles_active, tiles_col=tiles_col, player_x=px_next, player_col=player_col_next,
             player_target_col=target_col_new, player_backpack_colors=player_backpack_colors,
@@ -898,7 +912,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         max_color = max(int(self.consts.N_TILE_TYPES), 1)
@@ -977,16 +991,21 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
 
 class KlaxRenderer(JAXGameRenderer):
-    def __init__(self, consts: KlaxConstants = None):
-        super().__init__()
+    def __init__(self, consts: KlaxConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or KlaxConstants()
+        super().__init__(self.consts)
 
-        self.rendering_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and process all sprites
         (

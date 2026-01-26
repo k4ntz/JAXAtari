@@ -9,8 +9,9 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
-import jaxatari.spaces as spaces
+from flax import struct
 
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -22,6 +23,7 @@ from jaxatari.games.timepilot_levels import (
     TimePilot_Level_4,
     TimePilot_Level_5
 )
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -112,13 +114,13 @@ def _get_default_asset_config() -> tuple:
         {'name': 'all_enemy_sprites', 'type': 'group', 'files': all_enemy_sprites_files},
     )
 
-class TimePilotConstants(NamedTuple):
+class TimePilotConstants(AutoDerivedConstants):
     # Constants for game environment
-    WIDTH: int = 160
-    HEIGHT: int = 210
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # Object sizes (width, height)
-    PLAYER_SIZE_PER_ROTATION: chex.Array = jnp.array([
+    PLAYER_SIZE_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (7, 14), # up
         (8, 10),
         (8, 9), # left
@@ -127,20 +129,20 @@ class TimePilotConstants(NamedTuple):
         (8, 10),
         (8, 9), # right
         (8, 10)
-    ])
-    MISSILE_SIZE: Tuple[int, int] = (1, 2)
+    ]))
+    MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (1, 2))
 
     # Rendering constants
-    WALL_TOP_HEIGHT: int = 32
-    WALL_BOTTOM_HEIGHT: int = 16
-    BLACK_BORDER_TOP_HEIGHT: int = 0
-    BLACK_BORDER_BOTTOM_HEIGHT: int = 17
+    WALL_TOP_HEIGHT: int = struct.field(pytree_node=False, default=32)
+    WALL_BOTTOM_HEIGHT: int = struct.field(pytree_node=False, default=16)
+    BLACK_BORDER_TOP_HEIGHT: int = struct.field(pytree_node=False, default=0)
+    BLACK_BORDER_BOTTOM_HEIGHT: int = struct.field(pytree_node=False, default=17)
 
     # Player constants
-    PLAYER_X: int = 76
-    PLAYER_Y: int = WALL_TOP_HEIGHT + BLACK_BORDER_TOP_HEIGHT + 68
-    INITIAL_PLAYER_ROTATION: int = 2
-    PLAYER_SPEED_PER_ROTATION: chex.Array = jnp.array([
+    PLAYER_X: int = struct.field(pytree_node=False, default=76)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    INITIAL_PLAYER_ROTATION: int = struct.field(pytree_node=False, default=2)
+    PLAYER_SPEED_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -4), # up
         (-4, -4),
         (-4, 0), # left
@@ -149,9 +151,9 @@ class TimePilotConstants(NamedTuple):
         (4, 4),
         (4, 0), # down
         (4, -4)
-    ])
+    ]))
     # speed is different in every step (the pattern is recurring every eighth step)
-    PLAYER_MISSILE_SPEED_PER_ROTATION: chex.Array = jnp.array([
+    PLAYER_MISSILE_SPEED_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         ((0, -4), (0, 4), (0, -8), (0, 4), (0, -4), (0, 4), (0, -4), (0, 0)), # up
         ((-4, -4), (4, 4), (-8, -8), (4, 4), (-4, -4), (4, 4), (-4, -4), (0, 0)),
         ((-4, 0), (4, 0), (-8, 0), (4, 0), (-4, 0), (4, 0), (-4, 0), (0, 0)), # left
@@ -160,45 +162,45 @@ class TimePilotConstants(NamedTuple):
         ((4, 4), (-4, -4), (8, 8), (-4, -4), (4, 4), (-4, -4), (4, 4), (0, 0)),
         ((4, 0), (-4, 0), (8, 0), (-4, 0), (4, 0), (-4, 0), (4, 0), (0, 0)), # right
         ((4, -4), (-4, 4), (8, -8), (-4, 4), (4, -4), (-4, 4), (4, -4), (0, 0))
-    ])
+    ]))
 
     # Cloud constants
-    INITIAL_CLOUDS: chex.Array = jnp.array([ 
+    INITIAL_CLOUDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([ 
         (16, 65),
         (96, 65),
         (16, 129),
         (96, 129)
-    ])
+    ]))
 
     # Game constants
-    INITIAL_ENEMIES_REMAINING: int = 8
-    INITIAL_LIVES: int = 5
-    MAX_LIVES: int = 5
-    MAX_SCORE: int = 999900
+    INITIAL_ENEMIES_REMAINING: int = struct.field(pytree_node=False, default=8)
+    INITIAL_LIVES: int = struct.field(pytree_node=False, default=5)
+    MAX_LIVES: int = struct.field(pytree_node=False, default=5)
+    MAX_SCORE: int = struct.field(pytree_node=False, default=999900)
 
-    POINTS_PER_ENEMY: int = 100
-    POINTS_PER_BOSS: int = 3000
-    POINTS_TO_GAIN_A_LIFE: int = 10000
-    ENEMY_KILLS_TO_ELIMINATE: int = 4 
+    POINTS_PER_ENEMY: int = struct.field(pytree_node=False, default=100)
+    POINTS_PER_BOSS: int = struct.field(pytree_node=False, default=3000)
+    POINTS_TO_GAIN_A_LIFE: int = struct.field(pytree_node=False, default=10000)
+    ENEMY_KILLS_TO_ELIMINATE: int = struct.field(pytree_node=False, default=4) 
 
-    MAX_ENTITY_X: int = WIDTH - 1
-    MAX_ENTITY_Y: int = HEIGHT - WALL_BOTTOM_HEIGHT - BLACK_BORDER_BOTTOM_HEIGHT - 1
-    MIN_ENTITY_X: int = 0
-    MIN_ENTITY_Y: int = WALL_TOP_HEIGHT + BLACK_BORDER_TOP_HEIGHT + 1
+    MAX_ENTITY_X: int = struct.field(pytree_node=False, default=None)
+    MAX_ENTITY_Y: int = struct.field(pytree_node=False, default=None)
+    MIN_ENTITY_X: int = struct.field(pytree_node=False, default=0)
+    MIN_ENTITY_Y: int = struct.field(pytree_node=False, default=None)
 
     # Animation and respawn delays
-    START_SCREEN_DELAY: int = 120
-    PLAYER_DEATH_ANIMATION_DELAY: int = 64
-    TRANSITION_DELAY_FIRST_STAGE: int = 128
-    TRANSITION_DELAY_SECOND_STAGE: int = 128
-    TRANSITION_DELAY: int = TRANSITION_DELAY_FIRST_STAGE + TRANSITION_DELAY_SECOND_STAGE
-    ENEMY_DEATH_ANIMATION_DELAY = 24
+    START_SCREEN_DELAY: int = struct.field(pytree_node=False, default=120)
+    PLAYER_DEATH_ANIMATION_DELAY: int = struct.field(pytree_node=False, default=64)
+    TRANSITION_DELAY_FIRST_STAGE: int = struct.field(pytree_node=False, default=128)
+    TRANSITION_DELAY_SECOND_STAGE: int = struct.field(pytree_node=False, default=128)
+    TRANSITION_DELAY: int = struct.field(pytree_node=False, default=None)
+    ENEMY_DEATH_ANIMATION_DELAY: int = struct.field(pytree_node=False, default=24)
 
     # Enemy constants
-    MAX_NUMBER_OF_ENEMIES: int = 4
-    MAX_ENEMY_MISSILES: int = 2
-    INITIAL_ATTACK_DELAY: int = 150 # mean delay for first attack after player respawn
-    ENEMY_MISSILE_SPEED_PER_ROTATION = jnp.array([
+    MAX_NUMBER_OF_ENEMIES: int = struct.field(pytree_node=False, default=4)
+    MAX_ENEMY_MISSILES: int = struct.field(pytree_node=False, default=2)
+    INITIAL_ATTACK_DELAY: int = struct.field(pytree_node=False, default=150) # mean delay for first attack after player respawn
+    ENEMY_MISSILE_SPEED_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         (0, -4), # up
         (-4, -4),
         (-4, 0), # left
@@ -207,21 +209,31 @@ class TimePilotConstants(NamedTuple):
         (4, 4),
         (4, 0), # right
         (4, -4)
-    ])
+    ]))
     
     # Level constants
-    LEVEL_1: LevelConstants = TimePilot_Level_1
-    LEVEL_2: LevelConstants = TimePilot_Level_2
-    LEVEL_3: LevelConstants = TimePilot_Level_3
-    LEVEL_4: LevelConstants = TimePilot_Level_4
-    LEVEL_5: LevelConstants = TimePilot_Level_5
+    LEVEL_1: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_1)
+    LEVEL_2: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_2)
+    LEVEL_3: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_3)
+    LEVEL_4: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_4)
+    LEVEL_5: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_5)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'PLAYER_Y': self.WALL_TOP_HEIGHT + self.BLACK_BORDER_TOP_HEIGHT + 68,
+            'MAX_ENTITY_X': self.WIDTH - 1,
+            'MAX_ENTITY_Y': self.HEIGHT - self.WALL_BOTTOM_HEIGHT - self.BLACK_BORDER_BOTTOM_HEIGHT - 1,
+            'MIN_ENTITY_Y': self.WALL_TOP_HEIGHT + self.BLACK_BORDER_TOP_HEIGHT + 1,
+            'TRANSITION_DELAY': self.TRANSITION_DELAY_FIRST_STAGE + self.TRANSITION_DELAY_SECOND_STAGE
+        }
 
 # immutable state container
-class TimePilotState(NamedTuple):
-
+@struct.dataclass
+class TimePilotState:
     player_rotation: chex.Array
     player_active: chex.Array
     player_missile_state: chex.Array # (4, ) array with (x, y, rotation, missile_step_counter)
@@ -245,7 +257,8 @@ class TimePilotState(NamedTuple):
     rng_key: chex.Array
     original_rng_key: chex.Array # keep track of original key to reuse after respawning
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -253,7 +266,8 @@ class EntityPosition(NamedTuple):
     rotation: jnp.ndarray
     active: jnp.ndarray
 
-class TimePilotObservation(NamedTuple):
+@struct.dataclass
+class TimePilotObservation:
     player: EntityPosition # (x, y, width, height, rotation, active)
     player_missile: EntityPosition  # (x, y, width, height, rotation, active)
     enemies: jnp.ndarray # shape (4, 6) - 4 enemies, each with (x, y, width, height, rotation, active)
@@ -265,28 +279,34 @@ class TimePilotObservation(NamedTuple):
     lives: jnp.ndarray
     enemies_remaining: jnp.ndarray
 
-class TimePilotInfo(NamedTuple):
+@struct.dataclass
+class TimePilotInfo:
     level: chex.Array
     score: chex.Array
     lives: chex.Array
     enemies_remaining: chex.Array
 
 class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilotInfo, TimePilotConstants]):
+    # Minimal ALE action set for Time Pilot (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: TimePilotConstants|None = None):
         consts = consts or TimePilotConstants()
         super().__init__(consts)
-        self.action_set = jnp.array([
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE
-        ])
         self.obs_size = 3*6 + self.consts.MAX_NUMBER_OF_ENEMIES*6 + self.consts.MAX_ENEMY_MISSILES*6 + 4
         self.renderer = TimePilotRenderer(consts)
 
@@ -859,6 +879,8 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
     def step(
         self, state: TimePilotState, action: chex.Array
     ) -> Tuple[TimePilotObservation, TimePilotState, float, bool, TimePilotInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         
         level_constants = self._get_level_constants(state.level)
         
@@ -873,13 +895,13 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         player_rotation = jax.lax.cond(
             jnp.logical_and(jnp.logical_and(state.player_active, state.respawn_timer <= 0), 
                             (state.step_counter + 2) % 8 == 0),
-            lambda: self.player_step(state.player_rotation, action),
+            lambda: self.player_step(state.player_rotation, atari_action),
             lambda: state.player_rotation
         )
 
         # update player missile (every step)
         player_missile_state, missile_rdy = self.player_missile_step(
-            state.player_missile_state, state.missile_rdy, player_rotation, action, 
+            state.player_missile_state, state.missile_rdy, player_rotation, atari_action, 
             jnp.logical_and(state.player_active, state.respawn_timer <= 0), state.step_counter
         )
 
@@ -1345,7 +1367,7 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         ])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Box: 
         """Returns the observation space for TimePilot.
@@ -1420,21 +1442,23 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
 class TimePilotRenderer(JAXGameRenderer):
     """JAX-based TimePilot game renderer, optimized with JIT compilation."""
 
-    def __init__(self, consts: TimePilotConstants|None = None):
+    def __init__(self, consts: TimePilotConstants|None = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading and processing all assets.
         """
-        super().__init__()
-
         self.consts = consts or TimePilotConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/timepilot"
 
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants

@@ -8,11 +8,14 @@ import jax.random as random
 import jax
 import numpy as np
 import collections
+from flax import struct
+
 # Replaced legacy utils with new one
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
 
 rand_key = random.key(0)
 
@@ -43,62 +46,81 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class TennisConstants(NamedTuple):
+class TennisConstants(AutoDerivedConstants):
     # frame (window) constants
-    FRAME_WIDTH: int = 160
-    FRAME_HEIGHT: int = 210
+    FRAME_WIDTH: int = struct.field(pytree_node=False, default=160)
+    FRAME_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # field constants (the actual tennis court)
-    FIELD_WIDTH_TOP: chex.Array = jnp.array(79)
-    FIELD_WIDTH_BOTTOM: chex.Array = jnp.array(111)
-    FIELD_HEIGHT: chex.Array = jnp.array(130)
+    FIELD_WIDTH_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(79))
+    FIELD_WIDTH_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(111))
+    FIELD_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(130))
 
     # game constants (these values are used for the actual gameplay calculations)
-    GAME_OFFSET_LEFT_BOTTOM: chex.Array = jnp.array(15 + 1)
-    GAME_OFFSET_TOP: chex.Array = jnp.array(43.0)
-    GAME_WIDTH: chex.Array = jnp.array(FIELD_WIDTH_BOTTOM)
-    GAME_HEIGHT: chex.Array = jnp.array(FIELD_HEIGHT)
-    GAME_MIDDLE: chex.Array = jnp.array(GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT)
-    GAME_OFFSET_BOTTOM: chex.Array = jnp.array(GAME_OFFSET_TOP + GAME_HEIGHT)
-    PAUSE_DURATION: chex.Array = jnp.array(100)
+    GAME_OFFSET_LEFT_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(15 + 1))
+    GAME_OFFSET_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(43.0))
+    GAME_WIDTH: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_HEIGHT: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_MIDDLE: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_OFFSET_BOTTOM: chex.Array = struct.field(pytree_node=False, default=None)
+    PAUSE_DURATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(100))
 
     # player constants
-    PLAYER_CONST: chex.Array = jnp.array(0)
-    PLAYER_WIDTH: chex.Array = jnp.array(13)
-    PLAYER_HEIGHT: chex.Array = jnp.array(23)
-    PLAYER_MIN_X: chex.Array = jnp.array(8)
-    PLAYER_MAX_X: chex.Array = jnp.array(144)
-    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = jnp.array(160)
-    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = jnp.array(109)
-    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = jnp.array(70)
-    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = jnp.array(15)
+    PLAYER_CONST: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(0))
+    PLAYER_WIDTH: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(13))
+    PLAYER_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(23))
+    PLAYER_MIN_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(8))
+    PLAYER_MAX_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array(144))
+    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(160))
+    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(109))
+    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(70))
+    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(15))
 
-    START_X: chex.Array = jnp.array(GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH)
-    PLAYER_START_Y: chex.Array = jnp.array(GAME_OFFSET_TOP - PLAYER_HEIGHT)
-    ENEMY_START_Y: chex.Array = jnp.array(GAME_OFFSET_BOTTOM - PLAYER_HEIGHT)
+    START_X: chex.Array = struct.field(pytree_node=False, default=None)
+    PLAYER_START_Y: chex.Array = struct.field(pytree_node=False, default=None)
+    ENEMY_START_Y: chex.Array = struct.field(pytree_node=False, default=None)
 
-    PLAYER_START_DIRECTION: chex.Array = jnp.array(1)
-    PLAYER_START_FIELD: chex.Array = jnp.array(1)
+    PLAYER_START_DIRECTION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    PLAYER_START_FIELD: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
     # ball constants
-    BALL_GRAVITY_PER_FRAME: chex.Array = jnp.array(1.1)
-    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = jnp.array(21)
-    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(1)
-    BALL_WIDTH: chex.Array = jnp.array(2.0)
-    LONG_HIT_THRESHOLD_TOP: chex.Array = jnp.array(52)
-    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = jnp.array(121)
-    LONG_HIT_DISTANCE: chex.Array = jnp.array(91)
-    SHORT_HIT_DISTANCE: chex.Array = jnp.array(40)
+    BALL_GRAVITY_PER_FRAME: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1.1))
+    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(21))
+    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    BALL_WIDTH: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(2.0))
+    LONG_HIT_THRESHOLD_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(52))
+    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(121))
+    LONG_HIT_DISTANCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(91))
+    SHORT_HIT_DISTANCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(40))
 
     # enemy constants
-    ENEMY_CONST: chex.Array = jnp.array(1)
+    ENEMY_CONST: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
-    GAME_MIDDLE_HORIZONTAL: chex.Array = jnp.array((FRAME_WIDTH - PLAYER_WIDTH) / 2)
+    GAME_MIDDLE_HORIZONTAL: chex.Array = struct.field(pytree_node=False, default=None)
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+
+    def compute_derived(self) -> Dict[str, Any]:
+        game_width = self.FIELD_WIDTH_BOTTOM
+        game_height = self.FIELD_HEIGHT
+        game_middle = self.GAME_OFFSET_TOP + 0.5 * game_height
+        game_offset_bottom = self.GAME_OFFSET_TOP + game_height
+        return {
+            'GAME_WIDTH': game_width,
+            'GAME_HEIGHT': game_height,
+            'GAME_MIDDLE': game_middle,
+            'GAME_OFFSET_BOTTOM': game_offset_bottom,
+            'START_X': self.GAME_OFFSET_LEFT_BOTTOM + 0.5 * game_width - 0.5 * self.PLAYER_WIDTH,
+            'PLAYER_START_Y': self.GAME_OFFSET_TOP - self.PLAYER_HEIGHT,
+            'ENEMY_START_Y': game_offset_bottom - self.PLAYER_HEIGHT,
+            'GAME_MIDDLE_HORIZONTAL': (self.FRAME_WIDTH - self.PLAYER_WIDTH) / 2,
+        }
 
 
-class BallState(NamedTuple):
+
+
+@struct.dataclass
+class BallState:
     ball_x: chex.Array  # x-coordinate of the ball
     ball_y: chex.Array  # y-coordinate of the ball
     ball_z: chex.Array  # z-coordinate of the ball
@@ -114,7 +136,8 @@ class BallState(NamedTuple):
     last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     player_x: chex.Array  # x-coordinate of the player
     player_y: chex.Array  # y-coordinate of the player
     player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
@@ -123,7 +146,8 @@ class PlayerState(NamedTuple):
     player_walk_speed: chex.Array
 
 
-class EnemyState(NamedTuple):
+@struct.dataclass
+class EnemyState:
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
@@ -131,7 +155,8 @@ class EnemyState(NamedTuple):
     y_movement_direction: chex.Array  # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
 
 
-class GameState(NamedTuple):
+@struct.dataclass
+class GameState:
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
     pause_counter: chex.Array  # delay between restart of game
     player_score: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
@@ -141,7 +166,8 @@ class GameState(NamedTuple):
     is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
 
-class AnimatorState(NamedTuple):
+@struct.dataclass
+class AnimatorState:
     player_frame: chex.Array = 0
     enemy_frame: chex.Array = 0
     player_racket_frame: chex.Array = 0
@@ -150,7 +176,8 @@ class AnimatorState(NamedTuple):
     enemy_racket_animation: chex.Array = False
 
 
-class TennisState(NamedTuple):
+@struct.dataclass
+class TennisState:
     player_state: PlayerState
     enemy_state: EnemyState
     ball_state: BallState
@@ -166,7 +193,8 @@ class TennisState(NamedTuple):
 # have been moved into the TennisJaxEnv class below.
 
 
-class PlayerObs(NamedTuple):
+@struct.dataclass
+class PlayerObs:
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array
@@ -174,13 +202,15 @@ class PlayerObs(NamedTuple):
     player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
 
 
-class EnemyObs(NamedTuple):
+@struct.dataclass
+class EnemyObs:
     enemy_x: chex.Array
     enemy_y: chex.Array
     enemy_direction: chex.Array
 
 
-class BallObs(NamedTuple):
+@struct.dataclass
+class BallObs:
     ball_x: chex.Array  # x-coordinate of the ball
     ball_y: chex.Array  # y-coordinate of the ball
     ball_z: chex.Array  # z-coordinate of the ball
@@ -188,7 +218,8 @@ class BallObs(NamedTuple):
     last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
 
-class TennisObs(NamedTuple):
+@struct.dataclass
+class TennisObs:
     player: PlayerObs
     enemy: EnemyObs
     ball: BallObs
@@ -199,11 +230,36 @@ class TennisObs(NamedTuple):
     enemy_sets: chex.Array
 
 
-class TennisInfo(NamedTuple):
+@struct.dataclass
+class TennisInfo:
     pass 
 
 
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+    # Minimal ALE action set for Tennis (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(self, consts: TennisConstants = None):
         if consts is None:
@@ -294,11 +350,14 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                                 ),
                                 state.counter + 1, animator_state=AnimatorState(),random_key=state.random_key)
         
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         new_state = jax.lax.cond(state.game_state.is_finished,
                         lambda s: s,
                         lambda s: jax.lax.cond(s.game_state.pause_counter > 0,
                                                _pause_step,
-                                               lambda s_inner: self._normal_step(s_inner, action),
+                                               lambda s_inner: self._normal_step(s_inner, atari_action),
                                                s
                                                ),
                         state
@@ -311,20 +370,19 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return new_obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _normal_step(self, state: TennisState, action) -> TennisState:
+    def _normal_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates the entire state of the game by calling all step functions. Should be used when game is not paused.
 
         Args:
             state (TennisState): The current state of the game.
-            action: The action to apply.
-
+            atari_action: The translated ALE action to apply.
         Returns:
             TennisState: The updated state of the game.
         """
         new_state_after_score_check = self._check_score(state)
-        new_state_after_ball_step = self._ball_step(new_state_after_score_check, action)
-        new_player_state = self._player_step(new_state_after_ball_step, action)
+        new_state_after_ball_step = self._ball_step(new_state_after_score_check, atari_action)
+        new_player_state = self._player_step(new_state_after_ball_step, atari_action)
         new_enemy_state = self._enemy_step(new_state_after_ball_step)
         new_animator_state = self._animator_step(state, new_player_state, new_enemy_state)
 
@@ -1111,30 +1169,14 @@ class EnemyObs(NamedTuple):
     enemy_direction: chex.Array
 
 
-class BallObs(NamedTuple):
-    ball_x: chex.Array  # x-coordinate of the ball
-    ball_y: chex.Array  # y-coordinate of the ball
-    ball_z: chex.Array  # z-coordinate of the ball
-    bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
-    last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
-
-
-class TennisObs(NamedTuple):
-    player: PlayerObs
-    enemy: EnemyObs
-    ball: BallObs
-    is_serving_state: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
-    player_points: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
-    enemy_points: chex.Array
-    player_sets: chex.Array  # Number of won sets
-    enemy_sets: chex.Array
-
-
-class TennisInfo(NamedTuple):
-    pass 
-
-
 class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+    # ALE minimal action set: [NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT, UPFIRE, RIGHTFIRE, LEFTFIRE, DOWNFIRE, UPRIGHTFIRE, UPLEFTFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE]
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
+        Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
+        Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE,
+        Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
+    ], dtype=jnp.int32)
 
     def __init__(self, consts: TennisConstants = None):
         if consts is None:
@@ -1210,6 +1252,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         Returns:
             TennisState: The updated state of the game.
         """
+        # Translate agent action (0,1,2,...,17) to ALE action
+        atari_action = jnp.take(self.ACTION_SET, action)
         
         def _pause_step(state: TennisState) -> TennisState:
             return TennisState(state.player_state, state.enemy_state,
@@ -1229,7 +1273,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                         lambda s: s,
                         lambda s: jax.lax.cond(s.game_state.pause_counter > 0,
                                                _pause_step,
-                                               lambda s_inner: self._normal_step(s_inner, action),
+                                               lambda s_inner: self._normal_step(s_inner, atari_action),
                                                s
                                                ),
                         state
@@ -1242,20 +1286,20 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return new_obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _normal_step(self, state: TennisState, action) -> TennisState:
+    def _normal_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates the entire state of the game by calling all step functions. Should be used when game is not paused.
 
         Args:
             state (TennisState): The current state of the game.
-            action: The action to apply.
+            atari_action: The translated ALE action to apply.
 
         Returns:
             TennisState: The updated state of the game.
         """
         new_state_after_score_check = self._check_score(state)
-        new_state_after_ball_step = self._ball_step(new_state_after_score_check, action)
-        new_player_state = self._player_step(new_state_after_ball_step, action)
+        new_state_after_ball_step = self._ball_step(new_state_after_score_check, atari_action)
+        new_player_state = self._player_step(new_state_after_ball_step, atari_action)
         new_enemy_state = self._enemy_step(new_state_after_ball_step)
         new_animator_state = self._animator_step(state, new_player_state, new_enemy_state)
 
@@ -1265,8 +1309,8 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def render(self, state: TennisState) -> Tuple[jnp.ndarray]:
         return self.renderer.render(state)
 
-    def action_space(self) -> jnp.ndarray:
-        return spaces.Discrete(18)
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def flatten_player_obs(self, player_obs: PlayerObs):
         return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float64)]), jnp.array([player_obs.player_y.astype(jnp.float64)]),
@@ -1672,13 +1716,13 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
                          state.player_game_score, state.enemy_game_score, is_finished)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _player_step(self, state: TennisState, action: chex.Array) -> PlayerState:
+    def _player_step(self, state: TennisState, atari_action: chex.Array) -> PlayerState:
         """
         Updates player position based on provided action and applies bounding box.
 
         Args:
             state (PlayerState): The current player state.
-            action (chex.Array): The action to apply.
+            atari_action (chex.Array): The translated ALE action to apply.
 
         Returns:
             PlayerState: The updated player state.
@@ -1689,33 +1733,33 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         # does the action contain UP
         up = jnp.any(
             jnp.array(
-                [action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT,
-                 action == Action.UPFIRE, action == Action.UPRIGHTFIRE,
-                 action == Action.UPLEFTFIRE]
+                [atari_action == Action.UP, atari_action == Action.UPRIGHT, atari_action == Action.UPLEFT,
+                 atari_action == Action.UPFIRE, atari_action == Action.UPRIGHTFIRE,
+                 atari_action == Action.UPLEFTFIRE]
             )
         )
         # does the action contain DOWN
         down = jnp.any(
             jnp.array(
-                [action == Action.DOWN, action == Action.DOWNRIGHT, action == Action.DOWNLEFT,
-                 action == Action.DOWNFIRE, action == Action.DOWNRIGHTFIRE,
-                 action == Action.DOWNLEFTFIRE]
+                [atari_action == Action.DOWN, atari_action == Action.DOWNRIGHT, atari_action == Action.DOWNLEFT,
+                 atari_action == Action.DOWNFIRE, atari_action == Action.DOWNRIGHTFIRE,
+                 atari_action == Action.DOWNLEFTFIRE]
             )
         )
         # does the action contain LEFT
         left = jnp.any(
             jnp.array(
-                [action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT,
-                 action == Action.LEFTFIRE, action == Action.UPLEFTFIRE,
-                 action == Action.DOWNLEFTFIRE]
+                [atari_action == Action.LEFT, atari_action == Action.UPLEFT, atari_action == Action.DOWNLEFT,
+                 atari_action == Action.LEFTFIRE, atari_action == Action.UPLEFTFIRE,
+                 atari_action == Action.DOWNLEFTFIRE]
             )
         )
         # does the action contain RIGHT
         right = jnp.any(
             jnp.array(
-                [action == Action.RIGHT, action == Action.UPRIGHT, action == Action.DOWNRIGHT,
-                 action == Action.RIGHTFIRE, action == Action.UPRIGHTFIRE,
-                 action == Action.DOWNRIGHTFIRE]
+                [atari_action == Action.RIGHT, atari_action == Action.UPRIGHT, atari_action == Action.DOWNRIGHT,
+                 atari_action == Action.RIGHTFIRE, atari_action == Action.UPRIGHTFIRE,
+                 atari_action == Action.DOWNRIGHTFIRE]
             )
         )
 
@@ -1927,14 +1971,14 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _ball_step(self, state: TennisState, action) -> TennisState:
+    def _ball_step(self, state: TennisState, atari_action) -> TennisState:
         """
         Updates ball position by applying velocity and gravity. Also handles player-ball collisions
         and fires the ball if the provided action contains FIRE.
 
         Args:
             state (TennisState): The current state of the game.
-            action (chex.Array): The action to apply.
+            atari_action (chex.Array): The translated ALE action to apply.
 
         Returns:
             BallState: The updated ball state.
@@ -2069,11 +2113,11 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
         # check if fire is pressed
         fire = jnp.any(jnp.array(
-            [action == Action.FIRE, action == Action.LEFTFIRE, action == Action.DOWNLEFTFIRE,
-             action == Action.DOWNFIRE,
-             action == Action.DOWNRIGHTFIRE, action == Action.RIGHTFIRE,
-             action == Action.UPRIGHTFIRE, action == Action.UPFIRE,
-             action == Action.UPLEFTFIRE]))
+            [atari_action == Action.FIRE, atari_action == Action.LEFTFIRE, atari_action == Action.DOWNLEFTFIRE,
+             atari_action == Action.DOWNFIRE,
+             atari_action == Action.DOWNRIGHTFIRE, atari_action == Action.RIGHTFIRE,
+             atari_action == Action.UPRIGHTFIRE, atari_action == Action.UPFIRE,
+             atari_action == Action.UPLEFTFIRE]))
 
         any_entity_ready_to_fire = jnp.logical_or(
             jnp.logical_and(
@@ -2343,15 +2387,20 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
 class TennisRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: TennisConstants = None):
-        super().__init__()
+    def __init__(self, consts: TennisConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or TennisConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tennis"
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Load and pad background
         background_rgba = self.jr.loadFrame(os.path.join(self.sprite_path, 'background.npy'))

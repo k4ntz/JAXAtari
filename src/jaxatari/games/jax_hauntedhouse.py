@@ -1,13 +1,15 @@
 import os
 from enum import IntEnum
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Optional
 import jax.lax
 import jax.numpy as jnp
 import chex
 from PIL.ImageChops import logical_and
 from tensorstore import int32
+from flax import struct
 
+from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -106,7 +108,8 @@ def _get_default_asset_config() -> tuple:
         {'name': 'digits', 'type': 'digits', 'pattern': 'SpriteNumber{}.npy'},
     )
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     floor: jnp.ndarray
@@ -115,34 +118,34 @@ class EntityPosition(NamedTuple):
     
     
 
-class HauntedHouseConstants(NamedTuple):
-    WIDTH: int = 160
-    HEIGHT: int = 210
+class HauntedHouseConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    Y_WALKING_DISTANCE: int = 2  # This is compensation for the stretched pixels in the ALE version. However, the game
+    Y_WALKING_DISTANCE: int = struct.field(pytree_node=False, default=2)  # This is compensation for the stretched pixels in the ALE version. However, the game
                                  # feels much better when this is set to 1. Possible values: [1, 2]
 
 
     WALL_Y_OFFSET: int = 4
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
-    WALL_COLOR_BLUE: chex.Array = jnp.array([24, 26, 167, 255], dtype=jnp.uint8)
-    WALL_COLOR_RED: chex.Array = jnp.array([163, 57, 21, 255], dtype=jnp.uint8)
-    WALL_COLOR_GREEN: chex.Array = jnp.array([24, 98, 78, 255], dtype=jnp.uint8)
-    WALL_COLOR_YELLOW: chex.Array = jnp.array([162, 134, 56, 255], dtype=jnp.uint8)
-    WALL_COLOR_WHITE: chex.Array = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
-    LIGHT_COLOR: chex.Array = jnp.array([198, 108, 58, 255], dtype=jnp.uint8)
-    ITEM_OFFSETS: chex.Array = jnp.array([(0, 0), (0, 2), (2, 0), (5, 2),
-                                          (0, 0), (2, 0), (0, 2), (0, 0)], dtype=jnp.uint8)
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 0))
+    WALL_COLOR_BLUE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([24, 26, 167, 255], dtype=jnp.uint8))
+    WALL_COLOR_RED: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([163, 57, 21, 255], dtype=jnp.uint8))
+    WALL_COLOR_GREEN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([24, 98, 78, 255], dtype=jnp.uint8))
+    WALL_COLOR_YELLOW: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([162, 134, 56, 255], dtype=jnp.uint8))
+    WALL_COLOR_WHITE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([255, 255, 255, 255], dtype=jnp.uint8))
+    LIGHT_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([198, 108, 58, 255], dtype=jnp.uint8))
+    ITEM_OFFSETS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([(0, 0), (0, 2), (2, 0), (5, 2),
+                                          (0, 0), (2, 0), (0, 2), (0, 0)], dtype=jnp.uint8))
 
 
-    STAIRS_TOP_LEFT: chex.Array = jnp.array([True, True, True, True], dtype=jnp.bool)
-    STAIRS_TOP_RIGHT: chex.Array = jnp.array([False, True, True, False], dtype=jnp.bool)
-    STAIRS_BOTTOM_LEFT: chex.Array = jnp.array([False, True, True, False], dtype=jnp.bool)
-    STAIRS_BOTTOM_RIGHT: chex.Array = jnp.array([True, True, True, True], dtype=jnp.bool)
-    STAIRS_LEFT: chex.Array = jnp.array([False, True, True, False], dtype=jnp.bool)
-    STAIRS_RIGHT: chex.Array = jnp.array([False, False, True, True], dtype=jnp.bool)
+    STAIRS_TOP_LEFT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([True, True, True, True], dtype=jnp.bool))
+    STAIRS_TOP_RIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, True, True, False], dtype=jnp.bool))
+    STAIRS_BOTTOM_LEFT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, True, True, False], dtype=jnp.bool))
+    STAIRS_BOTTOM_RIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([True, True, True, True], dtype=jnp.bool))
+    STAIRS_LEFT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, True, True, False], dtype=jnp.bool))
+    STAIRS_RIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, False, True, True], dtype=jnp.bool))
 
-    DIRECTION: chex.Array = jnp.array([
+    DIRECTION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
     0,  # Action.NOOP (0)
     0,  # Action.FIRE (1)
     1,  # Action.UP (2)
@@ -161,9 +164,9 @@ class HauntedHouseConstants(NamedTuple):
     2,  # Action.UPLEFTFIRE (15)
     6,  # Action.DOWNRIGHTFIRE (16)
     4,  # Action.DOWNLEFTFIRE (17)
-], dtype=jnp.int32)
+], dtype=jnp.int32))
 
-    ADJACENCY_MATRIX: chex.Array = jnp.array([(0,0,0,0),                                         #0
+    ADJACENCY_MATRIX: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([(0,0,0,0),                                         #0
                                               (2,3,7,0),    (1,4,0,0),     (1,4,5,0),     (2,3,6,0),    #1-4
                                               (3,6,0,0),    (4,5,8,0),     (1,0,0,0),     (6,0,0,0),    #5-8
                                               (10,11,15,0), (9,12,16,0),   (9,12,13,19),  (10,11,14,0), #9-12
@@ -174,8 +177,8 @@ class HauntedHouseConstants(NamedTuple):
                                               (25,0,0,0),   (22,0,0,0),    (23,0,0,0),    (33,34,38,0), #29-32
                                               (32,35,0,0),  (32,35,36,0),  (33,34,37,40), (34,37,0,0),  #33-36
                                               (35,36,39,0), (32,0,0,0),    (37,0,0,0),    (35,0,0,0)    #37-40
-                                              ], dtype=jnp.int32)
-    LOCATIONS: chex.Array = jnp.array([(0, 0, 1),                                         #0
+                                              ], dtype=jnp.int32))
+    LOCATIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([(0, 0, 1),                                         #0
                                        (36, 106, 1),  (116, 106, 1), (36, 234, 1),  (116, 234, 1), #1-4
                                        (36, 428, 1),  (116, 428, 1), (36, 6, 1),    (116, 496, 1), #5-8
                                        (36, 106, 2),  (116, 106, 2), (36, 234, 2),  (116, 234, 2), #9-12
@@ -186,47 +189,76 @@ class HauntedHouseConstants(NamedTuple):
                                        (116, 496, 3), (4, 234, 3),   (148, 234, 3), (36, 106, 4),  #29-32
                                        (116, 106, 4), (36, 234, 4),  (116, 234, 4), (36, 428, 4),  #33-36
                                        (116, 428, 4), (36, 6, 4),    (116, 496, 4), (148, 234, 4)  #37-40
-                                       ], dtype=jnp.int32)
+                                       ], dtype=jnp.int32))
 
-    UP_STAIRS: chex.Array = jnp.array([7, 8, 16, 17, 19, 26, 29, 31])
-    DOWN_STAIRS: chex.Array = jnp.array([15, 18, 27, 28, 30, 38, 39, 40])
-    ROOMS: chex.Array = jnp.array([1,2,3,5,6,9,10,11,12,13,14,20,21,22,23,24,25,32,33,34,35,36,37])
-    STAIR_TRANSITIONS: chex. Array = jnp.array([0,0,0,0,0,0,0,15,18,0,0, #0-10
+    UP_STAIRS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([7, 8, 16, 17, 19, 26, 29, 31]))
+    DOWN_STAIRS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([15, 18, 27, 28, 30, 38, 39, 40]))
+    ROOMS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1,2,3,5,6,9,10,11,12,13,14,20,21,22,23,24,25,32,33,34,35,36,37]))
+    STAIR_TRANSITIONS: chex. Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0,0,0,0,0,0,0,15,18,0,0, #0-10
                                                 0,0,0,0,7,27,28,8,30,0,  #11-20
                                                 0,0,0,0,0,38,16,17,39,19, #21-30
-                                                40,0,0,0,0,0,0,26,29,31]) #31-40
+                                                40,0,0,0,0,0,0,26,29,31])) #31-40
 
-    PLAYER_SIZE: Tuple[int, int] = (8, 6)
-    GHOST_SIZE: Tuple[int, int] = (8, 16)
-    SPIDER_SIZE: Tuple[int, int] = (8, 16)
-    BAT_SIZE: Tuple[int, int] = (8, 20)
-    SCEPTER_SIZE: Tuple[int, int] = (8, 16)
-    URN_LEFT_SIZE: Tuple[int, int] = (4, 8)
-    URN_MIDDLE_SIZE: Tuple[int, int] = (4, 16)
-    URN_RIGHT_SIZE: Tuple[int, int] = (4, 8)
-    URN_LEFT_MIDDLE_SIZE: Tuple[int, int] = (6, 16)
-    URN_MIDDLE_RIGHT_SIZE: Tuple[int, int] = (6, 16)
-    URN_LEFT_RIGHT_SIZE: Tuple[int, int] = (8, 8)
-    URN_SIZE: Tuple[int, int] = (8, 16)
-    ITEM_SIZES: chex.Array = jnp.array([SCEPTER_SIZE, URN_LEFT_SIZE, URN_MIDDLE_SIZE, URN_RIGHT_SIZE,
-                                        URN_LEFT_MIDDLE_SIZE, URN_MIDDLE_RIGHT_SIZE, URN_LEFT_RIGHT_SIZE, URN_SIZE])
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    GHOST_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 16))
+    SPIDER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 16))
+    BAT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 20))
+    SCEPTER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 16))
+    URN_LEFT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 8))
+    URN_MIDDLE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 16))
+    URN_RIGHT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 8))
+    URN_LEFT_MIDDLE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (6, 16))
+    URN_MIDDLE_RIGHT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (6, 16))
+    URN_LEFT_RIGHT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 8))
+    URN_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 16))
 
-    # The -2 is a jank hack that allows it to always pass same_floor checks
-    ROOM_POSITIONS: chex.Array = jnp.array([(0, 0, -2), (80, 0, -2), (0, 178, -2), (80, 178, -2), (0, 338, -2), (80, 338, -2)])
-    ROOM_SIZES: chex.Array = jnp.array([(80, 177), (80, 177), (80, 161), (80, 161), (80, 177), (80, 177)])
+    # Derived constants (computed from other constants)
+    ITEM_SIZES: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    ROOM_POSITIONS: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    ROOM_SIZES: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    WALL: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    LIGHT: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
 
-    # Used for collision detection
-    WALL: chex.Array = _COLLISION_WALL
-    LIGHT: chex.Array = _COLLISION_LIGHT
-
-    INVISIBLE_ENTITY: EntityPosition = EntityPosition(x=jnp.array(-1), y=jnp.array(-1), floor=jnp.array(-1), width=jnp.array(-1), height=jnp.array(-1))
+    INVISIBLE_ENTITY: EntityPosition = struct.field(pytree_node=False, default_factory=lambda: EntityPosition(
+        x=jnp.array(-1), 
+        y=jnp.array(-1), 
+        floor=jnp.array(-1), 
+        width=jnp.array(-1), 
+        height=jnp.array(-1)
+    ))
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
+
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'ITEM_SIZES': jnp.array([
+                self.SCEPTER_SIZE, 
+                self.URN_LEFT_SIZE, 
+                self.URN_MIDDLE_SIZE, 
+                self.URN_RIGHT_SIZE,
+                self.URN_LEFT_MIDDLE_SIZE, 
+                self.URN_MIDDLE_RIGHT_SIZE, 
+                self.URN_LEFT_RIGHT_SIZE, 
+                self.URN_SIZE
+            ], dtype=jnp.int32),
+            # The -2 is a jank hack that allows it to always pass same_floor checks
+            'ROOM_POSITIONS': jnp.array([
+                (0, 0, -2), (80, 0, -2), (0, 178, -2), (80, 178, -2), (0, 338, -2), (80, 338, -2)
+            ], dtype=jnp.int32),
+            'ROOM_SIZES': jnp.array([
+                (80, 177), (80, 177), (80, 161), (80, 161), (80, 177), (80, 177)
+            ], dtype=jnp.int32),
+            # Used for collision detection
+            'WALL': _COLLISION_WALL,
+            'LIGHT': _COLLISION_LIGHT,
+        }
 
 
 # immutable state container
-class HauntedHouseState(NamedTuple):
+@struct.dataclass
+class HauntedHouseState:
     step_counter: chex.Array
     player: chex.Array
     player_direction: chex.Array
@@ -253,11 +285,8 @@ class HauntedHouseState(NamedTuple):
     fire_button_active: chex.Array
 
 
-
-
-
-
-class HauntedHouseObservation(NamedTuple):
+@struct.dataclass
+class HauntedHouseObservation:
     player: EntityPosition
     ghost: EntityPosition
     spider: EntityPosition
@@ -277,38 +306,41 @@ class HauntedHouseObservation(NamedTuple):
     lives: jnp.ndarray
 
 
-class HauntedHouseInfo(NamedTuple):
+@struct.dataclass
+class HauntedHouseInfo:
     time: jnp.ndarray
 
 
-
-
-
 class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation, HauntedHouseInfo, HauntedHouseConstants]):
+    # Minimal ALE action set for Haunted House
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: HauntedHouseConstants = None):
         consts = consts or HauntedHouseConstants()
         super().__init__(consts)
         self.renderer = HauntedHouseRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE,
-            Action.DOWNLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.UPRIGHT,
-            Action.DOWNLEFT,
-            Action.DOWNRIGHT
-        ]
         self.obs_size = 3*4+1+1
 
 
@@ -874,7 +906,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def check_illuminated_single(self, player, pos, size):
-        pos = jnp.array([pos[0] - player[0] + 12, pos[1] - player[1] + 24])
+        pos = jnp.array([pos[0] - player.x + 12, pos[1] - player.y + 24])
         height, width = self.consts.LIGHT.shape
 
         oob = jnp.logical_or(jnp.logical_or(pos[1] < 0, pos[1] >= height),
@@ -952,10 +984,12 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: HauntedHouseState, action: chex.Array) -> Tuple[HauntedHouseObservation, HauntedHouseState, float, bool, HauntedHouseInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # Step 1: Player Mechanics
         (player, player_direction, stun_duration, match_duration, matches_used,
-         item_dropped, stairs_active, fire_button_active, lives, game_ends) = self.player_step(state, action)
+         item_dropped, stairs_active, fire_button_active, lives, game_ends) = self.player_step(state, atari_action)
 
         # Step 2: Item Mechanics
         (item_held, scepter, urn_left, urn_middle, urn_right,
@@ -1273,7 +1307,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             obs.lives.flatten()])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         # Define a reusable space for entities that can be invisible
@@ -1342,16 +1376,20 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
 
 class HauntedHouseRenderer(JAXGameRenderer):
-    def __init__(self, consts: HauntedHouseConstants = None):
-        super().__init__()
+    def __init__(self, consts: HauntedHouseConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HauntedHouseConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/hauntedhouse"
         
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants

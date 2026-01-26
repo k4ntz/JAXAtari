@@ -18,13 +18,15 @@ from jaxatari.renderers import JAXGameRenderer
 from gymnax.environments import spaces
 import jaxatari.spaces as spaces
 from jaxatari.rendering import jax_rendering_utils_legacy as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 import jax
 import numpy as np
 from jax import Array as jArray
+from flax import struct
 
 #Defines Observation of Alien, where we also need to know if a enemy is killable and where the current items are
-class AlienObservation(NamedTuple):
+class AlienObservation(struct.PyTreeNode):
     player_x:jnp.ndarray
     player_y:jnp.ndarray
     player_o:jnp.ndarray
@@ -35,115 +37,119 @@ class AlienObservation(NamedTuple):
     collision_map: jnp.ndarray
 
 #Defines the Info of Alien, which is score, step counter and all rewards
-class AlienInfo(NamedTuple):
+class AlienInfo(struct.PyTreeNode):
     score: jnp.ndarray
     step_counter: jnp.ndarray
     
-class AlienConstants(NamedTuple):
-    SEED: int = 42 #seed for randomness
-    RENDER_SCALE_FACTOR: int = 4
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    WIDTH: int = 160 # Width of the playing field in game state
-    HEIGHT: int = 210 # height of the playing field in game state
-    PLAYER_VELOCITY: int = 1
-    ENEMY_VELOCITY: int = 1
+class AlienConstants(struct.PyTreeNode):
+    SEED: int = struct.field(pytree_node=False, default=42) #seed for randomness
+    RENDER_SCALE_FACTOR: int = struct.field(pytree_node=False, default=4)
+    MODULE_DIR: str = struct.field(pytree_node=False, default=os.path.dirname(os.path.abspath(__file__)))
+    WIDTH: int = struct.field(pytree_node=False, default=160) # Width of the playing field in game state
+    HEIGHT: int = struct.field(pytree_node=False, default=210) # height of the playing field in game state
+    PLAYER_VELOCITY: int = struct.field(pytree_node=False, default=1)
+    ENEMY_VELOCITY: int = struct.field(pytree_node=False, default=1)
     #player sprite dimensions
-    PLAYER_WIDTH: int = 8
-    PLAYER_HEIGHT: int = 13
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=8)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=13)
     # player initial position
-    PLAYER_X: int = 67
-    PLAYER_Y: int = 56
+    PLAYER_X: int = struct.field(pytree_node=False, default=67)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=56)
     # Position at which the numbers are rendered
-    SCORE_X: int = 19
-    SCORE_Y: int = 171
+    SCORE_X: int = struct.field(pytree_node=False, default=19)
+    SCORE_Y: int = struct.field(pytree_node=False, default=171)
     #offset for background rendering
-    RENDER_OFFSET_Y: int = 5
-    RENDER_OFFSET_X: int = 8
+    RENDER_OFFSET_Y: int = struct.field(pytree_node=False, default=5)
+    RENDER_OFFSET_X: int = struct.field(pytree_node=False, default=8)
     DIGIT_OFFSET: int = 3 # Offset between numbers
     #digit sprite dimensions
-    DIGIT_WIDTH: int = 6
-    DIGIT_HEIGHT: int = 7
+    DIGIT_WIDTH: int = struct.field(pytree_node=False, default=6)
+    DIGIT_HEIGHT: int = struct.field(pytree_node=False, default=7)
 
     # Position at which the life counter is rendered
-    LIFE_X: int = 13
-    LIFE_Y: int = 187
-    LIFE_OFFSET_X: int = 2 # Offset between life sprites
-    LIFE_WIDTH: int = 5
+    LIFE_X: int = struct.field(pytree_node=False, default=13)
+    LIFE_Y: int = struct.field(pytree_node=False, default=187)
+    LIFE_OFFSET_X: int = struct.field(pytree_node=False, default=2) # Offset between life sprites
+    LIFE_WIDTH: int = struct.field(pytree_node=False, default=5)
 
     # Enemy_player_collision_offset
-    ENEMY_PLAYER_COLLISION_OFFSET_Y_LOW: int = 4
-    ENEMY_PLAYER_COLLISION_OFFSET_Y_HIGH: int = 6
+    ENEMY_PLAYER_COLLISION_OFFSET_Y_LOW: int = struct.field(pytree_node=False, default=4)
+    ENEMY_PLAYER_COLLISION_OFFSET_Y_HIGH: int = struct.field(pytree_node=False, default=6)
     
     # Enemy amount
-    ENEMY_AMOUNT_PRIMARY_STAGE: int = 3
-    ENEMY_AMOUNT_BONUS_STAGE: int = 6
+    ENEMY_AMOUNT_PRIMARY_STAGE: int = struct.field(pytree_node=False, default=3)
+    ENEMY_AMOUNT_BONUS_STAGE: int = struct.field(pytree_node=False, default=6)
     # Spawn position of enemies
-    ENEMY_SPAWN_X: int = 67
-    ENEMY_SPAWN_Y: int = 147 + 5
+    ENEMY_SPAWN_X: int = struct.field(pytree_node=False, default=67)
+    ENEMY_SPAWN_Y: int = struct.field(pytree_node=False, default=147 + 5)
     # Enemy start position between walls
-    ENEMY_START_Y: int = 128
-    FRIGHTENED_DURATION: int = 100
-    FLAME_FRIGHTENED_DURATION: int = 5
+    ENEMY_START_Y: int = struct.field(pytree_node=False, default=128)
+    FRIGHTENED_DURATION: int = struct.field(pytree_node=False, default=100)
+    FLAME_FRIGHTENED_DURATION: int = struct.field(pytree_node=False, default=5)
 
     # Scatter means random movement, chase means the enemy is actively chasing the player
     # Pink enemy constants
-    SCATTER_DURATION_1: int =  100
-    CHASE_DURATION_1: int = 200
-    MODECHANGE_PROBABILITY_1: float = 0.5
-    SCATTER_POINT_X_1: int = 0
-    SCATTER_POINT_Y_1: int = 0
+    SCATTER_DURATION_1: int =  struct.field(pytree_node=False, default=100)
+    CHASE_DURATION_1: int = struct.field(pytree_node=False, default=200)
+    MODECHANGE_PROBABILITY_1: float = struct.field(pytree_node=False, default=0.5)
+    SCATTER_POINT_X_1: int = struct.field(pytree_node=False, default=0)
+    SCATTER_POINT_Y_1: int = struct.field(pytree_node=False, default=0)
 
     # Yellow enemy constants
-    SCATTER_DURATION_2: int = 100
-    CHASE_DURATION_2: int = 100
-    MODECHANGE_PROBABILITY_2: float = 0.6
-    SCATTER_POINT_X_2: int = 0
-    SCATTER_POINT_Y_2: int = 180
+    SCATTER_DURATION_2: int = struct.field(pytree_node=False, default=100)
+    CHASE_DURATION_2: int = struct.field(pytree_node=False, default=100)
+    MODECHANGE_PROBABILITY_2: float = struct.field(pytree_node=False, default=0.6)
+    SCATTER_POINT_X_2: int = struct.field(pytree_node=False, default=0)
+    SCATTER_POINT_Y_2: int = struct.field(pytree_node=False, default=180)
 
     # Green enemy constants
-    SCATTER_DURATION_3: int = 150
-    CHASE_DURATION_3: int = 100
-    MODECHANGE_PROBABILITY_3: float = 0.7
-    SCATTER_POINT_X_3: int = 180
-    SCATTER_POINT_Y_3: int = 180
+    SCATTER_DURATION_3: int = struct.field(pytree_node=False, default=150)
+    CHASE_DURATION_3: int = struct.field(pytree_node=False, default=100)
+    MODECHANGE_PROBABILITY_3: float = struct.field(pytree_node=False, default=0.7)
+    SCATTER_POINT_X_3: int = struct.field(pytree_node=False, default=180)
+    SCATTER_POINT_Y_3: int = struct.field(pytree_node=False, default=180)
     
     #Colors
-    BASIC_BLUE = jnp.array([132, 144, 252]) # blue egg, lifes, player, digits
-    ORANGE = jnp.array([252, 144, 144]) # orange egg, evil item, flamethrower
-    PINK = jnp.array([236, 140, 224]) # pink enemy, pink egg
-    GREEN = jnp.array([132, 252, 212]) # green enemy, green egg
-    YELLOW = jnp.array([252, 252, 84]) # yellow enemy, yellow egg, items
-    OTHER_BLUE = jnp.array([101, 111, 228])# fleeing enemys
+    BASIC_BLUE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([132, 144, 252], dtype=jnp.int32)) # blue egg, lifes, player, digits
+    ORANGE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([252, 144, 144], dtype=jnp.int32)) # orange egg, evil item, flamethrower
+    PINK: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([236, 140, 224], dtype=jnp.int32)) # pink enemy, pink egg
+    GREEN: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([132, 252, 212], dtype=jnp.int32)) # green enemy, green egg
+    YELLOW: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([252, 252, 84], dtype=jnp.int32)) # yellow enemy, yellow egg, items
+    OTHER_BLUE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([101, 111, 228], dtype=jnp.int32))# fleeing enemys
     
-    ENEMY_COLORS = jnp.array([PINK, YELLOW, GREEN])
+    ENEMY_COLORS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [236, 140, 224],  # PINK
+        [252, 252, 84],   # YELLOW
+        [132, 252, 212]   # GREEN
+    ], dtype=jnp.int32))
     
     # color : 0 (yellow), 1 (orange), 2 (blue), 3 (pink), 4 (turquoise), 5 ( orange and blue)
-    EGG_COLORS = jnp.array([
-        [YELLOW,YELLOW],
-        [ORANGE,ORANGE],
-        [BASIC_BLUE,BASIC_BLUE],
-        [PINK,PINK],
-        [GREEN,GREEN],
-        [ORANGE,BASIC_BLUE]
-    ])
+    EGG_COLORS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [[252, 252, 84], [252, 252, 84]],      # YELLOW, YELLOW
+        [[252, 144, 144], [252, 144, 144]],    # ORANGE, ORANGE
+        [[132, 144, 252], [132, 144, 252]],    # BASIC_BLUE, BASIC_BLUE
+        [[236, 140, 224], [236, 140, 224]],    # PINK, PINK
+        [[132, 252, 212], [132, 252, 212]],    # GREEN, GREEN
+        [[252, 144, 144], [132, 144, 252]]     # ORANGE, BASIC_BLUE
+    ], dtype=jnp.int32))
     
-    ITEM_ARRAY = jnp.array([ 
+    ITEM_ARRAY: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([ 
     #index: 1-> x_position 2-> y_position 3-> 1 if active 0 if not 4-> type of item -> 0:evil item, 1: pulsar, 2: rocket, 3: saturn, 4: starship
         [68, 9,  1,  0],
         [22,  129,  0,  0],
         [114, 129,  0,  0],
         [68 ,  56,  0,  1] #static score item
-    ])
+    ], dtype=jnp.int32))
     
-    ITEM_SCORE_MULTIPLIERS = jnp.array([0, 100, 500, 1000, 2000, 3000, 5000])# Score for collecting items, last item is not a score item
-    ENEMY_KILL_SCORE = jnp.array([500, 1000, 1500]) # Score for killing enemies, depending on how many have been killed in succession
+    ITEM_SCORE_MULTIPLIERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 100, 500, 1000, 2000, 3000, 5000], dtype=jnp.int32))# Score for collecting items, last item is not a score item
+    ENEMY_KILL_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([500, 1000, 1500], dtype=jnp.int32)) # Score for killing enemies, depending on how many have been killed in succession
 
     # egg discription:
     # x-coordinate
     # y-coordinate
     # status : 1 (on the field),  0 (not on the field)
     # color : 0 (yellow), 1 (orange), 2 (blue), 3 (pink), 4 (turquoise), 5 ( orange and blue)
-    EGG_ARRAY = jnp.array([
+    EGG_ARRAY: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
     [
         [18,14,1,4],   [26,16,1,4],   [34,18,1,4],   [48,14,1,1],   [56,16,1,1],   [64,18,1,5],
         [18,26,1,4],                                 [48,26,1,2],
@@ -173,18 +179,18 @@ class AlienConstants(NamedTuple):
         [81,134,1,4],  [89,136,1,4],  [97,138,1,4],  [110,134,1,0], [118,136,1,0], [126,138,1,0],
                                                      [110,146,1,0],                [126,150,1,0],
                        [89,160,1,4],  [97,162,1,4],  [110,158,1,0], [118,160,1,0], [126,162,1,0]
-    ]])
-    EGG_SCORE_MULTIPLYER = 10
+    ]], dtype=jnp.int32))
+    EGG_SCORE_MULTIPLYER: int = struct.field(pytree_node=False, default=10)
     
 #Defines params of FlameThrower
-class FlameState(NamedTuple):
+class FlameState(struct.PyTreeNode):
     x: jnp.ndarray # x position of the flame
     y: jnp.ndarray # y position of the flame
     flame_counter: jnp.ndarray # counter for how long the flame is active
     flame_flag:jnp.ndarray  # flag for if the flame is active
 
 # Defines params of the Player
-class PlayerState(NamedTuple):
+class PlayerState(struct.PyTreeNode):
     x: jnp.ndarray # x position of the player
     y: jnp.ndarray # y position of the player
     orientation: jnp.ndarray # orientation of the player
@@ -195,7 +201,7 @@ class PlayerState(NamedTuple):
     blink: jnp.ndarray # blink state of the player, used for when the player is blinking
 
 # Defines Movement modes of the enemies
-class EnemyModeConstants(NamedTuple):
+class EnemyModeConstants(struct.PyTreeNode):
     scatter_duration: jnp.ndarray # duration of the scatter mode
     scatter_point_x: jnp.ndarray # x position of the scatter point, simulates tendencys in which area aliens move
     scatter_point_y: jnp.ndarray # y position of the scatter point
@@ -204,7 +210,7 @@ class EnemyModeConstants(NamedTuple):
     frightened_duration: jnp.ndarray # duration of the frightened mode, frightened mode is when the enemy is killable or is fleeing from flame of the player
 
 # Defines params of a single enemy
-class SingleEnemyState(NamedTuple):
+class SingleEnemyState(struct.PyTreeNode):
     x: jnp.ndarray # x position of the enemy
     y: jnp.ndarray # y position of the enemy
     orientation: jnp.ndarray   # orientation of the enemy
@@ -225,7 +231,7 @@ class SingleEnemyState(NamedTuple):
     kill_score_flag: jnp.ndarray # defines if first, second or third enemy kill in a row, used to give score for killing enemies in a row (500, 1000, 1500)
 
 #Deines params of all enemies, but vectors of the single enemy params
-class MultipleEnemiesState(NamedTuple):
+class MultipleEnemiesState(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     orientation: jnp.ndarray
@@ -246,7 +252,7 @@ class MultipleEnemiesState(NamedTuple):
     kill_score_flag: jnp.ndarray
 
 # Defines general state of all enemies and its parameters
-class EnemiesState(NamedTuple):
+class EnemiesState(struct.PyTreeNode):
     multiple_enemies: MultipleEnemiesState
     rng_key: jnp.ndarray # random key for the enemies
     collision_map: jnp.ndarray # collision map of the enemies, defines how the enemies collide with the environment
@@ -254,7 +260,7 @@ class EnemiesState(NamedTuple):
     velocity: jnp.ndarray # velocity of the enemies
 
 # Defines general state of the level and its parameters
-class LevelState(NamedTuple):
+class LevelState(struct.PyTreeNode):
     collision_map: jnp.ndarray # collision map of the level, defines how the wall collides with the player and enemies
     score: jnp.ndarray # current score of the player
     frame_count: jnp.ndarray # frame counter, used for timing events
@@ -272,7 +278,7 @@ class LevelState(NamedTuple):
     score_item_counter: jnp.ndarray # counter for how long the score item can be active
 
 # Defines the complete state of the game
-class AlienState(NamedTuple):
+class AlienState(struct.PyTreeNode):
     player: PlayerState
     enemies: EnemiesState
     level: LevelState
@@ -281,8 +287,8 @@ class AlienState(NamedTuple):
     step_counter: jnp.ndarray # counts the number of steps taken in the game, used for statistics and info for training
 
 # to ensure that both enemy states have the same fields
-m_fs = set(MultipleEnemiesState._fields)
-s_fs = set(SingleEnemyState._fields)
+m_fs = set(MultipleEnemiesState.__dataclass_fields__.keys())
+s_fs = set(SingleEnemyState.__dataclass_fields__.keys())
 if not (m_fs.issubset(s_fs) and s_fs.issubset(m_fs)):
     raise Exception("Mismatch between fields in SingleEnemyState and MultipleEnemiesState")
 
@@ -435,8 +441,8 @@ def collision_check_between_two_objects(obj1_map: jnp.ndarray, obj2_map: jnp.nda
 
     return has_collision
 
-@partial(jax.jit, static_argnames=['cnsts'])
-def check_for_player_enemy_collision(cnsts: AlienConstants, state: AlienState, new_position: jnp.ndarray) -> jnp.ndarray:
+@jax.jit
+def check_for_player_enemy_collision(state: AlienState, new_position: jnp.ndarray) -> jnp.ndarray:
     """Wrapper for collision_check_between_two_objects that checks all enemies
        and checks for player death in primary stage identified by checking collision with non killable enemies
     Args:
@@ -502,6 +508,31 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
 
 # Main Environment Class
 class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienConstants]):
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            JAXAtariAction.NOOP,
+            JAXAtariAction.FIRE,
+            JAXAtariAction.UP,
+            JAXAtariAction.RIGHT,
+            JAXAtariAction.LEFT,
+            JAXAtariAction.DOWN,
+            JAXAtariAction.UPRIGHT,
+            JAXAtariAction.UPLEFT,
+            JAXAtariAction.DOWNRIGHT,
+            JAXAtariAction.DOWNLEFT,
+            JAXAtariAction.UPFIRE,
+            JAXAtariAction.RIGHTFIRE,
+            JAXAtariAction.LEFTFIRE,
+            JAXAtariAction.DOWNFIRE,
+            JAXAtariAction.UPRIGHTFIRE,
+            JAXAtariAction.UPLEFTFIRE,
+            JAXAtariAction.DOWNRIGHTFIRE,
+            JAXAtariAction.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: AlienConstants = None):
         consts = consts or AlienConstants()
         super().__init__(consts)
@@ -521,32 +552,12 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         self.level_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "bg", "map_sprite_collision_map.npy"), transpose=True)
         self.enemy_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "player_animation","player_sprite_collision_map.npy"), transpose=True)
         self.enemy_bonus_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path, "enemy_animation", "enemy_sprite_bonus_collision_map.npy"), transpose=True)
-
-        # Define action set
-        self.action_set = [
-            JAXAtariAction.NOOP,
-            JAXAtariAction.FIRE,
-            JAXAtariAction.UP,
-            JAXAtariAction.RIGHT,
-            JAXAtariAction.LEFT,
-            JAXAtariAction.DOWN,
-            JAXAtariAction.UPRIGHT,
-            JAXAtariAction.UPLEFT,
-            JAXAtariAction.DOWNRIGHT,
-            JAXAtariAction.DOWNLEFT,
-            JAXAtariAction.UPFIRE,
-            JAXAtariAction.RIGHTFIRE,
-            JAXAtariAction.LEFTFIRE,
-            JAXAtariAction.DOWNFIRE,
-            JAXAtariAction.UPRIGHTFIRE,
-            JAXAtariAction.UPLEFTFIRE,
-            JAXAtariAction.DOWNRIGHTFIRE,
-            JAXAtariAction.DOWNLEFTFIRE
-        ]
+    
     def render(self, state: AlienState) -> jnp.ndarray:
         return self.renderer.render(state)
+    
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
 
     def reset(self, rng_key: jArray) -> Tuple[AlienObservation, AlienState]:
@@ -663,7 +674,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         _, new_state = self.reset(state.enemies.rng_key)
         
         # init new start player position with other collision map for bonus stage
-        new_player_state = new_state.player._replace(
+        new_player_state = new_state.player.replace(
             x=jnp.array(self.consts.PLAYER_X).astype(jnp.int32),
             y=jnp.array(self.consts.ENEMY_START_Y + 20).astype(jnp.int32),
             last_horizontal_orientation=JAXAtariAction.LEFT,
@@ -682,25 +693,25 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         enemy_y_positions = jnp.arange(self.consts.ENEMY_AMOUNT_BONUS_STAGE, dtype=jnp.int32) * diagonal_spacing + start_y
         
         # init new enemies position with other collision map for bonus stage
-        new_multiple_enemies = state.enemies.multiple_enemies._replace(
+        new_multiple_enemies = state.enemies.multiple_enemies.replace(
             x=enemy_x_positions,
             y=enemy_y_positions,
             last_horizontal_orientation=jnp.array([JAXAtariAction.LEFT, JAXAtariAction.RIGHT, JAXAtariAction.LEFT, JAXAtariAction.RIGHT, JAXAtariAction.LEFT, JAXAtariAction.RIGHT], dtype=jnp.int32),
             enemy_spawn_frame=jnp.zeros(self.consts.ENEMY_AMOUNT_BONUS_STAGE, dtype=jnp.int32)
         )
-        new_enemies_state = state.enemies._replace(
+        new_enemies_state = state.enemies.replace(
             multiple_enemies=new_multiple_enemies,
             collision_map=self.enemy_bonus_collision_map,
             rng_key=main_key
         )
-        new_level_state = new_state.level._replace(
+        new_level_state = new_state.level.replace(
             score=state.level.score + 1,
             lifes=state.level.lifes,
             bonus_flag=jnp.array(1).astype(jnp.int32),
             collision_map=jnp.zeros(new_state.level.collision_map.shape, dtype=jnp.bool_),
             difficulty_stage=state.level.difficulty_stage
         )
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             player=new_player_state,
             enemies=new_enemies_state,
             level=new_level_state
@@ -718,16 +729,16 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
         _, reset_state = self.reset(state.enemies.rng_key)
         
-        new_level_state = reset_state.level._replace(
+        new_level_state = reset_state.level.replace(
             lifes=state.level.lifes,
             score=state.level.score,
             difficulty_stage=state.level.difficulty_stage + 0.5, # increase difficulty stage after each bonus stage
             evil_item_duration=jnp.maximum((-63 * state.level.difficulty_stage + 505), 0).astype(jnp.int32) # decrease evil item duration with increasing difficulty stage
         )
-        new_enemies_state = reset_state.enemies._replace(
+        new_enemies_state = reset_state.enemies.replace(
             rng_key=state.enemies.rng_key
         )
-        new_state = reset_state._replace(level=new_level_state, enemies=new_enemies_state)
+        new_state = reset_state.replace(level=new_level_state, enemies=new_enemies_state)
         return new_state
         
     @partial(jax.jit, static_argnums=(0))
@@ -750,7 +761,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         )
 
         # lose a life if collision with enemy and not already in death animation
-        condition_new_life = jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
+        condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
         new_life = jnp.multiply(condition_new_life, jnp.add(state.level.lifes, -1)) + jnp.multiply(1 - condition_new_life, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
@@ -765,7 +776,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             score=new_score,
             state=state
         )
-        new_level_state = state.level._replace(
+        new_level_state = state.level.replace(
             score=new_score,
             lifes=new_life,
             death_frame_counter=new_death_frame_counter,
@@ -776,7 +787,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             score_item_counter=new_score_item_counter
         )
         
-        new_state = state._replace(
+        new_state = state.replace(
             player=new_player_state,
             enemies=new_enemies_state,
             level=new_level_state,
@@ -800,28 +811,28 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_death_frame_counter = state.level.death_frame_counter - 1
 
 
-        freeze_level_state = state.level._replace(
+        freeze_level_state = state.level.replace(
             death_frame_counter=new_death_frame_counter,
             blink_evil_item=jnp.array(0).astype(jnp.int32),
             blink_current_active_item=jnp.array(0).astype(jnp.int32)
             )
 
         # state is frozen during death animation except for death frame counter
-        freeze_state = state._replace(
+        freeze_state = state.replace(
             level=freeze_level_state
             )
         
         _, reset_state = self.reset(state.enemies.rng_key)
         
-        soft_reset_multiple_enemies = reset_state.enemies.multiple_enemies._replace(
+        soft_reset_multiple_enemies = reset_state.enemies.multiple_enemies.replace(
             kill_score_flag=state.enemies.multiple_enemies.kill_score_flag
             )
         
-        soft_reset_enemies = reset_state.enemies._replace(
+        soft_reset_enemies = reset_state.enemies.replace(
             rng_key=state.enemies.rng_key,
             multiple_enemies=soft_reset_multiple_enemies
             )
-        soft_reset_level_state = reset_state.level._replace(
+        soft_reset_level_state = reset_state.level.replace(
             death_frame_counter=new_death_frame_counter,
             score=state.level.score,
             lifes=state.level.lifes,
@@ -839,7 +850,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         items_keep_evil_reset_score = state.items.at[3, 2].set(0)
 
         # create soft reset state with preserved score, lives, difficulty stage and item state
-        soft_reset_state = reset_state._replace(
+        soft_reset_state = reset_state.replace(
             enemies=soft_reset_enemies,
             level=soft_reset_level_state,
             eggs=state.eggs,
@@ -866,7 +877,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # count up death frame counter during game over animation because it is -40 at the start of the game over animation
         new_death_frame_counter = jnp.add(state.level.death_frame_counter, 1)
 
-        freeze_level_state = state.level._replace(
+        freeze_level_state = state.level.replace(
             death_frame_counter=new_death_frame_counter,
             current_active_item_index=jnp.array(0).astype(jnp.int32),
             blink_evil_item=jnp.array(0).astype(jnp.int32),
@@ -874,17 +885,17 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             )
 
         # state is frozen during game over animation except for death frame counter
-        freeze_state = state._replace(
+        freeze_state = state.replace(
             level=freeze_level_state
             )
         
         _, reset_state = self.reset(state.enemies.rng_key)
 
-        hard_reset_enemies = reset_state.enemies._replace(
+        hard_reset_enemies = reset_state.enemies.replace(
             rng_key=state.enemies.rng_key
             )
         
-        hard_reset_state = reset_state._replace(
+        hard_reset_state = reset_state.replace(
             enemies=hard_reset_enemies,
         )
 
@@ -978,7 +989,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_player_state: PlayerState =  self.player_step(state, action)
 
         # lose a life if collision with enemy and not already in death animation
-        condition_new_life = jnp.logical_and(check_for_player_enemy_collision(self.consts, state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
+        condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
         new_life = jnp.multiply(condition_new_life, state.level.lifes-1) + jnp.multiply(1 - condition_new_life, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
@@ -993,13 +1004,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_score_kill = state.level.score + score_increase_kill
 
 
-        freeze_level_state = state.level._replace(
+        freeze_level_state = state.level.replace(
                 lifes=new_life,
                 death_frame_counter=new_death_frame_counter,
                 score=new_score_kill
         )
         new_enemies: EnemiesState = self.multiple_enemies_step(state)
-        freeze_multiple_enemies = state.enemies.multiple_enemies._replace(
+        freeze_multiple_enemies = state.enemies.multiple_enemies.replace(
                     x=new_enemies.multiple_enemies.x,
                     y=new_enemies.multiple_enemies.y,
                     orientation=new_enemies.multiple_enemies.orientation,
@@ -1014,26 +1025,26 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     kill_score_flag=new_kill_score_flag
                 )
         
-        freeze_player_state = new_player_state._replace(
+        freeze_player_state = new_player_state.replace(
             x=state.player.x,
             y=state.player.y
         )
         
-        freeze_enemies = state.enemies._replace(
+        freeze_enemies = state.enemies.replace(
                 multiple_enemies=freeze_multiple_enemies
         )
-        freeze_state = state._replace(
+        freeze_state = state.replace(
             player=freeze_player_state,
             enemies=freeze_enemies,
             level=freeze_level_state,
         )
         
-        kill_multiple_enemies = new_enemies.multiple_enemies._replace(
+        kill_multiple_enemies = new_enemies.multiple_enemies.replace(
                 blink=jnp.zeros((self.consts.ENEMY_AMOUNT_BONUS_STAGE,), dtype=jnp.int32),
                 position_at_death_x= new_enemies.multiple_enemies.position_at_death_x,
                 position_at_death_y=new_enemies.multiple_enemies.position_at_death_y
             )
-        kill_enemies = new_enemies._replace(
+        kill_enemies = new_enemies.replace(
                 multiple_enemies=kill_multiple_enemies
             )
         new_egg_state, new_score = self.egg_step(
@@ -1049,7 +1060,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             score=new_score,
             state=state
         )
-        level_state = state.level._replace(
+        level_state = state.level.replace(
                 score=new_score,
                 lifes=new_life,
                 death_frame_counter=new_death_frame_counter,
@@ -1061,7 +1072,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 spawn_score_item_flag_2=new_spawn_score_item_flag_2,
                 score_item_counter=new_score_item_counter
                 )
-        kill_state = state._replace(
+        kill_state = state.replace(
                 player=new_player_state,
                 enemies=kill_enemies,
                 level=level_state,
@@ -1119,7 +1130,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         max_y = self.consts.ENEMY_START_Y + 20
         bounded_y = jnp.clip(new_position[1], None, max_y)
         
-        new_player_state = state.player._replace(y=bounded_y)
+        new_player_state = state.player.replace(y=bounded_y)
         
         return new_player_state
 
@@ -1135,8 +1146,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         #56/21 is the approximated average of how frequent enemies move in bonus
         new_enemy_velocity_this_frame = jax.lax.min(jnp.round(((56/121))*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((56/121))*(state.level.frame_count - 1)).astype(jnp.int32),1)
         
-        new_enemies = state.enemies._replace(velocity=new_enemy_velocity_this_frame)
-        return new_enemies._replace(multiple_enemies=self.enemy_step_bonus(state.enemies.multiple_enemies, state))
+        new_enemies = state.enemies.replace(velocity=new_enemy_velocity_this_frame)
+        return new_enemies.replace(multiple_enemies=self.enemy_step_bonus(state.enemies.multiple_enemies, state))
 
 
     @partial(jax.jit, static_argnums=(0))
@@ -1151,9 +1162,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         #counts down the death frame counter and freeze counter to 0
         new_death_frame_counter = jnp.clip(state.level.death_frame_counter - 1, 0, None)
         new_freeze_counter = jnp.clip(state.level.evil_item_frame_counter - 1, 0, None)
-        new_level = state.level._replace(death_frame_counter=new_death_frame_counter)
-        new_level = new_level._replace(evil_item_frame_counter=new_freeze_counter)
-        new_state = state._replace(level=new_level)
+        new_level = state.level.replace(death_frame_counter=new_death_frame_counter)
+        new_level = new_level.replace(evil_item_frame_counter=new_freeze_counter)
+        new_state = state.replace(level=new_level)
         
         #freeze until animation is done and then start primary stage
         return jax.lax.cond(
@@ -1193,10 +1204,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # increase score if item(score of item is increased with later stages) is collected (when dead_or_alive is 1)
         new_score = state.level.score.at[0].set((state.level.score[0] + ((jnp.mod(dead_or_alive, 2)) * self.consts.ITEM_SCORE_MULTIPLIERS[jnp.clip(state.level.difficulty_stage.astype(jnp.int32) + 2, 0, len(self.consts.ITEM_SCORE_MULTIPLIERS) - 1)]).astype(jnp.uint16)))
         
-        new_level = state.level._replace(death_frame_counter=new_death_frame_counter,
+        new_level = state.level.replace(death_frame_counter=new_death_frame_counter,
                                          evil_item_frame_counter=new_freeze_counter,
                                          score=new_score)                
-        new_state = state._replace(player=new_player_state,
+        new_state = state.replace(player=new_player_state,
                                    enemies=new_enemies_state,
                                    level=new_level)
         
@@ -1237,6 +1248,9 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         Returns:
             Tuple[AlienObservation, AlienState,float, bool,  AlienInfo]: New state, observation and info
         """
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         # Choose Step here:
         is_in_bonus: jArray = state.level.bonus_flag
         is_in_regular: jArray = jnp.logical_and(1 - state.level.bonus_flag, jnp.greater(state.level.frame_count, 50))
@@ -1255,8 +1269,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     state, action)
 
         # signalizes that one frame has passed
-        new_level_state = new_state.level._replace(frame_count=new_state.level.frame_count + 1)
-        new_state = new_state._replace(level=new_level_state,
+        new_level_state = new_state.level.replace(frame_count=new_state.level.frame_count + 1)
+        new_state = new_state.replace(level=new_level_state,
                                        step_counter= jnp.add(state.step_counter,1))
 
         # Here is info and observation secured
@@ -1270,7 +1284,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
     def get_action_space(self) -> jnp.ndarray:
         # calls the action set
-        return jnp.array(self.action_set)
+        return self.ACTION_SET
 
     def image_space(self) -> spaces.Box:
         # Define the observation space for images
@@ -1310,7 +1324,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             AlienObservation: observation for the ai agent
         """
         # Get the position of the currently active "kill item" (first 2 coordinates: x, y)
-        new_kill_item_position = jnp.take(AlienConstants.ITEM_ARRAY, state.level.current_active_item_index, axis=0)[:2]
+        new_kill_item_position = jnp.take(self.consts.ITEM_ARRAY, state.level.current_active_item_index, axis=0)[:2]
 
         return AlienObservation(
             player_x= state.player.x,
@@ -1786,7 +1800,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # - x, y: position of the flame visual
         # - flame_counter: remaining flamethrower charges
         # - flame_flag: whether the flame is currently active
-        new_flame = state.player.flame._replace(
+        new_flame = state.player.flame.replace(
             x=jnp.array(new_flame_x).astype(jnp.int32),
             y=jnp.array(new_position[1] + 6).astype(jnp.int32),
             flame_counter=jnp.array(new_flame_counter).astype(jnp.int32),
@@ -1794,7 +1808,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         )
 
         # return updated player
-        return state.player._replace(
+        return state.player.replace(
             x=jnp.array(new_position[0]),
             y=jnp.array(new_position[1]),
             orientation=state_player_orientation,
@@ -1846,11 +1860,11 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         new_multiple_enemies = self.enemy_step(state.enemies.multiple_enemies, state)
 
 
-        new_multiple_enemies = new_multiple_enemies._replace(
+        new_multiple_enemies = new_multiple_enemies.replace(
             key=enemy_keys,
             )
 
-        new_enemies_state = state.enemies._replace(
+        new_enemies_state = state.enemies.replace(
             multiple_enemies=new_multiple_enemies,
             rng_key=main_key
         )
@@ -2122,7 +2136,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             new_position_at_death_x = jnp.multiply(position_at_death_cond, enemy.x) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_x)
             new_position_at_death_y = jnp.multiply(position_at_death_cond, enemy.y) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_y)
             # Create updated enemy state with all new values
-            new_enemy0 = enemy._replace(
+            new_enemy0 = enemy.replace(
                 x=new_x,
                 y=new_y,
                 orientation=new_direction,
@@ -2139,7 +2153,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             )
             # During global or individual death frames, override position to stay at death coordinates
             new_enemy1 = jax.lax.cond(jnp.logical_or(jnp.not_equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0),jnp.not_equal(state.level.death_frame_counter,0)),
-                                      lambda x: x._replace(
+                                      lambda x: x.replace(
                                           x = new_position_at_death_x,
                                           y = new_position_at_death_y),
                                       lambda x: x,
@@ -2245,7 +2259,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             y = jnp.multiply(mask_y, new_position_at_death_y) + jnp.multiply(1 - mask_y, new_y)
 
             # Return updated enemy state
-            return enemy._replace(
+            return enemy.replace(
                 x=cnsts.ENEMY_SPAWN_X,
                 y=y,
                 orientation=new_orientation,
@@ -2302,7 +2316,7 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     new_enemy_death_frame = jnp.multiply(mask_collision, jnp.array(1)) + jnp.multiply(1 - mask_collision, enemy.enemy_death_frame)
 
 
-    new_enemy = enemy._replace(
+    new_enemy = enemy.replace(
         x=new_x,
         y=enemy.y,
         orientation=enemy.orientation,
@@ -2325,9 +2339,20 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     return new_enemy
 
 class AlienRenderer(JAXGameRenderer):
-    def __init__(self, consts: AlienConstants = None):
-        super().__init__()
+    def __init__(self, consts: AlienConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or AlienConstants()
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        # Note: Alien uses legacy rendering utils, but we store config for API consistency
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
         (self.map_sprite, 
         self.player_sprite, 
@@ -3113,7 +3138,7 @@ def traverse_multiple_enemy_(fun: Callable[[SingleEnemyState], Any], number_of_n
         _type_: output of fun
     """
    
-    fields = list(SingleEnemyState._fields)
+    fields = list(SingleEnemyState.__dataclass_fields__.keys())
     fields.sort()
     def wrapper_function(*args):
         k_dict: Dict[str, jnp.ndarray] = {}

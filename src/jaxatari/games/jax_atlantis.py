@@ -6,6 +6,7 @@ from jax import config, Array
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import pygame
 from typing import Dict, Any, Optional, NamedTuple, Tuple
@@ -62,82 +63,9 @@ def _get_default_asset_config() -> tuple:
     
     return config
 
-@dataclass(frozen=True)
-class GameConfig: # TODO: move this into the constants..
-    """Game configuration parameters"""
-
-    screen_width: int = 160
-    screen_height: int = 210
-    scaling_factor: int = 3
-    bullet_height: int = 1
-    bullet_width: int = 1
-    bullet_speed: int = 3  # for side cannon 3 in x 2 in y middle 3 in y
-    cannon_height: int = 8
-    cannon_width: int = 8
-    cannon_y: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([118, 106, 106], dtype=jnp.int32)
-    )
-    cannon_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32)
-    )
-    max_bullets: int = 2  # Max 2 bullets simultaneously at screen
-    max_enemies: int = 20  # max 1 enemy per lane
-    fire_cooldown_frames: int = 9  # delay between shots
-    # y-coordinates of the different enemy paths/heights
-    enemy_paths: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([20, 40, 60, 80], dtype=jnp.int32)
-    )
-    enemy_probabilities: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([0.45, 0.45, 0.10], dtype=jnp.float32)
-    )
-    enemy_points: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([100, 100, 1000], dtype=jnp.int32)
-    )
-    enemy_speed_multipliers: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([1, 1, 2], dtype=jnp.int32)
-    )
-    enemy_width: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([15, 15, 9], dtype=jnp.int32)
-    )
-    enemy_height: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([7, 8, 7], dtype=jnp.int32)
-    )
-    # enemy_width: int = 15  # 3 different lengths 15, 16, 9
-    # enemy_height: int = 8
-    enemy_speed: int = 1  # changes throughout the game
-    enemy_spawn_min_frames: int = 5
-    enemy_spawn_max_frames: int = 50
-    wave_end_cooldown: int = (
-        150  # cooldown of 150 frames after wave-end, before spawning new enemies
-    )
-    wave_start_enemy_count: int = 10  # number of enemies in the first wave
-    max_digits_for_score: int = (
-        9  # highest possible score has length of 9; lower limit is always possible
-    )
-    # coordinates and sizes of all installations
-    installations_y: jnp.ndarray = field(
-        default_factory=lambda: jnp.array(
-            [164, 142, 132, 118, 153, 132], dtype=jnp.int32
-        )
-    )
-    installations_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array(
-            [17, 38, 62, 82, 96, 142], dtype=jnp.int32
-        )
-    )
-    installations_width: jnp.ndarray = field(
-        default_factory=lambda: jnp.array(
-            [16, 16, 4, 4, 16, 4], dtype=jnp.int32
-        )
-    )
-    installations_height: int = 8  # all the same height
-    height_upper_beam = 40
-    start_beam = 90
-
-
 # Each value of this class is a list.
 # e.g. if i have 3 entities, then each of these lists would have a length of 3
-class EntityPosition(NamedTuple):
+class EntityPosition(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
@@ -145,7 +73,7 @@ class EntityPosition(NamedTuple):
     alive: jnp.ndarray
 
 
-class AtlantisState(NamedTuple):
+class AtlantisState(struct.PyTreeNode):
     score: chex.Array  # tracks the current score
     reward: chex.Array
     score_spent: chex.Array  # tracks how much was spent on repair
@@ -178,7 +106,7 @@ class AtlantisState(NamedTuple):
     plasma_active: chex.Array
 
 
-class AtlantisObservation(NamedTuple):
+class AtlantisObservation(struct.PyTreeNode):
     score: jnp.ndarray
     enemy: EntityPosition
     bullet: EntityPosition
@@ -186,7 +114,7 @@ class AtlantisObservation(NamedTuple):
     command_post_alive: jnp.ndarray
 
 
-class AtlantisInfo(NamedTuple):
+class AtlantisInfo(struct.PyTreeNode):
     score: jnp.ndarray
     wave: jnp.ndarray
     enemies_alive: jnp.ndarray  # scalar
@@ -197,9 +125,45 @@ class AtlantisInfo(NamedTuple):
     installations_alive: jnp.ndarray  # (6,) bool
 
 
-class AtlantisConstants(NamedTuple):
+class AtlantisConstants(struct.PyTreeNode):
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
+    scaling_factor: int = struct.field(pytree_node=False, default=3)
+    bullet_height: int = struct.field(pytree_node=False, default=1)
+    bullet_width: int = struct.field(pytree_node=False, default=1)
+    bullet_speed: int = struct.field(pytree_node=False, default=3)  # for side cannon 3 in x 2 in y middle 3 in y
+    cannon_height: int = struct.field(pytree_node=False, default=8)
+    cannon_width: int = struct.field(pytree_node=False, default=8)
+    cannon_y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([118, 106, 106], dtype=jnp.int32))
+    cannon_x: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 72, 152], dtype=jnp.int32))
+    max_bullets: int = struct.field(pytree_node=False, default=2)  # Max 2 bullets simultaneously at screen
+    max_enemies: int = struct.field(pytree_node=False, default=20)  # max 1 enemy per lane
+    fire_cooldown_frames: int = struct.field(pytree_node=False, default=9)  # delay between shots
+    # y-coordinates of the different enemy paths/heights
+    enemy_paths: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([20, 40, 60, 80], dtype=jnp.int32))
+    enemy_probabilities: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.45, 0.45, 0.10], dtype=jnp.float32))
+    enemy_points: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([100, 100, 1000], dtype=jnp.int32))
+    enemy_speed_multipliers: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 1, 2], dtype=jnp.int32))
+    enemy_width: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([15, 15, 9], dtype=jnp.int32))
+    enemy_height: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([7, 8, 7], dtype=jnp.int32))
+    # enemy_width: int = 15  # 3 different lengths 15, 16, 9
+    # enemy_height: int = 8
+    enemy_speed: int = struct.field(pytree_node=False, default=1)  # changes throughout the game
+    enemy_spawn_min_frames: int = struct.field(pytree_node=False, default=5)
+    enemy_spawn_max_frames: int = struct.field(pytree_node=False, default=50)
+    wave_end_cooldown: int = struct.field(pytree_node=False, default=150)  # cooldown of 150 frames after wave-end, before spawning new enemies
+    wave_start_enemy_count: int = struct.field(pytree_node=False, default=10)  # number of enemies in the first wave
+    max_digits_for_score: int = struct.field(pytree_node=False, default=9)  # highest possible score has length of 9; lower limit is always possible
+    # coordinates and sizes of all installations
+    installations_y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([164, 142, 132, 118, 153, 132], dtype=jnp.int32))
+    installations_x: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([17, 38, 62, 82, 96, 142], dtype=jnp.int32))
+    installations_width: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 16, 4, 4, 16, 4], dtype=jnp.int32))
+    installations_height: int = struct.field(pytree_node=False, default=8)  # all the same height
+    height_upper_beam: int = struct.field(pytree_node=False, default=40)
+    start_beam: int = struct.field(pytree_node=False, default=90)
+
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 class JaxAtlantis(
@@ -254,29 +218,28 @@ class JaxAtlantis(
         reward_funcs (tuple): Tuple of reward functions for multi-objective RL
     """
 
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
+
     def __init__(
         self,
         consts: AtlantisConstants | None = None,
     ):
         consts = consts or AtlantisConstants()
         super().__init__(consts)
-        self.config = GameConfig()  # Keep for backward compatibility if needed
-        self.renderer = AtlantisRenderer(config=self.config)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-        ]
+        self.renderer = AtlantisRenderer(consts=self.consts)
 
     def reset(
         self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)
     ) -> Tuple[AtlantisObservation, AtlantisState]:
         # --- empty tables ---
-        empty_enemies = jnp.zeros((self.config.max_enemies, 6), dtype=jnp.int32)
-        empty_bullets = jnp.zeros((self.config.max_bullets, 4), dtype=jnp.int32)
+        empty_enemies = jnp.zeros((self.consts.max_enemies, 6), dtype=jnp.int32)
+        empty_bullets = jnp.zeros((self.consts.max_bullets, 4), dtype=jnp.int32)
         empty_bullets_alive = jnp.zeros(
-            (self.config.max_bullets,), dtype=jnp.bool_
+            (self.consts.max_bullets,), dtype=jnp.bool_
         )
         empty_lanes = jnp.ones((4,), dtype=jnp.bool_)  # All lanes start free
         start_installations = jnp.ones(
@@ -304,21 +267,21 @@ class JaxAtlantis(
             enemy_spawn_timer=jax.random.randint(
                 sub,
                 (),
-                self.config.enemy_spawn_min_frames,
-                self.config.enemy_spawn_max_frames + 1,
+                self.consts.enemy_spawn_min_frames,
+                self.consts.enemy_spawn_max_frames + 1,
                 dtype=jnp.int32,
             ),
             rng=key,
             lanes_free=empty_lanes,
             number_enemies_wave_remaining=jnp.array(
-                self.config.wave_start_enemy_count, dtype=jnp.int32
+                self.consts.wave_start_enemy_count, dtype=jnp.int32
             ),
             wave_end_cooldown_remaining=jnp.array(0, dtype=jnp.int32),
             # Defensive structures (all start intact)
             command_post_alive=jnp.array(True, dtype=jnp.bool_),
             installations=start_installations,
             # Plasma system (all enemies start with plasma capability)
-            plasma_active=jnp.ones((self.config.max_enemies,), dtype=jnp.bool_),
+            plasma_active=jnp.ones((self.consts.max_enemies,), dtype=jnp.bool_),
         )
 
         # Generate initial observation
@@ -365,7 +328,7 @@ class JaxAtlantis(
 
     def _spawn_bullet(self, state, cannon_idx):
         """Insert newly spawned bullet in first free slot"""
-        cfg = self.config
+        cfg = self.consts
 
         def _do_spawn(s):
             # To identify which slots are free
@@ -412,7 +375,7 @@ class JaxAtlantis(
             def _write(s2):
                 b2 = s2.bullets.at[slot_idx].set(new_bullet)
                 a2 = s2.bullets_alive.at[slot_idx].set(True)
-                return s2._replace(bullets=b2, bullets_alive=a2)
+                return s2.replace(bullets=b2, bullets_alive=a2)
 
             # Conditionally write if a free slot exists
             return jax.lax.cond(slot_available, _write, lambda x: x, s)
@@ -422,17 +385,17 @@ class JaxAtlantis(
 
     def _update_cooldown(self, state, cannon_idx):
         """Reset after a shot or decrement the fire cooldown timer."""
-        cfg = self.config
+        cfg = self.consts
         new_cd = jnp.where(
             cannon_idx >= 0,  # -1 means no cannon fired
             jnp.array(cfg.fire_cooldown_frames, dtype=jnp.int32),
             jnp.maximum(state.fire_cooldown - 1, 0),
         )
-        return state._replace(fire_cooldown=new_cd)
+        return state.replace(fire_cooldown=new_cd)
 
     def _move_bullets(self, state):
         """Move bullets by their velocity and deactivate offscreen bullets"""
-        cfg = self.config
+        cfg = self.consts
 
         # compute new x and y positions by adding the velocity dx and dy
         # state.bullets has shape (max_bullets, 4): (x,y,dx,dy)
@@ -452,7 +415,7 @@ class JaxAtlantis(
 
         # a bullet only remains alive if it was already alive and still on-screen
         alive = state.bullets_alive & in_bounds
-        return state._replace(bullets=moved, bullets_alive=alive)
+        return state.replace(bullets=moved, bullets_alive=alive)
 
     @staticmethod
     @jax.jit
@@ -485,7 +448,7 @@ class JaxAtlantis(
           new random value in min, max and advance the rng
         """
 
-        cfg = self.config
+        cfg = self.consts
 
         # helper that creates  a fresh timer value
         def _next_timer(rng):
@@ -514,7 +477,7 @@ class JaxAtlantis(
 
         # if the timer is still bigger than 0, just update the timer and rng state
         def _no_spawn(s: AtlantisState) -> AtlantisState:
-            return s._replace(enemy_spawn_timer=timer, rng=rng_after)
+            return s.replace(enemy_spawn_timer=timer, rng=rng_after)
 
         def _spawn(s: AtlantisState) -> AtlantisState:
             # enemy has 5 entries, the last one (index 5) is the active_flag
@@ -577,7 +540,7 @@ class JaxAtlantis(
             def _write(write_s):
                 updated_enemies = write_s.enemies.at[slot_idx].set(new_enemy)
                 p2 = write_s.plasma_active.at[slot_idx].set(True)
-                return write_s._replace(
+                return write_s.replace(
                     enemies=updated_enemies, plasma_active=p2
                 )
 
@@ -591,14 +554,14 @@ class JaxAtlantis(
             new_lanes = s.lanes_free.at[0].set(False)
 
             # decrease counter of spawnable enemies per wave
-            updated_state = updated_state._replace(
+            updated_state = updated_state.replace(
                 number_enemies_wave_remaining=(
                     s.number_enemies_wave_remaining - 1
                 )
             )
             # jax.debug.print(f"Enemies remaining: {updated_state.number_enemies_wave_remaining}")
 
-            return updated_state._replace(
+            return updated_state.replace(
                 enemy_spawn_timer=new_timer, rng=rng_after, lanes_free=new_lanes
             )
 
@@ -613,7 +576,7 @@ class JaxAtlantis(
     # move all active enemies horizontally and deactive off-screen ones
     @partial(jax.jit, static_argnums=(0,))
     def _move_enemies(self, state: AtlantisState) -> AtlantisState:
-        cfg = self.config
+        cfg = self.consts
         enemies = state.enemies
         x_pos = enemies[:, 0]
         y_pos = enemies[:, 1]
@@ -713,7 +676,7 @@ class JaxAtlantis(
             lane_masks.append(~lane_is_occupied)  # True if lane is free
 
         free_lanes = jnp.array(lane_masks)
-        return state._replace(enemies=updated_enemies, lanes_free=free_lanes)
+        return state.replace(enemies=updated_enemies, lanes_free=free_lanes)
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_bullet_enemy_collision(
@@ -798,13 +761,13 @@ class JaxAtlantis(
                 new_enemy_flags.astype(jnp.int32)
             )
 
-            return l_state._replace(
+            return l_state.replace(
                 bullets_alive=new_bullet_alive,
                 enemies=enemies_updated,
                 score=new_score,
             )
 
-        cfg = self.config
+        cfg = self.consts
 
         bullets_x, bullets_y = state.bullets[:, 0], state.bullets[:, 1]  # (B,)
         enemies_x, enemies_y, type_ids = (
@@ -870,7 +833,7 @@ class JaxAtlantis(
         Returns:
             Updated game state with wave progression and potential revivals
         """
-        cfg = self.config
+        cfg = self.consts
 
         def _new_wave(s: AtlantisState) -> AtlantisState:
             """
@@ -950,7 +913,7 @@ class JaxAtlantis(
             # Compute how many enemies next wave should have
             next_count = cfg.wave_start_enemy_count + new_wave * 2
 
-            return s._replace(
+            return s.replace(
                 wave=new_wave,
                 wave_end_cooldown_remaining=jnp.array(
                     cfg.wave_end_cooldown, jnp.int32
@@ -1003,7 +966,7 @@ class JaxAtlantis(
           9. Disable this shooter’s plasma until it goes off-screen.
 
         """
-        cfg = self.config
+        cfg = self.consts
 
         # Find out enemy in 4th lane which currently is using plasma
         is_lane4 = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
@@ -1094,14 +1057,14 @@ class JaxAtlantis(
             # a) knock out command post
             s1 = jax.lax.cond(
                 kill_cmd,
-                lambda st: st._replace(command_post_alive=False),
+                lambda st: st.replace(command_post_alive=False),
                 lambda st: st,
                 s,
             )
 
             # b) knock out the installation
             def _kill_one(st: AtlantisState) -> AtlantisState:
-                return st._replace(
+                return st.replace(
                     installations=st.installations.at[inst_idx].set(False)
                 )
 
@@ -1116,7 +1079,7 @@ class JaxAtlantis(
             disable_plasma = kill_inst | kill_cmd
             return jax.lax.cond(
                 disable_plasma,
-                lambda st: st._replace(
+                lambda st: st.replace(
                     plasma_active=st.plasma_active.at[shooter_idx].set(False)
                 ),
                 lambda st: st,
@@ -1137,22 +1100,25 @@ class JaxAtlantis(
         # on_screen == True if any part of the enemy is still inside [0, screen_width)
         on_screen = (
             new_pos
-            + self.config.enemy_width[state.enemies[:, 3].astype(jnp.int32)]
+            + self.consts.enemy_width[state.enemies[:, 3].astype(jnp.int32)]
             > 0
-        ) & (new_pos < self.config.screen_width)
+        ) & (new_pos < self.consts.screen_width)
         # whenever *off* screen, re‐enable that slot’s plasma_active bit
         allowed = jnp.where(on_screen, state.plasma_active, True)
-        return state._replace(plasma_active=allowed)
+        return state.replace(plasma_active=allowed)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: AtlantisState, action: chex.Array
     ) -> Tuple[AtlantisObservation, AtlantisState, float, bool, AtlantisInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         previous_state = state
 
         def _pause_step(s: AtlantisState) -> AtlantisState:
             # reduce pause cooldown
-            s = s._replace(
+            s = s.replace(
                 wave_end_cooldown_remaining=jnp.maximum(
                     s.wave_end_cooldown_remaining - 1, 0
                 )
@@ -1166,7 +1132,7 @@ class JaxAtlantis(
 
             # bullets
             s = self._spawn_bullet(s, cannon_idx)
-            s = self._update_cooldown(s, cannon_idx)._replace(
+            s = self._update_cooldown(s, cannon_idx).replace(
                 fire_button_prev=fire_pressed
             )
 
@@ -1191,13 +1157,13 @@ class JaxAtlantis(
         done = self._get_done(state)
         info = self._get_info(state)
         new_reward = state.score - previous_state.score
-        state = state._replace(reward=new_reward)
+        state = state.replace(reward=new_reward)
 
         return observation, state, state.reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AtlantisState) -> AtlantisObservation:
-        cfg = self.config
+        cfg = self.consts
 
         # get types of enemies
         type_ids = state.enemies[:, 3].astype(jnp.int32)
@@ -1253,7 +1219,7 @@ class JaxAtlantis(
         )
 
     def observation_space(self) -> spaces.Dict:
-        cfg = self.config
+        cfg = self.consts
 
         def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
             return spaces.Dict(
@@ -1371,7 +1337,7 @@ class JaxAtlantis(
           2) The central command post is destroyed and all installations are destroyed.
         """
         # 1) Max‐score condition
-        max_score = 10**self.config.max_digits_for_score
+        max_score = 10**self.consts.max_digits_for_score
         reached_max = state.score >= max_score  # bool scalar
 
         # 2) All defenses down?
@@ -1396,13 +1362,13 @@ class JaxAtlantis(
         2: RIGHTFIRE
         3: LEFTFIRE
         """
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def render(self, state: AtlantisState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def image_space(self) -> spaces.Box:
-        cfg = self.config
+        cfg = self.consts
         return spaces.Box(
             low=0,
             high=255,
@@ -1413,14 +1379,21 @@ class JaxAtlantis(
 
 
 class AtlantisRenderer(JAXGameRenderer):
-    def __init__(self, config: GameConfig | None = None):
-        super().__init__()
-        self.config = config or GameConfig()
-        self.jr = render_utils.JaxRenderingUtils(
-            render_utils.RendererConfig(
-                game_dimensions=(self.config.screen_height, self.config.screen_width)
+    def __init__(self, consts: AtlantisConstants | None = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or AtlantisConstants()
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
             )
-        )
+        else:
+            self.config = config
+        
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Create a dummy constants object to access ASSET_CONFIG
         # Since Atlantis uses GameConfig instead of Constants, we'll use the default
@@ -1434,8 +1407,8 @@ class AtlantisRenderer(JAXGameRenderer):
             color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
             return jnp.tile(color, (height, width, 1))
         dynamic_procedural_assets = [
-            {'name': 'bullet', 'data': _solid_sprite_data(self.config.bullet_width, self.config.bullet_height, (255, 255, 255))},
-            {'name': 'beam_light_blue', 'data': _solid_sprite_data(3, self.config.height_upper_beam, (90, 204, 165))},
+            {'name': 'bullet', 'data': _solid_sprite_data(self.consts.bullet_width, self.consts.bullet_height, (255, 255, 255))},
+            {'name': 'beam_light_blue', 'data': _solid_sprite_data(3, self.consts.height_upper_beam, (90, 204, 165))},
         ]
         for asset in dynamic_procedural_assets:
             final_asset_config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
@@ -1479,7 +1452,7 @@ class AtlantisRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AtlantisState) -> chex.Array:
-        cfg = self.config
+        cfg = self.consts
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # --- Render Cannons ---

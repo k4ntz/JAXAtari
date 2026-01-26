@@ -161,6 +161,27 @@ def main():
 
     action_space = env.action_space()
 
+    def map_action_to_index(action_constant):
+        """Convert Action constant to the specific index within the game's ACTION_SET."""
+        if hasattr(env, 'ACTION_SET'):
+            # Convert JAX array/constant to standard Python int for comparison
+            action_set = np.array(env.ACTION_SET)
+            action_int = int(action_constant)
+            
+            # Find where this constant lives in the current game's minimal set
+            matches = np.where(action_set == action_int)[0]
+            
+            if len(matches) > 0:
+                idx = int(matches[0])
+                if args.verbose:
+                    name = ACTION_NAMES.get(action_int, "UNKNOWN")
+                    # Verification: "LEFT" (4) should map to Index 3 in Pong
+                    print(f"[Action Debug] Input: {name} | Constant: {action_int} -> Env Index: {idx}")
+                return jax.numpy.array(idx, dtype=jax.numpy.int32)
+        
+        # Fallback if no ACTION_SET is defined
+        return jax.numpy.array(action_constant, dtype=jax.numpy.int32)
+
     save_keys = {}
     running = True
     pause = False
@@ -248,8 +269,9 @@ def main():
             action = action_space.sample(action_key)
             action_key, _ = jax.random.split(action_key)
         else:
-            # get the pressed keys
-            action = get_human_action()
+            # get the pressed keys (returns Action constant) and map to action index
+            action_constant = get_human_action()
+            action = map_action_to_index(action_constant)
             # Save the action to the save_keys dictionary
             if args.record:
                 # Save the action to the save_keys dictionary
@@ -262,7 +284,8 @@ def main():
                 next_frame_asked = False
         else:
             # Need to get action to update event queue even if paused
-            action = get_human_action()
+            action_constant = get_human_action()
+            action = map_action_to_index(action_constant)
 
         if done:
             print(f"Done. Total return {total_return}")

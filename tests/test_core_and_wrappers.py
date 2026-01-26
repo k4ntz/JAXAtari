@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 import jaxatari
+from dataclasses import is_dataclass
 from jaxatari.environment import EnvInfo, EnvObs, EnvState
 from jaxatari.wrappers import (
     NormalizeObservationWrapper,
@@ -401,12 +402,17 @@ def test_flatten_observation_wrapper_space_structure(raw_env):
 
     def deep_asdict(obj: any) -> any:
         """
-        Recursively converts a Pytree of namedtuples into a Pytree of standard dicts.
-        This is needed because obs is a namedtuple but the space is a Dict.
+        Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of standard dicts.
+        This is needed because obs might be a namedtuple or dataclass but the space is a Dict.
         """
         if hasattr(obj, '_asdict'): # It's a namedtuple
             return collections.OrderedDict(
                 (key, deep_asdict(value)) for key, value in obj._asdict().items()
+            )
+        elif is_dataclass(obj): # It's a dataclass
+            from dataclasses import asdict
+            return collections.OrderedDict(
+                (key, deep_asdict(value)) for key, value in asdict(obj).items()
             )
         elif isinstance(obj, (list, tuple)):
             return type(obj)(deep_asdict(item) for item in obj)
@@ -494,6 +500,100 @@ def test_atari_wrapper_features_and_pixel_preprocessing(raw_env):
     (pix_obs, obj_obs), state = mixed_env.reset(key)
     assert pix_obs.shape == expected_shape
     assert obj_obs.ndim == 2
+
+
+def test_native_downscaling_hot_swap(raw_env):
+    """
+    Verifies that enabling use_native_downscaling correctly hot-swaps the 
+    renderer configuration and produces downscaled observations natively.
+    """
+    # 1. Setup: Load raw env and basic wrappers
+    env = AtariWrapper(raw_env)
+    
+    # Define target shape
+    TARGET_H, TARGET_W = 84, 84
+    
+    # 2. Apply Wrapper with Native Downscaling enabled
+    # This triggers the "Hot Swap" logic in PixelObsWrapper.__init__
+    try:
+        env = PixelObsWrapper(
+            env, 
+            do_pixel_resize=True, 
+            pixel_resize_shape=(TARGET_H, TARGET_W), 
+            use_native_downscaling=True
+        )
+    except TypeError as e:
+        pytest.fail(f"Game renderer likely hasn't updated its __init__ to accept 'config'. Error: {e}")
+
+    # 3. Check Observation Space (Public Interface)
+    # The wrapper should have patched image_space() or observation_space()
+    obs_space = env.observation_space()
+    
+    # Expected: (Stack, H, W, 3) or (Stack, H, W, 1)
+    # We assume default RGB (channels=3) for this test unless env forces grayscale
+    expected_shape = (env.frame_stack_size, TARGET_H, TARGET_W, 3)
+    
+    assert obs_space.shape == expected_shape, \
+        f"Observation space mismatch. Expected {expected_shape}, got {obs_space.shape}"
+
+    # 4. Check Internals (The Hot Swap Verification)
+    # We dig into the wrapped instance to verify the Renderer config was actually updated.
+    # Stack: PixelObsWrapper -> AtariWrapper -> GameEnv
+    base_env = env._env._env 
+    
+    # Ensure the renderer has the downscale config set
+    assert base_env.renderer.config.downscale == (TARGET_H, TARGET_W), \
+        f"Renderer config was not updated! It is {base_env.renderer.config.downscale}. Wrapper might be falling back to slow resizing."
+
+    # 5. Check Runtime Output (JIT Compilation & Execution)
+    # This ensures the JAX graph compiles with the new shapes
+    key = jax.random.PRNGKey(0)
+    
+    # Test Reset
+    obs, state = env.reset(key)
+    assert obs.shape == expected_shape, f"Reset observation shape mismatch. Got {obs.shape}"
+    
+    # Test Step
+    obs, state, reward, done, info = env.step(state, 0)
+    assert obs.shape == expected_shape, f"Step observation shape mismatch. Got {obs.shape}"
+
+    # 6. Verify Values (Sanity Check)
+    # Ensure we aren't getting empty arrays or garbage
+    assert obs.dtype == jnp.uint8
+    assert jnp.max(obs) <= 255
+    assert jnp.min(obs) >= 0
+
+
+def test_native_downscaling_grayscale(raw_env):
+    """
+    Specific test to ensure Native Downscaling handles Grayscale channel reduction correctly.
+    """
+    env = AtariWrapper(raw_env)
+    TARGET_H, TARGET_W = 84, 84
+
+    # Enable Grayscale + Native
+    env = PixelObsWrapper(
+        env, 
+        do_pixel_resize=True, 
+        pixel_resize_shape=(TARGET_H, TARGET_W), 
+        grayscale=True,
+        use_native_downscaling=True
+    )
+
+    # Expecting 1 channel now
+    expected_shape = (env.frame_stack_size, TARGET_H, TARGET_W, 1)
+    
+    obs_space = env.observation_space()
+    assert obs_space.shape == expected_shape
+    
+    # Verify Internal Config channels
+    base_env = env._env._env
+    assert base_env.renderer.config.channels == 1, "Renderer config channels should be 1 for grayscale"
+
+    # Runtime check
+    key = jax.random.PRNGKey(0)
+    obs, _ = env.reset(key)
+    assert obs.shape == expected_shape
 
 if __name__ == "__main__":
     pytest.main([__file__])

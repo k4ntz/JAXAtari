@@ -5,8 +5,10 @@ import importlib
 import inspect
 import os
 import sys
+import warnings
 
 from typing import Type, Tuple, Dict, Any, List, Callable
+from dataclasses import is_dataclass
 
 from functools import partial
 
@@ -171,6 +173,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
 
     game = None
     renderer = None
+    renderer_class = None
     # Find the class that inherits from JaxEnvironment
     for name, obj in inspect.getmembers(game_module):
         if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
@@ -179,10 +182,20 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
 
         if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
-            renderer = obj()
+            renderer_class = obj
 
     if game is None:
         raise ImportError(f"No class found in {game_file_path} that inherits from JaxEnvironment")
+
+    # Instantiate renderer with constants from the game environment
+    if renderer_class is not None:
+        try:
+            consts = game.consts if hasattr(game, 'consts') else None
+            renderer = renderer_class(consts=consts)
+        except Exception as e:
+            print(f"Warning: Could not instantiate renderer with constants: {e}")
+            # Fallback: try without constants (renderer will use defaults)
+            renderer = renderer_class()
 
     return game, renderer
 
@@ -252,7 +265,32 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
             if const_overrides:
                 # Recreate env with modded constants
                 base_consts = env.consts
-                modded_consts = base_consts._replace(**const_overrides)
+                
+                # 1. Modern (.replace)
+                if hasattr(base_consts, 'replace'):
+                    modded_consts = base_consts.replace(**const_overrides)
+                
+                # 2. Legacy (_replace)
+                elif hasattr(base_consts, '_replace'):
+                    warnings.warn(
+                        f"Unregistered Game '{game_name}': Using legacy '_replace()' for constants. "
+                        "Please migrate to 'flax.struct.PyTreeNode'.",
+                        UserWarning
+                    )
+                    valid_fields = base_consts._fields
+                    field_overrides = {k: v for k, v in const_overrides.items() if k in valid_fields}
+                    modded_consts = base_consts._replace(**field_overrides)
+                    
+                    # Legacy attribute injection
+                    remaining = {k: v for k, v in const_overrides.items() if k not in valid_fields}
+                    if remaining:
+                        for k, v in remaining.items():
+                            setattr(type(base_consts), k, v)
+                else:
+                     raise TypeError(
+                        f"Constants class {type(base_consts).__name__} must support .replace() or _replace()."
+                    )
+                
                 env = env.__class__(consts=modded_consts)
 
             # 4. BUILD STAGE 1 (Internal Controller)
