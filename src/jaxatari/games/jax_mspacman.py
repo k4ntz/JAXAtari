@@ -894,12 +894,6 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         self.SPRITES = MsPacmanRenderer.load_sprites()
         self.BG_SPRITES = [MsPacmanMaze.load_background(i) for i in range(len(MsPacmanMaze.MAZES))]
 
-    # def render_background(self, level: chex.Array, lives: chex.Array, score: chex.Array):
-    #     """Reset the background for a new level."""
-    #     self.SPRITE_BG = MsPacmanMaze.load_background(get_level_maze(level))
-    #     self.SPRITE_BG = MsPacmanRenderer.render_lives(self.SPRITE_BG, lives, self.SPRITES["pacman"][1][1]) # Life sprite (right looking pacman)
-    #     self.SPRITE_BG = MsPacmanRenderer.render_score(self.SPRITE_BG, score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)), self.SPRITES["score"])
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
         """Renders the current game state on screen."""
@@ -910,15 +904,8 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             bg = MsPacmanRenderer.render_score(bg, state.score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(state.score)), self.SPRITES["score"])
             return bg
 
+        # TODO: Implement slicing/vectorization improvement
         def render_pellets(background):
-            # First approach. Not possible because of incompatible x-axis scales
-            # pellet_mask = jnp.repeat(jnp.repeat(state.level.pellets,
-            #                                MsPacmanMaze.TILE_SCALE, axis=0),
-            #                                MsPacmanMaze.TILE_SCALE, axis=1)
-            # return jnp.where(mask, MsPacmanMaze.WALL_COLOR, background)
-
-            # TODO: There might be a more efficient way, maybe ask ChatGPT for other options
-
             x_range, y_range = jnp.nonzero(state.level.pellets)
             x_offset = jnp.where(x_range < 9, 8, 12)
             x_positions = x_range * 8 + x_offset
@@ -944,48 +931,6 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
             # Update background at all positions
             return background.at[xx_flat, yy_flat].set(color_pixels)
-
-
-            # scaled_pmask = jnp.repeat(jnp.repeat(state.level.pellets, 8, axis=0), 15, axis=1)  # pellet mask
-            # print("scaled_pmask")
-            # print(scaled_pmask)
-
-            # yshift = 10
-            # pmask_yshift = jnp.concatenate([jnp.zeros((yshift, scaled_pmask.shape[1]), dtype=scaled_pmask.dtype), scaled_pmask[:-yshift, :]], axis=0)
-            # print("pmask_yshift")
-            # print(pmask_yshift)
-
-            # mid = scaled_pmask.shape[1] // 2
-            # pmask_l = pmask_yshift[:, :mid]
-            # pmask_r = pmask_yshift[:, mid:]
-            # print("pmask_l")
-            # print(pmask_l)
-
-            # xshift_l = 8
-            # xshift_r = 12
-            # pmask_l_xshift = jnp.concatenate([jnp.zeros((pmask_l.shape[0], xshift_l), dtype=pmask_l.dtype), pmask_l[:, :-xshift_l]], axis=1)
-            # pmask_r_xshift = jnp.concatenate([jnp.zeros((pmask_r.shape[0], xshift_r), dtype=pmask_r.dtype), pmask_r[:, :-xshift_r]], axis=1)
-            # print("pmask_l_xshift")
-            # print(pmask_l_xshift)
-
-            # combined_pmask = jnp.concatenate([pmask_l_xshift, pmask_r_xshift], axis=1)
-            # print("combined_pmask")
-            # print(combined_pmask)
-
-            # ypadding = 16
-            # padded_mask = jnp.concatenate([jnp.zeros((ypadding, scaled_pmask.shape[1])), combined_pmask], axis=0)
-            # print("padded_mask")
-            # print(padded_mask)
-            # print("\n\n")
-
-            # pmask = jnp.swapaxes(combined_pmask, 0, 1)
-            # return jnp.where(padded_mask[..., None], MsPacmanMaze.WALL_COLOR, background)
-
-
-        # def derender_pellet(background):
-        #     pellet_x = state.player.position[0] + 3
-        #     pellet_y = state.player.position[1] + 4
-        #     return background.at[pellet_x:pellet_x+4, pellet_y:pellet_y+2].set(PATH_COLOR)
 
         def render_power_pellet(idx, background):
             return aj.render_at(
@@ -1021,20 +966,17 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                 render_ghost,
                 background
             )
+        
+        def render_fruit(raster, fruit: FruitState, fruit_sprites):
+            """Renders the fruit at its current position."""
+            return aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
+        
 
+        # -------- Render playing field --------
         # Render background for new game or level
         background = render_background()
-        # if state.level.loaded < 2:
-        #     self.render_background(state.level.id, state.lives, state.score) # Render game over screen
-        # raster = self.SPRITE_BG
 
-        # De-render pellets when consumed
-        # background = jax.lax.cond(
-        #     state.player.has_pellet,
-        #     lambda: derender_pellet(background),
-        #     lambda: background
-        # ) 
-
+        # Render pellets
         background = render_pellets(background)
 
         # Render power pellets
@@ -1055,21 +997,11 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         # Render ghosts
         background = render_ghosts(background)
 
-        # ghosts_orientation = ((state.step_count & 0b10000) >> 4) # (state.step_count % 32) // 16
-        # for i in range(len(state.ghosts.types)):
-        #     # Render frightened ghost
-        #     if not (state.ghosts.modes[i] == GhostMode.FRIGHTENED or state.ghosts.modes[i] == GhostMode.BLINKING):
-        #         g_sprite = self.SPRITES["ghost"][ghosts_orientation][i]
-        #     elif state.ghosts.modes[i] == GhostMode.BLINKING and ((state.step_count & 0b1000) >> 3):
-        #         g_sprite = self.SPRITES["ghost"][ghosts_orientation][5] # white blinking effect
-        #     else:
-        #         g_sprite = self.SPRITES["ghost"][ghosts_orientation][4] # blue ghost
-        #     raster = aj.render_at(raster, state.ghosts.positions[i][0], state.ghosts.positions[i][1], g_sprite)
-
         # Render fruit if present
         if state.fruit.type != FruitType.NONE:
-            background = MsPacmanRenderer.render_fruit(background, state.fruit, self.SPRITES["fruit"])
+            background = render_fruit(background, state.fruit, self.SPRITES["fruit"])
 
+        # -------- Render UI --------
         # Render score if changed
         if jnp.any(state.score_changed):
             background = MsPacmanRenderer.render_score(background, state.score, state.score_changed, self.SPRITES["score"])
@@ -1080,6 +1012,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         return background
     
+
     @staticmethod
     def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0])):
         """Render the score on the raster at a fixed position. Only updates digits that have changed."""
@@ -1093,20 +1026,20 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                 new_raster  = aj.render_at(rast, digit_x, score_y, bg_sprite)
                 new_raster  = aj.render_at(new_raster, digit_x, score_y, d_sprite)
                 return new_raster
-            
+
             return jax.lax.cond(
                 score_changed[idx],
                 update_digit,
                 lambda: rast
             )
-        
+
         return jax.lax.fori_loop(
             0,
             digits.shape[0],
             digit_loop,
             raster
         )
-
+    
     @staticmethod
     def render_lives(raster, current_lives, life_sprite, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0])):
         """Render the lives on the raster at a fixed position."""
@@ -1120,18 +1053,13 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             )
             this_life_x = life_x + life_offset * (life_sprite.shape[1] + spacing)
             return aj.render_at(rast, this_life_x, life_y, this_sprite)
-        
+
         return jax.lax.fori_loop(
             0,
             MAX_LIVE_COUNT,
             live_loop,
             raster
         )
-    
-    @staticmethod
-    def render_fruit(raster, fruit: FruitState, fruit_sprites):
-        """Renders the fruit at its current position."""
-        return aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
     
     @staticmethod
     def load_sprites() -> dict[str, Any]:
