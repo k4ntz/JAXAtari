@@ -316,7 +316,7 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
     def __init__(self, consts: GalaxianConstants = None):
         super().__init__()
         self.consts = consts or GalaxianConstants()
-        self.renderer = GalaxianRenderer()
+        self.renderer = GalaxianRenderer(consts=self.consts)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1436,16 +1436,19 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
 
 class GalaxianRenderer(JAXGameRenderer):
-    def __init__(self, consts: GalaxianConstants = None):
-        super().__init__()
+    def __init__(self, consts: GalaxianConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or GalaxianConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))

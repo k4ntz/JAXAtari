@@ -1379,14 +1379,21 @@ class JaxAtlantis(
 
 
 class AtlantisRenderer(JAXGameRenderer):
-    def __init__(self, consts: AtlantisConstants | None = None):
-        super().__init__()
+    def __init__(self, consts: AtlantisConstants | None = None, config: render_utils.RendererConfig = None):
         self.consts = consts or AtlantisConstants()
-        self.jr = render_utils.JaxRenderingUtils(
-            render_utils.RendererConfig(
-                game_dimensions=(self.consts.screen_height, self.consts.screen_width)
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
             )
-        )
+        else:
+            self.config = config
+        
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Create a dummy constants object to access ASSET_CONFIG
         # Since Atlantis uses GameConfig instead of Constants, we'll use the default

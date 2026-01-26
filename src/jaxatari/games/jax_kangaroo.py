@@ -2100,7 +2100,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    def __init__(self, consts: KangarooConstants = None):
+    def __init__(self, consts: KangarooConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
 
@@ -2108,13 +2108,19 @@ class KangarooRenderer(JAXGameRenderer):
             sprite_path: Path to the directory containing sprite .npy files.
         """
         self.consts = consts or KangarooConstants()
+        super().__init__(self.consts)
 
-        self.rendering_config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and process all sprites
         (

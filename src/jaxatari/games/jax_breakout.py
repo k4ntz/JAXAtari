@@ -827,14 +827,19 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
 
 class BreakoutRenderer(JAXGameRenderer):
-    def __init__(self, consts: BreakoutConstants = None):
-        super().__init__()
+    def __init__(self, consts: BreakoutConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or BreakoutConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Standard API setup from the new renderer

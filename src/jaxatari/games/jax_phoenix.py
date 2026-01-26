@@ -1275,16 +1275,19 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 from jaxatari.renderers import JAXGameRenderer
 
 class PhoenixRenderer(JAXGameRenderer):
-    def __init__(self, consts: PhoenixConstants = None):
-        super().__init__()
+    def __init__(self, consts: PhoenixConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or PhoenixConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-            #downscale=(84, 84),
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # 2. Define sprite path

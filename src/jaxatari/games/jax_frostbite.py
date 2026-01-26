@@ -2840,20 +2840,24 @@ class FrostbiteRenderer(JAXGameRenderer):
     and composites them onto a 160x210 pixel display using JAX operations.
     """
 
-    def __init__(self, consts: FrostbiteConstants = None):
+    def __init__(self, consts: FrostbiteConstants = None, config: render_utils.RendererConfig = None):
         """Initialize the renderer with game constants and load all sprites.
 
         Args:
             consts: Game constants defining screen dimensions and positions
         """
-        super().__init__()
         self.consts = consts or FrostbiteConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the new renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         self.sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "frostbite")
         # 2. Call the asset preparation helper

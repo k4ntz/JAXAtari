@@ -1390,16 +1390,20 @@ class Renderer_NameThisGame(JAXGameRenderer):
 
     sprites: Dict[str, Any]
 
-    def __init__(self, consts: NameThisGameConstants = None):
-        super().__init__()
+    def __init__(self, consts: NameThisGameConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or NameThisGameConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/namethisgame"
-        # Configure render utils
-        self.ru_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         # Build asset config: copy defaults and add swatch for palette colors we need (orange, green, white, black)
         final_asset_config = list(self.consts.ASSET_CONFIG)
         swatch_rgba = jnp.array([
@@ -1438,10 +1442,10 @@ class Renderer_NameThisGame(JAXGameRenderer):
 
     def _draw_box_ids(self, raster: jnp.ndarray, x: chex.Array, y: chex.Array, w: int, h: int, color_id: int) -> jnp.ndarray:
         # Scale and build mask in render-utils space
-        sx = jnp.round(x * self.ru_config.width_scaling).astype(jnp.int32)
-        sy = jnp.round(y * self.ru_config.height_scaling).astype(jnp.int32)
-        sw = jnp.maximum(1, jnp.round(w * self.ru_config.width_scaling)).astype(jnp.int32)
-        sh = jnp.maximum(1, jnp.round(h * self.ru_config.height_scaling)).astype(jnp.int32)
+        sx = jnp.round(x * self.config.width_scaling).astype(jnp.int32)
+        sy = jnp.round(y * self.config.height_scaling).astype(jnp.int32)
+        sw = jnp.maximum(1, jnp.round(w * self.config.width_scaling)).astype(jnp.int32)
+        sh = jnp.maximum(1, jnp.round(h * self.config.height_scaling)).astype(jnp.int32)
         xx, yy = self.jr._xx, self.jr._yy
         mask = (xx >= sx) & (xx < sx + sw) & (yy >= sy) & (yy < sy + sh)
         return jnp.where(mask, jnp.asarray(color_id, raster.dtype), raster)

@@ -215,7 +215,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             consts = AsterixConstants()
         
         super().__init__(consts)
-        self.renderer = AsterixRenderer()
+        self.renderer = AsterixRenderer(consts=self.consts)
 
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         lane_y_centers = (stage_borders[:-1] + stage_borders[1:]) // 2
@@ -823,16 +823,19 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
 
 class AsterixRenderer(JAXGameRenderer):
-    def __init__(self, consts: AsterixConstants = None):
-        super().__init__()
+    def __init__(self, consts: AsterixConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or AsterixConstants()
+        super().__init__(self.consts)
 
-        # Configure renderer and utils
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Asset base path

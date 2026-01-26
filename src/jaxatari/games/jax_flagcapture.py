@@ -595,14 +595,19 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
 
 class FlagCaptureRenderer(JAXGameRenderer):
-    def __init__(self, consts: FlagCaptureConstants = None):
-        super().__init__()
+    def __init__(self, consts: FlagCaptureConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or FlagCaptureConstants()
+        super().__init__(self.consts)
 
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH), # TODO window size?
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         (

@@ -2544,14 +2544,19 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         return obs, return_state, 0.0, False, info
 
 class LaserGatesRenderer(JAXGameRenderer):
-    def __init__(self, consts: LaserGatesConstants = None):
-        super().__init__()
+    def __init__(self, consts: LaserGatesConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or LaserGatesConstants()
+        super().__init__(self.consts)
 
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Helper to generate 1x1 pixel for masks

@@ -768,7 +768,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
 
-        self.renderer = EnduroRenderer()
+        self.renderer = EnduroRenderer(consts=self.config)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
@@ -2498,16 +2498,19 @@ class EnduroRenderer(JAXGameRenderer):
     """
     Renders the jax_enduro game using the new JAX-native rendering utils
     """
-    def __init__(self, consts: EnduroConstants = None):
-        super().__init__()
+    def __init__(self, consts: EnduroConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or EnduroConstants()
+        super().__init__(self.consts)
         
-        # Configure renderer and utils
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # Store scaling factors as static values for use in JIT functions
         self._height_scaling = float(self.config.height_scaling)

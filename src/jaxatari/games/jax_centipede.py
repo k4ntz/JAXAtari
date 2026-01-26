@@ -2195,17 +2195,20 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
 
 
 class CentipedeRenderer(JAXGameRenderer):
-    def __init__(self, consts: CentipedeConstants = None):
-        super().__init__()
+    def __init__(self, consts: CentipedeConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or CentipedeConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/centipede"
 
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants

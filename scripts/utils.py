@@ -173,6 +173,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
 
     game = None
     renderer = None
+    renderer_class = None
     # Find the class that inherits from JaxEnvironment
     for name, obj in inspect.getmembers(game_module):
         if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
@@ -181,10 +182,20 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
 
         if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
             print(f"Found renderer: {name}")
-            renderer = obj()
+            renderer_class = obj
 
     if game is None:
         raise ImportError(f"No class found in {game_file_path} that inherits from JaxEnvironment")
+
+    # Instantiate renderer with constants from the game environment
+    if renderer_class is not None:
+        try:
+            consts = game.consts if hasattr(game, 'consts') else None
+            renderer = renderer_class(consts=consts)
+        except Exception as e:
+            print(f"Warning: Could not instantiate renderer with constants: {e}")
+            # Fallback: try without constants (renderer will use defaults)
+            renderer = renderer_class()
 
     return game, renderer
 

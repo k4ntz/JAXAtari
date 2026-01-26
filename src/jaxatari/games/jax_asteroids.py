@@ -1263,13 +1263,20 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
 class AsteroidsRenderer(JAXGameRenderer):
     """JAX-based Asteroids game renderer, optimized with the declarative asset pipeline."""
 
-    def __init__(self, consts: AsteroidsConstants = None):
+    def __init__(self, consts: AsteroidsConstants = None, config: render_utils.RendererConfig = None):
         """Initializes the renderer by loading and processing all assets."""
-        super().__init__()
         self.consts = consts or AsteroidsConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH)
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Start from (possibly modded) asset config provided via constants

@@ -317,8 +317,8 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     def __init__(self, consts: HangmanConstants = None):
         consts = consts or HangmanConstants()
         super().__init__(consts)
-        self.renderer = HangmanRenderer()
         self.consts = consts
+        self.renderer = HangmanRenderer(consts=self.consts)
 
         # Combine base words with additional words from constants
         all_words = list(consts.RAW_WORDS)
@@ -638,14 +638,19 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
 # render
 class HangmanRenderer(JAXGameRenderer):
-    def __init__(self, consts: HangmanConstants = None):
-        consts = consts or HangmanConstants()
-        super().__init__()
-        self.consts = consts
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+    def __init__(self, consts: HangmanConstants = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or HangmanConstants()
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Create procedural background (Solid color only)

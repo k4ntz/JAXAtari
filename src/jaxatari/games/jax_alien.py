@@ -18,6 +18,7 @@ from jaxatari.renderers import JAXGameRenderer
 from gymnax.environments import spaces
 import jaxatari.spaces as spaces
 from jaxatari.rendering import jax_rendering_utils_legacy as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 import jax
 import numpy as np
@@ -2338,9 +2339,20 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     return new_enemy
 
 class AlienRenderer(JAXGameRenderer):
-    def __init__(self, consts: AlienConstants = None):
-        super().__init__()
+    def __init__(self, consts: AlienConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or AlienConstants()
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        # Note: Alien uses legacy rendering utils, but we store config for API consistency
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
         (self.map_sprite, 
         self.player_sprite, 

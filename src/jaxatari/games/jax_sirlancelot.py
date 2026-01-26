@@ -2688,15 +2688,20 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
 # -----------------------------------------------------------------------------
 
 class SirLancelotRenderer(JAXGameRenderer):
-    def __init__(self, consts: SirLancelotConstants = None):
+    def __init__(self, consts: SirLancelotConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SirLancelotConstants()
         super().__init__(self.consts)
         
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "sir_lancelot")

@@ -134,37 +134,3 @@ def make(game_name: str,
     except (ImportError, NotImplementedError) as e:
         # Only wrap registration/import errors - let intentional errors (ValueError, etc.) propagate
         raise ImportError(f"Failed to load game '{game_name}': {e}") from e
-
-def make_renderer(game_name: str) -> JAXGameRenderer:
-    """
-    Creates and returns a JaxAtari game environment renderer.
-
-    Args:
-        game_name: Name of the game to load (e.g., "pong").
-
-    Returns:
-        An instance of the specified game environment renderer.
-    """
-    if game_name not in GAME_MODULES:
-        raise NotImplementedError(
-            f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
-        )
-    
-    try:
-        # 1. Dynamically load the module
-        module = importlib.import_module(GAME_MODULES[game_name])
-        
-        # 2. Find the correct environment class within the module
-        renderer_class = None
-        for _, obj in inspect.getmembers(module):
-            if inspect.isclass(obj) and issubclass(obj, JAXGameRenderer) and obj is not JAXGameRenderer:
-                renderer_class = obj
-                break # Found it
-
-        if renderer_class is None:
-            raise ImportError(f"No JAXGameRenderer subclass found in {GAME_MODULES[game_name]}")
-
-        # 3. Instantiate the class, passing along the arguments, and return it
-        return renderer_class()
-    except (ImportError, AttributeError) as e:
-      raise ImportError(f"Failed to load renderer for '{game_name}': {e}") from e

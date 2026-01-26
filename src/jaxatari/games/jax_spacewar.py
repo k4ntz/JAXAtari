@@ -862,19 +862,22 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
 class SpaceWarRenderer(JAXGameRenderer):
     """JAX-based SpaceWar game renderer, optimized with JIT compilation."""
 
-    def __init__(self, consts: SpaceWarConstants = None):
+    def __init__(self, consts: SpaceWarConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading and pre-processing all assets.
         """
-        super().__init__()
         self.consts = consts or SpaceWarConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spacewar"

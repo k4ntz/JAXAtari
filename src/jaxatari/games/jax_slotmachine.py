@@ -265,17 +265,20 @@ class SlotMachineRenderer(JAXGameRenderer):
 
     """
 
-    def __init__(self, consts: SlotMachineConstants = None):
-    
-        super().__init__()
+    def __init__(self, consts: SlotMachineConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SlotMachineConstants()
+        super().__init__(self.consts)
         self.sprite_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/slotmachine"
-        # Configure new render utils
-        self.ru_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         # Build asset config from constants and inject pre-scaled symbol data (slightly hacky to keep compatibility with modification pipeline)
         final_asset_config = [dict(item) for item in self.consts.ASSET_CONFIG]
         for item in final_asset_config:
@@ -682,10 +685,10 @@ class SlotMachineRenderer(JAXGameRenderer):
     def _draw_colored_box_ids(self, raster: jnp.ndarray, x: int, y: int, width: int, height: int, color_id: int) -> jnp.ndarray:
         """Fill a rectangle using scaled boolean masks (compatible with downscaling)."""
         # Scale geometric parameters according to renderer config
-        scaled_x = jnp.round(x * self.ru_config.width_scaling).astype(jnp.int32)
-        scaled_y = jnp.round(y * self.ru_config.height_scaling).astype(jnp.int32)
-        scaled_w = jnp.maximum(1, jnp.round(width * self.ru_config.width_scaling)).astype(jnp.int32)
-        scaled_h = jnp.maximum(1, jnp.round(height * self.ru_config.height_scaling)).astype(jnp.int32)
+        scaled_x = jnp.round(x * self.config.width_scaling).astype(jnp.int32)
+        scaled_y = jnp.round(y * self.config.height_scaling).astype(jnp.int32)
+        scaled_w = jnp.maximum(1, jnp.round(width * self.config.width_scaling)).astype(jnp.int32)
+        scaled_h = jnp.maximum(1, jnp.round(height * self.config.height_scaling)).astype(jnp.int32)
         # Build mask over cached grids
         xx, yy = self.jr._xx, self.jr._yy
         mask = (xx >= scaled_x) & (xx < scaled_x + scaled_w) & (yy >= scaled_y) & (yy < scaled_y + scaled_h)
