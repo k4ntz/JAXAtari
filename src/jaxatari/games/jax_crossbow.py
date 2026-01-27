@@ -42,7 +42,9 @@ def _get_default_asset_config() -> tuple:
         {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
         {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
         {'name': 'voracious_plant', 'type': 'single', 'file': 'voracious_plant.npy'},
-        {'name': 'snake', 'type': 'group', 'files': ['snake_1.npy', 'snake_2.npy']},
+        {'name': 'snake', 'type': 'group', 'files': [
+            'snake_1.npy', 'snake_2.npy', 'snake_3.npy', 'snake_4.npy', 'snake_5.npy'
+        ]},
         {
             'name': 'bat', 'type': 'group',
             'files': [
@@ -613,7 +615,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
     def _desert_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-        rng, spawn_key, type_key, scatter_key = jax.random.split(state.key, 4)
+        rng, spawn_key, type_key, scatter_key, snake_x_key, snake_y_key = jax.random.split(state.key, 6)
         HIT_TOLERANCE = 8
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
@@ -623,15 +625,16 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-        point_values = jnp.array([0, 50, 50, 100, 200, 100, 50])
+        point_values = jnp.array([0, 50, 50, 100, 200, 100, 50, 0, 0, 0, 0, 100])
         reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
-        move_freq = jnp.select([state.enemies_type == EnemyType.ANT, state.enemies_type == EnemyType.SNAKE], [2, 2], default=3)
+        move_freq = jnp.select([state.enemies_type == EnemyType.ANT], [2], default=3)
         should_move = (state.step_counter % move_freq) == 0
 
+        is_snake = state.enemies_type == EnemyType.SNAKE
         is_vulture = state.enemies_type == EnemyType.VULTURE
-        move_x = jnp.where(should_move, -1.0, 0.0)
-        move_y = jnp.where(jnp.logical_and(state.enemies_type == EnemyType.VULTURE, should_move), 1.0, 0.0)
+        move_x = jnp.where(is_snake, 0.0, jnp.where(should_move, -1.0, 0.0))
+        move_y = jnp.where(jnp.logical_and(is_vulture, should_move), 1.0, 0.0)
 
         new_x = state.enemies_x + move_x
         new_y = state.enemies_y + move_y
@@ -642,14 +645,29 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         type_indices = jax.random.randint(type_key, (self.consts.MAX_ENEMIES,), 0, 4)
         new_types = enemy_types[type_indices]
 
-        spawn_x = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 140, 160).astype(jnp.float32)
+        spawn_x_edge = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 140, 160).astype(jnp.float32)
+        spawn_x_random = jax.random.randint(snake_x_key, (self.consts.MAX_ENEMIES,), 20, 140).astype(jnp.float32)
         spawn_ground_y = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), self.consts.GROUND_Y_MIN, self.consts.GROUND_Y_MAX).astype(jnp.float32)
         spawn_air_y = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 20, 80).astype(jnp.float32)
-        spawn_y = jnp.where(new_types == EnemyType.VULTURE, spawn_air_y, spawn_ground_y)
+        spawn_snake_y = jax.random.randint(snake_y_key, (self.consts.MAX_ENEMIES,), 80, 120).astype(jnp.float32)
+
+        is_new_snake = new_types == EnemyType.SNAKE
+        is_new_vulture = new_types == EnemyType.VULTURE
+
+        spawn_x = jnp.where(is_new_snake, spawn_x_random, spawn_x_edge)
+        spawn_y = jnp.select([is_new_vulture, is_new_snake], [spawn_air_y, spawn_snake_y], default=spawn_ground_y)
 
         final_x = jnp.where(should_spawn, spawn_x, new_x)
         final_y = jnp.where(should_spawn, spawn_y, new_y)
-        final_active = jnp.logical_and(jnp.logical_or(surviving_enemies, should_spawn), final_x > -10)
+
+        new_age = jnp.where(should_spawn, 0, state.enemies_age + 1)
+
+        SNAKE_LIFESPAN = 150
+        snake_expired = jnp.logical_and(is_snake, new_age >= SNAKE_LIFESPAN)
+
+        is_active_candidate = jnp.logical_or(surviving_enemies, should_spawn)
+        not_off_screen = final_x > -10
+        final_active = jnp.logical_and(is_active_candidate, jnp.logical_and(not_off_screen, jnp.logical_not(snake_expired)))
 
         fx, fy = state.friend_x, state.friend_y
         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + self.consts.ENEMY_SIZE[0] > fx)
@@ -663,6 +681,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             enemies_x=final_x.astype(jnp.float32),
             enemies_y=final_y.astype(jnp.float32),
             enemies_type=jnp.where(should_spawn, new_types, state.enemies_type).astype(jnp.int32),
+            enemies_age=new_age.astype(jnp.int32),
             key=rng
         )
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
@@ -1130,7 +1149,10 @@ class CrossbowRenderer(JAXGameRenderer):
 
         self.snake_anim_masks = jnp.stack([
             pad_to_target(self.SHAPE_MASKS["snake"][0]),
-            pad_to_target(self.SHAPE_MASKS["snake"][1])
+            pad_to_target(self.SHAPE_MASKS["snake"][1]),
+            pad_to_target(self.SHAPE_MASKS["snake"][2]),
+            pad_to_target(self.SHAPE_MASKS["snake"][3]),
+            pad_to_target(self.SHAPE_MASKS["snake"][4])
         ])
 
         self.bat_anim_masks = jnp.stack([pad_to_target(self.SHAPE_MASKS["bat"][j]) for j in range(5)])
@@ -1217,11 +1239,14 @@ class CrossbowRenderer(JAXGameRenderer):
             diag_sprite_idx = 1 + (quad_idx * 2)
             final_arrow_idx = jnp.select([is_right, is_down, is_left, is_up], [0, 2, 4, 6], default=diag_sprite_idx)
 
-            snake_frame_idx = (state.step_counter // 8) % 2
+            snake_step = age // 10
+            snake_frame_idx = jnp.where(snake_step < 5, snake_step, 8 - snake_step)
+            snake_frame_idx = jnp.maximum(0, jnp.minimum(4, snake_frame_idx))
+
             bat_idx = jnp.where(age < 48, jnp.minimum(age // 16, 2), 3 + ((age - 48) // 8) % 2)
             stal_idx = jnp.where(enemy_type == EnemyType.STALACTITE_HANGING, 1, 0)
 
-            snake_mask = jax.lax.switch(snake_frame_idx, [lambda j=j: self.snake_anim_masks[j] for j in range(2)])
+            snake_mask = jax.lax.switch(snake_frame_idx, [lambda j=j: self.snake_anim_masks[j] for j in range(5)])
             bat_mask = jax.lax.switch(bat_idx, [lambda j=j: self.bat_anim_masks[j] for j in range(5)])
             stal_mask = jax.lax.switch(stal_idx, [lambda j=j: self.stalactite_masks[j] for j in range(2)])
             arrow_mask = jax.lax.switch(final_arrow_idx, [lambda j=j: self.arrow_sprites[j] for j in range(8)])
