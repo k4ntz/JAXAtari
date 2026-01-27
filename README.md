@@ -208,6 +208,19 @@ Contributions are welcome!
 5. Open a pull request  
 
 ---
+## Cite us
+
+```bibtex
+@misc{jaxatari2026,
+  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kersting, Kristian},
+  title = {JAXAtari: A High-Performance Framework for Reasoning agents},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {https://github.com/k4ntz/JAXAtari/},
+}
+```
+---
 
 ## License
 
