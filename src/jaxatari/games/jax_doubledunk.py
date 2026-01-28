@@ -794,14 +794,59 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_final_off)
         )
 
+        # --- Defensive Jump Logic (CPU Defenders) ---
+        # When the attacker (P1) is in the air with the ball during a shot, the CPU defenders should jump
+        is_shoot_step = (state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT)
+        
+        # Check if P1 Inside or P1 Outside is in the air with the ball
+        p1_inside_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_outside_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        p1_inside_in_air = state.player1_inside.z > 0
+        p1_outside_in_air = state.player1_outside.z > 0
+        
+        p1_inside_shooting = jnp.logical_and(jnp.logical_and(p1_inside_has_ball, p1_inside_in_air), is_shoot_step)
+        p1_outside_shooting = jnp.logical_and(jnp.logical_and(p1_outside_has_ball, p1_outside_in_air), is_shoot_step)
+        p1_is_shooting = jnp.logical_or(p1_inside_shooting, p1_outside_shooting)
+        
+        # Determine if P2 is defending and close to the shooter
+        p2_in_close_to_p1_in = jnp.sqrt((state.player2_inside.x - state.player1_inside.x)**2 + (state.player2_inside.y - state.player1_inside.y)**2) < 40
+        p2_in_close_to_p1_out = jnp.sqrt((state.player2_inside.x - state.player1_outside.x)**2 + (state.player2_inside.y - state.player1_outside.y)**2) < 40
+        p2_out_close_to_p1_in = jnp.sqrt((state.player2_outside.x - state.player1_inside.x)**2 + (state.player2_outside.y - state.player1_inside.y)**2) < 40
+        p2_out_close_to_p1_out = jnp.sqrt((state.player2_outside.x - state.player1_outside.x)**2 + (state.player2_outside.y - state.player1_outside.y)**2) < 40
+        
+        # P2 Inside defensive jump: jumps if P1 Inside is shooting and P2 Inside is close
+        p2_in_defensive_jump = jnp.logical_and(p1_inside_shooting, p2_in_close_to_p1_in)
+        
+        # P2 Outside defensive jump: jumps if P1 Outside is shooting and P2 Outside is close
+        p2_out_defensive_jump = jnp.logical_and(p1_outside_shooting, p2_out_close_to_p1_out)
+        
+        # P2 Inside can also jump if P1 Outside is shooting and P2 Inside is close (interior defense)
+        p2_in_defensive_jump = jnp.logical_or(p2_in_defensive_jump, jnp.logical_and(p1_outside_shooting, p2_in_close_to_p1_out))
+        
+        # P2 Outside can also jump if P1 Inside is shooting and P2 Outside is close (perimeter help)
+        p2_out_defensive_jump = jnp.logical_or(p2_out_defensive_jump, jnp.logical_and(p1_inside_shooting, p2_out_close_to_p1_in))
+        
+        # Add FIRE (Jump) action if defensive jump is needed
+        p2_inside_def_action = jax.lax.select(
+            jnp.logical_and(p2_in_defensive_jump, p1_has_ball),
+            Action.FIRE,
+            p2_inside_action
+        )
+        
+        p2_outside_def_action = jax.lax.select(
+            jnp.logical_and(p2_out_defensive_jump, p1_has_ball),
+            Action.FIRE,
+            p2_outside_action
+        )
+
         # --- Enemy Reaction Time Logic ---
         use_last_action = state.timers.enemy_reaction > 0
         
-        final_p2_inside_action = jax.lax.select(use_last_action, state.strategy.last_enemy_actions[0], p2_inside_action)
-        final_p2_outside_action = jax.lax.select(use_last_action, state.strategy.last_enemy_actions[1], p2_outside_action)
+        final_p2_inside_action = jax.lax.select(use_last_action, state.strategy.last_enemy_actions[0], p2_inside_def_action)
+        final_p2_outside_action = jax.lax.select(use_last_action, state.strategy.last_enemy_actions[1], p2_outside_def_action)
         
         new_timer = jax.lax.select(use_last_action, state.timers.enemy_reaction - 1, 6) # Reset to 6 frames (~0.1s)
-        new_last_actions = jax.lax.select(use_last_action, state.strategy.last_enemy_actions, jnp.array([p2_inside_action, p2_outside_action]))
+        new_last_actions = jax.lax.select(use_last_action, state.strategy.last_enemy_actions, jnp.array([p2_inside_def_action, p2_outside_def_action]))
 
         actions = (p1_inside_action, p1_outside_action, final_p2_inside_action, final_p2_outside_action)
         return actions, key, new_timer, new_last_actions
@@ -917,7 +962,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         shoot_speed = 8.0
         shoot_vel = (shoot_direction / shoot_safe_norm) * shoot_speed
 
-        # Basic blocking
+        # Interception/Blocking Logic
+        # A shot can only be blocked if the defending player is in the air (z > 0)
+        # This requires the defender to jump when the attacker jumps to shoot
         def check_blocking():
             # opponents (if shooter is P1, opponents are P2; if shooter is P2, opponents are P1)
             is_shooter_p1 = jnp.logical_or((shooter == PlayerID.PLAYER1_INSIDE), (shooter == PlayerID.PLAYER1_OUTSIDE))
@@ -929,6 +976,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             opp_ids = player_ids[opp_indices]
 
             dists = jnp.sqrt((opp_xs - shooter_x)**2 + (opp_ys - shooter_y)**2)
+            # Defender must be in the air (opp_zs > 0) AND within BLOCK_RADIUS to intercept
             can_blocks = jnp.logical_and((opp_zs > 0), (dists < self.constants.BLOCK_RADIUS))
             
             blocked_by = jax.lax.select(can_blocks[0], opp_ids[0], jax.lax.select(can_blocks[1], opp_ids[1], PlayerID.NONE))
