@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -220,22 +221,34 @@ class MsPacmanMaze:
        HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
        TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]]) # y coordinates of every tunnel - 0 means no tunnel
 
-       # TODO: Make jit-compatible
        @staticmethod
-       def precompute_dof(maze: np.ndarray):
+       def precompute_dof(maze: jnp.ndarray):
               """
               Precompute the degree of freedom for each position in the maze
               """
               w, h = maze.shape
-              dof_grid = np.zeros((h, w, 4), dtype=bool)
-              for x in range(maze.shape[1]):
-                     for y in range(maze.shape[0]):
-                            no_wall_above = sum(maze[y-2, x-1:x+2]) == 0
-                            no_wall_right = sum(maze[y-1:y+2, (x+2)%h]) == 0
-                            no_wall_left = sum(maze[y-1:y+2, x-2]) == 0
-                            no_wall_bellow = sum(maze[(y+2)%w, x-1:x+2]) == 0
-                            dof_grid[x, y] = [no_wall_above, no_wall_right, no_wall_left, no_wall_bellow]
-              return jnp.array(dof_grid)
+              def x_loop(x, x_grid):
+                     def y_loop(y, y_grid):
+                            no_wall_above  = jnp.sum(maze[y-2, x-1:x+2]) == 0
+                            no_wall_right  = jnp.sum(maze[y-1:y+2, (x+2)%h]) == 0
+                            no_wall_left   = jnp.sum(maze[y-1:y+2, x-2]) == 0
+                            no_wall_bellow = jnp.sum(maze[(y+2)%w, x-1:x+2]) == 0
+                            return y_grid.at[x, y].set([no_wall_above, no_wall_right, no_wall_left, no_wall_bellow])
+
+                     return jax.lax.fori_loop(
+                            0,
+                            maze.shape[0],
+                            y_loop,
+                            x_grid
+                     )
+              
+              dof_grid = jnp.zeros((h, w, 4), dtype=bool)
+              return jax.lax.fori_loop(
+                     0,
+                     maze.shape[1],
+                     x_loop,
+                     dof_grid
+              )
 
        @staticmethod
        def load_background(maze: int, mazes = MAZES, scale = TILE_SCALE,

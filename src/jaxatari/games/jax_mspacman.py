@@ -904,33 +904,18 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             bg = MsPacmanRenderer.render_score(bg, state.score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(state.score)), self.SPRITES["score"])
             return bg
 
-        # TODO: Implement slicing/vectorization improvement
         def render_pellets(background):
             x_range, y_range = jnp.nonzero(state.level.pellets)
             x_offset = jnp.where(x_range < 9, 8, 12)
             x_positions = x_range * 8 + x_offset
             y_positions = y_range * 12 + 10
 
-            # Prepare index arrays for all rectangles and all pixels in each rectangle
-            p_height, p_width = 2, 4
-            dx = jnp.arange(p_width)
-            dy = jnp.arange(p_height)
-            xx = x_positions[:, None, None] + dx[None, None, :]
-            yy = y_positions[:, None, None] + dy[None, :, None]
+            dx = jnp.arange(4)[:, None]   # (w, 1)
+            dy = jnp.arange(2)[None, :]   # (1, h)
 
-            # Broadcast to shape (num_rects, rect_h, rect_w)
-            xx = jnp.broadcast_to(xx, (x_positions.shape[0], p_height, p_width))
-            yy = jnp.broadcast_to(yy, (y_positions.shape[0], p_height, p_width))
-
-            # Flatten to 1D arrays for advanced indexing
-            xx_flat = xx.reshape(-1)
-            yy_flat = yy.reshape(-1)
-
-            # Repeat color for each pixel
-            color_pixels = jnp.broadcast_to(MsPacmanMaze.WALL_COLOR, (xx_flat.shape[0], 3))
-
-            # Update background at all positions
-            return background.at[xx_flat, yy_flat].set(color_pixels)
+            rows = x_positions[:, None, None] + dx   # (N, w, 1)
+            cols = y_positions[:, None, None] + dy   # (N, 1, h)
+            return background.at[rows, cols].set(MsPacmanMaze.WALL_COLOR)
 
         def render_power_pellet(idx, background):
             return aj.render_at(
