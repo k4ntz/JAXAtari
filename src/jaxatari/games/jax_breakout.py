@@ -756,7 +756,7 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BreakoutState) -> chex.Array:
-        return jnp.logical_or(state.lives <= 0, jnp.logical_or(state.all_blocks_cleared, state.step_counter >= 5000))
+        return jnp.logical_or(state.lives <= 0, state.all_blocks_cleared)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for Breakout.
@@ -767,9 +767,6 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         3: LEFT
         """
         return spaces.Discrete(len(self.ACTION_SET))
-        # But since actions are currently directly mapped from digits
-        # return Discrete(4) would lead to not being able to use the left action
-        return spaces.Discrete(5)
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Breakout.

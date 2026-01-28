@@ -98,7 +98,11 @@ def make_test(config, save_params):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
-            env = PixelObsWrapper(env)
+            grayscale = config.get("PIXEL_GRAYSCALE", False)
+            do_resize = config.get("PIXEL_RESIZE", True)
+            resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
+            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
+            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
         env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)
         return env

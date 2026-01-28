@@ -134,7 +134,8 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
                 env,
                 do_pixel_resize=True,
                 pixel_resize_shape=(84, 84),
-                grayscale=True
+                grayscale=True,
+                use_native_downscaling=True
             )
         else:
             env = FlattenObservationWrapper(NormalizeObservationWrapper(ObjectCentricWrapper(env)))
@@ -281,7 +282,7 @@ if __name__ == "__main__":
 
     renderer = None
     if args.capture_video:
-        renderer = jaxatari.make_renderer(args.env_id)
+        renderer = env.renderer
    
     # vmap and squeeze observations in order to get (B, F, H, W, 1) -> (B, F, H, W),
     # where F is the frame stack which becomes the channel for the convolutions
