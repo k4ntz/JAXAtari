@@ -655,7 +655,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_dying=state.player_dying.astype(jnp.bool_),
             player_death_timer=state.player_death_timer.astype(jnp.int32),
         )
-        return state
+        return state, 0, False
 
     def bat_step(self, state):
         bat_step_size = 0.5
@@ -729,7 +729,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         # Only remove the projectile if any valid hit occurred
         any_valid_hit = jnp.any(left_hit_valid | right_hit_valid)
-        new_proj_y = jnp.where(any_valid_hit, -1, state.projectile_y)
         def update_wing_state(current_state, left_hit, right_hit):
             # current_state: int (-1,0,1,2), left_hit & right_hit: bool
 
@@ -763,7 +762,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             enemies_x=new_enemies_x.astype(jnp.float32),
             enemies_y=new_enemies_y.astype(jnp.float32),
             horizontal_direction_enemies=new_directions.astype(jnp.float32),
-            projectile_y=new_proj_y,
             blue_blocks=state.blue_blocks.astype(jnp.float32),
             red_blocks=state.red_blocks.astype(jnp.float32),
             green_blocks=state.green_blocks.astype(jnp.float32),
@@ -772,7 +770,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             bat_y_cooldown=new_y_cooldown.astype(jnp.int32)
         )
 
-        return state
+        return state, jnp.where(any_valid_hit, 20, 0.0), any_valid_hit
 
     def boss_step(self, state):
         step_size = 0.05
@@ -862,19 +860,15 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             lambda: rotate(new_blue_blocks),
             lambda: new_blue_blocks,
         )
-        projectile_x = jnp.where(projectile_hit_detected, -1, state.projectile_x)
-        projectile_y = jnp.where(projectile_hit_detected, -1, state.projectile_y)
 
         state = state.replace(
             enemies_y=new_enemy_y.astype(jnp.float32),
             blue_blocks=new_blue_blocks.astype(jnp.float32),
             red_blocks=new_red_blocks.astype(jnp.float32),
             green_blocks=new_green_blocks.astype(jnp.float32),
-            projectile_x=projectile_x.astype(jnp.int32),
-            projectile_y=projectile_y.astype(jnp.int32),
             enemies_x = state.enemies_x.astype(jnp.float32),
         )
-        return state
+        return state, jnp.where(projectile_hit_detected, 20, 0.0), projectile_hit_detected
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PhoenixObservation, PhoenixState]:
 
@@ -955,26 +949,23 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         ])
         firing = jnp.any(fire_actions) & can_fire
 
-        state = jax.lax.cond(
+        state, sub_step_score, sub_step_hit = jax.lax.cond(
             jnp.logical_or((state.level % 5) == 1, (state.level % 5) == 2),
             lambda: self.phoenix_step(state),
             lambda: jax.lax.cond(
                 jnp.logical_or((state.level % 5) == 3, (state.level % 5) == 4),
                 lambda: self.bat_step(state),
                 lambda: self.boss_step(state),
-
             )
         )
-        projectile_x = jnp.where(firing,
-                                 state.player_x + 2,
-                                 state.projectile_x).astype(jnp.int32)
 
-        projectile_y = jnp.where(firing,
-                                 state.player_y - 1,
-                                 jnp.where(projectile_active,
-                                           state.projectile_y - 3,  # move up if active
-                                           state.projectile_y))  # stay
-        projectile_y = jnp.where(projectile_y < 0, -6, projectile_y)
+        projectile_x = jnp.where(sub_step_hit, -1, state.projectile_x)
+        projectile_y = jnp.where(sub_step_hit, -1, state.projectile_y)
+        
+        # If it hit a wing/block, it's gone (-1), so body check will fail (Correct)
+        projectile_active = projectile_y >= 0
+        
+        projectile_pos = jnp.array([projectile_x, projectile_y])
         # use step_counter for randomness
         def generate_fire_key_and_chance(step_counter: int, fire_chance: float) -> Tuple[jax.random.PRNGKey, float]:
             key = jax.random.PRNGKey(step_counter)
@@ -1264,7 +1255,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         )
         observation = self._get_observation(return_state)
-        env_reward = jnp.where(enemy_hit_detected, 1.0, 0.0)
+        env_reward = self._get_reward(state, return_state)
         done = self._get_done(return_state)
         info = self._get_info(return_state)
         return observation, return_state, env_reward, done, info
