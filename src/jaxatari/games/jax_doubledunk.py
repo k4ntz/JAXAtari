@@ -795,7 +795,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         )
 
         # --- Defensive Jump Logic (CPU Defenders) ---
-        # When the attacker (P1) is in the air with the ball during a shot, the CPU defenders should jump
+        # When the attacker (P1) is in the air with the ball during a shot, the matching position CPU defender should jump
         is_shoot_step = (state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT)
         
         # Check if P1 Inside or P1 Outside is in the air with the ball
@@ -806,35 +806,30 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         p1_inside_shooting = jnp.logical_and(jnp.logical_and(p1_inside_has_ball, p1_inside_in_air), is_shoot_step)
         p1_outside_shooting = jnp.logical_and(jnp.logical_and(p1_outside_has_ball, p1_outside_in_air), is_shoot_step)
-        p1_is_shooting = jnp.logical_or(p1_inside_shooting, p1_outside_shooting)
         
-        # Determine if P2 is defending and close to the shooter
+        # Determine if P2 is defending and close to the corresponding shooter
+        # P2 Inside defends P1 Inside (inside player on inside player)
         p2_in_close_to_p1_in = jnp.sqrt((state.player2_inside.x - state.player1_inside.x)**2 + (state.player2_inside.y - state.player1_inside.y)**2) < 40
-        p2_in_close_to_p1_out = jnp.sqrt((state.player2_inside.x - state.player1_outside.x)**2 + (state.player2_inside.y - state.player1_outside.y)**2) < 40
-        p2_out_close_to_p1_in = jnp.sqrt((state.player2_outside.x - state.player1_inside.x)**2 + (state.player2_outside.y - state.player1_inside.y)**2) < 40
+        
+        # P2 Outside defends P1 Outside (outside player on outside player)
         p2_out_close_to_p1_out = jnp.sqrt((state.player2_outside.x - state.player1_outside.x)**2 + (state.player2_outside.y - state.player1_outside.y)**2) < 40
         
+        # Defensive jumps: only matching positions jump to avoid double jumps
         # P2 Inside defensive jump: jumps if P1 Inside is shooting and P2 Inside is close
         p2_in_defensive_jump = jnp.logical_and(p1_inside_shooting, p2_in_close_to_p1_in)
         
         # P2 Outside defensive jump: jumps if P1 Outside is shooting and P2 Outside is close
         p2_out_defensive_jump = jnp.logical_and(p1_outside_shooting, p2_out_close_to_p1_out)
         
-        # P2 Inside can also jump if P1 Outside is shooting and P2 Inside is close (interior defense)
-        p2_in_defensive_jump = jnp.logical_or(p2_in_defensive_jump, jnp.logical_and(p1_outside_shooting, p2_in_close_to_p1_out))
-        
-        # P2 Outside can also jump if P1 Inside is shooting and P2 Outside is close (perimeter help)
-        p2_out_defensive_jump = jnp.logical_or(p2_out_defensive_jump, jnp.logical_and(p1_inside_shooting, p2_out_close_to_p1_in))
-        
-        # Add FIRE (Jump) action if defensive jump is needed
+        # Add FIRE (Jump) action if defensive jump is needed and not already in action
         p2_inside_def_action = jax.lax.select(
-            jnp.logical_and(p2_in_defensive_jump, p1_has_ball),
+            jnp.logical_and(jnp.logical_and(p2_in_defensive_jump, p1_has_ball), state.player2_inside.z == 0),
             Action.FIRE,
             p2_inside_action
         )
         
         p2_outside_def_action = jax.lax.select(
-            jnp.logical_and(p2_out_defensive_jump, p1_has_ball),
+            jnp.logical_and(jnp.logical_and(p2_out_defensive_jump, p1_has_ball), state.player2_outside.z == 0),
             Action.FIRE,
             p2_outside_action
         )
@@ -922,7 +917,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions_stacked = jnp.stack(actions)
 
         def check_shooting(pid, p_z, p_action):
-            is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_shoot_step), (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
+            # Allow shooting if in JUMPSHOOT step, player is in the air, has the ball, and fire is pressed
+            # Note: During JUMPSHOOT step, we don't require offset_cooldown == 0 since jump already set it
+            is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(is_shoot_step, (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
             return is_shooting
 
         shooting_flags = jax.vmap(check_shooting)(player_ids, players.z, actions_stacked)
