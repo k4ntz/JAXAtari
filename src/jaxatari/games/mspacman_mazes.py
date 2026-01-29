@@ -1,14 +1,8 @@
-import jax
 import jax.numpy as jnp
-import numpy as np
-
 
 class MsPacmanMaze:
-       TILE_SCALE = 4 # Pixel - Each cell becomes a 4x4 block in the final image
-       WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8) # Wall color (RGB)
-       PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8) # Path color (RGB)
-
-       BASE_PELLETS = np.array([ # Total number of pellets in the maze = 155
+       # -------- Layouts --------
+       BASE_PELLETS = jnp.array([ # Total number of pellets in the maze = 155
        	[1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -29,7 +23,7 @@ class MsPacmanMaze:
               [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1]
        	], dtype=bool)
        
-       MAZE0 = np.array([
+       MAZE0 = jnp.array([
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -123,7 +117,7 @@ class MsPacmanMaze:
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
        ], dtype=bool)
        
-       MAZE2 = np.array([
+       MAZE2 = jnp.array([
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -170,7 +164,7 @@ class MsPacmanMaze:
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
        ], dtype=bool)
 
-       MAZE3 = np.array([
+       MAZE3 = jnp.array([
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
               [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -217,56 +211,61 @@ class MsPacmanMaze:
               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
        ], dtype=bool)
 
-       MAZES = [MAZE0, MAZE1, MAZE2, MAZE3]
-       HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape) # All mazes must have the same dimensions!
-       TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]]) # y coordinates of every tunnel - 0 means no tunnel
+       # -------- Constants --------
+       MAZES = jnp.array([MAZE0, MAZE1, MAZE2, MAZE3], dtype=jnp.bool_)
+       TILE_SCALE = 4  # Pixels - Each cell becomes a 4x4 block in the final image
+       HEIGHT, WIDTH = TILE_SCALE * jnp.array(MAZE0.shape)  # All mazes must have the same dimensions!
+       TUNNEL_HEIGHTS = jnp.array([[54, 102], [66, 162], [102, 0], [78, 102]])  # y coordinates of every tunnel - 0 means no tunnel
 
+       WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)  # Wall color (RGB)
+       PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)  # Path color (RGB)
+
+       # -------- Methods --------
        @staticmethod
-       def precompute_dof(maze: jnp.ndarray):
+       def precompute_dof(maze_id: int):
               """
               Precompute the degree of freedom for each position in the maze
               """
-              w, h = maze.shape
-              def x_loop(x, x_grid):
-                     def y_loop(y, y_grid):
-                            no_wall_above  = jnp.sum(maze[y-2, x-1:x+2]) == 0
-                            no_wall_right  = jnp.sum(maze[y-1:y+2, (x+2)%h]) == 0
-                            no_wall_left   = jnp.sum(maze[y-1:y+2, x-2]) == 0
-                            no_wall_bellow = jnp.sum(maze[(y+2)%w, x-1:x+2]) == 0
-                            return y_grid.at[x, y].set([no_wall_above, no_wall_right, no_wall_left, no_wall_bellow])
-
-                     return jax.lax.fori_loop(
-                            0,
-                            maze.shape[0],
-                            y_loop,
-                            x_grid
-                     )
-              
-              dof_grid = jnp.zeros((h, w, 4), dtype=bool)
-              return jax.lax.fori_loop(
-                     0,
-                     maze.shape[1],
-                     x_loop,
-                     dof_grid
+              # 1. Pre-calculate the "strip sums" (sums the neighbors in a 3-tile strip)
+              maze = MsPacmanMaze.MAZES[maze_id]
+              sum_horizontal_strip = (  # Sum of (x-1, x, x+1) for every row, axis=1 is the column axis (width)
+                  jnp.roll(maze, 1, axis=1) + 
+                  jnp.roll(maze, -1, axis=1) +
+                  maze 
+              )
+              sum_vertical_strip = (  # Sum of (y-1, y, y+1) for every column, axis=0 is the row axis (height)
+                  jnp.roll(maze, 1, axis=0) + 
+                  jnp.roll(maze, -1, axis=0) +
+                  maze
               )
 
+              # 2. Shift the strips to check the specific offsets (walls +/- 2 away)
+              no_wall_above = jnp.roll(sum_horizontal_strip, 2, axis=0) == 0
+              no_wall_below = jnp.roll(sum_horizontal_strip, -2, axis=0) == 0
+              no_wall_left = jnp.roll(sum_vertical_strip, 2, axis=1) == 0
+              no_wall_right = jnp.roll(sum_vertical_strip, -2, axis=1) == 0
+
+              # 3. Stack results
+              dof_grid = jnp.stack([no_wall_above, no_wall_right, no_wall_left, no_wall_below], axis=-1)  # (height, width, 4)
+              return jnp.transpose(dof_grid, (1, 0, 2))  # (width, height, 4)
+
        @staticmethod
-       def load_background(maze: int, mazes = MAZES, scale = TILE_SCALE,
-                           wall_color = WALL_COLOR, path_color = PATH_COLOR):
+       def load_background(maze_id: int):
               """
               Constructs the background based on the level.
               """
-              maze_grid = jnp.array(mazes[maze])  # shape (height, width)
-              maze_grid_expanded = jnp.repeat(jnp.repeat(maze_grid, scale, axis=0), scale, axis=1)  # shape (height*scale, width*scale)
+              # 1. Expand the maze layout to pixel scale
+              maze = MsPacmanMaze.MAZES[maze_id]  # (height, width)
+              maze_expanded = jnp.repeat(jnp.repeat(maze, MsPacmanMaze.TILE_SCALE, axis=0), MsPacmanMaze.TILE_SCALE, axis=1)  # (height*scale, width*scale)
               
-              # Choose color for each pixel
+              # 2. Assign color to each pixel
               background = jnp.where(
-                  maze_grid_expanded[..., None],  # shape (height*scale, width*scale, 1)
-                  wall_color,                     # shape (3,)
-                  path_color                      # shape (3,)
+                  maze_expanded[..., None],  # (height*scale, width*scale, 1)
+                  MsPacmanMaze.WALL_COLOR,  # (3,)
+                  MsPacmanMaze.PATH_COLOR  # (3,)
               )
               
-              # Pad to a height of 210 to accomodate UI
+              # 3. Pad to a height of 210 to accomodate UI
               pad_height = 210 - background.shape[0]
               background = jnp.pad(background, ((0, pad_height), (0, 0), (0, 0)))
-              return jnp.swapaxes(jnp.array(background), 0, 1)
+              return jnp.swapaxes(background, 0, 1)
