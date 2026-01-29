@@ -257,7 +257,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             self.consts.spawn_max_delay + 1,
         )
         enemies = Enemy(
-            x=jnp.full((max_entities,), -9999.0),
+            x=jnp.full((max_entities,), -5.0),
             vx=jnp.zeros((max_entities,)),
             alive=jnp.zeros((max_entities,), dtype=bool)
         )
@@ -275,7 +275,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
 
         score_popups = ScorePopup(
-            x=jnp.full((max_entities,), -9999.0),
+            x=jnp.full((max_entities,), -5.0),
             value=jnp.zeros((max_entities,), dtype=jnp.int32),
             timer=jnp.zeros((max_entities,), dtype=jnp.int32),
             active=jnp.zeros((max_entities,), dtype=bool)
@@ -566,12 +566,12 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         def _clear_entities(_):
             cleared_enemies = enemies.replace(
-                x=jnp.full_like(enemies.x, -9999.0),
+                x=jnp.full_like(enemies.x, -5.0),
                 vx=jnp.zeros_like(enemies.vx),
                 alive=jnp.zeros_like(enemies.alive),
             )
             cleared_collectibles = collectibles.replace(
-                x=jnp.full_like(collectibles.x, -9999.0),
+                x=jnp.full_like(collectibles.x, -5.0),
                 vx=jnp.zeros_like(collectibles.vx),
                 alive=jnp.zeros_like(collectibles.alive),
             )
@@ -617,7 +617,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         enemies = jax.lax.cond(
             just_finished_respawn,
             lambda _: enemies.replace(
-                x=jnp.full_like(enemies.x, -9999.0),
+                x=jnp.full_like(enemies.x, -5.0),
                 vx=jnp.zeros_like(enemies.vx),
                 alive=jnp.zeros_like(enemies.alive)
             ),
@@ -627,7 +627,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         collectibles = jax.lax.cond(
             just_finished_respawn,
             lambda _: collectibles.replace(
-                x=jnp.full_like(collectibles.x, -9999.0),
+                x=jnp.full_like(collectibles.x, -5.0),
                 vx=jnp.zeros_like(collectibles.vx),
                 alive=jnp.zeros_like(collectibles.alive)
             ),
@@ -653,7 +653,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         def _clear_popups(_):
             return score_popups.replace(
-                x=jnp.full_like(score_popups.x, -9999.0),
+                x=jnp.full_like(score_popups.x, -5.0),
                 value=jnp.zeros_like(score_popups.value),
                 timer=jnp.zeros_like(score_popups.timer),
                 active=jnp.zeros_like(score_popups.active),
@@ -764,6 +764,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
+            "enemies": spaces.Box(low=0, high=160, shape=(8, 4), dtype=jnp.int32),
+            "collectibles": spaces.Box(low=0, high=160, shape=(8, 4), dtype=jnp.int32),
         })
 
 
@@ -788,6 +790,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             obs.player.y.flatten(),
             obs.player.width.flatten(),
             obs.player.height.flatten(),
+            obs.enemies.flatten(),
+            obs.collectibles.flatten(),
         ])
 
 

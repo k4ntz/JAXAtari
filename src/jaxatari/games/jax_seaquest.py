@@ -91,6 +91,23 @@ class SeaquestConstants(AutoDerivedConstants):
     # First wave directions from original code
     FIRST_WAVE_DIRS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, False, False, True]))
 
+    # --- SCORING CONSTANTS ---
+    # Enemy Scoring: Starts at 20, +10 per rescue, max 90
+    SCORE_ENEMY_BASE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(20))
+    SCORE_ENEMY_STEP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(10))
+    SCORE_ENEMY_MAX: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(90))
+
+    # Diver Scoring: Starts at 50, +50 per rescue, max 1000
+    SCORE_DIVER_BASE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(50))
+    SCORE_DIVER_STEP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(50))
+    SCORE_DIVER_MAX: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1000))
+
+    # Oxygen Scoring: Same scaling as Enemies (per user request)
+    # Starts at 20 per unit, +10 per rescue, max 90 per unit
+    SCORE_OXYGEN_BASE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(20))
+    SCORE_OXYGEN_STEP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(10))
+    SCORE_OXYGEN_MAX: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(90))
+
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
 
@@ -2021,12 +2038,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
     @partial(jax.jit, static_argnums=(0,))
     def calculate_kill_points(self, successful_rescues: chex.Array) -> chex.Array:
-        """Calculate the points awarded for killing a shark or submarine. Sharks and submarines are worth 20 points.
-        The points are increased by 10 for each successful rescue with a maximum of 90."""
-        base_points = 20
-        max_points = 90
-        additional_points = 10 * successful_rescues
-        return jnp.minimum(base_points + additional_points, max_points)
+        """
+        Calculate the points awarded for killing a shark or submarine. 
+        Scales based on successful rescues using defined constants.
+        """
+        bonus = self.consts.SCORE_ENEMY_STEP * successful_rescues
+        points = self.consts.SCORE_ENEMY_BASE + bonus
+        return jnp.minimum(points, self.consts.SCORE_ENEMY_MAX)
 
 
     # Minimal ALE action set for Seaquest (from scripts/action_space_helper.py)
@@ -2555,20 +2573,25 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 death_counter=jnp.array(90),
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state),
             )
-
-            # Calculate points for rescuing divers. Each diver is worth 50 points.
-            # Each successful rescue adds 50 points with a maximum of 1000 points each.
-            base_points_per_diver = 50
-            max_points_per_diver = 1000
-            additional_points_per_rescue = 50 * state.successful_rescues
+            
+            # 1. Calculate Diver Points
+            # Formula: Base (50) + (Step (50) * Rescues), Capped at Max (1000)
+            diver_bonus_val = self.consts.SCORE_DIVER_STEP * state.successful_rescues
             points_per_diver = jnp.minimum(
-                base_points_per_diver + additional_points_per_rescue,
-                max_points_per_diver,
+                self.consts.SCORE_DIVER_BASE + diver_bonus_val,
+                self.consts.SCORE_DIVER_MAX,
             )
             total_diver_points = points_per_diver * state.divers_collected
 
-            # Calculate bonus points for remaining oxygen
-            oxygen_bonus = state.oxygen * 20
+            # 2. Calculate Oxygen Points
+            # Formula: Base (20) + (Step (10) * Rescues), Capped at Max (90)
+            # This applies per unit of oxygen remaining.
+            oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * state.successful_rescues
+            points_per_oxygen_unit = jnp.minimum(
+                self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
+                self.consts.SCORE_OXYGEN_MAX
+            )
+            oxygen_bonus = state.oxygen * points_per_oxygen_unit
 
             # Calculate total points for successful rescue
             total_rescue_points = total_diver_points + oxygen_bonus

@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import warnings
 
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
@@ -119,14 +120,22 @@ def make(game_name: str,
 
         # 3. Handle mods if requested
         if mods_config:
-            return apply_modifications(
-                game_name=game_name,
-                mods_config=mods_config,
-                allow_conflicts=allow_conflicts,
-                base_consts=base_consts,
-                env_class=env_class,
-                MOD_MODULES=MOD_MODULES
-            )
+            try:
+                return apply_modifications(
+                    game_name=game_name,
+                    mods_config=mods_config,
+                    allow_conflicts=allow_conflicts,
+                    base_consts=base_consts,
+                    env_class=env_class,
+                    MOD_MODULES=MOD_MODULES
+                )
+            except NotImplementedError as e:
+                # Mod module not defined for this game - fall back to base environment
+                warnings.warn(
+                    f"Mods requested for '{game_name}' but no mod module is available. "
+                    f"Creating base environment without mods. Error: {e}",
+                    UserWarning
+                )
 
         # No mods: return default base env with default constants
         return env_class(consts=base_consts)
