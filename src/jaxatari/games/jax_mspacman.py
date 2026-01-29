@@ -10,9 +10,10 @@ TODO
     3)  [x] Performance improvements
     4)  [ ] JIT compatibility
 
-    BUgs:
-    1)  [ ] Fix type cast warning
+    Bugs:
+    1)  [x] Fix type cast warning
     2)  [ ] Fix frightened ghosts death loop in the lower left corner
+    3)  [ ] Fix entity alignment (pacman, ghosts and pellets one pixel up / ghosts one pixel to the right)
 
     Optional:
     a)  [ ] Correct speed
@@ -1376,19 +1377,19 @@ def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, al
 def get_level_maze(level: chex.Array):
     """Returns the maze id that correpsonds to the current level."""
     return jax.lax.switch(  # Invalid levels (<0) are not handled explicitly and just get assigned to level 0
-        jnp.digitize(level, jnp.array([3, 6, 10, 14])),
+        jnp.digitize(level, jnp.array([3, 6, 10, 14])).astype(jnp.int32),
         (
-            lambda _: 0,                # Levels 1-3
-            lambda _: 1,                # Levels 4-6
-            lambda _: 2,                # Levels 7-10
-            lambda _: 3,                # Levels 11-14
-            lambda _: jax.lax.cond(     # Levels 15+
-                (level % 4 == 0) | (level % 4 == 1),
-                lambda: 2,
-                lambda: 3
+            lambda lvl: jnp.array(0, dtype=jnp.int32),  # Levels 1-3
+            lambda lvl: jnp.array(1, dtype=jnp.int32),  # Levels 4-6
+            lambda lvl: jnp.array(2, dtype=jnp.int32),  # Levels 7-10
+            lambda lvl: jnp.array(3, dtype=jnp.int32),  # Levels 11-14
+            lambda lvl: jax.lax.cond(                   # Levels 15+
+                (lvl % 4 == 0) | (lvl % 4 == 1),
+                lambda: jnp.array(2, dtype=jnp.int32),
+                lambda: jnp.array(3, dtype=jnp.int32)
             )
         ),
-        None
+        level
     )
 
 
@@ -1456,11 +1457,10 @@ def detect_collision(position_1: chex.Array, position_2: chex.Array):
 
 # -------- Reset functions --------
 def reset_level(level: chex.Array):
-    maze = MsPacmanMaze.MAZES[get_level_maze(level)]
     return LevelState(
         id                  = jnp.array(level, dtype=jnp.uint8),
         collected_pellets   = jnp.array(0).astype(jnp.uint8),
-        dofmaze             = MsPacmanMaze.precompute_dof(maze), # Precompute degree of freedom maze layout
+        dofmaze             = MsPacmanMaze.precompute_dof(get_level_maze(level)),  # Precompute degree of freedom maze layout
         pellets             = jnp.copy(MsPacmanMaze.BASE_PELLETS),
         power_pellets       = jnp.ones(4, dtype=jnp.bool_),
         loaded              = jnp.array(0, dtype=jnp.uint8)
@@ -1471,7 +1471,7 @@ def reset_player():
         position            = INITIAL_PACMAN_POSITION,
         action              = INITIAL_ACTION,
         has_pellet          = jnp.array(False),
-        eaten_ghosts        = jnp.array(0).astype(jnp.uint8) # number of eaten ghost since power pellet consumed
+        eaten_ghosts        = jnp.array(0).astype(jnp.uint8)  # number of eaten ghost since power pellet consumed
     )
 
 def reset_ghosts():
