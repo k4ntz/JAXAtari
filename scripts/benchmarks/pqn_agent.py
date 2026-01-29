@@ -143,14 +143,18 @@ def make_train(config):
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
-    env = jaxatari.make(config["ENV_NAME"].lower())
-    mod_env = env
+    # Build mods_config list
+    mods_config = []
     if config.get("MOD_NAME", None) is not None:
-        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+        mods = config["MOD_NAME"]
+        mods_config = mods if isinstance(mods, list) else [mods]
+
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
+    mod_env = env
     renderer = mod_env.renderer
 
     def apply_wrappers(env):
-        env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
+        env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30, max_episode_length=18000)
         if config.get("OBJECT_CENTRIC", False):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
@@ -520,9 +524,96 @@ def make_train(config):
 
     return train
 
+def generate_final_video(config, params, batch_stats, seed_idx=0):
+    """Generate a video of the trained agent playing and log it to wandb."""
+    print(f"Generating final video for seed {seed_idx}...")
+    
+    # Build mods_config list
+    mods_config = []
+    if config.get("MOD_NAME", None) is not None:
+        mods = config["MOD_NAME"]
+        mods_config = mods if isinstance(mods, list) else [mods]
+
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
+    renderer = env.renderer
+
+    # Apply wrappers
+    env = AtariWrapper(env, episodic_life=False, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=False, noop_reset=30, max_episode_length=18000)
+    if config.get("OBJECT_CENTRIC", False):
+        env = ObjectCentricWrapper(env)
+        env = FlattenObservationWrapper(env)
+    else:
+        grayscale = config.get("PIXEL_GRAYSCALE", False)
+        do_resize = config.get("PIXEL_RESIZE", True)
+        resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
+        use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
+        env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
+    env = NormalizeObservationWrapper(env)
+    env = LogWrapper(env)
+
+    # Create network
+    network = QNetwork(
+        action_dim=env.action_space().n,
+        hidden_size=config.get("HIDDEN_SIZE", 128),
+        num_layers=config.get("NUM_LAYERS", 2),
+        norm_type=config["NORM_TYPE"],
+        norm_input=config.get("NORM_INPUT", False),
+        object_centric=config.get("OBJECT_CENTRIC", True),
+    )
+
+    # Run evaluation episode
+    rng = jax.random.PRNGKey(config["SEED"] + seed_idx + 1000)
+    rng, reset_rng = jax.random.split(rng)
+    obs, env_state = env.reset(reset_rng)
+    
+    frames = []
+    total_reward = 0.0
+    max_steps = config.get("VIDEO_MAX_STEPS", 5000)
+    
+    for step in range(max_steps):
+        # Get action from policy (greedy)
+        q_vals = network.apply(
+            {"params": params, "batch_stats": batch_stats},
+            obs[None, ...],  # Add batch dimension
+            train=False,
+        )
+        action = jnp.argmax(q_vals, axis=-1)[0]
+        
+        # Step environment
+        rng, step_rng = jax.random.split(rng)
+        obs, env_state, reward, done, info = env.step(env_state, action)
+        total_reward += float(reward)
+        
+        # Render frame (get state for rendering)
+        state_for_render = env_state
+        while hasattr(state_for_render, 'atari_state'):
+            state_for_render = state_for_render.atari_state
+        if hasattr(state_for_render, 'env_state'):
+            state_for_render = state_for_render.env_state
+        
+        frame = renderer.render(state_for_render)
+        frames.append(np.array(frame, dtype=np.uint8))
+        
+        if done:
+            break
+    
+    print(f"Final video: {len(frames)} frames, total reward: {total_reward:.1f}")
+    
+    # Convert frames to video format
+    if len(frames) > 0:
+        frames = np.stack(frames, axis=0)
+        # Shape: (N, H, W, 3) -> (N, 3, H, W) for wandb
+        frames = np.transpose(frames, (0, 3, 1, 2))
+        
+        video = wandb.Video(frames, fps=30, format="mp4")
+        wandb.log({f"final_video_seed{seed_idx}": video, f"final_return_seed{seed_idx}": total_reward})
+        print(f"Video logged to wandb.")
+    
+    return total_reward
+
+
 #TODO: 
 # * check status of scaling parameter from paul
-
 def single_run(config):
 
     config = {**config, **config["alg"]}
@@ -576,6 +667,16 @@ def single_run(config):
             )
             save_params(params, save_path)
             save_params(batch_stats, save_path.replace(".safetensors", "_bs.safetensors"))
+        print(f"Model saved to {save_dir}")
+
+    # Generate final video for the first seed
+    if config.get("RECORD_FINAL_VIDEO", True):
+        model_state = outs["runner_state"][0]
+        params = jax.tree_util.tree_map(lambda x: x[0], model_state.params)
+        batch_stats = jax.tree_util.tree_map(lambda x: x[0], model_state.batch_stats)
+        generate_final_video(config, params, batch_stats, seed_idx=0)
+
+    wandb.finish()
 
 
 def tune(default_config):
