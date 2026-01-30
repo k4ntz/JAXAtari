@@ -922,7 +922,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions_stacked = jnp.stack(actions)
 
         def check_shooting(pid, p_z, p_action):
-            is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(jnp.logical_and((state.timers.offense_cooldown == 0), is_shoot_step), (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
+            is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(is_shoot_step, (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
             return is_shooting
 
         shooting_flags = jax.vmap(check_shooting)(player_ids, players.z, actions_stacked)
@@ -975,9 +975,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             opp_zs = players.z[opp_indices]
             opp_ids = player_ids[opp_indices]
 
+            #Defenders pressing FIRE will start jumping
+            opp_actions = actions_stacked[opp_indices]
+            opp_press_fire = jax.vmap(lambda a: jnp.any(jnp.asarray(a) == jnp.asarray(list(_JUMP_ACTIONS))))(opp_actions)
+
             dists = jnp.sqrt((opp_xs - shooter_x)**2 + (opp_ys - shooter_y)**2)
-            # Defender must be in the air (opp_zs > 0) AND within BLOCK_RADIUS to intercept
-            can_blocks = jnp.logical_and((opp_zs > 0), (dists < self.constants.BLOCK_RADIUS))
+            # Defender can block if they are already in the air OR pressing FIRE this frame, and are within BLOCK_RADIUS
+            will_be_in_air = jnp.logical_or((opp_zs > 0), opp_press_fire)
+            can_blocks = jnp.logical_and(will_be_in_air, (dists < self.constants.BLOCK_RADIUS))
             
             blocked_by = jax.lax.select(can_blocks[0], opp_ids[0], jax.lax.select(can_blocks[1], opp_ids[1], PlayerID.NONE))
             return blocked_by
