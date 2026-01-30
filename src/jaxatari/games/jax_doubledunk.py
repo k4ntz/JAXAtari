@@ -912,8 +912,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         step_increment = jax.lax.select(is_passing, 1, 0)
         return new_ball_state, step_increment, is_passing
 
-    def _handle_shooting(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[BallState, chex.PRNGKey, chex.Array, chex.Array]:
-        """Handles the logic for shooting the ball."""
+    def _handle_shooting(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey, pre_jump_z: chex.Array) -> Tuple[BallState, chex.PRNGKey, chex.Array, chex.Array]:
+        """Handles the logic for shooting the ball.
+        Shooting now requires that the shooter was already in the air(pre_jump_z > 0)"""
         ball_state = state.ball
         is_shoot_step = (state.strategy.offense_pattern[state.strategy.offense_step] == OffensiveAction.JUMPSHOOT)
         
@@ -922,10 +923,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         actions_stacked = jnp.stack(actions)
 
         def check_shooting(pid, p_z, p_action):
+            # Use p_z from frame start (pre_jump_z) so a jump started this frame doesn't allow an immediate shot
             is_shooting = jnp.logical_and(jnp.logical_and(jnp.logical_and(is_shoot_step, (p_z != 0)), (ball_state.holder == pid)), jnp.any(jnp.asarray(p_action) == jnp.asarray(list(_SHOOT_ACTIONS))))
             return is_shooting
 
-        shooting_flags = jax.vmap(check_shooting)(player_ids, players.z, actions_stacked)
+        shooting_flags = jax.vmap(check_shooting)(player_ids, pre_jump_z, actions_stacked)
         is_shooting = jnp.any(shooting_flags)
         shooter_idx = jnp.argmax(shooting_flags)
         shooter = player_ids[shooter_idx]
@@ -1068,8 +1070,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return player.replace(vel_z=new_vel_z, triggered_clearance=triggered_clearance), did_jump
 
-    def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey) -> Tuple[DunkGameState, chex.PRNGKey, chex.Array]:
-        """Handles offensive actions: passing, shooting, and move commands."""
+    def _handle_offense_actions(self, state: DunkGameState, actions: Tuple[int, ...], key: chex.PRNGKey, pre_jump_z: chex.Array) -> Tuple[DunkGameState, chex.PRNGKey, chex.Array]:
         
         # Check current action type
         current_step_action = state.strategy.offense_pattern[state.strategy.offense_step]
@@ -1101,7 +1102,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(jnp.logical_or(did_pass, (move_inc > 0)), 6, state.timers.offense_cooldown)))
 
         # Shooting
-        ball_state_after_shot, key, shot_inc, did_shoot = self._handle_shooting(state, actions, key)
+        ball_state_after_shot, key, shot_inc, did_shoot = self._handle_shooting(state, actions, key, pre_jump_z)
         state = state.replace(ball=ball_state_after_shot)
         state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_shoot, 6, state.timers.offense_cooldown)))
 
@@ -1148,7 +1149,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         state = state.replace(timers=state.timers.replace(offense_cooldown=jax.lax.select(did_jump > 0, 6, state.timers.offense_cooldown)))
 
         # 3. Handle Offense (Pass/Shoot) using masked actions
-        state, key, offense_increment = self._handle_offense_actions(state, masked_actions, key)
+        state, key, offense_increment = self._handle_offense_actions(state, masked_actions, key, players.z)
         # _handle_defense_actions removed as it is handled in step 1
 
         # 4. Update offensive_strategy_step
