@@ -15,9 +15,9 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 class UpNDownConstants(NamedTuple):
     FRAME_SKIP: int = 4
     DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
-    MAX_SPEED: int = 6
+    MAX_SPEED: int = 7
     INITIAL_LIVES: int = 5
-    JUMP_ARC_HEIGHT: float = 18.0
+    JUMP_ARC_HEIGHT: float = 22.0
     RESPAWN_DELAY_FRAMES: int = 60
     RESPAWN_Y: int = 0
     RESPAWN_X: int = 30
@@ -54,6 +54,8 @@ class UpNDownConstants(NamedTuple):
     PASSIVE_SCORE_INTERVAL: int = 60  # Steps between passive score awards
     PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
+    ACCELERATION_INTERVAL: int = 6  # Frames between speed changes when holding up/down
+    EXTRA_LIFE_THRESHOLD: int = 10000  # Score threshold for extra life
     TRACK_LENGTH: int = 1036
     FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30])
     TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035])
@@ -181,6 +183,9 @@ class UpNDownState(NamedTuple):
     awaiting_round_start: chex.Array  # True at game start and after respawn until input received
     # Input debounce - requires button release before next input triggers round start
     input_released: chex.Array  # True when player has released all buttons since last state change
+    jump_key_released: chex.Array  # True if jump button was NOT pressed in previous step
+    last_extra_life_score: chex.Array  # Score at which last extra life was awarded
+    jump_total_duration: chex.Array  # Total duration of the current/last jump for rendering arc
 
 
 
@@ -238,7 +243,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             6  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started
         )
         # Speed dividers for movement timing (indexed by speed level)
-        self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16])
+        self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16, 16, 16])
 
     @partial(jax.jit, static_argnums=(0,))
     def _compute_movement_timing(self, speed: chex.Array, step_counter: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
@@ -257,7 +262,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         move_y = jnp.logical_and((step_counter % period) == (half_period % period), speed != 0)
         move_x = jnp.logical_and((step_counter % period) == 0, speed != 0)
-        step_size = jnp.where(speed_index >= self.consts.MAX_SPEED, 1.5, 1.0)
+        step_size = jnp.where(speed_index >= 6, 1.5 + (speed_index - 6) * 0.2, 1.0)
         
         return move_y, move_x, step_size, speed_sign
 
@@ -480,6 +485,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         car_type: chex.Array,
         is_landing: chex.Array,
         stored_jump_slope: chex.Array,
+        jump_progress: chex.Array,
     ) -> Car:
         """
         Advance the player car position.
@@ -507,16 +513,59 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             position, slope, b, speed_sign, step_size, car_direction_x, move_y, move_x
         )
 
+        # === JUMP PHYSICS NORMALIZATION ===
+        # Normalize jump velocity so total speed (Euclidean) matches 'step_size'
+        # Without this, diagonal jumps cover more distance per frame than straight road movement
+        # stored_jump_slope is dX/dY
+        # Scaling factor = 1 / sqrt(1 + slope^2)
+        jump_speed_scaling = 1.0 / jnp.sqrt(1.0 + stored_jump_slope**2)
+        jump_step_size = step_size * jump_speed_scaling
+
         # === Y MOVEMENT ===
-        # When jumping: move freely in Y direction
+        # When jumping: move freely in Y direction but with normalized speed
         # When on road: use road-based movement result
-        jump_y = jnp.where(move_y, position_y + speed_sign * -step_size, position_y)
+        # Note: We must apply step_y on move_y ticks to keep sync with engine heartbeat
+        jump_y = jnp.where(move_y, position_y + speed_sign * -jump_step_size, position_y)
         new_player_y = jnp.where(is_jumping, jump_y, road_y)
 
         # === X MOVEMENT ===
         # When jumping: use stored_jump_slope (locked at jump start) - moves X proportionally to Y
-        # When on road: use road-based movement result
-        jump_x = jnp.where(move_x, position_x - speed_sign * stored_jump_slope * step_size, position_x)
+        # Use jump_step_size to maintain correct trajectory and speed
+        # X step = slope * Y step magnitude = slope * jump_step_size
+        raw_jump_x = jnp.where(move_x, position_x - speed_sign * stored_jump_slope * jump_step_size, position_x)
+        
+        # === AIR STEERING / MAGNETISM ===
+        # Gradually steer towards the nearest road while in the air to prevent "teleporting" on landing
+        segment_curr = self._get_road_segment(new_player_y)
+        road_A_x_curr = self._get_x_on_road(new_player_y, segment_curr, self.consts.FIRST_TRACK_CORNERS_X)
+        road_B_x_curr = self._get_x_on_road(new_player_y, segment_curr, self.consts.SECOND_TRACK_CORNERS_X)
+        
+        dist_A = jnp.abs(raw_jump_x - road_A_x_curr)
+        dist_B = jnp.abs(raw_jump_x - road_B_x_curr)
+        
+        # Find closest road center
+        target_road_x = jnp.where(dist_A < dist_B, road_A_x_curr, road_B_x_curr)
+        dist_to_target = target_road_x - raw_jump_x
+        
+        # Only nudge in the last 25% of the jump (progress > 0.75)
+        # when reasonably close to a road (within 2x tolerance)
+        # and only when player is between the two roads
+        
+        is_late_jump = jump_progress > 0.75
+        is_reasonably_close = jnp.abs(dist_to_target) < (self.consts.LANDING_TOLERANCE * 2.0)
+        
+        # Check if player is between the two roads
+        min_road_x_curr = jnp.minimum(road_A_x_curr, road_B_x_curr)
+        max_road_x_curr = jnp.maximum(road_A_x_curr, road_B_x_curr)
+        is_between_roads = jnp.logical_and(raw_jump_x > min_road_x_curr, raw_jump_x < max_road_x_curr)
+        
+        should_magnet = jnp.logical_and(is_late_jump, jnp.logical_and(is_reasonably_close, is_between_roads))
+        
+        # Nudge factor: reduced to 2% steering strength (very subtle)
+        nudge_amount = dist_to_target * 0.08
+        
+        jump_x = raw_jump_x + jnp.where(should_magnet, nudge_amount, 0.0)
+        
         new_player_x = jnp.where(is_jumping, jump_x, road_x)
 
         # === LANDING LOGIC ===
@@ -550,12 +599,41 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Valid landing: on a road OR between roads (will snap to nearest)
         valid_landing = jnp.logical_or(on_any_road, between_roads)
         
+        # Bridge crossing physics: if speed is high, we can "skip" small water gaps (land on nearest road)
+        # In original game, bridges allow crossing without jumping if you have speed
+        can_bridge_gap = jnp.abs(speed) >= 5
+        
         # If landing and between roads but not directly on a road, snap to nearest road
         should_snap = jnp.logical_and(is_landing, jnp.logical_and(between_roads, jnp.logical_not(on_any_road)))
-        final_player_x = jnp.where(should_snap, nearest_road_x, new_player_x)
+        # Also snap if we are "in water" but have speed to bridge the gap
+        should_snap_bridge = jnp.logical_and(is_landing, jnp.logical_and(can_bridge_gap, jnp.logical_not(valid_landing)))
         
-        # Water landing (crash): landing outside the valid road area
-        landing_in_water = jnp.logical_and(is_landing, jnp.logical_not(valid_landing))
+        final_player_x = jnp.where(jnp.logical_or(should_snap, should_snap_bridge), nearest_road_x, new_player_x)
+        
+        # Water landing (crash): Only if NOT on road AND NOT between roads (i.e., landed completely outside)
+        # User clarification: "crashing should only be possible if you dont land in betweeen or on the roads"
+        
+        # Safe if: ON ROAD or BETWEEN ROADS
+        is_safe_landing = jnp.logical_or(on_any_road, between_roads)
+        
+        landing_in_water = jnp.logical_and(
+            is_landing, 
+            jnp.logical_not(is_safe_landing)
+        )
+        
+        # Snap logic: 
+        # If landing BETWEEN roads but not ON a road -> snap to nearest (safe!)
+        # (Outside landings are now crashes, so no need to snap them)
+        should_snap = jnp.logical_and(is_landing, jnp.logical_and(between_roads, jnp.logical_not(on_any_road)))
+        
+        # Also snap if bridging (fast jump across water gap)
+        should_snap_bridge = jnp.logical_and(is_landing, jnp.logical_and(between_roads, can_bridge_gap))
+        
+        final_player_x = jnp.where(
+            jnp.logical_or(should_snap, should_snap_bridge), 
+            nearest_road_x, 
+            new_player_x
+        )
         
         # === UPDATE ROAD STATE ===
         # Determine which road to assign on landing (priority: road A > road B > nearest)
@@ -645,44 +723,23 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _flag_step(self, state: UpNDownState, new_player_y: chex.Array, player_x: chex.Array, current_road: chex.Array) -> Tuple[Flag, chex.Array, chex.Array]:
-        """Update flag collection state and score.
+        """Update flag collection state and score (vectorized)."""
+        # Calculate flag X positions on both roads
+        # _get_x_on_road supports array inputs via advanced indexing
+        x_road_0 = self._get_x_on_road(state.flags.y, state.flags.road_segment, self.consts.FIRST_TRACK_CORNERS_X)
+        x_road_1 = self._get_x_on_road(state.flags.y, state.flags.road_segment, self.consts.SECOND_TRACK_CORNERS_X)
         
-        Args:
-            state: Current game state
-            new_player_y: Updated player Y position after movement
-            player_x: Current player X position
-            current_road: Current road player is on
-            
-        Returns:
-            Tuple of (updated_flags, score_delta, flags_collected_mask)
-        """
-        # Check collision for each flag
-        def check_flag_collision(flag_idx):
-            flag_y = state.flags.y[flag_idx]
-            flag_road = state.flags.road[flag_idx]
-            flag_collected = state.flags.collected[flag_idx]
-            
-            # Calculate flag X position on its road
-            flag_segment = state.flags.road_segment[flag_idx]
-            flag_x = jax.lax.cond(
-                flag_road == 0,
-                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.FIRST_TRACK_CORNERS_X),
-                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.SECOND_TRACK_CORNERS_X),
-                operand=None,
-            )
-            
-            # Check if player is close enough to collect the flag
-            y_distance = jnp.abs(new_player_y - flag_y)
-            x_distance = jnp.abs(player_x - flag_x)
-            same_road = (current_road == flag_road)
-
-            collision = jnp.logical_and(
-                jnp.logical_and(y_distance < self.consts.COLLISION_THRESHOLD, x_distance < self.consts.COLLISION_THRESHOLD),
-                jnp.logical_and(same_road, ~flag_collected)
-            )
-            return collision
+        flag_x = jnp.where(state.flags.road == 0, x_road_0, x_road_1)
         
-        new_collections = jax.vmap(check_flag_collision)(jnp.arange(self.consts.NUM_FLAGS))
+        # Vectorized distance check
+        y_dist = jnp.abs(new_player_y - state.flags.y)
+        x_dist = jnp.abs(player_x - flag_x)
+        same_road = (current_road == state.flags.road)
+        
+        new_collections = jnp.logical_and(
+            jnp.logical_and(y_dist < self.consts.COLLISION_THRESHOLD, x_dist < self.consts.COLLISION_THRESHOLD),
+            jnp.logical_and(same_road, ~state.flags.collected)
+        )
         
         # Update flags collected state
         new_flags_collected = jnp.logical_or(state.flags.collected, new_collections)
@@ -862,7 +919,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
-        jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
+        jump_pressed = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
         
         # Check if on a steep road section FIRST (before applying speed changes)
         is_on_steep_road = self._is_steep_road_segment(
@@ -885,19 +942,34 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Start with current speed
         player_speed = state.player_car.speed
         
-        # === STEEP ROAD BLOCKING LOGIC ===
+        # === FRICTION & MOMENTUM LOGIC ===
+        is_accelerating = up
+        is_braking = down
+        
+        # No friction - speed stays constant when no input
+        # Speed changes gradually (periodically, not every frame)
+        should_change_speed = (state.step_counter % self.consts.ACCELERATION_INTERVAL) == 0
+        
+        # === ACCELERATION (UP) ===
         # On steep road: UP action has NO effect (can't accelerate while on steep section)
-        # Apply UP acceleration only if NOT on steep road (or if jumping over it)
         can_accelerate = jnp.logical_not(on_steep_not_jumping)
+        
         player_speed = jnp.where(
-            jnp.logical_and(jnp.logical_and(player_speed < self.consts.MAX_SPEED, up), can_accelerate),
+            jnp.logical_and(
+                jnp.logical_and(should_change_speed, is_accelerating), 
+                jnp.logical_and(player_speed < self.consts.MAX_SPEED, can_accelerate)
+            ),
             player_speed + 1,
             player_speed,
         )
         
+        # === BRAKING (DOWN) ===
         # DOWN action always works (can brake/reverse)
         player_speed = jnp.where(
-            jnp.logical_and(player_speed > -self.consts.MAX_SPEED, down),
+            jnp.logical_and(
+                jnp.logical_and(should_change_speed, is_braking),
+                player_speed > -self.consts.MAX_SPEED
+            ),
             player_speed - 1,
             player_speed,
         )
@@ -916,9 +988,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Check if player has reached halfway point (50% progress through segment)
         past_halfway = steep_progress >= 0.5
         
+        # Check if player has enough momentum to climb steep road
+        MIN_CLIMB_SPEED = 5
+        has_momentum = player_speed >= MIN_CLIMB_SPEED
+        
         # Two behaviors based on progress:
         # 1. Before halfway: gradually reduce speed using timer
-        # 2. At/past halfway: immediately set speed to -2 (slide back)
+        # 2. At/past halfway: immediately slide back UNLESS we have enough momentum
         
         # Before halfway: reduce speed periodically using timer
         should_reduce_speed = jnp.logical_and(
@@ -940,18 +1016,25 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             steep_road_timer,
         )
         
-        # At/past halfway: force speed to -2 (slide back down)
-        should_slide_back = jnp.logical_and(on_steep_going_up, past_halfway)
+        # At/past halfway: force speed to -2 (slide back down) IF momentum is lost
+        should_slide_back = jnp.logical_and(
+            on_steep_going_up, 
+            jnp.logical_and(past_halfway, jnp.logical_not(has_momentum))
+        )
         player_speed = jnp.where(
             should_slide_back,
             jnp.int32(-3),
             player_speed,
         )
 
-        can_start_jump = jnp.logical_and(state.jump_cooldown == 0, state.post_jump_cooldown == 0)
+        # === JUMP LOGIC ===
+        can_start_jump = jnp.logical_and(
+            state.jump_cooldown == 0, 
+            jnp.logical_and(state.post_jump_cooldown == 0, state.jump_key_released)
+        )
         is_jumping = jnp.logical_or(
             jnp.logical_and(state.is_jumping, state.jump_cooldown > 0),
-            jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed >= 0, jnp.logical_and(can_start_jump, jump))),
+            jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed >= 0, jnp.logical_and(can_start_jump, jump_pressed))),
         )
         
         # Detect when a new jump is starting (was not jumping, now is jumping)
@@ -1000,11 +1083,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Lock slope at jump start, keep previous slope during jump (use jnp.where)
         jump_slope = jnp.where(starting_jump, new_jump_slope, state.jump_slope)
 
+        # Calculate dynamic jump duration based on speed
+        # Faster speed = shorter jump duration (covering gap faster)
+        # Increased base duration for more "air time" as requested
+        # Formula: 48 - 2 * abs(speed) -> Speed 8 = 32 frames (was 24 before)
+        current_jump_duration = 48 - 2 * jnp.abs(player_speed)
+        jump_duration = jnp.where(starting_jump, current_jump_duration.astype(jnp.int32), state.jump_total_duration)
+
         # Use jnp.where for branchless execution of jump_cooldown
         jump_cooldown = jnp.where(
             state.jump_cooldown > 0,
             state.jump_cooldown - 1,
-            jnp.where(is_jumping, self.consts.JUMP_FRAMES, 0),
+            jnp.where(is_jumping, jump_duration, 0),
         )
 
         # Use jnp.where for branchless execution of post_jump_cooldown
@@ -1016,6 +1106,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         is_on_road = ~is_jumping
         is_landing = is_landing_now
+
+        # Calculate jump progress for magnetism
+        # Progress = (Total - Remaining) / Total
+        # Use jnp.maximum(..., 1.0) to avoid division by zero
+        safe_total_duration = jnp.maximum(state.jump_total_duration, 1.0)
+        jump_progress = (safe_total_duration - jump_cooldown.astype(jnp.float32)) / safe_total_duration
+        jump_progress = jnp.clip(jump_progress, 0.0, 1.0)
 
         updated_player_car = self._advance_player_car(
             position_x=state.player_car.position.x,
@@ -1031,12 +1128,16 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             car_type=state.player_car.type,
             is_landing=is_landing,
             stored_jump_slope=jump_slope,
+            jump_progress=jump_progress,
         )
 
         # Check if a speed-changing action (UP or DOWN) was taken
         speed_action_taken = jnp.logical_or(up, down)
         # Round starts only after a speed-changing action
         round_started_now = jnp.logical_or(state.round_started, speed_action_taken)
+        
+        # Track jump key release for preventing held-key jumps
+        next_jump_key_released = jnp.logical_not(jump_pressed)
 
         next_state = state._replace(
             jump_cooldown=jump_cooldown,
@@ -1049,6 +1150,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             movement_steps=jnp.where(round_started_now, state.movement_steps + 1, state.movement_steps),
             steep_road_timer=steep_road_timer,
             jump_slope=jump_slope,
+            jump_key_released=next_jump_key_released,
+            jump_total_duration=jump_duration,
         )
 
         water_crash = jnp.logical_and(is_landing, updated_player_car.current_road == 2)
@@ -1091,12 +1194,34 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _completion_bonus_step(self, state: UpNDownState) -> UpNDownState:
-        """Award bonus when all flags are collected."""
+    def _level_progression_step(self, state: UpNDownState) -> UpNDownState:
+        """Handle level completion: award bonus and reset flags."""
         all_flags_collected = jnp.all(state.flags_collected_mask)
-        # Use jnp.where for branchless execution
+        
         bonus = jnp.where(all_flags_collected, self.consts.ALL_FLAGS_BONUS, 0)
-        return state._replace(score=state.score + bonus)
+        
+        # Reset flags if all collected
+        new_collected = jnp.where(all_flags_collected, jnp.zeros_like(state.flags.collected), state.flags.collected)
+        new_mask = jnp.where(all_flags_collected, jnp.zeros_like(state.flags_collected_mask), state.flags_collected_mask)
+        
+        updated_flags = state.flags._replace(collected=new_collected)
+        
+        return state._replace(
+            score=state.score + bonus,
+            flags=updated_flags,
+            flags_collected_mask=new_mask
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _extra_life_step(self, state: UpNDownState) -> UpNDownState:
+        """Award extra life every 10000 points."""
+        next_milestone = state.last_extra_life_score + self.consts.EXTRA_LIFE_THRESHOLD
+        should_award = state.score >= next_milestone
+        
+        new_lives = jnp.where(should_award, state.lives + 1, state.lives)
+        new_last_score = jnp.where(should_award, next_milestone, state.last_extra_life_score)
+        
+        return state._replace(lives=new_lives, last_extra_life_score=new_last_score)
 
     @partial(jax.jit, static_argnums=(0,))
     def _collectible_step_main(self, state: UpNDownState) -> UpNDownState:
@@ -1406,6 +1531,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             awaiting_respawn=jnp.array(False),
             awaiting_round_start=jnp.array(True),  # Wait for input to start round after respawn
             input_released=jnp.array(False),  # Require button release before round can start
+            jump_key_released=jnp.array(True),
+            last_extra_life_score=state.last_extra_life_score,
+            jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
             rng_key=rng_key,
         )
 
@@ -1429,9 +1557,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # For ground collision: only trigger when enemy position is within tight distance
         overlap_x_ground = dx <= self.consts.GROUND_COLLISION_DISTANCE
         overlap_y_ground = wrapped_dy <= self.consts.GROUND_COLLISION_DISTANCE
-        # For late jump collision: use larger overlap based on car dimensions
-        overlap_x_jump = dx <= (state.player_car.position.width + state.enemy_cars.position.width) / 2.0
-        overlap_y_jump = wrapped_dy <= (state.player_car.position.height + state.enemy_cars.position.height) / 2.0
+        # For late jump collision: use larger overlap based on car dimensions plus extra tolerance
+        # "slightly more forgiving"
+        jump_tolerance = 4.0
+        overlap_x_jump = dx <= (state.player_car.position.width + state.enemy_cars.position.width) / 2.0 + jump_tolerance
+        overlap_y_jump = wrapped_dy <= (state.player_car.position.height + state.enemy_cars.position.height) / 2.0 + jump_tolerance
         same_road = state.enemy_cars.current_road == state.player_car.current_road
 
         # Ground collision mask uses tight 3-pixel distance and same road
@@ -1583,6 +1713,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             awaiting_respawn=jnp.array(False),
             awaiting_round_start=jnp.array(True),  # Start frozen until first input
             input_released=jnp.array(True),  # Can start immediately at game start
+            jump_key_released=jnp.array(True),
+            last_extra_life_score=jnp.array(0, dtype=jnp.int32),
+            jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -1635,7 +1768,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             s = self._death_step(s)
             s = self._passive_score_step_main(s)
             s = self._flag_step_main(s)
-            s = self._completion_bonus_step(s)
+            s = self._level_progression_step(s)
+            s = self._extra_life_step(s)
             s = self._collectible_step_main(s)
             s = self._enemy_step_main(s)
             s = self._enemy_collision_step_main(s)
@@ -2051,9 +2185,9 @@ class UpNDownRenderer(JAXGameRenderer):
         return jnp.array([self._find_palette_id(color) for color in self.consts.FLAG_COLORS], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _jump_arc_offset(self, jump_cooldown: chex.Array) -> chex.Array:
+    def _jump_arc_offset(self, jump_cooldown: chex.Array, total_duration: chex.Array) -> chex.Array:
         """Return a simple parabolic jump height based on remaining jump frames."""
-        total = jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.float32)
+        total = total_duration.astype(jnp.float32)
         remaining = jnp.array(jump_cooldown, dtype=jnp.float32)
         progress = jnp.clip((total - remaining) / jnp.maximum(total, 1.0), 0.0, 1.0)
         centered = (progress - 0.5) * 2.0
@@ -2115,13 +2249,20 @@ class UpNDownRenderer(JAXGameRenderer):
             right_mask = self.enemy_right_masks[enemy_type]
             return jnp.where(going_left, left_mask, right_mask)
 
+        # Pre-cast enemy properties to optimal types for rendering BEFORE the scan loop
+        enemy_active_arr = state.enemy_cars.active
+        enemy_x_arr = state.enemy_cars.position.x.astype(jnp.int32)
+        enemy_y_arr = state.enemy_cars.position.y
+        enemy_type_arr = state.enemy_cars.type
+        enemy_direction_x_arr = state.enemy_cars.direction_x
+
         def render_enemy(carry, enemy_idx):
             raster = carry
-            enemy_active = state.enemy_cars.active[enemy_idx]
-            enemy_x = state.enemy_cars.position.x[enemy_idx]
-            enemy_y = state.enemy_cars.position.y[enemy_idx]
-            enemy_type = state.enemy_cars.type[enemy_idx]
-            direction_x = state.enemy_cars.direction_x[enemy_idx]
+            enemy_active = enemy_active_arr[enemy_idx]
+            enemy_x = enemy_x_arr[enemy_idx]
+            enemy_y = enemy_y_arr[enemy_idx]
+            enemy_type = enemy_type_arr[enemy_idx]
+            direction_x = enemy_direction_x_arr[enemy_idx]
             screen_y = 105 + (enemy_y - state.player_car.position.y)
             # Hide enemies when awaiting round start or awaiting respawn
             should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
@@ -2133,7 +2274,7 @@ class UpNDownRenderer(JAXGameRenderer):
 
             raster = jax.lax.cond(
                 is_visible,
-                lambda r: self.jr.render_at(r, enemy_x.astype(jnp.int32), screen_y.astype(jnp.int32), enemy_mask),
+                lambda r: self.jr.render_at(r, enemy_x, screen_y.astype(jnp.int32), enemy_mask),
                 lambda r: r,
                 operand=raster,
             )
@@ -2143,7 +2284,7 @@ class UpNDownRenderer(JAXGameRenderer):
 
         jump_offset = jax.lax.cond(
             state.is_jumping,
-            lambda _: self._jump_arc_offset(state.jump_cooldown),
+            lambda _: self._jump_arc_offset(state.jump_cooldown, state.jump_total_duration),
             lambda _: jnp.array(0.0, dtype=jnp.float32),
             operand=None,
         )
