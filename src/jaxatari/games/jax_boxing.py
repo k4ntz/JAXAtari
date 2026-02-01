@@ -1,10 +1,6 @@
 """
-Boxing - JAXAtari Implementation (Phase 1: Minimum Viable Game)
-
+Boxing - JAXAtari Implementation 
 A GPU-accelerated, JAX-based implementation of the Atari 2600 Boxing game.
-Phase 1 implements basic environment setup, input handling, and a movable player dot.
-
-Technical Specification Reference: reference_material/TECHNICAL_SPECIFICATION.md
 """
 
 import os
@@ -22,7 +18,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 # =============================================================================
-# Asset Config (declarative sprite manifest)
+# Asset Config 
 # =============================================================================
 
 def _get_default_asset_config() -> tuple:
@@ -61,7 +57,7 @@ def _get_default_asset_config() -> tuple:
 
 
 # =============================================================================
-# Constants (immutable game parameters from Technical Specification)
+# Constants 
 # =============================================================================
 
 class BoxingConstants(NamedTuple):
@@ -138,14 +134,12 @@ class BoxingConstants(NamedTuple):
 
 
 # =============================================================================
-# State (mutable game state - spec-compliant structure)
+# State 
 # =============================================================================
 
 class BoxingState(NamedTuple):
     """
     Complete game state for Boxing, structured per Technical Specification.
-    
-    Phase 1 uses only player position fields; others are placeholders for future phases.
     """
     # Left boxer (player 1) position
     left_boxer_x: chex.Array
@@ -198,7 +192,7 @@ class BoxingState(NamedTuple):
 
 
 # =============================================================================
-# Observation (what the agent sees - spec-compliant)
+# Observation (for agent)
 # =============================================================================
 
 class EntityPosition(NamedTuple):
@@ -225,11 +219,13 @@ class BoxingObservation(NamedTuple):
 
 
 # =============================================================================
-# Info (auxiliary information)
+# Info 
 # =============================================================================
 
 class BoxingInfo(NamedTuple):
-    """Auxiliary info returned with each step."""
+    """
+    Auxiliary info returned with each step.
+    """
     time: jnp.ndarray  # Total frames elapsed
     clock_minutes: jnp.ndarray
     clock_seconds: jnp.ndarray
@@ -242,8 +238,6 @@ class BoxingInfo(NamedTuple):
 class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, BoxingConstants]):
     """
     JAX-based Boxing environment.
-    
-    Phase 1 MVP: Single movable dot representing the player.
     Responds to directional input and respects boundary constraints.
     """
     
@@ -275,7 +269,9 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         ]
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BoxingObservation, BoxingState]:
-        """Initialize game state per Technical Specification."""
+        """
+        Initialize game state per Technical Specification.
+        """
         state_key, _step_key = jax.random.split(key)
         
         state = BoxingState(
@@ -334,8 +330,6 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     def _player_step(self, state: BoxingState, action: chex.Array) -> BoxingState:
         """
         Handle player movement based on joystick input.
-        
-        Phase 1: Simple directional movement with boundary clamping.
         Movement is blocked if stunned.
         """
         # Check if player is stunned (hit_boxer_index == 0 means left boxer was hit)
