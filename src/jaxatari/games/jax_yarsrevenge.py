@@ -218,28 +218,32 @@ class YarsRevengeConstants(NamedTuple):
     SWIRL_FIRE_PER_STEP: int = 250  # steps between swarm firing
 
     # Speeds (pixels per frame)
-    QOTILE_SPEED = 0.5  # slow vertical oscillation of qotile
-    YAR_SPEED = 2.0  # horizontal move speed
-    YAR_DIAGONAL_SPEED = 1.0  # diagonal movement is slower to preserve overall speed
-    SWIRL_SPEED = 3.0  # swirl target following speed
-    DESTROYER_SPEED = 0.125  # very slow chase of Yar
-    ENERGY_MISSILE_SPEED = 4.0  # fast missile from cannon or YAR
-    CANNON_SPEED = 2.0  # horizontal cannon movement
-    SNAKE_FRAME = 4  # snake shift applied every 4 steps in stage-1
+    QOTILE_SPEED: float = 0.5  # slow vertical oscillation of qotile
+    YAR_SPEED: float = 2.0  # horizontal move speed
+    YAR_DIAGONAL_SPEED: float = (
+        1.0  # diagonal movement is slower to preserve overall speed
+    )
+    SWIRL_SPEED: float = 3.0  # swirl target following speed
+    DESTROYER_SPEED: float = 0.125  # very slow chase of Yar
+    ENERGY_MISSILE_SPEED: float = 4.0  # fast missile from cannon or YAR
+    CANNON_SPEED: float = 2.0  # horizontal cannon movement
+    SNAKE_FRAME: float = 4  # snake shift applied every 4 steps in stage-1
 
     # Animation frame intervals
-    STEADY_YAR_MOVEMENT_FRAME = (
+    STEADY_YAR_MOVEMENT_FRAME: int = (
         4  # Movement animation change interval for Yar (no action)
     )
-    MOVING_YAR_MOVEMENT_FRAME = 1  # Movement animation change interval for Yar (moving)
-    CANNON_MOVEMENT_FRAME = 8  # Animation change interval for cannon
-    SWIRL_MOVEMENT_FRAME = 2  # Swirl sprite cycle
+    MOVING_YAR_MOVEMENT_FRAME: int = (
+        1  # Movement animation change interval for Yar (moving)
+    )
+    CANNON_MOVEMENT_FRAME: int = 8  # Animation change interval for cannon
+    SWIRL_MOVEMENT_FRAME: int = 2  # Swirl sprite cycle
 
     # Animation timings
-    QOTILE_DEATH_FRAMES = 223  # Animation duration on Qotile's Death
-    YAR_DEATH_FRAMES = 86  # Animation duration on Yar's Death
-    YAR_DEATH_TURN_FRAMES = 4  # Frame amount where yar rotates to up on death
-    YAR_DEATH_EXPLOSION_CUTOFFS = jnp.array(
+    QOTILE_DEATH_FRAMES: int = 223  # Animation duration on Qotile's Death
+    YAR_DEATH_FRAMES: int = 86  # Animation duration on Yar's Death
+    YAR_DEATH_TURN_FRAMES: int = 4  # Frame amount where yar rotates to up on death
+    YAR_DEATH_EXPLOSION_CUTOFFS: jnp.ndarray = jnp.array(
         [
             40,
             56,
@@ -250,30 +254,32 @@ class YarsRevengeConstants(NamedTuple):
     )  # Frame amount cutoffs for explosion animation
 
     # Points
-    SHIELD_CELL_DESTROY_POINTS = 69  # Destroying a cell with energy missile or cannon
-    SHIELD_CELL_DEVOUR_POINTS = 169  # Destroying the cell by devouring
-    DESTROY_QOTILE_POINTS = 1000  # Destroying qotile with cannon
-    DESTROY_CHARGING_SWIRL_POINTS = 2000  # Destroying a charging swirl (not fired)
-    DESTROY_SWIRL_POINTS = 6000  # Destoring a fired swirl mid-air
+    SHIELD_CELL_DESTROY_POINTS: int = (
+        69  # Destroying a cell with energy missile or cannon
+    )
+    SHIELD_CELL_DEVOUR_POINTS: int = 169  # Destroying the cell by devouring
+    DESTROY_QOTILE_POINTS: int = 1000  # Destroying qotile with cannon
+    DESTROY_CHARGING_SWIRL_POINTS: int = 2000  # Destroying a charging swirl (not fired)
+    DESTROY_SWIRL_POINTS: int = 6000  # Destoring a fired swirl mid-air
 
     # Colour palette (RGB)
     ENERGY_SHIELD_COLOR: Tuple[int, int, int] = (163, 57, 21)
     NEUTRAL_ZONE_COLOR: Tuple[int, int, int] = (20, 20, 20)
 
     # Scoreboard
-    SCOREBOARD_X = 20
-    SCOREBOARD_Y = 50
-    SCOREBOARD_MAX_DIGITS = 9
-    LIFE_X = 20
-    LIFE_Y = 75
+    SCOREBOARD_X: int = 20
+    SCOREBOARD_Y: int = 50
+    SCOREBOARD_MAX_DIGITS: int = 9
+    LIFE_X: int = 20
+    LIFE_Y: int = 75
 
     # Energy shield grid - each cell is `ENERGY_CELL_WIDTH` x
     # `ENERGY_CELL_HEIGHT`.
-    ENERGY_CELL_WIDTH = 4
-    ENERGY_CELL_HEIGHT = 8
+    ENERGY_CELL_WIDTH: int = 4
+    ENERGY_CELL_HEIGHT: int = 8
 
     # 16 rows × 8 columns grid (top-to-bottom, left-to-right)
-    INITIAL_ENERGY_SHIELD = jnp.array(
+    INITIAL_ENERGY_SHIELD: jnp.ndarray = jnp.array(
         [
             [
                 [0, 0, 0, 0, 1, 1, 1, 1],
@@ -300,7 +306,7 @@ class YarsRevengeConstants(NamedTuple):
 
     # Missile hit kernel used for a 3×3 convolution that detects
     # neighbouring hits in a plus shape.
-    MISSILE_HIT_KERNEL = jnp.array(
+    MISSILE_HIT_KERNEL: jnp.ndarray = jnp.array(
         [
             [0, 1, 0],
             [1, 1, 1],
@@ -309,14 +315,14 @@ class YarsRevengeConstants(NamedTuple):
         dtype=jnp.int32,
     )
 
-    NEUTRAL_ZONE_DATA = "TU Darmstadt"
-    NEUTRAL_ZONE_DATA_SIZE = 254
+    NEUTRAL_ZONE_DATA: str = "TU Darmstadt"
+    NEUTRAL_ZONE_DATA_SIZE: int = 254
 
     RENDERER_RANDOM_COLORS_PER_N_ROW: int = 2
-    RENDERER_QOTILE_COLOR_HUE_VALUES = jnp.arange(0, 331, 30)
-    RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN = 0.2
-    RENDERER_QOTILE_BRIGHTNESS_STEP_END = 0.8
-    RENDERER_QOTILE_STEP_MOD = 100
+    RENDERER_QOTILE_COLOR_HUE_VALUES: jnp.ndarray = jnp.arange(0, 331, 30)
+    RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN: float = 0.2
+    RENDERER_QOTILE_BRIGHTNESS_STEP_END: float = 0.8
+    RENDERER_QOTILE_STEP_MOD: int = 100
 
 
 class YarsRevengeState(NamedTuple):
