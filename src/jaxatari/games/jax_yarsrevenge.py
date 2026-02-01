@@ -2080,22 +2080,27 @@ class YarsRevengeRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_digits(self, raster, x, y, value):
-        digits_mask = self.jr.int_to_digits(value, max_digits=9)
+    def _render_digits(self, raster, x, y, value, spacing=12, right_align=False):
+        digits_mask = self.jr.int_to_digits(
+            value, max_digits=self.consts.SCOREBOARD_MAX_DIGITS
+        )
         num_digits = jnp.minimum(
             jnp.maximum(1, jnp.ceil(jnp.log10(value + 1))).astype(jnp.int32),
             self.consts.SCOREBOARD_MAX_DIGITS,
         )
         start_index = self.consts.SCOREBOARD_MAX_DIGITS - num_digits
+
+        render_x = jnp.where(right_align, start_index * spacing + x, x)
+
         raster = self.jr.render_label_selective(
             raster,
-            x,
+            render_x,
             y,
             all_digits=digits_mask,
             digit_id_masks=self.SHAPE_MASKS["digits"],
             start_index=start_index,
             num_to_render=num_digits,
-            spacing=12,
+            spacing=spacing,
             max_digits_to_render=self.consts.SCOREBOARD_MAX_DIGITS,
         )
 
@@ -2158,12 +2163,20 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         # Rendering the score digits
         raster = self._render_digits(
-            raster, self.consts.SCOREBOARD_X, self.consts.SCOREBOARD_Y, state.score
+            raster,
+            self.consts.SCOREBOARD_X,
+            self.consts.SCOREBOARD_Y,
+            state.score,
+            right_align=True,
         )
 
         # Rendering the lives
         raster = self._render_digits(
-            raster, self.consts.LIFE_X, self.consts.LIFE_Y, state.lives
+            raster,
+            self.consts.LIFE_X,
+            self.consts.LIFE_Y,
+            state.lives,
+            right_align=True,
         )
 
         return raster.astype(jnp.uint8)
