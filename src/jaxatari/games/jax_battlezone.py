@@ -322,7 +322,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         #--------------------update positions based on player movement-------------------
-        updated_enemies = jax.vmap(self._obj_player_position_update, in_axes=(0, None))(state.enemies, direction)
+        updated_enemies = jax.vmap(self._enemy_player_position_update, in_axes=(0, None))(state.enemies, direction)
         updated_projectiles = (jax.vmap(self._obj_player_position_update, in_axes=(0, None))
                                (state.enemy_projectiles, direction))
         new_player_projectile = self._obj_player_position_update(new_state.player_projectile, direction)
@@ -507,10 +507,42 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         """
         _position_update version for named tuples that contain x, z, distance
         """
-        new_x, new_z = self._position_update(obj.x, obj.z, obj.active, player_direction)
-        return obj._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
+        # get offset to add to coords to get updated position
+        offset_x, offset_z = self._position_update(obj.x, obj.z, obj.active, player_direction)
 
+        # update object position
+        new_x = obj.x + offset_x
+        new_z = obj.z + offset_z
 
+        return obj._replace(
+            x=self.wrap_coord(new_x, self.consts.WORLD_SIZE_X), 
+            z=self.wrap_coord(new_z, self.consts.WORLD_SIZE_Z), 
+            distance=self._get_distance(new_x, new_z)
+        )
+    
+    def _enemy_player_position_update(self, obj: Enemy, player_direction) -> Enemy:
+        """
+        _position_update version for named tuples that contain x, z, distance
+        """
+        # get offset to add to coords to get updated position
+        offset_x, offset_z = self._position_update(obj.x, obj.z, obj.active, player_direction)
+
+        # update object position
+        new_x = obj.x + offset_x
+        new_z = obj.z + offset_z
+        
+        return obj._replace(
+            x=self.wrap_coord(new_x, self.consts.WORLD_SIZE_X), 
+            z=self.wrap_coord(new_z, self.consts.WORLD_SIZE_Z), 
+            distance=self._get_distance(new_x, new_z),
+            # also need to adapt stored points for saucer movement
+            point_store_1_temp=obj.point_store_1_temp + jnp.array([offset_x, offset_z], dtype=jnp.float32),
+            point_store_2_temp=obj.point_store_2_temp + jnp.array([offset_x, offset_z], dtype=jnp.float32)
+        )
+
+    def wrap_coord(self, coord, world_size):
+        """Wraps a coordinate around the world edges."""
+        return (coord + world_size / 2) % world_size - world_size / 2
 
     def _position_update(self, prev_x, prev_z, active, player_direction):
         """
@@ -540,14 +572,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         #jax.debug.print("{}",jnp.argmax(direction)
         offset = offset_xz[idx]
 
-        new_x = prev_x + offset[0] 
-        new_z = prev_z + offset[1] 
-
-        # Wrap around world edges
-        new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
-        new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
-        
-        return new_x, new_z
+        return offset[0], offset[1]
 
 
     def _obj_player_rotation_update(self, obj: NamedTuple, angle_change):
@@ -632,7 +657,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:  # Enemy towards player with -1 and away with 1
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
-            return enemy._replace(x=enemy.x +direction_x*towards*speed, z=enemy.z +direction_z*towards*speed)
+            new_x = enemy.x +direction_x*towards*speed
+            new_z = enemy.z +direction_z*towards*speed
+            new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
+            new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+            
+            return enemy._replace(x=new_x, z=new_z)
 
         def enemy_turn(enemy: Enemy) -> Enemy:
             return enemy._replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
@@ -742,7 +772,29 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     vx_new = cos_dtheta*vx-sin_dtheta*vz
                     vz_new = sin_dtheta*vx+cos_dtheta*vz
                     # Update saucer
-                    saucer = saucer._replace(x = rot_centre_x+vx_new, z = rot_centre_z+vz_new)
+                    new_x = rot_centre_x + vx_new
+                    new_z = rot_centre_z + vz_new
+                    new_x_wrapped = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
+                    new_z_wrapped = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+                    saucer = saucer._replace(x = new_x_wrapped, z = new_z_wrapped)
+
+                    # if the saucer position wraps, we need to wrap the stored points too
+                    def wrap_stored_points_x(saucer):
+                        wrap_direction = jnp.sign(new_x - new_x_wrapped)  # + = right wrap, - = left wrap
+                        return saucer._replace(
+                            point_store_1_temp=saucer.point_store_1_temp.at[0].add(-wrap_direction*self.consts.WORLD_SIZE_X),
+                            point_store_2_temp=saucer.point_store_2_temp.at[0].add(-wrap_direction*self.consts.WORLD_SIZE_X)
+                        )
+
+                    def wrap_stored_points_z(saucer):
+                        wrap_direction = jnp.sign(new_z - new_z_wrapped)  # + = up wrap, - = down wrap
+                        return saucer._replace(
+                            point_store_1_temp=saucer.point_store_1_temp.at[1].add(-wrap_direction*self.consts.WORLD_SIZE_Z),
+                            point_store_2_temp=saucer.point_store_2_temp.at[1].add(-wrap_direction*self.consts.WORLD_SIZE_Z)
+                        )
+
+                    jax.lax.cond(new_x != new_x_wrapped, wrap_stored_points_x, lambda saucer: saucer, saucer)
+                    jax.lax.cond(new_z != new_z_wrapped, wrap_stored_points_z, lambda saucer: saucer, saucer)
 
                     def next_phase(saucer):
                         return saucer._replace(point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
