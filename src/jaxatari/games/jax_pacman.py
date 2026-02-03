@@ -1,4 +1,5 @@
 import os
+import sys
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
@@ -283,32 +284,36 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.RIGHT,
         ]
         
-        # Determine maze file path once (single source of truth)
-        from jaxatari.games.pacmanMaps.nodes import NodeGroup
-        maze_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
-        )
+        # Determine paths relative to this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+            
+        pacman_maps_dir = os.path.join(current_dir, "pacmanMaps")
+        maze_file_path = os.path.join(pacman_maps_dir, "maze1.txt")
+        maze_file_pellet_path = os.path.join(pacman_maps_dir, "maze1_pellet.txt")
         
-        maze_file_pellet_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1_pellet.txt"
-        )
-        
-        # Check if maze file exists, raise error if not found
-        if not os.path.exists(maze_file_path):
-            raise FileNotFoundError(f"Maze file not found: {maze_file_path}")
+        import pacmanMaps.nodes as nodes_mod
+        NodeGroup = nodes_mod.NodeGroup
         
         # Initialize maze layout if not provided (load from file)
         if consts.MAZE_LAYOUT is None:
-            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_pellet_path))
+            loaded_maze = self._load_maze_from_file(maze_file_pellet_path)
+            if loaded_maze is None:
+                raise ValueError("Failed to load maze layout.")
+            self.consts = consts._replace(MAZE_LAYOUT=loaded_maze)
         else:
             self.consts = consts
         
         # Create renderer after maze layout is loaded (so it can create maze_background correctly)
+        # Check to ensure layout is valid for renderer
+        if self.consts.MAZE_LAYOUT is None:
+             raise ValueError("MAZE_LAYOUT is None before initializing renderer!")
+             
         self.renderer = PacmanRenderer(self.consts)
         
         # Load NodeGroup using the same maze file path
+        # NodeGroup.from_maze_file handles scaling by tile_size
         self.node_group = NodeGroup.from_maze_file(maze_file_path, tile_size=self.consts.TILE_SIZE)
         
         # Pre-compute node positions for JIT-compatible movement
@@ -1475,10 +1480,14 @@ class PacmanRenderer(JAXGameRenderer):
         self.white_id = jnp.array(self.COLOR_TO_ID[(255, 255, 255)], dtype=jnp.uint8)
 
         # Pre-render static maze background (walls and ghost house)
-        self.maze_background = self._create_maze_background()
-
-        # NEW: precompute per-tile wall connectivity mask indices (0–15)
-        self.wall_mask_indices = self._compute_wall_masks()
+        if self.consts.MAZE_LAYOUT is not None:
+            print("Pre-rendering maze background...")
+            self.maze_background = self._create_maze_background()
+            # NEW: precompute per-tile wall connectivity mask indices (0–15)
+            self.wall_mask_indices = self._compute_wall_masks()
+        else:
+             self.maze_background = None
+             self.wall_mask_indices = None
     
     def _compute_wall_masks(self) -> jnp.ndarray:
         """Precompute 4-way connectivity mask for wall-like tiles.
