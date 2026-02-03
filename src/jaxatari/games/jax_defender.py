@@ -2870,6 +2870,45 @@ class JaxDefender(
                     shape=(),
                     dtype=jnp.int32
                 ),
+                "enemy_states": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(self.consts.ENEMY_MAX_IN_GAME, 5),
+                    dtype=jnp.float32
+                ),
+                "human_states": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(self.consts.HUMAN_MAX_AMOUNT, 3),
+                    dtype=jnp.float32
+                ),
+                "bullet_active": spaces.Discrete(2),
+                "bullet_x": spaces.Box(
+                    low=0,
+                    high=self.consts.WORLD_WIDTH,
+                    shape=(),
+                    dtype=jnp.float32
+                ),
+                "bullet_y": spaces.Box(
+                    low=0,
+                    high=self.consts.WORLD_HEIGHT,
+                    shape=(),
+                    dtype=jnp.float32
+                ),
+                "laser_active": spaces.Discrete(2),
+                "laser_x": spaces.Box(
+                    low=0,
+                    high=self.consts.WORLD_WIDTH,
+                    shape=(),
+                    dtype=jnp.float32
+                ),
+                "laser_y": spaces.Box(
+                    low=0,
+                    high=self.consts.WORLD_HEIGHT,
+                    shape=(),
+                    dtype=jnp.float32
+                ),
+                
             }
         )
 

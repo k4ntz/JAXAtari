@@ -9,3 +9,10 @@ results/
 .DS_Store
 docs/build/
 
+scripts/benchmarks/outputs/
+scripts/benchmarks/wandb/
+
+
+outputs/
+models/
+wandb/
