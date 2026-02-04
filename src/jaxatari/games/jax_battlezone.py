@@ -149,7 +149,7 @@ class BattlezoneConstants(NamedTuple):
 
     # --- game mechanics ---
     HITBOX_SIZE: float = 6.0  # player
-    ENEMY_HITBOX_SIZE: float = 9.0 #todo change
+    ENEMY_HITBOX_SIZE: float = 4.5 #todo change  # full hitbox size is twice this in both directions (square)
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0],# 0.0, 0.0],   #1_000
@@ -586,17 +586,18 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
     def _player_projectile_collision_check(self, enemies: Enemy, player_projectiles: Projectile) -> bool:
-        """checks whether a player projectile hit an enemy. player_projectiles contains arrays of size 1"""
+        """checks whether a player projectile hit an enemy. player_projectiles contains arrays of size 1. uses square hitbox"""
         s = self.consts.ENEMY_HITBOX_SIZE
-        distx = jnp.abs((enemies.x+s) - player_projectiles.x) <= s
-        distz = jnp.abs((enemies.z+s) - player_projectiles.z) <= s
+        distx = jnp.abs(enemies.x - player_projectiles.x) <= s
+        distz = jnp.abs(enemies.z - player_projectiles.z) <= s
         return jnp.all(jnp.stack([distx, distz, enemies.active, player_projectiles.active]))
 
 
     def _enemy_projectile_collision_check(self, obj: Projectile):
+        """checks whether an enemy projectile hit the player. player hitbox is rectangle around origin: (x: -3, z: 0) to (x: 3, z: 6)"""
         s = self.consts.HITBOX_SIZE
         distx = jnp.abs(obj.x) <= s
-        distz = jnp.abs(obj.z) <= s
+        distz = (obj.z <= 2*s) & (obj.z >= 0)
         return jnp.all(jnp.stack([distx, distz, obj.active]))
 
 
@@ -654,11 +655,26 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:  # Enemy towards player with -1 and away with 1
+        def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:
+            """Enemy towards player with -1 and away with 1"""
+
             direction_x = -jnp.sin(perfect_angle)
             direction_z = jnp.cos(perfect_angle)
             new_x = enemy.x +direction_x*towards*speed
             new_z = enemy.z +direction_z*towards*speed
+            new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
+            new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+            
+            return enemy._replace(x=new_x, z=new_z)
+        
+        def move_orthogonal_to_player(enemy: Enemy, direction: int = 1) -> Enemy:
+            """Enemy right of player with -1 and left with 1"""
+
+            ortho_angle = (perfect_angle + jnp.sign(direction)*(jnp.pi/2)) % (2*jnp.pi)
+            direction_x = -jnp.sin(ortho_angle)
+            direction_z = jnp.cos(ortho_angle)
+            new_x = enemy.x +direction_x*speed*jnp.abs(direction)
+            new_z = enemy.z +direction_z*speed*jnp.abs(direction)
             new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
             new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
             
@@ -702,18 +718,49 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
-            min_dist = 27.
+            min_dist = 27.0
+            # TODO: try reflecting roattion center when going from + to - x etc or add a separate strafing mechanism that resets phases
 
             def near_player(saucer):
                 """movement of the saucer when too near to the player"""
-                saucer = saucer._replace(phase=0)
-                return move_to_player(saucer, 1)
+                saucer = saucer._replace(phase=1)
+
+                # strafe speed is maximal when player points at middle of hitbox, minimal at edges, quadratic relation
+                # 3 and 1 match my playtesting at 60fps, we scale with 4*speed (=1 in my test case) so changes to the speed are reflected here
+                max_strafe_speed = 2.0 * speed * 4
+                min_strafe_speed = 1.0 * speed * 4
+                strafe_speed = (
+                    4 * (min_strafe_speed - max_strafe_speed)
+                    / ((2*self.consts.ENEMY_HITBOX_SIZE) ** 2)
+                ) * (saucer.x + (2*self.consts.ENEMY_HITBOX_SIZE) / 2) ** 2 + max_strafe_speed
+
+                # saucer tries to stay outside the player's aim, +-1 unit buffer
+                saucer = jax.lax.cond(
+                    (saucer.x > -(2*self.consts.ENEMY_HITBOX_SIZE)-1) & (saucer.x < 1.0) & (saucer.z > 0.0), 
+                    lambda x: move_orthogonal_to_player(x, -jnp.sign(self.consts.ENEMY_HITBOX_SIZE + saucer.x)*strafe_speed), 
+                    lambda x: x,
+                    saucer
+                )
+
+                # strafing is additional to moving away from player
+                saucer = move_to_player(saucer, 1)
+                
+                return saucer
+            
             def far_player(saucer):
                 """movement of the saucer when far enough away from the player"""
 
                 def p0(saucer):
                     saucer = saucer._replace(dist_moved_temp=saucer.dist_moved_temp + speed)
-                    saucer = move_to_player(saucer, 1)
+
+                    # saucer tries to stay outside the player's aim.
+                    saucer = jax.lax.cond(
+                        (saucer.x > -(2*self.consts.ENEMY_HITBOX_SIZE)-1) & (saucer.x < 1.0) & (saucer.z > 0.0), 
+                        lambda x: move_orthogonal_to_player(x, -jnp.sign(self.consts.ENEMY_HITBOX_SIZE + saucer.x)*0.5), 
+                        lambda x: move_to_player(x, 0.5),
+                        saucer
+                    )
+                    saucer = move_to_player(saucer, 0.5)
 
                     def next_phase(saucer):
                         saucer = saucer._replace(dist_moved_temp=0.0)
@@ -733,11 +780,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     rot_centre_z = saucer.z+(9.22*uz)-(4.33*ux)
                     # Intersection circle and line
                     ## Component for abc
-                    rad = jnp.sqrt((saucer.x-rot_centre_x)*(saucer.x-rot_centre_x) + (saucer.z-rot_centre_z)*(saucer.z-rot_centre_z))
-                    m = saucer.z/saucer.x
-                    a = 1+m*m
+                    radius = jnp.sqrt((saucer.x - rot_centre_x)**2 + (saucer.z - rot_centre_z)**2)
+                    m = saucer.z / saucer.x
+                    a = 1 + m**2
                     b =(-2)*(rot_centre_x+m*rot_centre_z)
-                    c = rot_centre_x*rot_centre_x+rot_centre_z*rot_centre_z-rad*rad
+                    c = rot_centre_x*rot_centre_x+rot_centre_z*rot_centre_z-radius**2
                     ## abc
                     x_1 = ((-b)+jnp.sqrt(b*b-4*a*c))/(2*a)
                     x_2 = ((-b)-jnp.sqrt(b*b-4*a*c))/(2*a)
@@ -1113,20 +1160,22 @@ class BattlezoneRenderer(JAXGameRenderer):
         return jnp.pad(arr, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=-1)
 
     def get_enemy_mask(self, enemy:Enemy):
-        #selects the correct mask fo the given enemy
-        selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type] #this is still an array containing all rotations
+        # selects the correct mask fo the given enemy
+        selected_enemy_type = self.padded_enemy_masks[enemy.enemy_type]  # this is still an array containing all rotations
 
         #----------------select sprite based on rotation------------
         n, _, _ = jnp.shape(selected_enemy_type)
-        circle = 2*jnp.pi  #change to 2pi if radians
-        #v = jnp.array([enemy.x, enemy.z])
-        #w = jnp.array([0, 1])
-        #to_screen_angle = (jnp.dot(v, w)/jnp.linalg.norm(v))
-        #angle = (enemy.orientation_angle + to_screen_angle - (jnp.pi/2)) % circle
+        circle = 2*jnp.pi  # change to 2pi if radians
+        # v = jnp.array([enemy.x, enemy.z])
+        # w = jnp.array([0, 1])
+        # to_screen_angle = (jnp.dot(v, w)/jnp.linalg.norm(v))
+        # angle = (enemy.orientation_angle + to_screen_angle - (jnp.pi/2)) % circle
         angle = ((jnp.pi/2)-enemy.orientation_angle) % circle
         angle = jnp.where(angle<=jnp.pi, angle, jnp.where(angle <= jnp.pi+jnp.pi/2, jnp.pi, 0))
         index = jnp.round((angle/jnp.pi) * (n-1)).astype(int)
-        rotated_sprite = selected_enemy_type[index]
+        rotated_sprite = jnp.array(selected_enemy_type[index])
+
+        # rotated_sprite = jnp.where(rotated_sprite!=255, rotated_sprite + jnp.uint8(enemy.phase), rotated_sprite)  # color by phase for debug
 
         return rotated_sprite
 
@@ -1144,8 +1193,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             return u, v
 
         return jax.lax.cond(z<=0, anchor, uvMap, operand=None)
-
-
+    
     def zoom_mask(self, mask, zoom_factor):
         """
         Scales the mask proportional to zoom_factor.
@@ -1199,17 +1247,22 @@ class BattlezoneRenderer(JAXGameRenderer):
 
         return jax.lax.cond(zoom_factor <= 1, anchor, zoom, operand=None)
 
-
-    def render_single_enemy(self, raster, enemy:Enemy):
+    def render_single_enemy(self, raster, enemy: Enemy):
 
         def enemy_active(enemy):
             enemy_mask = self.get_enemy_mask(enemy)
-            zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
-                           self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
+            # zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
+            #                self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
+            zoom_factor = jnp.clip(((-0.15 * (enemy.distance) + 21.0)/20.0), 0.0, 1.0)
+            zoom_factor = jnp.round(1.0 / zoom_factor)
             zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
             x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-            return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+            rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
+                                            jnp.arange(zoomed_mask.shape[1]),
+                                            -1))
+
+            return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
         
         def enemy_inactive(enemy):
 
@@ -1233,7 +1286,11 @@ class BattlezoneRenderer(JAXGameRenderer):
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
                 x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-                return self.jr.render_at_clipped(raster, x, self.consts.ENEMY_POS_Y, zoomed_mask)
+                rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
+                                            jnp.arange(zoomed_mask.shape[1]),
+                                            -1))
+
+                return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
             
             def _pass(_):
                 return raster
@@ -1249,6 +1306,14 @@ class BattlezoneRenderer(JAXGameRenderer):
             projectile_mask_index = jnp.where(projectile.distance <= 15,0,1)
             projectile_mask = self.projectile_masks[projectile_mask_index]
             x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
+
+            # TODO: decide if centering is needed here or not
+            # rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != 255, axis=0),
+            #                                 jnp.arange(projectile_mask.shape[1]),
+            #                                 -1))
+            
+            # return self.jr.render_at_clipped(raster, x- (rightmost_col // 2), y, projectile_mask)
+            
             return self.jr.render_at_clipped(raster, x+projectile_mask_index, y, projectile_mask)
         def projectile_inactive(_):
             return raster
@@ -1262,10 +1327,11 @@ class BattlezoneRenderer(JAXGameRenderer):
     def render_targeting_indicator(self, raster, state):
 
         # determine if pointing at enemy
-        within_x = jnp.logical_and(state.enemies.x <= 0,
-                       state.enemies.x >= -2*self.consts.ENEMY_HITBOX_SIZE)  # TODO: for blue tank this is too large and for saucer too small (enemy hitboxes don't fit sprites in general, doesn't scale with distance?)
+        within_x = jnp.abs(state.enemies.x) <= self.consts.ENEMY_HITBOX_SIZE
+        # within_x = jnp.logical_and(state.enemies.x <= 0,
+        #                state.enemies.x >= -2*self.consts.ENEMY_HITBOX_SIZE)  # TODO: for blue tank this is too large and for saucer too small (enemy hitboxes don't fit sprites in general, doesn't scale with distance?)
         in_front = state.enemies.z > 0
-        overlaps = jnp.logical_and(jnp.logical_and(state.enemies.active, within_x), in_front)
+        overlaps = state.enemies.active & within_x & in_front
         pointing_at_enemy = jnp.any(overlaps)
 
         color_id = jnp.where(pointing_at_enemy,
@@ -1306,7 +1372,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
 
             #-------------------------------enemies-----------------
-            def render_single_enemy_wrapped(raster, enemy): #so that i dont have to pass self
+            def render_single_enemy_wrapped(raster, enemy):  # so that i dont have to pass self
                 return self.render_single_enemy(raster, enemy), None
 
 
@@ -1317,7 +1383,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             #raster = jax.lax.cond(state.step_counter%2==0, self.render_single_projectile, lambda r, _: r,
                          #raster, state.player_projectile)
             # probably more accurate but looks stoopid because different frame rates
-            def render_single_projectile_wrapped(raster, projectile): #so that i dont have to pass self
+            def render_single_projectile_wrapped(raster, projectile):  # so that i dont have to pass self
                 return self.render_single_projectile(raster, projectile), None
 
             raster, _ = jax.lax.scan(render_single_projectile_wrapped, raster, state.enemy_projectiles)
