@@ -330,31 +330,26 @@ class EntityPosition(NamedTuple):## not sure
     y: chex.Array
 
 class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, None]):
+    # Minimal ALE action set for Phoenix
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: PhoenixConstants = None):
         consts = consts or PhoenixConstants()
         super().__init__(consts)
         self.renderer = PhoenixRenderer(self.consts)
         self.step_counter = 0
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-            Action.UPRIGHT,
-            Action.UPLEFT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.UPFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.DOWNFIRE,
-            Action.UPRIGHTFIRE,
-            Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]# Add step counter tracking
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
@@ -382,7 +377,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> Space:
         return spaces.Dict({
@@ -417,11 +412,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             jnp.array(
                 [
                     action == Action.LEFT,
-                    action == Action.UPLEFT,
-                    action == Action.DOWNLEFT,
                     action == Action.LEFTFIRE,
-                    action == Action.UPLEFTFIRE,
-                    action == Action.DOWNLEFTFIRE,
                 ]
             )
         )
@@ -430,11 +421,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             jnp.array(
                 [
                     action == Action.RIGHT,
-                    action == Action.UPRIGHT,
-                    action == Action.DOWNRIGHT,
                     action == Action.RIGHTFIRE,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.DOWNRIGHTFIRE,
                 ]
             )
         )
@@ -893,7 +880,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         return initial_obs, return_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self,state, action: Action) -> Tuple[PhoenixObservation, PhoenixState, float, bool, PhoenixInfo]:
+    def step(self, state, action: int) -> Tuple[PhoenixObservation, PhoenixState, float, bool, PhoenixInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+        
         new_respawn_timer = jnp.where(state.player_respawn_timer > 0, state.player_respawn_timer - 1, 0)
         respawn_ended = (state.player_respawn_timer > 0) & (new_respawn_timer == 0)
 
@@ -902,7 +892,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         state = jax.lax.cond(
             jnp.logical_or(state.player_dying, state.player_respawn_timer > 0),
             lambda s: s,
-            lambda s: self.player_step(s, action),
+            lambda s: self.player_step(s, atari_action),
             state
         ) # Player_step only if not dying
 
@@ -911,15 +901,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         # Can fire only if inactive
         can_fire = (~projectile_active) & (~state.player_dying) & (state.player_respawn_timer <= 0)
         fire_actions = jnp.array([
-            action == Action.FIRE,
-            action == Action.LEFTFIRE,
-            action == Action.RIGHTFIRE,
-            action == Action.UPFIRE,
-            action == Action.DOWNFIRE,
-            action == Action.UPLEFTFIRE,
-            action == Action.UPRIGHTFIRE,
-            action == Action.DOWNLEFTFIRE,
-            action == Action.DOWNRIGHTFIRE,
+            atari_action == Action.FIRE,
+            atari_action == Action.LEFTFIRE,
+            atari_action == Action.RIGHTFIRE,
+            atari_action == Action.DOWNFIRE,
         ])
         firing = jnp.any(fire_actions) & can_fire
 

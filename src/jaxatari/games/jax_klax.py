@@ -242,6 +242,30 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
     ORIENT_D1: int = 2    # diagonal down-right
     ORIENT_D2: int = 3    # diagonal up-right
 
+    # Minimal ALE action set for Klax
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(self, consts: KlaxConstants = None):
         consts = consts or KlaxConstants()
@@ -261,27 +285,6 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         fallback_branch = (lambda op: op[2].astype(jnp.float32),)
 
         self._rf_branches = rf_branches + fallback_branch
-
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-            Action.UPRIGHT,
-            Action.UPLEFT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.UPFIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.DOWNFIRE,
-            Action.UPRIGHTFIRE,
-            Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE,
-        ]
 
         self._kernels = {
             3: (jnp.ones((1, 3), dtype=jnp.int32), jnp.ones((3, 1), dtype=jnp.int32),
@@ -470,7 +473,9 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: KlaxState, action: chex.Array):
-        new_state = self._advance_state(state, action)
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+        new_state = self._advance_state(state, atari_action)
         base_reward = self._get_reward(state, new_state).astype(jnp.float32)
         operand = (state, new_state, base_reward)
 
@@ -898,7 +903,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         max_color = max(int(self.consts.N_TILE_TYPES), 1)

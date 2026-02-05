@@ -671,6 +671,22 @@ StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, Enduro
 
 # https://www.free80sarcade.com/atari2600_Enduro.php
 class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
+    # Minimal ALE action set for Enduro
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: EnduroConstants = None):
         self.config = consts or EnduroConstants()
         super().__init__(self.config)
@@ -678,21 +694,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
         self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
 
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,  # gas
-            Action.LEFT,  # steer left
-            Action.RIGHT,  # steer right
-            Action.DOWN,  # brake
-            Action.LEFTFIRE,  # steer left + gas
-            Action.RIGHTFIRE,  # steer right + gas
-            Action.DOWNFIRE  # brake + gas (will just override to gas)
-        ]
-
         self.renderer = EnduroRenderer()
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -834,6 +839,9 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: EnduroGameState, action: int) -> StepResult:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+
         """
         Performs a single frame update of the Enduro environment.
 

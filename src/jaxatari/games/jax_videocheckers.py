@@ -474,17 +474,23 @@ class BoardHandler:
 
 class JaxVideoCheckers(
     JaxEnvironment[VideoCheckersState, VideoCheckersObservation, VideoCheckersInfo, VideoCheckersConstants]):
-    def __init__(self, consts: VideoCheckersConstants = None):
-        consts = consts or VideoCheckersConstants()
-        super().__init__(consts)
-        self.renderer = VideoCheckersRenderer(self.consts)
-        self.action_set = {
+    # Minimal ALE action set for Video Checkers (from scripts/action_space_helper.py)
+    # Note: NOOP is NOT in the ALE action set for this game
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.FIRE,
             Action.UPRIGHT,
             Action.UPLEFT,
             Action.DOWNRIGHT,
-            Action.DOWNLEFT
-        }
+            Action.DOWNLEFT,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: VideoCheckersConstants = None):
+        consts = consts or VideoCheckersConstants()
+        super().__init__(consts)
+        self.renderer = VideoCheckersRenderer(self.consts)
 
     def render(self, state: VideoCheckersState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -1111,6 +1117,9 @@ class JaxVideoCheckers(
             done: A boolean indicating if the game is over.
             info: Additional information about the game state.
         """
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         # Switch between game phases to choose which function handles the step
         # So separate function for each game phase
         def _run_phase_logic(state, action):
@@ -1133,8 +1142,8 @@ class JaxVideoCheckers(
             return jax.lax.switch(state.game_phase, phase_functions, operands)
 
         new_state = jax.lax.cond(
-            (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (action != Action.NOOP),
-            lambda: _run_phase_logic(state, action),  # Call the new switch logic
+            (state.frame_counter == (self.consts.ANIMATION_FRAME_RATE - 1)) & (atari_action != Action.NOOP),
+            lambda: _run_phase_logic(state, atari_action),  # Call the new switch logic
             lambda: state,
         )
 
@@ -1158,7 +1167,7 @@ class JaxVideoCheckers(
         Returns:
             action_space: The action space of the game environment.
         """
-        return spaces.Discrete(5)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(

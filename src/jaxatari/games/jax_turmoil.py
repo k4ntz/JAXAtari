@@ -256,10 +256,9 @@ class TurmoilInfo(NamedTuple):
 
 
 class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, TurmoilConstants]):
-    def __init__(self, consts: TurmoilConstants = None):
-        consts = consts or TurmoilConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -270,15 +269,15 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
             Action.UPLEFT,
             Action.DOWNRIGHT,
             Action.DOWNLEFT,
-            Action.UPFIRE,
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
-            Action.DOWNFIRE,
-            Action.UPRIGHTFIRE,
-            Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: TurmoilConstants = None):
+        consts = consts or TurmoilConstants()
+        super().__init__(consts)
         self.obs_size = 6 + 1 + 7 * 6 + 5 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
 
@@ -320,7 +319,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Seaquest.
@@ -1821,6 +1820,9 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
     def step(
         self, state: TurmoilState, action: chex.Array
     ) -> Tuple[TurmoilObservation, TurmoilState, float, bool, TurmoilInfo]:
+
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         previous_state = state
 

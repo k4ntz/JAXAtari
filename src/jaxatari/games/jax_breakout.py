@@ -108,6 +108,12 @@ class BreakoutState(NamedTuple):
     all_blocks_cleared: chex.Array
 
 class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInfo, BreakoutConstants]):
+    # Minimal ALE action set for Breakout: 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: BreakoutConstants = None):
         consts = consts or BreakoutConstants()
         super().__init__(consts)
@@ -137,11 +143,11 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         state_player_x: chex.Array,
         state_player_speed: chex.Array,
         acceleration_counter: chex.Array,
-        action: chex.Array,
+        atari_action: chex.Array,
     ) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """Updates the player position based on the action."""
-        left = action == Action.LEFT
-        right = action == Action.RIGHT
+        left = atari_action == Action.LEFT
+        right = atari_action == Action.RIGHT
 
         # Calculate the maximum X position based on paddle width
         # Use the maximum paddle width to ensure it works for both normal and small paddles
@@ -636,13 +642,15 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _step(self, state: BreakoutState, action: chex.Array) -> BreakoutState:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         # Update player position
         new_player_x, new_paddle_v, new_acceleration_counter = self._player_step(
-            state.player_x, state.player_speed, state.acceleration_counter, action
+            state.player_x, state.player_speed, state.acceleration_counter, atari_action
         )
         #TODO: this is a hack -> always fire
         game_started = jnp.logical_or(state.game_started, True)
-        # game_started = jnp.logical_or(state.game_started, action == Action.FIRE)
+        # game_started = jnp.logical_or(state.game_started, atari_action == Action.FIRE)
 
         # Update ball, check collisions, etc., as before, but now pass new_player_x
         (ball_x, ball_y, ball_vel_x, ball_vel_y, ball_speed_idx, ball_direction_idx,
@@ -754,11 +762,10 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         Actions are:
         0: NOOP
         1: FIRE
-        2: UP
-        3: RIGHT
-        4: LEFT
+        2: RIGHT
+        3: LEFT
         """
-        #TODO: in ALE, this is 4: NOOP, FIRE, RIGHT, LEFT
+        return spaces.Discrete(len(self.ACTION_SET))
         # But since actions are currently directly mapped from digits
         # return Discrete(4) would lead to not being able to use the left action
         return spaces.Discrete(5)

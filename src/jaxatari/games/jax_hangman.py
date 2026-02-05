@@ -20,6 +20,9 @@ L_MAX = 8
 
 MAX_MISSES = 11
 STEP_PENALTY = 0.0
+DIFFICULTY_MODE = "B"
+TIMER_SECONDS = 20
+STEPS_PER_SECOND = 30
 
 #colours of environment
 BG_COLOR    = jnp.array([150, 40, 30],   dtype=jnp.uint8)
@@ -338,6 +341,15 @@ WORDS_ENC = jnp.stack([_encode_word(w) for w in _WORDS], axis=0)
 WORDS_LEN = jnp.array([min(len(w), L_MAX) for w in _WORDS], dtype=jnp.int32)
 N_WORDS = WORDS_ENC.shape[0]
 
+
+class HangmanConstants(NamedTuple):
+    MAX_MISSES: int = MAX_MISSES
+    STEP_PENALTY: float = STEP_PENALTY
+    DIFFICULTY_MODE: str = DIFFICULTY_MODE
+    TIMER_SECONDS: int = TIMER_SECONDS
+    STEPS_PER_SECOND: int = STEPS_PER_SECOND
+
+
 class HangmanState(NamedTuple):
     key: chex.Array
     word: chex.Array          
@@ -381,14 +393,37 @@ def _compute_revealed(word: chex.Array, mask: chex.Array) -> chex.Array:
     return jnp.where(mask.astype(bool), word, PAD_TOKEN)
 
 def _action_delta_cursor(action: chex.Array) -> chex.Array:
-    up_like = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
-    down_like = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
+    # Actions that move cursor up: UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
+    up_like = jnp.logical_or(
+        jnp.logical_or(
+            jnp.logical_or(action == Action.UP, action == Action.UPRIGHT),
+            jnp.logical_or(action == Action.UPLEFT, action == Action.UPFIRE)
+        ),
+        jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)
+    )
+    # Actions that move cursor down: DOWN, DOWNRIGHT, DOWNLEFT, DOWNFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE
+    down_like = jnp.logical_or(
+        jnp.logical_or(
+            jnp.logical_or(action == Action.DOWN, action == Action.DOWNRIGHT),
+            jnp.logical_or(action == Action.DOWNLEFT, action == Action.DOWNFIRE)
+        ),
+        jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE)
+    )
     return jnp.where(up_like, -1, jnp.where(down_like, 1, 0)).astype(jnp.int32)
 
 def _action_commit(action: chex.Array) -> chex.Array:
+    # All FIRE actions commit: FIRE, UPFIRE, DOWNFIRE, RIGHTFIRE, LEFTFIRE, 
+    # UPRIGHTFIRE, UPLEFTFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE
     return jnp.logical_or(
-        jnp.logical_or(action == Action.FIRE, action == Action.UPFIRE),
-        action == Action.DOWNFIRE
+        jnp.logical_or(
+            jnp.logical_or(action == Action.FIRE, action == Action.UPFIRE),
+            jnp.logical_or(action == Action.DOWNFIRE, action == Action.RIGHTFIRE)
+        ),
+        jnp.logical_or(
+            jnp.logical_or(action == Action.LEFTFIRE, action == Action.UPRIGHTFIRE),
+            jnp.logical_or(action == Action.UPLEFTFIRE, 
+                jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE))
+        )
     )
 
 @jax.jit
@@ -670,23 +705,45 @@ class HangmanRenderer(JAXGameRenderer):
     
 #environment
 
-class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, Action]):
-    def __init__(self, *,
-                 max_misses: int = MAX_MISSES,
-                 step_penalty: float = STEP_PENALTY,
-                 difficulty_mode: str = "B",
-                 timer_seconds: int = 20,
-                 steps_per_second: int = 30):
-        super().__init__()
+class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, HangmanConstants]):
+    # Full ALE action set for Hangman (18 actions):
+    # ['NOOP', 'FIRE', 'UP', 'RIGHT', 'LEFT', 'DOWN', 'UPRIGHT', 'UPLEFT', 'DOWNRIGHT', 'DOWNLEFT', 
+    #  'UPFIRE', 'RIGHTFIRE', 'LEFTFIRE', 'DOWNFIRE', 'UPRIGHTFIRE', 'UPLEFTFIRE', 'DOWNRIGHTFIRE', 'DOWNLEFTFIRE']
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: HangmanConstants = None):
+        consts = consts or HangmanConstants()
+        super().__init__(consts)
         self.renderer = HangmanRenderer()
-        self.max_misses = int(max_misses)
-        self.step_penalty = float(step_penalty)
+        self.consts = consts
 
-        self.timed = 1 if str(difficulty_mode).upper() == "A" else 0
-        self.timer_steps = int(timer_seconds * steps_per_second)
-
-        self.action_set = [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.UPFIRE, Action.DOWNFIRE]
         self.obs_size = L_MAX + L_MAX + ALPHABET_SIZE + 3
+
+        # Compute derived values from constants
+        self.timed = 1 if str(consts.DIFFICULTY_MODE).upper() == "A" else 0
+        self.timer_steps = int(consts.TIMER_SECONDS * consts.STEPS_PER_SECOND)
 
         self._rng_key = jrandom.PRNGKey(0)
 
@@ -721,7 +778,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
             mask=jnp.zeros((L_MAX,), dtype=jnp.int32),
             guessed=jnp.zeros((ALPHABET_SIZE,), dtype=jnp.int32),
             misses=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(self.max_misses, dtype=jnp.int32),
+            lives=jnp.array(self.consts.MAX_MISSES, dtype=jnp.int32),
             cursor_idx=jnp.array(0, dtype=jnp.int32),
             done=jnp.array(False),
             reward=jnp.array(0.0, dtype=jnp.float32),
@@ -737,6 +794,9 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: HangmanState, action: chex.Array) -> Tuple[HangmanObservation, HangmanState, float, bool, HangmanInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         commit = _action_commit(action).astype(jnp.int32)
         delta  = _action_delta_cursor(action)
         delta  = jnp.where(state.step_counter % 6 == 0, delta, 0)
@@ -749,7 +809,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 mask=jnp.zeros((L_MAX,), dtype=jnp.int32),
                 guessed=jnp.zeros((ALPHABET_SIZE,), dtype=jnp.int32),
                 misses=jnp.array(0, dtype=jnp.int32),
-                lives=jnp.array(self.max_misses, dtype=jnp.int32),
+                lives=jnp.array(self.consts.MAX_MISSES, dtype=jnp.int32),
                 cursor_idx=jnp.array(0, dtype=jnp.int32),
                 done=jnp.array(False),                     
                 reward=s.reward,                           
@@ -774,7 +834,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 mask=jnp.zeros((L_MAX,), dtype=jnp.int32),
                 guessed=jnp.zeros((ALPHABET_SIZE,), dtype=jnp.int32),
                 misses=jnp.array(0, dtype=jnp.int32),
-                lives=jnp.array(self.max_misses, dtype=jnp.int32),
+                lives=jnp.array(self.consts.MAX_MISSES, dtype=jnp.int32),
                 cursor_idx=jnp.array(0, dtype=jnp.int32),
                 done=jnp.array(False),
                 reward=jnp.array(0.0, dtype=jnp.float32),
@@ -819,14 +879,14 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                 all_revealed = (n_revealed == s2.length)
 
                 #loss check
-                lost = misses >= self.max_misses
+                lost = misses >= self.consts.MAX_MISSES
 
                 #reveal
                 mask_final = jnp.where(lost, jnp.where(within, 1, mask), mask)
 
                 # reward
                 step_reward = jnp.where(all_revealed, 1.0,
-                                jnp.where(lost, -1.0, self.step_penalty)).astype(jnp.float32)
+                                jnp.where(lost, -1.0, self.consts.STEP_PENALTY)).astype(jnp.float32)
 
                 #bump counters
                 won          = all_revealed.astype(jnp.int32)
@@ -870,7 +930,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
                 misses = s2.misses + add_miss
                 lives  = s2.lives  - add_miss
-                lost   = misses >= self.max_misses
+                lost   = misses >= self.consts.MAX_MISSES
 
                 idx = jnp.arange(L_MAX, dtype=jnp.int32)
                 within = idx < s2.length
@@ -892,7 +952,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
                     cursor_idx=cursor,
                     done=jnp.array(False),                        # never signal done
                     reward=jnp.where(lost, jnp.array(-1.0, dtype=jnp.float32),
-                                     jnp.array(self.step_penalty, dtype=jnp.float32)),
+                                     jnp.array(self.consts.STEP_PENALTY, dtype=jnp.float32)),
                     step_counter=s2.step_counter + 1,
                     score=s2.score,
                     round_no=new_roundno,
@@ -936,15 +996,15 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         return obs, next_state, env_reward, done, info
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "revealed": spaces.Box(low=0, high=PAD_TOKEN, shape=(L_MAX,), dtype=jnp.int32),
             "mask":     spaces.Box(low=0, high=1,          shape=(L_MAX,), dtype=jnp.int32),
             "guessed":  spaces.Box(low=0, high=1,          shape=(ALPHABET_SIZE,), dtype=jnp.int32),
-            "misses":   spaces.Box(low=0, high=self.max_misses, shape=(), dtype=jnp.int32),
-            "lives":    spaces.Box(low=0, high=self.max_misses, shape=(), dtype=jnp.int32),
+            "misses":   spaces.Box(low=0, high=self.consts.MAX_MISSES, shape=(), dtype=jnp.int32),
+            "lives":    spaces.Box(low=0, high=self.consts.MAX_MISSES, shape=(), dtype=jnp.int32),
             "cursor_idx": spaces.Box(low=0, high=ALPHABET_SIZE-1, shape=(), dtype=jnp.int32),
         })
 

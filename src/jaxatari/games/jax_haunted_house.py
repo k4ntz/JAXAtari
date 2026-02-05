@@ -285,30 +285,35 @@ class HauntedHouseInfo(NamedTuple):
 
 
 class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation, HauntedHouseInfo, HauntedHouseConstants]):
+    # Minimal ALE action set for Haunted House
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: HauntedHouseConstants = None):
         consts = consts or HauntedHouseConstants()
         super().__init__(consts)
         self.renderer = HauntedHouseRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.UPFIRE,
-            Action.DOWNFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE,
-            Action.DOWNLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-            Action.UPLEFT,
-            Action.UPRIGHT,
-            Action.DOWNLEFT,
-            Action.DOWNRIGHT
-        ]
         self.obs_size = 3*4+1+1
 
 
@@ -952,10 +957,12 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: HauntedHouseState, action: chex.Array) -> Tuple[HauntedHouseObservation, HauntedHouseState, float, bool, HauntedHouseInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # Step 1: Player Mechanics
         (player, player_direction, stun_duration, match_duration, matches_used,
-         item_dropped, stairs_active, fire_button_active, lives, game_ends) = self.player_step(state, action)
+         item_dropped, stairs_active, fire_button_active, lives, game_ends) = self.player_step(state, atari_action)
 
         # Step 2: Item Mechanics
         (item_held, scepter, urn_left, urn_middle, urn_right,
@@ -1273,7 +1280,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             obs.lives.flatten()])
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         # Define a reusable space for entities that can be invisible

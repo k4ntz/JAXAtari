@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import chex
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction, EnvObs
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils_legacy as jr
 from jaxatari.spaces import Space
@@ -99,30 +99,35 @@ class FlagCaptureInfo(NamedTuple):
 
 
 class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, FlagCaptureInfo,FlagCaptureConstants]):
+    # Minimal ALE action set for Flag Capture
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.UPFIRE,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+            Action.DOWNFIRE,
+            Action.UPRIGHTFIRE,
+            Action.UPLEFTFIRE,
+            Action.DOWNRIGHTFIRE,
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self,consts:FlagCaptureConstants = None):
         consts = consts or FlagCaptureConstants()
         super().__init__(consts)
         self.renderer = FlagCaptureRenderer(consts=consts)
-        self.action_set = [
-            JAXAtariAction.NOOP,
-            JAXAtariAction.FIRE,
-            JAXAtariAction.UP,
-            JAXAtariAction.RIGHT,
-            JAXAtariAction.LEFT,
-            JAXAtariAction.DOWN,
-            JAXAtariAction.UPRIGHT,
-            JAXAtariAction.UPLEFT,
-            JAXAtariAction.DOWNRIGHT,
-            JAXAtariAction.DOWNLEFT,
-            JAXAtariAction.UPFIRE,
-            JAXAtariAction.RIGHTFIRE,
-            JAXAtariAction.LEFTFIRE,
-            JAXAtariAction.DOWNFIRE,
-            JAXAtariAction.UPRIGHTFIRE,
-            JAXAtariAction.UPLEFTFIRE,
-            JAXAtariAction.DOWNRIGHTFIRE,
-            JAXAtariAction.DOWNLEFTFIRE
-        ]
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(187)) -> Tuple[
         FlagCaptureObservation, FlagCaptureState]:
@@ -187,8 +192,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
     def action_space(self) -> Space:
         """
-        Returns the action space of the environment as an array containing the actions that can be taken.
-        Returns: The action space of the environment as an array.
+        Returns the action space of the environment.
+        Returns: The action space of the environment as a Discrete space.
         """
         return spaces.Discrete(18)
 
@@ -239,6 +244,8 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             done: A boolean indicating if the game is over.
             info: Additional information about the game state.
         """
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         def player_step(player_x, player_y, is_checking, player_move_cooldown, animation_type, action):
             """
@@ -258,42 +265,42 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
                 new_is_checking: Updated state of the player (checking or not).
                 new_player_move_cooldown: Updated cooldown for player movement.
             """
-            new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, JAXAtariAction.FIRE),
-                                                          jnp.logical_and(jnp.greater_equal(action, JAXAtariAction.UPFIRE),
-                                                                          jnp.less_equal(action, JAXAtariAction.DOWNLEFTFIRE))),
+            new_is_checking = jax.lax.cond(jnp.logical_or(jnp.equal(action, Action.FIRE),
+                                                          jnp.logical_and(jnp.greater_equal(action, Action.UPFIRE),
+                                                                          jnp.less_equal(action, Action.DOWNLEFTFIRE))),
                                            lambda: 1, lambda: 0)
-            is_up = jnp.logical_or(jnp.equal(action, JAXAtariAction.UP),
-                                   jnp.logical_or(jnp.equal(action, JAXAtariAction.UPFIRE),
-                                                  jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
-                                                                 jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT),
+            is_up = jnp.logical_or(jnp.equal(action, Action.UP),
+                                   jnp.logical_or(jnp.equal(action, Action.UPFIRE),
+                                                  jnp.logical_or(jnp.equal(action, Action.UPRIGHT),
+                                                                 jnp.logical_or(jnp.equal(action, Action.UPLEFT),
                                                                                 jnp.logical_or(jnp.equal(action,
-                                                                                                         JAXAtariAction.UPRIGHTFIRE),
+                                                                                                         Action.UPRIGHTFIRE),
                                                                                                jnp.equal(action,
-                                                                                                         JAXAtariAction.UPLEFTFIRE))))))
-            is_down = jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWN),
-                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNFIRE),
-                                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
-                                                                   jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT),
+                                                                                                         Action.UPLEFTFIRE))))))
+            is_down = jnp.logical_or(jnp.equal(action, Action.DOWN),
+                                     jnp.logical_or(jnp.equal(action, Action.DOWNFIRE),
+                                                    jnp.logical_or(jnp.equal(action, Action.DOWNRIGHT),
+                                                                   jnp.logical_or(jnp.equal(action, Action.DOWNLEFT),
                                                                                   jnp.logical_or(jnp.equal(action,
-                                                                                                           JAXAtariAction.DOWNRIGHTFIRE),
+                                                                                                           Action.DOWNRIGHTFIRE),
                                                                                                  jnp.equal(action,
-                                                                                                           JAXAtariAction.DOWNLEFTFIRE))))))
-            is_left = jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFT),
-                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.UPLEFT),
-                                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNLEFT),
-                                                                   jnp.logical_or(jnp.equal(action, JAXAtariAction.LEFTFIRE),
+                                                                                                           Action.DOWNLEFTFIRE))))))
+            is_left = jnp.logical_or(jnp.equal(action, Action.LEFT),
+                                     jnp.logical_or(jnp.equal(action, Action.UPLEFT),
+                                                    jnp.logical_or(jnp.equal(action, Action.DOWNLEFT),
+                                                                   jnp.logical_or(jnp.equal(action, Action.LEFTFIRE),
                                                                                   jnp.logical_or(jnp.equal(action,
-                                                                                                           JAXAtariAction.UPLEFTFIRE),
+                                                                                                           Action.UPLEFTFIRE),
                                                                                                  jnp.equal(action,
-                                                                                                           JAXAtariAction.DOWNLEFTFIRE))))))
-            is_right = jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHT),
-                                      jnp.logical_or(jnp.equal(action, JAXAtariAction.UPRIGHT),
-                                                     jnp.logical_or(jnp.equal(action, JAXAtariAction.DOWNRIGHT),
-                                                                    jnp.logical_or(jnp.equal(action, JAXAtariAction.RIGHTFIRE),
+                                                                                                           Action.DOWNLEFTFIRE))))))
+            is_right = jnp.logical_or(jnp.equal(action, Action.RIGHT),
+                                      jnp.logical_or(jnp.equal(action, Action.UPRIGHT),
+                                                     jnp.logical_or(jnp.equal(action, Action.DOWNRIGHT),
+                                                                    jnp.logical_or(jnp.equal(action, Action.RIGHTFIRE),
                                                                                    jnp.logical_or(jnp.equal(action,
-                                                                                                            JAXAtariAction.UPRIGHTFIRE),
+                                                                                                            Action.UPRIGHTFIRE),
                                                                                                   jnp.equal(action,
-                                                                                                            JAXAtariAction.DOWNRIGHTFIRE))))))
+                                                                                                            Action.DOWNRIGHTFIRE))))))
 
             new_player_y = jax.lax.cond(is_down, lambda: player_y + 1, lambda: player_y)
             new_player_y = jax.lax.cond(is_up, lambda: player_y - 1, lambda: new_player_y)
@@ -318,7 +325,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             state.is_checking,
             state.player_move_cooldown,
             state.animation_type,
-            action,
+            atari_action,
         )
 
         bomb_animation_over = jnp.logical_and(

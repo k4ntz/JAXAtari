@@ -8,6 +8,7 @@ env
 results/
 .DS_Store
 docs/build/
+.python-version
 
 scripts/benchmarks/outputs/
 scripts/benchmarks/wandb/

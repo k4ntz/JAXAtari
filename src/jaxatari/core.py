@@ -127,7 +127,8 @@ def make(game_name: str,
         # No mods: return default base env with default constants
         return env_class(consts=base_consts)
 
-    except (ImportError, AttributeError, ValueError, NotImplementedError) as e:
+    except (ImportError, NotImplementedError) as e:
+        # Only wrap registration/import errors - let intentional errors (ValueError, etc.) propagate
         raise ImportError(f"Failed to load game '{game_name}': {e}") from e
 
 def make_renderer(game_name: str) -> JAXGameRenderer:
