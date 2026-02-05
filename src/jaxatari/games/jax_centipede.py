@@ -2198,7 +2198,7 @@ class CentipedeRenderer(JAXGameRenderer):
     def __init__(self, consts: CentipedeConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or CentipedeConstants()
         super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/centipede"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "centipede")
 
         # Use injected config if provided, else default
         if config is None:

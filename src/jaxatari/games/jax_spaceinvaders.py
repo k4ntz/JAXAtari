@@ -85,7 +85,7 @@ class SpaceInvadersConstants(AutoDerivedConstants):
     BULLET_SPEED: int = struct.field(pytree_node=False, default=1)
     ENEMY_BULLET_SPEED: int = struct.field(pytree_node=False, default=1)
 
-    PATH_SPRITES: str = struct.field(pytree_node=False, default="sprites/spaceinvaders")
+    PATH_SPRITES: str = struct.field(pytree_node=False, default_factory=lambda: os.path.join(render_utils.get_base_sprite_dir(), "spaceinvaders"))
     ENEMY_ROWS: int = struct.field(pytree_node=False, default=6)
     ENEMY_COLS: int = struct.field(pytree_node=False, default=6)
     MAX_ENEMY_BULLETS: int = struct.field(pytree_node=False, default=3)
@@ -1181,7 +1181,7 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spaceinvaders"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "spaceinvaders")
         
         # 3. Use asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

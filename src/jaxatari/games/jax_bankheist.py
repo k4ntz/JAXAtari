@@ -187,7 +187,7 @@ class BankHeistConstants(AutoDerivedConstants):
     
     # Path constants
     MODULE_DIR: str = struct.field(pytree_node=False, default_factory=lambda: os.path.dirname(os.path.abspath(__file__)))
-    SPRITES_DIR: str = struct.field(pytree_node=False, default_factory=lambda: os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "bankheist"))
+    SPRITES_DIR: str = struct.field(pytree_node=False, default_factory=lambda: os.path.join(render_utils.get_base_sprite_dir(), "bankheist"))
     
     # Asset config baked into constants
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)

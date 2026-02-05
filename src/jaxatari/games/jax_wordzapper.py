@@ -1749,7 +1749,7 @@ class WordZapperRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define asset path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/wordzapper"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wordzapper")
         # 3. Load all assets using the manifest from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         

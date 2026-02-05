@@ -1413,7 +1413,7 @@ class AtlantisRenderer(JAXGameRenderer):
         for asset in dynamic_procedural_assets:
             final_asset_config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "atlantis")
         
         # 3. Load all assets, create palette, and generate ID masks
         (

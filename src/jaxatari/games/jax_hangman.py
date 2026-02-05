@@ -659,8 +659,7 @@ class HangmanRenderer(JAXGameRenderer):
         # 2. Define asset config
         asset_config = self._get_asset_config(background_sprite)
 
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sprite_path = os.path.join(base_dir, "sprites", "hangman")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "hangman")
 
         # 3. Load assets
         (

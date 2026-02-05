@@ -185,8 +185,7 @@ def _get_default_asset_config(
     Car assets are loaded manually by the renderer.
     """
     # Base path for loading RGBA data
-    module_dir = os.path.dirname(os.path.abspath(__file__))
-    base_sprite_path = os.path.join(module_dir, "sprites/enduro")
+    base_sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "enduro")
     config_list = [
         # --- Static Backgrounds ---
         {'name': 'background', 'type': 'background', 'file': 'backgrounds/background.npy'},
@@ -670,10 +669,10 @@ class VehicleSpec:
                                   which may contain multiple animation frames.
         """
         # load full path
-        module_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = render_utils.get_base_sprite_dir()
         sprite_path = Path(sprite_path_car)
         if not sprite_path.is_absolute():
-            sprite_path = module_dir / sprite_path
+            sprite_path = base_dir / sprite_path
 
         # Load the sprite with the absolute path
         largest_sprite_data = np.load(str(sprite_path))
@@ -765,8 +764,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         self.config = consts or EnduroConstants()
         super().__init__(self.config)
         self.state = self.reset()
-        self.car_0_spec = VehicleSpec("sprites/enduro/cars/car_0.npy")
-        self.car_1_spec = VehicleSpec("sprites/enduro/cars/car_1.npy")
+        self.car_0_spec = VehicleSpec("enduro/cars/car_0.npy")
+        self.car_1_spec = VehicleSpec("enduro/cars/car_1.npy")
 
         self.renderer = EnduroRenderer(consts=self.config)
 
@@ -2517,7 +2516,7 @@ class EnduroRenderer(JAXGameRenderer):
         self._width_scaling = float(self.config.width_scaling)
         # Asset base path
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        self._sprite_path = os.path.join(module_dir, "sprites/enduro")
+        self._sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "enduro")
         # 1. Load all declared assets (weather, UI, background, etc.)
         final_asset_config = list(self.consts.ASSET_CONFIG)
         

@@ -8,6 +8,10 @@ from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
 from platformdirs import user_data_dir
 
+def get_base_sprite_dir() -> str:
+    """Returns the base directory for JAXAtari sprites: ~/.local/share/jaxatari/sprites"""
+    return os.path.join(user_data_dir("jaxatari"), "sprites")
+
 class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""
     # TODO: uses HWC since everything does right now, but might be counterintuitive during usage
@@ -186,8 +190,7 @@ class JaxRenderingUtils:
         Returns:
             JAX array of shape (Height, Width, 4).
         """
-        base_path = os.path.join(Path(user_data_dir("jaxatari")), fileName)
-        frame = jnp.load(base_path)
+        frame = jnp.load(fileName)
         if frame.ndim != 3:
             raise ValueError(
                 f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."

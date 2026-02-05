@@ -1018,7 +1018,7 @@ class KlaxRenderer(JAXGameRenderer):
 
     def _load_sprites(self):
         """Defines the asset manifest for Klax and loads them via the utility function."""
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/klax"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "klax")
 
         # Define the game-specific asset manifest in a clear, declarative way.
         asset_config = [

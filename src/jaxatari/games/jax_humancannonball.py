@@ -820,7 +820,7 @@ class HumanCannonballRenderer(JAXGameRenderer):
     def __init__(self, consts: HumanCannonballConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HumanCannonballConstants()
         super().__init__(self.consts)
-        self.sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/human_cannonball")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "human_cannonball")
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(

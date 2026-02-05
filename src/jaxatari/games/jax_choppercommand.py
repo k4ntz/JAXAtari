@@ -1884,7 +1884,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
         super().__init__(self.consts)
         # Use a consistent sprite path based on the old load_sprites function
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(MODULE_DIR, "sprites/choppercommand")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "choppercommand")
         
         # Use injected config if provided, else default
         if config is None:

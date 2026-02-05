@@ -1541,8 +1541,7 @@ class FishingDerbyRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(module_dir, "sprites/fishingderby")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "fishingderby")
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
         (

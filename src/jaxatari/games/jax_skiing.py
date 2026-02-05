@@ -932,7 +932,7 @@ class SkiingRenderer(JAXGameRenderer):
     def __init__(self, consts: SkiingConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SkiingConstants()
         super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/skiing"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "skiing")
         
         # Use injected config if provided, else default
         if config is None:

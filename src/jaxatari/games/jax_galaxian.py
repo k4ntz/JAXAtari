@@ -1452,7 +1452,7 @@ class GalaxianRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(MODULE_DIR, "sprites/galaxian")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "galaxian")
         # 3. Get asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         # 4. Load, process, and set up all assets

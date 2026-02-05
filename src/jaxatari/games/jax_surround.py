@@ -643,8 +643,7 @@ class SurroundRenderer(JAXGameRenderer):
         for name, data in procedural_sprites.items():
             final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
+        digit_path = os.path.join(render_utils.get_base_sprite_dir(), "seaquest/digits/{}" + ".npy")
         base_digits = self.jr.load_and_pad_digits(digit_path)
         scale = 2
         scaled_digits_list = [jnp.kron(d, jnp.ones((scale, scale, 1), dtype=jnp.uint8)) for d in base_digits]

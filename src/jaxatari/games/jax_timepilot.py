@@ -1448,7 +1448,7 @@ class TimePilotRenderer(JAXGameRenderer):
         """
         self.consts = consts or TimePilotConstants()
         super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/timepilot"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "timepilot")
 
         # Use injected config if provided, else default
         if config is None:

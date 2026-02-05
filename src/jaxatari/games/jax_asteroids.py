@@ -1282,7 +1282,7 @@ class AsteroidsRenderer(JAXGameRenderer):
         # 1. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/asteroids"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "asteroids")
         
         # 2. Load all assets, create palette, and generate ID masks
         (

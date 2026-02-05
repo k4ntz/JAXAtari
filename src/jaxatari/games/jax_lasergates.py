@@ -2587,7 +2587,7 @@ class LaserGatesRenderer(JAXGameRenderer):
             })
 
         # 6. Load everything
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/lasergates")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "lasergates")
         (
             self.PALETTE,
             self.SHAPE_MASKS,

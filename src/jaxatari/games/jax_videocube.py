@@ -972,7 +972,7 @@ class VideoCubeRenderer(JAXGameRenderer):
         else:
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocube"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videocube")
         
         # 2. Asset manifest is now loaded from constants
         # The large local 'asset_config' list has been removed.

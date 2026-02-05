@@ -842,7 +842,7 @@ class BreakoutRenderer(JAXGameRenderer):
         # 1. Standard API setup from the new renderer
         procedural_sprites = self._create_procedural_sprites()
         asset_config = self._get_asset_config(procedural_sprites)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/breakout"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "breakout")
         
         # Add ball and player colors to palette as 1x1 procedural sprites if they differ from defaults
         # This ensures the colors are in the palette before we recolor

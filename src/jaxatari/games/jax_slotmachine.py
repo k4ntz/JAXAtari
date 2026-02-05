@@ -268,7 +268,7 @@ class SlotMachineRenderer(JAXGameRenderer):
     def __init__(self, consts: SlotMachineConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SlotMachineConstants()
         super().__init__(self.consts)
-        self.sprite_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/slotmachine"
+        self.sprite_dir = os.path.join(render_utils.get_base_sprite_dir(), "slotmachine")
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(

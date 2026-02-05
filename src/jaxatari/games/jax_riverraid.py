@@ -1809,7 +1809,7 @@ class RiverraidRenderer(JAXGameRenderer):
 
         # 2. Define sprite path
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(MODULE_DIR, "sprites/riverraid")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "riverraid")
 
         # 3. Get asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

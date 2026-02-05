@@ -15,6 +15,8 @@ dependencies = [
     "ml-dtypes",
     "numpy",
     "opt-einsum>=3.4.0",
+    "platformdirs>=4.5.1",
+    "requests>=2.32.5",
     "scipy>=1.15.3",
     "toolz>=1.0.0",
     "typing-extensions>=4.14.0",
@@ -42,7 +44,6 @@ gh_ci = [
   "pytest-xdist",
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
-<<<<<<< HEAD
 ]
 training = [
   "tyro",
@@ -51,6 +52,3 @@ training = [
   "rtpt>=0.0.4",
   "wandb[media]>=0.24.0",
 ]
-=======
-]
->>>>>>> temp

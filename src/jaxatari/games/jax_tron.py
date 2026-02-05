@@ -786,7 +786,7 @@ class TronRenderer(JAXGameRenderer):
         else:
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tron"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "tron")
         
         # 1.5. Compute arena geometry (needed for background generation)
         (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (

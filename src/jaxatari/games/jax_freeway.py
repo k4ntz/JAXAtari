@@ -517,7 +517,7 @@ class FreewayRenderer(JAXGameRenderer):
         # Load and setup assets using the new pattern
         # Convert tuple to list so we can modify it
         asset_config = list(self.consts.ASSET_CONFIG)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "freeway")
         
         # Map lane index to car sprite name
         car_sprite_names = [

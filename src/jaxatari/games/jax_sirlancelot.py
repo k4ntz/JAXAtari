@@ -2704,7 +2704,7 @@ class SirLancelotRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "sir_lancelot")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "sir_lancelot")
         
         preprocessed_assets = self._load_and_preprocess_assets(sprite_path)
         final_asset_config = list(self.consts.ASSET_CONFIG)

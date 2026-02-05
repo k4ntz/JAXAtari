@@ -1243,7 +1243,7 @@ class VideoCheckersRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Define sprite path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocheckers"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videocheckers")
         
         # 3. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

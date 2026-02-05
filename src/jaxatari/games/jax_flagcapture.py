@@ -620,8 +620,7 @@ class FlagCaptureRenderer(JAXGameRenderer):
 
     def _load_sprites(self):
         """Defines the asset manifest for FlagCapture and loads them using the new utility."""
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sprite_base = os.path.join(MODULE_DIR, "sprites/flagcapture")
+        sprite_base = os.path.join(render_utils.get_base_sprite_dir(), "flagcapture")
 
         # Player states: player_0.npy (Normal) to player_18.npy (19 total)
         player_files = [f"player_states/player_{i}.npy" for i in range(19)]

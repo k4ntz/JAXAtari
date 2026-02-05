@@ -1393,7 +1393,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
     def __init__(self, consts: NameThisGameConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or NameThisGameConstants()
         super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/namethisgame"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "namethisgame")
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(

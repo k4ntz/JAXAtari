@@ -764,7 +764,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
-            "enemies": spaces.Box(low=0, high=160, shape=(8, 4), dtype=jnp.int32),
+            "enemies": spaces.Box(low=-5, high=160, shape=(8, 4), dtype=jnp.int32),
             "collectibles": spaces.Box(low=0, high=160, shape=(8, 4), dtype=jnp.int32),
         })
 
@@ -812,7 +812,7 @@ class AsterixRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Asset base path
-        self._sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/asterix")
+        self._sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "asterix")
 
         # Load all assets via declarative manifest
         final_asset_config = list(self.consts.ASSET_CONFIG)

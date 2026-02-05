@@ -2378,69 +2378,69 @@ class AlienRenderer(JAXGameRenderer):
         """
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
         #background sprites
-        bg = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/bg/map_sprite.npy")), (1, 0, 2))
-        bg_bs = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/bg/bonus_map_sprite.npy")), (1, 0, 2))
+        bg = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/bg/map_sprite.npy")), (1, 0, 2))
+        bg_bs = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/bg/bonus_map_sprite.npy")), (1, 0, 2))
         
         #player sprites
-        pl_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player1.npy")), (1, 0, 2))
-        pl_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player2.npy")), (1, 0, 2))
-        pl_f3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player3.npy")), (1, 0, 2))
+        pl_f1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_animation/player1.npy")), (1, 0, 2))
+        pl_f2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_animation/player2.npy")), (1, 0, 2))
+        pl_f3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_animation/player3.npy")), (1, 0, 2))
         
         #player death sprites
-        pl_d1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_1_sprite.npy")), (1, 0, 2))
-        pl_d2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_2_sprite.npy")), (1, 0, 2))
-        pl_d3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_3_sprite.npy")), (1, 0, 2))
-        pl_d4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_4_sprite.npy")), (1, 0, 2))
+        pl_d1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_death_animation/player_death_1_sprite.npy")), (1, 0, 2))
+        pl_d2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_death_animation/player_death_2_sprite.npy")), (1, 0, 2))
+        pl_d3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_death_animation/player_death_3_sprite.npy")), (1, 0, 2))
+        pl_d4 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_death_animation/player_death_4_sprite.npy")), (1, 0, 2))
         
         #player teleport sprites
-        pl_t1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport1.npy")), (1, 0, 2))
-        pl_t2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport2.npy")), (1, 0, 2))
-        pl_t3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport3.npy")), (1, 0, 2))
-        pl_t4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport4.npy")), (1, 0, 2))
+        pl_t1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_teleport_animation/teleport1.npy")), (1, 0, 2))
+        pl_t2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_teleport_animation/teleport2.npy")), (1, 0, 2))
+        pl_t3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_teleport_animation/teleport3.npy")), (1, 0, 2))
+        pl_t4 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/player_teleport_animation/teleport4.npy")), (1, 0, 2))
         
         #items
-        ei_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/evil_item_1.npy")), (1, 0, 2))
-        ei_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/evil_item_2.npy")), (1, 0, 2))
-        pulsar = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/pulsar.npy")), (1, 0, 2))
-        rocket = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/rocket.npy")), (1, 0, 2))
-        saturn = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/saturn.npy")), (1, 0, 2))
-        starship = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/starship.npy")), (1, 0, 2))
-        pi = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/pi.npy")), (1, 0, 2))
-        orb = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/orb.npy")), (1, 0, 2))
+        ei_f1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/evil_item_1.npy")), (1, 0, 2))
+        ei_f2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/evil_item_2.npy")), (1, 0, 2))
+        pulsar = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/pulsar.npy")), (1, 0, 2))
+        rocket = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/rocket.npy")), (1, 0, 2))
+        saturn = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/saturn.npy")), (1, 0, 2))
+        starship = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/starship.npy")), (1, 0, 2))
+        pi = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/pi.npy")), (1, 0, 2))
+        orb = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/items/orb.npy")), (1, 0, 2))
         
         #enemy sprite
-        e_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk1.npy")), (1, 0, 2))
-        e_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk2.npy")), (1, 0, 2))
-        e_f3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk3.npy")), (1, 0, 2))
+        e_f1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_animation/enemy_walk1.npy")), (1, 0, 2))
+        e_f2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_animation/enemy_walk2.npy")), (1, 0, 2))
+        e_f3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_animation/enemy_walk3.npy")), (1, 0, 2))
         
         #enemy death sprites
-        e_d1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death1.npy")), (1, 0, 2))
-        e_d2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death2.npy")), (1, 0, 2))
-        e_d3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death3.npy")), (1, 0, 2))
-        e_d4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death4.npy")), (1, 0, 2))
+        e_d1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/alien_death_animation/alien_death1.npy")), (1, 0, 2))
+        e_d2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/alien_death_animation/alien_death2.npy")), (1, 0, 2))
+        e_d3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/alien_death_animation/alien_death3.npy")), (1, 0, 2))
+        e_d4 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/alien_death_animation/alien_death4.npy")), (1, 0, 2))
 
         #enemy teleport sprites
-        e_t1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/1.npy")), (1, 0, 2))
-        e_t2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/2.npy")), (1, 0, 2))
-        e_t3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/3.npy")), (1, 0, 2))
-        e_t4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/4.npy")), (1, 0, 2))
+        e_t1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_teleport_animation/1.npy")), (1, 0, 2))
+        e_t2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_teleport_animation/2.npy")), (1, 0, 2))
+        e_t3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_teleport_animation/3.npy")), (1, 0, 2))
+        e_t4 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/enemy_teleport_animation/4.npy")), (1, 0, 2))
         
-        digit_none = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/none.npy")), (1, 0, 2))
-        digit_0 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/0.npy")), (1, 0, 2))
-        digit_1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/1.npy")), (1, 0, 2))
-        digit_2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/2.npy")), (1, 0, 2))
-        digit_3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/3.npy")), (1, 0, 2))
-        digit_4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/4.npy")), (1, 0, 2))
-        digit_5 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/5.npy")), (1, 0, 2))
-        digit_6 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/6.npy")), (1, 0, 2))
-        digit_7 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/7.npy")), (1, 0, 2))
-        digit_8 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/8.npy")), (1, 0, 2))
-        digit_9 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/9.npy")), (1, 0, 2))
+        digit_none = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/none.npy")), (1, 0, 2))
+        digit_0 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/0.npy")), (1, 0, 2))
+        digit_1 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/1.npy")), (1, 0, 2))
+        digit_2 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/2.npy")), (1, 0, 2))
+        digit_3 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/3.npy")), (1, 0, 2))
+        digit_4 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/4.npy")), (1, 0, 2))
+        digit_5 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/5.npy")), (1, 0, 2))
+        digit_6 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/6.npy")), (1, 0, 2))
+        digit_7 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/7.npy")), (1, 0, 2))
+        digit_8 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/8.npy")), (1, 0, 2))
+        digit_9 = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/digits/9.npy")), (1, 0, 2))
         
         
         #egg sprites
-        egg = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/egg/egg.npy")), (1, 0, 2))
-        egg_h = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/egg/half_egg.npy")), (1, 0, 2))
+        egg = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/egg/egg.npy")), (1, 0, 2))
+        egg_h = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/egg/half_egg.npy")), (1, 0, 2))
 
 
         # Pad sprite arrays to have matching shapes
@@ -2543,10 +2543,10 @@ class AlienRenderer(JAXGameRenderer):
             ]
         )
         #flame sprite
-        FLAME_SPRITE = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/flame/flame_sprite.npy")), (1, 0, 2))
+        FLAME_SPRITE = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/flame/flame_sprite.npy")), (1, 0, 2))
         
         #life sprite
-        LIFES = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/life/life_sprite.npy")), (1, 0, 2))
+        LIFES = jnp.transpose(jr.loadFrame(os.path.join(render_utils.get_base_sprite_dir(), "alien/life/life_sprite.npy")), (1, 0, 2))
         
         #digit sprites
         DIGITS = jnp.stack([digit_none, digit_0, digit_1, digit_2, digit_3, digit_4, digit_5, digit_6, digit_7, digit_8, digit_9])

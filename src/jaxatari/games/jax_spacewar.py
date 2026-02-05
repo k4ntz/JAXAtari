@@ -880,7 +880,7 @@ class SpaceWarRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/spacewar"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "spacewar")
         
         # 3. Use asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

@@ -2732,7 +2732,7 @@ class SeaquestRenderer(JAXGameRenderer):
         for name, data in procedural_sprites.items():
             final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/seaquest"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "seaquest")
 
         # 4. Load all assets, create palette, and generate ID masks
         (

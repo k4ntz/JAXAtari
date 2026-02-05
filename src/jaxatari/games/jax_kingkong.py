@@ -2226,7 +2226,7 @@ class KingKongRenderer(JAXGameRenderer):
 	def __init__(self, consts: KingKongConstants = None, config: render_utils.RendererConfig = None):
 		self.consts = consts or KingKongConstants()
 		super().__init__(self.consts)
-		self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kingkong"
+		self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "kingkong")
 		
 		# Use injected config if provided, else default
 		if config is None:

@@ -655,7 +655,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_dying=state.player_dying.astype(jnp.bool_),
             player_death_timer=state.player_death_timer.astype(jnp.int32),
         )
-        return state, 0, False
+        return state, 0.0, False
 
     def bat_step(self, state):
         bat_step_size = 0.5
@@ -770,7 +770,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             bat_y_cooldown=new_y_cooldown.astype(jnp.int32)
         )
 
-        return state, jnp.where(any_valid_hit, 20, 0.0), any_valid_hit
+        return state, jnp.where(any_valid_hit, 20.0, 0.0), any_valid_hit
 
     def boss_step(self, state):
         step_size = 0.05
@@ -1282,7 +1282,7 @@ class PhoenixRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # 2. Define sprite path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/phoenix"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "phoenix")
         
         # 3. Use asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)

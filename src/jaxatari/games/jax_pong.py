@@ -622,7 +622,7 @@ class PongRenderer(JAXGameRenderer):
         final_asset_config.append({'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom})
 
         # 4. Bake assets once
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/pong"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "pong")
         (
             self.PALETTE,
             self.SHAPE_MASKS,

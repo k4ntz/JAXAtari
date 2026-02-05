@@ -2141,7 +2141,7 @@ class KangarooRenderer(JAXGameRenderer):
             
     def _load_sprites(self):
         """Defines the asset manifest for Kangaroo and loads them via the utility function."""
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kangaroo"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "kangaroo")
 
         # 2. Make one call to the utility function. Done.
         return self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)

@@ -18,10 +18,10 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _load_collision_masks():
     """Helper to load WALL and LIGHT masks for collision detection."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = render_utils.get_base_sprite_dir()
     jr_temp = render_utils.JaxRenderingUtils(render_utils.RendererConfig())
-    wall = jr_temp.loadFrame(os.path.join(base_dir, "sprites/hauntedhouse/Wall.npy"))
-    light = jr_temp.loadFrame(os.path.join(base_dir, "sprites/hauntedhouse/SpriteLight1.npy"))
+    wall = jr_temp.loadFrame(os.path.join(base_dir, "hauntedhouse/Wall.npy"))
+    light = jr_temp.loadFrame(os.path.join(base_dir, "hauntedhouse/SpriteLight1.npy"))
     WALL_COLOR_BLUE = jnp.array([24, 26, 167, 255], dtype=jnp.uint8)
     LIGHT_COLOR = jnp.array([198, 108, 58, 255], dtype=jnp.uint8)
     wall_mask = jnp.any(wall == WALL_COLOR_BLUE, axis=-1)
@@ -1379,7 +1379,7 @@ class HauntedHouseRenderer(JAXGameRenderer):
     def __init__(self, consts: HauntedHouseConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HauntedHouseConstants()
         super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/hauntedhouse"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "hauntedhouse")
         
         # Use injected config if provided, else default
         if config is None:

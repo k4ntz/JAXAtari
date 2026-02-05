@@ -4238,7 +4238,7 @@ class VideoPinballRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define sprite path
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videopinball"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videopinball")
         
         # 3. Use asset config from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
@@ -4322,7 +4322,7 @@ class VideoPinballRenderer(JAXGameRenderer):
         # FLIP_OFFSETS only stores the first offset for groups, so we need to compute
         # per-sprite offsets from the ORIGINAL sprite dimensions (before padding)
         # Shape masks are already padded, so we need to load the original sprites
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videopinball"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videopinball")
         plunger_files = [f"Launcher{i}.npy" for i in range(19)]
         plunger_files[5] = "Launcher4.npy"  # Fix: Match original code (Launcher5 uses Launcher4 sprite)
         plunger_paths = [os.path.join(sprite_path, f) for f in plunger_files]

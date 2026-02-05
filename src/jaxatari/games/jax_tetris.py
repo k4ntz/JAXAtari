@@ -637,7 +637,7 @@ class TetrisRenderer(JAXGameRenderer):
         # 2. Create procedural assets using modded constants
         # Procedurally generate 1x1 pixel sprites for each of the 22 row colors.
         # This ensures they are all included in the final color palette.
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "tetris")
         for i in range(22):
             # The file is loaded here to get the color, then converted to a procedural sprite.
             color_rgba = self.jr.loadFrame(
@@ -669,7 +669,7 @@ class TetrisRenderer(JAXGameRenderer):
         for i in range(22):
             # Load the color, convert to a tuple, and look up its ID in the generated map.
             color_rgba = self.jr.loadFrame(
-                f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tetris/height_colors/h_{i}.npy"
+                f"{os.path.join(render_utils.get_base_sprite_dir(), 'tetris')}/height_colors/h_{i}.npy"
             )[0, 0]
             rgb_tuple = tuple(np.array(color_rgba[:3]))
             color_ids.append(self.COLOR_TO_ID[rgb_tuple])
