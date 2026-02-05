@@ -50,7 +50,8 @@ class MultiRewardWrapper(JaxatariWrapper):
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def render(self, state: RewardWrapperState) -> chex.Array:
-        return self._env.render(state.env_state)
+        unpacked_state = jax.tree_util.tree_leaves(state, is_leaf=lambda x: not (hasattr(x, "env_state") or hasattr(x, "atari_state")))[0]
+        return self._env.render(unpacked_state)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     # def _get_all_rewards(self, previous_state: EnvState, state: EnvState) -> chex.Array:

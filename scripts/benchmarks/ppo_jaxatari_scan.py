@@ -21,7 +21,7 @@ import optax
 import tyro
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 import jaxatari
 from jaxatari.wrappers import MultiRewardWrapper, NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
@@ -117,18 +117,40 @@ class Args:
 class RewardVariables:
     highest_y: jnp.array
 
-@jax.jit
-def encourage_up_kangaroo(previous_state, state, reward_vars: RewardVariables):
-    """Encourage the kangaroo to go up by rewarding increases in the y position."""
-    reward = jnp.where(state.player.y > reward_vars.highest_y, 1, 0)
-    reward_vars = reward_vars.replace(highest_y=jnp.maximum(state.player.y, reward_vars.highest_y))
-    return reward, reward_vars
+# @jax.jit
+# def encourage_up_kangaroo(previous_state, state, reward_vars: RewardVariables):
+#     """Encourage the kangaroo to go up by rewarding increases in the y position."""
+#     state = jax.tree_util.tree_leaves(state, is_leaf=lambda x: not (hasattr(x, "atari_state") or hasattr(x, "env_state")))[0]
+#     previous_state = jax.tree_util.tree_leaves(previous_state, is_leaf=lambda x: not (hasattr(x, "atari_state") or hasattr(x, "env_state")))[0]
+#     orig_reward = state.score - previous_state.score
+#     higher_y_score = jnp.where(state.player.y < reward_vars.highest_y, 1, 0)
+#     reward = jnp.clip(orig_reward, -1, 1) + 10 * higher_y_score
+#     reward_vars = reward_vars.replace(highest_y=jnp.minimum(state.player.y, reward_vars.highest_y))
+#     return reward, reward_vars
 
+@jax.jit
+def move_towards_ladder_kangaroo(previous_state, state, reward_vars: RewardVariables):
+    """Encourage the kangaroo to move towards the ladder by rewarding decreases in the x distance to the ladder."""
+    state = jax.tree_util.tree_leaves(state, is_leaf=lambda x: not (hasattr(x, "atari_state") or hasattr(x, "env_state")))[0]
+    previous_state = jax.tree_util.tree_leaves(previous_state, is_leaf=lambda x: not (hasattr(x, "atari_state") or hasattr(x, "env_state")))[0]
+    # get closest ladder (based on y pos)
+    y_distances_to_ladders = jnp.abs(state.player.y - state.level.ladder_positions[:, 1])
+    closest_ladder_idx = jnp.argmin(y_distances_to_ladders)
+
+    # reward going closer on x axis to the closest ladder
+    reward = jnp.abs(previous_state.player.x - state.level.ladder_positions[closest_ladder_idx, 0]) - jnp.abs(state.player.x - state.level.ladder_positions[closest_ladder_idx, 0])
+
+    # also reward going up
+    reward += jnp.where(state.player.y < reward_vars.highest_y, 1, 0)
+    reward_vars = reward_vars.replace(highest_y=jnp.minimum(state.player.y, reward_vars.highest_y))
+    return reward, reward_vars
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
     def thunk():
         env = jaxatari.make(env_id, mods_config=mods)
-        env = MultiRewardWrapper(env, [encourage_up_kangaroo], [RewardVariables(highest_y=-1.0)], use_as_main=True)
+        if env_id == "kangaroo" and not eval:
+            print("Applying kangaroo custom reward function.")
+            env = MultiRewardWrapper(env, [move_towards_ladder_kangaroo], [RewardVariables(highest_y=500.0)], use_as_main=True)
         env = AtariWrapper(
                 env,
                 episodic_life=not eval, # only active during training 
@@ -270,17 +292,22 @@ if __name__ == "__main__":
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            sync_tensorboard=True,
+            # sync_tensorboard=True,
             config=vars(args),
             name=run_name,
-            monitor_gym=True,
+            # monitor_gym=True,
             save_code=True,
         )
-    writer = SummaryWriter(f"runs/{run_name}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-    )
+        # create directory
+        if not os.path.exists(f"runs/{run_name}"):
+            os.makedirs(f"runs/{run_name}")
+        else:
+            print(f"Warning: run name {run_name} already exists!") 
+    # writer = SummaryWriter(f"runs/{run_name}")
+    # writer.add_text(
+    #     "hyperparameters",
+    #     "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+    # )
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
@@ -503,11 +530,12 @@ if __name__ == "__main__":
             model_path,
             partial(make_env, mods=list(args.mods), pixel_based=args.pixel_based, eval=True),
             args.env_id,
-            eval_episodes=10,
+            eval_episodes=5,
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic) if args.pixel_based else (MLP_Network, Actor, Critic)
         )
-        writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step) 
+        # writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step)
+        wandb.log({"eval/episodic_return": np.mean(jax.device_get(episodic_returns))}, step=global_step)
 
         if args.capture_video and renderer is not None: 
             frames = jax.vmap(renderer.render)(env_states)
@@ -556,7 +584,7 @@ if __name__ == "__main__":
     for iteration in range(1, args.num_iterations + 1):
         rtpt.step()
         if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
-           eval_and_vid(iteration, global_step) 
+            eval_and_vid(iteration, global_step) 
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state = rollout(
@@ -570,27 +598,40 @@ if __name__ == "__main__":
             key,
         )
         avg_episodic_return = np.mean(jax.device_get(env_state.returned_episode_returns))
-        # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
+        print(f"global_step={global_step}/{args.total_timesteps}, avg_episodic_return={avg_episodic_return}, iteration={iteration}/{args.num_iterations}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-        writer.add_scalar(
-            "charts/avg_episodic_length", np.mean(jax.device_get(env_state.returned_episode_lengths)), global_step
-        )
-        writer.add_scalar("charts/learning_rate", agent_state.opt_state[1].hyperparams["learning_rate"].item(), global_step)
-        writer.add_scalar("losses/value_loss", v_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl[-1, -1].item(), global_step)
-        writer.add_scalar("losses/loss", loss[-1, -1].item(), global_step)
-        # print("SPS:", int(global_step / (time.time() - start_time)))
-        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        writer.add_scalar(
-            "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)), global_step
-        )
-        writer.add_scalar(
-            "charts/time", time.time() - start_time, global_step
-        )
+        # writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
+        # writer.add_scalar(
+        #     "charts/avg_episodic_length", np.mean(jax.device_get(env_state.returned_episode_lengths)), global_step
+        # )
+        # writer.add_scalar("charts/learning_rate", agent_state.opt_state[1].hyperparams["learning_rate"].item(), global_step)
+        # writer.add_scalar("losses/value_loss", v_loss[-1, -1].item(), global_step)
+        # writer.add_scalar("losses/policy_loss", pg_loss[-1, -1].item(), global_step)
+        # writer.add_scalar("losses/entropy", entropy_loss[-1, -1].item(), global_step)
+        # writer.add_scalar("losses/approx_kl", approx_kl[-1, -1].item(), global_step)
+        # writer.add_scalar("losses/loss", loss[-1, -1].item(), global_step)
+        # # print("SPS:", int(global_step / (time.time() - start_time)))
+        # writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        # writer.add_scalar(
+        #     "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)), global_step
+        # )
+        # writer.add_scalar(
+        #     "charts/time", time.time() - start_time, global_step
+        # )
+        wandb.log({
+            "charts/avg_episodic_return": avg_episodic_return,
+            "charts/avg_episodic_length": np.mean(jax.device_get(env_state.returned_episode_lengths)),
+            "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
+            "losses/value_loss": v_loss[-1, -1].item(),
+            "losses/policy_loss": pg_loss[-1, -1].item(),
+            "losses/entropy": entropy_loss[-1, -1].item(),
+            "losses/approx_kl": approx_kl[-1, -1].item(),
+            "losses/loss": loss[-1, -1].item(),
+            "charts/SPS": int(global_step / (time.time() - start_time)),
+            "charts/SPS_update": int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)),
+            "charts/time": time.time() - start_time,
+        }, step=global_step)
     end_time = time.time()
     print("Training done.")
     print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
@@ -605,4 +646,4 @@ if __name__ == "__main__":
         #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
         #     push_to_hub(args, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
 
-    writer.close()
+    # writer.close()
