@@ -7,6 +7,8 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import apply_modifications
 from jaxatari.wrappers import JaxatariWrapper
 
+from . import check_ownership
+
 
 
 # Map of game names to their module paths
@@ -99,6 +101,8 @@ def make(game_name: str,
     Returns:
         An instance of the specified game environment.
     """
+    check_ownership()  # Ensure ownership confirmed
+
     if game_name not in GAME_MODULES:
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"

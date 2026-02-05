@@ -11,7 +11,7 @@ dependencies = [
     "flax>=0.10.6",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-    "jax[cuda12]",
+    "jax",
     "ml-dtypes",
     "numpy",
     "opt-einsum>=3.4.0",
@@ -23,6 +23,9 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+install-sprites = "jaxatari.install_sprites:download_and_extract"
 
 [project.optional-dependencies]
 dev = [
@@ -39,6 +42,7 @@ gh_ci = [
   "pytest-xdist",
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
+<<<<<<< HEAD
 ]
 training = [
   "tyro",
@@ -47,3 +51,6 @@ training = [
   "rtpt>=0.0.4",
   "wandb[media]>=0.24.0",
 ]
+=======
+]
+>>>>>>> temp

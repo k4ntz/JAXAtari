@@ -6,6 +6,7 @@ from functools import partial
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
+from platformdirs import user_data_dir
 
 class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""
@@ -185,7 +186,8 @@ class JaxRenderingUtils:
         Returns:
             JAX array of shape (Height, Width, 4).
         """
-        frame = jnp.load(fileName)
+        base_path = os.path.join(Path(user_data_dir("jaxatari")), fileName)
+        frame = jnp.load(base_path)
         if frame.ndim != 3:
             raise ValueError(
                 f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."
@@ -221,9 +223,11 @@ class JaxRenderingUtils:
         """
         digits = []
         max_height, max_width = 0, 0
+        # base_path = Path(user_data_dir("jaxatari"))
 
         # Load digits assuming loadFrame returns (H, W, C)
         for i in range(num_chars):
+            # path = os.path.join(base_path, path_pattern.format(i))
             digit = self.loadFrame(path_pattern.format(i), transpose=False) # Ensure HWC
             max_height = max(max_height, digit.shape[0]) # Axis 0 is Height
             max_width = max(max_width, digit.shape[1])   # Axis 1 is Width
@@ -579,6 +583,7 @@ class JaxRenderingUtils:
         raw_sprites_dict = {} 
         FLIP_OFFSETS = {}
         background_rgba = None
+        # base_path = os.path.join(Path(user_data_dir("jaxatari")), base_sub_path)
 
         # 1. Load all assets from the configuration manifest
         for asset in asset_config:
@@ -587,6 +592,7 @@ class JaxRenderingUtils:
             # --- Background ---
             if asset_type == 'background':
                 if 'file' in asset:
+                    # background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
                     background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
                 elif 'data' in asset:
                     background_rgba = asset['data']
@@ -658,6 +664,19 @@ class JaxRenderingUtils:
             max_color_id = max(COLOR_TO_ID.values())
             self.TRANSPARENT_ID = max_color_id + 1
         # If no colors (shouldn't happen), keep the default TRANSPARENT_ID
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
 
         # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
         # Use black (0,0,0) as the default color for transparent pixels
