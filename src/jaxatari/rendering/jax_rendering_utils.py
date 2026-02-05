@@ -1,10 +1,12 @@
 import os
+from pathlib import Path
 import jax.numpy as jnp
 import jax
 from functools import partial
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
+from platformdirs import user_data_dir
 
 class RendererConfig(NamedTuple):
     """Configuration for the rendering pipeline."""
@@ -183,7 +185,8 @@ class JaxRenderingUtils:
         Returns:
             JAX array of shape (Height, Width, 4).
         """
-        frame = jnp.load(fileName)
+        base_path = os.path.join(Path(user_data_dir("jaxatari")), fileName)
+        frame = jnp.load(base_path)
         if frame.ndim != 3:
             raise ValueError(
                 f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."
@@ -219,9 +222,11 @@ class JaxRenderingUtils:
         """
         digits = []
         max_height, max_width = 0, 0
+        # base_path = Path(user_data_dir("jaxatari"))
 
         # Load digits assuming loadFrame returns (H, W, C)
         for i in range(num_chars):
+            # path = os.path.join(base_path, path_pattern.format(i))
             digit = self.loadFrame(path_pattern.format(i), transpose=False) # Ensure HWC
             max_height = max(max_height, digit.shape[0]) # Axis 0 is Height
             max_width = max(max_width, digit.shape[1])   # Axis 1 is Width
@@ -551,6 +556,7 @@ class JaxRenderingUtils:
         raw_sprites_dict = {} 
         FLIP_OFFSETS = {}
         background_rgba = None
+        # base_path = os.path.join(Path(user_data_dir("jaxatari")), base_sub_path)
 
         # 1. Load all assets from the configuration manifest
         for asset in asset_config:
@@ -559,6 +565,7 @@ class JaxRenderingUtils:
             # --- Background ---
             if asset_type == 'background':
                 if 'file' in asset:
+                    # background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
                     background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
                 elif 'data' in asset:
                     background_rgba = asset['data']
