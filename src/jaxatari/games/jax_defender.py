@@ -48,7 +48,7 @@ class DefenderConstants(NamedTuple):
     SCANNER_SCREEN_X: int = 48
 
     # Drawables
-    CITY_WIDTH: int = 80
+    CITY_WIDTH: int = 60
     CITY_HEIGHT: int = 13
     SCORE_SCREEN_Y: int = 177
     SCORE_SCREEN_X: int = 57
@@ -85,10 +85,10 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_INIT_GAME_X: float = 200
     SPACE_SHIP_INIT_GAME_Y: float = 80
     SPACE_SHIP_INIT_FACE_RIGHT: bool = True
-    SPACE_SHIP_ACCELERATION: float = 0.15
+    SPACE_SHIP_ACCELERATION: float = 0.07
     SPACE_SHIP_BREAK: float = 0.1
-    SPACE_SHIP_MAX_SPEED: float = 4.0
-    SPACE_SHIP_EXHAUST_WIDTH: int = 12
+    SPACE_SHIP_MAX_SPEED: float = 2.5
+    SPACE_SHIP_EXHAUST_WIDTH: int = 7
     SPACE_SHIP_EXHAUST_FLICKER_N_FRAMES: int = 5
     SPACE_SHIP_INIT_LIVES: int = 3
     SPACE_SHIP_INIT_BOMBS: int = 3
@@ -107,7 +107,7 @@ class DefenderConstants(NamedTuple):
     # Enemy
     ENEMY_WIDTH: int = 13
     ENEMY_HEIGHT: int = 7
-    ENEMY_SPEED: float = 0.24
+    ENEMY_SPEED: float = 0.12
     SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
 
     ENEMY_MAX_IN_GAME: int = 30
@@ -178,8 +178,8 @@ class DefenderConstants(NamedTuple):
     DEAD_RED: int = 2
 
     # Humans
-    HUMAN_WIDTH: int = 3
-    HUMAN_HEIGHT: int = 3
+    HUMAN_WIDTH: int = 2
+    HUMAN_HEIGHT: int = 4
     HUMAN_FALLING_SPEED: float = 0.5
     HUMAN_DEADLY_FALL_HEIGHT: float = 80.0
     HUMAN_INIT_GAME_Y: int = WORLD_HEIGHT - HUMAN_HEIGHT
@@ -215,7 +215,7 @@ class DefenderConstants(NamedTuple):
     # Space ship laser
     # Width and height are for each laser
     # as the final laser is made out of 2
-    LASER_WIDTH: int = 20
+    LASER_WIDTH: int = 15
     LASER_HEIGHT: int = 1
     LASER_2ND_OFFSET: int = 7
     LASER_FINAL_WIDTH: int = LASER_WIDTH + LASER_2ND_OFFSET
@@ -397,8 +397,6 @@ class DefenderRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["baiter"],
         ]
 
-        lander_animatin_before_pad = self.SHAPE_MASKS["lander_pickup"]
-
         def _create_padded_masks(self, enemy_mask_before_pad):
             """Create padded enemy masks with uniform dimensions."""
             max_h = max(m.shape[0] for m in enemy_mask_before_pad)
@@ -421,26 +419,24 @@ class DefenderRenderer(JAXGameRenderer):
         self.ENEMY_MASKS = _create_padded_masks(self, enemy_mask_before_pad)
         self.ENEMY_MASK_SIZE = self.ENEMY_MASKS[0].shape
 
-        self.LANDER_MASKS = _create_padded_masks(self, lander_animatin_before_pad)
-        self.LANDER_MASK_SIZE = self.LANDER_MASKS[0].shape
-
+        d_h, d_w = self.SHAPE_MASKS["death_yellow"].shape
         self.DEATH_MASKS = jnp.array(
             [
                 jnp.pad(
                     self.SHAPE_MASKS["death_yellow"],
-                    ((0, 10), (0, 0)),
+                    ((0, self.ENEMY_MASK_SIZE[0] - d_h), (0, self.ENEMY_MASK_SIZE[1] - d_w)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
                 jnp.pad(
                     self.SHAPE_MASKS["death_blue"],
-                    ((0, 10), (0, 0)),
+                    ((0, self.ENEMY_MASK_SIZE[0] - d_h), (0, self.ENEMY_MASK_SIZE[1] - d_w)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
                 jnp.pad(
                     self.SHAPE_MASKS["death_red"],
-                    ((0, 10), (0, 0)),
+                    ((0, self.ENEMY_MASK_SIZE[0] - d_h), (0, self.ENEMY_MASK_SIZE[1] - d_w)),
                     mode="constant",
                     constant_values=self.jr.TRANSPARENT_ID,
                 ),
@@ -497,25 +493,7 @@ class DefenderRenderer(JAXGameRenderer):
             {"name": "baiter", "type": "single", "file": "baiter.npy"},
             {"name": "bomber", "type": "single", "file": "bomber.npy"},
             {"name": "lander", "type": "single", "file": "lander.npy"},
-            {
-                "name": "lander_pickup",
-                "type": "group",
-                "files": [
-                    "lander_0.npy",
-                    "lander_1.npy",
-                    "lander_2.npy",
-                    "lander_3.npy",
-                    "lander_4.npy",
-                    "lander_5.npy",
-                    "lander_6.npy",
-                    "lander_7.npy",
-                    "lander_8.npy",
-                    "lander_9.npy",
-                    "lander_10.npy",
-                    "lander_11.npy",
-                    "lander_12.npy",
-                ],
-            },
+            {"name": "lander_abduct", "type": "single", "file": "lander_abduct.npy"},
             {"name": "death_yellow", "type": "single", "file": "death_yellow.npy"},
             {"name": "death_blue", "type": "single", "file": "death_blue.npy"},
             {"name": "death_red", "type": "single", "file": "death_red.npy"},
@@ -607,9 +585,7 @@ class DefenderRenderer(JAXGameRenderer):
                 return r
 
             def render_lander(r):
-                mask_index = jnp.clip(jnp.floor_divide(enemy[4].astype(jnp.int32), 10), 0, 13)
-
-                pickup_mask = self.LANDER_MASKS[mask_index + 1]
+                pickup_mask = self.SHAPE_MASKS["lander_abduct"]
                 normal_mask = self.ENEMY_MASKS[enemy_type]
 
                 r = jax.lax.cond(
@@ -785,7 +761,9 @@ class DefenderRenderer(JAXGameRenderer):
             city_mask = self.SHAPE_MASKS["city"]
             r = self.jr.render_at_clipped(r, city_screen_x, city_screen_y, city_mask)
             r = self.jr.render_at_clipped(r, city_screen_x + self.consts.CITY_WIDTH, city_screen_y, city_mask)
+            r = self.jr.render_at_clipped(r, city_screen_x + 2 * self.consts.CITY_WIDTH, city_screen_y, city_mask)
             r = self.jr.render_at_clipped(r, city_screen_x - self.consts.CITY_WIDTH, city_screen_y, city_mask)
+            r = self.jr.render_at_clipped(r, city_screen_x - 2 * self.consts.CITY_WIDTH, city_screen_y, city_mask)
             return r
 
         raster = render_city(raster)
@@ -1178,18 +1156,17 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
     def _spawn_enemy_random_pos(self, state: DefenderState, e_type: int) -> DefenderState:
 
-        def fill_sector(index, sector_amounts):
+        def fill_sector(index):
             game_x, _, e_type, _, _ = self._get_enemy(state, index)
             sector = self.dh._which_sector(game_x)
 
             is_alive = jnp.logical_and(e_type != self.consts.INACTIVE, e_type != self.consts.DEAD)
 
-            sector_current = sector_amounts[sector] + jnp.where(is_alive, 1, 0)
-            sector_amounts = sector_amounts.at[sector].set(sector_current)
-            return sector_amounts
+            contribution = jnp.zeros(self.consts.ENEMY_SECTORS)
+            val = jnp.where(is_alive, 1, 0)
+            return contribution.at[sector].set(val)
 
-        sector_amounts = jnp.zeros(self.consts.ENEMY_SECTORS)
-        sector_amounts = jax.lax.fori_loop(0, self.consts.ENEMY_MAX_IN_GAME, fill_sector, sector_amounts)
+        sector_amounts = jnp.sum(jax.vmap(fill_sector)(jnp.arange(self.consts.ENEMY_MAX_IN_GAME)), axis=0)
 
         # Determine at max 2 sectors, 1 is current one and other is left or right overlapping
         overlap_ease = 1  # Allow left and right border to be inside same sector
@@ -1208,7 +1185,6 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
         # Max out both sectors
         sector_amounts = sector_amounts.at[left_border_sector].set(self.consts.ENEMY_MAX_IN_GAME)
-
         sector_amounts = sector_amounts.at[right_border_sector].set(self.consts.ENEMY_MAX_IN_GAME)
 
         smallest_sector = jnp.argmin(sector_amounts)
@@ -1982,7 +1958,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = state._replace(bring_back_human=bring_back_human)
             return state
 
-        def _human_move_switch(index: int, state: DefenderState) -> DefenderState:
+        def _human_move_switch(index, state: DefenderState) -> DefenderState:
             state = jax.lax.switch(
                 jnp.array(state.human_states[index][2], int),
                 [
@@ -1997,12 +1973,12 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
             return state
 
-        state = jax.lax.fori_loop(
-            0,
-            self.consts.HUMAN_MAX_AMOUNT,
-            _human_move_switch,
-            state,
-        )
+        def human_merge(state, states):
+            idx = jnp.arange(self.consts.HUMAN_MAX_AMOUNT)
+            new_humans = states.human_states[idx, idx]
+            return state._replace(human_states=new_humans)
+
+        state = human_merge(state, jax.vmap(_human_move_switch, in_axes=(0, None))(jnp.arange(self.consts.HUMAN_MAX_AMOUNT), state))
 
         return state
 
@@ -2228,7 +2204,15 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = jax.lax.cond(is_falling, lambda: check_human_collision(index, state), lambda: state)
             return state
 
-        state = jax.lax.fori_loop(0, self.consts.HUMAN_MAX_AMOUNT, check_for_falling, state)
+        def merge_states(state, states):
+            idx = jnp.arange(self.consts.HUMAN_MAX_AMOUNT)
+
+            new_humans = states.human_states[idx, idx]
+
+            return state._replace(human_states=new_humans)
+
+        state = merge_states(state, jax.vmap(check_for_falling, in_axes=(0, None))(jnp.arange(self.consts.HUMAN_MAX_AMOUNT), state))
+
         return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
@@ -2281,6 +2265,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = jax.lax.cond(is_active, lambda: collision(index, state), lambda: state)
             return state
 
+        # Vmap here is hard as game over gets called in function, changing whole state
         state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX_IN_GAME, check_for_inactive, state)
         return state
 
