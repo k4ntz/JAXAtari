@@ -13,10 +13,11 @@ TODO
     Bugs:
     1)  [x] Fix type cast warning
     2)  [ ] Fix frightened ghosts death loop in the lower left corner
-    3)  [ ] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up / ghosts one pixel to the right)
+    3)  [ ] Fix frightened ghosts being able to revert
+    4)  [ ] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up / ghosts one pixel to the right)
 
     Optional:
-    a)  [ ] Correct speed
+    a)  [x] Correct speed
     b)  [ ] Pacman death animation
     c)  [ ] Bonus Life at 10000 score
     d)  [ ] Fruit scale and animation
@@ -99,8 +100,8 @@ ENJAILED_DURATION = 120 # in steps
 RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
 
 # FRUITS
-# FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
-FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100], dtype=jnp.uint16)
+FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
+# FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100], dtype=jnp.uint16)
 FRUIT_WANDER_DURATION = jnp.array(20*8, dtype=jnp.uint16) # Chosen randomly for now, should follow a hardcoded path instead
 
 # POSITIONS
@@ -416,9 +417,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 lambda: state.player.action
             )
         )
-        # 3) Compute the next position 
-        new_pos = state.player.position + ACTIONS[new_action]
-        new_pos = new_pos.at[0].set(new_pos[0] % 160)
+        # 3) Compute the next position
+        new_pos = get_new_position(state.player.position, new_action)
         # 4) Update pellets based on the new player position
         (
             pellets,
@@ -538,8 +538,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 skip
             )
 
-            new_position = state.ghosts.positions[ghost_index] + ACTIONS[new_action]
-            new_position = new_position.at[0].set(new_position[0] % 160)
+            new_position = jax.lax.cond(
+                ((state.ghosts.modes[ghost_index] == GhostMode.FRIGHTENED) | (state.ghosts.modes[ghost_index] == GhostMode.BLINKING)) & (state.step_count % 2 == 0),
+                lambda: state.ghosts.positions[ghost_index],
+                lambda: get_new_position(state.ghosts.positions[ghost_index], new_action)
+            )
 
             new_modes       = new_ghost_states[0].at[ghost_index].set(new_mode)
             new_actions     = new_ghost_states[1].at[ghost_index].set(new_action)
@@ -808,11 +811,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
 
     @staticmethod
     def fruit_move(state: PacmanState, key: chex.Array
-                   ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+                   ) -> Tuple[chex.Array, chex.Array]:
         """
         Updates the fruits position, action and timer if one is currently active.
         """
-        # 1) Choose new direction based on last position, action and fruit timer
+        # Choose new direction based on last position, action and fruit timer
         allowed = get_allowed_directions(state.fruit.position, state.fruit.action, state.level.dofmaze)
         n_allowed = jnp.sum(allowed != 0)
         new_dir = jax.lax.cond(
@@ -828,19 +831,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 )
             )
         )
-        # 2) Decrement fruit timer if above zero
-        new_timer = jax.lax.cond(
-            state.fruit.timer > 0,
-            lambda: state.fruit.timer - 1,
-            lambda: state.fruit.timer
-        )
-        # 3) Compute the new position
-        new_pos = jnp.array(state.fruit.position) + ACTIONS[new_dir]
-        new_pos = new_pos.at[0].set(new_pos[0] % 160) # wrap horizontally
+        # Compute the new position
+        new_pos = get_new_position(state.fruit.position, new_dir)
+        # Return new position and direction values
         return (
             jnp.array(new_pos, dtype=jnp.uint8),
-            jnp.array(new_dir, dtype=jnp.uint8),
-            jnp.array(new_timer, dtype=jnp.uint16)
+            jnp.array(new_dir, dtype=jnp.uint8)
         )
 
     @staticmethod
@@ -881,8 +877,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 FRUIT_WANDER_DURATION
             ), 0
         
-        def move_fruit():
-            fruit_position, fruit_action, fruit_timer = JaxPacman.fruit_move(state, key)
+        def step_fruit():
+            fruit_position, fruit_action = jax.lax.cond(
+                state.step_count % 2 == 0,
+                lambda: JaxPacman.fruit_move(state, key),
+                lambda: (state.fruit.position, state.fruit.action)
+            )
+            fruit_timer = jax.lax.cond(
+                state.fruit.timer > 0,
+                lambda: state.fruit.timer - 1,
+                lambda: state.fruit.timer
+            )
             return FruitState(
                 fruit_position,
                 state.fruit.exit,
@@ -904,7 +909,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 lambda: jax.lax.cond(
                     (state.fruit.timer == 0) & (jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit))),
                     remove_fruit,
-                    move_fruit
+                    step_fruit
                 )    
             )
         )
@@ -1456,6 +1461,13 @@ def pathfind(position: chex.Array, direction: chex.Array, target: chex.Array, al
             multi_allowed
         )
     )
+
+
+"""Returns the next position, given the current position and action that is applied this step"""
+def get_new_position(position: chex.Array, action: chex.Array):
+    new_position = position + ACTIONS[action]
+    return new_position.at[0].set(new_position[0] % 160)  # Wrap around horizontally for tunnels
+
 
 
 def get_level_maze(level: chex.Array):
