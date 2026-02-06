@@ -949,7 +949,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             x_range, y_range = jnp.nonzero(state.level.pellets, size=state.level.pellets.size)
             x_offset = jnp.where(x_range < 9, 8, 12)
             x_positions = x_range * 8 + x_offset
-            y_positions = y_range * 12 + 10
+            y_positions = y_range * 12 + 9
 
             dx = jnp.arange(4)[:, None]   # (w, 1)
             dy = jnp.arange(2)[None, :]   # (1, h)
@@ -964,8 +964,8 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                     state.level.power_pellets[idx],
                     lambda: aj.render_at(
                         bg,
-                        (POWER_PELLET_TILES[idx][0] + 1) * MsPacmanMaze.TILE_SCALE,
-                        (POWER_PELLET_TILES[idx][1] + 2) * MsPacmanMaze.TILE_SCALE,
+                        (POWER_PELLET_TILES[idx][0]) * MsPacmanMaze.TILE_SCALE + 4,
+                        (POWER_PELLET_TILES[idx][1]) * MsPacmanMaze.TILE_SCALE + 6,
                         POWER_PELLET_SPRITE),
                     lambda: bg
                 ) 
