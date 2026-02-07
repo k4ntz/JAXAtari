@@ -148,7 +148,7 @@ class DefenderConstants(NamedTuple):
     POD_MAX_AMOUNT: int = 3
     POD_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 3, 3, 3])
     ENEMY_SPAWN_AROUND_MIN_RADIUS: float = 5.0
-    ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 25.0
+    ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 60.0
 
     # Bomber
     BOMBER_Y_SPEED: float = -0.2
@@ -158,8 +158,6 @@ class DefenderConstants(NamedTuple):
     BOMBER_LEVEL_AMOUNT: chex.Array = jnp.array([1, 2, 2, 2, 2])
 
     # Swarmers
-    SWARM_SPAWN_MIN: int = 1
-    SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
     SWARMERS_MAX_SPEED: float = 1.0
     SWARMERS_Y_SPEED: float = 0.8
@@ -1052,12 +1050,6 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = state._replace(enemy_killed=enemy_killed)
             return state
 
-        # state = jax.lax.cond(
-        #     enemy_type < self.consts.SWARMERS,
-        #     lambda: add_killed_enemy(state, enemy_type),
-        #     lambda: state,
-        # )
-
         def lander_death(state: DefenderState) -> DefenderState:
             current_killed = state.enemy_killed[self.consts.LANDER - 1]
 
@@ -1087,21 +1079,19 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             # )
             return state
 
-        # state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
+        def pod_death(state: DefenderState, index: int) -> DefenderState:
+            x, y = self._get_enemy(state, index)[:2]
+            state = self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS)
+            state = self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS)
+            return state
 
-        # def pod_death(state: DefenderState, index: int) -> DefenderState:
-        #     key, subkey = jax.random.split(state.key)
-        #     spawn_amount = jnp.round(jax.random.uniform(subkey, minval=1, maxval=2)).astype(jnp.int32)
-        #     x, y = self._get_enemy(state, index)[:2]
-        #     state = jax.lax.fori_loop(
-        #         0,
-        #         spawn_amount,
-        #         lambda _, state: self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS),
-        #         state,
-        #     )
-        #     return state._replace(key=key)
-
-        # state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
+        state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
+        state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
+        state = jax.lax.cond(
+            enemy_type < self.consts.SWARMERS,
+            lambda: add_killed_enemy(state, enemy_type),
+            lambda: state,
+        )
 
         new_enemy = enemy.at[2].set(new_type)
         new_enemy = new_enemy.at[3].set(color)
@@ -1114,44 +1104,19 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         enemy_state = state.enemy_states.at[index].set(new_enemy)
         return state._replace(enemy_states=enemy_state)
 
-    def _enemies_on_screen(self, state) -> Tuple:
-        # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
+    def _enemies_on_screen(self, state) -> jax.Array:
+        mask = jnp.full(self.consts.ENEMY_MAX_IN_GAME, False)
 
-        indices = jnp.full((self.consts.ENEMY_MAX_ON_SCREEN,), -1)
+        def check_on_screen(i):
+            x, y, _, _, _ = self._get_enemy(state, i)
+            w = self.consts.ENEMY_WIDTH
+            h = self.consts.ENEMY_HEIGHT
+            on_screen = self.dh._is_onscreen_from_game(state, x, y, w, h)
+            return on_screen
 
-        # Returns data = (enemy_states, indices)
-        def add_indices(i, data):
-            enemy_states = data[0]
-            indices = data[1]
-            enemy_count_in_indices = data[2]
+        mask = jax.vmap(check_on_screen)(jnp.arange(self.consts.ENEMY_MAX_IN_GAME))
 
-            enemy = enemy_states[i]
-            x = enemy[0]
-            y = enemy[1]
-            is_active = enemy[2] != self.consts.INACTIVE
-            is_onscreen = jax.lax.cond(
-                is_active,
-                lambda: self.dh._is_onscreen_from_game(state, x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT),
-                lambda: False,
-            )
-
-            # Pass -1 for non on screen enemies, array has to be static size
-            indices = indices.at[enemy_count_in_indices].set(jax.lax.cond(is_onscreen, lambda: i, lambda: -1))
-            enemy_count_in_indices += is_onscreen
-
-            return (enemy_states, indices, enemy_count_in_indices)
-
-        result = jax.lax.fori_loop(
-            0,
-            self.consts.ENEMY_MAX_IN_GAME,
-            add_indices,
-            (state.enemy_states, indices, 0),
-        )
-
-        indices = result[1]
-        max_indice = result[2]
-
-        return (indices, max_indice)
+        return mask
 
     def _spawn_enemy_random_pos(self, state: DefenderState, e_type: int) -> DefenderState:
 
@@ -1305,17 +1270,25 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
     def _shoot_smart_bomb(self, state: DefenderState) -> DefenderState:
         # Get all enemies on screen and delete them
-        enemy_indices, max_indice = self._enemies_on_screen(state)
+        onscreen_mask = self._enemies_on_screen(state)
 
-        def delete_enemy(index, state: DefenderState) -> DefenderState:
-            return self._delete_enemy_index(state, enemy_indices[index])
+        def delete_enemy(i):
+            return jax.lax.cond(onscreen_mask[i], lambda: self._delete_enemy(state, i), lambda: state)
 
-        state = jax.lax.fori_loop(0, max_indice, delete_enemy, state)
+        def merge_states(state, states):
+            idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
+
+            new_enemy = states.enemy_states[idx, idx]
+
+            return state._replace(enemy_states=new_enemy)
+
+        batch_states = jax.vmap(delete_enemy)(jnp.arange(self.consts.ENEMY_MAX_IN_GAME))
+
         smart_bomb_amount = state.smart_bomb_amount - 1
 
         shooting_cooldown = self.consts.SPACE_SHIP_SHOOT_CD
 
-        state = state._replace(smart_bomb_amount=smart_bomb_amount, shooting_cooldown=shooting_cooldown)
+        state = merge_states(state, batch_states)._replace(smart_bomb_amount=smart_bomb_amount, shooting_cooldown=shooting_cooldown)
         return state
 
     def _shoot_laser(self, state: DefenderState) -> DefenderState:
@@ -1950,10 +1923,10 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
     def _bullet_spawn(self, state: DefenderState) -> DefenderState:
         # Spawns a bullet, call only if bullet is inactive
-        enemy_indices, max_indice = self._enemies_on_screen(state)
-
-        # Choose a random enemy
-        chosen_one = enemy_indices[jrandom.randint(state.key, (), 0, max_indice, dtype=jnp.int32)]
+        onscreen_mask = self._enemies_on_screen(state)
+        chosen_one = jnp.argmax(onscreen_mask)
+        # If all are False, check for that
+        chosen_one = jnp.where(onscreen_mask[chosen_one], chosen_one, -1)
 
         def _shoot(s_state: DefenderState):
             ss_onscreen_x, ss_onscreen_y = self.dh._onscreen_pos(s_state, s_state.space_ship_x, s_state.space_ship_y)
@@ -1994,7 +1967,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             )
 
         # Shoot the bullet if an enemy is onscreen
-        return jax.lax.cond(max_indice > 0, lambda: _shoot(state), lambda: state)
+        return jax.lax.cond(chosen_one >= 0, lambda: _shoot(state), lambda: state)
 
     def _bullet_update(self, state: DefenderState) -> DefenderState:
         # Updates a bullet, call only if bullet state active
@@ -2180,6 +2153,8 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
+        game_over = False
+
         def collision(index, state: DefenderState) -> DefenderState:
             e = state.enemy_states[index]
             e_x = e[0]
@@ -2229,8 +2204,24 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = jax.lax.cond(is_active, lambda: collision(index, state), lambda: state)
             return state
 
-        # Vmap here is hard as game over gets called in function, changing whole state
-        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX_IN_GAME, check_for_inactive, state)
+        def merge_states(state, states):
+            idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
+
+            new_enemy = states.enemy_states[idx, idx]
+            new_score = state.score + jnp.sum(states.score[idx] - state.score)
+            killed_l = jnp.sum(states.enemy_killed[idx, 0] - state.enemy_killed[0])
+            killed_p = jnp.sum(states.enemy_killed[idx, 1] - state.enemy_killed[1])
+            killed_b = jnp.sum(states.enemy_killed[idx, 2] - state.enemy_killed[2])
+
+            new_enemy_killed = state.enemy_killed + jnp.asarray([killed_l, killed_p, killed_b])
+
+            new_laser_active = states.laser_active[jnp.argmin(states.laser_active)]
+
+            return state._replace(enemy_states=new_enemy, score=new_score, enemy_killed=new_enemy_killed, laser_active=new_laser_active)
+
+        state = merge_states(state, jax.vmap(check_for_inactive, in_axes=(0, None))(jnp.arange(self.consts.ENEMY_MAX_IN_GAME), state))
+        state = jax.lax.cond(game_over, lambda: self._game_over(state), lambda: state)
+
         return state
 
     def _collision_step(self, state) -> DefenderState:
