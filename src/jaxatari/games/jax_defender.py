@@ -161,7 +161,7 @@ class DefenderConstants(NamedTuple):
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
-    SWARMERS_MAX_SPEED: float = 2.0
+    SWARMERS_MAX_SPEED: float = 1.0
     SWARMERS_Y_SPEED: float = 0.8
 
     # Mutant
@@ -1005,16 +1005,14 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         enemy_state = enemy_state.at[index].set([game_x, game_y, enemy_type, arg1, arg2])
         return state._replace(enemy_states=enemy_state)
 
-    def _delete_enemy(self, state: DefenderState, index) -> DefenderState:
-        is_index = jnp.logical_and(index >= 0, index < self.consts.ENEMY_MAX_IN_GAME)
-        _, _, enemy_type, e_arg1, e_arg2 = self._get_enemy(state, index)
-        enemy_type = enemy_type.astype(int)
-        e_arg1 = e_arg1.astype(int)
-        e_arg2 = e_arg2.astype(int)
+    def _delete_enemy(self, enemy: chex.Array) -> chex.Array:
+        enemy_type = enemy[2].astype(jnp.int32)
+        e_arg1 = enemy[3]
+        e_arg2 = enemy[4]
+
         # When iterating in enemy_step, dead ones go to inactive, only one frame dead for animation
         is_dead = enemy_type == self.consts.DEAD
         new_type = jax.lax.cond(is_dead, lambda: self.consts.INACTIVE, lambda: self.consts.DEAD)
-
         color = jax.lax.switch(
             enemy_type,
             [
@@ -1046,8 +1044,6 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             ],
         )
 
-        state = self._add_score(state, score - 50)
-
         def add_killed_enemy(state: DefenderState, e_type) -> DefenderState:
             enemy_killed = state.enemy_killed
             e_index = e_type - 1
@@ -1056,64 +1052,67 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = state._replace(enemy_killed=enemy_killed)
             return state
 
-        state = jax.lax.cond(
-            enemy_type < self.consts.SWARMERS,
-            lambda: add_killed_enemy(state, enemy_type),
-            lambda: state,
-        )
+        # state = jax.lax.cond(
+        #     enemy_type < self.consts.SWARMERS,
+        #     lambda: add_killed_enemy(state, enemy_type),
+        #     lambda: state,
+        # )
 
         def lander_death(state: DefenderState) -> DefenderState:
             current_killed = state.enemy_killed[self.consts.LANDER - 1]
 
             # Spawn human if lander held one
-            is_holding = e_arg1 == self.consts.LANDER_STATE_ASCEND
-            state = jax.lax.cond(
-                is_holding,
-                lambda: self._set_human_from_lander_falling(state, index),
-                lambda: state,
-            )
+            # is_holding = e_arg1 == self.consts.LANDER_STATE_ASCEND
+            # state = jax.lax.cond(
+            #     is_holding,
+            #     lambda: self._set_human_from_lander_falling(state, index),
+            #     lambda: state,
+            # )
 
             # If its with collision with player, kill the human and give nothing
-            game_over = state.game_state == self.consts.GAME_STATE_GAMEOVER
-            state = jax.lax.cond(
-                game_over,
-                lambda: self._update_human(state, e_arg2, 0.0, 0.0, self.consts.INACTIVE),
-                lambda: state,
-            )
+            # game_over = state.game_state == self.consts.GAME_STATE_GAMEOVER
+            # state = jax.lax.cond(
+            #     game_over,
+            #     lambda: self._update_human(state, e_arg2, 0.0, 0.0, self.consts.INACTIVE),
+            #     lambda: state,
+            # )
 
             # Spawn new landers
-            spawn_more = jnp.less(current_killed, self.consts.LANDER_LEVEL_AMOUNT[state.level])
+            # spawn_more = jnp.less(current_killed, self.consts.LANDER_LEVEL_AMOUNT[state.level])
 
-            state = jax.lax.cond(
-                spawn_more,
-                lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER),
-                lambda: state,
-            )
+            # state = jax.lax.cond(
+            #     spawn_more,
+            #     lambda: self._spawn_enemy_random_pos(state, self.consts.LANDER),
+            #     lambda: state,
+            # )
             return state
 
-        state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
+        # state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
 
-        def pod_death(state: DefenderState, index: int) -> DefenderState:
-            key, subkey = jax.random.split(state.key)
-            spawn_amount = jnp.round(jax.random.uniform(subkey, minval=1, maxval=2)).astype(jnp.int32)
-            x, y = self._get_enemy(state, index)[:2]
-            state = jax.lax.fori_loop(
-                0,
-                spawn_amount,
-                lambda _, state: self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS),
-                state,
-            )
-            return state._replace(key=key)
+        # def pod_death(state: DefenderState, index: int) -> DefenderState:
+        #     key, subkey = jax.random.split(state.key)
+        #     spawn_amount = jnp.round(jax.random.uniform(subkey, minval=1, maxval=2)).astype(jnp.int32)
+        #     x, y = self._get_enemy(state, index)[:2]
+        #     state = jax.lax.fori_loop(
+        #         0,
+        #         spawn_amount,
+        #         lambda _, state: self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS),
+        #         state,
+        #     )
+        #     return state._replace(key=key)
 
-        state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
+        # state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
 
-        state = self._update_enemy(
-            state,
-            index,
-            enemy_type=new_type,
-            arg1=color,
-        )
-        return state
+        new_enemy = enemy.at[2].set(new_type)
+        new_enemy = new_enemy.at[3].set(color)
+        return new_enemy, score
+    
+    def _delete_enemy_index(self, state: DefenderState, index) -> DefenderState:
+        enemy = state.enemy_states[index]
+        new_enemy = self._delete_enemy(enemy)
+        jax.debug.print("Deleted enemy at index {index} with type {type}", index=index, type=enemy[2])
+        enemy_state = state.enemy_states.at[index].set(new_enemy)
+        return state._replace(enemy_states=enemy_state)
 
     def _enemies_on_screen(self, state) -> Tuple:
         # Returns an array of indices corresponding to position in enemy_states, and a max_indice to random under
@@ -1309,7 +1308,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         enemy_indices, max_indice = self._enemies_on_screen(state)
 
         def delete_enemy(index, state: DefenderState) -> DefenderState:
-            return self._delete_enemy(state, enemy_indices[index])
+            return self._delete_enemy_index(state, enemy_indices[index])
 
         state = jax.lax.fori_loop(0, max_indice, delete_enemy, state)
         smart_bomb_amount = state.smart_bomb_amount - 1
@@ -1499,10 +1498,9 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
     def _lander_movement(
         self,
-        enemy_index: int,
+        lander: chex.Array,
         state: DefenderState,
     ) -> chex.Array:
-        lander = state.enemy_states[enemy_index]
         lander_x = lander[0]
         lander_y = lander[1]
         lander_state = lander[3]
@@ -1515,31 +1513,24 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                 human_state[2] == self.consts.HUMAN_STATE_IDLE,
             )
 
-        def lander_patrol(state: DefenderState, enemy_index: int) -> Tuple[float, float]:
+        def lander_patrol(state: DefenderState) -> chex.Array:
             speed_x, speed_y = jax.lax.cond(
                 state.space_ship_speed > 0,
                 lambda: (-self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
                 lambda: (self.consts.ENEMY_SPEED, self.consts.LANDER_Y_SPEED),
             )
-            enemy_states = state.enemy_states
             speed_x += state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED
             # check if on top of human to switch to descend
 
             proximity_checks = jax.vmap(check_proximity)(state.human_states)
             is_near_human = jnp.any(proximity_checks)
             # Check if any other lander (not this one) is already descending or picking up
-            indices = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
             other_landers_descending = jnp.any(
-                jnp.logical_and(
-                    jnp.logical_and(
-                        indices != enemy_index,
-                        state.enemy_states[:, 2] == self.consts.LANDER,
-                    ),
-                    jnp.logical_or(
-                        state.enemy_states[:, 3] == self.consts.LANDER_STATE_DESCEND,
-                        state.enemy_states[:, 3] == self.consts.LANDER_STATE_PICKUP,
-                    ),
-                )
+                jnp.logical_or(
+                    state.enemy_states[:, 3] == self.consts.LANDER_STATE_DESCEND,
+                    state.enemy_states[:, 3] == self.consts.LANDER_STATE_PICKUP,
+                ),
+                
             )
             lander_state = jax.lax.cond(
                 jnp.logical_and(is_near_human, jnp.logical_not(other_landers_descending)),
@@ -1549,13 +1540,11 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
             x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
             new_lander = [x, y, lander[2], lander_state, counter_id]
-            new_enemy_states = enemy_states.at[enemy_index].set(new_lander)
-            return state._replace(enemy_states=new_enemy_states)
+            return new_lander
 
-        def lander_descend(state: DefenderState, enemy_index: int) -> Tuple[float, float]:
+        def lander_descend() -> chex.Array:
             speed_x = 0.0
             speed_y = self.consts.LANDER_Y_SPEED * 5
-            enemy_states = state.enemy_states
 
             # Check if lander reached the bottom (human level)
             lander_state = jax.lax.cond(
@@ -1565,16 +1554,14 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             )
             x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
             new_lander = [x, y, lander[2], lander_state, counter_id]
-            new_enemy_states = enemy_states.at[enemy_index].set(new_lander)
-            return state._replace(enemy_states=new_enemy_states)
+            return new_lander
 
-        def lander_pickup(current_counter: float, state: DefenderState, enemy_index: int) -> DefenderState:
+        def lander_pickup(current_counter: float, state: DefenderState) -> chex.Array:
             speed_x = 0.0
             speed_y = 0.0
             current_counter += 1.0
             lander_state = self.consts.LANDER_STATE_PICKUP
 
-            enemy_states = state.enemy_states
             human_states = state.human_states
 
             near = jax.vmap(check_proximity)(human_states)
@@ -1590,19 +1577,16 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             )
             x, y = self._move_and_wrap(lander_x, lander_y, speed_x, speed_y)
             new_lander = [x, y, lander[2], lander_state, current_counter]
-            new_enemy_states = enemy_states.at[enemy_index].set(new_lander)
-            return state._replace(enemy_states=new_enemy_states)
+            return new_lander
 
-        def lander_ascend(human_id: int, state: DefenderState, enemy_index: int) -> DefenderState:
+        def lander_ascend(human_id: int, state: DefenderState) -> DefenderState:
             def lander_reached_top(
                 human_index: int,
-                enemy_index: int,
                 state: DefenderState,
-            ) -> DefenderState:
+            ) -> chex.Array:
                 speed_x = 0.0
                 speed_y = -self.consts.LANDER_Y_SPEED * 5
 
-                enemy_states = state.enemy_states
                 human_states = state.human_states
                 human = human_states[human_index]
                 human_x = human[0]
@@ -1620,21 +1604,16 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                     self.consts.LANDER_STATE_PATROL,
                     counter_id,
                 ]
-                new_enemy_states = enemy_states.at[enemy_index].set(new_lander)
-                new_human_states = human_states.at[human_index].set(new_human)
-                state = state._replace(human_states=new_human_states, enemy_states=new_enemy_states)
-                return self._spawn_enemy_random_pos(state, self.consts.MUTANT)
+                return new_lander
 
             def lander_ascend_continue(
                 human_index: int,
                 lander_y: float,
                 state: DefenderState,
-            ) -> DefenderState:
+            ) -> chex.Array:
                 speed_x = 0.0
                 speed_y = -self.consts.LANDER_Y_SPEED * 5
 
-                enemy_states = state.enemy_states
-                human = state.human_states[human_index]
                 human_y = lander_y + 5  # Move human up with lander
                 state = self._update_human(
                     state,
@@ -1651,43 +1630,38 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                     self.consts.LANDER_STATE_ASCEND,
                     counter_id,
                 ]
-                state = self._update_enemy(
-                    state,
-                    enemy_index,
-                    x,
-                    y,
-                    arg1=self.consts.LANDER_STATE_ASCEND,
-                    arg2=counter_id.astype(float),
-                )
-                return state
+                return new_lander
 
             # Check if lander reached the top
-            state = jax.lax.cond(
+            new_lander = jax.lax.cond(
                 lander_y <= self.consts.LANDER_START_Y,
-                lambda: lander_reached_top(jnp.array(human_id, int), enemy_index, state),
+                lambda: lander_reached_top(jnp.array(human_id, int), state),
                 lambda: lander_ascend_continue(jnp.array(human_id, int), lander_y, state),
             )
 
-            return state
-
+            return new_lander
+        
         counter_id = lander[4]
-        state = jax.lax.switch(
+        patrol_state = lander_patrol(state)
+        descend_state = lander_descend()
+        pickup_state = lander_pickup(current_counter, state)
+        ascend_state = lander_ascend(counter_id, state)
+
+
+        new_lander = jax.lax.switch(
             jnp.array(lander_state, int),
             [
-                lambda: lander_patrol(state, enemy_index),  # Patrol
-                lambda: lander_descend(state, enemy_index),  # Descend
-                lambda: lander_pickup(current_counter, state, enemy_index),  # Pickup
-                lambda: lander_ascend(counter_id, state, enemy_index),  # Ascend
+                lambda: patrol_state,
+                lambda: descend_state,
+                lambda: pickup_state,
+                lambda: ascend_state,
             ],
         )
-        return state
+        return jnp.stack(new_lander)
 
-    def _pod_movement(self, index: int, state: DefenderState) -> DefenderState:
-        pod = state.enemy_states[index]
+    def _pod_movement(self, pod: chex.Array, state: DefenderState) -> chex.Array:
         pod_x = pod[0]
         pod_y = pod[1]
-
-        enemy_states = state.enemy_states
 
         speed_x, speed_y = jax.lax.cond(
             state.space_ship_speed > 0,
@@ -1702,15 +1676,11 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             speed_y,
         )
         new_pod = [x, y, pod[2], pod[3], pod[4]]
-        new_enemy_states = enemy_states.at[index].set(new_pod)
-        return state._replace(enemy_states=new_enemy_states)
+        return jnp.stack(new_pod)
 
-    def _mutant_movement(self, index: int, state: DefenderState) -> DefenderState:
-        mutant = state.enemy_states[index]
+    def _mutant_movement(self, mutant: chex.Array, state: DefenderState) -> chex.Array:
         mutant_x = mutant[0]
         mutant_y = mutant[1]
-
-        enemy_states = state.enemy_states
 
         speed_x, speed_y = jax.lax.cond(
             state.space_ship_speed > 0,
@@ -1725,20 +1695,17 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             speed_y,
         )
         new_mutant = [x, y, mutant[2], mutant[3], mutant[4]]
-        new_enemy_states = enemy_states.at[index].set(new_mutant)
-        return state._replace(enemy_states=new_enemy_states)
+        return jnp.stack(new_mutant)
 
     def _bomber_movement(
         self,
-        index: int,
+        bomber: chex.Array,
         state: DefenderState,
-    ) -> DefenderState:
-        bomber = state.enemy_states[index]
+    ) -> chex.Array:
+
         x_pos = bomber[0]
         y_pos = bomber[1]
         direction_right = bomber[4]
-        enemy_states = state.enemy_states
-
         speed_x = self.consts.ENEMY_SPEED
         # acceleration in x direction
         speed_x = jax.lax.cond(direction_right, lambda s: s, lambda s: -s, operand=speed_x)
@@ -1762,20 +1729,17 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             self.consts.BOMBER_Y_SPEED,
         )
         new_bomber = [x_pos, y_pos, bomber[2], bomber[3], direction_right]
-        new_enemy_states = enemy_states.at[index].set(new_bomber)
-        return state._replace(enemy_states=new_enemy_states)
+        return jnp.stack(new_bomber)
 
     def _swarmers_movement(
         self,
-        index: int,
+        swarmer: chex.Array,
         state: DefenderState,
-    ) -> DefenderState:
-        swarmer = state.enemy_states[index]
+    ) -> chex.Array:
         x_pos = swarmer[0]
         y_pos = swarmer[1]
         speed = swarmer[4]
         swarmer_direction = swarmer[3]
-        enemy_states = state.enemy_states
         speed = speed + 0.05  # acceleration over time
         # max speed
         speed = jnp.clip(speed, a_min=-self.consts.SWARMERS_MAX_SPEED, a_max=self.consts.SWARMERS_MAX_SPEED)
@@ -1835,8 +1799,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         )
 
         new_swarmer = [x_pos, y_pos, swarmer[2], swarmer_direction, speed]
-        new_enemy_states = enemy_states.at[index].set(new_swarmer)
-        return state._replace(enemy_states=new_enemy_states)
+        return jnp.stack(new_swarmer)
 
     def _set_human_from_lander_falling(
         self,
@@ -1857,41 +1820,42 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         return state
 
     def _enemy_step(self, state: DefenderState) -> DefenderState:
-        def _enemy_move_switch(enemy_index: int, state: DefenderState) -> DefenderState:
-            enemy_type = state.enemy_states[enemy_index][2]
-            state = jax.lax.switch(
+        def _enemy_move_switch(enemy: chex.Array, state: DefenderState) -> DefenderState:
+            score = 0
+            enemy_type = enemy[2]
+            inactive_state = enemy
+            lander_state = self._lander_movement(enemy, state)
+            pod_state = self._pod_movement(enemy, state)
+            bomber_state = self._bomber_movement(enemy, state)
+            swarmers_state = self._swarmers_movement(enemy, state)
+            mutant_state = self._mutant_movement(enemy, state)
+            baiter_state = enemy
+            delete_state, score = self._delete_enemy(enemy)
+
+            enemy_state = jax.lax.switch(
                 jnp.array(enemy_type, int),
                 [
-                    lambda: state,
-                    lambda: self._lander_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._pod_movement(enemy_index, state),
-                    lambda: self._bomber_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._swarmers_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: self._mutant_movement(
-                        enemy_index,
-                        state,
-                    ),
-                    lambda: state,
-                    lambda: self._delete_enemy(state, enemy_index),
+                    lambda: inactive_state,  # Inactive
+                    lambda: lander_state,  # Lander
+                    lambda: pod_state,  # Pod
+                    lambda: bomber_state,  # Bomber
+                    lambda: swarmers_state,  # Swarmer
+                    lambda: mutant_state,  # Mutant
+                    lambda: baiter_state,  # Baiter
+                    lambda: delete_state,  # To be deleted (used for lander when it reaches top with human)
                 ],
             )
 
-            return state
+            return enemy_state
 
-        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX_IN_GAME, _enemy_move_switch, state)
+        def _enemy_move_switch_wrapped(enemy: chex.Array) -> chex.Array:
+            return _enemy_move_switch(enemy, state)
+        
+        enemy_states_updated = jax.vmap(_enemy_move_switch_wrapped, in_axes=(0,))(state.enemy_states)
+        state = state._replace(enemy_states=enemy_states_updated)
 
         return state
 
-    ## -------- HUMAN STEP ------------------------------
 
     def _human_step(self, state: DefenderState) -> DefenderState:
         def _human_falling(state: DefenderState, index: int) -> DefenderState:
@@ -2251,7 +2215,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = jax.lax.cond(space_ship_is_colliding, lambda: self._game_over(state), lambda: state)
 
             is_dead = jnp.logical_or(laser_is_colliding, space_ship_is_colliding)
-            state = jax.lax.cond(is_dead, lambda: self._delete_enemy(state, index), lambda: state)
+            state = jax.lax.cond(is_dead, lambda: self._delete_enemy_index(state, index), lambda: state)
             state = jax.lax.cond(
                 laser_is_colliding,
                 lambda: state._replace(laser_active=False),
@@ -2585,14 +2549,14 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                     },
                 ),
                 "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-                "enemy_states": spaces.Box(low=0, high=255, shape=(self.consts.ENEMY_MAX_IN_GAME, 5), dtype=jnp.float32),
-                "human_states": spaces.Box(low=0, high=255, shape=(self.consts.HUMAN_MAX_AMOUNT, 3), dtype=jnp.float32),
+                "enemy_states": spaces.Box(low=0, high=255, shape=(self.consts.ENEMY_MAX_IN_GAME, 5), dtype=jnp.int32),
+                "human_states": spaces.Box(low=0, high=255, shape=(self.consts.HUMAN_MAX_AMOUNT, 3), dtype=jnp.int32),
                 "bullet_active": spaces.Discrete(2),
-                "bullet_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.float32),
-                "bullet_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.float32),
+                "bullet_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.int32),
+                "bullet_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.int32),
                 "laser_active": spaces.Discrete(2),
-                "laser_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.float32),
-                "laser_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.float32),
+                "laser_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.int32),
+                "laser_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.int32),
             }
         )
 
