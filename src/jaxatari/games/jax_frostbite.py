@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 # Import the new rendering utils
@@ -399,12 +399,15 @@ class FrostbiteState:
 # ==========================================================================================
 @struct.dataclass
 class FrostbiteObservation:
-    """Simple observation"""
-    bailey_x: jnp.ndarray
-    bailey_y: jnp.ndarray
-    bailey_animation: jnp.ndarray
-    bailey_jumping: jnp.ndarray
-    frame_count: jnp.ndarray
+    bailey: ObjectObservation
+    obstacles: ObjectObservation
+    bear: ObjectObservation
+    ice_grid: jnp.ndarray
+    igloo_progress: jnp.ndarray
+    temperature: jnp.ndarray
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    level: jnp.ndarray
 
 
 @struct.dataclass
@@ -785,14 +788,114 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         obs = self._get_observation(state)
         return obs, state
     
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: FrostbiteState) -> FrostbiteObservation:
-        """Convert state to observation"""
+        # --- Bailey ---
+        # State: 0=Walking, 1=Jumping
+        bailey_status = (state.bailey_jumping_idx > 0).astype(jnp.int32)
+        # Orientation: 0(Right)->90, 1(Left)->270
+        bailey_ori = jnp.where(state.bailey_direction == 0, 90.0, 270.0)
+        
+        bailey = ObjectObservation.create(
+            x=jnp.clip(state.bailey_x, 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.bailey_y, 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.BAILEY_BOUNDING_WIDTH, dtype=jnp.int32),
+            height=jnp.array(18, dtype=jnp.int32), # Approx height
+            orientation=bailey_ori.astype(jnp.float32),
+            state=bailey_status,
+            active=state.bailey_visible.astype(jnp.int32)
+        )
+
+        # --- Obstacles ---
+        # Logic to extract individual obstacle copies from rows
+        # Each of 4 rows can have multiple copies based on duplication mode
+        
+        def extract_row_obstacles(i):
+            x_base = state.obstacle_x[i]
+            y = state.obstacle_y[i]
+            active = state.obstacle_active[i]
+            dir_ = state.obstacle_directions[i]
+            mode = state.obstacle_duplication_mode[i]
+            
+            # FIXED: Call instance method without passing self.consts
+            copies, spacing = self._decode_sprite_duplication(mode)
+            
+            # Generate 3 potential slots
+            slots = jnp.arange(3)
+            xs = x_base + slots * spacing
+            valid = (slots < copies) & (active == 1)
+            
+            # Filter out off-screen copies (simple bounding box check)
+            # Obs width is 8x8
+            on_screen = (xs > -8) & (xs < self.consts.SCREEN_WIDTH)
+            
+            final_active = valid & on_screen
+            final_ori = jnp.where(dir_ == 0, 90.0, 270.0) # 0=Right, 1=Left
+            
+            return xs, jnp.full(3, y), jnp.full(3, final_ori), final_active.astype(jnp.int32)
+
+        # Vectorize over 4 rows
+        xs, ys, oris, actives = jax.vmap(extract_row_obstacles)(jnp.arange(4))
+        
+        # Flatten (4, 3) -> (12,)
+        obstacles = ObjectObservation.create(
+            x=jnp.clip(xs.flatten().astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(ys.flatten().astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((12,), 8, dtype=jnp.int32),
+            height=jnp.full((12,), 8, dtype=jnp.int32),
+            orientation=oris.flatten().astype(jnp.float32),
+            active=actives.flatten().astype(jnp.int32)
+        )
+
+        # --- Polar Bear ---
+        bear_ori = jnp.where(state.polar_grizzly_direction == 0, 90.0, 270.0)
+        bear = ObjectObservation.create(
+            x=jnp.clip(state.polar_grizzly_x, 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(self.consts.YMIN_BAILEY, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(20, dtype=jnp.int32),
+            height=jnp.array(14, dtype=jnp.int32),
+            orientation=bear_ori.astype(jnp.float32),
+            active=state.polar_grizzly_active.astype(jnp.int32)
+        )
+
+        # --- Ice Grid (Procedural Generation) ---
+        # Generate a grid representation of where valid ice exists
+        # We sample the "active block" logic at regular intervals
+        grid_width = 16 # Discretize screen width into 16 chunks
+        sample_xs = jnp.linspace(self.consts.PLAYFIELD_LEFT, self.consts.PLAYFIELD_RIGHT, grid_width).astype(jnp.int32)
+        
+        def sample_row(row_idx):
+            # Reuse the renderer's logic to find active segments
+            pos, widths, mask = self._get_row_segments(state, row_idx)
+            
+            def check_point(px):
+                # Check if px falls within any active segment
+                # Check standard position
+                # Note: _compute_row_segments returns canonical positions, so simple check works
+                def is_in_segment(seg_x, seg_w, active):
+                    return active & (px >= seg_x) & (px < seg_x + seg_w)
+
+                hits = jax.vmap(is_in_segment)(pos, widths, mask)
+                return jnp.any(hits)
+
+            return jax.vmap(check_point)(sample_xs)
+
+        ice_grid = jax.vmap(sample_row)(jnp.arange(4)).astype(jnp.int32)
+
+        # --- Helper for BCD ---
+        score_val = self._bcd_to_decimal(state.score)
+        temp_val = self._bcd_to_decimal(jnp.array([0, 0, state.temperature], dtype=jnp.int32)) # Only uses lowest byte
+
         return FrostbiteObservation(
-            bailey_x=state.bailey_x,
-            bailey_y=state.bailey_y,
-            bailey_animation=state.bailey_animation_idx,
-            bailey_jumping=jnp.int32(state.bailey_jumping_idx > 0),
-            frame_count=state.frame_count
+            bailey=bailey,
+            obstacles=obstacles,
+            bear=bear,
+            ice_grid=ice_grid,
+            igloo_progress=state.building_igloo_idx + 1, # -1..15 -> 0..16
+            temperature=temp_val.astype(jnp.int32),
+            score=score_val.astype(jnp.int32),
+            lives=state.remaining_lives.astype(jnp.int32),
+            level=state.level.astype(jnp.int32)
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -2789,13 +2892,18 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
-        """Return the observation space as Dict matching FrostbiteObservation fields"""
         return spaces.Dict({
-            "bailey_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-            "bailey_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            "bailey_animation": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-            "bailey_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            "frame_count": spaces.Box(low=0, high=2**31-1, shape=(), dtype=jnp.int32),
+            "bailey": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            # Obstacles: Max 4 rows * 3 copies = 12 potential objects
+            "obstacles": spaces.get_object_space(n=12, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "bear": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            # Ice Grid: 4 rows, discretized horizontally into ~10-12 pixel chunks (width 152 / 12 ~= 12 blocks)
+            "ice_grid": spaces.Box(low=0, high=1, shape=(4, 16), dtype=jnp.int32),
+            "igloo_progress": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
+            "temperature": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int32),
         })
 
     def obs_to_flat_array(self, obs: FrostbiteObservation) -> jnp.ndarray:

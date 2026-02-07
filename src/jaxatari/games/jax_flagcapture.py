@@ -11,7 +11,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space
-from jaxatari.environment import JAXAtariAction as Action
+from jaxatari.environment import ObjectObservation, JAXAtariAction as Action
 
 
 #
@@ -88,19 +88,13 @@ class FlagCaptureState:
     animation_type: chex.Array
     rng_key: chex.PRNGKey
 
-@struct.dataclass
-class PlayerEntity:
-    x: chex.Array
-    y: chex.Array
-    width: chex.Array
-    height: chex.Array
-    status: chex.Array
-
 
 @struct.dataclass
 class FlagCaptureObservation:
-    player: PlayerEntity
+    player: ObjectObservation
+    grid: jnp.ndarray
     score: chex.Array
+    time: chex.Array
 
 
 @struct.dataclass
@@ -178,21 +172,24 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns:
             FlagCaptureObservation: The observation of the game state.
         """
+        # Calculate pixel coordinates from grid coordinates
+        px = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (state.player_x * self.consts.FIELD_GAP_X)
+        py = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (state.player_y * self.consts.FIELD_GAP_Y)
+
+        player = ObjectObservation.create(
+            x=jnp.clip(px.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(py.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.FIELD_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.FIELD_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
         return FlagCaptureObservation(
-            player=PlayerEntity(
-                x=jnp.array(
-                    self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (
-                                state.player_x * self.consts.FIELD_GAP_X)).astype(
-                    jnp.int32),
-                y=jnp.array(
-                    self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (
-                                state.player_y * self.consts.FIELD_GAP_Y)).astype(
-                    jnp.int32),
-                width=jnp.array(self.consts.FIELD_WIDTH).astype(jnp.int32),
-                height=jnp.array(self.consts.FIELD_HEIGHT).astype(jnp.int32),
-                status=jnp.array(self.consts.PLAYER_STATUS_ALIVE).astype(jnp.int32),
-            ),
-            score=state.score
+            player=player,
+            grid=state.field,
+            score=state.score,
+            time=state.time
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -212,14 +209,11 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
 
     def observation_space(self) -> spaces:
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "status": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            # The grid contains IDs (0-20) representing state of each tile
+            "grid": spaces.Box(low=0, high=20, shape=(self.consts.NUM_FIELDS_X, self.consts.NUM_FIELDS_Y), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+            "time": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -229,16 +223,6 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
             shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
             dtype=jnp.uint8,
         )
-
-    def obs_to_flat_array(self, obs: FlagCaptureObservation) -> jnp.ndarray:
-        return jnp.array([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-            obs.player.status.flatten(),
-            obs.score.flatten(),
-        ]).flatten()
 
     def render(self, state: FlagCaptureState) -> jnp.ndarray:
         return self.renderer.render(state)

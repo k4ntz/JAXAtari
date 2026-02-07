@@ -20,7 +20,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 
-from jaxatari.environment import JAXAtariAction as Action
+from jaxatari import spaces
+from jaxatari.environment import JAXAtariAction as Action, ObjectObservation
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -442,16 +443,14 @@ class VideoCubeState:
 
 @struct.dataclass
 class VideoCubeObservation:
+    player: ObjectObservation
+    """ The player observation containing the position and color """
     cube_current_view: jnp.ndarray
     """ The current view on the cube """
     player_score: jnp.ndarray
     """ The score of the player """
     player_color: jnp.ndarray
     """ The color of the player """
-    player_x: jnp.ndarray
-    """ The x coordinate of the player """
-    player_y: jnp.ndarray
-    """ The y coordinate of the player """
 
 
 @struct.dataclass
@@ -903,33 +902,64 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
     def image_space(self) -> Box:
         return Box(0, 255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
-    def observation_space(self) -> Dict:
-        return Dict({
-            "cube_current_view": Box(0, 6, (3, 3), jnp.int32),
-            "player_score": Box(0, 100000, (), jnp.int32),
-            "player_color": Box(0, 6, (), jnp.int32),
-            "player_x": Box(0, 2, (), jnp.int32),
-            "player_y": Box(0, 2, (), jnp.int32)
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        # Use actual screen dimensions for ObjectObservation
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "player": single_obj,
+            "cube_current_view": spaces.Box(low=0, high=6, shape=(3, 3), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=100000, shape=(), dtype=jnp.int32),
+            "player_color": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: VideoCubeObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.cube_current_view.flatten(),
-            obs.player_score.flatten(),
-            obs.player_color.flatten(),
-            obs.player_x.flatten(),
-            obs.player_y.flatten()
-        ])
+    def _get_observation(self, state: VideoCubeState) -> VideoCubeObservation:
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: VideoCubeState):
+        # Calculate logical local coordinates (0..2, 0..2) on the current face
+        py, px = self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)
+        
+        # Map logical coordinates to Screen Pixels
+        # Use the state's last_action to determine the view type approximation
+        is_vertical_move = jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN)
+        view_idx = jnp.where(is_vertical_move, 0, 1)
+        
+        pixel_pos = self.renderer.PLAYER_POSITIONS[view_idx, px, py]
+        pixel_x = pixel_pos[0]
+        pixel_y = pixel_pos[1]
+
+        # Orientation: cube_orientation 0..3 -> 0, 90, 180, 270
+        p_ori = (state.cube_orientation * 90.0).astype(jnp.float32)
+
+        # Player size depends on rotation (from constants)
+        # Use a safe default constant since dynamic sprite size lookup is complex here.
+        p_w = jnp.array(12, dtype=jnp.int32)
+        p_h = jnp.array(12, dtype=jnp.int32)
+
+        player = ObjectObservation.create(
+            x=jnp.clip(pixel_x, 0, w),
+            y=jnp.clip(pixel_y, 0, h),
+            width=p_w,
+            height=p_h,
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.player_color.astype(jnp.int32),
+            orientation=p_ori
+        )
+
+        view = get_view(state.cube, state.cube_current_side, state.cube_orientation, c.GAME_VARIATION, state.movement_state.is_moving_between_two_sides)
+
         return VideoCubeObservation(
-            cube_current_view=get_view(state.cube, state.cube_current_side, state.cube_orientation, self.consts.GAME_VARIATION, state.movement_state.is_moving_between_two_sides),
+            player=player,
+            cube_current_view=view,
             player_score=state.player_score.astype(jnp.int32),
-            player_color=state.player_color.astype(jnp.int32),
-            player_x=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[0],
-            player_y=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[1]
+            player_color=state.player_color.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))

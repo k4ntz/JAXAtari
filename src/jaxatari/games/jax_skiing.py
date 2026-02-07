@@ -9,7 +9,7 @@ import numpy as np
 import collections
 from flax import struct
 import jaxatari.rendering.jax_rendering_utils as render_utils 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
@@ -169,18 +169,11 @@ class SkiingState:
     gates_seen: chex.Array  # Anzahl der bereits verarbeiteten Gates (despawned)
 
 @struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-@struct.dataclass
 class SkiingObservation:
-    skier: EntityPosition
-    flags: jnp.ndarray
-    trees: jnp.ndarray
-    rocks: jnp.ndarray
+    skier: ObjectObservation
+    flags: ObjectObservation # n=2
+    trees: ObjectObservation # n=4
+    rocks: ObjectObservation # n=3
     score: jnp.ndarray
 
 
@@ -207,47 +200,25 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # ALE actions: NOOP=0, RIGHT=1, LEFT=2
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self):
-        c = self.consts
-
-        skier_space = spaces.Dict(collections.OrderedDict({
-            "x":      spaces.Box(low=0.0,               high=float(c.screen_width),  shape=(), dtype=jnp.float32),
-            "y":      spaces.Box(low=0.0,               high=float(c.screen_height), shape=(), dtype=jnp.float32),
-            "width":  spaces.Box(low=float(c.skier_width),  high=float(c.skier_width),  shape=(), dtype=jnp.float32),
-            "height": spaces.Box(low=float(c.skier_height), high=float(c.skier_height), shape=(), dtype=jnp.float32),
-        }))
-
-        flags_space = spaces.Box(low=[0.0, 0.0],
-                                 high=[float(c.screen_width), float(c.screen_height)],
-                                 shape=(c.max_num_flags, 2), dtype=jnp.float32)
-        trees_space = spaces.Box(low=[0.0, 0.0],
-                                 high=[float(c.screen_width), float(c.screen_height)],
-                                 shape=(c.max_num_trees, 2), dtype=jnp.float32)
-        rocks_space = spaces.Box(low=[0.0, 0.0],
-                                 high=[float(c.screen_width), float(c.screen_height)],
-                                 shape=(c.max_num_rocks, 2), dtype=jnp.float32)
-
-        # nachher (alles float32):
-        score_space = spaces.Box(low=jnp.array(0.0, dtype=jnp.float32),
-                                 high=jnp.array(1_000_000.0, dtype=jnp.float32),
-                                 shape=(), dtype=jnp.float32)
-
-        return spaces.Dict(collections.OrderedDict({
-            "skier": skier_space, "flags": flags_space, "trees": trees_space, "rocks": rocks_space, "score": score_space,
-        }))
+    def observation_space(self) -> spaces.Dict:
+        # Use self.consts directly, casting to int for concrete values
+        h = int(self.consts.screen_height)
+        w = int(self.consts.screen_width)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "skier": single_obj,
+            "flags": spaces.get_object_space(n=self.consts.max_num_flags, screen_size=screen_size),
+            "trees": spaces.get_object_space(n=self.consts.max_num_trees, screen_size=screen_size),
+            "rocks": spaces.get_object_space(n=self.consts.max_num_rocks, screen_size=screen_size),
+            "score": spaces.Box(low=0.0, high=1_000_000.0, shape=(), dtype=jnp.float32),
+        })
 
     def image_space(self):
         c = self.consts
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
-
-    def obs_to_flat_array(self, obs: SkiingObservation) -> jnp.ndarray:
-        skier_vec  = jnp.array([obs.skier.x, obs.skier.y, obs.skier.width, obs.skier.height],
-                               dtype=jnp.float32).reshape(-1)
-        flags_flat = jnp.array(obs.flags, dtype=jnp.float32).reshape(-1)
-        trees_flat = jnp.array(obs.trees, dtype=jnp.float32).reshape(-1)
-        rocks_flat = jnp.array(obs.rocks, dtype=jnp.float32).reshape(-1)
-        score_flat = jnp.array(obs.score, dtype=jnp.float32).reshape(-1)
-        return jnp.concatenate([skier_vec, flags_flat, trees_flat, rocks_flat, score_flat], axis=0)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, SkiingState]:
         """Initialize a new game state deterministically from `key`."""
@@ -788,50 +759,76 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         return obs, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: SkiingState):
-        # --- CHANGED: cast observation leaves to float64 (score stays int32)
+    def _get_observation(self, state: SkiingState) -> SkiingObservation:
+        c = self.consts
+        w, h = int(c.screen_width), int(c.screen_height)
 
-        # Skier (float64 now)
-        skier = EntityPosition(
-            x=jnp.array(state.skier_x, dtype=jnp.float32),           # CHANGED
-            y=jnp.array(self.consts.skier_y, dtype=jnp.float32),     # CHANGED
-            width=jnp.array(self.consts.skier_width, dtype=jnp.float32),   # CHANGED
-            height=jnp.array(self.consts.skier_height, dtype=jnp.float32), # CHANGED
+        # --- Skier ---
+        # Map skier_pos (0..7) to angles
+        # 0=Left (-90), 3=Straight (0), 7=Right (90) approx mapping
+        # 0->270, 1->292.5, 2->315, 3->0, 4->0, 5->45, 6->67.5, 7->90
+        # Simple mapping: (pos - 3.5) * 25.7 degrees? 
+        # Using explicit mapping for clarity based on sprite logic:
+        # 0..2=Left, 3..4=Straight, 5..7=Right
+        skier_ori = jnp.select(
+            [state.skier_pos <= 2, state.skier_pos >= 5],
+            [270.0, 90.0],
+            0.0
+        ).astype(jnp.float32)
+
+        skier = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.skier_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(c.skier_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.skier_width, dtype=jnp.int32),
+            height=jnp.array(c.skier_height, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=jnp.array(skier_ori, dtype=jnp.float32)
         )
 
-        # Positionsspalten aus dem State holen
-        flags_xy_f32 = jnp.array(state.flags, dtype=jnp.float32)[..., :2]
-        trees_xy_f32 = jnp.array(state.trees, dtype=jnp.float32)[..., :2]
-        rocks_xy_f32 = jnp.array(state.rocks, dtype=jnp.float32)[..., :2]
-
-        # In-Space clippen (gegen Ausreißer wie y=240)
-        W = jnp.float32(self.consts.screen_width  - 1)
-        H = jnp.float32(self.consts.screen_height - 1)
-
-        flags_xy_f32 = flags_xy_f32.at[:, 0].set(jnp.clip(flags_xy_f32[:, 0], 0.0, W))
-        flags_xy_f32 = flags_xy_f32.at[:, 1].set(jnp.clip(flags_xy_f32[:, 1], 0.0, H))
-
-        trees_xy_f32 = jnp.stack(
-            [jnp.clip(trees_xy_f32[:, 0], 0.0, W),
-             jnp.clip(trees_xy_f32[:, 1], 0.0, H)],
-            axis=1
-        )
-        rocks_xy_f32 = jnp.stack(
-            [jnp.clip(rocks_xy_f32[:, 0], 0.0, W),
-             jnp.clip(rocks_xy_f32[:, 1], 0.0, H)],
-            axis=1
+        # --- Flags ---
+        # Flags in state are [x, y, w, h]
+        flags_xy = state.flags[..., :2].astype(jnp.int32)
+        flags_active = (flags_xy[:, 1] < h).astype(jnp.int32) # Simple visibility check
+        
+        flags = ObjectObservation.create(
+            x=jnp.clip(flags_xy[:, 0], 0, w),
+            y=jnp.clip(flags_xy[:, 1], 0, h),
+            width=jnp.full((c.max_num_flags,), c.flag_width, dtype=jnp.int32),
+            height=jnp.full((c.max_num_flags,), c.flag_height, dtype=jnp.int32),
+            active=flags_active,
+            visual_id=jnp.zeros((c.max_num_flags,), dtype=jnp.int32) # Could encode Red/Blue if needed
         )
 
-        flags_xy = jnp.array(flags_xy_f32, dtype=jnp.float32)
-        trees_xy = jnp.array(trees_xy_f32, dtype=jnp.float32)
-        rocks_xy = jnp.array(rocks_xy_f32, dtype=jnp.float32) 
+        # --- Trees ---
+        trees_xy = state.trees[..., :2].astype(jnp.int32)
+        trees_active = (trees_xy[:, 1] < h).astype(jnp.int32)
+        
+        trees = ObjectObservation.create(
+            x=jnp.clip(trees_xy[:, 0], 0, w),
+            y=jnp.clip(trees_xy[:, 1], 0, h),
+            width=jnp.full((c.max_num_trees,), c.tree_width, dtype=jnp.int32),
+            height=jnp.full((c.max_num_trees,), c.tree_height, dtype=jnp.int32),
+            active=trees_active
+        )
+
+        # --- Rocks ---
+        rocks_xy = state.rocks[..., :2].astype(jnp.int32)
+        rocks_active = (rocks_xy[:, 1] < h).astype(jnp.int32)
+        
+        rocks = ObjectObservation.create(
+            x=jnp.clip(rocks_xy[:, 0], 0, w),
+            y=jnp.clip(rocks_xy[:, 1], 0, h),
+            width=jnp.full((c.max_num_rocks,), c.rock_width, dtype=jnp.int32),
+            height=jnp.full((c.max_num_rocks,), c.rock_height, dtype=jnp.int32),
+            active=rocks_active
+        )
 
         return SkiingObservation(
             skier=skier,
-            flags=flags_xy,
-            trees=trees_xy,
-            rocks=rocks_xy,
-            score=jnp.array(state.score, dtype=jnp.float32),
+            flags=flags,
+            trees=trees,
+            rocks=rocks,
+            score=jnp.array(state.score, dtype=jnp.float32)
         )
 
 

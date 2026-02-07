@@ -8,7 +8,7 @@ import chex
 from jax.image import resize
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
@@ -368,13 +368,14 @@ class EntityPosition:
 
 @struct.dataclass
 class SirLancelotObservation:
-    player: EntityPosition
-    enemies: jnp.ndarray  # Shape (NUM_ENEMIES, 5) for x,y,w,h,active
-    dragon: jnp.ndarray  # Shape (5,) for x,y,w,h,active
-    fireballs: jnp.ndarray  # Shape (MAX_FIREBALLS, 5) for x,y,w,h,active
+    player: ObjectObservation
+    enemies: ObjectObservation  # Beasts (n=4)
+    dragon: ObjectObservation   # Boss (n=1, scalar)
+    fireballs: ObjectObservation # n=3
     score: jnp.ndarray
     lives: jnp.ndarray
-    stage: jnp.ndarray  # Current stage (1=aerial, 2=dragon)
+    stage: jnp.ndarray
+    level: jnp.ndarray
 
 
 @struct.dataclass
@@ -2510,57 +2511,67 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SirLancelotState) -> SirLancelotObservation:
-        # Player observation
-        player_obs = EntityPosition(
-            x=state.player.x,
-            y=state.player.y,
-            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.float32),
-            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.float32)
+        c = self.consts
+        w, h = int(c.SCREEN_WIDTH), int(c.SCREEN_HEIGHT)
+
+        # --- Player ---
+        # Facing Left (True) -> 270.0, Right (False) -> 90.0
+        p_ori = jnp.where(state.player.facing_left, 270.0, 90.0).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player.x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player.y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=jnp.array(p_ori, dtype=jnp.float32)
         )
+
+        # --- Enemies (Beasts) ---
+        e_ori = jnp.where(state.enemies.facing_left, 270.0, 90.0).astype(jnp.float32)
         
-        # Enemy observations
-        enemy_widths = jnp.full(self.consts.NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.float32)
-        enemy_heights = jnp.full(self.consts.NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
-        enemy_active = state.enemies.active.astype(jnp.float32)
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemies.positions[:, 0].astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemies.positions[:, 1].astype(jnp.int32), 0, h),
+            width=jnp.full((c.NUM_ENEMIES,), c.ENEMY_WIDTH, dtype=jnp.int32),
+            height=jnp.full((c.NUM_ENEMIES,), c.ENEMY_HEIGHT, dtype=jnp.int32),
+            active=state.enemies.active.astype(jnp.int32),
+            orientation=e_ori
+        )
+
+        # --- Dragon ---
+        # Dragon is rendered at consts.DRAGON_Y (minus small animation adjustments)
+        d_ori = jnp.where(state.dragon.facing_left, 270.0, 90.0).astype(jnp.float32)
         
-        enemy_obs = jnp.stack([
-            state.enemies.positions[:, 0],
-            state.enemies.positions[:, 1],
-            enemy_widths,
-            enemy_heights,
-            enemy_active
-        ], axis=-1)
-        
-        # Dragon observation
-        dragon_obs = jnp.array([
-            state.dragon.x,
-            self.consts.DRAGON_Y,
-            self.consts.DRAGON_WIDTH,
-            self.consts.DRAGON_HEIGHT,
-            state.dragon.is_active.astype(jnp.float32)
-        ])
-        
-        # Fireball observations
-        fireball_widths = jnp.full(self.consts.MAX_FIREBALLS, self.consts.FIREBALL_WIDTH, dtype=jnp.float32)
-        fireball_heights = jnp.full(self.consts.MAX_FIREBALLS, self.consts.FIREBALL_HEIGHT, dtype=jnp.float32)
-        fireball_active = state.fireballs.active.astype(jnp.float32)
-        
-        fireball_obs = jnp.stack([
-            state.fireballs.positions[:, 0],
-            state.fireballs.positions[:, 1],
-            fireball_widths,
-            fireball_heights,
-            fireball_active
-        ], axis=-1)
-        
+        dragon = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.dragon.x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(c.DRAGON_Y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.DRAGON_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.DRAGON_HEIGHT, dtype=jnp.int32),
+            active=state.dragon.is_active.astype(jnp.int32),
+            orientation=jnp.array(d_ori, dtype=jnp.float32)
+        )
+
+        # --- Fireballs ---
+        fireballs = ObjectObservation.create(
+            x=jnp.clip(state.fireballs.positions[:, 0].astype(jnp.int32), 0, w),
+            y=jnp.clip(state.fireballs.positions[:, 1].astype(jnp.int32), 0, h),
+            width=jnp.full((c.MAX_FIREBALLS,), c.FIREBALL_WIDTH, dtype=jnp.int32),
+            height=jnp.full((c.MAX_FIREBALLS,), c.FIREBALL_HEIGHT, dtype=jnp.int32),
+            active=state.fireballs.active.astype(jnp.int32),
+            # Fireballs fall straight down, no specific orientation
+            orientation=jnp.zeros((c.MAX_FIREBALLS,), dtype=jnp.float32)
+        )
+
         return SirLancelotObservation(
-            player=player_obs,
-            enemies=enemy_obs,
-            dragon=dragon_obs,
-            fireballs=fireball_obs,
-            score=state.score.astype(jnp.float32),
-            lives=state.lives.astype(jnp.float32),
-            stage=state.stage.astype(jnp.float32)
+            player=player,
+            enemies=enemies,
+            dragon=dragon,
+            fireballs=fireballs,
+            score=state.score,
+            lives=state.lives,
+            stage=state.stage,
+            level=state.level
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -2624,34 +2635,21 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
+        h = int(self.consts.SCREEN_HEIGHT)
+        w = int(self.consts.SCREEN_WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-                "width": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-                "height": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-            }),
-            "enemies": spaces.Box(
-                low=0,
-                high=255,
-                shape=(self.consts.NUM_ENEMIES, 5),
-                dtype=jnp.float32
-            ),
-            "dragon": spaces.Box(
-                low=0,
-                high=255,
-                shape=(5,),  # x, y, width, height, active
-                dtype=jnp.float32
-            ),
-            "fireballs": spaces.Box(
-                low=0,
-                high=255,
-                shape=(self.consts.MAX_FIREBALLS, 5),  # 3 fireballs × 5 values each
-                dtype=jnp.float32
-            ),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.float32),
-            "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.float32),
-            "stage": spaces.Box(low=1, high=2, shape=(), dtype=jnp.float32),  # 1=aerial, 2=dragon
+            "player": single_obj,
+            "enemies": spaces.get_object_space(n=self.consts.NUM_ENEMIES, screen_size=screen_size),
+            "dragon": single_obj,
+            "fireballs": spaces.get_object_space(n=self.consts.MAX_FIREBALLS, screen_size=screen_size),
+            "score": spaces.Box(low=0, high=9999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "stage": spaces.Box(low=1, high=2, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=1, high=100, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Box:
@@ -2660,26 +2658,6 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             high=255, 
             shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3), 
             dtype=jnp.uint8
-        )
-    
-    def flat_observation_space(self) -> spaces.Box:
-        """Return the observation space for flattened observations.
-
-        The flat array contains:
-        - Player (x, y, width, height): 4 values
-        - Enemies (4 enemies × 5 values each): 20 values
-        - Dragon (x, y, width, height, active): 5 values
-        - Fireballs (3 fireballs × 5 values each): 15 values
-        - Score: 1 value
-        - Lives: 1 value
-        - Stage: 1 value
-        Total: 47 values
-        """
-        return spaces.Box(
-            low=0.0,
-            high=jnp.inf,  # Score can be arbitrarily high
-            shape=(47,),
-            dtype=jnp.float32
         )
 
 

@@ -15,7 +15,7 @@ from flax import struct
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import AutoDerivedConstants
 import time
@@ -298,14 +298,14 @@ class EntityPosition:
 
 @struct.dataclass
 class ChopperCommandObservation:
-    player: PlayerEntity
-    trucks: jnp.ndarray # Shape (MAX_TRUCKS, 5) - MAX_TRUCKS enemies, each with x,y,w,h,active
-    jets: jnp.ndarray  # Shape (MAX_JETS, 5) - MAX_JETS enemies, each with x,y,w,h,active
-    choppers: jnp.ndarray # Shape (MAX_CHOPPERS, 5) - MAX_CHOPPERS enemies, each with x,y,w,h,active
-    enemy_missiles: jnp.ndarray  # Shape (MAX_MISSILES, 5)
-    player_missile: EntityPosition
-    player_score: jnp.ndarray
+    player: ObjectObservation
+    trucks: ObjectObservation
+    jets: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_JETS enemies, each with x,y,w,h,active
+    choppers: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_CHOPPERS enemies, each with x,y,w,h,active
+    enemy_missiles: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_MISSILES enemies, each with x,y,w,h,active
+    player_missiles: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_MISSILES player, each with x,y,w,h,active
     lives: jnp.ndarray
+    score: jnp.ndarray
 
 @struct.dataclass
 class ChopperCommandInfo:
@@ -390,43 +390,19 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        f32 = jnp.float32
-        SAFE_X_LOW = -60000.0
-        SAFE_X_HIGH = 60000.0
-
-        tw, th = self.consts.TRUCK_SIZE
-        jw, jh = self.consts.JET_SIZE
-        cw, ch = self.consts.CHOPPER_SIZE
-        mw, mh = self.consts.ENEMY_MISSILE_SIZE
-
-        def make_array_box(n, w, h):
-            low = jnp.tile(jnp.array([SAFE_X_LOW, 0.0, 0.0, 0.0, 0.0], dtype=f32), (n, 1))
-            high = jnp.tile(jnp.array([SAFE_X_HIGH, 210.0, float(w), float(h), 1.0], dtype=f32), (n, 1))
-            return spaces.Box(low=low, high=high, dtype=f32)
-
+        """
+        Returns the observation space for Chopper Command.
+        All coordinates are converted to screen space (0-160, 0-210).
+        """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=SAFE_X_LOW, high=SAFE_X_HIGH, shape=(), dtype=f32),
-                "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "o": spaces.Box(low=-1.0, high=1.0, shape=(), dtype=f32),
-                "width": spaces.Box(low=0.0, high=160.0, shape=(), dtype=f32),
-                "height": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=f32),
-            }),
-            "trucks": make_array_box(self.consts.MAX_TRUCKS, tw, th),
-            "jets": make_array_box(self.consts.MAX_JETS, jw, jh),
-            "choppers": make_array_box(self.consts.MAX_CHOPPERS, cw, ch),
-            "enemy_missiles": make_array_box(self.consts.MAX_ENEMY_MISSILES, mw, mh),
-
-            "player_missile": spaces.Dict({
-                "x": spaces.Box(low=SAFE_X_LOW, high=SAFE_X_HIGH, shape=(), dtype=f32),
-                "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "width": spaces.Box(low=0.0, high=160.0, shape=(), dtype=f32),
-                "height": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=f32),
-            }),
-            "player_score": spaces.Box(low=0.0, high=999999.0, shape=(), dtype=f32),
-            "lives": spaces.Box(low=0.0, high=3.0, shape=(), dtype=f32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "trucks": spaces.get_object_space(n=self.consts.MAX_TRUCKS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "jets": spaces.get_object_space(n=self.consts.MAX_JETS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "choppers": spaces.get_object_space(n=self.consts.MAX_CHOPPERS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "enemy_missiles": spaces.get_object_space(n=self.consts.MAX_ENEMY_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "player_missiles": spaces.get_object_space(n=self.consts.MAX_PLAYER_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.uint16),
+            "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.uint8),
         })
 
     def image_space(self) -> spaces.Box:
@@ -442,54 +418,97 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: ChopperCommandState) -> ChopperCommandObservation:
-        f32 = jnp.float32
-
-        player = PlayerEntity(
-            x=jnp.asarray(state.player_x, dtype=f32),
-            y=jnp.asarray(state.player_y, dtype=f32),
-            o=jnp.asarray(state.player_facing_direction, dtype=f32),
-            width=jnp.asarray(self.consts.PLAYER_SIZE[0], dtype=f32),
-            height=jnp.asarray(self.consts.PLAYER_SIZE[1], dtype=f32),
-            active=jnp.asarray(1.0, dtype=f32),
+        # --- Helper for Screen Coordinates ---
+        # Calculate where the player is drawn on screen (center x)
+        screen_center = self.consts.WIDTH // 2
+        player_screen_x_center = screen_center + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING)
+        
+        # --- Player ---
+        player_x = player_screen_x_center - (self.consts.PLAYER_SIZE[0] // 2)
+        # Orientation: 1 -> 90 (Right), -1 -> 270 (Left)
+        player_orientation = jnp.where(state.player_facing_direction == 1, 90.0, 270.0)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(player_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(state.player_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=player_orientation.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        def convert_to_entity(pos, size_wh):
-            # aktiv: dir != 0 und death_timer == 0 (oder >FRAMES… – je nach deiner Logik)
-            active = jnp.where((pos[2] != 0) & (pos[3] == 0), 1.0, 0.0).astype(f32)
-            return jnp.array([pos[0], pos[1], size_wh[0], size_wh[1], active], dtype=f32)
+        # --- Enemies Helper ---
+        # Converts global world coordinates to relative screen coordinates matching the renderer logic
+        def convert_enemies(positions, size, death_threshold):
+            # positions: [x, y, dir, death_timer]
+            # Logic: screen_x = enemy_world_x - player_world_x + (screen_center + local_offset - size//2)
+            static_center_x = screen_center + state.local_player_offset - (size[0] // 2)
+            screen_x = positions[:, 0] - state.player_x + static_center_x
+            
+            screen_y = positions[:, 1]
+            direction = positions[:, 2]
+            timer = positions[:, 3]
+            
+            # Active if direction is set and not fully dead
+            active = (direction != 0) & (timer > death_threshold)
+            orientation = jnp.where(direction == 1, 90.0, jnp.where(direction == -1, 270.0, 0.0))
+            
+            return ObjectObservation.create(
+                x=jnp.clip(screen_x.astype(jnp.int32), 0, self.consts.WIDTH),
+                y=jnp.clip(screen_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+                width=jnp.full(screen_x.shape, size[0], dtype=jnp.int32),
+                height=jnp.full(screen_x.shape, size[1], dtype=jnp.int32),
+                orientation=orientation.astype(jnp.float32),
+                active=active.astype(jnp.int32)
+            )
 
-        def convert_missile(pos, size_wh):
-            active = jnp.where(pos[2] != 0, 1.0, 0.0).astype(f32)
-            return jnp.array([pos[0], pos[1], size_wh[0], size_wh[1], active], dtype=f32)
+        trucks = convert_enemies(state.truck_positions, self.consts.TRUCK_SIZE, self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
+        jets = convert_enemies(state.jet_positions, self.consts.JET_SIZE, self.consts.FRAMES_DEATH_ANIMATION_ENEMY)
+        choppers = convert_enemies(state.chopper_positions, self.consts.CHOPPER_SIZE, self.consts.FRAMES_DEATH_ANIMATION_ENEMY)
 
-        trucks = jax.vmap(lambda p: convert_to_entity(p, self.consts.TRUCK_SIZE))(state.truck_positions.astype(f32))
-        jets = jax.vmap(lambda p: convert_to_entity(p, self.consts.JET_SIZE))(state.jet_positions.astype(f32))
-        choppers = jax.vmap(lambda p: convert_to_entity(p, self.consts.CHOPPER_SIZE))(
-            state.chopper_positions.astype(f32))
-        enemy_missiles = jax.vmap(lambda p: convert_missile(p, self.consts.ENEMY_MISSILE_SIZE))(
-            state.enemy_missile_positions.astype(f32))
-
-        missile_pos = state.player_missile_positions[0].astype(f32)
-        player_missile = EntityPosition(
-            x=missile_pos[0],
-            y=missile_pos[1],
-            width=jnp.asarray(self.consts.PLAYER_MISSILE_SIZE[0], dtype=f32),
-            height=jnp.asarray(self.consts.PLAYER_MISSILE_SIZE[1], dtype=f32),
-            active=jnp.where(missile_pos[2] != 0, 1.0, 0.0).astype(f32),
+        # --- Enemy Missiles ---
+        # Renderer aligns missiles with the chopper size center
+        static_center_x_missile = screen_center + state.local_player_offset - (self.consts.CHOPPER_SIZE[0] // 2)
+        em_x = state.enemy_missile_positions[:, 0] - state.player_x + static_center_x_missile
+        em_y = state.enemy_missile_positions[:, 1]
+        em_active = em_y > 2 # Active check from renderer
+        
+        enemy_missiles = ObjectObservation.create(
+            x=jnp.clip(em_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(em_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.full(em_x.shape, self.consts.ENEMY_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(em_x.shape, self.consts.ENEMY_MISSILE_SIZE[1], dtype=jnp.int32),
+            active=em_active.astype(jnp.int32)
         )
 
-        player_score = jnp.asarray(state.score, dtype=f32)
-        lives = jnp.asarray(state.lives, dtype=f32)
+        # --- Player Missiles ---
+        # Renderer logic: screen_x = missile_x - player_x + chopper_position_top_left
+        chopper_pos_tl = player_screen_x_center - (self.consts.PLAYER_SIZE[0] // 2)
+        
+        pm_x = state.player_missile_positions[:, 0] - state.player_x + chopper_pos_tl
+        pm_y = state.player_missile_positions[:, 1]
+        pm_dir = state.player_missile_positions[:, 2]
+        pm_active = pm_dir != 0
+        pm_orientation = jnp.where(pm_dir == 1, 90.0, jnp.where(pm_dir == -1, 270.0, 0.0))
+
+        player_missiles = ObjectObservation.create(
+            x=jnp.clip(pm_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(pm_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.full(pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[1], dtype=jnp.int32),
+            orientation=pm_orientation.astype(jnp.float32),
+            active=pm_active.astype(jnp.int32)
+        )
 
         return ChopperCommandObservation(
             player=player,
             trucks=trucks,
             jets=jets,
             choppers=choppers,
-            enemy_missiles=enemy_missiles,  # (MAX_ENEMY_MISSILES,5)
-            player_missile=player_missile,
-            player_score=player_score,
-            lives=lives,
+            enemy_missiles=enemy_missiles,
+            player_missiles=player_missiles,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))

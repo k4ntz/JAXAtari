@@ -8,7 +8,7 @@ import numpy as np
 import chex
 import pygame
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -64,20 +64,12 @@ class BreakoutConstants(struct.PyTreeNode):
     REVERSE_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([2, 3, 0, 1]))
 
 @struct.dataclass
-class EntityPosition:
-    x: chex.Array
-    y: chex.Array
-    width: chex.Array
-    height: chex.Array
-
-@struct.dataclass
 class BreakoutObservation:
-    player: EntityPosition
-    ball: EntityPosition
-    blocks: chex.Array
-    # TODO: move this into info??
-    score: chex.Array
-    lives: chex.Array
+    player: ObjectObservation
+    ball: ObjectObservation
+    blocks: jnp.ndarray
+    lives: jnp.ndarray
+    score: jnp.ndarray
 
 @struct.dataclass
 class BreakoutInfo:
@@ -719,30 +711,50 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BreakoutState) -> BreakoutObservation:
+        # --- Player ---
         paddle_width = jnp.where(state.small_paddle, self.consts.PLAYER_SIZE_SMALL[0], self.consts.PLAYER_SIZE[0])
-
-        player = EntityPosition(
-            x=state.player_x,
-            y=jnp.array(self.consts.PLAYER_START_Y),
-            width=paddle_width,
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
+        
+        # Clip coordinates to screen bounds 
+        p_x = jnp.clip(state.player_x, 0, self.consts.WINDOW_WIDTH)
+        p_y = jnp.clip(jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32), 0, self.consts.WINDOW_HEIGHT)
+        
+        player = ObjectObservation.create(
+            x=p_x,
+            y=p_y,
+            width=paddle_width.astype(jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        ball = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(self.consts.BALL_SIZE[0]),
-            height=jnp.array(self.consts.BALL_SIZE[1]),
+        # --- Ball ---
+        # Calculate orientation from velocity vector (0-360 degrees)
+        ball_orientation = jnp.mod(jnp.degrees(jnp.arctan2(state.ball_vel_y, state.ball_vel_x)), 360.0)
+        
+        b_x = jnp.clip(state.ball_x, 0, self.consts.WINDOW_WIDTH)
+        b_y = jnp.clip(state.ball_y, 0, self.consts.WINDOW_HEIGHT)
+
+        ball = ObjectObservation.create(
+            x=b_x,
+            y=b_y,
+            width=jnp.array(self.consts.BALL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.BALL_SIZE[1], dtype=jnp.int32),
+            orientation=ball_orientation,
+            active=jnp.array(1, dtype=jnp.int32)
         )
+        
+        # --- Blocks ---
+        # Pass the grid directly as a dense array
+        blocks = state.blocks.astype(jnp.int32)
 
         return BreakoutObservation(
             player=player,
             ball=ball,
-            blocks=state.blocks,
-            score=state.score,
+            blocks=blocks,
             lives=state.lives,
+            score=state.score
         )
 
+    
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BreakoutState) -> BreakoutInfo:
         return BreakoutInfo(
@@ -771,28 +783,18 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Breakout.
         The observation contains:
-        - player: EntityPosition (x, y, width, height)
-        - ball: EntityPosition (x, y, width, height)
-        - blocks: array of shape (6, 18) with 0/1 values for each block
-        - score: int (0-999999)
-        - lives: int (0-5)
+        - player: ObjectObservation (x, y, width, height)
+        - ball: ObjectObservation (x, y, width, height)
+        - blocks: jnp.ndarray (6, 18) with 0/1 values for each block
+        - lives: jnp.ndarray (1) with the number of lives
+        - score: jnp.ndarray (1) with the score
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)),
+            "ball": spaces.get_object_space(n=None, screen_size=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)),
             "blocks": spaces.Box(low=0, high=1, shape=(self.consts.NUM_ROWS, self.consts.BLOCKS_PER_ROW), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=self.consts.NUM_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -805,22 +807,6 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
             shape=(210, 160, 3),
             dtype=jnp.uint8
         )
-
-
-    def obs_to_flat_array(self, obs: BreakoutObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-            obs.ball.x.flatten(),
-            obs.ball.y.flatten(),
-            obs.ball.width.flatten(),
-            obs.ball.height.flatten(),
-            obs.blocks.flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten(),
-        ])
 
 
 class BreakoutRenderer(JAXGameRenderer):

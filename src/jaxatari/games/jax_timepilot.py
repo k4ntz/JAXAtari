@@ -14,7 +14,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.games.timepilot_levels import (
     LevelConstants,
     TimePilot_Level_1,
@@ -257,22 +257,15 @@ class TimePilotState:
     rng_key: chex.Array
     original_rng_key: chex.Array # keep track of original key to reuse after respawning
 
-@struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    rotation: jnp.ndarray
-    active: jnp.ndarray
 
 @struct.dataclass
 class TimePilotObservation:
-    player: EntityPosition # (x, y, width, height, rotation, active)
-    player_missile: EntityPosition  # (x, y, width, height, rotation, active)
-    enemies: jnp.ndarray # shape (4, 6) - 4 enemies, each with (x, y, width, height, rotation, active)
-    level_boss: EntityPosition # (x, y, width, height, rotation, active)
-    enemy_missiles: EntityPosition  # shape (2, 6) - 4 enemy missiles, each with (x, y, width, height, rotation, active)
+    player: ObjectObservation
+    player_missile: ObjectObservation
+    enemies: ObjectObservation  # n=4
+    level_boss: ObjectObservation
+    enemy_missiles: ObjectObservation  # n=2
+    clouds: ObjectObservation # n=4 (Added clouds for completeness)
 
     level: jnp.ndarray
     score: jnp.ndarray
@@ -1253,79 +1246,154 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: TimePilotState):
+    def _get_observation(self, state: TimePilotState) -> TimePilotObservation:
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
 
-        # player
-        player = EntityPosition(
-            x=jnp.array(self.consts.PLAYER_X),
-            y=jnp.array(self.consts.PLAYER_Y),
-            width=jnp.array(self.consts.PLAYER_SIZE_PER_ROTATION[state.player_rotation][0]),
-            height=jnp.array(self.consts.PLAYER_SIZE_PER_ROTATION[state.player_rotation][1]),
-            rotation=state.player_rotation,
-            active=jnp.logical_and(state.player_active, state.respawn_timer <= 0).astype(jnp.int32)
+        # Helper: Rotation (0..7) -> Degrees
+        # 0=Up(0), 2=Left(270?), 4=Down(180), 6=Right(90)
+        # 8 steps -> 45 degrees per step. 
+        # But wait, logic says 0=Up. Typically 0 deg is Up or Right. 
+        # Let's map directly: 0->0, 1->45... 7->315? 
+        # Check logic:
+        # up=0, left=2 (2*45=90? No, left is usually 270 or -90).
+        # Let's stick to standard 0=Up/North clockwise or counter-clockwise convention if possible, 
+        # or just map raw indices if orientation logic is complex.
+        # Assuming 0=Up, clockwise: 0=0, 2=90(Right), 4=180(Down), 6=270(Left).
+        # But constants comment says: 0=Up, 2=Left, 4=Down, 6=Right. So Counter-Clockwise?
+        # Let's use (rot * 45.0) for now, maybe normalized later.
+        def get_ori(rot):
+            # Map 0->0 (Up), 2->270 (Left), 4->180 (Down), 6->90 (Right)
+            # This is non-linear mapping based on typical conventions.
+            return jnp.select(
+                [rot == 0, rot == 2, rot == 4, rot == 6],
+                [0.0, 270.0, 180.0, 90.0],
+                (rot * 45.0) # Diagonal fallback
+            ).astype(jnp.float32)
+
+        # --- Player ---
+        p_active = jnp.logical_and(state.player_active, state.respawn_timer <= 0).astype(jnp.int32)
+        p_size = c.PLAYER_SIZE_PER_ROTATION[state.player_rotation]
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(c.PLAYER_X, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(c.PLAYER_Y, dtype=jnp.int32), 0, h),
+            width=jnp.array(p_size[0], dtype=jnp.int32),
+            height=jnp.array(p_size[1], dtype=jnp.int32),
+            active=p_active,
+            orientation=get_ori(state.player_rotation)
         )
 
-        # player missile
-        player_missile = EntityPosition(
-            x=state.player_missile_state[0],
-            y=state.player_missile_state[1],
-            width=jnp.array(self.consts.MISSILE_SIZE[0]),
-            height=jnp.array(self.consts.MISSILE_SIZE[1]),
-            rotation=state.player_missile_state[2],
-            active=state.player_missile_state[3]
+        # --- Player Missile ---
+        pm_state = state.player_missile_state
+        pm_active = (pm_state[3] > 0).astype(jnp.int32)
+        
+        player_missile = ObjectObservation.create(
+            x=jnp.clip(pm_state[0], 0, w),
+            y=jnp.clip(pm_state[1], 0, h),
+            width=jnp.array(c.MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.MISSILE_SIZE[1], dtype=jnp.int32),
+            active=pm_active,
+            orientation=get_ori(pm_state[2])
         )
 
-        # enemies
-        def convert_enemy_state_to_entity(enemy_state, enemy_death_timer, idx):
-            return jnp.array([
-                enemy_state[0], # x position
-                enemy_state[1], # y position
-                self._get_level_constants(state.level).enemy_size_per_rotation[enemy_state[2]][0], # width
-                self._get_level_constants(state.level).enemy_size_per_rotation[enemy_state[2]][1], # height
-                enemy_state[2], # rotation
-                jnp.logical_and(jnp.logical_and(enemy_death_timer <= 0, enemy_state[3]), 
-                                jnp.logical_not(idx == state.level_boss)).astype(jnp.int32) # active flag
-            ])
-
-        enemies = jax.vmap(convert_enemy_state_to_entity)(
-            state.enemy_states, state.enemy_death_timers, jnp.array(range(self.consts.MAX_NUMBER_OF_ENEMIES))
-        )
-
-        # level boss
-        level_boss = jax.lax.cond(
-            state.level_boss > -1,
-            lambda: EntityPosition(
-                x=state.enemy_states[state.level_boss][0],
-                y=state.enemy_states[state.level_boss][1],
-                width=jnp.array(self._get_level_constants(state.level).level_boss_size[0]),
-                height=jnp.array(self._get_level_constants(state.level).level_boss_size[1]),
-                rotation=state.enemy_states[state.level_boss][4],
-                active=jnp.logical_and(state.enemy_death_timers[state.level_boss] <= 0, 
-                                       state.enemy_states[state.level_boss][3]).astype(jnp.int32)
-            ),
-            lambda: EntityPosition(
-                x=0,
-                y=0,
-                width=jnp.array(self._get_level_constants(state.level).level_boss_size[0]),
-                height=jnp.array(self._get_level_constants(state.level).level_boss_size[1]),
-                rotation=0,
-                active=0
+        # --- Enemies ---
+        # State: (x, y, rotation, active)
+        e_states = state.enemy_states
+        e_timers = state.enemy_death_timers
+        
+        # Calculate sizes per enemy based on rotation
+        # Note: level_boss overrides size if idx match, handled below
+        # For now, just use rotation lookup for standard enemies
+        # This is tricky without vectorizing lookup of tuples.
+        # Approximation: Use max size or average, or vmap the lookup.
+        
+        def get_enemy_props(i, s, t):
+            # Size lookup
+            # If boss:
+            is_boss = (i == state.level_boss)
+            # Level constants are needed for sizes. Accessing _get_level_constants inside vmap might be slow/tricky 
+            # if not static. But here we are inside jitted _get_observation.
+            # We can use the constants directly.
+            lvl_consts = self._get_level_constants(state.level)
+            
+            size = jax.lax.cond(
+                is_boss,
+                lambda: lvl_consts.level_boss_size,
+                lambda: lvl_consts.enemy_size_per_rotation[s[2]]
             )
+            
+            active = jnp.logical_and(
+                jnp.logical_and(t <= 0, s[3]), 
+                jnp.logical_not(is_boss) # Boss is separate object
+            ).astype(jnp.int32)
+            
+            return size[0], size[1], active, get_ori(s[2])
+
+        ew, eh, ea, eo = jax.vmap(get_enemy_props)(
+            jnp.arange(c.MAX_NUMBER_OF_ENEMIES), e_states, e_timers
+        )
+        
+        enemies = ObjectObservation.create(
+            x=jnp.clip(e_states[:, 0], 0, w),
+            y=jnp.clip(e_states[:, 1], 0, h),
+            width=ew.astype(jnp.int32),
+            height=eh.astype(jnp.int32),
+            active=ea,
+            orientation=eo
         )
 
-        # enemy missiles
-        def convert_enemy_missile_state_to_entity(enemy_missile_state):
-            return jnp.array([
-                enemy_missile_state[0], # x position
-                enemy_missile_state[1], # y position
-                jnp.array(self.consts.MISSILE_SIZE[0]),
-                jnp.array(self.consts.MISSILE_SIZE[1]),
-                enemy_missile_state[2], # rotation
-                enemy_missile_state[3] # active flag
-            ])
+        # --- Level Boss ---
+        # Extracted from enemy list if active
+        boss_idx = state.level_boss
+        boss_active = (boss_idx > -1).astype(jnp.int32)
+        
+        # Get boss props if active, else dummy
+        def get_boss_props():
+            s = e_states[boss_idx]
+            t = e_timers[boss_idx]
+            lvl_consts = self._get_level_constants(state.level)
+            size = lvl_consts.level_boss_size
+            active = jnp.logical_and(t <= 0, s[3]).astype(jnp.int32)
+            return s[0], s[1], size[0], size[1], active, get_ori(s[2])
 
-        enemy_missiles = jax.vmap(convert_enemy_missile_state_to_entity)(
-            state.enemy_missile_states
+        bx, by, bw, bh, ba, bo = jax.lax.cond(
+            boss_active == 1,
+            get_boss_props,
+            lambda: (0, 0, 0, 0, 0, 0.0)
+        )
+        
+        level_boss = ObjectObservation.create(
+            x=jnp.clip(jnp.array(bx, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(by, dtype=jnp.int32), 0, h),
+            width=jnp.array(bw, dtype=jnp.int32),
+            height=jnp.array(bh, dtype=jnp.int32),
+            active=jnp.array(ba, dtype=jnp.int32),
+            orientation=jnp.array(bo, dtype=jnp.float32)
+        )
+
+        # --- Enemy Missiles ---
+        em_states = state.enemy_missile_states
+        em_active = em_states[:, 3].astype(jnp.int32)
+        
+        enemy_missiles = ObjectObservation.create(
+            x=jnp.clip(em_states[:, 0], 0, w),
+            y=jnp.clip(em_states[:, 1], 0, h),
+            width=jnp.full((c.MAX_ENEMY_MISSILES,), c.MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((c.MAX_ENEMY_MISSILES,), c.MISSILE_SIZE[1], dtype=jnp.int32),
+            active=em_active,
+            orientation=jax.vmap(get_ori)(em_states[:, 2])
+        )
+
+        # --- Clouds ---
+        cp = state.cloud_positions
+        # Clouds always active? Yes, usually background.
+        clouds = ObjectObservation.create(
+            x=jnp.clip(cp[:, 0], 0, w),
+            y=jnp.clip(cp[:, 1], 0, h),
+            width=jnp.full((4,), 32, dtype=jnp.int32), # Approx cloud size?
+            height=jnp.full((4,), 16, dtype=jnp.int32),
+            active=jnp.ones((4,), dtype=jnp.int32),
         )
 
         return TimePilotObservation(
@@ -1334,85 +1402,36 @@ class JaxTimePilot(JaxEnvironment[TimePilotState, TimePilotObservation, TimePilo
             enemies=enemies,
             level_boss=level_boss,
             enemy_missiles=enemy_missiles,
+            clouds=clouds,
             level=state.level,
             score=state.score,
             lives=state.lives,
             enemies_remaining=state.enemies_remaining
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: TimePilotObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-
-        def entity_pos_to_flat_array(obj: EntityPosition):
-            return jnp.concatenate([
-                jnp.atleast_1d(obj.x),
-                jnp.atleast_1d(obj.y),
-                jnp.atleast_1d(obj.width),
-                jnp.atleast_1d(obj.height),
-                jnp.atleast_1d(obj.rotation),
-                jnp.atleast_1d(obj.active)])
-
-        return jnp.concatenate([
-            entity_pos_to_flat_array(obs.player),
-            entity_pos_to_flat_array(obs.player_missile),
-            obs.enemies.flatten(),
-            entity_pos_to_flat_array(obs.level_boss),
-            obs.enemy_missiles.flatten(),
-
-            obs.level.flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten(),
-            obs.enemies_remaining.flatten()
-        ])
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces.Box: 
-        """Returns the observation space for TimePilot.
-        The observation contains:
-        - player: EntityPosition (x, y, width, height, rotation, active)
-        - player_missile: EntityPosition (x, y, width, height, rotation, active)
-        - enemies: array of shape (4, 6) with (x, y, width, height, rotation, active)
-        - level_boss: EntityPosition (x, y, width, height, rotation, active)
-        - enemy_missiles: array of shape (2, 6) with (x, y, width, height, rotation, active)
-        - level: int (1-5)
-        - score: int (0-999900)
-        - lives: int (0-5)
-        - enemies_remaining: int (0-8)
-        """
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_missile": spaces.Dict({
-                "x": spaces.Box(low=-8, high=168, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=188, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "enemies": spaces.Box(low=-50, high=226, shape=(self.consts.MAX_NUMBER_OF_ENEMIES, 6), dtype=jnp.int32),
-            "level_boss": spaces.Dict({
-                "x": spaces.Box(low=-50, high=210, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-17, high=226, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "enemy_missiles": spaces.Box(low=-4, high=180, shape=(self.consts.MAX_ENEMY_MISSILES, 6), dtype=jnp.int32),
+            "player": single_obj,
+            "player_missile": single_obj,
+            "enemies": spaces.get_object_space(n=c.MAX_NUMBER_OF_ENEMIES, screen_size=screen_size),
+            "level_boss": single_obj,
+            "enemy_missiles": spaces.get_object_space(n=c.MAX_ENEMY_MISSILES, screen_size=screen_size),
+            "clouds": spaces.get_object_space(n=4, screen_size=screen_size),
+            
             "level": spaces.Box(low=1, high=5, shape=(), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
-            "enemies_remaining": spaces.Box(low=0, high=self.consts.INITIAL_ENEMIES_REMAINING, shape=(), dtype=jnp.int32)
+            "score": spaces.Box(low=0, high=c.MAX_SCORE, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=c.MAX_LIVES, shape=(), dtype=jnp.int32),
+            "enemies_remaining": spaces.Box(low=0, high=c.INITIAL_ENEMIES_REMAINING, shape=(), dtype=jnp.int32)
         })
 
     def image_space(self) -> spaces.Box:

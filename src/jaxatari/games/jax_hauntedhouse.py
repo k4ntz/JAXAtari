@@ -13,7 +13,7 @@ from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 
 def _load_collision_masks():
@@ -287,24 +287,14 @@ class HauntedHouseState:
 
 @struct.dataclass
 class HauntedHouseObservation:
-    player: EntityPosition
-    ghost: EntityPosition
-    spider: EntityPosition
-    bat: EntityPosition
+    player: ObjectObservation
+    enemies: ObjectObservation  # Merged Ghost, Spider, Bat
+    items: ObjectObservation    # Merged Scepter, Urn Parts, Full Urn
     item_held: jnp.ndarray
-    scepter: EntityPosition
-    urnleft: EntityPosition
-    urnmiddle: EntityPosition
-    urnright: EntityPosition
-    urnleftmiddle: EntityPosition
-    urnmiddleright: EntityPosition
-    urnleftright: EntityPosition
-    urn: EntityPosition
     match_duration: jnp.ndarray
     matches_used: jnp.ndarray
     chasing: jnp.ndarray
     lives: jnp.ndarray
-
 
 @struct.dataclass
 class HauntedHouseInfo:
@@ -1050,301 +1040,120 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: HauntedHouseState):
-        player = EntityPosition(
-            x=state.player[0],
-            y=state.player[1],
-            floor=state.player[2],
-            width=jnp.array(self.consts.PLAYER_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
+    def _get_observation(self, state: HauntedHouseState) -> HauntedHouseObservation:
+        # --- Player ---
+        p_dir = state.player_direction[1]
+        p_ori = jnp.select(
+            [p_dir == 1, p_dir == 3, p_dir == 5, p_dir == 7],
+            [0.0, 90.0, 180.0, 270.0],
+            default=0.0
         )
 
-        ghost = EntityPosition(
-            x=state.ghost[0],
-            y=state.ghost[1],
-            floor=state.ghost[2],
-            width=jnp.array(self.consts.GHOST_SIZE[0]),
-            height=jnp.array(self.consts.GHOST_SIZE[1]),
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player[0], 0, self.consts.WIDTH),
+            y=jnp.clip(state.player[1], 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=p_ori.astype(jnp.float32),
+            state=state.player[2].astype(jnp.int32), # Floor number as state
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        spider = EntityPosition(
-            x=state.spider[0],
-            y=state.spider[1],
-            floor=state.spider[2],
-            width=jnp.array(self.consts.SPIDER_SIZE[0]),
-            height=jnp.array(self.consts.SPIDER_SIZE[1]),
+        # --- Enemies (Merged) ---
+        # 0: Ghost, 1: Spider, 2: Bat
+        en_pos = jnp.stack([state.ghost, state.spider, state.bat])
+        en_sizes = jnp.array([
+            self.consts.GHOST_SIZE, 
+            self.consts.SPIDER_SIZE, 
+            self.consts.BAT_SIZE
+        ])
+        
+        # Visibility Check
+        def check_enemy_vis(pos, size):
+            visible_floor = (state.player[2] == pos[2])
+            # Reconstruct EntityPosition just for the check function
+            e_ent = EntityPosition(pos[0], pos[1], pos[2], size[0], size[1])
+            visible_screen = self.check_visibility(state.player, e_ent)
+            return visible_floor & visible_screen
+
+        en_active = jax.vmap(check_enemy_vis)(en_pos, en_sizes)
+        
+        enemies = ObjectObservation.create(
+            x=jnp.clip(en_pos[:, 0], 0, self.consts.WIDTH),
+            y=jnp.clip(en_pos[:, 1], 0, self.consts.HEIGHT),
+            width=en_sizes[:, 0].astype(jnp.int32),
+            height=en_sizes[:, 1].astype(jnp.int32),
+            visual_id=jnp.arange(3, dtype=jnp.int32), # ID distinguishes enemy type
+            active=en_active.astype(jnp.int32)
         )
 
-        bat = EntityPosition(
-            x=state.bat[0],
-            y=state.bat[1],
-            floor=state.bat[2],
-            width=jnp.array(self.consts.BAT_SIZE[0]),
-            height=jnp.array(self.consts.BAT_SIZE[1]),
+        # --- Items (Merged) ---
+        # 0: Scepter
+        # 1-6: Urn Pieces
+        # 7: Full Urn
+        item_pos_stack = jnp.stack([
+            state.scepter, 
+            state.urn_left, state.urn_middle, state.urn_right,
+            state.urn_left_middle, state.urn_middle_right, state.urn_left_right, 
+            state.urn
+        ])
+        
+        item_sizes = jnp.array([
+            self.consts.SCEPTER_SIZE,
+            self.consts.URN_LEFT_SIZE, self.consts.URN_MIDDLE_SIZE, self.consts.URN_RIGHT_SIZE,
+            self.consts.URN_LEFT_MIDDLE_SIZE, self.consts.URN_MIDDLE_RIGHT_SIZE, self.consts.URN_LEFT_RIGHT_SIZE,
+            self.consts.URN_SIZE
+        ])
+        
+        is_lit = state.match_duration > 0
+        
+        def check_item_vis(pos, size):
+            visible_floor = (state.player[2] == pos[2])
+            p_ent = EntityPosition(state.player[0], state.player[1], state.player[2], self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1])
+            visible_light = self.check_illuminated_single(p_ent, pos, size)
+            return visible_floor & is_lit & visible_light
+
+        item_active = jax.vmap(check_item_vis)(item_pos_stack, item_sizes)
+
+        items = ObjectObservation.create(
+            x=jnp.clip(item_pos_stack[:, 0], 0, self.consts.WIDTH),
+            y=jnp.clip(item_pos_stack[:, 1], 0, self.consts.HEIGHT),
+            width=item_sizes[:, 0].astype(jnp.int32),
+            height=item_sizes[:, 1].astype(jnp.int32),
+            visual_id=jnp.arange(8, dtype=jnp.int32), # Matches the item_held ID logic
+            active=item_active.astype(jnp.int32)
         )
-
-        scepter = EntityPosition(
-            x=state.scepter[0],
-            y=state.scepter[1],
-            floor=state.scepter[2],
-            width=jnp.array(self.consts.SCEPTER_SIZE[0]),
-            height=jnp.array(self.consts.SCEPTER_SIZE[1]),
-        )
-
-        urnleft = EntityPosition(
-            x=state.urn_left[0],
-            y=state.urn_left[1],
-            floor=state.urn_left[2],
-            width=jnp.array(self.consts.URN_LEFT_SIZE[0]),
-            height=jnp.array(self.consts.URN_LEFT_SIZE[1]),
-        )
-
-        urnmiddle = EntityPosition(
-            x=state.urn_middle[0],
-            y=state.urn_middle[1],
-            floor=state.urn_middle[2],
-            width=jnp.array(self.consts.URN_MIDDLE_SIZE[0]),
-            height=jnp.array(self.consts.URN_MIDDLE_SIZE[1]),
-        )
-
-        urnright = EntityPosition(
-            x=state.urn_right[0],
-            y=state.urn_right[1],
-            floor=state.urn_right[2],
-            width=jnp.array(self.consts.URN_RIGHT_SIZE[0]),
-            height=jnp.array(self.consts.URN_RIGHT_SIZE[1]),
-        )
-
-        urnleftmiddle = EntityPosition(
-            x=state.urn_left_middle[0],
-            y=state.urn_left_middle[1],
-            floor=state.urn_left_middle[2],
-            width=jnp.array(self.consts.URN_LEFT_MIDDLE_SIZE[0]),
-            height=jnp.array(self.consts.URN_LEFT_MIDDLE_SIZE[1]),
-        )
-
-        urnmiddleright = EntityPosition(
-            x=state.urn_middle_right[0],
-            y=state.urn_middle_right[1],
-            floor=state.urn_middle_right[2],
-            width=jnp.array(self.consts.URN_MIDDLE_RIGHT_SIZE[0]),
-            height=jnp.array(self.consts.URN_MIDDLE_RIGHT_SIZE[1]),
-        )
-
-        urnleftright = EntityPosition(
-            x=state.urn_left_right[0],
-            y=state.urn_left_right[1],
-            floor=state.urn_left_right[2],
-            width=jnp.array(self.consts.URN_LEFT_RIGHT_SIZE[0]),
-            height=jnp.array(self.consts.URN_LEFT_RIGHT_SIZE[1]),
-        )
-
-        urn = EntityPosition(
-            x=state.urn[0],
-            y=state.urn[1],
-            floor=state.urn[2],
-            width=jnp.array(self.consts.URN_SIZE[0]),
-            height=jnp.array(self.consts.URN_SIZE[1]),
-        )
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_visibility(state.player, ghost),
-                               lambda x: False, None)
-        ghost = jax.lax.cond(visible, lambda x: ghost, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.spider[2],
-                               lambda x: self.check_visibility(state.player, spider),
-                               lambda x: False, None)
-        spider = jax.lax.cond(visible, lambda x: spider, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.bat[2],
-                               lambda x: self.check_visibility(state.player, bat),
-                               lambda x: False, None)
-        bat = jax.lax.cond(visible, lambda x: bat, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.scepter[2],
-                               lambda x: self.check_illuminated_single(player, state.scepter, self.consts.SCEPTER_SIZE),
-                               lambda x: False, None)
-        scepter = jax.lax.cond(visible, lambda x: scepter, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_left, self.consts.URN_LEFT_SIZE),
-                               lambda x: False, None)
-        urnleft = jax.lax.cond(visible, lambda x: urnleft, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_middle, self.consts.URN_MIDDLE_SIZE),
-                               lambda x: False, None)
-        urnmiddle = jax.lax.cond(visible, lambda x: urnmiddle, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_right, self.consts.URN_RIGHT_SIZE),
-                               lambda x: False, None)
-        urnright = jax.lax.cond(visible, lambda x: urnright, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_left_middle, self.consts.URN_LEFT_MIDDLE_SIZE),
-                               lambda x: False, None)
-        urnleftmiddle = jax.lax.cond(visible, lambda x: urnleftmiddle, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_middle_right, self.consts.URN_MIDDLE_RIGHT_SIZE),
-                               lambda x: False, None)
-        urnmiddleright = jax.lax.cond(visible, lambda x: urnmiddleright, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn_left_right, self.consts.URN_LEFT_RIGHT_SIZE),
-                               lambda x: False, None)
-        urnleftright = jax.lax.cond(visible, lambda x: urnleftright, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-        visible = jax.lax.cond(state.player[2] == state.ghost[2],
-                               lambda x: self.check_illuminated_single(player, state.urn, self.consts.URN_SIZE),
-                               lambda x: False, None)
-        urn = jax.lax.cond(visible, lambda x: urn, lambda x: self.consts.INVISIBLE_ENTITY, None)
-
-
 
         return HauntedHouseObservation(
             player=player,
-            ghost=ghost,
-            spider=spider,
-            bat=bat,
+            enemies=enemies,
+            items=items,
             item_held=state.item_held,
-            scepter=scepter,
-            urnleft=urnleft,
-            urnmiddle=urnmiddle,
-            urnright=urnright,
-            urnleftmiddle=urnleftmiddle,
-            urnmiddleright=urnmiddleright,
-            urnleftright=urnleftright,
-            urn=urn,
-            match_duration=state.match_duration > 0,
+            match_duration=jnp.int32(state.match_duration > 0),
             matches_used=state.matches_used,
-            chasing=state.chasing > 0,
+            chasing=jnp.int32(state.chasing > 0),
             lives=state.lives
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: HauntedHouseObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.floor.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-
-            obs.ghost.x.flatten(),
-            obs.ghost.y.flatten(),
-            obs.ghost.floor.flatten(),
-            obs.ghost.width.flatten(),
-            obs.ghost.height.flatten(),
-
-            obs.spider.x.flatten(),
-            obs.spider.y.flatten(),
-            obs.spider.floor.flatten(),
-            obs.spider.width.flatten(),
-            obs.spider.height.flatten(),
-
-            obs.bat.x.flatten(),
-            obs.bat.y.flatten(),
-            obs.bat.floor.flatten(),
-            obs.bat.width.flatten(),
-            obs.bat.height.flatten(),
-
-            obs.item_held.flatten(),
-
-            obs.scepter.x.flatten(),
-            obs.scepter.y.flatten(),
-            obs.scepter.floor.flatten(),
-            obs.scepter.width.flatten(),
-            obs.scepter.height.flatten(),
-
-            obs.urnleft.x.flatten(),
-            obs.urnleft.y.flatten(),
-            obs.urnleft.floor.flatten(),
-            obs.urnleft.width.flatten(),
-            obs.urnleft.height.flatten(),
-
-            obs.urnmiddle.x.flatten(),
-            obs.urnmiddle.y.flatten(),
-            obs.urnmiddle.floor.flatten(),
-            obs.urnmiddle.width.flatten(),
-            obs.urnmiddle.height.flatten(),
-
-            obs.urnright.x.flatten(),
-            obs.urnright.y.flatten(),
-            obs.urnright.floor.flatten(),
-            obs.urnright.width.flatten(),
-            obs.urnright.height.flatten(),
-
-            obs.urnleftmiddle.x.flatten(),
-            obs.urnleftmiddle.y.flatten(),
-            obs.urnleftmiddle.floor.flatten(),
-            obs.urnleftmiddle.width.flatten(),
-            obs.urnleftmiddle.height.flatten(),
-
-            obs.urnmiddleright.x.flatten(),
-            obs.urnmiddleright.y.flatten(),
-            obs.urnmiddleright.floor.flatten(),
-            obs.urnmiddleright.width.flatten(),
-            obs.urnmiddleright.height.flatten(),
-
-            obs.urnleftright.x.flatten(),
-            obs.urnleftright.y.flatten(),
-            obs.urnleftright.floor.flatten(),
-            obs.urnleftright.width.flatten(),
-            obs.urnleftright.height.flatten(),
-
-            obs.urn.x.flatten(),
-            obs.urn.y.flatten(),
-            obs.urn.floor.flatten(),
-            obs.urn.width.flatten(),
-            obs.urn.height.flatten(),
-
-            obs.match_duration.flatten(),
-            obs.matches_used.flatten(),
-            obs.chasing.flatten(),
-            obs.lives.flatten()])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces:
-        # Define a reusable space for entities that can be invisible
-        entity_space = spaces.Dict({
-            "x": spaces.Box(low=-1, high=160, shape=(), dtype=jnp.int32),
-            "y": spaces.Box(low=-1, high=506, shape=(), dtype=jnp.int32),  # Max y is 506
-            "floor": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
-            "width": spaces.Box(low=-1, high=16, shape=(), dtype=jnp.int32),
-            "height": spaces.Box(low=-1, high=20, shape=(), dtype=jnp.int32),  # Bat height is 20
-        })
-
+    def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=506, shape=(), dtype=jnp.int32),  # Max y is 506
-                "floor": spaces.Box(low=1, high=4, shape=(), dtype=jnp.int32),  # Player is always on floor 1-4
-                "width": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-            }),
-            "ghost": entity_space,
-            "spider": entity_space,
-            "bat": entity_space,
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            
+            # Enemies: Ghost, Spider, Bat (n=3)
+            "enemies": spaces.get_object_space(n=3, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            
+            # Items: Scepter, 6 Urn pieces, Full Urn (n=8)
+            "items": spaces.get_object_space(n=8, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            
             "item_held": spaces.Discrete(9),
-            "scepter": entity_space,
-            "urnleft": entity_space,
-            "urnmiddle": entity_space,
-            "urnright": entity_space,
-            "urnleftmiddle": entity_space,
-            "urnmiddleright": entity_space,
-            "urnleftright": entity_space,
-            "urn": entity_space,
             "match_duration": spaces.Discrete(2),
             "matches_used": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "chasing": spaces.Discrete(2),
             "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
         })
-
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(

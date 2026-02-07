@@ -10,9 +10,8 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.modification import AutoDerivedConstants
-
 
 def _get_default_asset_config() -> tuple:
     """
@@ -141,25 +140,14 @@ class HumanCannonballState:
     animation_running: chex.Array
     animation_counter: chex.Array
 
-
-# Position of the human and the water tower
-@struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
 # The state of the game
 @struct.dataclass
-class HumanCannonballObservation:
-    human: EntityPosition
-    water_tower: EntityPosition
-    angle: jnp.ndarray
+class HumanCannonballObservation(struct.PyTreeNode):
+    human: ObjectObservation
+    water_tower: ObjectObservation
+    cannon: ObjectObservation
     mph: jnp.ndarray
     score: jnp.ndarray
-    misses: jnp.ndarray
 
 
 @struct.dataclass
@@ -722,69 +710,62 @@ class JaxHumanCannonball(JaxEnvironment[HumanCannonballState, HumanCannonballObs
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: HumanCannonballState) -> HumanCannonballObservation:
-        # Create human projectile
-        human_cannonball = EntityPosition(
-            x=state.human_x,
-            y=state.human_y,
-            width=jnp.array(self.consts.HUMAN_SIZE[0]),
-            height=jnp.array(self.consts.HUMAN_SIZE[1]),
+        # --- Human ---
+        # Calculate orientation from velocity (0-360)
+        # If not launched, velocity is 0, angle -> 0 (or could use cannon angle)
+        vel_angle_rad = jnp.arctan2(state.human_y_vel, state.human_x_vel) # y is down positive? need to check coord system
+        # Assuming standard screen coords (y down), velocity up is negative y
+        # arctan2(y, x) -> standard math angle. Screen angle 0 is right (90), 90 is down (180).
+        # Let's just use standard math degrees for now: 0=Right, 90=Down, 180=Left, 270=Up
+        h_ori = jnp.mod(jnp.degrees(vel_angle_rad), 360.0)
+        
+        human = ObjectObservation.create(
+            x=jnp.clip(jnp.round(state.human_x).astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(jnp.round(state.human_y).astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.HUMAN_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.HUMAN_SIZE[1], dtype=jnp.int32),
+            orientation=h_ori.astype(jnp.float32),
+            active=state.human_launched.astype(jnp.int32)
         )
 
-        # Create water tower
-        water_tower = EntityPosition(
-            x=state.water_tower_x,
-            y=jnp.array(self.consts.WATER_TOWER_Y),
-            width=jnp.array(self.consts.WATER_TOWER_WIDTH),
-            height=jnp.array(self.consts.WATER_TOWER_WALL_HEIGHT - 1),
+        # --- Water Tower ---
+        water_tower = ObjectObservation.create(
+            x=jnp.clip(jnp.round(state.water_tower_x).astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(jnp.array(self.consts.WATER_TOWER_Y - self.consts.WATER_TOWER_WALL_HEIGHT + 1, dtype=jnp.int32), 0, self.consts.HEIGHT), # Top-left Y
+            width=jnp.array(self.consts.WATER_TOWER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.WATER_TOWER_WALL_HEIGHT, dtype=jnp.int32), # Use wall height
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Cannon ---
+        # Static object, but useful for relational agents
+        cannon = ObjectObservation.create(
+            x=jnp.array(self.consts.CANNON_X, dtype=jnp.int32),
+            y=jnp.array(self.consts.CANNON_Y, dtype=jnp.int32),
+            width=jnp.array(20, dtype=jnp.int32), # Approx width
+            height=jnp.array(20, dtype=jnp.int32), # Approx height
+            orientation=state.angle.astype(jnp.float32), # Use cannon angle
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
         return HumanCannonballObservation(
-            human=human_cannonball,
+            human=human,
             water_tower=water_tower,
-            angle=state.angle,
-            mph=state.mph_values,
-            score=state.score,
-            misses=state.misses
+            cannon=cannon,
+            mph=state.mph_values.astype(jnp.int32),
+            score=state.score.astype(jnp.int32),
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: HumanCannonballObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.human.x.flatten(),
-            obs.human.y.flatten(),
-            obs.human.width.flatten(),
-            obs.human.height.flatten(),
-            obs.water_tower.x.flatten(),
-            obs.water_tower.y.flatten(),
-            obs.water_tower.width.flatten(),
-            obs.water_tower.height.flatten(),
-            obs.angle.flatten(),
-            obs.mph.flatten(),
-            obs.score.flatten(),
-            obs.misses.flatten()
-        ])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "human": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=()),
-                "y": spaces.Box(low=0, high=210, shape=()),
-                "width": spaces.Box(low=0, high=160, shape=()),
-                "height": spaces.Box(low=0, high=210, shape=()),
-            }),
-            "water_tower": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=()),
-                "y": spaces.Box(low=0, high=210, shape=()),
-                "width": spaces.Box(low=0, high=160, shape=()),
-                "height": spaces.Box(low=0, high=210, shape=()),
-            }),
-            "angle": spaces.Box(low=20, high=80, shape=()),
-            "mph": spaces.Box(low=28, high=45, shape=()),
-            "score": spaces.Box(low=0, high=7, shape=()),
-            "misses": spaces.Box(low=0, high=7, shape=()),
+            "human": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "water_tower": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "cannon": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "mph": spaces.Box(low=28, high=45, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=7, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

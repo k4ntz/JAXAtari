@@ -12,7 +12,7 @@ from jaxatari.environment import JAXAtariAction as Action
 # Use the new rendering utilities
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jax.scipy.ndimage import map_coordinates
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import AutoDerivedConstants
 
@@ -252,11 +252,14 @@ class BankHeistState(struct.PyTreeNode):
 
 #TODO: Add Background collision Map, Fuel, Fuel Refill and others
 class BankHeistObservation(struct.PyTreeNode):
-    player: FlatEntity
+    player: ObjectObservation
+    enemies: ObjectObservation
+    banks: ObjectObservation
+    dynamite: ObjectObservation
+    fuel: jnp.ndarray
+    fuel_refill: jnp.ndarray
     lives: jnp.ndarray
     score: jnp.ndarray
-    enemies: jnp.ndarray
-    banks: jnp.ndarray
 
 class BankHeistInfo(struct.PyTreeNode):
     time: jnp.ndarray
@@ -306,22 +309,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         """
         return spaces.Discrete(len(self.ACTION_SET))
     
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
         """
         Returns the observation space of the environment.
         """
-        # Return a box space representing the stacked frames
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
-                "visibility": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32)
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "enemies": spaces.get_object_space(n=3, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "banks": spaces.get_object_space(n=3, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "dynamite": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "fuel": spaces.Box(low=0, high=self.consts.FUEL_CAPACITY, shape=(), dtype=jnp.float32),
+            "fuel_refill": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
-            "enemies": spaces.Box(low=0, high=210, shape=(4, 4), dtype=jnp.int32),
-            "banks": spaces.Box(low=0, high=210, shape=(4, 4), dtype=jnp.int32)
         })
     
     def image_space(self) -> spaces.Box:
@@ -1285,28 +1285,56 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BankHeistState) -> BankHeistObservation:
-        police = jnp.zeros((4, 4), dtype=jnp.int32)
-        banks = jnp.zeros((4, 4), dtype=jnp.int32)
-        for i in range(state.enemy_positions.position.shape[0]):
-            police = police.at[i].set(
-                jnp.array([state.enemy_positions.position[i][0] * state.enemy_positions.visibility[i], 
-                           state.enemy_positions.position[i][1] * state.enemy_positions.visibility[i], 
-                           state.enemy_positions.direction[i] * state.enemy_positions.visibility[i], 
-                           state.enemy_positions.visibility[i]])
-            )
-            banks = banks.at[i].set(
-                jnp.array([state.bank_positions.position[i][0] * state.bank_positions.visibility[i], 
-                           state.bank_positions.position[i][1] * state.bank_positions.visibility[i], 
-                           state.bank_positions.direction[i] * state.bank_positions.visibility[i], 
-                           state.bank_positions.visibility[i]])
-            )
+
+        dir_to_angle = jnp.array([180.0, 0.0, 90.0, 270.0, 0.0], dtype=jnp.float32)
+
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player.position[0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.player.position[1], 0, self.consts.HEIGHT - 1),
+            width=jnp.array(self.consts.COLLISION_BOX[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.COLLISION_BOX[1], dtype=jnp.int32),
+            orientation=dir_to_angle[state.player.direction],
+            active=state.player.visibility
+        )
+        
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemy_positions.position[:, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.enemy_positions.position[:, 1], 0, self.consts.HEIGHT - 1),
+            width=jnp.full((3,), self.consts.COLLISION_BOX[0], dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.COLLISION_BOX[1], dtype=jnp.int32),
+            orientation=dir_to_angle[state.enemy_positions.direction],
+            active=state.enemy_positions.visibility
+        )
+
+        banks = ObjectObservation.create(
+            x=jnp.clip(state.bank_positions.position[:, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.bank_positions.position[:, 1], 0, self.consts.HEIGHT - 1),
+            width=jnp.full((3,), self.consts.COLLISION_BOX[0], dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.COLLISION_BOX[1], dtype=jnp.int32),
+            orientation=dir_to_angle[state.bank_positions.direction],
+            active=state.bank_positions.visibility
+        )
+        
+        # Determine if dynamite is active (not at [-1, -1])
+        dynamite_active = jnp.logical_not(jnp.all(state.dynamite_position == jnp.array([-1, -1])))
+        dynamite = ObjectObservation.create(
+            x=jnp.clip(state.dynamite_position[0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.dynamite_position[1], 0, self.consts.HEIGHT - 1),
+            width=jnp.array(self.consts.COLLISION_BOX[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.COLLISION_BOX[1], dtype=jnp.int32),
+            active=dynamite_active.astype(jnp.int32)
+        )
+
         return BankHeistObservation(
-            player=flat_entity(state.player),
-            lives=state.player_lives,
-            score=state.money,
-            enemies=police,
+            player=player,
+            enemies=enemies,
             banks=banks,
-            )
+            dynamite=dynamite,
+            fuel=state.fuel,
+            fuel_refill=state.fuel_refill,
+            lives=state.player_lives,
+            score=state.money
+        )
 
     def render(self, state: BankHeistState) -> jnp.ndarray:
         """Render the game state to a raster image."""

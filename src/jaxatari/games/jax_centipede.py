@@ -18,7 +18,7 @@ from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
 def _create_static_procedural_sprites() -> dict:
@@ -226,34 +226,16 @@ class CentipedeState:
     rng_key: chex.PRNGKey
 
 @struct.dataclass
-class PlayerEntity:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    o: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-@struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    
-    active: jnp.ndarray
-
-@struct.dataclass
 class CentipedeObservation:
-    player: PlayerEntity
-    mushrooms: jnp.ndarray      # Shape (MAX_MUSHROOMS, 5) - MAX_MUSHROOMS mushrooms, each with x,y,w,h,active
-    centipede: jnp.ndarray      # Shape (MAX_SEGMENTS, 5) - MAX_SEGMENTS Centipede segments, each with x,y,w,h,active
-    spider: EntityPosition      # Shape (5,) - one spider with x,y,w,h,active
-    flea: EntityPosition        # Shape (5,) - one flea with x,y,w,h,active
-    scorpion: EntityPosition    # Shape (5,) - one scorpion with x,y,w,h,active
-    player_spell: EntityPosition    # Shape (5,) - one spell with x,y,w,h,active
-    score: jnp.ndarray
+    player: ObjectObservation
+    mushrooms: ObjectObservation # Shape (MAX_MUSHROOMS, 5) - MAX_MUSHROOMS mushrooms, each with x,y,w,h,active
+    centipede: ObjectObservation      # Shape (MAX_SEGMENTS, 5) - MAX_SEGMENTS Centipede segments, each with x,y,w,h,active
+    spider: ObjectObservation      # Shape (5,) - one spider with x,y,w,h,active
+    flea: ObjectObservation        # Shape (5,) - one flea with x,y,w,h,active
+    scorpion: ObjectObservation    # Shape (5,) - one scorpion with x,y,w,h,active
+    player_spell: ObjectObservation    # Shape (5,) - one spell with x,y,w,h,active
     lives: jnp.ndarray
+    score: jnp.ndarray
 
 @struct.dataclass
 class CentipedeInfo:
@@ -299,94 +281,30 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.o], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: CentipedeObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),
-            obs.mushrooms.flatten().astype(jnp.int32),
-            obs.centipede.flatten().astype(jnp.int32),
-            self.flatten_entity_position(obs.spider),
-            self.flatten_entity_position(obs.flea),
-            self.flatten_entity_position(obs.scorpion),
-            self.flatten_entity_position(obs.player_spell),
-            obs.score.flatten().astype(jnp.int32),
-            obs.lives.flatten().astype(jnp.int32),
-        ])
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Centipede.
         The observation contains:
-        - player: PlayerEntity (x, y, o, width, height, active)
-        - mushrooms: array of shape (304, 5) with x,y,width,height,active for each mushroom
-        - centipede: array of shape (9, 5) with x,y,width,height,active for each segment
-        - spider: EntityPosition (x, y, width, height, active)
-        - flea: EntityPosition (x, y, width, height, active)
-        - scorpion: EntityPosition (x, y, width, height, active)
-        - player_spell: EntityPosition (x, y, width, height, active)
+        - player: ObjectObservation (x, y, width, height, active)
+        - mushrooms: ObjectObservation (304, 5) with x,y,width,height,active for each mushroom
+        - centipede: ObjectObservation (9, 5) with x,y,width,height,active for each segment
+        - spider: ObjectObservation (x, y, width, height, active)
+        - flea: ObjectObservation (x, y, width, height, active)
+        - scorpion: ObjectObservation (x, y, width, height, active)
+        - player_spell: ObjectObservation (x, y, width, height, active)
         - score: int (0-999999)
         - lives: int (0-3)
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "mushrooms": spaces.Box(low=0, high=210, shape=(304, 5), dtype=jnp.int32),
-            "centipede": spaces.Box(low=0, high=210, shape=(9, 5), dtype=jnp.int32),
-            "spider": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "flea": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "scorpion": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_spell": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "mushrooms": spaces.get_object_space(n=self.consts.MAX_MUSHROOMS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "centipede": spaces.get_object_space(n=self.consts.MAX_SEGMENTS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "spider": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "flea": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "scorpion": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "player_spell": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
         })
@@ -404,89 +322,106 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CentipedeState) -> CentipedeObservation:
-        # Create player (already scalar, no need for vectorization)
-        player = PlayerEntity(
-            x=state.player_x,
-            y=state.player_y,
-            o=jnp.array(0),  # No orientation in Centipede, set to 0
-            width=jnp.array(self.consts.PLAYER_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),  # Player is always active
+        # Helper for vector to angle (0-360)
+        def vec_to_angle(dx, dy):
+            return jnp.mod(jnp.degrees(jnp.arctan2(dy, dx)), 360.0)
+
+        # --- Player ---
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player_x, 0, self.consts.WIDTH),
+            y=jnp.clip(state.player_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32), # Player faces Up (0) or default
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        # Define a function to convert mushroom positions to entity format
-        def convert_to_mushroom_entity(pos):
-            x, y, is_poisoned, lives = pos
-            return jnp.array([
-                x,  # x position
-                y,  # y position
-                self.consts.MUSHROOM_SIZE[0],  # width
-                self.consts.MUSHROOM_SIZE[1],  # height
-                lives > 0,  # active flag
-            ])
+        # --- Mushrooms ---
+        # mushroom_positions: (304, 4) -> x, y, is_poisoned, lives
+        m_x = state.mushroom_positions[:, 0]
+        m_y = state.mushroom_positions[:, 1]
+        m_poisoned = state.mushroom_positions[:, 2]
+        m_lives = state.mushroom_positions[:, 3]
 
-        # Mushrooms
-        mushrooms = jax.vmap(convert_to_mushroom_entity)(
-            state.mushroom_positions
+        mushrooms = ObjectObservation.create(
+            x=jnp.clip(m_x, 0, self.consts.WIDTH),
+            y=jnp.clip(m_y, 0, self.consts.HEIGHT),
+            width=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[1], dtype=jnp.int32),
+            state=m_poisoned.astype(jnp.int32), # 1 if poisoned, 0 if normal
+            active=(m_lives > 0).astype(jnp.int32)
         )
 
-        # Define a function to convert centipede segments to entity format
-        def convert_to_centipede_entity(pos):
-            x, y, speed_h, movement_v, status = pos
-            return jnp.array([
-                x.astype(jnp.int32),  # x position
-                y.astype(jnp.int32),  # y position
-                self.consts.SEGMENT_SIZE[0],  # width
-                self.consts.SEGMENT_SIZE[1],  # height
-                status != 0,  # active flag assuming status indicates activity
-            ])
-
-        # Centipede segments
-        centipede = jax.vmap(convert_to_centipede_entity)(
-            state.centipede_position
+        # --- Centipede ---
+        # centipede_position: (9, 5) -> x, y, speed_h, movement_v, status
+        c_x = state.centipede_position[:, 0]
+        c_y = state.centipede_position[:, 1]
+        c_vx = state.centipede_position[:, 2]
+        c_vy = state.centipede_position[:, 3]
+        c_status = state.centipede_position[:, 4]
+        
+        centipede = ObjectObservation.create(
+            x=jnp.clip(c_x, 0, self.consts.WIDTH),
+            y=jnp.clip(c_y, 0, self.consts.HEIGHT),
+            width=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[1], dtype=jnp.int32),
+            orientation=vec_to_angle(c_vx, c_vy),
+            active=(c_status != 0).astype(jnp.int32)
         )
 
-        # Spider (scalar)
-        spider_pos = state.spider_position
-        spider = EntityPosition(
-            x=spider_pos[0],
-            y=spider_pos[1],
-            width=jnp.array(self.consts.SPIDER_SIZE[0]),
-            height=jnp.array(self.consts.SPIDER_SIZE[1]),
-            active=spider_pos[0] != 0,
+        # --- Spider ---
+        # spider_position: (3) -> x, y, direction (-1 left, 1 right, 0 inactive)
+        s_x, s_y, s_dir = state.spider_position
+        # Direction to angle: Right(1)->90, Left(-1)->270, Inactive->0
+        s_angle = jnp.select([s_dir > 0, s_dir < 0], [90.0, 270.0], default=0.0)
+        
+        spider = ObjectObservation.create(
+            x=jnp.clip(s_x, 0, self.consts.WIDTH),
+            y=jnp.clip(s_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.SPIDER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.SPIDER_SIZE[1], dtype=jnp.int32),
+            orientation=s_angle.astype(jnp.float32),
+            active=(s_dir != 0).astype(jnp.int32)
         )
 
-        # Flea (scalar)
-        flea_pos = state.flea_position
-        flea = EntityPosition(
-            x=flea_pos[0].astype(jnp.int32),
-            y=flea_pos[1].astype(jnp.int32),
-            width=jnp.array(self.consts.FLEA_SIZE[0]),
-            height=jnp.array(self.consts.FLEA_SIZE[1]),
-            active=flea_pos[2] > 0,
+        # --- Flea ---
+        # flea_position: (3) -> x, y, lives
+        f_x, f_y, f_lives = state.flea_position
+        flea = ObjectObservation.create(
+            x=jnp.clip(f_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(f_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.FLEA_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.FLEA_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(180.0, dtype=jnp.float32), # Flea falls down (180)
+            active=(f_lives > 0).astype(jnp.int32)
         )
 
-        # Scorpion (scalar)
-        scorpion_pos = state.scorpion_position
-        scorpion = EntityPosition(
-            x=scorpion_pos[0],
-            y=scorpion_pos[1],
-            width=jnp.array(self.consts.SCORPION_SIZE[0]),
-            height=jnp.array(self.consts.SCORPION_SIZE[1]),
-            active=scorpion_pos[0] != 0,
+        # --- Scorpion ---
+        # scorpion_position: (4) -> x, y, direction, speed
+        sc_x, sc_y, sc_dir, _ = state.scorpion_position
+        sc_angle = jnp.select([sc_dir > 0, sc_dir < 0], [90.0, 270.0], default=0.0)
+        
+        scorpion = ObjectObservation.create(
+            x=jnp.clip(sc_x, 0, self.consts.WIDTH),
+            y=jnp.clip(sc_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.SCORPION_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.SCORPION_SIZE[1], dtype=jnp.int32),
+            orientation=sc_angle.astype(jnp.float32),
+            active=(sc_dir != 0).astype(jnp.int32)
         )
 
-        # Player spell (scalar)
-        spell_pos = state.player_spell
-        player_spell = EntityPosition(
-            x=spell_pos[0],
-            y=spell_pos[1],
-            width=jnp.array(self.consts.PLAYER_SPELL_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SPELL_SIZE[1]),
-            active=spell_pos[2] != 0,
+        # --- Player Spell ---
+        # player_spell: (3) -> x, y, is_alive
+        ps_x, ps_y, ps_alive = state.player_spell
+        player_spell = ObjectObservation.create(
+            x=jnp.clip(ps_x, 0, self.consts.WIDTH),
+            y=jnp.clip(ps_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SPELL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SPELL_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32), # Moves Up (0)
+            active=(ps_alive != 0).astype(jnp.int32)
         )
 
-        # Return observation
         return CentipedeObservation(
             player=player,
             mushrooms=mushrooms,
@@ -496,9 +431,9 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             scorpion=scorpion,
             player_spell=player_spell,
             score=state.score,
-            lives=state.lives,
+            lives=state.lives
         )
-
+    
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: CentipedeState) -> CentipedeInfo:
         return CentipedeInfo(

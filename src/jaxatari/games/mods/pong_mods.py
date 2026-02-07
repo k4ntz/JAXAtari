@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod
+from jaxatari.games.mods.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod
 
 class PongEnvMod(JaxAtariModController):    
     """
@@ -11,6 +11,8 @@ class PongEnvMod(JaxAtariModController):
         "lazy_enemy": LazyEnemyMod,
         "random_enemy": RandomEnemyMod,
         "zero_score": AlwaysZeroScoreMod,
+        "linear_movement": LinearMovementMod,
+
     }
 
 

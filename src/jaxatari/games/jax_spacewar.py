@@ -14,7 +14,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
@@ -218,13 +218,14 @@ class MissilePosition:
 
 @struct.dataclass
 class SpaceWarObservation:
-    player: EntityPosition # (x, y, width, height, rotation, active)
-    player_missile: EntityPosition  # (x, y, width, height, active)
+    player: ObjectObservation
+    player_missile: ObjectObservation
+    enemy: ObjectObservation  # Static enemy position
+    star_base: ObjectObservation # Static star base
 
     player_score: jnp.ndarray
     player_fuel: jnp.ndarray
     player_ammo: jnp.ndarray
-
     enemy_score: jnp.ndarray
 
 @struct.dataclass
@@ -735,105 +736,92 @@ class JaxSpaceWar(JaxEnvironment[SpaceWarState, SpaceWarObservation, SpaceWarInf
         return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: SpaceWarState):
+    def _get_observation(self, state: SpaceWarState) -> SpaceWarObservation:
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
 
-        # player
-        player = EntityPosition(
-            x=self.to_screen_pos(state.player_state[0]),
-            y=self.to_screen_pos(state.player_state[1]),
-            width=jnp.array(self.consts.STAR_SHIP_SIZE[0]),
-            height=jnp.array(self.consts.STAR_SHIP_SIZE[1]),
-            rotation=state.player_state[4],
-            active=state.player_state[5] < 0
+        # --- Player ---
+        # Convert subpixel -> pixel
+        p_x = self.to_screen_pos(state.player_state[0])
+        p_y = self.to_screen_pos(state.player_state[1])
+        # Rotation 0..15 -> degrees (0=Up, 4=Left(90), 8=Down(180), 12=Right(270))
+        # Note: ACCEL table suggests 0=(0,-72) which is Up.
+        # 16 steps = 22.5 degrees per step.
+        p_rot = (state.player_state[4] * 22.5).astype(jnp.float32)
+        # Active if not in hyperspace (state[5] < 0)
+        p_active = (state.player_state[5] < 0).astype(jnp.int32)
+
+        player = ObjectObservation.create(
+            x=jnp.clip(p_x, 0, w),
+            y=jnp.clip(p_y, 0, h),
+            width=jnp.array(c.STAR_SHIP_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.STAR_SHIP_SIZE[1], dtype=jnp.int32),
+            active=p_active,
+            orientation=jnp.array(p_rot, dtype=jnp.float32)
         )
 
-        # missile
-        player_missile = MissilePosition(
-            x=self.to_screen_pos(state.player_missile_state[0]),
-            y=self.to_screen_pos(state.player_missile_state[1]),
-            width=jnp.array(self.consts.MISSILE_SIZE[0]),
-            height=jnp.array(self.consts.MISSILE_SIZE[1]),
-            active=state.player_missile_state[4] > 0
+        # --- Missile ---
+        m_x = self.to_screen_pos(state.player_missile_state[0])
+        m_y = self.to_screen_pos(state.player_missile_state[1])
+        m_active = (state.player_missile_state[4] > 0).astype(jnp.int32)
+        
+        player_missile = ObjectObservation.create(
+            x=jnp.clip(m_x, 0, w),
+            y=jnp.clip(m_y, 0, h),
+            width=jnp.array(c.MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.MISSILE_SIZE[1], dtype=jnp.int32),
+            active=m_active
+        )
+
+        # --- Enemy (Static) ---
+        enemy = ObjectObservation.create(
+            x=jnp.array(c.ENEMY_X, dtype=jnp.int32),
+            y=jnp.array(c.ENEMY_Y, dtype=jnp.int32),
+            width=jnp.array(c.STAR_SHIP_SIZE[0], dtype=jnp.int32), # Assuming same size
+            height=jnp.array(c.STAR_SHIP_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Star Base (Static) ---
+        star_base = ObjectObservation.create(
+            x=jnp.array(c.STAR_BASE_X, dtype=jnp.int32),
+            y=jnp.array(c.STAR_BASE_Y, dtype=jnp.int32),
+            width=jnp.array(c.STAR_BASE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.STAR_BASE_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
         return SpaceWarObservation(
             player=player,
             player_missile=player_missile,
-
+            enemy=enemy,
+            star_base=star_base,
             player_score=state.player_score,
-            player_fuel=(state.player_fuel + 255)//256,
+            player_fuel=(state.player_fuel + 255) // 256,
             player_ammo=state.player_ammo,
-
             enemy_score=state.enemy_score
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: SpaceWarObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-
-        def entity_pos_to_flat_array(obj: EntityPosition):
-            return jnp.concatenate([
-                jnp.atleast_1d(obj.x),
-                jnp.atleast_1d(obj.y),
-                jnp.atleast_1d(obj.width),
-                jnp.atleast_1d(obj.height),
-                jnp.atleast_1d(obj.rotation),
-                jnp.atleast_1d(obj.active)
-            ])
-        
-        def missile_pos_to_flat_array(obj: MissilePosition):
-            return jnp.concatenate([
-                jnp.atleast_1d(obj.x),
-                jnp.atleast_1d(obj.y),
-                jnp.atleast_1d(obj.width),
-                jnp.atleast_1d(obj.height),
-                jnp.atleast_1d(obj.active)
-            ])
-
-        return jnp.concatenate([
-            entity_pos_to_flat_array(obs.player),
-            missile_pos_to_flat_array(obs.player_missile),
-
-            obs.player_score.flatten(),
-            obs.player_fuel.flatten(),
-            obs.player_ammo.flatten(),
-
-            obs.enemy_score.flatten()
-        ])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces.Box:
-        """Returns the observation space for SpaceWar.
-        The observation contains:
-        - player: EntityPosition (x, y, width, height, rotation, active)
-        - player_missile: MissilePosition (x, y, width, height, active)
-        - player_score: int (0-10)
-        - player_fuel: int (0-8)
-        - player_ammo: int (0-8)
-        - enemy_score: int (0-10)
-        """
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160*256, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=250*256, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_missile": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_score": spaces.Box(low=0, high=self.consts.POINTS_TO_WIN, shape=(), dtype=jnp.int32),
-            "player_fuel": spaces.Box(low=0, high=self.consts.MAX_FUEL, shape=(), dtype=jnp.int32),
-            "player_ammo": spaces.Box(low=0, high=self.consts.MAX_AMMO, shape=(), dtype=jnp.int32),
-            "enemy_score": spaces.Box(low=0, high=self.consts.POINTS_TO_WIN, shape=(), dtype=jnp.int32)
+            "player": single_obj,
+            "player_missile": single_obj,
+            "enemy": single_obj,
+            "star_base": single_obj,
+            "player_score": spaces.Box(low=0, high=c.POINTS_TO_WIN, shape=(), dtype=jnp.int32),
+            "player_fuel": spaces.Box(low=0, high=c.MAX_FUEL, shape=(), dtype=jnp.int32),
+            "player_ammo": spaces.Box(low=0, high=c.MAX_AMMO, shape=(), dtype=jnp.int32),
+            "enemy_score": spaces.Box(low=0, high=c.POINTS_TO_WIN, shape=(), dtype=jnp.int32)
         })
 
     def image_space(self) -> spaces.Box:

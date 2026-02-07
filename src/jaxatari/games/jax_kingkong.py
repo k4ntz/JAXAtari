@@ -10,7 +10,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
@@ -446,18 +446,14 @@ class BombInfo:
 	directions_x: jnp.ndarray
 	directions_y: jnp.ndarray
 
-@struct.dataclass
-class KingKongObservation:
-	player: EntityPosition
-	kong: EntityPosition
-	princess: EntityPosition
-	bombs: BombInfo
-	score: jnp.ndarray
-	lives: jnp.ndarray
-	bonus_timer: jnp.ndarray
-	level: jnp.ndarray
-	gamestate: jnp.ndarray
-	player_floor: jnp.ndarray
+class KingKongObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    kong: ObjectObservation
+    princess: ObjectObservation
+    bombs: ObjectObservation
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    level: jnp.ndarray
 
 @struct.dataclass
 class KingKongInfo:
@@ -2077,40 +2073,83 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		return self.renderer.render(state)
 
 	@partial(jax.jit, static_argnums=(0,))
-	def _get_observation(self, state: KingKongState):
-		player = EntityPosition(
-			x=state.player_x,
-			y=state.player_y,
-			width=jnp.array(self.consts.PLAYER_SIZE[0]),
-			height=jnp.array(self.consts.PLAYER_SIZE[1]),
-			visible=jnp.array(1)  # Player is always visible
-		)
+	def _get_observation(self, state: KingKongState) -> KingKongObservation:
+		# --- Player ---
+		# Determine orientation based on state enums
+		# Left states: IDLE_LEFT(1), MOVE_LEFT(3), JUMP_LEFT(5), CATAPULT_LEFT(44)
+		is_left = (state.player_state == self.consts.PLAYER_IDLE_LEFT) | \
+					(state.player_state == self.consts.PLAYER_MOVE_LEFT) | \
+					(state.player_state == self.consts.PLAYER_JUMP_LEFT) | \
+					(state.player_state == self.consts.PLAYER_CATAPULT_LEFT)
 		
-		kong = EntityPosition(
-			x=state.kong_x,
-			y=state.kong_y,
-			width=jnp.array(self.consts.KONG_SIZE[0]),
-			height=jnp.array(self.consts.KONG_SIZE[1]),
-			visible=state.kong_visible
+		# Right states: IDLE_RIGHT(2), MOVE_RIGHT(4), JUMP_RIGHT(6), CATAPULT_RIGHT(45)
+		is_right = (state.player_state == self.consts.PLAYER_IDLE_RIGHT) | \
+					(state.player_state == self.consts.PLAYER_MOVE_RIGHT) | \
+					(state.player_state == self.consts.PLAYER_JUMP_RIGHT) | \
+					(state.player_state == self.consts.PLAYER_CATAPULT_RIGHT)
+
+		# Default to 0.0 (Up/Climbing) if not explicitly left/right
+		p_ori = jnp.select([is_left, is_right], [270.0, 90.0], default=0.0)
+
+		# Player is only "active" if in gameplay state and visible (lives > 0)
+		p_active = (state.gamestate == self.consts.GAMESTATE_GAMEPLAY) | \
+					(state.gamestate == self.consts.GAMESTATE_DEATH) | \
+					(state.gamestate == self.consts.GAMESTATE_SUCCESS)
+
+		player = ObjectObservation.create(
+			x=jnp.clip(state.player_x, 0, self.consts.WIDTH),
+			y=jnp.clip(state.player_y, 0, self.consts.HEIGHT),
+			width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+			height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+			orientation=p_ori.astype(jnp.float32),
+			# We pass the player_state enum as 'state' so the agent knows if it's climbing/jumping
+			state=state.player_state.astype(jnp.int32), 
+			active=p_active.astype(jnp.int32)
 		)
-		
-		princess = EntityPosition(
-			x=state.princess_x,
-			y=state.princess_y,
-			width=jnp.array(self.consts.PRINCESS_SIZE[0]),
-			height=jnp.array(self.consts.PRINCESS_SIZE[1]),
-			visible=state.princess_visible
+
+		# --- Kong ---
+		kong = ObjectObservation.create(
+			x=jnp.clip(state.kong_x, 0, self.consts.WIDTH),
+			y=jnp.clip(state.kong_y, 0, self.consts.HEIGHT),
+			width=jnp.array(self.consts.KONG_SIZE[0], dtype=jnp.int32),
+			height=jnp.array(self.consts.KONG_SIZE[1], dtype=jnp.int32),
+			orientation=jnp.array(0.0, dtype=jnp.float32),
+			active=state.kong_visible.astype(jnp.int32)
 		)
-		
-		bombs = BombInfo(
-			positions_x=state.bomb_positions_x,
-			positions_y=state.bomb_positions_y,
-			active=state.bomb_active,
-			is_magic=state.bomb_is_magic,
-			directions_x=state.bomb_directions_x,
-			directions_y=state.bomb_directions_y
+
+		# --- Princess ---
+		princess = ObjectObservation.create(
+			x=jnp.clip(state.princess_x, 0, self.consts.WIDTH),
+			y=jnp.clip(state.princess_y, 0, self.consts.HEIGHT),
+			width=jnp.array(self.consts.PRINCESS_SIZE[0], dtype=jnp.int32),
+			height=jnp.array(self.consts.PRINCESS_SIZE[1], dtype=jnp.int32),
+			orientation=jnp.array(0.0, dtype=jnp.float32),
+			state=state.princess_waving.astype(jnp.int32), # 0=Standing, 1=Waving
+			active=state.princess_visible.astype(jnp.int32)
 		)
+
+		# --- Bombs ---
+		# Calculate bomb orientation based on movement vector
+		# dx=1 -> 90, dx=-1 -> 270, dy=1 -> 180 (Down), dy=-1 -> 0 (Up)
+		b_dx = state.bomb_directions_x
+		b_dy = state.bomb_directions_y
 		
+		b_ori = jnp.select(
+			[b_dy > 0, b_dy < 0, b_dx > 0, b_dx < 0],
+			[180.0, 0.0, 90.0, 270.0],
+			default=0.0
+		)
+
+		bombs = ObjectObservation.create(
+			x=jnp.clip(state.bomb_positions_x, 0, self.consts.WIDTH),
+			y=jnp.clip(state.bomb_positions_y, 0, self.consts.HEIGHT),
+			width=jnp.full((self.consts.MAX_BOMBS,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
+			height=jnp.full((self.consts.MAX_BOMBS,), self.consts.BOMB_SIZE[1], dtype=jnp.int32),
+			orientation=b_ori.astype(jnp.float32),
+			visual_id=state.bomb_is_magic.astype(jnp.int32), # 0=Normal, 1=Magic
+			active=state.bomb_active.astype(jnp.int32)
+		)
+
 		return KingKongObservation(
 			player=player,
 			kong=kong,
@@ -2118,84 +2157,21 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			bombs=bombs,
 			score=state.score,
 			lives=state.lives,
-			bonus_timer=state.bonus_timer,
-			level=state.level,
-			gamestate=state.gamestate,
-			player_floor=state.player_floor
+			level=state.level
 		)
-
-	@partial(jax.jit, static_argnums=(0,))
-	def obs_to_flat_array(self, obs: KingKongObservation) -> jnp.ndarray:
-		return jnp.concatenate([
-			obs.player.x.flatten(),
-			obs.player.y.flatten(),
-			obs.player.width.flatten(),
-			obs.player.height.flatten(),
-			obs.player.visible.flatten(),
-			obs.kong.x.flatten(),
-			obs.kong.y.flatten(),
-			obs.kong.width.flatten(),
-			obs.kong.height.flatten(),
-			obs.kong.visible.flatten(),
-			obs.princess.x.flatten(),
-			obs.princess.y.flatten(),
-			obs.princess.width.flatten(),
-			obs.princess.height.flatten(),
-			obs.princess.visible.flatten(),
-			obs.bombs.positions_x.flatten(),
-			obs.bombs.positions_y.flatten(),
-			obs.bombs.active.flatten(),
-			obs.bombs.is_magic.flatten(),
-			obs.bombs.directions_x.flatten(),
-			obs.bombs.directions_y.flatten(),
-			obs.score.flatten(),
-			obs.lives.flatten(),
-			obs.bonus_timer.flatten(),
-			obs.level.flatten(),
-			obs.gamestate.flatten(),
-			obs.player_floor.flatten()
-		])
 
 	def action_space(self) -> spaces.Discrete:
 		return spaces.Discrete(len(self.ACTION_SET))
 
-	def observation_space(self) -> spaces:
+	def observation_space(self) -> spaces.Dict:
 		return spaces.Dict({
-			"player": spaces.Dict({
-				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-			}),
-			"kong": spaces.Dict({
-				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-			}),
-			"princess": spaces.Dict({
-				"x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-				"height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-				"visible": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-			}),
-			"bombs": spaces.Dict({
-				"positions_x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-				"positions_y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-				"active": spaces.Box(low=0, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-				"is_magic": spaces.Box(low=0, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-				"directions_x": spaces.Box(low=-1, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-				"directions_y": spaces.Box(low=-1, high=1, shape=(self.consts.MAX_BOMBS,), dtype=jnp.int32),
-			}),
+			"player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+			"kong": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+			"princess": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+			"bombs": spaces.get_object_space(n=self.consts.MAX_BOMBS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
 			"score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
 			"lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
-			"bonus_timer": spaces.Box(low=0, high=self.consts.BONUS_START, shape=(), dtype=jnp.int32),
 			"level": spaces.Box(low=1, high=100, shape=(), dtype=jnp.int32),
-			"gamestate": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-			"player_floor": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
 		})
 
 	def image_space(self) -> spaces.Box:

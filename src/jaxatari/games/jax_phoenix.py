@@ -8,7 +8,7 @@ import jaxatari.spaces as spaces
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 from flax import struct
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.spaces import Space
 from jaxatari.modification import AutoDerivedConstants
 
@@ -358,8 +358,12 @@ class PhoenixState:
 
 @struct.dataclass
 class PhoenixObservation:
-    player_x: chex.Array
-    player_y: chex.Array
+    player: ObjectObservation
+    player_projectile: ObjectObservation
+    enemy_projectiles: ObjectObservation  # n=8
+    enemies: ObjectObservation  # n=8, state encodes wings
+    boss: ObjectObservation
+    boss_blocks: ObjectObservation
     player_score: chex.Array
     lives: chex.Array
 
@@ -400,10 +404,117 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PhoenixState) -> PhoenixObservation:
-        player = EntityPosition(x=state.player_x, y=state.player_y)
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
+
+        # --- Player ---
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(13, dtype=jnp.int32),
+            height=jnp.array(8, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Player Projectile ---
+        p_active = (state.projectile_y > -1).astype(jnp.int32)
+        player_projectile = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.projectile_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.projectile_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.PROJECTILE_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.PROJECTILE_HEIGHT, dtype=jnp.int32),
+            active=p_active
+        )
+
+        # --- Enemy Projectiles ---
+        ep_active = (state.enemy_projectile_y > -1).astype(jnp.int32)
+        enemy_projectiles = ObjectObservation.create(
+            x=jnp.clip(state.enemy_projectile_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemy_projectile_y.astype(jnp.int32), 0, h),
+            width=jnp.full((8,), c.PROJECTILE_WIDTH, dtype=jnp.int32),
+            height=jnp.full((8,), c.PROJECTILE_HEIGHT, dtype=jnp.int32),
+            active=ep_active
+        )
+
+        # --- Enemies ---
+        # Map bat_wings (-1..2) to positive state (0..3)
+        # -1 (Left) -> 1
+        #  0 (None) -> 0
+        #  1 (Right) -> 2
+        #  2 (Both) -> 3
+        # In non-bat levels, reset to 3 (Full)
+        is_bat_level = jnp.logical_or((state.level % 5) == 3, (state.level % 5) == 4)
+        raw_wings = state.bat_wings
+        
+        # Remap: -1->1, 0->0, 1->2, 2->3
+        wing_state = jnp.select(
+            [raw_wings == 0, raw_wings == -1, raw_wings == 1, raw_wings == 2],
+            [0, 1, 2, 3],
+            3 # Default to full
+        ).astype(jnp.int32)
+        
+        # If not bat level, visual state is generic (3/Full)
+        final_state = jnp.where(is_bat_level, wing_state, 3)
+
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemies_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemies_y.astype(jnp.int32), 0, h),
+            width=jnp.full((8,), c.ENEMY_WIDTH, dtype=jnp.int32),
+            height=jnp.full((8,), c.ENEMY_HEIGHT, dtype=jnp.int32),
+            active=((state.enemies_x > -1) & (state.enemies_y < h + 10)).astype(jnp.int32),
+            state=final_state  # Encodes wing status
+        )
+
+        # --- Boss ---
+        boss_active = ((state.level % 5) == 0).astype(jnp.int32)
+        boss = ObjectObservation.create(
+            x=jnp.clip(state.enemies_x[0].astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemies_y[0].astype(jnp.int32), 0, h),
+            width=jnp.array(32, dtype=jnp.int32),
+            height=jnp.array(16, dtype=jnp.int32),
+            active=boss_active
+        )
+
+        # --- Boss Blocks ---
+        # Flatten blocks
+        def extract_blocks(blocks, start_id):
+            bx = blocks[:, 0].astype(jnp.int32)
+            by = blocks[:, 1].astype(jnp.int32)
+            active = (bx > -99).astype(jnp.int32)
+            vid = jnp.full(bx.shape, start_id, dtype=jnp.int32)
+            return bx, by, active, vid
+
+        bx_b, by_b, ba_b, vid_b = extract_blocks(state.blue_blocks, 0)
+        bx_r, by_r, ba_r, vid_r = extract_blocks(state.red_blocks, 1)
+        bx_g, by_g, ba_g, vid_g = extract_blocks(state.green_blocks, 2)
+        
+        blocks_x = jnp.concatenate([bx_b, bx_r, bx_g])
+        blocks_y = jnp.concatenate([by_b, by_r, by_g])
+        blocks_active = jnp.concatenate([ba_b, ba_r, ba_g])
+        blocks_vid = jnp.concatenate([vid_b, vid_r, vid_g])
+        
+        total_blocks = (
+            c.BLUE_BLOCK_POSITIONS.shape[0]
+            + c.RED_BLOCK_POSITIONS.shape[0]
+            + c.GREEN_BLOCK_POSITIONS.shape[0]
+        )
+        
+        boss_blocks = ObjectObservation.create(
+            x=jnp.clip(blocks_x, 0, w),
+            y=jnp.clip(blocks_y, 0, h),
+            width=jnp.full((total_blocks,), c.BLOCK_WIDTH, dtype=jnp.int32),
+            height=jnp.full((total_blocks,), c.BLOCK_HEIGHT, dtype=jnp.int32),
+            active=blocks_active,
+            visual_id=blocks_vid
+        )
+
         return PhoenixObservation(
-            player_x=player.x,
-            player_y=player.y,
+            player=player,
+            player_projectile=player_projectile,
+            enemy_projectiles=enemy_projectiles,
+            enemies=enemies,
+            boss=boss,
+            boss_blocks=boss_blocks,
             player_score=state.score,
             lives=state.lives
         )
@@ -426,10 +537,22 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> Space:
+    def observation_space(self) -> spaces.Dict:
+        screen_size = (int(self.consts.HEIGHT), int(self.consts.WIDTH))
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        total_blocks = (
+            int(self.consts.BLUE_BLOCK_POSITIONS.shape[0])
+            + int(self.consts.RED_BLOCK_POSITIONS.shape[0])
+            + int(self.consts.GREEN_BLOCK_POSITIONS.shape[0])
+        )
+        
         return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=self.consts.WIDTH - 1, shape=(), dtype=jnp.int32),
-            "player_y": spaces.Box(low=0, high=self.consts.HEIGHT - 1, shape=(), dtype=jnp.int32),
+            "player": single_obj,
+            "player_projectile": single_obj,
+            "enemy_projectiles": spaces.get_object_space(n=8, screen_size=screen_size),
+            "enemies": spaces.get_object_space(n=8, screen_size=screen_size),
+            "boss": single_obj,
+            "boss_blocks": spaces.get_object_space(n=total_blocks, screen_size=screen_size),
             "player_score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
         })
@@ -442,15 +565,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             dtype=jnp.uint8
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: PhoenixObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_x.flatten(),
-            obs.player_y.flatten(),
-            obs.player_score.flatten(),
-            obs.lives.flatten()
-        ]
-        )
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, state: PhoenixState, action: chex.Array) -> tuple[chex.Array]:
         step_size = 2  # Größerer Wert = schnellerer Schritt

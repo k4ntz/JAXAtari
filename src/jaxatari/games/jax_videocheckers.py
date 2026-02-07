@@ -10,7 +10,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs, ObjectObservation
 from jaxatari.spaces import Space
 from jaxatari.modification import AutoDerivedConstants
 
@@ -148,11 +148,12 @@ class VideoCheckersState:
 
 @struct.dataclass
 class VideoCheckersObservation:
-    board: chex.Array
-    start_pos: chex.Array
-    end_pos: chex.Array
+    board: jnp.ndarray
+    start_pos: ObjectObservation # n=1 (scalar)
+    end_pos: ObjectObservation   # n=1 (scalar)
+    cursor_pos: ObjectObservation # n=1 (scalar)
+    
     must_jump: chex.Array
-    cursor_pos: chex.Array
 
 
 @struct.dataclass
@@ -511,16 +512,6 @@ class JaxVideoCheckers(
             new OpponentMove with a clean captures positions array.
         """
         return opponent_move.replace(captured_positions=jnp.full(opponent_move.captured_positions.shape, -1))
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: VideoCheckersObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-          obs.board.flatten(),
-            obs.start_pos.flatten(),
-            obs.end_pos.flatten(),
-            obs.must_jump.flatten(),
-            obs.cursor_pos.flatten()
-        ])
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) \
             -> Tuple[VideoCheckersObservation, VideoCheckersState]:
@@ -1174,28 +1165,74 @@ class JaxVideoCheckers(
         return VideoCheckersInfo()
 
     def observation_space(self) -> spaces.Dict:
-        """
-        Returns the observation space of the game environment.
-        The observation contains:
-        - board: array of shape (8, 8) representing the game board
-        - start_pos: array of shape (2,) representing the starting position of the selected piece
-        - end_pos: array of shape (2,) representing the ending position of the selected piece
-        - must_jump: boolean indicating if the player must jump
-        - cursor_pos: array of shape (2,) representing the position of the cursor
-        """
+        c = self.consts
+        # Logical grid dimensions
+        h = int(c.NUM_FIELDS_Y)
+        w = int(c.NUM_FIELDS_X)
+        grid_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=grid_size)
+        
         return spaces.Dict({
-            'board': spaces.Box(low=0,high=160, shape=(8, 8), dtype=jnp.int32),
-            'start_pos': spaces.Box(low=-1,high=7, shape=(2,), dtype=jnp.int32),
-            'end_pos': spaces.Box(low=-1,high=7, shape=(2,), dtype=jnp.int32),
-            'must_jump': spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            'cursor_pos': spaces.Box(low=0, high=7, shape=(2,), dtype=jnp.int32),
+            "board": spaces.Box(low=0, high=6, shape=(h, w), dtype=jnp.int32), # 0=Empty, 1-6=Pieces/Cursors
+            "start_pos": single_obj,
+            "end_pos": single_obj,
+            "cursor_pos": single_obj,
+            
+            "must_jump": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: VideoCheckersState):
-        return VideoCheckersObservation(board=state.board, start_pos=state.cursor_pos,
-                                        end_pos=state.selected_piece, must_jump=state.must_jump.astype(jnp.int32),
-                                        cursor_pos=state.cursor_pos)
+    def _get_observation(self, state: VideoCheckersState) -> VideoCheckersObservation:
+        c = self.consts
+        # Use logical grid dimensions for object coordinates
+        w, h = int(c.NUM_FIELDS_X), int(c.NUM_FIELDS_Y)
+
+        # Helper to create a single 'pointer' object
+        # Active if coordinates are valid (>= 0)
+        def make_pointer(pos):
+            active = jnp.logical_and(pos[0] >= 0, pos[1] >= 0).astype(jnp.int32)
+            # Coordinates are (row, col) -> (y, x)
+            return ObjectObservation.create(
+                x=jnp.clip(pos[1], 0, w),
+                y=jnp.clip(pos[0], 0, h),
+                width=jnp.array(1, dtype=jnp.int32),
+                height=jnp.array(1, dtype=jnp.int32),
+                active=active
+            )
+
+        start_pos_obj = make_pointer(state.cursor_pos) # Start selection is cursor
+        # Logic check: observation wrapper used cursor_pos as 'start_pos' in original code, 
+        # and selected_piece as 'end_pos'. Naming was slightly confusing.
+        # Original: start_pos=state.cursor_pos, end_pos=state.selected_piece
+        
+        # Actually 'selected_piece' is the piece we picked up (start of move)
+        # 'cursor_pos' is where we are pointing now (potential end of move)
+        
+        # Let's map to object names:
+        # cursor_pos -> The cursor
+        # selected_piece -> The piece currently selected (if any)
+        
+        cursor = make_pointer(state.cursor_pos)
+        selected = make_pointer(state.selected_piece)
+        
+        # Opponent move visualization uses start/end from opponent_move struct
+        # We could add those if needed, but original obs only exposed these fields.
+        
+        # Original mapping:
+        # start_pos -> cursor_pos
+        # end_pos -> selected_piece
+        # cursor_pos -> cursor_pos
+        # This seems redundant. Let's stick to the requested structure but with clear naming.
+        # Re-using original names for compatibility with potential downstream logic if any.
+        
+        return VideoCheckersObservation(
+            board=state.board,
+            start_pos=cursor,      # Maps to cursor_pos in old code
+            end_pos=selected,      # Maps to selected_piece in old code
+            cursor_pos=cursor,     # Redundant but kept
+            must_jump=state.must_jump.astype(jnp.int32)
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: VideoCheckersState, state: VideoCheckersState) -> float:

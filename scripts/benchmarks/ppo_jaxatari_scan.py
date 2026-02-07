@@ -115,7 +115,7 @@ class Args:
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
     def thunk():
-        env = jaxatari.make(env_id, mods_config=mods)
+        env = jaxatari.make(env_id, mods=mods)
         env = AtariWrapper(
                 env,
                 episodic_life=not eval, # only active during training 

@@ -25,12 +25,12 @@ import numpy as np
 from jax import Array as jArray
 from flax import struct
 
+from jaxatari.environment import ObjectObservation
+
 #Defines Observation of Alien, where we also need to know if a enemy is killable and where the current items are
 class AlienObservation(struct.PyTreeNode):
-    player_x:jnp.ndarray
-    player_y:jnp.ndarray
-    player_o:jnp.ndarray
-    enemies_position:jnp.ndarray
+    player: ObjectObservation
+    enemies: ObjectObservation
     enemies_killable: jnp.ndarray
     kill_item_position: jnp.ndarray
     score_item_position: jnp.ndarray
@@ -1297,22 +1297,20 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
     def observation_space(self) -> spaces.Dict:
         # Define the observation space as a dictionary of multiple components
+        # Use object-centric spaces for player and enemies while keeping boolean fields separate
+        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
         return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),  # Player X position (0–160)
-            "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32), # Player Y position (0–210)
-            "player_o": spaces.Box(low=0, high=17, shape=(), dtype=jnp.int32),   # Player orientation/state (0–17)
-            "enemies_position":
-                spaces.Box(low=0, high= 210, shape=(2, 6), dtype=jnp.int32), # Enemy positions: 2D coords for 6 enemies
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
+            "enemies": spaces.get_object_space(n=enemy_count, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
             "enemies_killable":
-                spaces.Box(low=0, high=1, shape=(6, ), dtype=jnp.int32),  # Boolean (0/1) for whether each enemy is killable
+                spaces.Box(low=0, high=1, shape=(enemy_count,), dtype=jnp.int32),
             "kill_item_position":
-                spaces.Box(low=0, high=210, shape=(2, ), dtype=jnp.int32), # Position (x, y) of the kill item
+                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
             "score_item_position":
-                spaces.Box(low=0, high=210, shape=(2, ), dtype=jnp.int32), # Position (x, y) of the score item
+                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
             "collision_map":
-                spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.int32), # Binary grid: collision map of the environment
-        }
-        )
+                spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.int32),
+        })
 
     def _get_observation(self, state: AlienState) -> AlienObservation:
         """returns the observation to a given state
@@ -1326,15 +1324,36 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # Get the position of the currently active "kill item" (first 2 coordinates: x, y)
         new_kill_item_position = jnp.take(self.consts.ITEM_ARRAY, state.level.current_active_item_index, axis=0)[:2]
 
+        # Build object-centric observations
+        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
+
+        player_obj = ObjectObservation.create(
+            x=jnp.array(state.player.x, dtype=jnp.int32),
+            y=jnp.array(state.player.y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(0, dtype=jnp.int32),
+            orientation=jnp.array(state.player.orientation, dtype=jnp.int32),
+        )
+
+        enemies_obj = ObjectObservation.create(
+            x=state.enemies.multiple_enemies.x,
+            y=state.enemies.multiple_enemies.y,
+            width=jnp.full((enemy_count,), self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.full((enemy_count,), self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=state.enemies.multiple_enemies.active_enemy,
+            visual_id=jnp.zeros((enemy_count,), dtype=jnp.int32),
+            orientation=state.enemies.multiple_enemies.orientation,
+        )
+
         return AlienObservation(
-            player_x= state.player.x,
-            player_y= state.player.y,
-            player_o= jnp.array(state.player.orientation, jnp.int32),
-            enemies_position= jnp.array([state.enemies.multiple_enemies.x,state.enemies.multiple_enemies.y]),
-            enemies_killable= state.enemies.multiple_enemies.killable,
-            kill_item_position= new_kill_item_position,
-            score_item_position= jnp.array([68 ,  56]), # Hardcoded position of the score item
-            collision_map = jnp.astype(BACKGROUND_COLLISION_MAP, jnp.int32)
+            player=player_obj,
+            enemies=enemies_obj,
+            enemies_killable=state.enemies.multiple_enemies.killable,
+            kill_item_position=new_kill_item_position,
+            score_item_position=jnp.array([68, 56], dtype=jnp.int32), # Hardcoded position of the score item
+            collision_map=jnp.astype(BACKGROUND_COLLISION_MAP, jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1385,24 +1404,6 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         score = state.level.score - previous_state.level.score
         return score[0]
 
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: AlienObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        ret = jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.player_o.flatten(),
-                obs.enemies_position.flatten(),
-                obs.enemies_killable.flatten(),
-                obs.kill_item_position.flatten(),
-                obs.score_item_position.flatten(),
-                obs.collision_map.flatten(),
-            ]
-        )
-        # Remove any unnecessary dimensions (e.g. from concatenation)
-        return jnp.squeeze(ret)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AlienState) -> bool:

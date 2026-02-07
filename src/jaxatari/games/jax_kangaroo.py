@@ -8,7 +8,7 @@ from jax import Array
 from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.games.kangaroo_levels import (
@@ -219,17 +219,15 @@ class KangarooState:
 
 @struct.dataclass
 class KangarooObservation:
-    player_x: chex.Array
-    player_y: chex.Array
-    player_o: chex.Array
-    platform_positions: chex.Array
-    ladder_positions: chex.Array
-    fruit_positions: chex.Array
-    bell_position: chex.Array
-    child_position: chex.Array
-    falling_coco_position: chex.Array
-    monkey_positions: chex.Array
-    coco_positions: chex.Array
+    player: ObjectObservation
+    platforms: ObjectObservation
+    ladders: ObjectObservation
+    fruits: ObjectObservation
+    bell: ObjectObservation
+    child: ObjectObservation
+    falling_coconut: ObjectObservation
+    monkeys: ObjectObservation
+    thrown_coconuts: ObjectObservation
 
 
 @struct.dataclass
@@ -1692,51 +1690,17 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for Kangaroo.
-        The observation contains:
-        - player_x: int (0-160)
-        - player_y: int (0-210)
-        - player_o: int (-1 or 1 for orientation)
-        - platform_positions: array of shape (20, 2) with x,y coordinates (0-160, 0-210)
-        - ladder_positions: array of shape (20, 2) with x,y coordinates (0-160, 0-210)
-        - fruit_positions: array of shape (3, 2) with x,y coordinates (0-160, 0-210)
-        - bell_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - child_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - falling_coco_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - monkey_positions: array of shape (4, 2) with x,y coordinates (0-160, 0-210)
-        - coco_positions: array of shape (4, 2) with x,y coordinates (0-160, 0-210)
-        """
-        return spaces.Dict(
-            {
-                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "player_o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "platform_positions": spaces.Box(
-                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
-                ),
-                "ladder_positions": spaces.Box(
-                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
-                ),
-                "fruit_positions": spaces.Box(
-                    low=-1, high=160, shape=(3, 2), dtype=jnp.int32
-                ),
-                "bell_position": spaces.Box(
-                    low=-1, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "child_position": spaces.Box(
-                    low=0, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "falling_coco_position": spaces.Box(
-                    low=-1, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "monkey_positions": spaces.Box(
-                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
-                ),
-                "coco_positions": spaces.Box(
-                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
-                ),
-            }
-        )
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "platforms": spaces.get_object_space(n=self.consts.MAX_PLATFORMS * 2, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)), # Padded to 20
+            "ladders": spaces.get_object_space(n=self.consts.MAX_PLATFORMS * 2, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)), # Padded to 20
+            "fruits": spaces.get_object_space(n=3, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "bell": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "child": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "falling_coconut": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "monkeys": spaces.get_object_space(n=4, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "thrown_coconuts": spaces.get_object_space(n=4, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -2042,45 +2006,129 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KangarooState) -> KangarooObservation:
-        fruit_mask = state.level.fruit_actives[:, jnp.newaxis]
-        fruit_positions = jnp.where(
-            fruit_mask, state.level.fruit_positions, jnp.array([-1, -1])
+        # --- Player ---
+        p_ori = jnp.where(state.player.orientation == 1, 90.0, 270.0)
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player.x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.player.y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=state.player.height.astype(jnp.int32),
+            orientation=p_ori.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        bell_mask = jnp.any(state.level.bell_position != jnp.array([-1, -1]))
-        bell_position = jnp.where(
-            bell_mask, state.level.bell_position, jnp.array([-1, -1])
+        # --- Platforms ---
+        plat_pos = state.level.platform_positions
+        plat_size = state.level.platform_sizes
+        plat_active = plat_pos[:, 0] != -1
+        platforms = ObjectObservation.create(
+            x=jnp.clip(plat_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(plat_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.clip(plat_size[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            height=jnp.clip(plat_size[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            active=plat_active.astype(jnp.int32)
         )
 
-        falling_coco_mask = state.level.falling_coco_dropping[None]
-        falling_coco_position = jnp.where(
-            falling_coco_mask, state.level.falling_coco_position, jnp.array([-1, -1])
+        # --- Ladders ---
+        lad_pos = state.level.ladder_positions
+        lad_size = state.level.ladder_sizes
+        lad_active = lad_pos[:, 0] != -1
+        ladders = ObjectObservation.create(
+            x=jnp.clip(lad_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(lad_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.clip(lad_size[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            height=jnp.clip(lad_size[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            active=lad_active.astype(jnp.int32)
         )
 
-        monkey_mask = state.level.monkey_states[:, jnp.newaxis]
-        monkey_positions = jnp.where(
-            monkey_mask, state.level.monkey_positions, jnp.array([-1, -1])
+        # --- Fruits ---
+        fruit_pos = state.level.fruit_positions
+        fruit_active = state.level.fruit_actives
+        fruits = ObjectObservation.create(
+            x=jnp.clip(fruit_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(fruit_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((3,), self.consts.FRUIT_WIDTH, dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.FRUIT_HEIGHT, dtype=jnp.int32),
+            visual_id=state.level.fruit_stages.astype(jnp.int32), # Use stage as ID
+            active=fruit_active.astype(jnp.int32)
         )
 
-        coco_mask = state.level.coco_states[:, jnp.newaxis]
-        coco_positions = jnp.where(
-            coco_mask, state.level.coco_positions, jnp.array([-1, -1])
+        # --- Bell ---
+        bell_pos = state.level.bell_position
+        bell_active = bell_pos[0] != -1
+        bell = ObjectObservation.create(
+            x=jnp.clip(jnp.array(bell_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(bell_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.BELL_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.BELL_HEIGHT, dtype=jnp.int32),
+            active=bell_active.astype(jnp.int32)
+        )
+
+        # --- Child ---
+        child_pos = state.level.child_position
+        child_active = child_pos[0] != -1
+        child_ori = jnp.where(state.level.child_velocity > 0, 90.0, 270.0)
+        child = ObjectObservation.create(
+            x=jnp.clip(jnp.array(child_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(child_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.CHILD_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.CHILD_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(child_ori, dtype=jnp.float32),
+            active=child_active.astype(jnp.int32)
+        )
+
+        # --- Falling Coconut ---
+        fc_pos = state.level.falling_coco_position
+        fc_active = (fc_pos[0] != 13) | (fc_pos[1] != -1)
+        falling_coconut = ObjectObservation.create(
+            x=jnp.clip(jnp.array(fc_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(fc_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.FALLING_COCONUT_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.FALLING_COCONUT_HEIGHT, dtype=jnp.int32),
+            active=fc_active.astype(jnp.int32)
+        )
+
+        # --- Monkeys ---
+        m_pos = state.level.monkey_positions
+        m_states = state.level.monkey_states
+        m_active = m_states != 0
+        # State 4 is moving right, State 2 is moving left
+        m_ori = jnp.select([m_states == 4, m_states == 2], [90.0, 270.0], default=0.0)
+
+        monkeys = ObjectObservation.create(
+            x=jnp.clip(m_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(m_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((4,), self.consts.MONKEY_WIDTH, dtype=jnp.int32),
+            height=jnp.full((4,), self.consts.MONKEY_HEIGHT, dtype=jnp.int32),
+            orientation=m_ori.astype(jnp.float32),
+            state=m_states.astype(jnp.int32), # 1=down, 2=left, 3=throw, 4=right, 5=up
+            active=m_active.astype(jnp.int32)
+        )
+
+        # --- Thrown Coconuts ---
+        c_pos = state.level.coco_positions
+        c_states = state.level.coco_states
+        c_active = c_states != 0
+        thrown_coconuts = ObjectObservation.create(
+            x=jnp.clip(c_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(c_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((4,), self.consts.THROWN_COCONUT_WIDTH, dtype=jnp.int32),
+            height=jnp.full((4,), self.consts.THROWN_COCONUT_HEIGHT, dtype=jnp.int32),
+            state=c_states.astype(jnp.int32), # 1=charging, 2=throwing
+            active=c_active.astype(jnp.int32)
         )
 
         return KangarooObservation(
-            player_x=state.player.x,
-            player_y=state.player.y,
-            player_o=state.player.orientation,
-            platform_positions=state.level.platform_positions,
-            ladder_positions=state.level.ladder_positions,
-            fruit_positions=fruit_positions,
-            bell_position=bell_position,
-            child_position=state.level.child_position,
-            falling_coco_position=falling_coco_position,
-            monkey_positions=monkey_positions,
-            coco_positions=coco_positions,
+            player=player,
+            platforms=platforms,
+            ladders=ladders,
+            fruits=fruits,
+            bell=bell,
+            child=child,
+            falling_coconut=falling_coconut,
+            monkeys=monkeys,
+            thrown_coconuts=thrown_coconuts
         )
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: KangarooState) -> KangarooInfo:
         return KangarooInfo(

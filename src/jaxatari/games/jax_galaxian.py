@@ -11,7 +11,7 @@ from flax import struct
 
 import jaxatari.spaces as spaces
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
@@ -250,21 +250,13 @@ class GalaxianState:
 
 @struct.dataclass
 class GalaxianObservation:
-    player_x: chex.Array
-    player_y: chex.Array
-    bullet_x: chex.Array
-    bullet_y: chex.Array
-    enemy_grid_x: chex.Array
-    enemy_grid_y: chex.Array
-    enemy_grid_state: chex.Array  # 0: dead, 1: alive, 2: attacking
-    enemy_attack_pos: chex.Array
-    enemy_attack_x: chex.Array
-    enemy_attack_y: chex.Array
-    enemy_support_pos: chex.Array
-    enemy_support_x: chex.Array
-    enemy_support_y: chex.Array
-    enemy_attack_bullet_x: chex.Array
-    enemy_attack_bullet_y: chex.Array
+    player: ObjectObservation
+    aliens: ObjectObservation
+    missiles: ObjectObservation  # Player shot (scalar in state, objectified)
+    bombs: ObjectObservation     # Enemy shots
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    level: jnp.ndarray
 
 @struct.dataclass
 class GalaxianInfo:
@@ -1303,24 +1295,151 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GalaxianState) -> GalaxianObservation:
-        return GalaxianObservation(
-            player_x=state.player_x,
-            player_y=state.player_y,
-            bullet_x=state.bullet_x,
-            bullet_y=state.bullet_y,
-            enemy_grid_x=state.enemy_grid_x,
-            enemy_grid_y=state.enemy_grid_y,
-            enemy_grid_state=state.enemy_grid_state,
-            enemy_attack_pos=state.enemy_attack_pos,
-            enemy_attack_x=state.enemy_attack_x,
-            enemy_attack_y=state.enemy_attack_y,
-            enemy_support_pos=state.enemy_support_pos,
-            enemy_support_x=state.enemy_support_x,
-            enemy_support_y=state.enemy_support_y,
-            enemy_attack_bullet_x=state.enemy_attack_bullet_x,
-            enemy_attack_bullet_y=state.enemy_attack_bullet_y,
+        # --- Player ---
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player_x.astype(jnp.int32), 0, self.consts.NATIVE_GAME_WIDTH),
+            y=jnp.clip(state.player_y.astype(jnp.int32), 0, self.consts.NATIVE_GAME_HEIGHT),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=state.player_alive.astype(jnp.int32)
         )
 
+        # --- Aliens ---
+        # 1. Grid Aliens
+        grid_x = state.enemy_grid_x.flatten()
+        grid_y = state.enemy_grid_y.flatten()
+        grid_status = state.enemy_grid_state.flatten()
+        
+        # 0-2: Gray, 3: Purple, 4: Red, 5: White
+        row_indices = jnp.repeat(jnp.arange(self.consts.GRID_ROWS), self.consts.GRID_COLS)
+        grid_active = (grid_status == self.consts.GRID)
+
+        # Dimensions for Grid Aliens
+        grid_w = jnp.full(grid_x.shape, self.consts.ENEMY_WIDTH, dtype=jnp.int32)
+        grid_h = jnp.full(grid_x.shape, self.consts.ENEMY_HEIGHT, dtype=jnp.int32)
+        
+        # 2. Attackers (Divers)
+        att_x = state.enemy_attack_x
+        att_y = state.enemy_attack_y
+        att_status = state.enemy_attack_states
+        # Fix: Sanitize visual_id (rows) for inactive aliens to avoid -9999
+        att_active = (att_status == 1) | (att_status == 2)
+        att_rows = jnp.where(att_active, state.enemy_attack_pos[:, 0], 0)
+        
+        # Determine orientation for attackers
+        att_is_turning = state.enemy_attack_turning != self.consts.NO_TURNING
+        att_dir_idx = jnp.where(
+            att_is_turning, 
+            2, # Down 
+            jnp.where(state.enemy_attack_direction == -1, 0, 1) # Left or Right
+        )
+        att_orientation = jnp.select(
+            [att_dir_idx == 0, att_dir_idx == 1, att_dir_idx == 2],
+            [270.0, 90.0, 180.0],
+            default=0.0
+        )
+
+        # Dimensions for Attackers
+        att_w = jnp.full(att_x.shape, self.consts.ENEMY_ATTACK_WIDTH, dtype=jnp.int32)
+        att_h = jnp.full(att_x.shape, self.consts.ENEMY_ATTACK_HEIGHT, dtype=jnp.int32)
+
+        # 3. Supporters
+        supp_x = state.enemy_support_x
+        supp_y = state.enemy_support_y
+        supp_status = state.enemy_support_states
+        
+        # Fix: Sanitize visual_id (rows) for inactive supporters
+        supp_active = (supp_status == 1) | (supp_status == 2)
+        supp_rows = jnp.where(supp_active, state.enemy_support_pos[:, 0], 0)
+        
+        # Supporters orientation logic (follows caller)
+        caller_idx = state.enemy_support_caller_idx
+        valid_caller = caller_idx != self.consts.ERROR_VALUE
+        safe_caller_idx = jnp.where(valid_caller, caller_idx, 0)
+        
+        supp_turning = state.enemy_attack_turning[safe_caller_idx] != self.consts.NO_TURNING
+        supp_dir_val = state.enemy_attack_direction[safe_caller_idx]
+        
+        supp_dir_idx = jnp.where(supp_turning, 2, jnp.where(supp_dir_val == -1, 0, 1))
+        supp_orientation_scalar = jnp.select(
+            [supp_dir_idx == 0, supp_dir_idx == 1, supp_dir_idx == 2],
+            [270.0, 90.0, 180.0],
+            default=0.0
+        )
+        # Broadcast scalar orientation to all supporters
+        supp_orientation = jnp.full((self.consts.MAX_SUPPORTERS,), supp_orientation_scalar, dtype=jnp.float32)
+
+        # Dimensions for Supporters
+        supp_w = jnp.full(supp_x.shape, self.consts.ENEMY_ATTACK_WIDTH, dtype=jnp.int32)
+        supp_h = jnp.full(supp_x.shape, self.consts.ENEMY_ATTACK_HEIGHT, dtype=jnp.int32)
+
+        # Combine all aliens
+        all_x = jnp.concatenate([grid_x, att_x, supp_x])
+        all_y = jnp.concatenate([grid_y, att_y, supp_y])
+        all_w = jnp.concatenate([grid_w, att_w, supp_w])
+        all_h = jnp.concatenate([grid_h, att_h, supp_h])
+        all_active = jnp.concatenate([grid_active, att_active, supp_active])
+        all_visual_id = jnp.concatenate([row_indices, att_rows, supp_rows])
+        
+        # State: 0 for Grid, 1 for Attack/Support (Diving)
+        all_state = jnp.concatenate([
+            jnp.zeros_like(grid_x, dtype=jnp.int32),
+            jnp.ones_like(att_x, dtype=jnp.int32),
+            jnp.ones_like(supp_x, dtype=jnp.int32)
+        ])
+        
+        all_orientation = jnp.concatenate([
+            jnp.zeros_like(grid_x, dtype=jnp.float32),
+            att_orientation.astype(jnp.float32),
+            supp_orientation.astype(jnp.float32)
+        ])
+
+        aliens = ObjectObservation.create(
+            x=jnp.clip(all_x.astype(jnp.int32), 0, self.consts.NATIVE_GAME_WIDTH),
+            y=jnp.clip(all_y.astype(jnp.int32), 0, self.consts.NATIVE_GAME_HEIGHT),
+            width=all_w,
+            height=all_h,
+            orientation=all_orientation,
+            visual_id=all_visual_id.astype(jnp.int32),
+            state=all_state.astype(jnp.int32),
+            active=all_active.astype(jnp.int32)
+        )
+
+        # --- Player Missile ---
+        pm_active = state.bullet_y >= 0
+        missiles = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.bullet_x, dtype=jnp.int32), 0, self.consts.NATIVE_GAME_WIDTH),
+            y=jnp.clip(jnp.array(state.bullet_y, dtype=jnp.int32), 0, self.consts.NATIVE_GAME_HEIGHT),
+            width=jnp.array(1, dtype=jnp.int32),
+            height=jnp.array(4, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=pm_active.astype(jnp.int32)
+        )
+
+        # --- Enemy Bombs ---
+        bm_x = state.enemy_attack_bullet_x
+        bm_y = state.enemy_attack_bullet_y
+        bm_active = bm_y >= 0
+
+        bombs = ObjectObservation.create(
+            x=jnp.clip(bm_x.astype(jnp.int32), 0, self.consts.NATIVE_GAME_WIDTH),
+            y=jnp.clip(bm_y.astype(jnp.int32), 0, self.consts.NATIVE_GAME_HEIGHT),
+            width=jnp.full(bm_x.shape, 2, dtype=jnp.int32),
+            height=jnp.full(bm_x.shape, 4, dtype=jnp.int32),
+            orientation=jnp.full(bm_x.shape, 180.0, dtype=jnp.float32),
+            active=bm_active.astype(jnp.int32)
+        )
+
+        return GalaxianObservation(
+            player=player,
+            aliens=aliens,
+            missiles=missiles,
+            bombs=bombs,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+            level=state.level.astype(jnp.int32)
+        )
     @partial(jax.jit, static_argnums=(0,))
     def get_action_space(self):
         return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
@@ -1330,25 +1449,19 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "player_x": spaces.Box(low=0, high=self.consts.NATIVE_GAME_WIDTH, shape=(), dtype=jnp.float32),
-                "player_y": spaces.Box(low=0, high=self.consts.NATIVE_GAME_HEIGHT, shape=(), dtype=jnp.float32),
-                "bullet_x": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_WIDTH, shape=(), dtype=jnp.float32),
-                "bullet_y": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_HEIGHT, shape=(), dtype=jnp.float32),
-                "enemy_grid_x": spaces.Box(low=0, high=self.consts.NATIVE_GAME_WIDTH, shape=(self.consts.GRID_ROWS, self.consts.GRID_COLS), dtype=jnp.float32),
-                "enemy_grid_y": spaces.Box(low=0, high=self.consts.NATIVE_GAME_HEIGHT, shape=(self.consts.GRID_ROWS, self.consts.GRID_COLS), dtype=jnp.float32),
-                "enemy_grid_state": spaces.Box(low=0, high=2, shape=(self.consts.GRID_ROWS, self.consts.GRID_COLS), dtype=jnp.float32),
-                "enemy_attack_pos": spaces.Box(low=self.consts.ERROR_VALUE, high=max(self.consts.GRID_ROWS, self.consts.GRID_COLS), shape=(self.consts.MAX_DIVERS, 2), dtype=jnp.float32),
-                "enemy_attack_x": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_WIDTH, shape=(self.consts.MAX_DIVERS,), dtype=jnp.float32),
-                "enemy_attack_y": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_HEIGHT, shape=(self.consts.MAX_DIVERS,), dtype=jnp.float32),
-                "enemy_support_pos": spaces.Box(low=self.consts.ERROR_VALUE, high=max(self.consts.GRID_ROWS, self.consts.GRID_COLS), shape=(self.consts.MAX_SUPPORTERS, 2), dtype=jnp.float32),
-                "enemy_support_x": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_WIDTH, shape=(self.consts.MAX_SUPPORTERS,), dtype=jnp.float32),
-                "enemy_support_y": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_HEIGHT, shape=(self.consts.MAX_SUPPORTERS,), dtype=jnp.float32),
-                "enemy_attack_bullet_x": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_WIDTH, shape=(self.consts.MAX_DIVERS,), dtype=jnp.float32),
-                "enemy_attack_bullet_y": spaces.Box(low=self.consts.ERROR_VALUE, high=self.consts.NATIVE_GAME_HEIGHT, shape=(self.consts.MAX_DIVERS,), dtype=jnp.float32),
-            }
-        )
+        # 6 rows * 7 cols = 42 grid slots
+        # + 5 max divers + 2 max supporters = 49 total potential alien objects
+        n_aliens = self.consts.GRID_ROWS * self.consts.GRID_COLS + self.consts.MAX_DIVERS + self.consts.MAX_SUPPORTERS
+        
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH)),
+            "aliens": spaces.get_object_space(n=n_aliens, screen_size=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH)),
+            "missiles": spaces.get_object_space(n=None, screen_size=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH)),
+            "bombs": spaces.get_object_space(n=self.consts.MAX_DIVERS, screen_size=(self.consts.NATIVE_GAME_HEIGHT, self.consts.NATIVE_GAME_WIDTH)),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -1356,29 +1469,6 @@ class JaxGalaxian(JaxEnvironment[GalaxianState, GalaxianObservation, GalaxianInf
             high=255,
             shape=(210, 160, 3),
             dtype=jnp.uint8
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: GalaxianObservation) -> chex.Array:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.bullet_x.flatten(),
-                obs.bullet_y.flatten(),
-                obs.enemy_grid_x.flatten(),
-                obs.enemy_grid_y.flatten(),
-                obs.enemy_grid_state.flatten(),
-                obs.enemy_attack_pos.flatten(),
-                obs.enemy_attack_x.flatten(),
-                obs.enemy_attack_y.flatten(),
-                obs.enemy_support_pos.flatten(),
-                obs.enemy_support_x.flatten(),
-                obs.enemy_support_y.flatten(),
-                obs.enemy_attack_bullet_x.flatten(),
-                obs.enemy_attack_bullet_y.flatten(),
-            ]
         )
 
     @partial(jax.jit, static_argnums=(0,))

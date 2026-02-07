@@ -11,7 +11,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 def _create_wall_sprite(consts: "PongConstants", height: int) -> jnp.ndarray:
     wall_color_rgba = (*consts.SCORE_COLOR, 255)
@@ -79,17 +79,10 @@ class PongState(struct.PyTreeNode):
     buffer: chex.Array
     key: chex.PRNGKey
 
-
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
 class PongObservation(struct.PyTreeNode):
-    player: EntityPosition
-    enemy: EntityPosition
-    ball: EntityPosition
+    player: ObjectObservation
+    enemy: ObjectObservation
+    ball: ObjectObservation
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
 
@@ -493,21 +486,21 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         return self.renderer.render(state)
 
     def _get_observation(self, state: PongState):
-        player = EntityPosition(
+        player = ObjectObservation.create(
             x=jnp.array(self.consts.PLAYER_X),
             y=state.player_y,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
-
-        enemy = EntityPosition(
+        
+        enemy = ObjectObservation.create(
             x=jnp.array(self.consts.ENEMY_X),
             y=state.enemy_y,
             width=jnp.array(self.consts.ENEMY_SIZE[0]),
             height=jnp.array(self.consts.ENEMY_SIZE[1]),
         )
-
-        ball = EntityPosition(
+        
+        ball = ObjectObservation.create(
             x=state.ball_x,
             y=state.ball_y,
             width=jnp.array(self.consts.BALL_SIZE[0]),
@@ -521,49 +514,17 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             score_enemy=state.enemy_score,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: PongObservation) -> jnp.ndarray:
-           return jnp.concatenate([
-               obs.player.x.flatten(),
-               obs.player.y.flatten(),
-               obs.player.height.flatten(),
-               obs.player.width.flatten(),
-               obs.enemy.x.flatten(),
-               obs.enemy.y.flatten(),
-               obs.enemy.height.flatten(),
-               obs.enemy.width.flatten(),
-               obs.ball.x.flatten(),
-               obs.ball.y.flatten(),
-               obs.ball.height.flatten(),
-               obs.ball.width.flatten(),
-               obs.score_player.flatten(),
-               obs.score_enemy.flatten()
-            ]
-           )
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
+        # Use get_object_space helper to create standard ObjectObservation spaces
+        object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "enemy": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
+            "player": object_space,
+            "enemy": object_space,
+            "ball": object_space,
             "score_player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
             "score_enemy": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
         })

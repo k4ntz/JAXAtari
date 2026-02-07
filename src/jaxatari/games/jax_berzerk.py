@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import chex
 from flax import struct
 from jax import Array
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -214,26 +214,16 @@ class BerzerkState:
     entry_direction: chex.Array         # (1,)
     room_transition_timer: chex.Array   # (1,)
 
-
+# TODO: wall positions probably also needed
 @struct.dataclass
-class BerzerkObservation:
-    # Player
-    player_pos: jnp.ndarray        # (2,)
-    player_dir: jnp.ndarray        # (2,)
-    player_bullet: jnp.ndarray     # (1,2)
-    player_bullet_dir: jnp.ndarray # (1,2)
-
-    # Enemies
-    enemy_pos: jnp.ndarray
-    enemy_bullets: jnp.ndarray
-    enemy_bullet_dirs: jnp.ndarray
-
-    # Otto
-    otto_pos: jnp.ndarray   
-
-    # Game-level
-    score: jnp.ndarray        
-    lives: jnp.ndarray     
+class BerzerkObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    player_bullet: ObjectObservation
+    enemies: ObjectObservation
+    enemy_bullets: ObjectObservation
+    otto: ObjectObservation
+    score: jnp.ndarray
+    lives: jnp.ndarray
 
 
 @struct.dataclass
@@ -904,38 +894,91 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
        
     @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state) -> BerzerkObservation:
-        # Player as (2,)
-        player_pos = jnp.array([state.player.pos[0], state.player.pos[1]], dtype=jnp.float32)
-        player_dir = jnp.array([state.player.last_dir[0], state.player.last_dir[1]], dtype=jnp.float32)
+    def _get_observation(self, state: BerzerkState) -> BerzerkObservation:
+        # Helper to convert vector (dx, dy) to degrees (0-360)
+        def vec_to_deg(v):
+            # arctan2(y, x) -> degrees
+            return jnp.mod(jnp.degrees(jnp.arctan2(v[..., 1], v[..., 0])), 360.0)
 
-        # Bullet as (1,2)
-        player_bullet = jnp.array([state.player.bullet[0]], dtype=jnp.float32) if state.player.bullet.ndim == 2 else jnp.array([state.player.bullet], dtype=jnp.float32)
-        player_bullet_dir = jnp.array([state.player.bullet_dir[0]], dtype=jnp.float32) if state.player.bullet_dir.ndim == 2 else jnp.array([state.player.bullet_dir], dtype=jnp.float32)
+        # --- Player ---
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player.pos[0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.player.pos[1], 0, self.consts.HEIGHT - 1),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=vec_to_deg(state.player.last_dir),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Player Bullet ---
+        # state.player.bullet is shape (1, 2)
+        pb_dir = state.player.bullet_dir[0]
+        pb_is_horiz = jnp.abs(pb_dir[0]) > 0
+        pb_w = jnp.where(pb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[0], self.consts.BULLET_SIZE_VERTICAL[0])
+        pb_h = jnp.where(pb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[1], self.consts.BULLET_SIZE_VERTICAL[1])
+        
+        player_bullet = ObjectObservation.create(
+            x=jnp.clip(state.player.bullet[0, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.player.bullet[0, 1], 0, self.consts.HEIGHT - 1),
+            width=pb_w.astype(jnp.int32),
+            height=pb_h.astype(jnp.int32),
+            orientation=vec_to_deg(pb_dir),
+            active=state.player.bullet_active[0].astype(jnp.int32)
+        )
 
         # --- Enemies ---
-        enemy_pos = state.enemy.pos.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
-        enemy_bullets = state.enemy.bullets.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
-        enemy_bullet_dirs = state.enemy.bullet_dirs.astype(jnp.float32)  # shape (MAX_NUM_ENEMIES, 2)
+        # Convert enemy axis/dir to vector
+        e_axis = state.enemy.move_axis
+        e_dir = state.enemy.move_dir
+        e_dx = jnp.where(e_axis == 0, e_dir, 0.0)
+        e_dy = jnp.where(e_axis == 1, e_dir, 0.0)
+        e_vec = jnp.stack([e_dx, e_dy], axis=-1)
+
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemy.pos[:, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.enemy.pos[:, 1], 0, self.consts.HEIGHT - 1),
+            width=jnp.full((self.consts.MAX_NUM_ENEMIES,), self.consts.ENEMY_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((self.consts.MAX_NUM_ENEMIES,), self.consts.ENEMY_SIZE[1], dtype=jnp.int32),
+            orientation=vec_to_deg(e_vec),
+            active=state.enemy.alive.astype(jnp.int32)
+        )
+
+        # --- Enemy Bullets ---
+        eb_dirs = state.enemy.bullet_dirs
+        eb_is_horiz = jnp.abs(eb_dirs[:, 0]) > 0
+        eb_w = jnp.where(eb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[0], self.consts.BULLET_SIZE_VERTICAL[0])
+        eb_h = jnp.where(eb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[1], self.consts.BULLET_SIZE_VERTICAL[1])
+
+        enemy_bullets = ObjectObservation.create(
+            x=jnp.clip(state.enemy.bullets[:, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.enemy.bullets[:, 1], 0, self.consts.HEIGHT - 1),
+            width=eb_w.astype(jnp.int32),
+            height=eb_h.astype(jnp.int32),
+            orientation=vec_to_deg(eb_dirs),
+            active=state.enemy.bullet_active.astype(jnp.int32)
+        )
 
         # --- Otto ---
-        otto_pos = state.otto.pos.astype(jnp.float32)
-
-        # --- Global ---
-        score = state.score.astype(jnp.float32)
-        lives = state.lives.astype(jnp.float32)
+        # Calculate vector to player for orientation
+        otto_vec = state.player.pos - state.otto.pos
+        
+        otto = ObjectObservation.create(
+            x=jnp.clip(state.otto.pos[0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(state.otto.pos[1], 0, self.consts.HEIGHT - 1),
+            width=jnp.array(self.consts.EVIL_OTTO_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.EVIL_OTTO_SIZE[1], dtype=jnp.int32),
+            orientation=vec_to_deg(otto_vec),
+            active=state.otto.active.astype(jnp.int32)
+        )
 
         return BerzerkObservation(
-            player_pos=player_pos,
-            player_dir=player_dir,
+            player=player,
             player_bullet=player_bullet,
-            player_bullet_dir=player_bullet_dir,
-            enemy_pos=enemy_pos,
+            enemies=enemies,
             enemy_bullets=enemy_bullets,
-            enemy_bullet_dirs=enemy_bullet_dirs,
-            otto_pos=otto_pos,
-            score=score,
-            lives=lives,
+            otto=otto,
+            score=state.score,
+            lives=state.lives
         )
 
 
@@ -1665,23 +1708,13 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     def observation_space(self) -> spaces.Dict:
         """Returns the simplified observation space for the agent."""
         return spaces.Dict({
-            # Player
-            "player_pos": spaces.Box(0, 255, (2,), jnp.float32),
-            "player_dir": spaces.Box(-1, 1, (2,), jnp.float32),
-            "player_bullet": spaces.Box(0, 255, (1,2), jnp.float32),
-            "player_bullet_dir": spaces.Box(-1, 1, (1,2), jnp.float32),
-
-            # Enemies
-            "enemy_pos": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
-            "enemy_bullets": spaces.Box(-255, 255, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
-            "enemy_bullet_dirs": spaces.Box(-1, 1, (self.consts.MAX_NUM_ENEMIES, 2), jnp.float32),
-
-            # Otto
-            "otto_pos": spaces.Box(-255, 255, (2,), jnp.float32),
-
-            # Global
-            "score": spaces.Box(0, 999999, (), jnp.float32),
-            "lives": spaces.Box(0, 99, (), jnp.float32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "player_bullet": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "enemies": spaces.get_object_space(n=self.consts.MAX_NUM_ENEMIES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "enemy_bullets": spaces.get_object_space(n=self.consts.MAX_NUM_ENEMIES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "otto": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "score": spaces.Box(0, 999999, (), jnp.uint16),
+            "lives": spaces.Box(0, 99, (), jnp.uint8),
         })
 
 

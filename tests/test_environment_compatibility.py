@@ -223,15 +223,6 @@ class TestBasicAPI:
         image_space = raw_env.image_space()
         assert image_space.contains(rendered_image), "Rendered image should be contained in image space"
 
-    def test_obs_to_flat_array(self, raw_env):
-        """Test that the obs_to_flat_array function works correctly."""
-        key = jax.random.PRNGKey(0)
-        obs, state = raw_env.reset(key)
-        flat_obs = raw_env.obs_to_flat_array(obs)
-        assert flat_obs is not None, "Flat observation should not be None"
-        assert isinstance(flat_obs, jnp.ndarray), "Flat observation should be jnp.ndarray"
-        assert flat_obs.ndim == 1, "Flat observation should be 1-dimensional"
-
     def test_episode_completion(self, raw_env):
         """Test that episodes can run to completion."""
         key = jax.random.PRNGKey(0)
@@ -624,17 +615,27 @@ class TestAdvancedWrapperFeatures:
         # Test runtime observation transformation
         obs_flat, state = flatten_env.reset(key)
         assert obs_flat is not None, "Flattened observation should not be None"
-        
-        # Convert observation to dict for comparison
-        obs_flat_dict = deep_asdict(obs_flat)
-        obs_leaves = jax.tree.leaves(obs_flat_dict)
-        space_leaves = jax.tree.leaves(flattened_space)
-        
-        assert len(obs_leaves) == len(space_leaves), "Number of observation and space leaves should match"
-        
-        for obs_leaf, space_leaf in zip(obs_leaves, space_leaves):
-            assert isinstance(space_leaf, spaces.Box), "Space leaf should be Box"
-            assert space_leaf.contains(obs_leaf), "Observation leaf should be contained in space"
+
+        # Use .contains() to verify observation validity.
+        # This is robust to Pytree leaf order mismatches between Dict spaces (insertion order)
+        # and Dataclass observations (field definition order), as Dict.contains uses key lookups.
+        assert flattened_space.contains(obs_flat), "Flattened observation should be contained in space"
+
+        # Ensure flattened values match manual flattening of the original observation
+        raw_obs, _ = atari_env.reset(key)
+
+        def manual_flatten(leaf):
+            leaf_array = jnp.asarray(leaf)
+            return leaf_array.flatten().astype(jnp.float32)
+
+        expected_flat = jax.tree.map(manual_flatten, raw_obs)
+        actual_flat, _ = flatten_env.reset(key)
+
+        def compare_leaves(expected_leaf, actual_leaf):
+            assert expected_leaf.shape == actual_leaf.shape, "Flattened leaf shape mismatch"
+            assert jnp.allclose(expected_leaf, actual_leaf), "Flattened leaf values mismatch"
+
+        jax.tree.map(compare_leaves, expected_flat, actual_flat)
 
     def test_normalize_observation_wrapper(self, raw_env):
         """Test that NormalizeObservationWrapper correctly normalizes observations."""
@@ -780,7 +781,11 @@ class TestAdvancedWrapperFeatures:
         _, state_with_fire = env_with_fire.reset(key)
         
         # The state with first_fire should have a different prev_action
-        assert state_with_fire.prev_action == env_with_fire.fire_action_index, "first_fire should set prev_action to the FIRE action index"
+        # Note: first_fire may be automatically disabled if FIRE action is not available
+        if env_with_fire.first_fire:
+            assert state_with_fire.prev_action == env_with_fire.fire_action_index, "first_fire should set prev_action to the FIRE action index"
+        else:
+            assert state_with_fire.prev_action == 0, "first_fire should be disabled for games without FIRE action"
         assert state_no_fire.prev_action == 0, "first_fire=False should set prev_action to NOOP (0)"
         
         # Test sticky_actions feature

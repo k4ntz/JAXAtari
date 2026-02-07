@@ -2,6 +2,7 @@
 
 import functools
 import types
+import warnings
 from typing import Any, Dict, Tuple, Union, Optional, Callable
 from dataclasses import is_dataclass, asdict
 
@@ -10,6 +11,7 @@ from flax import struct
 import jax
 import jax.image as jim
 import jax.numpy as jnp
+from jax import flatten_util
 from jaxatari.environment import EnvState, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 import numpy as np
@@ -25,7 +27,7 @@ class JaxatariWrapper(object):
     def __getattr__(self, name):
         return getattr(self._env, name)
 
-
+# TODO: HIGH PRIORITY: the hotwswap might wipe out applied mods because it replaces the renderer! We need to make sure this does not happen, either by reapplying mods or by doing the hot-swap earlier / differently.
 def _apply_native_downscaling_hotswap(
     base_env,
     pixel_resize_shape: tuple[int, int],
@@ -361,26 +363,22 @@ class ObjectCentricWrapper(JaxatariWrapper):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "ObjectCentricWrapper must be applied after AtariWrapper"
 
-        # First, get the space for a SINGLE, UNSTACKED frame from the base env.
-        single_frame_space = self._env._env.observation_space()
-
-        # Calculate the bounds and size for a single flattened frame for all leaf spaces.
+        # Calculate exact bounds for the flattened observation based on the space structure.
+        # Get the stacked observation space from AtariWrapper.
+        stacked_space = self._env.observation_space()
         lows, highs = [], []
-        single_frame_flat_size = 0
-        for leaf_space in jax.tree.leaves(single_frame_space):
+        
+        # Iterate over leaves of the stacked space. Each leaf is a Box(stack_size, ...).
+        # We extract bounds for a single frame (index 0) and flatten them.
+        for leaf_space in jax.tree.leaves(stacked_space):
             if isinstance(leaf_space, spaces.Box):
-                # Flatten the bounds arrays for Box spaces
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                # Extract bounds from the first frame and flatten
+                low_arr = np.broadcast_to(leaf_space.low[0], leaf_space.shape[1:]).flatten()
+                high_arr = np.broadcast_to(leaf_space.high[0], leaf_space.shape[1:]).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
-                single_frame_flat_size += low_arr.size
-            elif isinstance(leaf_space, spaces.Discrete):
-                # A Discrete space flattens to a single value
-                lows.append(np.array([0], dtype=leaf_space.dtype))
-                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
-                single_frame_flat_size += 1
             else:
+                # Should not happen if stack_space works correctly (it converts Discrete to Box)
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
         if not lows:
@@ -393,8 +391,8 @@ class ObjectCentricWrapper(JaxatariWrapper):
         self._observation_space = spaces.Box(
             low=single_frame_lows,
             high=single_frame_highs,
-            shape=(self._env.frame_stack_size, int(single_frame_flat_size)),
-            dtype=single_frame_lows.dtype
+            shape=(self._env.frame_stack_size, int(single_frame_lows.shape[0])),
+            dtype=jnp.float32
         )
     
     def observation_space(self) -> spaces.Box:
@@ -402,12 +400,18 @@ class ObjectCentricWrapper(JaxatariWrapper):
         return self._observation_space
 
     @functools.partial(jax.jit, static_argnums=(0,))
+    def _flatten_obs(self, obs_stack):
+        """Flatten each frame in the observation stack using ravel_pytree."""
+        flattened = jax.vmap(lambda x: flatten_util.ravel_pytree(x)[0])(obs_stack)
+        return flattened.astype(jnp.float32)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
         obs, state = self._env.reset(key)
         # Flatten each frame in the stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs)
+        flat_obs = self._flatten_obs(obs)
         return flat_obs, state
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -418,7 +422,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
     ) -> Tuple[chex.Array, EnvState, float, bool, Any]:  # dict]:
         obs, state, reward, done, info = self._env.step(state, action)
         # Flatten each frame in the stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs)
+        flat_obs = self._flatten_obs(obs)
         return flat_obs, state, reward, done, info
 
 
@@ -560,22 +564,22 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         stacked_image_space = spaces.stack_space(image_space, self._env.frame_stack_size)
 
-        # Part 2: Define the FLATTENED object space (with the bug fix).
-        single_frame_space = self._env._env.observation_space()
+        # Part 2: Define the FLATTENED object space with exact bounds.
+        # Get the stacked observation space from AtariWrapper.
+        stacked_space = self._env.observation_space()
         lows, highs = [], []
-        single_frame_flat_size = 0
-        for leaf_space in jax.tree.leaves(single_frame_space):
+        
+        # Iterate over leaves of the stacked space. Each leaf is a Box(stack_size, ...).
+        # We extract bounds for a single frame (index 0) and flatten them.
+        for leaf_space in jax.tree.leaves(stacked_space):
             if isinstance(leaf_space, spaces.Box):
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                # Extract bounds from the first frame and flatten
+                low_arr = np.broadcast_to(leaf_space.low[0], leaf_space.shape[1:]).flatten()
+                high_arr = np.broadcast_to(leaf_space.high[0], leaf_space.shape[1:]).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
-                single_frame_flat_size += low_arr.size
-            elif isinstance(leaf_space, spaces.Discrete):
-                lows.append(np.array([0], dtype=leaf_space.dtype))
-                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
-                single_frame_flat_size += 1
             else:
+                # Should not happen if stack_space works correctly (it converts Discrete to Box)
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
         if not lows:
@@ -587,8 +591,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         stacked_object_space_flat = spaces.Box(
             low=single_frame_lows,
             high=single_frame_highs,
-            shape=(self._env.frame_stack_size, int(single_frame_flat_size)),
-            dtype=single_frame_lows.dtype
+            shape=(self._env.frame_stack_size, int(single_frame_lows.shape[0])),
+            dtype=jnp.float32
         )
 
         # Part 3: Combine them into the final Tuple space.
@@ -617,6 +621,11 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         return image.astype(jnp.uint8)
     
     @functools.partial(jax.jit, static_argnums=(0,))
+    def _flatten_obs(self, obs_stack):
+        """Flatten each frame in the observation stack using ravel_pytree."""
+        return jax.vmap(lambda x: flatten_util.ravel_pytree(x)[0])(obs_stack).astype(jnp.float32)
+    
+    @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
@@ -624,7 +633,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         obs_stack, atari_state = self._env.reset(key)
 
         # 2. Flatten the object-centric part
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs_stack)
+        flat_obs = self._flatten_obs(obs_stack)
 
         # 3. Render and preprocess the image
         image = self._env.render(atari_state.env_state)
@@ -645,7 +654,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         obs_stack, atari_state, reward, done, info = self._env.step(state.atari_state, action)
 
         # 2. Flatten the new object-centric observation stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs_stack)
+        flat_obs = self._flatten_obs(obs_stack)
 
         # 3. Render and preprocess the new image
         image = self._env.render(atari_state.env_state)
@@ -737,7 +746,11 @@ class FlattenObservationWrapper(JaxatariWrapper):
 
     def _process_obs(self, obs_tree: chex.ArrayTree) -> chex.ArrayTree:
         """Applies .flatten() to each leaf array in the pytree."""
-        return jax.tree.map(lambda leaf: leaf.flatten(), obs_tree)
+        def flatten_and_cast(leaf):
+            flattened = leaf.flatten()
+            # Cast to float32 to match space dtype
+            return flattened.astype(jnp.float32) if isinstance(leaf, jnp.ndarray) else flattened
+        return jax.tree.map(flatten_and_cast, obs_tree)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:

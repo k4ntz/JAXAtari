@@ -9,7 +9,7 @@ from flax import struct
 
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 
 def _create_static_procedural_sprites() -> dict:
@@ -201,9 +201,9 @@ class GameState:
 """
 @struct.dataclass
 class FishingDerbyObservation:
-    player1_hook_xy: chex.Array
-    fish_xy: chex.Array
-    shark_x: chex.Array
+    hook_p1: ObjectObservation
+    fish: ObjectObservation
+    shark: ObjectObservation
     score: chex.Array
 
 """
@@ -360,12 +360,50 @@ class FishingDerby(JaxEnvironment):
                 of Player 1's hook, the positions of all fish, the x coordinate of the shark,
                 and Player 1's current score.
             """
+        # --- Player 1 Hook ---
         hook_x, hook_y = self._get_hook_position(self.consts.P1_START_X, state.p1)
+        
+        hook_p1 = ObjectObservation.create(
+            x=jnp.clip(jnp.array(hook_x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(hook_y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.HOOK_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.HOOK_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Fish ---
+        # Orientation: 1.0 (Right) -> 90.0, -1.0 (Left) -> 270.0
+        fish_dirs = state.fish_directions
+        fish_orientations = jnp.where(fish_dirs > 0, 90.0, 270.0)
+        
+        fish = ObjectObservation.create(
+            x=jnp.clip(state.fish_positions[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.fish_positions[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((self.consts.NUM_FISH,), self.consts.FISH_WIDTH, dtype=jnp.int32),
+            height=jnp.full((self.consts.NUM_FISH,), self.consts.FISH_HEIGHT, dtype=jnp.int32),
+            orientation=fish_orientations.astype(jnp.float32),
+            active=state.fish_active.astype(jnp.int32)
+        )
+
+        # --- Shark ---
+        # Orientation: 1.0 (Right) -> 90.0, -1.0 (Left) -> 270.0
+        shark_orientation = jnp.where(state.shark_dir > 0, 90.0, 270.0)
+        
+        shark = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.shark_x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(self.consts.SHARK_Y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.SHARK_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.SHARK_HEIGHT, dtype=jnp.int32),
+            orientation=shark_orientation.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
         return FishingDerbyObservation(
-            player1_hook_xy=jnp.array([hook_x, hook_y]),
-            fish_xy=state.fish_positions,
-            shark_x=state.shark_x,
-            score=state.p1.score
+            hook_p1=hook_p1,
+            fish=fish,
+            shark=shark,
+            score=state.p1.score.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -662,31 +700,10 @@ class FishingDerby(JaxEnvironment):
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the environment."""
         return spaces.Dict({
-            "player1_hook_xy": spaces.Box(
-                low=jnp.array([0.0, 0.0], dtype=jnp.float32),
-                high=jnp.array([self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT], dtype=jnp.float32),
-                shape=(2,),
-                dtype=jnp.float32
-            ),
-            "fish_xy": spaces.Box(
-                low=jnp.array([[0.0, 0.0]] * self.consts.NUM_FISH, dtype=jnp.float32),
-                high=jnp.array([[self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT]] * self.consts.NUM_FISH,
-                               dtype=jnp.float32),
-                shape=(self.consts.NUM_FISH, 2),
-                dtype=jnp.float32
-            ),
-            "shark_x": spaces.Box(
-                low=jnp.array(0.0, dtype=jnp.float32),
-                high=jnp.array(self.consts.SCREEN_WIDTH, dtype=jnp.float32),
-                shape=(),
-                dtype=jnp.float32
-            ),
-            "score": spaces.Box(
-                low=jnp.array(0.0, dtype=jnp.float32),
-                high=jnp.array(99.0, dtype=jnp.float32),
-                shape=(),
-                dtype=jnp.float32
-            )
+            "hook_p1": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "fish": spaces.get_object_space(n=self.consts.NUM_FISH, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "shark": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Space:
@@ -697,14 +714,6 @@ class FishingDerby(JaxEnvironment):
             shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
-
-    def obs_to_flat_array(self, obs: FishingDerbyObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate([
-            obs.player1_hook_xy,  # 2 values: hook x, y
-            obs.fish_xy.flatten(),  # 12 values: 6 fish * 2 coordinates each
-            jnp.array([obs.shark_x, obs.score])  # 2 values: shark x, score
-        ])
 
     def _is_fire_action(self, a: int) -> chex.Array:
         """True for FIRE and any directional FIRE combo (e.g., UPFIRE, RIGHTFIRE...)."""

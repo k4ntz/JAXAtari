@@ -17,6 +17,7 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
+from jaxatari.environment import ObjectObservation
 
 # +++ HELPER FUNCTIONS (for setup) +++
 
@@ -712,26 +713,17 @@ class VehicleSpec:
 
 @struct.dataclass
 class EnduroObservation:
-    # cars
-    player_x: jnp.ndarray
-    player_y: jnp.ndarray
-    visible_opponents: chex.Array
-
-    # score box
-    cars_to_overtake: jnp.ndarray  # goal for current level
+    player: ObjectObservation
+    opponents: ObjectObservation
+    track_left: jnp.ndarray
+    track_right: jnp.ndarray
+    curvature: jnp.ndarray
+    cars_to_overtake: jnp.ndarray
     distance: jnp.ndarray
     level: jnp.ndarray
-    level_passed: jnp.ndarray  # the flags when all required opponents have been overtaken
-
-    # track
-    track_left_xs: chex.Array
-    track_right_xs: chex.Array
-    curvature: jnp.ndarray  # one of -1, 0, or 1
-
-    # environment
-    cooldown: chex.Array
-    weather_index: chex.Array
-
+    level_passed: jnp.ndarray
+    cooldown: jnp.ndarray
+    weather_index: jnp.ndarray
 
 @struct.dataclass
 class EnduroInfo:
@@ -782,43 +774,23 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            # Player position
-            "player_x": spaces.Box(low=0, high=self.config.screen_width, shape=(1,), dtype=jnp.float32),
-            "player_y": spaces.Box(low=0, high=self.config.screen_height, shape=(1,), dtype=jnp.float32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.config.screen_height, self.config.screen_width)),
+            "opponents": spaces.get_object_space(n=7, screen_size=(self.config.screen_height, self.config.screen_width)),
+            
+            # Track geometry (Dense Arrays)
+            "track_left": spaces.Box(low=-1, high=self.config.screen_width, shape=(self.config.track_height,), dtype=jnp.float32),
+            "track_right": spaces.Box(low=-1, high=self.config.screen_width, shape=(self.config.track_height,), dtype=jnp.float32),
+            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),
 
-            # Opponents (7 slots, each with x,y coordinates, -1 for empty/fogged slots)
-            "visible_opponents": spaces.Box(
-                low=-1,
-                high=self.config.screen_width,
-                shape=(7, 2),
-                dtype=jnp.float32
-            ),
-
-            # Game objectives
+            # Game State
             "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.float32),
             "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
             "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.float32),
             "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),
-
-            # Track boundaries (can be -1 for fogged areas)
-            "track_left_xs": spaces.Box(
-                low=-1,
-                high=self.config.screen_width,
-                shape=(self.config.track_height,),
-                dtype=jnp.float32
-            ),
-            "track_right_xs": spaces.Box(
-                low=-1,
-                high=self.config.screen_width,
-                shape=(self.config.track_height,),
-                dtype=jnp.float32
-            ),
-            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),
-
-            # Environmental state
+            
+            # Environment
             "cooldown": spaces.Box(low=0, high=self.config.car_crash_cooldown_frames, shape=(1,), dtype=jnp.float32),
-            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,),
-                                        dtype=jnp.float32),
+            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,), dtype=jnp.float32),
         })
 
     def obs_to_flat_array(self, obs: EnduroObservation) -> jnp.ndarray:
@@ -1584,6 +1556,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         Returns:
             EnduroObservation with cleaned, game-relevant state information
+        TODO: update Docstring
         """
         track = state.whole_track
         directions = track[:, 0]
@@ -1633,7 +1606,6 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
         def apply_fog_to_track(track_xs):
             # Set fogged track positions to -1 or some "invisible" value
-            # Alternative: you could set them to the screen edge to make them "invisible"
             fog_mask = jnp.arange(len(track_xs)) < fog_track_rows
             return jnp.where(fog_mask, -1, track_xs)
 
@@ -1649,26 +1621,54 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             state.visible_track_right
         )
 
+        # === Construct Objects ===
+        player_direction = jnp.sign(state.player_x_abs_position)
+        # Player Object
+        # Clip to screen dimensions
+        p_x = jnp.clip(state.player_x_abs_position, 0, self.config.screen_width)
+        p_y = jnp.clip(state.player_y_abs_position, 0, self.config.screen_height)
+        # Orientation: 1 -> 90.0 (Right), -1 -> 270.0 (Left), 0 -> 0.0 (Straight)
+        p_orientation = jnp.select(
+            [player_direction == 1, player_direction == -1],
+            [90.0, 270.0],
+            default=0.0
+        )
+        
+        player = ObjectObservation.create(
+            x=p_x.astype(jnp.int32),
+            y=p_y.astype(jnp.int32),
+            width=jnp.array(self.config.car_width_0, dtype=jnp.int32),
+            height=jnp.array(self.config.car_height_0, dtype=jnp.int32),
+            orientation=p_orientation.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # Opponent Objects
+        # visible_opponents has shape (7, 2) [x, y]
+        opp_x = visible_opponents[:, 0]
+        opp_y = visible_opponents[:, 1]
+        opp_active = opp_x != -1
+        
+        opponents = ObjectObservation.create(
+            x=jnp.clip(opp_x, 0, self.config.screen_width).astype(jnp.int32),
+            y=jnp.clip(opp_y, 0, self.config.screen_height).astype(jnp.int32),
+            width=self.config.car_widths.astype(jnp.int32),
+            height=self.config.car_heights.astype(jnp.int32),
+            active=opp_active.astype(jnp.int32)
+        )
+
         return EnduroObservation(
-            # cars - use float32
-            player_x=jnp.array([state.player_x_abs_position], dtype=jnp.float32),
-            player_y=jnp.array([state.player_y_abs_position], dtype=jnp.float32),  # Changed to float32
-            visible_opponents=visible_opponents.astype(jnp.float32),  # Changed to float32
-
-            # score box - use float32
-            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float32),  # Changed to float32
+            player=player,
+            opponents=opponents,
+            track_left=track_left_xs.astype(jnp.float32),
+            track_right=track_right_xs.astype(jnp.float32),
+            curvature=jnp.array([curvature], dtype=jnp.float32),
+            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float32),
             distance=jnp.array([state.distance], dtype=jnp.float32),
-            level=jnp.array([state.level], dtype=jnp.float32),  # Changed to float32
-            level_passed=jnp.array([state.level_passed], dtype=jnp.float32),  # Changed to float32
-
-            # track - use float32
-            track_left_xs=track_left_xs.astype(jnp.float32),  # Changed to float32
-            track_right_xs=track_right_xs.astype(jnp.float32),  # Changed to float32
-            curvature=jnp.array([curvature], dtype=jnp.float32),  # Changed to float32
-
-            # environment - use float32
+            level=jnp.array([state.level], dtype=jnp.float32),
+            level_passed=jnp.array([state.level_passed], dtype=jnp.float32),
             cooldown=jnp.array([state.cooldown], dtype=jnp.float32),
-            weather_index=jnp.array([state.weather_index], dtype=jnp.float32),  # Changed to float32
+            weather_index=jnp.array([state.weather_index], dtype=jnp.float32),
         )
 
     @partial(jax.jit, static_argnums=(0,))

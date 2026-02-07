@@ -8,7 +8,7 @@ import chex
 from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
@@ -232,17 +232,15 @@ class PlayerEntity:
 
 @struct.dataclass
 class WordZapperObservation:
-    player: PlayerEntity
-
-    player_missile: EntityPosition
-    player_zapper: jnp.ndarray # shape (6,) -> x, y, width, height, active, cooldown
-
-    letters: jnp.ndarray # shape (27, 6) -> x, y, width, height, active, char_id
+    player: ObjectObservation
+    player_missile: ObjectObservation
+    player_zapper: ObjectObservation # Scalar
+    
+    letters: ObjectObservation # n=27
+    enemies: ObjectObservation # n=6
+    
     current_letter_index: jnp.ndarray
-    target_word: jnp.ndarray     # shape (max_word_len,) max_word_len=6
-
-    enemies: jnp.ndarray # shape (MAX_ENEMIES, 5) -> x, y, width, height, active
-
+    target_word: jnp.ndarray
     score: jnp.ndarray
     game_phase: jnp.ndarray
     level_word_len: jnp.ndarray
@@ -1036,41 +1034,22 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        """
-        Returns observation space for WordZapper, contains:
-        - player: PlayerEntity (x, y, direction, width, height, active)
-        - player_missile: EntityPosition (x, y, width, height, active)
-        - player_zapper: array of shape (6,) -> x, y, width, height, active, cooldown
-        - letters: array of shape (27, 6) -> x, y, width, height, active, char_id
-        - current_letter_index: int (0-5)
-        - target_word: array of shape (6,) -> for letters of target word max 27
-        - enemies: array of shape (MAX_ENEMIES, 5) -> x, y, width, height, active
-        - score: int (0-999999)
-        - game_phase: int (0-2)
-        - level_word_len: int (4-6)
-        - waiting_for_special: int (0-1)
-        """
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_missile": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_zapper": spaces.Box(low=0, high=255, shape=(6,), dtype=jnp.int32),
-            "letters": spaces.Box(low=0, high=self.consts.LETTER_RESET_X+27*(self.consts.LETTER_SIZE[0]+self.consts.LETTERS_DISTANCE)+10, shape=(27, 6), dtype=jnp.int32),
+            "player": single_obj,
+            "player_missile": single_obj,
+            "player_zapper": single_obj,
+            "letters": spaces.get_object_space(n=27, screen_size=screen_size),
+            "enemies": spaces.get_object_space(n=c.MAX_ENEMIES, screen_size=screen_size),
+            
             "current_letter_index": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "target_word": spaces.Box(low=-1, high=27, shape=(6,), dtype=jnp.int32),
-            "enemies": spaces.Box(low=0, high=255, shape=(self.consts.MAX_ENEMIES, 5), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "game_phase": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
             "level_word_len": spaces.Box(low=4, high=6, shape=(), dtype=jnp.int32),
@@ -1091,91 +1070,94 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WordZapperState) -> WordZapperObservation:
-        # Player entity (always active)
-        player = PlayerEntity(
-            x=state.player_x,
-            y=state.player_y,
-            direction=state.player_direction,
-            width=jnp.array(self.consts.PLAYER_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
+
+        # --- Player ---
+        p_ori = jnp.where(state.player_direction == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=p_ori
         )
 
-        # Player missile: shape (4,) -> x, y, active, direction
-        missile_pos = state.player_missile_position
-        player_missile = EntityPosition(
-            x=missile_pos[0],
-            y=missile_pos[1],
-            width=jnp.array(self.consts.MISSILE_SIZE[0]),
-            height=jnp.array(self.consts.MISSILE_SIZE[1]),
-            active=missile_pos[2],
+        # --- Player Missile ---
+        m_pos = state.player_missile_position
+        m_active = m_pos[2].astype(jnp.int32)
+        m_ori = jnp.where(m_pos[3] == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        player_missile = ObjectObservation.create(
+            x=jnp.clip(m_pos[0].astype(jnp.int32), 0, w),
+            y=jnp.clip(m_pos[1].astype(jnp.int32), 0, h),
+            width=jnp.array(c.MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.MISSILE_SIZE[1], dtype=jnp.int32),
+            active=m_active,
+            orientation=m_ori
         )
 
-        # Player zapper: shape (7,) -> x, y, active, cooldown, pulse, initial_x, block_zapper
-        zapper_pos = state.player_zapper_position
-        # Keep only x, y, width, height, active, cooldown
-        player_zapper = jnp.array([
-            zapper_pos[0],  # x
-            zapper_pos[1],  # y
-            self.consts.ZAPPER_SIZE[0],
-            self.consts.ZAPPER_SIZE[1],
-            zapper_pos[2],  # active
-            zapper_pos[3],  # cooldown
-        ])
-
-        # Letters: shape (27, 6) -> x, y, width, height, active, char_id
-        def convert_letter(x, y, alive, char_id):
-            return jnp.array([
-                x,
-                y,
-                self.consts.LETTER_SIZE[0],
-                self.consts.LETTER_SIZE[1],
-                alive,
-                char_id,
-            ])
-
-        letters = jax.vmap(convert_letter)(
-            state.letters_x,
-            state.letters_y,
-            state.letters_alive[:, 0],  # first channel: alive flag
-            state.letters_char,
+        # --- Player Zapper ---
+        z_pos = state.player_zapper_position
+        z_active = z_pos[2].astype(jnp.int32)
+        
+        player_zapper = ObjectObservation.create(
+            x=jnp.clip(z_pos[0].astype(jnp.int32), 0, w),
+            y=jnp.clip(z_pos[1].astype(jnp.int32), 0, h),
+            width=jnp.array(c.ZAPPER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.ZAPPER_SIZE[1], dtype=jnp.int32),
+            active=z_active
         )
 
-        # Enemies: shape (MAX_ENEMIES, 5) -> x, y, width, height, active
-        def convert_enemy(pos, active):
-            return jnp.where(
-                pos[2] == 1, # if zonker
-                jnp.array([
-                pos[0],  # x
-                pos[1],  # y
-                self.consts.ZONKER_SIZE[0],
-                self.consts.ZONKER_SIZE[1],
-                active,
-                ]),
-                jnp.array([
-                    pos[0],  # x
-                    pos[1],  # y
-                    self.consts.BONKER_SIZE[0],
-                    self.consts.BONKER_SIZE[1],
-                    active,
-                ])
-            )
+        # --- Letters ---
+        # letters_char encodes the char ID
+        l_active = state.letters_alive[:, 0].astype(jnp.int32)
+        
+        letters = ObjectObservation.create(
+            x=jnp.clip(state.letters_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.letters_y.astype(jnp.int32), 0, h),
+            width=jnp.full((27,), c.LETTER_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((27,), c.LETTER_SIZE[1], dtype=jnp.int32),
+            active=l_active,
+            visual_id=state.letters_char.astype(jnp.int32)
+        )
 
-        enemies = jax.vmap(convert_enemy)(state.enemy_positions, state.enemy_active)
+        # --- Enemies ---
+        # Type: 0=Bonker, 1=Zonker
+        # Direction: 5th column
+        e_type = state.enemy_positions[:, 2].astype(jnp.int32)
+        e_dir = state.enemy_positions[:, 4]
+        e_ori = jnp.where(e_dir == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        # Width/Height depends on type
+        # Bonker: (5,5), Zonker: (7,10)
+        e_w = jnp.where(e_type == 1, c.ZONKER_SIZE[0], c.BONKER_SIZE[0]).astype(jnp.int32)
+        e_h = jnp.where(e_type == 1, c.ZONKER_SIZE[1], c.BONKER_SIZE[1]).astype(jnp.int32)
 
-        # Return observation
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemy_positions[:, 0].astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemy_positions[:, 1].astype(jnp.int32), 0, h),
+            width=e_w,
+            height=e_h,
+            active=state.enemy_active.astype(jnp.int32),
+            visual_id=e_type,
+            orientation=e_ori
+        )
+
         return WordZapperObservation(
             player=player,
             player_missile=player_missile,
             player_zapper=player_zapper,
             letters=letters,
+            enemies=enemies,
             current_letter_index=state.current_letter_index,
             target_word=state.target_word,
-            enemies=enemies,
             score=state.score,
             game_phase=state.game_phase,
             level_word_len=state.level_word_len,
-            waiting_for_special=state.waiting_for_special,
+            waiting_for_special=state.waiting_for_special
         )
 
     @partial(jax.jit, static_argnums=(0,))

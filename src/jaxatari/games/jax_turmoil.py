@@ -7,7 +7,7 @@ import chex
 from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
@@ -242,40 +242,23 @@ class TurmoilState:
 
     bg_visible: chex.Array # if background is visible
 
-@struct.dataclass
-class PlayerEntity:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    direction: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-@struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
 
 @struct.dataclass
 class TurmoilObservation:
-    player: PlayerEntity
-    ships: jnp.array
-    enemy: jnp.array # (7, 6) -> type, x, y, active, width, height,
-    prize: EntityPosition
-    score: jnp.array
-    bullet: EntityPosition
-    game_phase: jnp.array
-    level: jnp.array
+    player: ObjectObservation
+    enemies: ObjectObservation # n=7
+    prize: ObjectObservation
+    bullet: ObjectObservation
+    
+    ships: jnp.ndarray
+    score: jnp.ndarray
+    game_phase: jnp.ndarray
+    level: jnp.ndarray
 
 @struct.dataclass
 class TurmoilInfo:
     step_counter: jnp.ndarray  # Current step count
     level: jnp.ndarray # current game level
-
 
 
 class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, TurmoilConstants]):
@@ -301,40 +284,7 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
     def __init__(self, consts: TurmoilConstants = None):
         consts = consts or TurmoilConstants()
         super().__init__(consts)
-        self.obs_size = 6 + 1 + 7 * 6 + 5 + 1 + 5 + 1 + 1
         self.renderer = TurmoilRenderer(self.consts)
-
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.direction], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: TurmoilObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),
-            obs.ships.flatten().astype(jnp.int32),
-            obs.enemy.flatten().astype(jnp.int32),
-            self.flatten_entity_position(obs.prize),
-            obs.score.flatten().astype(jnp.int32),
-            self.flatten_entity_position(obs.bullet),
-            obs.game_phase.flatten().astype(jnp.int32),
-            obs.level.flatten().astype(jnp.int32),
-        ])
     
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TurmoilState) -> jnp.ndarray:
@@ -345,43 +295,20 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
         return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for Seaquest.
-        The observation contains:
-        - player: PlayerEntity (x, y, direction, width, height, active)
-        - enemy: array of shape (7, 6) -> type, x, y, active, width, height
-        - prize: EntityPosition (x, y, width, height, active)
-        - ships: int (0-6)
-        - score: int (0-999999)
-        - bullet: EntityPosition (x, y, width, height, active)
-        - game_phase: int (0-2)
-        - level: int (0-10) # max lvl is 9, lvl 10 for ending condition
-        """
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
+            "player": single_obj,
+            "enemies": spaces.get_object_space(n=c.MAX_ENEMIES, screen_size=screen_size),
+            "prize": single_obj,
+            "bullet": single_obj,
             "ships": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
-            "enemy": spaces.Box(low=-1, high=210, shape=(7, 6), dtype=jnp.int32),
-            "prize": spaces.Dict({
-                "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "bullet": spaces.Dict({
-                "x": spaces.Box(low=-100, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
             "game_phase": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
             "level": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
@@ -399,57 +326,91 @@ class JaxTurmoil(JaxEnvironment[TurmoilState, TurmoilObservation, TurmoilInfo, T
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TurmoilState) -> TurmoilObservation:
-        player = PlayerEntity(
-            x=state.player_x,
-            y=state.player_y,
-            direction=state.player_direction,
-            width=jnp.array(self.consts.PLAYER_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1), # always active
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
+
+        # --- Player ---
+        # Direction: -1 (Left/270), 1 (Right/90)
+        p_ori = jnp.where(state.player_direction == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=p_ori
         )
 
-        # bullet
-        bullet = EntityPosition(
-            x=state.bullet[0],
-            y=state.bullet[1],
-            width=jnp.array(self.consts.BULLET_SIZE[0]),
-            height=jnp.array(self.consts.BULLET_SIZE[1]),
-            active=jnp.array(state.bullet[2] != 0),
+        # --- Enemies ---
+        e = state.enemy
+        # enemy array cols: 0:type, 1:x, 2:y, 3:active, 4:speed, 5:dir, 6:limit
+        e_x = e[:, 1].astype(jnp.int32)
+        e_y = e[:, 2].astype(jnp.int32)
+        e_active = e[:, 3].astype(jnp.int32)
+        e_type = e[:, 0].astype(jnp.int32)
+        e_dir = e[:, 5].astype(jnp.int32)
+        
+        # Orientations
+        e_ori = jnp.where(e_dir == 1, 90.0, 270.0).astype(jnp.float32)
+
+        # Sizes lookup (vectorized?)
+        # Enemy sizes are in constant list ENEMY_SIZE. 
+        # Need to map e_type to size. 
+        # ENEMY_SIZE_FOR_COLLISION is a single tuple (max size).
+        # For visualization accuracy, we should map per type, but constant lookup in JIT is tricky if not array.
+        # ENEMY_SIZE is a jnp array in constants! Good.
+        sizes = jnp.take(jnp.asarray(c.ENEMY_SIZE), e_type, axis=0)
+        
+        enemies = ObjectObservation.create(
+            x=jnp.clip(e_x, 0, w),
+            y=jnp.clip(e_y, 0, h),
+            width=sizes[:, 0].astype(jnp.int32),
+            height=sizes[:, 1].astype(jnp.int32),
+            active=e_active,
+            visual_id=e_type,
+            orientation=e_ori
         )
 
-        # convert enemies
-        def convert_enemy(e):
-            return jnp.array([
-                e[0], # type
-                e[1],  # x
-                e[2],  # y
-                e[3] != 0,  # active
-                self.consts.ENEMY_SIZE_FOR_COLLISION[0],  # width
-                self.consts.ENEMY_SIZE_FOR_COLLISION[1],  # height
-            ])
+        # --- Prize ---
+        # prize array: 0:lane, 1:x, 2:y, 3:active, 4:timer, 5:dir
+        pr_active = state.prize[3].astype(jnp.int32)
+        pr_x = state.prize[1].astype(jnp.int32)
+        pr_y = state.prize[2].astype(jnp.int32)
+        pr_dir = state.prize[5].astype(jnp.int32)
+        pr_ori = jnp.where(pr_dir == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        prize = ObjectObservation.create(
+            x=jnp.clip(pr_x, 0, w),
+            y=jnp.clip(pr_y, 0, h),
+            width=jnp.array(c.PRIZE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.PRIZE_SIZE[1], dtype=jnp.int32),
+            active=pr_active,
+            orientation=pr_ori
+        )
 
-        enemy = jax.vmap(convert_enemy)(state.enemy)
-
-        # prize
-        prize = EntityPosition(
-            x=state.prize[1],
-            y=state.prize[2],
-            width=jnp.array(self.consts.PRIZE_SIZE[0]),
-            height=jnp.array(self.consts.PRIZE_SIZE[1]),
-            active=jnp.array(state.bullet[3] != 0)
+        # --- Bullet ---
+        # bullet array: 0:x, 1:y, 2:active, 3:dir
+        b_active = (state.bullet[2] != 0).astype(jnp.int32)
+        bullet = ObjectObservation.create(
+            x=jnp.clip(state.bullet[0].astype(jnp.int32), 0, w),
+            y=jnp.clip(state.bullet[1].astype(jnp.int32), 0, h),
+            width=jnp.array(c.BULLET_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(c.BULLET_SIZE[1], dtype=jnp.int32),
+            active=b_active,
+            orientation=jnp.where(state.bullet[3] == 1, 90.0, 270.0).astype(jnp.float32)
         )
 
         return TurmoilObservation(
             player=player,
-            ships=state.ships,
-            enemy=enemy,
+            enemies=enemies,
             prize=prize,
-            score=state.score,
             bullet=bullet,
-            game_phase=state.game_phase,
-            level=state.level,
+            ships=state.ships.astype(jnp.int32),
+            score=state.score.astype(jnp.int32),
+            game_phase=state.game_phase.astype(jnp.int32),
+            level=state.level.astype(jnp.int32)
         )
-    
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TurmoilState) -> TurmoilInfo:

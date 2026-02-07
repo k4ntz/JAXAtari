@@ -3,6 +3,8 @@ import jax.numpy as jnp
 from functools import partial
 from jaxatari.games.jax_pong import PongState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+import chex
+from jaxatari.environment import JAXAtariAction as Action
 
 # --- 1. Individual Mod Plugins ---
 class LazyEnemyMod(JaxAtariInternalModPlugin):
@@ -61,4 +63,47 @@ class AlwaysZeroScoreMod(JaxAtariPostStepModPlugin):
         return new_state.replace(
             player_score=jnp.array(0, dtype=jnp.int32),
             enemy_score=jnp.array(0, dtype=jnp.int32)
+        )
+    
+
+class LinearMovementMod(JaxAtariInternalModPlugin):
+    constants_overrides = {
+        "PLAYER_ACCELERATION": (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _player_step(self, state: PongState, action: chex.Array) -> PongState:
+        up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+
+        # Direct movement: move 2 pixels per frame when input pressed
+        move_amount = jnp.array(2, dtype=jnp.int32)
+        
+        new_player_y = state.player_y
+        new_player_y = jax.lax.cond(
+            up,
+            lambda y: y - move_amount,
+            lambda y: y,
+            operand=new_player_y,
+        )
+        
+        new_player_y = jax.lax.cond(
+            down,
+            lambda y: y + move_amount,
+            lambda y: y,
+            operand=new_player_y,
+        )
+
+        # Hard boundaries
+        new_player_y = jnp.clip(
+            new_player_y,
+            self._env.consts.WALL_TOP_Y + self._env.consts.WALL_TOP_HEIGHT - 10,
+            self._env.consts.WALL_BOTTOM_Y - 4,
+        )
+
+        return state.replace(
+            player_y=new_player_y,
+            player_speed=jnp.array(0, dtype=jnp.int32),
+            acceleration_counter=jnp.array(0, dtype=jnp.int32),
+            buffer=new_player_y
         )

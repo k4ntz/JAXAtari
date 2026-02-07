@@ -86,7 +86,7 @@ class TestModifications:
         
         # Try to create environment with empty mod list
         try:
-            env = make(game_name, mods_config=[])
+            env = make(game_name, mods=[])
             assert env is not None
             assert env.consts is not None
         except (ImportError, ValueError) as e:
@@ -100,7 +100,7 @@ class TestModifications:
         
         try:
             # Create with empty mod list (tests mod system initialization)
-            env = make(game_name, mods_config=[])
+            env = make(game_name, mods=[])
             
             # Test basic functionality
             key = jax.random.PRNGKey(42)
@@ -188,7 +188,7 @@ def test_specific_game_mods_load(raw_env):
     
     try:
         # Try to create environment with empty mod list
-        env = make(game_name, mods_config=[])
+        env = make(game_name, mods=[])
         assert env is not None
         
         # Verify it works

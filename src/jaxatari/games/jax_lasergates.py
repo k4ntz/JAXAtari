@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, JAXAtariAction, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import AutoDerivedConstants
 
@@ -490,38 +490,32 @@ class EntityPosition:
 
 @struct.dataclass
 class LaserGatesObservation:
-    # Player + Player Missile
-    player: EntityPosition
-    player_missile: EntityPosition
+    player: ObjectObservation
+    player_missile: ObjectObservation
 
-    # Single-entity enemies (+ missiles)
-    radar_mortar: EntityPosition
-    radar_mortar_missile: EntityPosition
-    byte_bat: EntityPosition
-    rock_muncher: EntityPosition
-    rock_muncher_missile: EntityPosition
-    homing_missile: EntityPosition
+    # Enemies
+    radar_mortar: ObjectObservation
+    radar_mortar_missile: ObjectObservation
+    byte_bat: ObjectObservation
+    rock_muncher: ObjectObservation
+    rock_muncher_missile: ObjectObservation
+    homing_missile: ObjectObservation
 
-    # Forcefields: up to 3 Pairs (upper/lower)
-    forcefield_0_upper: EntityPosition
-    forcefield_0_lower: EntityPosition
-    forcefield_1_upper: EntityPosition
-    forcefield_1_lower: EntityPosition
-    forcefield_2_upper: EntityPosition
-    forcefield_2_lower: EntityPosition
+    # Obstacles (Grouped)
+    forcefields: ObjectObservation  # n=6 (3 pairs of upper/lower)
+    densepack: ObjectObservation
+    detonator: ObjectObservation
+    energy_pod: ObjectObservation
 
-    # Densepack, Detonator, Energy Pod
-    densepack: EntityPosition
-    detonator: EntityPosition
-    energy_pod: EntityPosition
+    # Environment (Grouped)
+    upper_mountains: ObjectObservation  # n=3
+    lower_mountains: ObjectObservation  # n=3
 
-    # Mountains (3 top, 3 bottom)
-    upper_mountain_0: EntityPosition
-    upper_mountain_1: EntityPosition
-    upper_mountain_2: EntityPosition
-    lower_mountain_0: EntityPosition
-    lower_mountain_1: EntityPosition
-    lower_mountain_2: EntityPosition
+    # Global Counters
+    score: chex.Array
+    energy: chex.Array
+    shields: chex.Array
+    dtime: chex.Array
 
 
 @struct.dataclass
@@ -1949,145 +1943,161 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    @staticmethod
-    @jax.jit
-    def _f32(x):
-        return jnp.asarray(x, jnp.float32)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _make_ep(self, x, y, w, h, active_bool):
-        """EntityPosition with float32 und active ∈ {0.0, 1.0}."""
-        active = jnp.where(active_bool, jnp.float32(1.0), jnp.float32(0.0))
-        return EntityPosition(
-            x=self._f32(x),
-            y=self._f32(y),
-            width=self._f32(w),
-            height=self._f32(h),
-            active=active,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _masked_ep(self, x, y, w, h, active_bool):
-        """Like _make_ep, but null values if inactive."""
-        ep = self._make_ep(x, y, w, h, active_bool)
-        ax = ep.active
-        return EntityPosition(
-            x=ep.x * ax, y=ep.y * ax, width=ep.width * ax, height=ep.height * ax, active=ax
-        )
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: LaserGatesState) -> LaserGatesObservation:
         c = self.consts
+        
+        # Helper to create scalar object obs
+        def create_obs(x, y, w, h, active, visual_id=0):
+            return ObjectObservation.create(
+                x=jnp.clip(jnp.array(x, dtype=jnp.int32), 0, c.WIDTH),
+                y=jnp.clip(jnp.array(y, dtype=jnp.int32), 0, c.HEIGHT),
+                width=jnp.array(w, dtype=jnp.int32),
+                height=jnp.array(h, dtype=jnp.int32),
+                active=jnp.array(active, dtype=jnp.int32),
+                visual_id=jnp.array(visual_id, dtype=jnp.int32)
+            )
 
         # --- Player ---
-        player = self._masked_ep(
-            state.player_x, state.player_y,
-            c.PLAYER_SIZE[0], c.PLAYER_SIZE[1],
-            jnp.bool_(True)
+        player = create_obs(
+            state.player_x, state.player_y, 
+            c.PLAYER_SIZE[0], c.PLAYER_SIZE[1], 
+            1
         )
 
-        # --- Player missile ---
-        pm_alive = state.player_missile.direction != 0
-        player_missile = self._masked_ep(
+        # --- Player Missile ---
+        pm_active = state.player_missile.direction != 0
+        player_missile = create_obs(
             state.player_missile.x, state.player_missile.y,
             c.PLAYER_MISSILE_SIZE[0], c.PLAYER_MISSILE_SIZE[1],
-            pm_alive
+            pm_active
         )
 
-        # --- Radar mortar (+ missile) ---
+        # --- Radar Mortar ---
         rm = state.entities.radar_mortar_state
         rm_active = jnp.logical_and(rm.is_in_current_event, rm.is_alive)
-        radar_mortar = self._masked_ep(
+        radar_mortar = create_obs(
             rm.x, rm.y, c.RADAR_MORTAR_SIZE[0], c.RADAR_MORTAR_SIZE[1], rm_active
         )
+        
         rm_missile_active = jnp.logical_and(
-            rm.is_in_current_event,
+            rm.is_in_current_event, 
             jnp.logical_and(rm.missile_x != 0, rm.missile_y != 0)
         )
-        radar_mortar_missile = self._masked_ep(
-            rm.missile_x, rm.missile_y, c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], rm_missile_active
+        radar_mortar_missile = create_obs(
+            rm.missile_x, rm.missile_y, 
+            c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], 
+            rm_missile_active
         )
 
-        # --- Byte bat ---
+        # --- Byte Bat ---
         bb = state.entities.byte_bat_state
         bb_active = jnp.logical_and(bb.is_in_current_event, bb.is_alive)
-        byte_bat = self._masked_ep(
+        byte_bat = create_obs(
             bb.x, bb.y, c.BYTE_BAT_SIZE[0], c.BYTE_BAT_SIZE[1], bb_active
         )
 
-        # --- Rock muncher (+ missile) ---
+        # --- Rock Muncher ---
         rmu = state.entities.rock_muncher_state
         rmu_active = jnp.logical_and(rmu.is_in_current_event, rmu.is_alive)
-        rock_muncher = self._masked_ep(
+        rock_muncher = create_obs(
             rmu.x, rmu.y, c.ROCK_MUNCHER_SIZE[0], c.ROCK_MUNCHER_SIZE[1], rmu_active
         )
+        
         rmu_missile_active = jnp.logical_and(
-            rmu.is_in_current_event,
+            rmu.is_in_current_event, 
             jnp.logical_and(rmu.missile_x != 0, rmu.missile_y != 0)
         )
-        rock_muncher_missile = self._masked_ep(
-            rmu.missile_x, rmu.missile_y, c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], rmu_missile_active
+        rock_muncher_missile = create_obs(
+            rmu.missile_x, rmu.missile_y, 
+            c.ENTITY_MISSILE_SIZE[0], c.ENTITY_MISSILE_SIZE[1], 
+            rmu_missile_active
         )
 
-        # --- Homing missile ---
+        # --- Homing Missile ---
         hm = state.entities.homing_missile_state
         hm_active = jnp.logical_and(hm.is_in_current_event, hm.is_alive)
-        homing_missile = self._masked_ep(
+        homing_missile = create_obs(
             hm.x, hm.y, c.HOMING_MISSILE_SIZE[0], c.HOMING_MISSILE_SIZE[1], hm_active
         )
 
-        # --- Forcefields (up to 3 pairs (upper and lower, so 6 in total)) ---
+        # --- Forcefields (Grouped) ---
         ff = state.entities.forcefield_state
         ff_base_active = jnp.logical_and(ff.is_in_current_event, ff.is_alive)
         is_flashing = jnp.logical_and(jnp.logical_not(ff.is_flexing), jnp.logical_not(ff.is_fixed))
         ff_visible = jnp.logical_or(jnp.logical_not(is_flashing), ff.flash_on)
-        ff_col_active = lambda idx_lt_num: jnp.logical_and(ff_base_active, jnp.logical_and(ff_visible, idx_lt_num))
+        
+        def get_ff_active(idx_lt_num):
+            return jnp.logical_and(ff_base_active, jnp.logical_and(ff_visible, idx_lt_num)).astype(jnp.int32)
+
         ff_w = jnp.where(ff.is_wide, c.FORCEFIELD_WIDE_SIZE[0], c.FORCEFIELD_SIZE[0])
         ff_h = c.FORCEFIELD_SIZE[1]
+        
+        # Stack all forcefields
+        ff_xs = jnp.stack([ff.x0, ff.x1, ff.x2, ff.x3, ff.x4, ff.x5])
+        ff_ys = jnp.stack([ff.y0, ff.y1, ff.y2, ff.y3, ff.y4, ff.y5])
+        
+        ff_actives = jnp.stack([
+            get_ff_active(ff.num_of_forcefields > 0), # 0 Upper
+            get_ff_active(ff.num_of_forcefields > 0), # 0 Lower
+            get_ff_active(ff.num_of_forcefields > 1), # 1 Upper
+            get_ff_active(ff.num_of_forcefields > 1), # 1 Lower
+            get_ff_active(ff.num_of_forcefields > 2), # 2 Upper
+            get_ff_active(ff.num_of_forcefields > 2), # 2 Lower
+        ])
+        
+        forcefields = ObjectObservation.create(
+            x=jnp.clip(ff_xs.astype(jnp.int32), 0, c.WIDTH),
+            y=jnp.clip(ff_ys.astype(jnp.int32), 0, c.HEIGHT),
+            width=jnp.full((6,), ff_w, dtype=jnp.int32),
+            height=jnp.full((6,), ff_h, dtype=jnp.int32),
+            active=ff_actives
+        )
 
-        # column 0 (x0/y0 upper, x1/y1 lower)
-        ff0_u = self._masked_ep(ff.x0, ff.y0, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 0))
-        ff0_l = self._masked_ep(ff.x1, ff.y1, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 0))
-
-        # column 1 (x2/y2 upper, x3/y3 lower)
-        ff1_u = self._masked_ep(ff.x2, ff.y2, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 1))
-        ff1_l = self._masked_ep(ff.x3, ff.y3, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 1))
-
-        # column 2 (x4/y4 upper, x5/y5 lower)
-        ff2_u = self._masked_ep(ff.x4, ff.y4, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
-        ff2_l = self._masked_ep(ff.x5, ff.y5, ff_w, ff_h, ff_col_active(ff.num_of_forcefields > 2))
-
-        # --- Densepack (not every single part of the densepack is returned here, since there are a lot) ---
+        # --- Densepack ---
         dp = state.entities.dense_pack_state
         dp_active = jnp.logical_and(dp.is_in_current_event, dp.is_alive)
         dp_w = jnp.where(dp.is_wide, c.DENSEPACK_WIDE_PART_SIZE[0], c.DENSEPACK_NORMAL_PART_SIZE[0])
         dp_h = dp.number_of_parts * c.DENSEPACK_NORMAL_PART_SIZE[1]
-        densepack = self._masked_ep(dp.x, dp.upmost_y, dp_w, dp_h, dp_active)
+        densepack = create_obs(dp.x, dp.upmost_y, dp_w, dp_h, dp_active)
 
         # --- Detonator ---
         dn = state.entities.detonator_state
         dn_active = jnp.logical_and(dn.is_in_current_event, dn.is_alive)
-        detonator = self._masked_ep(dn.x, dn.y, c.DETONATOR_SIZE[0], c.DETONATOR_SIZE[1], dn_active)
+        detonator = create_obs(dn.x, dn.y, c.DETONATOR_SIZE[0], c.DETONATOR_SIZE[1], dn_active)
 
-        # --- Energy pod ---
+        # --- Energy Pod ---
         ep = state.entities.energy_pod_state
         ep_active = jnp.logical_and(ep.is_in_current_event, ep.is_alive)
-        energy_pod = self._masked_ep(ep.x, ep.y, c.ENERGY_POD_SIZE[0], c.ENERGY_POD_SIZE[1], ep_active)
+        energy_pod = create_obs(ep.x, ep.y, c.ENERGY_POD_SIZE[0], c.ENERGY_POD_SIZE[1], ep_active)
 
-        # --- Mountains ---
+        # --- Mountains (Grouped) ---
         mw, mh = c.MOUNTAIN_SIZE
+        
+        def mountain_active(x):
+            return jnp.logical_and(x + mw > 0, x < c.WIDTH).astype(jnp.int32)
 
-        def mountain_visible(x):
-            # only active if bounding box cuts screen
-            return jnp.logical_and(x + mw > 0, x < c.WIDTH)
+        # Upper Mountains
+        um_xs = jnp.stack([state.upper_mountains.x1, state.upper_mountains.x2, state.upper_mountains.x3])
+        um_ys = jnp.full((3,), state.upper_mountains.y, dtype=jnp.int32)
+        upper_mountains = ObjectObservation.create(
+            x=jnp.clip(um_xs, 0, c.WIDTH),
+            y=jnp.clip(um_ys, 0, c.HEIGHT),
+            width=jnp.full((3,), mw, dtype=jnp.int32),
+            height=jnp.full((3,), mh, dtype=jnp.int32),
+            active=jax.vmap(mountain_active)(um_xs)
+        )
 
-        um0 = self._masked_ep(state.upper_mountains.x1, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x1))
-        um1 = self._masked_ep(state.upper_mountains.x2, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x2))
-        um2 = self._masked_ep(state.upper_mountains.x3, state.upper_mountains.y, mw, mh, mountain_visible(state.upper_mountains.x3))
-
-        lm0 = self._masked_ep(state.lower_mountains.x1, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x1))
-        lm1 = self._masked_ep(state.lower_mountains.x2, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x2))
-        lm2 = self._masked_ep(state.lower_mountains.x3, state.lower_mountains.y, mw, mh, mountain_visible(state.lower_mountains.x3))
+        # Lower Mountains
+        lm_xs = jnp.stack([state.lower_mountains.x1, state.lower_mountains.x2, state.lower_mountains.x3])
+        lm_ys = jnp.full((3,), state.lower_mountains.y, dtype=jnp.int32)
+        lower_mountains = ObjectObservation.create(
+            x=jnp.clip(lm_xs, 0, c.WIDTH),
+            y=jnp.clip(lm_ys, 0, c.HEIGHT),
+            width=jnp.full((3,), mw, dtype=jnp.int32),
+            height=jnp.full((3,), mh, dtype=jnp.int32),
+            active=jax.vmap(mountain_active)(lm_xs)
+        )
 
         return LaserGatesObservation(
             player=player,
@@ -2098,21 +2108,16 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
             rock_muncher=rock_muncher,
             rock_muncher_missile=rock_muncher_missile,
             homing_missile=homing_missile,
-            forcefield_0_upper=ff0_u,
-            forcefield_0_lower=ff0_l,
-            forcefield_1_upper=ff1_u,
-            forcefield_1_lower=ff1_l,
-            forcefield_2_upper=ff2_u,
-            forcefield_2_lower=ff2_l,
+            forcefields=forcefields,
             densepack=densepack,
             detonator=detonator,
             energy_pod=energy_pod,
-            upper_mountain_0=um0,
-            upper_mountain_1=um1,
-            upper_mountain_2=um2,
-            lower_mountain_0=lm0,
-            lower_mountain_1=lm1,
-            lower_mountain_2=lm2,
+            upper_mountains=upper_mountains,
+            lower_mountains=lower_mountains,
+            score=state.score,
+            energy=state.energy,
+            shields=state.shields,
+            dtime=state.dtime
         )
 
     def _get_info(self, state: LaserGatesState) -> LaserGatesInfo:
@@ -2161,68 +2166,38 @@ class JaxLaserGates(JaxEnvironment[LaserGatesState, LaserGatesObservation, Laser
         })
 
     def observation_space(self) -> spaces.Dict:
+        # Cast to int to ensure concrete values are passed to Box, avoiding TracerArrayConversionError
+        screen_h = int(self.consts.HEIGHT)
+        screen_w = int(self.consts.WIDTH)
+        screen_size = (screen_h, screen_w)
+        
+        # Helper for single objects
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": self._entity_space(),
-            "player_missile": self._entity_space(),
-            "radar_mortar": self._entity_space(),
-            "radar_mortar_missile": self._entity_space(),
-            "byte_bat": self._entity_space(),
-            "rock_muncher": self._entity_space(),
-            "rock_muncher_missile": self._entity_space(),
-            "homing_missile": self._entity_space(),
-            "forcefield_0_upper": self._entity_space(),
-            "forcefield_0_lower": self._entity_space(),
-            "forcefield_1_upper": self._entity_space(),
-            "forcefield_1_lower": self._entity_space(),
-            "forcefield_2_upper": self._entity_space(),
-            "forcefield_2_lower": self._entity_space(),
-            "densepack": self._entity_space(),
-            "detonator": self._entity_space(),
-            "energy_pod": self._entity_space(),
-            "upper_mountain_0": self._entity_space(),
-            "upper_mountain_1": self._entity_space(),
-            "upper_mountain_2": self._entity_space(),
-            "lower_mountain_0": self._entity_space(),
-            "lower_mountain_1": self._entity_space(),
-            "lower_mountain_2": self._entity_space(),
+            "player": single_obj,
+            "player_missile": single_obj,
+            "radar_mortar": single_obj,
+            "radar_mortar_missile": single_obj,
+            "byte_bat": single_obj,
+            "rock_muncher": single_obj,
+            "rock_muncher_missile": single_obj,
+            "homing_missile": single_obj,
+            
+            "forcefields": spaces.get_object_space(n=6, screen_size=screen_size),
+            "densepack": single_obj,
+            "detonator": single_obj,
+            "energy_pod": single_obj,
+            
+            "upper_mountains": spaces.get_object_space(n=3, screen_size=screen_size),
+            "lower_mountains": spaces.get_object_space(n=3, screen_size=screen_size),
+            
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            # Explicitly cast these limits to int as well
+            "energy": spaces.Box(low=0, high=int(self.consts.MAX_ENERGY), shape=(), dtype=jnp.int32),
+            "shields": spaces.Box(low=0, high=int(self.consts.MAX_SHIELDS), shape=(), dtype=jnp.int32),
+            "dtime": spaces.Box(low=0, high=int(self.consts.MAX_DTIME), shape=(), dtype=jnp.int32),
         })
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
-        def row(ep: EntityPosition):
-            return jnp.array([ep.x, ep.y, ep.width, ep.height, ep.active], dtype=jnp.float32)
-
-        rows = jnp.stack([
-            row(obs.player),
-            row(obs.player_missile),
-            row(obs.radar_mortar),
-            row(obs.radar_mortar_missile),
-            row(obs.byte_bat),
-            row(obs.rock_muncher),
-            row(obs.rock_muncher_missile),
-            row(obs.homing_missile),
-            row(obs.forcefield_0_upper),
-            row(obs.forcefield_0_lower),
-            row(obs.forcefield_1_upper),
-            row(obs.forcefield_1_lower),
-            row(obs.forcefield_2_upper),
-            row(obs.forcefield_2_lower),
-            row(obs.densepack),
-            row(obs.detonator),
-            row(obs.energy_pod),
-            row(obs.upper_mountain_0),
-            row(obs.upper_mountain_1),
-            row(obs.upper_mountain_2),
-            row(obs.lower_mountain_0),
-            row(obs.lower_mountain_1),
-            row(obs.lower_mountain_2),
-        ], axis=0)  # (num_slots, 5)
-        return rows
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: LaserGatesObservation) -> jnp.ndarray:
-        mat = self.obs_to_array(obs)  # (num_slots, 5)
-        return jnp.reshape(mat, (self.obs_size,))  # float32-Vector
 
     @partial(jax.jit, static_argnums=(0, ))
     def reset(self, key = jax.random.PRNGKey(42)) -> Tuple[LaserGatesObservation, LaserGatesState]:

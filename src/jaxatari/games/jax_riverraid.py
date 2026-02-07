@@ -12,7 +12,7 @@ from flax import struct
 
 import jaxatari.spaces as spaces
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
@@ -178,27 +178,22 @@ class RiverraidInfo:
 
 @struct.dataclass
 class RiverraidObservation:
-    player_x: chex.Array
-    player_y: chex.Array
-    player_direction: chex.Array
-    player_velocity: chex.Array
+    player: ObjectObservation
+    enemies: ObjectObservation
+    fuel_tanks: ObjectObservation
+    player_projectile: ObjectObservation 
+    house_trees: ObjectObservation
+    
+    river_left_bank: chex.Array
+    river_right_bank: chex.Array
+    island_left_bank: chex.Array
+    island_right_bank: chex.Array
+    dam_indicator: chex.Array
+    
     player_fuel: chex.Array
     player_lives: chex.Array
     player_score: chex.Array
     player_speed: chex.Array
-    river_left: chex.Array
-    river_right: chex.Array
-    river_inner_left: chex.Array
-    river_inner_right: chex.Array
-    dam_position: chex.Array
-    enemy_x: chex.Array
-    enemy_y: chex.Array
-    enemy_type: chex.Array
-    enemy_state: chex.Array
-    enemy_direction: chex.Array
-    fuel_x: chex.Array
-    fuel_y: chex.Array
-    fuel_state: chex.Array
 
 
 # logic sperated into 3 branches: island, no_island, island_transition
@@ -1496,28 +1491,85 @@ class JaxRiverraid(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: RiverraidState) -> RiverraidObservation:
+        c = self.consts
+        w, h = int(c.SCREEN_WIDTH), int(c.SCREEN_HEIGHT)
+
+        # --- Player ---
+        # Map direction 0=Left, 1=Straight, 2=Right
+        p_ori = jax.lax.select(
+            state.player_direction == 0, 270.0,
+            jax.lax.select(state.player_direction == 2, 90.0, 0.0)
+        ).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=((state.player_state == 0).astype(jnp.int32)),
+            orientation=jnp.array(p_ori, dtype=jnp.float32)
+        )
+
+        # --- Enemies ---
+        # Orientation: 0/2=Left, 1/3=Right
+        e_dirs = state.enemy_direction
+        e_ori = jnp.where((e_dirs == 1) | (e_dirs == 3), 90.0, 270.0).astype(jnp.float32)
+        
+        enemy_widths = jnp.array([13, 9, 6])[state.enemy_type]
+
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemy_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemy_y.astype(jnp.int32), 0, h),
+            width=enemy_widths.astype(jnp.int32),
+            height=jnp.full((c.MAX_ENEMIES,), 6, dtype=jnp.int32),
+            active=(state.enemy_state == 1).astype(jnp.int32),
+            visual_id=state.enemy_type.astype(jnp.int32),
+            orientation=e_ori
+        )
+
+        # --- Fuel Tanks ---
+        fuel_tanks = ObjectObservation.create(
+            x=jnp.clip(state.fuel_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.fuel_y.astype(jnp.int32), 0, h),
+            width=jnp.full((c.MAX_ENEMIES,), 8, dtype=jnp.int32),
+            height=jnp.full((c.MAX_ENEMIES,), 12, dtype=jnp.int32),
+            active=(state.fuel_state == 1).astype(jnp.int32)
+        )
+
+        # --- Player Projectile ---
+        bullet_active = (state.player_bullet_y > -1).astype(jnp.int32)
+        player_projectile = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.player_bullet_x, dtype=jnp.int32), 0, w),
+            y=jnp.clip(jnp.array(state.player_bullet_y, dtype=jnp.int32), 0, h),
+            width=jnp.array(2, dtype=jnp.int32),
+            height=jnp.array(4, dtype=jnp.int32),
+            active=jnp.array(bullet_active, dtype=jnp.int32)
+        )
+
+        # --- House/Trees ---
+        house_trees = ObjectObservation.create(
+            x=jnp.clip(state.housetree_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.housetree_y.astype(jnp.int32), 0, h),
+            width=jnp.full((c.MAX_HOUSE_TREES,), 8, dtype=jnp.int32),
+            height=jnp.full((c.MAX_HOUSE_TREES,), 8, dtype=jnp.int32),
+            active=(state.housetree_state == 1).astype(jnp.int32)
+        )
+
         return RiverraidObservation(
-            player_x=state.player_x,
-            player_y=state.player_y,
-            player_direction=state.player_direction,
-            player_velocity=state.player_velocity,
+            player=player,
+            enemies=enemies,
+            fuel_tanks=fuel_tanks,
+            player_projectile=player_projectile,
+            house_trees=house_trees,
+            river_left_bank=state.river_left,
+            river_right_bank=state.river_right,
+            island_left_bank=state.river_inner_left,
+            island_right_bank=state.river_inner_right,
+            dam_indicator=state.dam_position,
             player_fuel=state.player_fuel,
             player_lives=state.player_lives,
             player_score=state.player_score,
-            player_speed=state.player_speed,
-            river_left=state.river_left,
-            river_right=state.river_right,
-            river_inner_left=state.river_inner_left,
-            river_inner_right=state.river_inner_right,
-            dam_position=state.dam_position,
-            enemy_x=state.enemy_x,
-            enemy_y=state.enemy_y,
-            enemy_type=state.enemy_type,
-            enemy_state=state.enemy_state,
-            enemy_direction=state.enemy_direction,
-            fuel_x=state.fuel_x,
-            fuel_y=state.fuel_y,
-            fuel_state=state.fuel_state,
+            player_speed=state.player_speed
         )
 
     def image_space(self) -> spaces.Box:
@@ -1726,63 +1778,35 @@ class JaxRiverraid(JaxEnvironment):
         return state.player_lives <= 0
 
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "player_x": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "player_y": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_HEIGHT + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "player_direction": spaces.Box(low=0 - self.consts.BUFFER, high=2 + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "player_velocity": spaces.Box(low=-3.0 - self.consts.BUFFER, high=3.0 + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "player_fuel": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.MAX_FUEL + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "player_lives": spaces.Box(low=0 - self.consts.BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.float32),
-                "player_score": spaces.Box(low=0 - self.consts.BUFFER, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.float32),
-                "player_speed": spaces.Box(low=0 - self.consts.BUFFER, high=3 + self.consts.BUFFER, shape=(), dtype=jnp.float32),
-                "river_left": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(self.consts.SCREEN_HEIGHT,), dtype=jnp.float32),
-                "river_right": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(self.consts.SCREEN_HEIGHT,), dtype=jnp.float32),
-                "river_inner_left": spaces.Box(low=-1 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(self.consts.SCREEN_HEIGHT,), dtype=jnp.float32),
-                "river_inner_right": spaces.Box(low=-1 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(self.consts.SCREEN_HEIGHT,), dtype=jnp.float32),
-                "dam_position": spaces.Box(low=-1 - self.consts.BUFFER, high=2 + self.consts.BUFFER, shape=(self.consts.SCREEN_HEIGHT,), dtype=jnp.float32),
-                "enemy_x": spaces.Box(low=-10 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + 10 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_y": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_HEIGHT + 1 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_type": spaces.Box(low=0 - self.consts.BUFFER, high=2 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_state": spaces.Box(low=0 - self.consts.BUFFER, high=4 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "enemy_direction": spaces.Box(low=0 - self.consts.BUFFER, high=3 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "fuel_x": spaces.Box(low=-1 - self.consts.BUFFER, high=self.consts.SCREEN_WIDTH + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "fuel_y": spaces.Box(low=0 - self.consts.BUFFER, high=self.consts.SCREEN_HEIGHT + 1 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-                "fuel_state": spaces.Box(low=0 - self.consts.BUFFER, high=4 + self.consts.BUFFER, shape=(self.consts.MAX_ENEMIES,), dtype=jnp.float32),
-            }
-        )
+        # Use concrete Python ints to avoid TracerArrayConversionError in Box.
+        h = int(self.consts.SCREEN_HEIGHT)
+        w = int(self.consts.SCREEN_WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "player": single_obj,
+            "enemies": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen_size),
+            "fuel_tanks": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen_size),
+            "player_projectile": single_obj,
+            "house_trees": spaces.get_object_space(n=self.consts.MAX_HOUSE_TREES, screen_size=screen_size),
+            
+            "river_left_bank": spaces.Box(low=0, high=w, shape=(h,), dtype=jnp.int32),
+            "river_right_bank": spaces.Box(low=0, high=w, shape=(h,), dtype=jnp.int32),
+            "island_left_bank": spaces.Box(low=-1, high=w, shape=(h,), dtype=jnp.int32),
+            "island_right_bank": spaces.Box(low=-1, high=w, shape=(h,), dtype=jnp.int32),
+            "dam_indicator": spaces.Box(low=-1, high=2, shape=(h,), dtype=jnp.int32),
+            
+            "player_fuel": spaces.Box(low=0, high=self.consts.MAX_FUEL + 50, shape=(), dtype=jnp.float32),
+            "player_lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "player_speed": spaces.Box(low=0, high=10, shape=(), dtype=jnp.float32),
+        })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: RiverraidState, state: RiverraidState):
         return state.player_score - previous_state.player_score
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: RiverraidObservation) -> chex.Array:
-        return jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.player_direction.flatten(),
-                obs.player_velocity.flatten(),
-                obs.player_fuel.flatten(),
-                obs.player_lives.flatten(),
-                obs.player_score.flatten(),
-                obs.player_speed.flatten(),
-                obs.river_left.flatten(),
-                obs.river_right.flatten(),
-                obs.river_inner_left.flatten(),
-                obs.river_inner_right.flatten(),
-                obs.dam_position.flatten(),
-                obs.enemy_x.flatten(),
-                obs.enemy_y.flatten(),
-                obs.enemy_type.flatten(),
-                obs.enemy_state.flatten(),
-                obs.enemy_direction.flatten(),
-                obs.fuel_x.flatten(),
-                obs.fuel_y.flatten(),
-                obs.fuel_state.flatten(),
-            ]
-        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: RiverraidState) -> RiverraidInfo:

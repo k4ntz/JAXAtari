@@ -6,7 +6,7 @@ from functools import partial
 from typing import NamedTuple, Tuple, Optional, Callable, Sequence
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
@@ -105,11 +105,9 @@ class SurroundState:
 
 @struct.dataclass
 class SurroundObservation:
-    """Observation returned to the agent."""
-
     grid: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT) int32
-    pos0: jnp.ndarray  # (2,) int32
-    pos1: jnp.ndarray  # (2,) int32
+    player1: ObjectObservation
+    player2: ObjectObservation
     agent_id: jnp.ndarray  # () int32
 
 
@@ -523,16 +521,51 @@ class JaxSurround(
         return obs, next_state, reward, done, info
 
 
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SurroundState) -> SurroundObservation:
+        c = self.consts
+        w, h = int(c.GRID_WIDTH), int(c.GRID_HEIGHT)
+        
         grid = state.trail
         grid = grid.at[tuple(state.pos0)].set(1)
         grid = grid.at[tuple(state.pos1)].set(2)
+
+        # Helper to map direction index (0..5) to orientation (degrees)
+        # NOOP=0, FIRE=1, UP=2, RIGHT=3, LEFT=4, DOWN=5 (Surround mapping is weird in _dir_offset logic)
+        # Looking at _dir_offset:
+        # 0: (0,0), 1: (0,0), 2: (0,-1) UP, 3: (1,0) RIGHT, 4: (-1,0) LEFT, 5: (0,1) DOWN
+        # So: 2->0.0, 3->90.0, 4->270.0, 5->180.0
+        def get_ori(d):
+            return jnp.select(
+                [d == 2, d == 3, d == 4, d == 5],
+                [0.0, 90.0, 270.0, 180.0],
+                0.0 # Default/NOOP
+            ).astype(jnp.float32)
+
+        p1 = ObjectObservation.create(
+            x=jnp.clip(state.pos0[0], 0, w),
+            y=jnp.clip(state.pos0[1], 0, h),
+            width=jnp.array(1, dtype=jnp.int32), # 1 cell
+            height=jnp.array(1, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(1, dtype=jnp.int32),
+            orientation=get_ori(state.dir0)
+        )
+        
+        p2 = ObjectObservation.create(
+            x=jnp.clip(state.pos1[0], 0, w),
+            y=jnp.clip(state.pos1[1], 0, h),
+            width=jnp.array(1, dtype=jnp.int32),
+            height=jnp.array(1, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(2, dtype=jnp.int32),
+            orientation=get_ori(state.dir1)
+        )
+
         return SurroundObservation(
             grid=grid,
-            pos0=state.pos0.astype(jnp.int32),
-            pos1=state.pos1.astype(jnp.int32),
+            player1=p1,
+            player2=p2,
             agent_id=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -561,25 +594,22 @@ class JaxSurround(
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        # Prefer per-dimension bounds; fall back to scalar bounds if unsupported by spaces.Box
-        try:
-            pos_low = jnp.array([0, 0], dtype=jnp.int32)
-            pos_high = jnp.array([self.consts.GRID_WIDTH - 1, self.consts.GRID_HEIGHT - 1], dtype=jnp.int32)
-            pos_box0 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
-            pos_box1 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
-        except Exception:
-            pos_box0 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
-            pos_box1 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
-
+        c = self.consts
+        h = int(c.GRID_HEIGHT)
+        w = int(c.GRID_WIDTH)
+        screen_size = (h, w) # Logical grid size, not pixel size
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
             "grid": spaces.Box(
                 low=0,
                 high=2,
-                shape=(self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT),
+                shape=(w, h),
                 dtype=jnp.int32,
             ),
-            "pos0": pos_box0,
-            "pos1": pos_box1,
+            "player1": single_obj,
+            "player2": single_obj,
             "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
         })
 
@@ -593,10 +623,6 @@ class JaxSurround(
 
     def render(self, state: SurroundState) -> jnp.ndarray:
         return self.renderer.render(state)
-
-    def obs_to_flat_array(self, obs: SurroundObservation) -> jnp.ndarray:
-        flat = [obs.grid.reshape(-1), obs.pos0.reshape(-1), obs.pos1.reshape(-1), jnp.array([obs.agent_id], dtype=jnp.int32)]
-        return jnp.concatenate(flat).astype(jnp.int32)
 
 
 class SurroundRenderer(JAXGameRenderer):

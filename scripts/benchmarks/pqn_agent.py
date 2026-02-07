@@ -149,7 +149,7 @@ def make_train(config):
         mods = config["MOD_NAME"]
         mods_config = mods if isinstance(mods, list) else [mods]
 
-    env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
     mod_env = env
     renderer = mod_env.renderer
 
@@ -534,11 +534,11 @@ def generate_final_video(config, params, batch_stats, seed_idx=0):
         mods = config["MOD_NAME"]
         mods_config = mods if isinstance(mods, list) else [mods]
 
-    env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
     renderer = env.renderer
 
     # Apply wrappers
-    env = AtariWrapper(env, episodic_life=False, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=False, noop_reset=30, max_episode_length=18000)
+    env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=False, noop_reset=30, max_episode_length=18000)
     if config.get("OBJECT_CENTRIC", False):
         env = ObjectCentricWrapper(env)
         env = FlattenObservationWrapper(env)

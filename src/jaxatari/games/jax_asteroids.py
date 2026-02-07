@@ -13,7 +13,7 @@ import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
@@ -294,18 +294,10 @@ class AsteroidsState(struct.PyTreeNode):
     step_counter: chex.Array
     rng_key: chex.PRNGKey
 
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    rotation: jnp.ndarray
-    active: jnp.ndarray
-
 class AsteroidsObservation(struct.PyTreeNode):
-    player: EntityPosition # (x, y, width, height, rotation, active)
-    missiles: jnp.ndarray  # shape (2, 6) - 2 missiles, each with (x, y, width, height, rotation, active)
-    asteroids: jnp.ndarray # shape (17, 6) - 17 asteroids, each with (x, y, width, height, rotation, active)
+    player: ObjectObservation # (x, y, width, height, active, visual_id, orientation)
+    missiles: ObjectObservation  # shape (2, 6) - 2 missiles, each with (x, y, width, height, rotation, active)
+    asteroids: ObjectObservation # shape (17, 6) - 17 asteroids, each with (x, y, width, height, rotation, active)
 
     score: jnp.ndarray
     lives: jnp.ndarray
@@ -1132,107 +1124,77 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsteroidsState):
         # player
-        player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
+        player = ObjectObservation.create(
+            x=self.to_screen_pos(state.player_x),
+            y=self.to_screen_pos(state.player_y),
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            rotation=state.player_rotation,
+            orientation=state.player_rotation,
             active=state.respawn_timer <= 0
         )
 
         # missiles
-        def convert_missile_states_to_entity(missile_states):
-            return jnp.array([
-                missile_states[0],  # x position
-                missile_states[1],  # y position
-                self.consts.MISSILE_SIZE[0],  # width
-                self.consts.MISSILE_SIZE[1],  # height
-                missile_states[4],  # rotation
-                missile_states[5] > 0  # active flag
-            ])
-
-        missiles = jax.vmap(convert_missile_states_to_entity)(
-            state.missile_states
+        missiles = ObjectObservation.create(
+            x=state.missile_states[:, 0],
+            y=state.missile_states[:, 1],
+            width=jnp.full_like(state.missile_states[:, 0], self.consts.MISSILE_SIZE[0]),
+            height=jnp.full_like(state.missile_states[:, 1], self.consts.MISSILE_SIZE[1]),
+            orientation=state.missile_states[:, 4],
+            active=state.missile_states[:, 5] > 0
         )
 
-        # asteroids
-        def convert_asteroid_states_to_entity(asteroid_states):
-            width, height = jax.lax.switch(
-                asteroid_states[3],
+        asteroids = ObjectObservation.create(
+            x=state.asteroid_states[:, 0],
+            y=state.asteroid_states[:, 1],
+            width=jax.vmap(lambda size: jax.lax.switch(
+                size,
                 [
-                    lambda: (0, 0),
-                    lambda: (self.consts.ASTEROID_SIZE_L[0], self.consts.ASTEROID_SIZE_L[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_L[0], self.consts.ASTEROID_SIZE_L[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_M[0], self.consts.ASTEROID_SIZE_M[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_S[0], self.consts.ASTEROID_SIZE_S[1])
+                    lambda: 0,
+                    lambda: self.consts.ASTEROID_SIZE_L[0],
+                    lambda: self.consts.ASTEROID_SIZE_L[0],
+                    lambda: self.consts.ASTEROID_SIZE_M[0],
+                    lambda: self.consts.ASTEROID_SIZE_S[0]
                 ]
-            )
-            return jnp.array([
-                asteroid_states[0],  # x position
-                asteroid_states[1],  # y position
-                width,  # width
-                height,  # height
-                asteroid_states[2], # rotation
-                asteroid_states[3] != self.consts.INACTIVE  # active flag
-            ])
-
-        asteroids = jax.vmap(convert_asteroid_states_to_entity)(
-            state.asteroid_states
+            ))(state.asteroid_states[:, 3]),
+            height=jax.vmap(lambda size: jax.lax.switch(
+                size,
+                [
+                    lambda: 0,
+                    lambda: self.consts.ASTEROID_SIZE_L[1],
+                    lambda: self.consts.ASTEROID_SIZE_L[1],
+                    lambda: self.consts.ASTEROID_SIZE_M[1],
+                    lambda: self.consts.ASTEROID_SIZE_S[1]
+                ]
+            ))(state.asteroid_states[:, 3]),
+            orientation=state.asteroid_states[:, 2],
+            active=state.asteroid_states[:, 3] != self.consts.INACTIVE
         )
 
         return AsteroidsObservation(
             player=player,
             missiles=missiles,
             asteroids=asteroids,
-
             score=state.score,
             lives=state.lives
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: AsteroidsObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate([
-            jnp.concatenate([
-                jnp.atleast_1d(obs.player.x),
-                jnp.atleast_1d(obs.player.y),
-                jnp.atleast_1d(obs.player.width),
-                jnp.atleast_1d(obs.player.height),
-                jnp.atleast_1d(obs.player.rotation),
-                jnp.atleast_1d(obs.player.active)
-            ]),
-            obs.missiles.flatten(),
-            obs.asteroids.flatten(),
-
-            obs.score.flatten(),
-            obs.lives.flatten()
-        ]
-        )
-
+    
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Asteroids.
         The observation contains:
-        - player: EntityPosition (x, y, width, height, rotation, active)
+        - player: ObjectObservation (x, y, width, height, active, visual_id, orientation)
         - missiles: array of shape (2, 6) with (x, y, width, height, rotation, active)
         - asteroids: array of shape (17, 6) with (x, y, width, height, rotation, active)
         - score: int (0-100000)
         - lives: int (0-9)
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160*256, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210*256, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "missiles": spaces.Box(low=0, high=160, shape=(2, 6), dtype=jnp.int32),
-            "asteroids": spaces.Box(low=0, high=160, shape=(self.consts.MAX_NUMBER_OF_ASTEROIDS, 6), dtype=jnp.int32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "missiles": spaces.get_object_space(n=2, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "asteroids": spaces.get_object_space(n=self.consts.MAX_NUMBER_OF_ASTEROIDS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32)
         })

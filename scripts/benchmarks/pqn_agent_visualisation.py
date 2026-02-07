@@ -191,7 +191,7 @@ def main():
             mods_config = mods if isinstance(mods, list) else [mods]
 
     # Create environment
-    env = jaxatari.make(game_name.lower(), mods_config=mods_config)
+    env = jaxatari.make(game_name.lower(), mods=mods_config)
     renderer = env.renderer
 
     # Apply wrappers (matching training setup)

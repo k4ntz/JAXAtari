@@ -7,7 +7,7 @@ import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, update_pygame, load_game_environment, load_game_mods
+from utils import get_human_action, update_pygame, load_game_environment, load_game_mods, print_observation_tree
 from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
@@ -91,7 +91,7 @@ def main():
         # 1. Try the registered path (core.make)
         env = jaxatari_make(
             game_name=args.game,
-            mods_config=args.mods,
+            mods=args.mods,
             allow_conflicts=args.allow_conflicts
         )
         print(f"Successfully loaded registered game: '{args.game}'")

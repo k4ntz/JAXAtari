@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -195,17 +195,10 @@ class AsterixState(struct.PyTreeNode):
     level: chex.Array
 
 
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
 class AsterixObservation(struct.PyTreeNode):
-    player: EntityPosition
-    enemies: jnp.ndarray
-    collectibles: jnp.ndarray
+    player: ObjectObservation
+    enemies: ObjectObservation
+    collectibles: ObjectObservation
 
 
 class AsterixInfo(struct.PyTreeNode):
@@ -257,14 +250,14 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             self.consts.spawn_max_delay + 1,
         )
         enemies = Enemy(
-            x=jnp.full((max_entities,), -5.0),
+            x=jnp.zeros((max_entities,)),
             vx=jnp.zeros((max_entities,)),
             alive=jnp.zeros((max_entities,), dtype=bool)
         )
         # Use the configurable offset constants
         left_offset = self.consts.initial_spawn_offset_left
         right_offset = self.consts.initial_spawn_offset_right
-        x_start = jnp.where(is_even, -float(left_offset), float(self.consts.screen_width + right_offset))
+        x_start = jnp.zeros((max_entities,))
         base_speed = self.consts.player_base_speed
         vx_start = jnp.where(is_even, 1.0, -1.0) * base_speed
         collectibles = CollectibleEnt(
@@ -275,7 +268,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         )
 
         score_popups = ScorePopup(
-            x=jnp.full((max_entities,), -5.0),
+            x=jnp.zeros((max_entities,)),
             value=jnp.zeros((max_entities,), dtype=jnp.int32),
             timer=jnp.zeros((max_entities,), dtype=jnp.int32),
             active=jnp.zeros((max_entities,), dtype=bool)
@@ -701,26 +694,31 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsterixState):
-        player = EntityPosition(
+        player = ObjectObservation.create(
             x=state.player_x.astype(jnp.int32),
             y=state.player_y.astype(jnp.int32),
             width=jnp.array(self.consts.player_width, dtype=jnp.int32),
             height=jnp.array(self.consts.player_height, dtype=jnp.int32),
         )
 
-        enemy = jnp.stack([
-            state.enemies.x.astype(jnp.int32),
-            self.lane_y_coords.astype(jnp.int32),
-            jnp.full_like(state.enemies.x, 8, dtype=jnp.int32),
-            jnp.full_like(state.enemies.x, 8, dtype=jnp.int32),
-        ], axis=-1)  # Shape: (num_stages, 4)
+        # Clip entity positions to valid screen bounds for observation space
+        enemy = ObjectObservation.create(
+            x=jnp.clip(state.enemies.x, 0, self.consts.screen_width - 1).astype(jnp.int32),
+            y=self.lane_y_coords.astype(jnp.int32),
+            width=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            height=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            active=state.enemies.alive.astype(jnp.bool_),
+            orientation=jnp.where(state.enemies.vx < 0, 2, jnp.where(state.enemies.vx > 0, 1, 0)).astype(jnp.int32),
+        )
 
-        collectible = jnp.stack([
-            state.collectibles.x.astype(jnp.int32),
-            self.lane_y_coords.astype(jnp.int32),
-            jnp.full_like(state.collectibles.x, 8, dtype=jnp.int32),
-            jnp.full_like(state.collectibles.x, 8, dtype=jnp.int32),
-        ], axis=-1)  # Shape: (num_stages, 4)
+        collectible = ObjectObservation.create(
+            x=jnp.clip(state.collectibles.x, 0, self.consts.screen_width - 1).astype(jnp.int32),
+            y=self.lane_y_coords.astype(jnp.int32),
+            width=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            height=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            active=state.collectibles.alive.astype(jnp.bool_),
+            visual_id=state.collectibles.type_index.astype(jnp.int32),
+        )
         
         return AsterixObservation(player=player, enemies=enemy, collectibles=collectible)
 
@@ -755,17 +753,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
     def observation_space(self) -> spaces.Dict:
         # Returns the observation space for Asterix.
         # The observation contains:
-        # - player: EntityPosition (x, y, width, height)
-        # - score: int (0-99)
+        # - player: ObjectObservation (x, y, width, height, active, visual_id, orientation)
+        # - enemies: array of shape (8, 4)
+        # - collectibles: array of shape (8, 4)
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "enemies": spaces.Box(low=-5, high=160, shape=(8, 4), dtype=jnp.int32),
-            "collectibles": spaces.Box(low=0, high=160, shape=(8, 4), dtype=jnp.int32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "enemies": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "collectibles": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
         })
 
 
@@ -784,15 +778,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: AsterixObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-            obs.enemies.flatten(),
-            obs.collectibles.flatten(),
-        ])
+
 
 
 class AsterixRenderer(JAXGameRenderer):

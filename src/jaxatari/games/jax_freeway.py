@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -164,7 +164,6 @@ class FreewayConstants(AutoDerivedConstants):
 @struct.dataclass
 class FreewayState:
     """Represents the current state of the game"""
-
     chicken_y: chex.Array
     cars: chex.Array  # Shape: (num_lanes, 2) for x,y positions (ints for render/collide)
     # Per-lane cadence counters (frames), advance independently to sync movement patterns per lane
@@ -185,8 +184,8 @@ class EntityPosition:
 
 @struct.dataclass
 class FreewayObservation:
-    chicken: EntityPosition
-    car: jnp.ndarray  # Shape: (10, 4) with x,y,width,height for each car
+    chicken: ObjectObservation
+    car: ObjectObservation # ObjectObservation that includes arrays for all values with the information of all 10 cars
 
 
 @struct.dataclass
@@ -410,18 +409,19 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: FreewayState):
         # create chicken
-        chicken = EntityPosition(
+        chicken = ObjectObservation.create(
             x=jnp.array(self.consts.chicken_x, dtype=jnp.int32),
             y=state.chicken_y,
             width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
+            active=jnp.array(True, dtype=jnp.bool_),
         )
 
         # create cars
-        cars = jnp.zeros((self.consts.num_lanes, 4), dtype=jnp.int32)
+        cars_pos = jnp.zeros((self.consts.num_lanes, 4), dtype=jnp.int32)
         for i in range(self.consts.num_lanes):
             car_pos = state.cars.at[i].get()
-            cars = cars.at[i].set(
+            cars_pos = cars_pos.at[i].set(
                 jnp.array(
                     [
                         car_pos.at[0].get(),  # x position
@@ -432,6 +432,22 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                     dtype=jnp.int32
                 )
             )
+
+        # get the car orientation by checking the sign of the lane's CAR_UPDATES value (positive = right, negative = left) in degree (left = 270°, right = 90°)
+        car_orientation = jnp.where(
+            jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32) < 0, 270, 90
+        )
+
+        cars = ObjectObservation.create(
+            x=cars_pos[:, 0],
+            y=cars_pos[:, 1],
+            width=cars_pos[:, 2],
+            height=cars_pos[:, 3],
+            active=jnp.ones((self.consts.num_lanes,), dtype=jnp.bool_),
+            visual_id=jnp.arange(self.consts.num_lanes, dtype=jnp.int32),
+            orientation=car_orientation.astype(jnp.int32)
+        )
+
         return FreewayObservation(chicken=chicken, car=cars)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -453,17 +469,12 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Freeway.
         The observation contains:
-        - chicken: EntityPosition (x, y, width, height)
-        - car: array of shape (10, 4) with x,y,width,height for each car
+        - chicken: ObjectObservation (x, y, width, height, active, visual_id, state, orientation)
+        - car: array of ObjectObservation (10 cars, each with x, y, width, height, active, visual_id, orientation)
         """
         return spaces.Dict({
-            "chicken": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "car": spaces.Box(low=0, high=210, shape=(10, 4), dtype=jnp.int32),
+            "chicken": spaces.get_object_space(n=None, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "car": spaces.get_object_space(n=self.consts.num_lanes, screen_size=(self.consts.screen_height, self.consts.screen_width)),
         })
 
     def image_space(self) -> spaces.Box:
@@ -480,22 +491,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     def render(self, state: FreewayState) -> jnp.ndarray:
         """Render the game state to a raster image."""
         return self.renderer.render(state)
-
-    def obs_to_flat_array(self, obs: FreewayObservation) -> jnp.ndarray:
-        """Convert observation to a flat array."""
-        # Flatten chicken position and dimensions
-        chicken_flat = jnp.concatenate([
-            obs.chicken.x.reshape(-1),
-            obs.chicken.y.reshape(-1),
-            obs.chicken.width.reshape(-1),
-            obs.chicken.height.reshape(-1)
-        ])
-        
-        # Flatten car positions and dimensions
-        cars_flat = obs.car.reshape(-1)
-        
-        # Concatenate all components
-        return jnp.concatenate([chicken_flat, cars_flat]).astype(jnp.int32)
 
 
 class FreewayRenderer(JAXGameRenderer):

@@ -18,6 +18,7 @@ from jaxatari.environment import (
     JaxEnvironment,
     JAXAtariAction as Action,
     EnvObs,
+    ObjectObservation,
 )
 import jaxatari.spaces as spaces
 
@@ -65,12 +66,7 @@ def _get_default_asset_config() -> tuple:
 
 # Each value of this class is a list.
 # e.g. if i have 3 entities, then each of these lists would have a length of 3
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    alive: jnp.ndarray
+    
 
 
 class AtlantisState(struct.PyTreeNode):
@@ -107,9 +103,9 @@ class AtlantisState(struct.PyTreeNode):
 
 
 class AtlantisObservation(struct.PyTreeNode):
+    enemy: ObjectObservation
+    bullet: ObjectObservation
     score: jnp.ndarray
-    enemy: EntityPosition
-    bullet: EntityPosition
     installations_alive: jnp.ndarray
     command_post_alive: jnp.ndarray
 
@@ -1165,106 +1161,78 @@ class JaxAtlantis(
     def _get_observation(self, state: AtlantisState) -> AtlantisObservation:
         cfg = self.consts
 
-        # get types of enemies
+        # --- ENEMIES ---
         type_ids = state.enemies[:, 3].astype(jnp.int32)
+        enemy_alive = (state.enemies[:, 5] == 1).astype(jnp.int32)
 
-        # Get the positions and dimensions of the enemies
-        # set inactive enemies to -1 or 0
-        enemy_alive = state.enemies[:, 5] == 1
-        enemy_x = jnp.where(
-            enemy_alive, state.enemies[:, 0].astype(jnp.int32), -1
-        )
-        enemy_y = jnp.where(
-            enemy_alive, state.enemies[:, 1].astype(jnp.int32), -1
-        )
-        enemy_w = jnp.where(
-            enemy_alive, cfg.enemy_width[type_ids].astype(jnp.int32), 0
-        )
-        enemy_h = jnp.where(
-            enemy_alive, cfg.enemy_height[type_ids].astype(jnp.int32), 0
-        )
-        enemy_pos = EntityPosition(
-            enemy_x, enemy_y, enemy_w, enemy_h, enemy_alive
+        # Map dx (index 2) to angle
+        enemy_dx = state.enemies[:, 2]
+        enemy_angle = jnp.where(enemy_dx < 0, 180.0, 0.0).astype(jnp.float32)
+
+        # FIX: Use 0 instead of -1 for inactive objects to satisfy Box(low=0)
+        enemy_x = jnp.where(enemy_alive == 1, state.enemies[:, 0].astype(jnp.int32), 0)
+        enemy_y = jnp.where(enemy_alive == 1, state.enemies[:, 1].astype(jnp.int32), 0)
+        
+        enemy_w = jnp.where(enemy_alive == 1, cfg.enemy_width[type_ids].astype(jnp.int32), 0)
+        enemy_h = jnp.where(enemy_alive == 1, cfg.enemy_height[type_ids].astype(jnp.int32), 0)
+        
+        enemy_pos = ObjectObservation.create(
+            x=enemy_x, 
+            y=enemy_y, 
+            width=enemy_w, 
+            height=enemy_h, 
+            active=enemy_alive, 
+            visual_id=type_ids, 
+            orientation=enemy_angle
         )
 
-        # Get the positions and dimensions of the bullets
-        # set inactive bullets to -1 or 0
-        bullet_alive = state.bullets_alive
-        bullet_x = jnp.where(
-            bullet_alive, state.bullets[:, 0].astype(jnp.int32), -1
-        )
-        bullet_y = jnp.where(
-            bullet_alive, state.bullets[:, 1].astype(jnp.int32), -1
-        )
-        bullet_w = jnp.where(
-            bullet_alive,
-            jnp.full((cfg.max_bullets,), cfg.bullet_width, dtype=jnp.int32),
-            0,
-        )
-        bullet_h = jnp.where(
-            bullet_alive,
-            jnp.full((cfg.max_bullets,), cfg.bullet_height, dtype=jnp.int32),
-            0,
-        )
-        bullet_pos = EntityPosition(
-            bullet_x, bullet_y, bullet_w, bullet_h, bullet_alive
+        # --- BULLETS ---
+        bullet_alive = state.bullets_alive.astype(jnp.int32)
+        
+        # FIX: Use 0 instead of -1 for inactive objects
+        bullet_x = jnp.where(bullet_alive == 1, state.bullets[:, 0].astype(jnp.int32), 0)
+        bullet_y = jnp.where(bullet_alive == 1, state.bullets[:, 1].astype(jnp.int32), 0)
+        
+        bullet_w = jnp.where(bullet_alive == 1, jnp.full((cfg.max_bullets,), cfg.bullet_width, dtype=jnp.int32), 0)
+        bullet_h = jnp.where(bullet_alive == 1, jnp.full((cfg.max_bullets,), cfg.bullet_height, dtype=jnp.int32), 0)
+
+        # Calculate angle from velocity
+        b_dx = state.bullets[:, 2].astype(jnp.float32)
+        b_dy = state.bullets[:, 3].astype(jnp.float32)
+        bullet_angle_rad = jnp.arctan2(b_dy, b_dx)
+        bullet_angle_deg = jnp.degrees(bullet_angle_rad)
+        bullet_angle = jnp.where(bullet_angle_deg < 0, bullet_angle_deg + 360.0, bullet_angle_deg).astype(jnp.float32)
+
+        bullet_pos = ObjectObservation.create(
+            x=bullet_x, 
+            y=bullet_y, 
+            width=bullet_w, 
+            height=bullet_h, 
+            active=bullet_alive, 
+            visual_id=jnp.zeros_like(bullet_x),
+            orientation=bullet_angle
         )
 
         return AtlantisObservation(
-            score=state.score,
             enemy=enemy_pos,
             bullet=bullet_pos,
-            installations_alive=state.installations,
-            command_post_alive=state.command_post_alive,
+            score=state.score,
+            installations_alive=state.installations.astype(jnp.int32),
+            command_post_alive=state.command_post_alive.astype(jnp.int32),
         )
-
+    
     def observation_space(self) -> spaces.Dict:
-        cfg = self.consts
-
-        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
-            return spaces.Dict(
-                {
-                    "x": spaces.Box(
-                        low=-w_max,
-                        high=cfg.screen_width,
-                        shape=(n,),
-                        dtype=jnp.int32,
-                    ),
-                    "y": spaces.Box(
-                        low=-h_max,
-                        high=cfg.screen_height,
-                        shape=(n,),
-                        dtype=jnp.int32,
-                    ),
-                    "width": spaces.Box(
-                        low=0, high=w_max, shape=(n,), dtype=jnp.int32
-                    ),
-                    "height": spaces.Box(
-                        low=0, high=h_max, shape=(n,), dtype=jnp.int32
-                    ),
-                    "alive": spaces.Box(
-                        low=0, high=1, shape=(n,), dtype=jnp.int32
-                    ),
-                }
-            )
+        cfg = self.consts    
 
         return spaces.Dict(
             {
+                "enemy": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 180.0)),
+                "bullet": spaces.get_object_space(n=cfg.max_bullets, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
                 "score": spaces.Box(
                     low=0,
                     high=(10**cfg.max_digits_for_score) - 1,
                     shape=(),
                     dtype=jnp.int32,
-                ),
-                "enemy": entity_space(
-                    n=cfg.max_enemies,
-                    w_max=int(jnp.max(cfg.enemy_width).item()),
-                    h_max=int(jnp.max(cfg.enemy_height).item()),
-                ),
-                "bullet": entity_space(
-                    n=cfg.max_bullets,
-                    w_max=int(cfg.bullet_width),
-                    h_max=int(cfg.bullet_height),
                 ),
                 "installations_alive": spaces.Box(
                     low=0,
@@ -1283,14 +1251,14 @@ class JaxAtlantis(
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
-        def _flat(ep: EntityPosition) -> jnp.ndarray:
+        def _flat(ep: ObjectObservation) -> jnp.ndarray:
             return jnp.concatenate(
                 [
                     jnp.ravel(ep.x).astype(jnp.int32),
                     jnp.ravel(ep.y).astype(jnp.int32),
                     jnp.ravel(ep.width).astype(jnp.int32),
                     jnp.ravel(ep.height).astype(jnp.int32),
-                    jnp.ravel(ep.alive).astype(jnp.int32),  # booleans -> 0,1
+                    jnp.ravel(ep.active).astype(jnp.int32),  # booleans -> 0,1
                 ],
                 axis=0,
             )

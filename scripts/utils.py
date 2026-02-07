@@ -12,10 +12,23 @@ from dataclasses import is_dataclass
 
 from functools import partial
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.wrappers import JaxatariWrapper
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import JaxAtariModController, JaxAtariModWrapper
+
+
+def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
+    """Warn if legacy obs_to_flat_array is present on the environment."""
+    if hasattr(env, "obs_to_flat_array") and callable(getattr(env, "obs_to_flat_array")):
+        warnings.warn(
+            "Environment exposes deprecated obs_to_flat_array(). "
+            "Observations should now be flax.struct.dataclasses using ObjectObservation "
+            "for objects or plain arrays for observations like lives, score, etc. "
+            "Depending on legacy obs_to_flat_array might lead to unforseen issues with wrappers.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
     """Updates the Pygame display with the rendered raster.
@@ -197,6 +210,7 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
             # Fallback: try without constants (renderer will use defaults)
             renderer = renderer_class()
 
+    _warn_deprecated_obs_to_flat_array(game)
     return game, renderer
 
 
@@ -221,7 +235,6 @@ def _dynamic_load_from_path(file_path: str, class_name: str):
             sys.path.pop(0) # Clean up path
     return getattr(game_module, class_name)
 
-# --- REWRITTEN FUNCTION ---
 def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool = False) -> Callable:
     """
     Dynamically loads the modding pipeline for an unregistered game.
@@ -318,3 +331,75 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
     
     # Return the callable 'apply_mods' function
     return apply_mods
+
+
+
+def print_observation_tree(observation, title="Observation", indent=0):
+    """
+    Recursively prints a JAXAtari observation tree with nice formatting.
+    """
+    prefix = "  " * indent
+    
+    # 1. Handle ObjectObservation (Special Pretty Print)
+    if isinstance(observation, ObjectObservation):
+        print(f"{prefix}{title}:")
+        repr_lines = str(observation).split('\n')
+        for line in repr_lines:
+            print(f"{prefix}  {line}")
+        return
+
+    # 2. Handle JAX/Numpy Arrays (Prioritize this over generic objects!)
+    if hasattr(observation, 'shape'):
+        try:
+            # Handle Scalar Arrays (0-dim or size 1)
+            if observation.size == 1:
+                # Try to convert to python scalar for clean output
+                val = observation.item()
+                if isinstance(val, (int, float)):
+                     print(f"{prefix}{title}: {val}")
+                else:
+                     print(f"{prefix}{title}: {val} ({observation.dtype})")
+            else:
+                # Handle Vector/Grid Arrays
+                shape_str = str(observation.shape)
+                print(f"{prefix}{title}: Array {shape_str} {observation.dtype}")
+                
+                # Print small arrays fully for debugging
+                if observation.size <= 16:
+                    flat_vals = observation.flatten().tolist()
+                    # Format list nicely
+                    vals_str = ", ".join([str(v) for v in flat_vals])
+                    print(f"{prefix}  Values: [{vals_str}]")
+        except Exception:
+            # Fallback for Tracers/JIT where .item() fails
+            print(f"{prefix}{title}: {observation}")
+        return
+
+    # 3. Handle Dictionaries
+    if isinstance(observation, dict):
+        print(f"{prefix}{title}:")
+        for key, value in observation.items():
+            print_observation_tree(value, title=key, indent=indent + 1)
+        return
+
+    # 4. Handle Flax PyTreeNodes / NamedTuples / Generic Classes
+    # (Moved below Array check to prevent JAX arrays getting caught here)
+    if hasattr(observation, '__dict__') or hasattr(observation, '_fields'):
+        name = type(observation).__name__
+        print(f"{prefix}{title} ({name}):")
+        
+        # Get field names
+        fields = getattr(observation, '_fields', None)
+        if fields is None:
+            fields = observation.__dict__.keys()
+            
+        for field in fields:
+            # Skip internal attributes
+            if field.startswith('_'): continue
+            
+            val = getattr(observation, field)
+            print_observation_tree(val, title=field, indent=indent + 1)
+        return
+
+    # 5. Fallback (Basic Types)
+    print(f"{prefix}{title}: {observation}")

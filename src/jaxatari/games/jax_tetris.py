@@ -10,7 +10,7 @@ from jax import random as jrandom
 from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.rendering import jax_rendering_utils as render_utils
 import numpy as np
 from jaxatari.renderers import JAXGameRenderer
@@ -140,12 +140,11 @@ class TetrisState:
 
 @struct.dataclass
 class TetrisObservation:
-    """ Observation returned by state"""
     board: chex.Array
-    piece_type: chex.Array
-    pos: chex.Array
-    rot: chex.Array
-    next_piece: chex.Array
+    active_piece: ObjectObservation
+    next_piece: ObjectObservation
+    score: chex.Array
+    game_over: chex.Array
 
 @struct.dataclass
 class TetrisInfo:
@@ -367,15 +366,20 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        """
-        Return the observation space for the environment.
-        """
+        c = self.consts
+        # Logical grid dimensions
+        h = int(c.BOARD_HEIGHT)
+        w = int(c.BOARD_WIDTH)
+        grid_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=grid_size)
+        
         return spaces.Dict({
-            "board": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), dtype=jnp.int32),
-            "piece_type": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
-            "pos": spaces.Box(low=0, high=max(self.consts.BOARD_HEIGHT, self.consts.BOARD_WIDTH), shape=(2,), dtype=jnp.int32),
-            "rot": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
-            "next_piece": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
+            "board": spaces.Box(low=0, high=1, shape=(h, w), dtype=jnp.int32),
+            "active_piece": single_obj,
+            "next_piece": single_obj, # Represents type via visual_id
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "game_over": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -567,15 +571,43 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     # ----- Helpers used inside step -----
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TetrisState) -> TetrisObservation:
-        """
-        Convert the state to an observation.
-        """
+        c = self.consts
+        w, h = int(c.BOARD_WIDTH), int(c.BOARD_HEIGHT)
+        
+        # --- Active Piece ---
+        # Piece position is (row, col) = (y, x) in grid coords
+        # Rotation 0..3 -> 0, 90, 180, 270
+        rot_deg = (state.rot * 90.0).astype(jnp.float32)
+        
+        active_piece = ObjectObservation.create(
+            x=jnp.clip(state.pos[1], 0, w), # pos[1] is x/col
+            y=jnp.clip(state.pos[0], 0, h), # pos[0] is y/row
+            width=jnp.array(4, dtype=jnp.int32), # All pieces are 4x4 grids
+            height=jnp.array(4, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.piece_type, # Type determines color/shape
+            orientation=jnp.array(rot_deg, dtype=jnp.float32)
+        )
+
+        # --- Next Piece ---
+        # Not on board, so position 0,0 inactive or just metadata?
+        # Standardize as an object with valid ID but perhaps off-board coordinates 
+        # or just visually distinct. Let's keep it 'active' for metadata access.
+        next_piece = ObjectObservation.create(
+            x=jnp.array(0, dtype=jnp.int32),
+            y=jnp.array(0, dtype=jnp.int32),
+            width=jnp.array(4, dtype=jnp.int32),
+            height=jnp.array(4, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.next_piece
+        )
+
         return TetrisObservation(
             board=state.board,
-            piece_type=state.piece_type,
-            pos=state.pos,
-            rot=state.rot,
-            next_piece=state.next_piece,
+            active_piece=active_piece,
+            next_piece=next_piece,
+            score=state.score,
+            game_over=state.game_over.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -600,13 +632,6 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         Check if the game is over.
         """
         return state.game_over
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: TetrisObservation) -> chex.Array:
-        """
-        Flatten the observation to a 1D array (for vectorization/testing).
-        """
-        return jnp.concatenate([obs.board.flatten(), obs.piece_type[None], obs.pos, obs.rot[None], obs.next_piece[None]]).astype(jnp.int32)
 
     def render(self, state: TetrisState) -> jnp.ndarray:
         """

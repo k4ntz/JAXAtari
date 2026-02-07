@@ -37,7 +37,7 @@ from flax import struct
 import pygame
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 
@@ -257,14 +257,13 @@ class NameThisGameObservation:
     Contains scalar score/round and per-entity AABBs (diver, shark, spear,
     tentacles) with narrow tentacle boxes for compatibility.
     """
+    player: ObjectObservation
+    shark: ObjectObservation
+    spear: ObjectObservation
+    tentacles: ObjectObservation
+    oxygen_line: ObjectObservation
     score: jnp.ndarray
-    diver: EntityPosition
-    shark: EntityPosition
-    spear: EntityPosition
-    tentacles: EntityPosition
     oxygen_frames_remaining: jnp.ndarray
-    oxygen_line_active: jnp.ndarray
-    oxygen_line_x: jnp.ndarray
     round_idx: jnp.ndarray
 
 
@@ -319,33 +318,24 @@ class JaxNameThisGame(
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        cfg = self.consts
-
-        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
-            return spaces.Dict(
-                {
-                    "x": spaces.Box(low=-w_max, high=cfg.screen_width, shape=(n,), dtype=jnp.int32),
-                    "y": spaces.Box(low=-h_max, high=cfg.screen_height, shape=(n,), dtype=jnp.int32),
-                    "width": spaces.Box(low=0, high=w_max, shape=(n,), dtype=jnp.int32),
-                    "height": spaces.Box(low=0, high=h_max, shape=(n,), dtype=jnp.int32),
-                    "alive": spaces.Box(low=0, high=1, shape=(n,), dtype=jnp.int32),
-                }
-            )
-
-        tentacle_h_max = int(cfg.tentacle_ys[-1] - cfg.tentacle_ys[0] + cfg.tentacle_square_h)
-        return spaces.Dict(
-            {
-                "score": spaces.Box(low=0, high=(10 ** cfg.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
-                "diver": entity_space(1, cfg.diver_width, cfg.diver_height),
-                "shark": entity_space(1, cfg.shark_width, cfg.shark_height),
-                "spear": entity_space(1, cfg.spear_width, cfg.spear_height),
-                "tentacles": entity_space(cfg.max_tentacles, cfg.tentacle_width, tentacle_h_max),
-                "oxygen_frames_remaining": spaces.Box(low=0, high=cfg.oxygen_full, shape=(), dtype=jnp.int32),
-                "oxygen_line_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-                "oxygen_line_x": spaces.Box(low=-cfg.oxygen_line_width, high=cfg.screen_width, shape=(), dtype=jnp.int32),
-                "round_idx": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
-            }
-        )
+        # Cast constants to int to avoid TracerArrayConversionError during JIT compilation
+        h = int(self.consts.screen_height)
+        w = int(self.consts.screen_width)
+        screen_size = (h, w)
+        
+        # Helpers
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "player": single_obj,
+            "shark": single_obj,
+            "spear": single_obj,
+            "tentacles": spaces.get_object_space(n=self.consts.max_tentacles, screen_size=screen_size),
+            "oxygen_line": single_obj,
+            "score": spaces.Box(low=0, high=(10 ** self.consts.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
+            "oxygen_frames_remaining": spaces.Box(low=0, high=int(self.consts.oxygen_full), shape=(), dtype=jnp.int32),
+            "round_idx": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+        })
 
     def image_space(self) -> spaces.Box:
         cfg = self.consts
@@ -455,103 +445,103 @@ class JaxNameThisGame(
     # -------------------------- Obs / Info ---------------------------------
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
-        """Flatten a structured observation into a single int32 vector.
-
-        Useful for simple agents or logging. Field order matches the concatenation
-        order below.
-        """
-        def _flat(ep: EntityPosition) -> jnp.ndarray:
-            return jnp.concatenate(
-                [
-                    jnp.ravel(ep.x).astype(jnp.int32),
-                    jnp.ravel(ep.y).astype(jnp.int32),
-                    jnp.ravel(ep.width).astype(jnp.int32),
-                    jnp.ravel(ep.height).astype(jnp.int32),
-                    jnp.ravel(ep.alive).astype(jnp.int32),
-                ],
-                axis=0,
-            )
-
-        return jnp.concatenate(
-            [
-                jnp.atleast_1d(obs.score).astype(jnp.int32),
-                _flat(obs.diver),
-                _flat(obs.shark),
-                _flat(obs.spear),
-                _flat(obs.tentacles),
-                jnp.atleast_1d(obs.oxygen_frames_remaining).astype(jnp.int32),
-                jnp.atleast_1d(obs.oxygen_line_active).astype(jnp.int32),
-                jnp.atleast_1d(obs.oxygen_line_x).astype(jnp.int32),
-                jnp.atleast_1d(obs.round_idx).astype(jnp.int32),
-            ],
-            axis=0,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: NameThisGameState) -> NameThisGameObservation:
-        """Build the object-centric observation from the current state.
-
-        Tentacle boxes are narrow one-column rectangles that span from the top segment
-        to the current tip, for compatibility with older consumers.
-        """
-
+        """Build the object-centric observation from the current state."""
         cfg = self.consts
-        diver_pos = EntityPosition(
-            x=jnp.atleast_1d(state.diver_x),
-            y=jnp.atleast_1d(state.diver_y),
-            width=jnp.atleast_1d(jnp.array(cfg.diver_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.diver_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.diver_alive.astype(jnp.int32)),
-        )
-        shark_pos = EntityPosition(
-            x=jnp.atleast_1d(state.shark_x),
-            y=jnp.atleast_1d(state.shark_y),
-            width=jnp.atleast_1d(jnp.array(cfg.shark_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.shark_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.shark_alive.astype(jnp.int32)),
-        )
-        spear_pos = EntityPosition(
-            x=jnp.atleast_1d(state.spear[0]),
-            y=jnp.atleast_1d(state.spear[1]),
-            width=jnp.atleast_1d(jnp.array(cfg.spear_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.spear_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.spear_alive.astype(jnp.int32)),
+        w = cfg.screen_width
+        h = cfg.screen_height
+
+        # --- Diver ---
+        # Orientation: 1 (Right) -> 90.0, -1 (Left) -> 270.0
+        diver_ori = jnp.select(
+            [state.diver_dir == 1, state.diver_dir == -1],
+            [90.0, 270.0],
+            0.0
+        ).astype(jnp.float32)
+
+        diver = ObjectObservation.create(
+            x=jnp.clip(state.diver_x, 0, w),
+            y=jnp.clip(state.diver_y, 0, h),
+            width=jnp.array(cfg.diver_width, jnp.int32),
+            height=jnp.array(cfg.diver_height, jnp.int32),
+            active=state.diver_alive.astype(jnp.int32),
+            orientation=diver_ori
         )
 
-        # Tentacle bboxes (narrow, one-column wide for obs compatibility)
+        # --- Shark ---
+        # Orientation: dx > 0 (Right) -> 90.0, dx < 0 (Left) -> 270.0
+        shark_ori = jnp.where(state.shark_dx > 0, 90.0, 270.0).astype(jnp.float32)
+        
+        shark = ObjectObservation.create(
+            x=jnp.clip(state.shark_x, 0, w),
+            y=jnp.clip(state.shark_y, 0, h),
+            width=jnp.array(cfg.shark_width, jnp.int32),
+            height=jnp.array(cfg.shark_height, jnp.int32),
+            active=state.shark_alive.astype(jnp.int32),
+            orientation=shark_ori
+        )
+
+        # --- Spear ---
+        # Orientation: 0.0 (Up)
+        spear_alive = state.spear_alive.astype(jnp.int32)
+        spear = ObjectObservation.create(
+            x=jnp.clip(state.spear[0], 0, w),
+            y=jnp.clip(state.spear[1], 0, h),
+            width=jnp.array(cfg.spear_width, jnp.int32),
+            height=jnp.array(cfg.spear_height, jnp.int32),
+            active=spear_alive,
+            orientation=jnp.array(0.0, jnp.float32)
+        )
+
+        # --- Tentacles ---
+        # Logic adapted from original _get_observation to calculate bounding boxes
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
         len_vec = state.tentacle_len
         alive_vec = (len_vec > 0).astype(jnp.int32)
         top_cols = jnp.where(len_vec > 0, state.tentacle_cols[:, 0], jnp.array(0, jnp.int32))
+        
         tentacle_left_x = jnp.where(
-            len_vec > 0, state.tentacle_base_x + top_cols * cfg.tentacle_col_width, jnp.array(-1, jnp.int32)
+            len_vec > 0, state.tentacle_base_x + top_cols * cfg.tentacle_col_width, jnp.array(0, jnp.int32)
         )
-        tentacle_y_top = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_ys[0], jnp.int32), jnp.array(-1, jnp.int32))
+        tentacle_y_top = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_ys[0], jnp.int32), jnp.array(0, jnp.int32))
+        
         last_y = jnp.take_along_axis(
             cfg.tentacle_ys[None, :].repeat(T, axis=0), jnp.clip((len_vec - 1)[:, None], 0, L - 1), axis=1
         ).squeeze(1)
+        
         tentacle_height_px = jnp.where(len_vec > 0, last_y - cfg.tentacle_ys[0] + cfg.tentacle_square_h, jnp.array(0, jnp.int32))
         tentacle_width_px = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_width, jnp.int32), jnp.array(0, jnp.int32))
 
-        tentacle_pos = EntityPosition(
-            x=tentacle_left_x,
-            y=tentacle_y_top,
+        tentacles = ObjectObservation.create(
+            x=jnp.clip(tentacle_left_x, 0, w),
+            y=jnp.clip(tentacle_y_top, 0, h),
             width=tentacle_width_px,
             height=tentacle_height_px,
-            alive=alive_vec,
+            active=alive_vec,
+            orientation=jnp.zeros((T,), dtype=jnp.float32)
+        )
+
+        # --- Oxygen Line ---
+        # Represented as an object
+        oxy_active = state.oxygen_line_active.astype(jnp.int32)
+        oxygen_line = ObjectObservation.create(
+            x=jnp.clip(state.oxygen_line_x, 0, w),
+            y=jnp.clip(jnp.array(cfg.oxygen_y, jnp.int32), 0, h),
+            width=jnp.array(cfg.oxygen_line_width, jnp.int32),
+            height=jnp.array(1, jnp.int32), # Nominal height
+            active=oxy_active,
+            orientation=jnp.array(0.0, jnp.float32)
         )
 
         return NameThisGameObservation(
+            player=diver,
+            shark=shark,
+            spear=spear,
+            tentacles=tentacles,
+            oxygen_line=oxygen_line,
             score=state.score,
-            diver=diver_pos,
-            shark=shark_pos,
-            spear=spear_pos,
-            tentacles=tentacle_pos,
             oxygen_frames_remaining=state.oxygen_frames_remaining,
-            oxygen_line_active=state.oxygen_line_active.astype(jnp.int32),
-            oxygen_line_x=state.oxygen_line_x,
             round_idx=state.round,
         )
 

@@ -7,7 +7,7 @@ from functools import partial
 from flax import struct
 
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs, ObjectObservation
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 import jax.lax
@@ -278,27 +278,12 @@ class EntityPosition:
 
 @struct.dataclass
 class TronObservation:
-    score: Array  # int32 scalar
-    wave_index: Array  # () int32
-
-    # Player (single box as 1-length arrays) + status
-    player: EntityPosition  # x,y,w,h (shape (1,))
-    player_lives: Array  # (1,) int32
-    player_gone: Array  # () bool
-
-    # Enemies
-    enemies: EntityPosition  # x,y,w,h (shape (max_enemies,))
-    enemies_alive: Array  # (max_enemies,) bool
-
-    # Discs
-    discs: EntityPosition  # x,y,w,h (shape (max_discs,))
-    disc_owner: Array  # (max_discs,) int32  (0=player,1=enemy)
-    disc_phase: Array  # (max_discs,) int32  (0=inactive,1=outbound,2=returning)
-
-    # Doors
-    doors: EntityPosition  # x,y,w,h (shape (max_doors,))
-    door_spawned: Array  # (max_doors,) bool (visible)
-    door_locked: Array  # (max_doors,) bool (locked-open / teleportable)
+    player: ObjectObservation
+    enemies: ObjectObservation  # n=max_enemies
+    discs: ObjectObservation    # n=max_discs, includes owner info in visual_id
+    doors: ObjectObservation    # n=max_doors
+    wave_index: Array
+    score: Array
 
 
 @struct.dataclass
@@ -2804,122 +2789,90 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
     @partial(jit, static_argnums=(0,))
     def _get_observation(self, state: TronState) -> TronObservation:
         c = self.consts
+        w, h = int(c.screen_width), int(c.screen_height)
 
-        # Player
-        px = jnp.atleast_1d(state.player.x[0]).astype(jnp.int32)
-        py = jnp.atleast_1d(state.player.y[0]).astype(jnp.int32)
-        pw = jnp.atleast_1d(state.player.w[0]).astype(jnp.int32)
-        ph = jnp.atleast_1d(state.player.h[0]).astype(jnp.int32)
-        player_entity = EntityPosition(x=px, y=py, width=pw, height=ph)
+        # --- Player ---
+        p_active = ((~state.player_gone) & (state.player.lives[0] > 0)).astype(jnp.int32)
+        # Orientation? Facing dx: -1 -> Left (270), 1 -> Right (90)
+        p_ori = jnp.where(state.facing_dx == -1, 270.0, 90.0).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player.x[0], 0, w),
+            y=jnp.clip(state.player.y[0], 0, h),
+            width=jnp.array(self.player_w, dtype=jnp.int32),
+            height=jnp.array(self.player_h, dtype=jnp.int32),
+            active=p_active,
+            orientation=jnp.array(p_ori, dtype=jnp.float32)
+        )
 
-        # Enemies: mask inactive to x/y=-1 and w/h=0
-        e = state.enemies
-        alive_mask = e.alive
-        ex = jnp.where(alive_mask, e.x, -jnp.ones_like(e.x)).astype(jnp.int32)
-        ey = jnp.where(alive_mask, e.y, -jnp.ones_like(e.y)).astype(jnp.int32)
-        ew = jnp.where(alive_mask, e.w, jnp.zeros_like(e.w)).astype(jnp.int32)
-        eh = jnp.where(alive_mask, e.h, jnp.zeros_like(e.h)).astype(jnp.int32)
-        enemies_entity = EntityPosition(x=ex, y=ey, width=ew, height=eh)
+        # --- Enemies ---
+        # Orientation: infer facing from horizontal velocity (vx < 0 -> left, else right)
+        e_ori = jnp.where(state.enemies.vx < 0, 270.0, 90.0).astype(jnp.float32)
+        
+        enemies = ObjectObservation.create(
+            x=jnp.clip(state.enemies.x, 0, w),
+            y=jnp.clip(state.enemies.y, 0, h),
+            width=state.enemies.w,
+            height=state.enemies.h,
+            active=state.enemies.alive.astype(jnp.int32),
+            orientation=e_ori
+        )
 
-        # Discs: "active" = phase > 0
-        d = state.discs
-        disc_active = d.phase > jnp.int32(0)
-        dx = jnp.where(disc_active, d.x, -jnp.ones_like(d.x)).astype(jnp.int32)
-        dy = jnp.where(disc_active, d.y, -jnp.ones_like(d.y)).astype(jnp.int32)
-        dw = jnp.where(disc_active, d.w, jnp.zeros_like(d.w)).astype(jnp.int32)
-        dh = jnp.where(disc_active, d.h, jnp.zeros_like(d.h)).astype(jnp.int32)
-        discs_entity = EntityPosition(x=dx, y=dy, width=dw, height=dh)
+        # --- Discs ---
+        # Owner: 0=Player, 1=Enemy
+        # Active: phase > 0
+        d_active = (state.discs.phase > 0).astype(jnp.int32)
+        
+        discs = ObjectObservation.create(
+            x=jnp.clip(state.discs.x, 0, w),
+            y=jnp.clip(state.discs.y, 0, h),
+            width=state.discs.w,
+            height=state.discs.h,
+            active=d_active,
+            visual_id=state.discs.owner # Encode owner ID
+        )
 
-        # Doors
-        doors = state.doors
-        door_entity = EntityPosition(
-            x=doors.x.astype(jnp.int32),
-            y=doors.y.astype(jnp.int32),
-            width=doors.w.astype(jnp.int32),
-            height=doors.h.astype(jnp.int32),
+        # --- Doors ---
+        # Active if spawned (visible)
+        # 0=Spawned/Unlocked, 1=Locked/Teleport
+        d_active = state.doors.is_spawned.astype(jnp.int32)
+        d_vid = state.doors.is_locked_open.astype(jnp.int32)
+        
+        doors = ObjectObservation.create(
+            x=jnp.clip(state.doors.x, 0, w),
+            y=jnp.clip(state.doors.y, 0, h),
+            width=state.doors.w,
+            height=state.doors.h,
+            active=d_active,
+            visual_id=d_vid
         )
 
         return TronObservation(
-            score=state.score.astype(jnp.int32),
-            player=player_entity,
-            player_lives=jnp.atleast_1d(state.player.lives[0]).astype(jnp.int32),
-            player_gone=state.player_gone,
-            enemies=enemies_entity,
-            enemies_alive=alive_mask,
-            discs=discs_entity,
-            disc_owner=d.owner.astype(jnp.int32),
-            disc_phase=d.phase.astype(jnp.int32),
-            doors=door_entity,
-            door_spawned=doors.is_spawned,
-            door_locked=doors.is_locked_open,
-            wave_index=state.wave_index.astype(jnp.int32),
+            score=state.score,
+            wave_index=state.wave_index,
+            player=player,
+            enemies=enemies,
+            discs=discs,
+            doors=doors
         )
 
     def observation_space(self) -> spaces.Dict:
         c = self.consts
-        # Shortcuts
-        E = int(c.max_enemies)
-        D = int(c.max_discs)
-        DO = int(c.max_doors)
+        h = int(c.screen_height)
+        w = int(c.screen_width)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({            
+            "player": single_obj,
+            "enemies": spaces.get_object_space(n=c.max_enemies, screen_size=screen_size),
+            "discs": spaces.get_object_space(n=c.max_discs, screen_size=screen_size),
+            "doors": spaces.get_object_space(n=c.max_doors, screen_size=screen_size),
+            "wave_index": spaces.Box(low=0, high=c.num_waves - 1, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=10**6 - 1, shape=(), dtype=jnp.int32),
 
-        # Generic helpers
-        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
-            return spaces.Dict(
-                {
-                    "x": spaces.Box(
-                        low=-w_max, high=c.screen_width, shape=(n,), dtype=jnp.int32
-                    ),
-                    "y": spaces.Box(
-                        low=-h_max, high=c.screen_height, shape=(n,), dtype=jnp.int32
-                    ),
-                    "width": spaces.Box(low=0, high=w_max, shape=(n,), dtype=jnp.int32),
-                    "height": spaces.Box(
-                        low=0, high=h_max, shape=(n,), dtype=jnp.int32
-                    ),
-                }
-            )
-
-        # Maximum sizes for caps
-        player_w_max = int(self.player_w)
-        player_h_max = int(self.player_h)
-        enemy_w_max = int(self.enemy_w)  # enemies use player-sized boxes for now
-        enemy_h_max = int(self.enemy_h)
-        out_w, out_h = c.disc_size_out
-        ret_w, ret_h = c.disc_size_ret
-        disc_w_max = int(max(out_w, ret_w))
-        disc_h_max = int(max(out_h, ret_h))
-
-        door_w_max = int(c.door_w)
-        door_h_max = int(c.door_h)
-
-        return spaces.Dict(
-            {
-                # Scalar
-                "score": spaces.Box(
-                    low=0, high=(10**6) - 1, shape=(), dtype=jnp.int32
-                ),  # highest displayable number in game
-                "wave_index": spaces.Box(
-                    low=0, high=max(0, c.num_waves - 1), shape=(), dtype=jnp.int32
-                ),
-                # Player
-                "player": entity_space(1, player_w_max, player_h_max),
-                "player_lives": spaces.Box(
-                    low=0, high=c.player_lives, shape=(1,), dtype=jnp.int32
-                ),
-                "player_gone": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-                # Enemies
-                "enemies": entity_space(E, enemy_w_max, enemy_h_max),
-                "enemies_alive": spaces.Box(low=0, high=1, shape=(E,), dtype=jnp.int32),
-                # Discs
-                "discs": entity_space(D, disc_w_max, disc_h_max),
-                "disc_owner": spaces.Box(low=0, high=1, shape=(D,), dtype=jnp.int32),
-                "disc_phase": spaces.Box(low=0, high=2, shape=(D,), dtype=jnp.int32),
-                # Doors
-                "doors": entity_space(DO, door_w_max, door_h_max),
-                "door_spawned": spaces.Box(low=0, high=1, shape=(DO,), dtype=jnp.int32),
-                "door_locked": spaces.Box(low=0, high=1, shape=(DO,), dtype=jnp.int32),
-            }
-        )
+        })
 
     @partial(jit, static_argnums=(0,))
     def _get_reward(self, previous_state: TronState, state: TronState) -> Array:

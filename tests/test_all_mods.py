@@ -15,6 +15,7 @@ from typing import Dict, List, Any
 
 from jaxatari.core import make, MOD_MODULES
 from jaxatari.modification import _load_from_string
+from conftest import parse_game_list
 
 
 def get_all_mods_for_game(game_name: str) -> Dict[str, List[str]]:
@@ -68,10 +69,11 @@ def pytest_generate_tests(metafunc):
         games_with_mods = list(MOD_MODULES.keys())
         
         # Filter by --game option if specified
-        specified_game = metafunc.config.getoption("--game", default=None)
-        if specified_game:
-            if specified_game in games_with_mods:
-                games_with_mods = [specified_game]
+        specified_games = parse_game_list(metafunc.config.getoption("--game", default=None))
+        if specified_games:
+            filtered = [g for g in games_with_mods if g in specified_games]
+            if filtered:
+                games_with_mods = filtered
             else:
                 # Game specified but doesn't have mods - skip all tests by not parametrizing
                 # The fixtures will handle skipping
@@ -107,10 +109,11 @@ def pytest_generate_tests(metafunc):
         games_with_mods = list(MOD_MODULES.keys())
         
         # Filter by --game option if specified
-        specified_game = metafunc.config.getoption("--game", default=None)
-        if specified_game:
-            if specified_game in games_with_mods:
-                games_with_mods = [specified_game]
+        specified_games = parse_game_list(metafunc.config.getoption("--game", default=None))
+        if specified_games:
+            filtered = [g for g in games_with_mods if g in specified_games]
+            if filtered:
+                games_with_mods = filtered
             else:
                 # Game specified but doesn't have mods - fixtures will skip
                 return
@@ -167,7 +170,7 @@ def test_mod_execution(mod_game_name: str, mod_key: str, mod_type: str):
     try:
         env = make(
             game_name=mod_game_name,
-            mods_config=[mod_key],
+            mods=[mod_key],
             allow_conflicts=allow_conflicts
         )
     except Exception as e:
@@ -330,7 +333,7 @@ def test_mod_vs_unmodded_comparison(mod_game_name):
     
     # Create unmodded environment
     try:
-        env_unmodded = make(game_name=mod_game_name, mods_config=[])
+        env_unmodded = make(game_name=mod_game_name, mods=[])
     except Exception as e:
         pytest.skip(f"Could not create unmodded environment: {e}")
     
@@ -338,7 +341,7 @@ def test_mod_vs_unmodded_comparison(mod_game_name):
     try:
         env_modded = make(
             game_name=mod_game_name,
-            mods_config=[test_mod],
+            mods=[test_mod],
             allow_conflicts=False
         )
     except Exception as e:
