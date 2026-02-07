@@ -1116,7 +1116,6 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             return on_screen
 
         mask = jax.vmap(check_on_screen)(jnp.arange(self.consts.ENEMY_MAX_IN_GAME))
-        print(mask)
 
         return mask
 
@@ -2190,6 +2189,8 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         return state
 
     def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
+        game_over = False
+
         def collision(index, state: DefenderState) -> DefenderState:
             e = state.enemy_states[index]
             e_x = e[0]
@@ -2239,8 +2240,24 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = jax.lax.cond(is_active, lambda: collision(index, state), lambda: state)
             return state
 
-        # Vmap here is hard as game over gets called in function, changing whole state
-        state = jax.lax.fori_loop(0, self.consts.ENEMY_MAX_IN_GAME, check_for_inactive, state)
+        def merge_states(state, states):
+            idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
+
+            new_enemy = states.enemy_states[idx, idx]
+            new_score = state.score + jnp.sum(states.score[idx] - state.score)
+            killed_l = jnp.sum(states.enemy_killed[idx, 0] - state.enemy_killed[0])
+            killed_p = jnp.sum(states.enemy_killed[idx, 1] - state.enemy_killed[1])
+            killed_b = jnp.sum(states.enemy_killed[idx, 2] - state.enemy_killed[2])
+
+            new_enemy_killed = state.enemy_killed + jnp.asarray([killed_l, killed_p, killed_b])
+
+            new_laser_active = states.laser_active[jnp.argmin(states.laser_active)]
+
+            return state._replace(enemy_states=new_enemy, score=new_score, enemy_killed=new_enemy_killed, laser_active=new_laser_active)
+
+        state = merge_states(state, jax.vmap(check_for_inactive, in_axes=(0, None))(jnp.arange(self.consts.ENEMY_MAX_IN_GAME), state))
+        state = jax.lax.cond(game_over, lambda: self._game_over(state), lambda: state)
+
         return state
 
     def _collision_step(self, state) -> DefenderState:
