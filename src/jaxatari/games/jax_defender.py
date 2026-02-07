@@ -1085,13 +1085,13 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             state = self._spawn_enemy_around_pos(state, x, y, self.consts.SWARMERS)
             return state
 
-        state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
-        state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
-        state = jax.lax.cond(
-            enemy_type < self.consts.SWARMERS,
-            lambda: add_killed_enemy(state, enemy_type),
-            lambda: state,
-        )
+        # state = jax.lax.cond(enemy_type == self.consts.LANDER, lambda: lander_death(state), lambda: state)
+        # state = jax.lax.cond(enemy_type == self.consts.POD, lambda: pod_death(state, index), lambda: state)
+        # state = jax.lax.cond(
+        #     enemy_type < self.consts.SWARMERS,
+        #     lambda: add_killed_enemy(state, enemy_type),
+        #     lambda: state,
+        # )
 
         new_enemy = enemy.at[2].set(new_type)
         new_enemy = new_enemy.at[3].set(color)
@@ -1099,8 +1099,8 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
     
     def _delete_enemy_index(self, state: DefenderState, index) -> DefenderState:
         enemy = state.enemy_states[index]
-        new_enemy = self._delete_enemy(enemy)
-        jax.debug.print("Deleted enemy at index {index} with type {type}", index=index, type=enemy[2])
+        new_enemy, score = self._delete_enemy(enemy)
+        state = self._add_score(state, score)
         enemy_state = state.enemy_states.at[index].set(new_enemy)
         return state._replace(enemy_states=enemy_state)
 
@@ -1273,7 +1273,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         onscreen_mask = self._enemies_on_screen(state)
 
         def delete_enemy(i):
-            return jax.lax.cond(onscreen_mask[i], lambda: self._delete_enemy(state, i), lambda: state)
+            return jax.lax.cond(onscreen_mask[i], lambda: self._delete_enemy_index(state, i), lambda: state)
 
         def merge_states(state, states):
             idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
