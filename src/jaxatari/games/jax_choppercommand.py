@@ -388,7 +388,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             "choppers": spaces.get_object_space(n=self.consts.MAX_CHOPPERS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "enemy_missiles": spaces.get_object_space(n=self.consts.MAX_ENEMY_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "player_missiles": spaces.get_object_space(n=self.consts.MAX_PLAYER_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.uint16),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.uint32),
             "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.uint8),
         })
 

@@ -6,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import chex
-import pygame
 
 from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
@@ -117,18 +116,6 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         This ensures the paddle doesn't extend beyond the right wall, accounting for variable paddle sizes."""
         max_paddle_width = max(self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE_SMALL[0])
         return self.consts.WINDOW_WIDTH - self.consts.WALL_SIDE_WIDTH - max_paddle_width 
-
-    def get_human_action(self) -> chex.Array:
-        """Records keyboard input and returns the corresponding action."""
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_a]:
-            return jnp.array(Action.LEFT)
-        elif keys[pygame.K_d]:
-            return jnp.array(Action.RIGHT)
-        elif keys[pygame.K_SPACE]:
-            return jnp.array(Action.FIRE)
-        else:
-            return jnp.array(Action.NOOP)
 
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(

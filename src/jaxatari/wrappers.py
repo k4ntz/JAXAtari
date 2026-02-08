@@ -832,8 +832,8 @@ class LogState:
     returned_episode_lengths: int
 
 class LogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths.
-    Please NOTE: This logs environment rewards and dones, which are NOT affected by episodic life or reward clipping.
+    """Log episode returns and lengths. An episode ends when the wrapped env returns done=True.
+    Uses env_reward from info when present (unclipped); otherwise uses the step reward.
     """
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -851,23 +851,24 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        # use env_done (not affected by episodic life) for logging
-        env_done = info.get("env_done", done)
-        # use env_reward (not clipped) for logging
-        new_episode_return = state.episode_returns + info.get("env_reward", reward) 
+        # use env_reward (unclipped) for logging when available
+        new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
+        done_ = jnp.bool_(done)
         state = LogState(
             atari_state=atari_state,
-            episode_returns=new_episode_return * (1 - env_done),
-            episode_lengths=new_episode_length * (1 - env_done),
-            returned_episode_returns=state.returned_episode_returns * (1 - env_done)
-            + new_episode_return * env_done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - env_done)
-            + new_episode_length * env_done,
+            episode_returns=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return)),
+            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
+            returned_episode_returns=jnp.where(
+                done_, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
+            ),
+            returned_episode_lengths=jnp.where(
+                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+            ),
         )
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = env_done
+        info["returned_episode"] = done
         return obs, state, reward, done, info
 
 @struct.dataclass
@@ -881,10 +882,9 @@ class MultiRewardLogState:
     returned_episode_lengths: int
 
 class MultiRewardLogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths for multiple rewards.
-    Make sure to apply MultiRewardWrapper to the core env when using this wrapper.
-    The final logs will be 'returned_episode_returns_0', ... for each reward function provided.
-    Please NOTE: This logs environment rewards and dones, which are NOT affected by episodic life or reward clipping.
+    """Log episode returns and lengths for multiple rewards. An episode ends when the wrapped env returns done=True.
+    Apply MultiRewardWrapper to the core env when using this wrapper.
+    Final logs: 'returned_episode_returns_0', ... for each reward function; env reward in 'returned_episode_env_returns'.
     """
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -906,29 +906,29 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        # use env_done (not affected by episodic life) for logging
-        env_done = info.get("env_done", done)
-        # use env_reward (not clipped) for logging
-        new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward) 
-        # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
+        new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward)
         all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
         new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
+        done_ = jnp.bool_(done)
         state = MultiRewardLogState(
             atari_state=atari_state,
-            episode_returns_env=new_episode_return_env * (1 - env_done),
-            episode_returns=new_episode_return * (1 - env_done),
-            episode_lengths=new_episode_length * (1 - env_done),
-            returned_episode_returns_env=state.returned_episode_returns_env * (1 - env_done)
-            + new_episode_return_env * env_done,
-            returned_episode_returns=state.returned_episode_returns * (1 - env_done)
-            + new_episode_return * env_done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - env_done)
-            + new_episode_length * env_done,
+            episode_returns_env=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return_env)),
+            episode_returns=jnp.where(done_, jnp.zeros_like(state.episode_returns), new_episode_return),
+            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
+            returned_episode_returns_env=jnp.where(
+                done_, jnp.float32(new_episode_return_env), jnp.float32(state.returned_episode_returns_env)
+            ),
+            returned_episode_returns=jnp.where(
+                done_, new_episode_return, state.returned_episode_returns
+            ),
+            returned_episode_lengths=jnp.where(
+                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+            ),
         )
         info["returned_episode_env_returns"] = state.returned_episode_returns_env
         for i, r in enumerate(new_episode_return):
             info[f"returned_episode_returns_{i}"] = state.returned_episode_returns[i]
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = env_done
+        info["returned_episode"] = done
         return obs, state, reward, done, info

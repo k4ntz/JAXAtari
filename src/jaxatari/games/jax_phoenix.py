@@ -1073,10 +1073,26 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             )
         )
 
-        projectile_x = jnp.where(sub_step_hit, -1, state.projectile_x)
-        projectile_y = jnp.where(sub_step_hit, -1, state.projectile_y)
-        
-        # If it hit a wing/block, it's gone (-1), so body check will fail (Correct)
+        # Clear projectile when sub-step detected a hit; otherwise spawn on FIRE or move active projectile
+        projectile_active = state.projectile_y >= 0
+        projectile_x = jnp.where(
+            sub_step_hit,
+            -1,
+            jnp.where(firing, state.player_x + 2, state.projectile_x),
+        )
+        projectile_y = jnp.where(
+            sub_step_hit,
+            -1,
+            jnp.where(
+                firing,
+                state.player_y - 1,
+                jnp.where(projectile_active, state.projectile_y - 3, state.projectile_y),
+            ),
+        )
+        projectile_y = jnp.where(projectile_y < 0, -1, projectile_y)
+        projectile_x = projectile_x.astype(jnp.int32)
+        projectile_y = projectile_y.astype(jnp.int32)
+
         projectile_active = projectile_y >= 0
         
         projectile_pos = jnp.array([projectile_x, projectile_y])
@@ -1166,16 +1182,17 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         phoenix_original_y = jnp.where(p_hit_mask, -1, state.phoenix_original_y)
 
         # Projektil/Score bei jedem Treffer (egal welches Level)
+        # Score: sub_steps (bat_step, boss_step) already detect hits and return sub_step_score;
+        # when they hit they clear the projectile, so our enemy_hit_detected is False for those.
+        # For phoenix level, phoenix_step returns (state, 0.0, False), so we rely on enemy_hit_detected here.
         projectile_x = jnp.where(enemy_hit_detected, -1, projectile_x)
         projectile_y = jnp.where(enemy_hit_detected, -1, projectile_y)
-        score = jnp.where(enemy_hit_detected, state.score + 20, state.score)
+        score = (state.score + sub_step_score + jnp.where(enemy_hit_detected, 20, 0)).astype(jnp.int32)
 
         # Gegner entfernen nach Ablauf der jeweiligen Death-Animation
         death_done_any = jnp.where(is_bat_level, b_death_done, p_death_done)
         enemies_x = jnp.where(death_done_any, -1, state.enemies_x)
         enemies_y = jnp.where(death_done_any, self.consts.HEIGHT + 20, state.enemies_y)
-
-        score = jnp.where(enemy_hit_detected, state.score + 20, state.score)
 
 
         # Checken ob alle Gegner getroffen wurden
@@ -1336,7 +1353,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             enemies_x = enemies_x,
             enemies_y = enemies_y,
             horizontal_direction_enemies = new_horizontal_direction_enemies,
-            score= score,
+            score=score,
             enemy_projectile_x=enemy_projectile_x.astype(jnp.int32),
             enemy_projectile_y=enemy_projectile_y.astype(jnp.int32),
             lives=lives,
@@ -1418,31 +1435,18 @@ class PhoenixRenderer(JAXGameRenderer):
         # Render common elements
         raster = self._render_common(state, raster)
 
-        # Dispatch to level-specific renderers
+        # Single switch for level-specific renderers (avoids 4 sequential conds)
         level_idx = (state.level - 1) % 5
-        raster = jax.lax.cond(
-            (level_idx == 0) | (level_idx == 1),
-            lambda r: self._render_phoenix_level(state, r),
-            lambda r: r,
-            raster
-        )
-        raster = jax.lax.cond(
-            level_idx == 2,
-            lambda r: self._render_bat_level(state, r, True),
-            lambda r: r,
-            raster
-        )
-        raster = jax.lax.cond(
-            level_idx == 3,
-            lambda r: self._render_bat_level(state, r, False),
-            lambda r: r,
-            raster
-        )
-        raster = jax.lax.cond(
-            level_idx == 4,
-            lambda r: self._render_boss_level(state, r),
-            lambda r: r,
-            raster
+        raster = jax.lax.switch(
+            level_idx,
+            [
+                lambda r: self._render_phoenix_level(state, r),
+                lambda r: self._render_phoenix_level(state, r),
+                lambda r: self._render_bat_level(state, r, True),
+                lambda r: self._render_bat_level(state, r, False),
+                lambda r: self._render_boss_level(state, r),
+            ],
+            raster,
         )
 
         # UI on top
@@ -1675,13 +1679,13 @@ class PhoenixRenderer(JAXGameRenderer):
         life_w = life_mask.shape[1]
         life_spacing = 4
         lives_y = 20
-        lives_count = jnp.clip(state.lives.astype(jnp.int32), 0, 99)
+        lives_count = jnp.clip(state.lives.astype(jnp.int32), 0, 9)
         score_right_edge = base_left + (max_digits - 1) * spacing + digit_w
         total_lives_width = jnp.where(lives_count > 0, (lives_count - 1) * life_spacing + life_w, 0)
         lives_x = score_right_edge - total_lives_width
         raster = self.jr.render_indicator(
             raster, lives_x, lives_y,
             lives_count, life_mask,
-            spacing=life_spacing, max_value=99
+            spacing=life_spacing, max_value=9
         )
         return raster

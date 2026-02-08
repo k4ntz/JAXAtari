@@ -2626,10 +2626,12 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
         })
     
     def image_space(self) -> spaces.Box:
+        h = int(self.consts.SCREEN_HEIGHT)
+        w = int(self.consts.SCREEN_WIDTH)
         return spaces.Box(
-            low=0, 
-            high=255, 
-            shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3), 
+            low=0,
+            high=255,
+            shape=(h, w, 3),
             dtype=jnp.uint8
         )
 

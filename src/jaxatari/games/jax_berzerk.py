@@ -1689,7 +1689,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             "enemies": spaces.get_object_space(n=self.consts.MAX_NUM_ENEMIES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "enemy_bullets": spaces.get_object_space(n=self.consts.MAX_NUM_ENEMIES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "otto": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "score": spaces.Box(0, 999999, (), jnp.uint16),
+            "score": spaces.Box(0, 999999, (), jnp.uint32),
             "lives": spaces.Box(0, 99, (), jnp.uint8),
         })
 

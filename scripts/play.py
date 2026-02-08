@@ -211,8 +211,10 @@ def main():
                     # Verification: "LEFT" (4) should map to Index 3 in Pong
                     print(f"[Action Debug] Input: {name} | Constant: {action_int} -> Env Index: {idx}")
                 return jax.numpy.array(idx, dtype=jax.numpy.int32)
+            # Key not in this game's action set (e.g. UP in Phoenix) -> NOOP (index 0)
+            return jax.numpy.array(0, dtype=jax.numpy.int32)
         
-        # Fallback if no ACTION_SET is defined
+        # Fallback if no ACTION_SET is defined: use constant as index
         return jax.numpy.array(action_constant, dtype=jax.numpy.int32)
 
     save_keys = {}

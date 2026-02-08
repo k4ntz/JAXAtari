@@ -20,10 +20,12 @@ def to_gymnasium_space(space: Space) -> gymnasium.Space:
         return gymnasium.spaces.Discrete(space.n)
     elif isinstance(space, Box):
         # Pass shape explicitly to allow gymnasium to handle scalar bounds correctly.
+        # Gymnasium expects shape elements to be Python ints, not JAX/numpy arrays.
+        shape = tuple(int(d) for d in space.shape)
         return gymnasium.spaces.Box(
             low=np.array(space.low),
             high=np.array(space.high),
-            shape=space.shape,
+            shape=shape,
             dtype=space.dtype
         )
     elif isinstance(space, TupleSpace):
