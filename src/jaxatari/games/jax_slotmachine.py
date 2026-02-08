@@ -1448,26 +1448,6 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             dtype=jnp.uint8,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: SlotMachineObservation) -> jnp.ndarray:
-        """Flatten the structured observation into a 1-D array."""
-        components = [
-            jnp.atleast_1d(obs.player1_credits).astype(jnp.float32),
-            jnp.atleast_1d(obs.player1_wager).astype(jnp.float32),
-            jnp.atleast_1d(obs.player2_credits).astype(jnp.float32),
-            jnp.atleast_1d(obs.player2_wager).astype(jnp.float32),
-            obs.reel_symbols.astype(jnp.float32).ravel(),
-            jnp.atleast_1d(obs.is_spinning).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_payout_p1).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_payout_p2).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_reward_p1).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_reward_p2).astype(jnp.float32),
-            jnp.atleast_1d(obs.jackpot_mode).astype(jnp.float32),
-            jnp.atleast_1d(obs.game_over).astype(jnp.float32),
-            jnp.atleast_1d(obs.winner).astype(jnp.float32),
-        ]
-        return jnp.concatenate(components, axis=0)
-
     def _get_info(
         self,
         state: SlotMachineState,

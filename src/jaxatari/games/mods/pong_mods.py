@@ -1,5 +1,6 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod
+from jaxatari.games.mods.pong.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod
 
 class PongEnvMod(JaxAtariModController):    
     """
@@ -15,6 +16,7 @@ class PongEnvMod(JaxAtariModController):
 
     }
 
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "pong", "sprites")
 
     def __init__(self,
                  env,

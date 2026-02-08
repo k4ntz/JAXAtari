@@ -335,15 +335,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dtype=jnp.uint8
         )
     
-    def obs_to_flat_array(self, obs: BankHeistObservation) -> jnp.ndarray:
-        """Convert observation to a flat array."""
-        player_array = jnp.concatenate([obs.player.x.reshape(-1), obs.player.y.reshape(-1), obs.player.direction.reshape(-1), obs.player.visibility.reshape(-1)])
-        banks_flat = obs.banks.reshape(-1)
-        police_flat = obs.enemies.reshape(-1)
-        flat_array = jnp.concatenate([player_array, obs.lives.reshape(-1), obs.score.reshape(-1), banks_flat, police_flat]) 
-        return flat_array
-    
-
     def reset(self, key: chex.PRNGKey) -> BankHeistState:
         # Minimal state initialization
         state = BankHeistState(

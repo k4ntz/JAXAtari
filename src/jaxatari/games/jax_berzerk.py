@@ -1010,30 +1010,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BerzerkObservation) -> chex.Array:
-        return jnp.concatenate([
-            obs.player_pos.flatten().astype(jnp.float32),
-            obs.player_dir.flatten().astype(jnp.float32),
-            obs.player_bullet.flatten().astype(jnp.float32),
-            obs.player_bullet_dir.flatten().astype(jnp.float32),
-            obs.enemy_pos.flatten().astype(jnp.float32),
-            obs.enemy_bullets.flatten().astype(jnp.float32),
-            obs.enemy_bullet_dirs.flatten().astype(jnp.float32),
-            obs.otto_pos.flatten().astype(jnp.float32),
-            obs.score.flatten().astype(jnp.float32),
-            obs.lives.flatten().astype(jnp.float32),
-        ])
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def info_to_flat_array(self, info: BerzerkInfo) -> chex.Array:
-        return jnp.concatenate([
-            info.enemies_killed.flatten(),
-            info.level_cleared.flatten()
-        ])
-
-
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BerzerkState) -> jnp.ndarray:
         return self.renderer.render(state)
 

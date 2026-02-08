@@ -2906,16 +2906,6 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             "level": spaces.Box(low=1, high=99, shape=(), dtype=jnp.int32),
         })
 
-    def obs_to_flat_array(self, obs: FrostbiteObservation) -> jnp.ndarray:
-        """Convert observation to flat array"""
-        return jnp.concatenate([
-            obs.bailey_x.flatten(),
-            obs.bailey_y.flatten(),
-            obs.bailey_animation.flatten(),
-            obs.bailey_jumping.flatten(),
-            obs.frame_count.flatten(),
-        ])
-
     def image_space(self) -> spaces.Box:
         """Returns the image space for Frostbite.
         The image is a RGB image with shape (210, 160, 3).

@@ -26,60 +26,6 @@ class JaxatariWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
-
-# TODO: HIGH PRIORITY: the hotwswap might wipe out applied mods because it replaces the renderer! We need to make sure this does not happen, either by reapplying mods or by doing the hot-swap earlier / differently.
-def _apply_native_downscaling_hotswap(
-    base_env,
-    pixel_resize_shape: tuple[int, int],
-    grayscale: bool
-) -> tuple[bool, bool]:
-    """
-    Helper function to hot-swap the renderer and image_space method on a base environment
-    to enable native downscaling.
-    
-    This function performs two "hot-swaps":
-    1. Replaces the renderer instance with a new one configured for downscaling
-    2. Replaces the image_space method on the instance to return the correct shape
-    
-    Args:
-        base_env: The base environment instance (not wrapped)
-        pixel_resize_shape: Target (height, width) for downscaling
-        grayscale: Whether to use grayscale (1 channel) or RGB (3 channels)
-    
-    Returns:
-        Tuple of (do_pixel_resize, grayscale) flags indicating whether wrapper-side
-        processing should be disabled (both False if native downscaling was applied).
-    """
-    # Create new config with downscaling
-    new_config = RendererConfig(
-        game_dimensions=base_env.renderer.config.game_dimensions,
-        channels=1 if grayscale else 3,
-        downscale=pixel_resize_shape
-    )
-    
-    # Hot-swap 1: Re-initialize the renderer with the new config
-    # This triggers the asset loading with the correct downscaling
-    # Reruns the __init__, but there was no better way since this is set in a wrapper and wrappers run after the env is first initialized
-    new_renderer = type(base_env.renderer)(
-        consts=base_env.consts,
-        config=new_config
-    )
-    base_env.renderer = new_renderer
-    
-    # Hot-swap 2: Replace the image_space method on the instance
-    def _native_image_space(self_env) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(pixel_resize_shape[0], pixel_resize_shape[1], new_config.channels),
-            dtype=jnp.uint8
-        )
-    
-    # Bind this function to the instance, overshadowing the class method
-    base_env.image_space = types.MethodType(_native_image_space, base_env)
-    
-    # Return flags indicating wrapper-side processing should be disabled
-    return False, False
     
 class MultiRewardWrapper(JaxatariWrapper):
     """
@@ -446,8 +392,9 @@ class PixelObsWrapper(JaxatariWrapper):
         base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
 
         if do_pixel_resize and use_native_downscaling:
-            # Apply hot-swap logic via helper function
-            self.do_pixel_resize, self.grayscale = _apply_native_downscaling_hotswap(
+            # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
+            from jaxatari.modification import apply_native_downscaling
+            self.do_pixel_resize, self.grayscale = apply_native_downscaling(
                 base_env, pixel_resize_shape, grayscale
             )
             self.pixel_resize_shape = pixel_resize_shape
@@ -541,8 +488,9 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
 
         if do_pixel_resize and use_native_downscaling:
-            # Apply hot-swap logic via helper function
-            self.do_pixel_resize, self.grayscale = _apply_native_downscaling_hotswap(
+            # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
+            from jaxatari.modification import apply_native_downscaling
+            self.do_pixel_resize, self.grayscale = apply_native_downscaling(
                 base_env, pixel_resize_shape, grayscale
             )
             self.pixel_resize_shape = pixel_resize_shape

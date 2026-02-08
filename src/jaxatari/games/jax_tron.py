@@ -2925,34 +2925,3 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             dtype=jnp.uint8,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnvObs) -> Array:
-        def _flat_entity(ep) -> jnp.ndarray:
-            return jnp.concatenate(
-                [
-                    jnp.ravel(ep.x).astype(jnp.int32),
-                    jnp.ravel(ep.y).astype(jnp.int32),
-                    jnp.ravel(ep.width).astype(jnp.int32),
-                    jnp.ravel(ep.height).astype(jnp.int32),
-                ],
-                axis=0,
-            )
-
-        return jnp.concatenate(
-            [
-                jnp.atleast_1d(obs.score).astype(jnp.int32),
-                jnp.atleast_1d(obs.wave_index).astype(jnp.int32),
-                _flat_entity(obs.player),
-                jnp.ravel(obs.player_lives).astype(jnp.int32),
-                jnp.atleast_1d(obs.player_gone.astype(jnp.int32)),
-                _flat_entity(obs.enemies),
-                jnp.ravel(obs.enemies_alive).astype(jnp.int32),
-                _flat_entity(obs.discs),
-                jnp.ravel(obs.disc_owner).astype(jnp.int32),
-                jnp.ravel(obs.disc_phase).astype(jnp.int32),
-                _flat_entity(obs.doors),
-                jnp.ravel(obs.door_spawned).astype(jnp.int32),
-                jnp.ravel(obs.door_locked).astype(jnp.int32),
-            ],
-            axis=0,
-        )

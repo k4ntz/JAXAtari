@@ -774,46 +774,6 @@ class JaxVideoPinball(
             tilt_mode_active=state.tilt_mode_active.astype(jnp.int32)
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: VideoPinballObservation) -> jnp.ndarray:
-        """
-        Description
-            Convert a structured VideoPinballObservation into a single 1D jnp.int32 array.
-
-        Parameters
-         ----------
-            obs : VideoPinballObservation
-                Structured observation containing fields (ball, spinners, flippers, plunger, targets, bumpers, rollovers, tilt_mode_hole_plugs, score, lives_lost, atari_symbols, bumper_multiplier, rollover_counter, color_cycling, tilt_mode_active).
-
-        Returns
-         ----------
-            jnp.ndarray
-                One-dimensional jnp.int32 array with a stable concatenation order matching observation_space().
-
-         Design Notes / Rationale
-         ----------
-            - Maintain a deterministic field order so downstream consumers get a consistent jax array.
-        """
-        return jnp.concatenate(
-            [
-                obs.ball.flatten(),
-                obs.spinners.flatten(),
-                obs.flippers.flatten(),
-                obs.plunger.flatten(),
-                obs.targets.flatten(),
-                obs.bumpers.flatten(),
-                obs.rollovers.flatten(),
-                obs.tilt_mode_hole_plugs.flatten(),
-                obs.score.flatten(),
-                obs.lives_lost.flatten(),
-                obs.atari_symbols.flatten(),
-                obs.bumper_multiplier.flatten(),
-                obs.rollover_counter.flatten(),
-                obs.color_cycling.flatten(),
-                obs.tilt_mode_active.flatten(),
-            ]
-        )
-
     def action_space(self) -> spaces.Discrete:
         """
         Returns the action space for VideoPinball.

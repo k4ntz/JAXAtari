@@ -257,6 +257,31 @@ class JaxRenderingUtils:
 
         return jnp.array(padded_digits)
 
+    def _load_and_pad_digits_from_paths(self, path_list: List[str], num_chars: int = 10):
+        """Loads digit sprites from a list of paths, pads to max dimensions. Used when resolve_path is needed (e.g. mod_path)."""
+        digits = []
+        max_height, max_width = 0, 0
+        for i in range(min(num_chars, len(path_list))):
+            digit = self.loadFrame(path_list[i], transpose=False)
+            max_height = max(max_height, digit.shape[0])
+            max_width = max(max_width, digit.shape[1])
+            digits.append(digit)
+        padded_digits = []
+        for digit in digits:
+            pad_h = max_height - digit.shape[0]
+            pad_w = max_width - digit.shape[1]
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+            padded_digit = jnp.pad(
+                digit,
+                ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                mode="constant",
+                constant_values=0,
+            )
+            padded_digits.append(padded_digit)
+        return jnp.array(padded_digits)
 
     def _create_id_mask(self, sprite_data, color_to_id: Dict) -> np.ndarray:
         """Converts a single 3D RGBA sprite into a 2D integer ID mask."""
@@ -586,17 +611,38 @@ class JaxRenderingUtils:
         raw_sprites_dict = {} 
         FLIP_OFFSETS = {}
         background_rgba = None
-        # base_path = os.path.join(Path(user_data_dir("jaxatari")), base_sub_path)
 
-        # 1. Load all assets from the configuration manifest
+        # 1. Pre-scan for Mod Path Injection and allowed fallback filenames
+        mod_path = None
+        mod_path_filenames = None  # None = allow fallback for any file (legacy); set = only these may use mod_path
         for asset in asset_config:
-            name, asset_type = asset.get('name'), asset.get('type')
-            
+            if asset.get("type") == "mod_path":
+                mod_path = asset.get("path")
+            elif asset.get("type") == "mod_path_filenames":
+                mod_path_filenames = set(asset.get("filenames", ()))
+
+        def resolve_path(filename):
+            full_path = os.path.join(base_path, filename)
+            if os.path.exists(full_path):
+                return full_path
+            # Only fall back to mod path when env is modded and this file is from a mod override
+            if mod_path and (mod_path_filenames is None or filename in mod_path_filenames):
+                mod_full_path = os.path.join(mod_path, filename)
+                if os.path.exists(mod_full_path):
+                    return mod_full_path
+            return full_path
+
+        # 2. Load assets (standard loop)
+        for asset in asset_config:
+            asset_type = asset.get("type")
+            if asset_type in ("mod_path", "mod_path_filenames"):
+                continue  # Skip meta-tags
+            name = asset.get("name")
+
             # --- Background ---
             if asset_type == 'background':
                 if 'file' in asset:
-                    # background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
-                    background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
+                    background_rgba = self.loadFrame(resolve_path(asset['file']))
                 elif 'data' in asset:
                     background_rgba = asset['data']
                 else:
@@ -609,13 +655,13 @@ class JaxRenderingUtils:
 
             if asset_type == 'single':
                 if 'file' in asset:
-                    base_data = self.loadFrame(os.path.join(base_path, asset['file']), transpose=asset.get('transpose', False))
+                    base_data = self.loadFrame(resolve_path(asset['file']), transpose=asset.get('transpose', False))
                 elif 'data' in asset:
                     base_data = asset['data']
                 
             elif asset_type == 'group':
                 if 'files' in asset:
-                    sprites = [self.loadFrame(os.path.join(base_path, f)) for f in asset['files']]
+                    sprites = [self.loadFrame(resolve_path(f)) for f in asset['files']]
                 elif 'data' in asset:
                     sprites = list(asset['data'])
                 padded, offsets = self.pad_to_match(sprites)
@@ -624,7 +670,8 @@ class JaxRenderingUtils:
 
             elif asset_type == 'digits':
                 if 'pattern' in asset:
-                    base_data = self.load_and_pad_digits(os.path.join(base_path, asset['pattern']))
+                    digit_paths = [resolve_path(asset['pattern'].format(i)) for i in range(10)]
+                    base_data = self._load_and_pad_digits_from_paths(digit_paths)
                 elif 'data' in asset:
                     base_data = asset['data']
 

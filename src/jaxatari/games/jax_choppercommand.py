@@ -373,19 +373,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             dtype=jnp.float32
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),  # 6
-            obs.trucks.flatten().astype(jnp.float32),  # 12*5
-            obs.jets.flatten().astype(jnp.float32),  # 12*5
-            obs.choppers.flatten().astype(jnp.float32),  # 12*5
-            obs.enemy_missiles.flatten().astype(jnp.float32),  # 48*5  (alle Missiles)
-            self.flatten_entity_position(obs.player_missile),  # 5
-            jnp.array([obs.player_score], dtype=jnp.float32),  # 1
-            jnp.array([obs.lives], dtype=jnp.float32),  # 1
-        ])
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 

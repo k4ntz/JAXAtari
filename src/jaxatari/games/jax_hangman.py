@@ -604,17 +604,6 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: HangmanObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.revealed.flatten(),
-            obs.mask.flatten(),
-            obs.guessed.flatten(),
-            obs.misses.reshape((1,)).astype(jnp.int32),
-            obs.lives.reshape((1,)).astype(jnp.int32),
-            obs.cursor_idx.reshape((1,)).astype(jnp.int32),
-        ])
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: HangmanState, state: HangmanState):
         # single scalar float32
         return jnp.asarray(state.reward, dtype=jnp.float32)

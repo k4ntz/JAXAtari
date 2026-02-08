@@ -2604,33 +2604,6 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
             self.renderer = SirLancelotRenderer(self.consts)
         return self.renderer.render(state)
     
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: SirLancelotObservation) -> jnp.ndarray:
-        """Convert structured observation to flat 1D array for ML models.
-
-        Flattens all observation components into a single array:
-        - Player position (x, y, width, height): 4 values
-        - Enemies array (4 enemies × 5 values each): 20 values
-        - Dragon (x, y, width, height, active): 5 values
-        - Fireballs (3 fireballs × 5 values each): 15 values
-        - Score: 1 value
-        - Lives: 1 value
-        - Stage: 1 value
-        Total: 47 values
-        """
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-            obs.enemies.flatten(),  # Already shape (NUM_ENEMIES, 5), flattens to (20,)
-            obs.dragon.flatten(),  # Shape (5,), flattens to (5,)
-            obs.fireballs.flatten(),  # Shape (MAX_FIREBALLS, 5), flattens to (15,)
-            obs.score.flatten(),
-            obs.lives.flatten(),
-            obs.stage.flatten()
-        ])
-    
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
     

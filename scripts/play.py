@@ -12,6 +12,37 @@ from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
 
+
+def _normalize_mods(mods):
+    """Convert common CLI mods input into a list of mod name strings.
+
+    Accepts:
+      - None -> None
+      - Space-separated (argparse nargs='+'): ['mod1', 'mod2']
+      - Comma-separated: ['mod1,mod2'] or ['mod1, mod2'] -> ['mod1', 'mod2']
+      - Single string (e.g. from config): 'mod1' or 'mod1,mod2' -> list
+      - Mixed: ['mod1', 'mod2,mod3'] -> ['mod1', 'mod2', 'mod3']
+    """
+    if mods is None:
+        return None
+    if isinstance(mods, str):
+        mods = [mods]
+    result = []
+    for item in mods:
+        if not isinstance(item, str):
+            item = str(item).strip()
+        else:
+            item = item.strip()
+        if not item:
+            continue
+        # Split by comma so "mod1, mod2" and "mod1,mod2" both work
+        for part in item.split(","):
+            part = part.strip()
+            if part:
+                result.append(part)
+    return result if result else None
+
+
 # Map action names to their integer values
 ACTION_NAMES = {
     v: k
@@ -36,7 +67,7 @@ def main():
         nargs='+',
         type=str,
         required=False,
-        help="Name of the mods class.",
+        help="Mod name(s). Space-separated (e.g. -m ModA ModB) or comma-separated (e.g. -m ModA,ModB).",
     )
 
     parser.add_argument(
@@ -84,9 +115,11 @@ def main():
 
     args = parser.parse_args()
 
+    # Normalize mods so we accept space-separated, comma-separated, or mixed
+    args.mods = _normalize_mods(args.mods)
+
     execute_without_rendering = False
     
-
     try:
         # 1. Try the registered path (core.make)
         env = jaxatari_make(

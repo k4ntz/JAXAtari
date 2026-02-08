@@ -1664,25 +1664,6 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             flip,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: KangarooObservation) -> chex.Array:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.player_o.flatten(),
-                obs.platform_positions.flatten(),
-                obs.ladder_positions.flatten(),
-                obs.fruit_positions.flatten(),
-                obs.bell_position.flatten(),
-                obs.child_position.flatten(),
-                obs.falling_coco_position.flatten(),
-                obs.coco_positions.flatten(),
-                obs.monkey_positions.flatten(),
-            ]
-        )
-
     def render(self, state: KangarooState) -> jnp.ndarray:
         return self.renderer.render(state)
 

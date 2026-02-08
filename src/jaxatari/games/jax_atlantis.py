@@ -1250,31 +1250,6 @@ class JaxAtlantis(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
-        def _flat(ep: ObjectObservation) -> jnp.ndarray:
-            return jnp.concatenate(
-                [
-                    jnp.ravel(ep.x).astype(jnp.int32),
-                    jnp.ravel(ep.y).astype(jnp.int32),
-                    jnp.ravel(ep.width).astype(jnp.int32),
-                    jnp.ravel(ep.height).astype(jnp.int32),
-                    jnp.ravel(ep.active).astype(jnp.int32),  # booleans -> 0,1
-                ],
-                axis=0,
-            )
-
-        return jnp.concatenate(
-            [
-                jnp.atleast_1d(obs.score).astype(jnp.int32),
-                _flat(obs.enemy),
-                _flat(obs.bullet),
-                obs.installations_alive.astype(jnp.int32),
-                jnp.atleast_1d(obs.command_post_alive.astype(jnp.int32)),
-            ],
-            axis=0,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_info(
         self, state: AtlantisState
     ) -> AtlantisInfo:

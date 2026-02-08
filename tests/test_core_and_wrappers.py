@@ -27,19 +27,6 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
-def test_obs_to_flat_array_with_stacked_observations(raw_env):
-    """Test that obs_to_flat_array works correctly with stacked observations."""
-    key = jax.random.PRNGKey(0)
-    base_env = raw_env
-    atari_env = AtariWrapper(base_env, frame_stack_size=4)
-    env = ObjectCentricWrapper(atari_env)
-
-    obs, state = env.reset(key)
-
-    # The observation should maintain the stacked structure
-    single_frame_size = get_object_centric_obs_size(atari_env._env.observation_space())
-    assert obs.shape == (4, single_frame_size), f"Expected shape (4, {single_frame_size}), got {obs.shape}"
-
 def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)

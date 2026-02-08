@@ -1185,22 +1185,6 @@ class JaxWordZapper(JaxEnvironment[WordZapperState, WordZapperObservation, WordZ
         ])
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: WordZapperObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),
-            self.flatten_entity_position(obs.player_missile),
-            obs.player_zapper.flatten().astype(jnp.int32),
-            obs.letters.flatten().astype(jnp.int32),
-            obs.current_letter_index.flatten().astype(jnp.int32),
-            obs.target_word.flatten().astype(jnp.int32),
-            obs.enemies.flatten().astype(jnp.int32),
-            obs.score.flatten().astype(jnp.int32),
-            obs.game_phase.flatten().astype(jnp.int32),
-            obs.level_word_len.flatten().astype(jnp.int32),
-            obs.waiting_for_special.flatten().astype(jnp.int32),
-        ])
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: WordZapperState, state: WordZapperState):
         # Reward is score difference
         return state.score - previous_state.score

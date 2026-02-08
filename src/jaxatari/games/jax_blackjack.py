@@ -785,15 +785,6 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             "label": Box(0, 8, (), jnp.int32)
         })
 
-    def obs_to_flat_array(self, obs: BlackjackObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_score.flatten(),
-            obs.player_bet.flatten(),
-            obs.player_current_card_sum.flatten(),
-            obs.dealer_current_card_sum.flatten(),
-            obs.label.flatten()
-        ])
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BlackjackState) -> jnp.ndarray:
         return self.renderer.render(state)

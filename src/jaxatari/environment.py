@@ -166,6 +166,21 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
 
         self.consts = consts
 
+        # --- MODDING INFRASTRUCTURE ---
+        # Functional: Tracks which renderer methods mods have patched.
+        # Used by wrappers to safely transfer patches during renderer swaps.
+        self._patched_renderer_methods = []
+        
+        # Informational: Structured audit log of every change made by the mod system.
+        # Machine-parseable: dict of category -> set of names that were changed.
+        # Categories: "attribute", "method", "constant", "asset".
+        self._mod_history = {
+            "attribute": set(),
+            "method": set(),
+            "constant": set(),
+            "asset": set(),
+        }
+
     def reset(self, key: jrandom.PRNGKey=None) -> Tuple[EnvObs, EnvState]:
         """
         Resets the environment to the initial state.
