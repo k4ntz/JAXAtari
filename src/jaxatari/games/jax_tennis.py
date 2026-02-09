@@ -8,11 +8,14 @@ import jax.random as random
 import jax
 import numpy as np
 import collections
+from flax import struct
+
 # Replaced legacy utils with new one
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
 
 rand_key = random.key(0)
 
@@ -43,62 +46,81 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class TennisConstants(NamedTuple):
+class TennisConstants(AutoDerivedConstants):
     # frame (window) constants
-    FRAME_WIDTH: int = 160
-    FRAME_HEIGHT: int = 210
+    FRAME_WIDTH: int = struct.field(pytree_node=False, default=160)
+    FRAME_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # field constants (the actual tennis court)
-    FIELD_WIDTH_TOP: chex.Array = jnp.array(79)
-    FIELD_WIDTH_BOTTOM: chex.Array = jnp.array(111)
-    FIELD_HEIGHT: chex.Array = jnp.array(130)
+    FIELD_WIDTH_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(79))
+    FIELD_WIDTH_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(111))
+    FIELD_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(130))
 
     # game constants (these values are used for the actual gameplay calculations)
-    GAME_OFFSET_LEFT_BOTTOM: chex.Array = jnp.array(15 + 1)
-    GAME_OFFSET_TOP: chex.Array = jnp.array(43.0)
-    GAME_WIDTH: chex.Array = jnp.array(FIELD_WIDTH_BOTTOM)
-    GAME_HEIGHT: chex.Array = jnp.array(FIELD_HEIGHT)
-    GAME_MIDDLE: chex.Array = jnp.array(GAME_OFFSET_TOP + 0.5 * GAME_HEIGHT)
-    GAME_OFFSET_BOTTOM: chex.Array = jnp.array(GAME_OFFSET_TOP + GAME_HEIGHT)
-    PAUSE_DURATION: chex.Array = jnp.array(100)
+    GAME_OFFSET_LEFT_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(15 + 1))
+    GAME_OFFSET_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(43.0))
+    GAME_WIDTH: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_HEIGHT: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_MIDDLE: chex.Array = struct.field(pytree_node=False, default=None)
+    GAME_OFFSET_BOTTOM: chex.Array = struct.field(pytree_node=False, default=None)
+    PAUSE_DURATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(100))
 
     # player constants
-    PLAYER_CONST: chex.Array = jnp.array(0)
-    PLAYER_WIDTH: chex.Array = jnp.array(13)
-    PLAYER_HEIGHT: chex.Array = jnp.array(23)
-    PLAYER_MIN_X: chex.Array = jnp.array(8)
-    PLAYER_MAX_X: chex.Array = jnp.array(144)
-    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = jnp.array(160)
-    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = jnp.array(109)
-    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = jnp.array(70)
-    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = jnp.array(15)
+    PLAYER_CONST: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(0))
+    PLAYER_WIDTH: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(13))
+    PLAYER_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(23))
+    PLAYER_MIN_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(8))
+    PLAYER_MAX_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array(144))
+    PLAYER_Y_LOWER_BOUND_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(160))
+    PLAYER_Y_UPPER_BOUND_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(109))
+    PLAYER_Y_LOWER_BOUND_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(70))
+    PLAYER_Y_UPPER_BOUND_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(15))
 
-    START_X: chex.Array = jnp.array(GAME_OFFSET_LEFT_BOTTOM + 0.5 * GAME_WIDTH - 0.5 * PLAYER_WIDTH)
-    PLAYER_START_Y: chex.Array = jnp.array(GAME_OFFSET_TOP - PLAYER_HEIGHT)
-    ENEMY_START_Y: chex.Array = jnp.array(GAME_OFFSET_BOTTOM - PLAYER_HEIGHT)
+    START_X: chex.Array = struct.field(pytree_node=False, default=None)
+    PLAYER_START_Y: chex.Array = struct.field(pytree_node=False, default=None)
+    ENEMY_START_Y: chex.Array = struct.field(pytree_node=False, default=None)
 
-    PLAYER_START_DIRECTION: chex.Array = jnp.array(1)
-    PLAYER_START_FIELD: chex.Array = jnp.array(1)
+    PLAYER_START_DIRECTION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    PLAYER_START_FIELD: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
     # ball constants
-    BALL_GRAVITY_PER_FRAME: chex.Array = jnp.array(1.1)
-    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = jnp.array(21)
-    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = jnp.array(1)
-    BALL_WIDTH: chex.Array = jnp.array(2.0)
-    LONG_HIT_THRESHOLD_TOP: chex.Array = jnp.array(52)
-    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = jnp.array(121)
-    LONG_HIT_DISTANCE: chex.Array = jnp.array(91)
-    SHORT_HIT_DISTANCE: chex.Array = jnp.array(40)
+    BALL_GRAVITY_PER_FRAME: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1.1))
+    BALL_SERVING_BOUNCE_VELOCITY_BASE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(21))
+    BALL_SERVING_BOUNCE_VELOCITY_RANDOM_OFFSET: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
+    BALL_WIDTH: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(2.0))
+    LONG_HIT_THRESHOLD_TOP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(52))
+    LONG_HIT_THRESHOLD_BOTTOM: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(121))
+    LONG_HIT_DISTANCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(91))
+    SHORT_HIT_DISTANCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(40))
 
     # enemy constants
-    ENEMY_CONST: chex.Array = jnp.array(1)
+    ENEMY_CONST: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
-    GAME_MIDDLE_HORIZONTAL: chex.Array = jnp.array((FRAME_WIDTH - PLAYER_WIDTH) / 2)
+    GAME_MIDDLE_HORIZONTAL: chex.Array = struct.field(pytree_node=False, default=None)
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+
+    def compute_derived(self) -> Dict[str, Any]:
+        game_width = self.FIELD_WIDTH_BOTTOM
+        game_height = self.FIELD_HEIGHT
+        game_middle = self.GAME_OFFSET_TOP + 0.5 * game_height
+        game_offset_bottom = self.GAME_OFFSET_TOP + game_height
+        return {
+            'GAME_WIDTH': game_width,
+            'GAME_HEIGHT': game_height,
+            'GAME_MIDDLE': game_middle,
+            'GAME_OFFSET_BOTTOM': game_offset_bottom,
+            'START_X': self.GAME_OFFSET_LEFT_BOTTOM + 0.5 * game_width - 0.5 * self.PLAYER_WIDTH,
+            'PLAYER_START_Y': self.GAME_OFFSET_TOP - self.PLAYER_HEIGHT,
+            'ENEMY_START_Y': game_offset_bottom - self.PLAYER_HEIGHT,
+            'GAME_MIDDLE_HORIZONTAL': (self.FRAME_WIDTH - self.PLAYER_WIDTH) / 2,
+        }
 
 
-class BallState(NamedTuple):
+
+
+@struct.dataclass
+class BallState:
     ball_x: chex.Array  # x-coordinate of the ball
     ball_y: chex.Array  # y-coordinate of the ball
     ball_z: chex.Array  # z-coordinate of the ball
@@ -114,7 +136,8 @@ class BallState(NamedTuple):
     last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
 
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     player_x: chex.Array  # x-coordinate of the player
     player_y: chex.Array  # y-coordinate of the player
     player_direction: chex.Array  # direction the player is currently facing in (-1: look towards left, 1: look towards right)
@@ -123,7 +146,8 @@ class PlayerState(NamedTuple):
     player_walk_speed: chex.Array
 
 
-class EnemyState(NamedTuple):
+@struct.dataclass
+class EnemyState:
     enemy_x: chex.Array  # x-coordinate of the enemy
     enemy_y: chex.Array  # y-coordinate of the enemy
     prev_walking_direction: chex.Array  # previous walking direction (in x-direction) of the enemy, -1 = towards x=min, 1 = towards x=max
@@ -131,7 +155,8 @@ class EnemyState(NamedTuple):
     y_movement_direction: chex.Array  # direction in which the enemy is moving until it hits the ball, -1 towards net 1 away from net
 
 
-class GameState(NamedTuple):
+@struct.dataclass
+class GameState:
     is_serving: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
     pause_counter: chex.Array  # delay between restart of game
     player_score: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
@@ -141,7 +166,8 @@ class GameState(NamedTuple):
     is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
 
 
-class AnimatorState(NamedTuple):
+@struct.dataclass
+class AnimatorState:
     player_frame: chex.Array = 0
     enemy_frame: chex.Array = 0
     player_racket_frame: chex.Array = 0
@@ -150,7 +176,8 @@ class AnimatorState(NamedTuple):
     enemy_racket_animation: chex.Array = False
 
 
-class TennisState(NamedTuple):
+@struct.dataclass
+class TennisState:
     player_state: PlayerState
     enemy_state: EnemyState
     ball_state: BallState
@@ -165,45 +192,25 @@ class TennisState(NamedTuple):
 # ball_step, is_overlapping, handle_ball_fire, tennis_reset)
 # have been moved into the TennisJaxEnv class below.
 
-
-class PlayerObs(NamedTuple):
-    player_x: chex.Array
-    player_y: chex.Array
-    player_direction: chex.Array
-    player_field: chex.Array  # top (1) or bottom (-1) field
-    player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
-
-
-class EnemyObs(NamedTuple):
-    enemy_x: chex.Array
-    enemy_y: chex.Array
-    enemy_direction: chex.Array
-
-
-class BallObs(NamedTuple):
-    ball_x: chex.Array  # x-coordinate of the ball
-    ball_y: chex.Array  # y-coordinate of the ball
-    ball_z: chex.Array  # z-coordinate of the ball
-    bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
-    last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
-
-
-class TennisObs(NamedTuple):
-    player: PlayerObs
-    enemy: EnemyObs
-    ball: BallObs
-    is_serving_state: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
-    player_points: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
+    
+@struct.dataclass
+class TennisObservation:
+    player: ObjectObservation
+    enemy: ObjectObservation
+    ball: ObjectObservation
+    is_serving_state: chex.Array
+    player_points: chex.Array
     enemy_points: chex.Array
-    player_sets: chex.Array  # Number of won sets
+    player_sets: chex.Array
     enemy_sets: chex.Array
 
 
-class TennisInfo(NamedTuple):
+@struct.dataclass
+class TennisInfo:
     pass 
 
 
-class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, TennisConstants]):
     # Minimal ALE action set for Tennis (from scripts/action_space_helper.py)
     ACTION_SET: jnp.ndarray = jnp.array(
         [
@@ -236,7 +243,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         self.renderer = TennisRenderer(consts)
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key) -> Tuple[TennisObs, TennisState]:
+    def reset(self, key) -> Tuple[TennisObservation, TennisState]:
         """
         Provides the initial state for the game. For that purpose, we use the default values assigned in TennisState.
 
@@ -292,7 +299,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return reset_obs, reset_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: TennisState, action) -> Tuple[TennisObs, TennisState, float, bool, TennisInfo]:
+    def step(self, state: TennisState, action) -> Tuple[TennisObservation, TennisState, float, bool, TennisInfo]:
         """
         Updates the entire state of the game by calling all step functions.
 
@@ -1123,44 +1130,7 @@ def tennis_reset(consts) -> TennisState:
     )
 
 
-class PlayerObs(NamedTuple):
-    player_x: chex.Array
-    player_y: chex.Array
-    player_direction: chex.Array
-    player_field: chex.Array  # top (1) or bottom (-1) field
-    player_serving: chex.Array  # true: Player is serving, false: Enemy is serving
-
-
-class EnemyObs(NamedTuple):
-    enemy_x: chex.Array
-    enemy_y: chex.Array
-    enemy_direction: chex.Array
-
-
-class BallObs(NamedTuple):
-    ball_x: chex.Array  # x-coordinate of the ball
-    ball_y: chex.Array  # y-coordinate of the ball
-    ball_z: chex.Array  # z-coordinate of the ball
-    bounces: chex.Array  # how many times the ball has hit the ground since it was last hit by an entity
-    last_hit: chex.Array  # 0 if last hit was performed by player, 1 if last hit was by enemy
-
-
-class TennisObs(NamedTuple):
-    player: PlayerObs
-    enemy: EnemyObs
-    ball: BallObs
-    is_serving_state: chex.Array  # whether the game is currently in serving state (ball bouncing on one side until player hits)
-    player_points: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
-    enemy_points: chex.Array
-    player_sets: chex.Array  # Number of won sets
-    enemy_sets: chex.Array
-
-
-class TennisInfo(NamedTuple):
-    pass 
-
-
-class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisConstants]):
+class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, TennisConstants]):
     # ALE minimal action set: [NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT, UPFIRE, RIGHTFIRE, LEFTFIRE, DOWNFIRE, UPRIGHTFIRE, UPLEFTFIRE, DOWNRIGHTFIRE, DOWNLEFTFIRE]
     ACTION_SET: jnp.ndarray = jnp.array([
         Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
@@ -1176,7 +1146,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         self.renderer = TennisRenderer(consts)
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key) -> Tuple[TennisObs, TennisState]:
+    def reset(self, key) -> Tuple[TennisObservation, TennisState]:
         """
         Provides the initial state for the game. For that purpose, we use the default values assigned in TennisState.
 
@@ -1232,7 +1202,7 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
         return reset_obs, reset_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: TennisState, action) -> Tuple[TennisObs, TennisState, float, bool, TennisInfo]:
+    def step(self, state: TennisState, action) -> Tuple[TennisObservation, TennisState, float, bool, TennisInfo]:
         """
         Updates the entire state of the game by calling all step functions.
 
@@ -1303,86 +1273,79 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def flatten_player_obs(self, player_obs: PlayerObs):
-        return jnp.concatenate([jnp.array([player_obs.player_x.astype(jnp.float64)]), jnp.array([player_obs.player_y.astype(jnp.float64)]),
-                                jnp.array([player_obs.player_direction]), jnp.array([player_obs.player_field]),
-                                jnp.array([player_obs.player_serving])])
-
-    def flatten_enemy_obs(self, enemy_obs: EnemyObs):
-        return jnp.concatenate(
-            [jnp.array([enemy_obs.enemy_x.astype(jnp.float64)]), jnp.array([enemy_obs.enemy_y.astype(jnp.float64)]), jnp.array([enemy_obs.enemy_direction])])
-
-    def flatten_ball_obs(self, ball_obs: BallObs):
-        return jnp.concatenate(
-            [jnp.array([ball_obs.ball_x.astype(jnp.float64)]), jnp.array([ball_obs.ball_y.astype(jnp.float64)]), jnp.array([ball_obs.ball_z.astype(jnp.float64)]),
-             jnp.array([ball_obs.bounces]), jnp.array([ball_obs.last_hit])])
-
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        h = int(c.FRAME_HEIGHT)
+        w = int(c.FRAME_WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
-            "player": spaces.Dict({
-                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "player_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.float32),
-                "player_field": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.float32),
-                "player_serving": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
-            }),
-            "enemy": spaces.Dict({
-                "enemy_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "enemy_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "enemy_direction": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.float32),
-            }),
-            "ball": spaces.Dict({
-                "ball_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "ball_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "ball_z": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
-                # no theoretical upper limit, but usually won't go above 50
-                "bounces": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
-                # no theoretical upper limit, but usually won't go above 2 since game is restarted at that point
-                "last_hit": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.float32),
-            }),
+            "player": single_obj,
+            "enemy": single_obj,
+            "ball": single_obj,
             "is_serving_state": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
             "player_points": spaces.Box(low=0, high=45, shape=(), dtype=jnp.float32),
-            "player_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),  # no theoretical upper limit
+            "player_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
             "enemy_points": spaces.Box(low=0, high=45, shape=(), dtype=jnp.float32),
-            "enemy_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),  # no theoretical upper limit
+            "enemy_sets": spaces.Box(low=0, high=999, shape=(), dtype=jnp.float32),
         })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH, 3), dtype=jnp.uint8)
 
-    def obs_to_flat_array(self, obs) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_obs(obs.player),
-            self.flatten_enemy_obs(obs.enemy),
-            self.flatten_ball_obs(obs.ball),
-            obs.is_serving_state.flatten(),
-            obs.player_points.flatten(),
-            obs.player_sets.flatten(),
-            obs.enemy_points.flatten(),
-            obs.enemy_sets.flatten()
-        ])
 
-#jnp.array(x, dtype=jnp.float32)
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: TennisState) -> TennisObservation:
+        c = self.consts
+        w, h = int(c.FRAME_WIDTH), int(c.FRAME_HEIGHT)
 
-    def _get_observation(self, state: TennisState) -> TennisObs:
-        return TennisObs(player=PlayerObs(state.player_state.player_x.astype(jnp.float32), state.player_state.player_y.astype(jnp.float32),
-                                          state.player_state.player_direction.astype(jnp.float32),
-                                          state.player_state.player_field.astype(jnp.float32),
-                                          jnp.where(state.player_state.player_serving, 1, 0).astype(jnp.float32)),
-                         enemy=EnemyObs(state.enemy_state.enemy_x.astype(jnp.float32), state.enemy_state.enemy_y.astype(jnp.float32),
-                                        state.enemy_state.enemy_direction.astype(jnp.float32)),
-                         ball=BallObs(state.ball_state.ball_x.astype(jnp.float32), state.ball_state.ball_y.astype(jnp.float32), state.ball_state.ball_z.astype(jnp.float32),
-                                      state.ball_state.bounces.astype(jnp.float32), state.ball_state.last_hit.astype(jnp.float32)),
-                         is_serving_state=jnp.where(state.game_state.is_serving, 1, 0).astype(jnp.float32),
-                         player_points=state.game_state.player_score.astype(jnp.float32),
-                         enemy_points=state.game_state.enemy_score.astype(jnp.float32),
-                         player_sets=state.game_state.player_game_score.astype(jnp.float32),
-                         enemy_sets=state.game_state.enemy_game_score.astype(jnp.float32))
+        # --- Player ---
+        # Direction: -1 (Left/270), 1 (Right/90)
+        p_ori = jnp.where(state.player_state.player_direction == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player_state.player_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.player_state.player_y.astype(jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=p_ori
+        )
 
-        #print(obs)
-        # 140564625680144, 140564617071968
-        # 140211275917888, 140211243107184
-        #return obs
+        # --- Enemy ---
+        # Use player sprite size for enemy as they are symmetric
+        e_ori = jnp.where(state.enemy_state.enemy_direction == 1, 90.0, 270.0).astype(jnp.float32)
+        
+        enemy = ObjectObservation.create(
+            x=jnp.clip(state.enemy_state.enemy_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.enemy_state.enemy_y.astype(jnp.int32), 0, h),
+            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            orientation=e_ori
+        )
+
+        # --- Ball ---
+        ball = ObjectObservation.create(
+            x=jnp.clip(state.ball_state.ball_x.astype(jnp.int32), 0, w),
+            y=jnp.clip(state.ball_state.ball_y.astype(jnp.int32), 0, h),
+            width=jnp.array(c.BALL_WIDTH, dtype=jnp.int32),
+            height=jnp.array(c.BALL_WIDTH, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        return TennisObservation(
+            player=player,
+            enemy=enemy,
+            ball=ball,
+            is_serving_state=jnp.where(state.game_state.is_serving, 1.0, 0.0),
+            player_points=state.game_state.player_score.astype(jnp.float32),
+            enemy_points=state.game_state.enemy_score.astype(jnp.float32),
+            player_sets=state.game_state.player_game_score.astype(jnp.float32),
+            enemy_sets=state.game_state.enemy_game_score.astype(jnp.float32)
+        )
 
     def _get_info(self, state: TennisState) -> TennisInfo:
         return TennisInfo()
@@ -2378,15 +2341,20 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObs, TennisInfo, TennisCons
 
 class TennisRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: TennisConstants = None):
-        super().__init__()
+    def __init__(self, consts: TennisConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or TennisConstants()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tennis"
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
-            channels=3,
-        )
+        super().__init__(self.consts)
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "tennis")
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.FRAME_HEIGHT, self.consts.FRAME_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Load and pad background
         background_rgba = self.jr.loadFrame(os.path.join(self.sprite_path, 'background.npy'))

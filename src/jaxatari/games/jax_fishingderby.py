@@ -5,10 +5,11 @@ from typing import NamedTuple, Tuple, Dict, List, Optional
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 
 def _create_static_procedural_sprites() -> dict:
@@ -66,169 +67,102 @@ def _get_default_asset_config() -> tuple:
     return tuple(asset_list)
 
 
-class GameConfig(NamedTuple):
+class FishingDerbyConstants(struct.PyTreeNode):
     """All static configuration parameters for the game."""
     # Screen dimensions
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
     
     # Colors
-    SKY_COLOR: Tuple[int, int, int] = (117, 128, 240)
-    WATER_COLOR: Tuple[int, int, int] = (24, 26, 167)
+    SKY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(117, 128, 240))
+    WATER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(24, 26, 167))
     
     # Water
-    WATER_Y_START: int = 60
-    WATER_SHIMMER_HEIGHT: int = 16
+    WATER_Y_START: int = struct.field(pytree_node=False, default=60)
+    WATER_SHIMMER_HEIGHT: int = struct.field(pytree_node=False, default=16)
     
     # Game control
-    RESET: int = 18
+    RESET: int = struct.field(pytree_node=False, default=18)
 
     # Player and Rod/Hook
-    P1_START_X: int = 9
-    P2_START_X: int = 135
-    PLAYER_Y: int = 23
-    ROD_Y: int = 38  # Y position where rod extends horizontally
-    FISH_SCORING_Y: int = 78
+    P1_START_X: int = struct.field(pytree_node=False, default=9)
+    P2_START_X: int = struct.field(pytree_node=False, default=135)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=23)
+    ROD_Y: int = struct.field(pytree_node=False, default=38)  # Y position where rod extends horizontally
+    FISH_SCORING_Y: int = struct.field(pytree_node=False, default=78)
 
     # Rod mechanics
-    MIN_ROD_LENGTH_X: int = 23  # Minimum horizontal rod extension
-    START_ROD_LENGTH_X: int = 23  # Starting horizontal rod length
-    MAX_ROD_LENGTH_X: int = 65  # Maximum horizontal extension
-    P2_MIN_ROD_LENGTH_X: int = 7  # Reduce this to allow less leftward extension
-    P2_MAX_ROD_LENGTH_X: int = 46  # Increase this to allow more rightward extension
-    MIN_HOOK_DEPTH_Y: int = 0  # Minimum vertical hook depth
-    START_HOOK_DEPTH_Y: int = 40  # Starting vertical hook depth
-    MAX_HOOK_DEPTH_Y: int = 160  # Maximum vertical extension to reach bottom fish
+    MIN_ROD_LENGTH_X: int = struct.field(pytree_node=False, default=23)  # Minimum horizontal rod extension
+    START_ROD_LENGTH_X: int = struct.field(pytree_node=False, default=23)  # Starting horizontal rod length
+    MAX_ROD_LENGTH_X: int = struct.field(pytree_node=False, default=65)  # Maximum horizontal extension
+    P2_MIN_ROD_LENGTH_X: int = struct.field(pytree_node=False, default=7)  # Reduce this to allow less leftward extension
+    P2_MAX_ROD_LENGTH_X: int = struct.field(pytree_node=False, default=46)  # Increase this to allow more rightward extension
+    MIN_HOOK_DEPTH_Y: int = struct.field(pytree_node=False, default=0)  # Minimum vertical hook depth
+    START_HOOK_DEPTH_Y: int = struct.field(pytree_node=False, default=40)  # Starting vertical hook depth
+    MAX_HOOK_DEPTH_Y: int = struct.field(pytree_node=False, default=160)  # Maximum vertical extension to reach bottom fish
 
-    ROD_SPEED: float = 1
+    ROD_SPEED: float = struct.field(pytree_node=False, default=1)
     # Fish death line - how far below the rod the fish must be brought to score
-    FISH_DEATH_LINE_OFFSET: int = 20  # Increase this to lower the death line
+    FISH_DEATH_LINE_OFFSET: int = struct.field(pytree_node=False, default=20)  # Increase this to lower the death line
 
-    HOOK_WIDTH: int = 3
-    HOOK_HEIGHT: int = 5
-    HOOK_SPEED_V: float = 10
-    REEL_SLOW_SPEED: float = 1
-    LINE_Y_START: int = 48
-    LINE_Y_END: int = 180
-    AUTO_LOWER_SPEED: float = 2.0
+    HOOK_WIDTH: int = struct.field(pytree_node=False, default=3)
+    HOOK_HEIGHT: int = struct.field(pytree_node=False, default=5)
+    HOOK_SPEED_V: float = struct.field(pytree_node=False, default=10)
+    REEL_SLOW_SPEED: float = struct.field(pytree_node=False, default=1)
+    LINE_Y_START: int = struct.field(pytree_node=False, default=48)
+    LINE_Y_END: int = struct.field(pytree_node=False, default=180)
+    AUTO_LOWER_SPEED: float = struct.field(pytree_node=False, default=2.0)
     
     # Physics
-    Acceleration: float = 0.2
-    Damping: float = 0.85
-    SLOW_REEL_PERIOD: int = 6  # slow reel: 1 px every 4 frames
-    MAX_HOOKED_WOBBLE_DX: float = 0.9  # max extra sideways dx per frame when hooked
-    WOBBLE_FREQ_BASE: float = 0.10  # base wobble frequency
-    WOBBLE_FREQ_RANGE: float = 0.06  # extra freq added with depth
-    WOBBLE_AMP_BASE: float = 0.05  # base wobble dx (px/frame)
-    WOBBLE_AMP_RANGE: float = 0.20  # extra wobble dx with depth
+    Acceleration: float = struct.field(pytree_node=False, default=0.2)
+    Damping: float = struct.field(pytree_node=False, default=0.85)
+    SLOW_REEL_PERIOD: int = struct.field(pytree_node=False, default=6)  # slow reel: 1 px every 4 frames
+    MAX_HOOKED_WOBBLE_DX: float = struct.field(pytree_node=False, default=0.9)  # max extra sideways dx per frame when hooked
+    WOBBLE_FREQ_BASE: float = struct.field(pytree_node=False, default=0.10)  # base wobble frequency
+    WOBBLE_FREQ_RANGE: float = struct.field(pytree_node=False, default=0.06)  # extra freq added with depth
+    WOBBLE_AMP_BASE: float = struct.field(pytree_node=False, default=0.05)  # base wobble dx (px/frame)
+    WOBBLE_AMP_RANGE: float = struct.field(pytree_node=False, default=0.20)  # extra wobble dx with depth
 
     # Occasional downward tugs by row (px/frame) when you're NOT reeling on this frame
-    FISH_PULL_PER_ROW: Tuple[float, ...] = (0.10, 0.12, 0.14, 0.16, 0.18, 0.20)
+    FISH_PULL_PER_ROW: Tuple[float, ...] = struct.field(pytree_node=False, default_factory=lambda: (0.10, 0.12, 0.14, 0.16, 0.18, 0.20))
 
     # Boundaries
-    LEFT_BOUNDARY: float = 10
-    RIGHT_BOUNDARY: float = 115
+    LEFT_BOUNDARY: float = struct.field(pytree_node=False, default=10)
+    RIGHT_BOUNDARY: float = struct.field(pytree_node=False, default=115)
     
     # Fish
-    FISH_WIDTH: int = 8
-    FISH_HEIGHT: int = 7
-    FISH_SPEED: float = 0.4
-    NUM_FISH: int = 6
-    FISH_ROW_YS: Tuple[int] = (95, 111, 127, 143, 159, 175)
-    FISH_ROW_SCORES: Tuple[int] = (2, 2, 4, 4, 6, 6)
+    FISH_WIDTH: int = struct.field(pytree_node=False, default=8)
+    FISH_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    FISH_SPEED: float = struct.field(pytree_node=False, default=0.4)
+    NUM_FISH: int = struct.field(pytree_node=False, default=6)
+    FISH_ROW_YS: Tuple[int] = struct.field(pytree_node=False, default_factory=lambda: (95, 111, 127, 143, 159, 175))
+    FISH_ROW_SCORES: Tuple[int] = struct.field(pytree_node=False, default_factory=lambda: (2, 2, 4, 4, 6, 6))
     # When hooked
-    HOOKED_FISH_SPEED_MULTIPLIER: float = 1.5
-    HOOKED_FISH_TURN_PROBABILITY: float = 0.04
-    HOOKED_FISH_BOUNDARY_ENABLED: bool = True
-    HOOKED_FISH_BOUNDARY_PADDING: int = 20 # Max distance from line
+    HOOKED_FISH_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=1.5)
+    HOOKED_FISH_TURN_PROBABILITY: float = struct.field(pytree_node=False, default=0.04)
+    HOOKED_FISH_BOUNDARY_ENABLED: bool = struct.field(pytree_node=False, default=True)
+    HOOKED_FISH_BOUNDARY_PADDING: int = struct.field(pytree_node=False, default=20) # Max distance from line
 
     # Normal swimming
-    FISH_BASE_TURN_PROBABILITY: float = 0.01  # 1% chance to change direction
+    FISH_BASE_TURN_PROBABILITY: float = struct.field(pytree_node=False, default=0.01)  # 1% chance to change direction
 
     # Turning cooldown for hooked fish
-    HOOKED_FISH_TURNING_COOLDOWN: int = 30  # frames before hooked fish can turn again
+    HOOKED_FISH_TURNING_COOLDOWN: int = struct.field(pytree_node=False, default=30)  # frames before hooked fish can turn again
 
     # Shark
-    SHARK_WIDTH: int = 16
-    SHARK_HEIGHT: int = 7
-    SHARK_SPEED: float = 0.3
-    SHARK_Y: int = 78
-    SHARK_BURST_SPEED: float = 1.5
-    SHARK_BURST_DURATION: int = 300 # Frames
-    SHARK_BURST_CHANCE: float = 0.001 # percentage
+    SHARK_WIDTH: int = struct.field(pytree_node=False, default=16)
+    SHARK_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    SHARK_SPEED: float = struct.field(pytree_node=False, default=0.3)
+    SHARK_Y: int = struct.field(pytree_node=False, default=78)
+    SHARK_BURST_SPEED: float = struct.field(pytree_node=False, default=1.5)
+    SHARK_BURST_DURATION: int = struct.field(pytree_node=False, default=300) # Frames
+    SHARK_BURST_CHANCE: float = struct.field(pytree_node=False, default=0.001) # percentage
     
     # Asset configuration
-    ASSET_CONFIG: tuple = None  # Will be set via factory method
-    
-    @classmethod
-    def create_default(cls):
-        """Factory method to create GameConfig with default asset config."""
-        # Create with all defaults, using _replace to set ASSET_CONFIG
-        # We need to provide all fields, so we'll use the defaults from the class definition
-        return cls(
-            SCREEN_WIDTH=160,
-            SCREEN_HEIGHT=210,
-            SKY_COLOR=(117, 128, 240),
-            WATER_COLOR=(24, 26, 167),
-            WATER_Y_START=60,
-            WATER_SHIMMER_HEIGHT=16,
-            RESET=18,
-            P1_START_X=9,
-            P2_START_X=135,
-            PLAYER_Y=23,
-            ROD_Y=38,
-            FISH_SCORING_Y=78,
-            MIN_ROD_LENGTH_X=23,
-            START_ROD_LENGTH_X=23,
-            MAX_ROD_LENGTH_X=65,
-            P2_MIN_ROD_LENGTH_X=7,
-            P2_MAX_ROD_LENGTH_X=46,
-            MIN_HOOK_DEPTH_Y=0,
-            START_HOOK_DEPTH_Y=40,
-            MAX_HOOK_DEPTH_Y=160,
-            ROD_SPEED=1.0,
-            FISH_DEATH_LINE_OFFSET=20,
-            HOOK_WIDTH=3,
-            HOOK_HEIGHT=5,
-            HOOK_SPEED_V=10.0,
-            REEL_SLOW_SPEED=1.0,
-            LINE_Y_START=48,
-            LINE_Y_END=180,
-            AUTO_LOWER_SPEED=2.0,
-            Acceleration=0.2,
-            Damping=0.85,
-            SLOW_REEL_PERIOD=6,
-            MAX_HOOKED_WOBBLE_DX=0.9,
-            WOBBLE_FREQ_BASE=0.10,
-            WOBBLE_FREQ_RANGE=0.06,
-            WOBBLE_AMP_BASE=0.05,
-            WOBBLE_AMP_RANGE=0.20,
-            FISH_PULL_PER_ROW=(0.10, 0.12, 0.14, 0.16, 0.18, 0.20),
-            LEFT_BOUNDARY=10.0,
-            RIGHT_BOUNDARY=115.0,
-            FISH_WIDTH=8,
-            FISH_HEIGHT=7,
-            FISH_SPEED=0.4,
-            NUM_FISH=6,
-            FISH_ROW_YS=(95, 111, 127, 143, 159, 175),
-            FISH_ROW_SCORES=(2, 2, 4, 4, 6, 6),
-            HOOKED_FISH_SPEED_MULTIPLIER=1.5,
-            HOOKED_FISH_TURN_PROBABILITY=0.04,
-            HOOKED_FISH_BOUNDARY_ENABLED=True,
-            HOOKED_FISH_BOUNDARY_PADDING=20,
-            FISH_BASE_TURN_PROBABILITY=0.01,
-            HOOKED_FISH_TURNING_COOLDOWN=30,
-            SHARK_WIDTH=16,
-            SHARK_HEIGHT=7,
-            SHARK_SPEED=0.3,
-            SHARK_Y=78,
-            SHARK_BURST_SPEED=1.5,
-            SHARK_BURST_DURATION=300,
-            SHARK_BURST_CHANCE=0.001,
-            ASSET_CONFIG=_get_default_asset_config()
-        )
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)  # Will be set via factory method
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     rod_length: chex.Array  # Length of horizontal rod extension
     hook_y: chex.Array  # Vertical position of hook (relative to rod end)
     score: chex.Array
@@ -240,8 +174,8 @@ class PlayerState(NamedTuple):
     score_animation_timer: chex.Array  # control animation timing
     line_segments_x: chex.Array  # X positions of line segments for trailing effect
 
-
-class GameState(NamedTuple):
+@struct.dataclass
+class GameState:
     p1: PlayerState
     p2: PlayerState
     fish_positions: chex.Array
@@ -265,10 +199,11 @@ class GameState(NamedTuple):
         shark_x (chex.Array): The x coordinate of the shark.
         score (chex.Array): The current score of Player 1.
 """
-class FishingDerbyObservation(NamedTuple):
-    player1_hook_xy: chex.Array
-    fish_xy: chex.Array
-    shark_x: chex.Array
+@struct.dataclass
+class FishingDerbyObservation:
+    hook_p1: ObjectObservation
+    fish: ObjectObservation
+    shark: ObjectObservation
     score: chex.Array
 
 """
@@ -279,7 +214,8 @@ class FishingDerbyObservation(NamedTuple):
         p2_score (int): The current score of Player 2.
         time (int): The elapsed time in the game, measured in frames.
 """
-class FishingDerbyInfo(NamedTuple):
+@struct.dataclass
+class FishingDerbyInfo:
     p1_score: int
     p2_score: int
     time: int
@@ -319,8 +255,8 @@ class FishingDerby(JaxEnvironment):
         dtype=jnp.int32,
     )
 
-    def __init__(self, consts: Optional[GameConfig] = None):
-        consts = consts or GameConfig.create_default()
+    def __init__(self, consts: Optional[FishingDerbyConstants] = None):
+        consts = consts or FishingDerbyConstants()
         super().__init__()
         self.consts = consts
         self.renderer = FishingDerbyRenderer(self.consts)
@@ -424,12 +360,50 @@ class FishingDerby(JaxEnvironment):
                 of Player 1's hook, the positions of all fish, the x coordinate of the shark,
                 and Player 1's current score.
             """
+        # --- Player 1 Hook ---
         hook_x, hook_y = self._get_hook_position(self.consts.P1_START_X, state.p1)
+        
+        hook_p1 = ObjectObservation.create(
+            x=jnp.clip(jnp.array(hook_x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(hook_y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.HOOK_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.HOOK_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
+        # --- Fish ---
+        # Orientation: 1.0 (Right) -> 90.0, -1.0 (Left) -> 270.0
+        fish_dirs = state.fish_directions
+        fish_orientations = jnp.where(fish_dirs > 0, 90.0, 270.0)
+        
+        fish = ObjectObservation.create(
+            x=jnp.clip(state.fish_positions[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.fish_positions[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((self.consts.NUM_FISH,), self.consts.FISH_WIDTH, dtype=jnp.int32),
+            height=jnp.full((self.consts.NUM_FISH,), self.consts.FISH_HEIGHT, dtype=jnp.int32),
+            orientation=fish_orientations.astype(jnp.float32),
+            active=state.fish_active.astype(jnp.int32)
+        )
+
+        # --- Shark ---
+        # Orientation: 1.0 (Right) -> 90.0, -1.0 (Left) -> 270.0
+        shark_orientation = jnp.where(state.shark_dir > 0, 90.0, 270.0)
+        
+        shark = ObjectObservation.create(
+            x=jnp.clip(jnp.array(state.shark_x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(self.consts.SHARK_Y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.SHARK_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.SHARK_HEIGHT, dtype=jnp.int32),
+            orientation=shark_orientation.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
         return FishingDerbyObservation(
-            player1_hook_xy=jnp.array([hook_x, hook_y]),
-            fish_xy=state.fish_positions,
-            shark_x=state.shark_x,
-            score=state.p1.score
+            hook_p1=hook_p1,
+            fish=fish,
+            shark=shark,
+            score=state.p1.score.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -685,7 +659,7 @@ class FishingDerby(JaxEnvironment):
             return ai_action
         # Player 2 is always controlled by the AI.
         p2_action = strategic_p2_ai()
-        state = state._replace(key=key)
+        state = state.replace(key=key)
 
         new_state = self._step_logic(state, action, p2_action)
         observation = self._get_observation(new_state)
@@ -726,31 +700,10 @@ class FishingDerby(JaxEnvironment):
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the environment."""
         return spaces.Dict({
-            "player1_hook_xy": spaces.Box(
-                low=jnp.array([0.0, 0.0], dtype=jnp.float32),
-                high=jnp.array([self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT], dtype=jnp.float32),
-                shape=(2,),
-                dtype=jnp.float32
-            ),
-            "fish_xy": spaces.Box(
-                low=jnp.array([[0.0, 0.0]] * self.consts.NUM_FISH, dtype=jnp.float32),
-                high=jnp.array([[self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT]] * self.consts.NUM_FISH,
-                               dtype=jnp.float32),
-                shape=(self.consts.NUM_FISH, 2),
-                dtype=jnp.float32
-            ),
-            "shark_x": spaces.Box(
-                low=jnp.array(0.0, dtype=jnp.float32),
-                high=jnp.array(self.consts.SCREEN_WIDTH, dtype=jnp.float32),
-                shape=(),
-                dtype=jnp.float32
-            ),
-            "score": spaces.Box(
-                low=jnp.array(0.0, dtype=jnp.float32),
-                high=jnp.array(99.0, dtype=jnp.float32),
-                shape=(),
-                dtype=jnp.float32
-            )
+            "hook_p1": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "fish": spaces.get_object_space(n=self.consts.NUM_FISH, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "shark": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Space:
@@ -761,14 +714,6 @@ class FishingDerby(JaxEnvironment):
             shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
             dtype=jnp.uint8
         )
-
-    def obs_to_flat_array(self, obs: FishingDerbyObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate([
-            obs.player1_hook_xy,  # 2 values: hook x, y
-            obs.fish_xy.flatten(),  # 12 values: 6 fish * 2 coordinates each
-            jnp.array([obs.shark_x, obs.score])  # 2 values: shark x, score
-        ])
 
     def _is_fire_action(self, a: int) -> chex.Array:
         """True for FIRE and any directional FIRE combo (e.g., UPFIRE, RIGHTFIRE...)."""
@@ -1590,19 +1535,22 @@ class FishingDerbyRenderer(JAXGameRenderer):
     Missing: water shimmer effect
     """
 
-    def __init__(self, consts: Optional[GameConfig] = None):
-        super().__init__()
-        self.consts = consts or GameConfig.create_default()
+    def __init__(self, consts: Optional[FishingDerbyConstants] = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or FishingDerbyConstants()
+        super().__init__(self.consts)
 
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(module_dir, "sprites/fishingderby")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "fishingderby")
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
         (

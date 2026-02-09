@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import chex
+from flax import struct
 
 import jaxatari.rendering.jax_rendering_utils_legacy as jru
 import jaxatari.rendering.jax_rendering_utils as render_utils
@@ -17,7 +18,7 @@ from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 
 def _create_static_procedural_sprites() -> dict:
@@ -81,28 +82,28 @@ def _get_default_asset_config() -> tuple:
         {'name': 'digits', 'type': 'digits', 'pattern': 'big_numbers/{}.npy'},
     )
 
-class CentipedeConstants:
+class CentipedeConstants(struct.PyTreeNode):
     # -------- Game constants --------
-    WIDTH = 160
-    HEIGHT = 210
-    SCALING_FACTOR = 6
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=6)
 
     ## -------- Player constants --------
-    PLAYER_START_X = 76
-    PLAYER_START_Y = 172
-    PLAYER_BOUNDS = (16, 140), (141, 172)
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=76)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=172)
+    PLAYER_BOUNDS: Tuple[Tuple[int, int], Tuple[int, int]] = struct.field(pytree_node=False, default_factory=lambda: ((16, 140), (141, 172)))
 
-    PLAYER_SIZE = (4, 9)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 9))
 
-    PLAYER_Y_VALUES = jnp.array([141, 145, 147, 150, 154, 156, 159, 163, 165, 168, 172])      # Double to not need extra state value
+    PLAYER_Y_VALUES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([141, 145, 147, 150, 154, 156, 159, 163, 165, 168, 172]))      # Double to not need extra state value
 
     ## -------- Player spell constants --------
-    PLAYER_SPELL_SPEED = 9
+    PLAYER_SPELL_SPEED: int = struct.field(pytree_node=False, default=9)
 
-    PLAYER_SPELL_SIZE = (1, 8)
+    PLAYER_SPELL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (1, 8))
 
     ## -------- Starting Pattern (X -> placed, O -> not placed, P -> placed and poisoned) --------
-    MUSHROOM_STARTING_PATTERN = [
+    MUSHROOM_STARTING_PATTERN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: [
         "OOOOOOOOOOOOOOOO",
         "OOOOOOOOXOOOOXOO",
         "OOOOOOOOOXOOOOXO",
@@ -122,85 +123,86 @@ class CentipedeConstants:
         "OXOOOXOOOOOOOOOO",
         "OOOOXOOOOOOOOOOX",
         "OOOOOOOOOOOOOOOO",
-    ]
+    ])
 
     ## -------- Mushroom constants --------
-    MAX_MUSHROOMS = 304             # Default 304 (19*16) | Maximum number of mushrooms that can appear at the same time
-    MUSHROOM_NUMBER_OF_ROWS = 19    # Default 19 | Number of rows -> Determines value of MAX_MUSHROOMS
-    MUSHROOM_NUMBER_OF_COLS = 16    # Default 16 | Number of mushrooms per row -> Determines value of MAX_MUSHROOMS
-    MUSHROOM_X_SPACING = 8      #
-    MUSHROOM_Y_SPACING = 9
-    MUSHROOM_COLUMN_START_EVEN = 20
-    MUSHROOM_COLUMN_START_ODD = 16
-    MUSHROOM_SIZE = (4, 3)
-    MUSHROOM_HITBOX_Y_OFFSET = 6
+    MAX_MUSHROOMS: int = struct.field(pytree_node=False, default=304)             # Default 304 (19*16) | Maximum number of mushrooms that can appear at the same time
+    MUSHROOM_NUMBER_OF_ROWS: int = struct.field(pytree_node=False, default=19)    # Default 19 | Number of rows -> Determines value of MAX_MUSHROOMS
+    MUSHROOM_NUMBER_OF_COLS: int = struct.field(pytree_node=False, default=16)    # Default 16 | Number of mushrooms per row -> Determines value of MAX_MUSHROOMS
+    MUSHROOM_X_SPACING: int = struct.field(pytree_node=False, default=8)      #
+    MUSHROOM_Y_SPACING: int = struct.field(pytree_node=False, default=9)
+    MUSHROOM_COLUMN_START_EVEN: int = struct.field(pytree_node=False, default=20)
+    MUSHROOM_COLUMN_START_ODD: int = struct.field(pytree_node=False, default=16)
+    MUSHROOM_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 3))
+    MUSHROOM_HITBOX_Y_OFFSET: int = struct.field(pytree_node=False, default=6)
 
     ## -------- Centipede constants --------
-    MAX_SEGMENTS = 9
-    SEGMENT_SIZE = (4, 6)
+    MAX_SEGMENTS: int = struct.field(pytree_node=False, default=9)
+    SEGMENT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 6))
 
     ## -------- Spider constants --------
-    SPIDER_X_POSITIONS = jnp.array([16, 133])
-    SPIDER_Y_POSITIONS = jnp.array([115, 124, 133, 142, 151, 160, 169, 178])
-    SPIDER_MOVE_PROBABILITY = 0.2
-    SPIDER_MIN_SPAWN_FRAMES = 55
-    SPIDER_MAX_SPAWN_FRAMES = 355
-    SPIDER_SIZE = (8, 6)
-    SPIDER_CLOSE_RANGE = 16
-    SPIDER_MID_RANGE = 32
+    SPIDER_X_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 133]))
+    SPIDER_Y_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([115, 124, 133, 142, 151, 160, 169, 178]))
+    SPIDER_MOVE_PROBABILITY: float = struct.field(pytree_node=False, default=0.2)
+    SPIDER_MIN_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=55)
+    SPIDER_MAX_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=355)
+    SPIDER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    SPIDER_CLOSE_RANGE: int = struct.field(pytree_node=False, default=16)
+    SPIDER_MID_RANGE: int = struct.field(pytree_node=False, default=32)
 
     ## -------- Scorpion constants --------
-    SCORPION_X_POSITIONS = jnp.array([16, 133])
-    SCORPION_Y_POSITIONS = jnp.array([7, 16, 25, 34, 43, 52, 61, 70, 79, 88, 97, 106, 115, 124, 133])
-    SCORPION_MIN_SPAWN_FRAMES = 355
-    SCORPION_MAX_SPAWN_FRAMES = 2000
-    SCORPION_SIZE = (8, 6)
-    SCORPION_POINTS = 1000
+    SCORPION_X_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 133]))
+    SCORPION_Y_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([7, 16, 25, 34, 43, 52, 61, 70, 79, 88, 97, 106, 115, 124, 133]))
+    SCORPION_MIN_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=355)
+    SCORPION_MAX_SPAWN_FRAMES: int = struct.field(pytree_node=False, default=2000)
+    SCORPION_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    SCORPION_POINTS: int = struct.field(pytree_node=False, default=1000)
 
     ## -------- Flea constants --------
-    FLEA_SIZE = (4, 6)
-    FLEA_SPAWN_MUSHROOM_PROBABILITY = 0.5
-    FLEA_POINTS = 200
+    FLEA_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 6))
+    FLEA_SPAWN_MUSHROOM_PROBABILITY: float = struct.field(pytree_node=False, default=0.5)
+    FLEA_POINTS: int = struct.field(pytree_node=False, default=200)
 
     ## -------- Death animation constants --------
-    DEATH_ANIMATION_MUSHROOM_THRESHOLD = 64        # 4 Frames * 4 Sprites * 4 Repetitions
+    DEATH_ANIMATION_MUSHROOM_THRESHOLD: int = struct.field(pytree_node=False, default=64)        # 4 Frames * 4 Sprites * 4 Repetitions
 
     ## -------- Color constants --------
-    ORANGE = jnp.array([181, 83, 40])#B55328    # Mushrooms lvl1
-    DARK_ORANGE = jnp.array([198, 108, 58])#C66C3A
-    PINK = jnp.array([184, 70, 162])#B846A2      # Centipede lvl1
-    GREEN = jnp.array([110, 156, 66])#6E9C42     # Border lvl1
-    LIGHT_PURPLE = jnp.array([188, 144, 252])#BC90FC  # UI Elements
-    PURPLE = jnp.array([146, 70, 192])#9246C0        # Spider
-    DARK_PURPLE = jnp.array([66, 72, 200])#4248C8
-    LIGHT_BLUE = jnp.array([84, 138, 210])#548AD2    # Border lvl2
-    DARK_BLUE = jnp.array([45, 50, 184])#2D32B8     # Mushrooms lvl2
-    LIGHT_RED = jnp.array([200, 72, 72])#C84848
-    RED = jnp.array([184, 50, 50])#B83232       # Centipede lvl2
-    YELLOW = jnp.array([187, 187, 53])#BBBB35
-    DARK_YELLOW = jnp.array([162, 162, 42])#A2A22A
+    ORANGE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(181, 83, 40))#B55328    # Mushrooms lvl1
+    DARK_ORANGE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(198, 108, 58))#C66C3A
+    PINK: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 70, 162))#B846A2      # Centipede lvl1
+    GREEN: Tuple[int, int, int] = struct.field(pytree_node=False, default=(110, 156, 66))#6E9C42     # Border lvl1
+    LIGHT_PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(188, 144, 252))#BC90FC  # UI Elements
+    PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(146, 70, 192))#9246C0        # Spider
+    DARK_PURPLE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(66, 72, 200))#4248C8
+    LIGHT_BLUE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(84, 138, 210))#548AD2    # Border lvl2
+    DARK_BLUE: Tuple[int, int, int] = struct.field(pytree_node=False, default=(45, 50, 184))#2D32B8     # Mushrooms lvl2
+    LIGHT_RED: Tuple[int, int, int] = struct.field(pytree_node=False, default=(200, 72, 72))#C84848
+    RED: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 50, 50))#B83232       # Centipede lvl2
+    YELLOW: Tuple[int, int, int] = struct.field(pytree_node=False, default=(187, 187, 53))#BBBB35
+    DARK_YELLOW: Tuple[int, int, int] = struct.field(pytree_node=False, default=(162, 162, 42))#A2A22A
 
     ## -------- Sprite Frames --------
-    SPRITE_PLAYER_FRAMES = 1
-    SPRITE_PLAYER_SPELL_FRAMES = 1
-    SPRITE_CENTIPEDE_FRAMES = 1
-    SPRITE_MUSHROOM_FRAMES = 1
-    SPRITE_SPIDER_FRAMES = 4
-    SPRITE_SPIDER_300_FRAMES = 1
-    SPRITE_SPIDER_600_FRAMES = 1
-    SPRITE_SPIDER_900_FRAMES = 1
-    SPRITE_FLEA_FRAMES = 2
-    SPRITE_SCORPION_FRAMES = 2
-    SPRITE_SPARKS_FRAMES = 4
-    SPRITE_BOTTOM_BORDER_FRAMES = 1
-    SPRITE_POISONED_MUSHROOMS_FRAMES = 16
+    SPRITE_PLAYER_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_PLAYER_SPELL_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_CENTIPEDE_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_MUSHROOM_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_FRAMES: int = struct.field(pytree_node=False, default=4)
+    SPRITE_SPIDER_300_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_600_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_SPIDER_900_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_FLEA_FRAMES: int = struct.field(pytree_node=False, default=2)
+    SPRITE_SCORPION_FRAMES: int = struct.field(pytree_node=False, default=2)
+    SPRITE_SPARKS_FRAMES: int = struct.field(pytree_node=False, default=4)
+    SPRITE_BOTTOM_BORDER_FRAMES: int = struct.field(pytree_node=False, default=1)
+    SPRITE_POISONED_MUSHROOMS_FRAMES: int = struct.field(pytree_node=False, default=16)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
     # -------- Centipede States --------
 
-class CentipedeState(NamedTuple):
+@struct.dataclass
+class CentipedeState:
     player_x: chex.Array
     player_y: chex.Array
     player_velocity_x: chex.Array
@@ -223,33 +225,20 @@ class CentipedeState(NamedTuple):
     spark_position: chex.Array
     rng_key: chex.PRNGKey
 
-class PlayerEntity(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    o: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-class CentipedeObservation(NamedTuple):
-    player: PlayerEntity
-    mushrooms: jnp.ndarray      # Shape (MAX_MUSHROOMS, 5) - MAX_MUSHROOMS mushrooms, each with x,y,w,h,active
-    centipede: jnp.ndarray      # Shape (MAX_SEGMENTS, 5) - MAX_SEGMENTS Centipede segments, each with x,y,w,h,active
-    spider: EntityPosition      # Shape (5,) - one spider with x,y,w,h,active
-    flea: EntityPosition        # Shape (5,) - one flea with x,y,w,h,active
-    scorpion: EntityPosition    # Shape (5,) - one scorpion with x,y,w,h,active
-    player_spell: EntityPosition    # Shape (5,) - one spell with x,y,w,h,active
-    score: jnp.ndarray
+@struct.dataclass
+class CentipedeObservation:
+    player: ObjectObservation
+    mushrooms: ObjectObservation # Shape (MAX_MUSHROOMS, 5) - MAX_MUSHROOMS mushrooms, each with x,y,w,h,active
+    centipede: ObjectObservation      # Shape (MAX_SEGMENTS, 5) - MAX_SEGMENTS Centipede segments, each with x,y,w,h,active
+    spider: ObjectObservation      # Shape (5,) - one spider with x,y,w,h,active
+    flea: ObjectObservation        # Shape (5,) - one flea with x,y,w,h,active
+    scorpion: ObjectObservation    # Shape (5,) - one scorpion with x,y,w,h,active
+    player_spell: ObjectObservation    # Shape (5,) - one spell with x,y,w,h,active
     lives: jnp.ndarray
+    score: jnp.ndarray
 
-class CentipedeInfo(NamedTuple):
+@struct.dataclass
+class CentipedeInfo:
     wave: jnp.ndarray
     step_counter: jnp.ndarray
 
@@ -292,94 +281,30 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([entity.x], dtype=jnp.int32),
-            jnp.array([entity.y], dtype=jnp.int32),
-            jnp.array([entity.o], dtype=jnp.int32),
-            jnp.array([entity.width], dtype=jnp.int32),
-            jnp.array([entity.height], dtype=jnp.int32),
-            jnp.array([entity.active], dtype=jnp.int32)
-        ])
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: CentipedeObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),
-            obs.mushrooms.flatten().astype(jnp.int32),
-            obs.centipede.flatten().astype(jnp.int32),
-            self.flatten_entity_position(obs.spider),
-            self.flatten_entity_position(obs.flea),
-            self.flatten_entity_position(obs.scorpion),
-            self.flatten_entity_position(obs.player_spell),
-            obs.score.flatten().astype(jnp.int32),
-            obs.lives.flatten().astype(jnp.int32),
-        ])
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Centipede.
         The observation contains:
-        - player: PlayerEntity (x, y, o, width, height, active)
-        - mushrooms: array of shape (304, 5) with x,y,width,height,active for each mushroom
-        - centipede: array of shape (9, 5) with x,y,width,height,active for each segment
-        - spider: EntityPosition (x, y, width, height, active)
-        - flea: EntityPosition (x, y, width, height, active)
-        - scorpion: EntityPosition (x, y, width, height, active)
-        - player_spell: EntityPosition (x, y, width, height, active)
+        - player: ObjectObservation (x, y, width, height, active)
+        - mushrooms: ObjectObservation (304, 5) with x,y,width,height,active for each mushroom
+        - centipede: ObjectObservation (9, 5) with x,y,width,height,active for each segment
+        - spider: ObjectObservation (x, y, width, height, active)
+        - flea: ObjectObservation (x, y, width, height, active)
+        - scorpion: ObjectObservation (x, y, width, height, active)
+        - player_spell: ObjectObservation (x, y, width, height, active)
         - score: int (0-999999)
         - lives: int (0-3)
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "mushrooms": spaces.Box(low=0, high=210, shape=(304, 5), dtype=jnp.int32),
-            "centipede": spaces.Box(low=0, high=210, shape=(9, 5), dtype=jnp.int32),
-            "spider": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "flea": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "scorpion": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_spell": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "mushrooms": spaces.get_object_space(n=self.consts.MAX_MUSHROOMS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "centipede": spaces.get_object_space(n=self.consts.MAX_SEGMENTS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "spider": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "flea": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "scorpion": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "player_spell": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
         })
@@ -397,89 +322,106 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CentipedeState) -> CentipedeObservation:
-        # Create player (already scalar, no need for vectorization)
-        player = PlayerEntity(
-            x=state.player_x,
-            y=state.player_y,
-            o=jnp.array(0),  # No orientation in Centipede, set to 0
-            width=jnp.array(self.consts.PLAYER_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            active=jnp.array(1),  # Player is always active
+        # Helper for vector to angle (0-360)
+        def vec_to_angle(dx, dy):
+            return jnp.mod(jnp.degrees(jnp.arctan2(dy, dx)), 360.0)
+
+        # --- Player ---
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player_x, 0, self.consts.WIDTH),
+            y=jnp.clip(state.player_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32), # Player faces Up (0) or default
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        # Define a function to convert mushroom positions to entity format
-        def convert_to_mushroom_entity(pos):
-            x, y, is_poisoned, lives = pos
-            return jnp.array([
-                x,  # x position
-                y,  # y position
-                self.consts.MUSHROOM_SIZE[0],  # width
-                self.consts.MUSHROOM_SIZE[1],  # height
-                lives > 0,  # active flag
-            ])
+        # --- Mushrooms ---
+        # mushroom_positions: (304, 4) -> x, y, is_poisoned, lives
+        m_x = state.mushroom_positions[:, 0]
+        m_y = state.mushroom_positions[:, 1]
+        m_poisoned = state.mushroom_positions[:, 2]
+        m_lives = state.mushroom_positions[:, 3]
 
-        # Mushrooms
-        mushrooms = jax.vmap(convert_to_mushroom_entity)(
-            state.mushroom_positions
+        mushrooms = ObjectObservation.create(
+            x=jnp.clip(m_x, 0, self.consts.WIDTH),
+            y=jnp.clip(m_y, 0, self.consts.HEIGHT),
+            width=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[1], dtype=jnp.int32),
+            state=m_poisoned.astype(jnp.int32), # 1 if poisoned, 0 if normal
+            active=(m_lives > 0).astype(jnp.int32)
         )
 
-        # Define a function to convert centipede segments to entity format
-        def convert_to_centipede_entity(pos):
-            x, y, speed_h, movement_v, status = pos
-            return jnp.array([
-                x.astype(jnp.int32),  # x position
-                y.astype(jnp.int32),  # y position
-                self.consts.SEGMENT_SIZE[0],  # width
-                self.consts.SEGMENT_SIZE[1],  # height
-                status != 0,  # active flag assuming status indicates activity
-            ])
-
-        # Centipede segments
-        centipede = jax.vmap(convert_to_centipede_entity)(
-            state.centipede_position
+        # --- Centipede ---
+        # centipede_position: (9, 5) -> x, y, speed_h, movement_v, status
+        c_x = state.centipede_position[:, 0]
+        c_y = state.centipede_position[:, 1]
+        c_vx = state.centipede_position[:, 2]
+        c_vy = state.centipede_position[:, 3]
+        c_status = state.centipede_position[:, 4]
+        
+        centipede = ObjectObservation.create(
+            x=jnp.clip(c_x, 0, self.consts.WIDTH),
+            y=jnp.clip(c_y, 0, self.consts.HEIGHT),
+            width=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[1], dtype=jnp.int32),
+            orientation=vec_to_angle(c_vx, c_vy),
+            active=(c_status != 0).astype(jnp.int32)
         )
 
-        # Spider (scalar)
-        spider_pos = state.spider_position
-        spider = EntityPosition(
-            x=spider_pos[0],
-            y=spider_pos[1],
-            width=jnp.array(self.consts.SPIDER_SIZE[0]),
-            height=jnp.array(self.consts.SPIDER_SIZE[1]),
-            active=spider_pos[0] != 0,
+        # --- Spider ---
+        # spider_position: (3) -> x, y, direction (-1 left, 1 right, 0 inactive)
+        s_x, s_y, s_dir = state.spider_position
+        # Direction to angle: Right(1)->90, Left(-1)->270, Inactive->0
+        s_angle = jnp.select([s_dir > 0, s_dir < 0], [90.0, 270.0], default=0.0)
+        
+        spider = ObjectObservation.create(
+            x=jnp.clip(s_x, 0, self.consts.WIDTH),
+            y=jnp.clip(s_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.SPIDER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.SPIDER_SIZE[1], dtype=jnp.int32),
+            orientation=s_angle.astype(jnp.float32),
+            active=(s_dir != 0).astype(jnp.int32)
         )
 
-        # Flea (scalar)
-        flea_pos = state.flea_position
-        flea = EntityPosition(
-            x=flea_pos[0].astype(jnp.int32),
-            y=flea_pos[1].astype(jnp.int32),
-            width=jnp.array(self.consts.FLEA_SIZE[0]),
-            height=jnp.array(self.consts.FLEA_SIZE[1]),
-            active=flea_pos[2] > 0,
+        # --- Flea ---
+        # flea_position: (3) -> x, y, lives
+        f_x, f_y, f_lives = state.flea_position
+        flea = ObjectObservation.create(
+            x=jnp.clip(f_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(f_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.FLEA_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.FLEA_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(180.0, dtype=jnp.float32), # Flea falls down (180)
+            active=(f_lives > 0).astype(jnp.int32)
         )
 
-        # Scorpion (scalar)
-        scorpion_pos = state.scorpion_position
-        scorpion = EntityPosition(
-            x=scorpion_pos[0],
-            y=scorpion_pos[1],
-            width=jnp.array(self.consts.SCORPION_SIZE[0]),
-            height=jnp.array(self.consts.SCORPION_SIZE[1]),
-            active=scorpion_pos[0] != 0,
+        # --- Scorpion ---
+        # scorpion_position: (4) -> x, y, direction, speed
+        sc_x, sc_y, sc_dir, _ = state.scorpion_position
+        sc_angle = jnp.select([sc_dir > 0, sc_dir < 0], [90.0, 270.0], default=0.0)
+        
+        scorpion = ObjectObservation.create(
+            x=jnp.clip(sc_x, 0, self.consts.WIDTH),
+            y=jnp.clip(sc_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.SCORPION_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.SCORPION_SIZE[1], dtype=jnp.int32),
+            orientation=sc_angle.astype(jnp.float32),
+            active=(sc_dir != 0).astype(jnp.int32)
         )
 
-        # Player spell (scalar)
-        spell_pos = state.player_spell
-        player_spell = EntityPosition(
-            x=spell_pos[0],
-            y=spell_pos[1],
-            width=jnp.array(self.consts.PLAYER_SPELL_SIZE[0]),
-            height=jnp.array(self.consts.PLAYER_SPELL_SIZE[1]),
-            active=spell_pos[2] != 0,
+        # --- Player Spell ---
+        # player_spell: (3) -> x, y, is_alive
+        ps_x, ps_y, ps_alive = state.player_spell
+        player_spell = ObjectObservation.create(
+            x=jnp.clip(ps_x, 0, self.consts.WIDTH),
+            y=jnp.clip(ps_y, 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SPELL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SPELL_SIZE[1], dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32), # Moves Up (0)
+            active=(ps_alive != 0).astype(jnp.int32)
         )
 
-        # Return observation
         return CentipedeObservation(
             player=player,
             mushrooms=mushrooms,
@@ -489,9 +431,9 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             scorpion=scorpion,
             player_spell=player_spell,
             score=state.score,
-            lives=state.lives,
+            lives=state.lives
         )
-
+    
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: CentipedeState) -> CentipedeInfo:
         return CentipedeInfo(
@@ -1918,7 +1860,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                      self.consts.SCORPION_MAX_SPAWN_FRAMES + 1
                  )
 
-                 return state._replace(
+                 return state.replace(
                      player_x=jnp.array(self.consts.PLAYER_START_X),
                      player_y=jnp.array(self.consts.PLAYER_START_Y),
                      player_velocity_x=jnp.array(0.0),
@@ -1964,7 +1906,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
                 lambda: jnp.zeros(2, dtype=jnp.int32)
             )
 
-            state_during_animation = state._replace(
+            state_during_animation = state.replace(
                 player_spell=jnp.zeros(3, dtype=jnp.int32),
                 spider_position=jnp.zeros(3, dtype=jnp.int32),
                 spider_points=jnp.array([0, 0]),
@@ -2142,7 +2084,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             new_centipede_timer = jnp.where(state.wave[0] == new_wave[0], new_centipede_timer, 0)
 
             # --- Return State ---
-            return state._replace(
+            return state.replace(
                 player_x=new_player_x,
                 player_y=new_player_y,
                 player_velocity_x=new_velocity_x,
@@ -2188,17 +2130,20 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
 
 
 class CentipedeRenderer(JAXGameRenderer):
-    def __init__(self, consts: CentipedeConstants = None):
-        super().__init__()
+    def __init__(self, consts: CentipedeConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or CentipedeConstants()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/centipede"
+        super().__init__(self.consts)
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "centipede")
 
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants

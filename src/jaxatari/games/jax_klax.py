@@ -4,47 +4,56 @@ import jax
 import jax.numpy as jnp
 import chex
 import os
+from flax import struct
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
-
-class KlaxConstants(NamedTuple):
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+class KlaxConstants(AutoDerivedConstants):
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # Tiles
-    N_TILE_TYPES: int = 7
-    TILE_SIZE: Tuple[int, int] = (7, 4)  # (width, height)
-    MAX_TILES: int = 50
-    STEPS_PER_SECOND: int = 60
-    SPAWN_INTERVAL_SECONDS: int = 6
-    FALL_DURATION_SECONDS: int = 9
-    SPEED_FACTOR: int = 10  # speed factor if down key is pressed
+    N_TILE_TYPES: int = struct.field(pytree_node=False, default=7)
+    TILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 4))
+    
+    # Optimized MAX_TILES
+    MAX_TILES: int = struct.field(pytree_node=False, default=15)
+    
+    # Timings converted to frames (assuming 60 FPS as this was the default value before. If its too slow, here is the culprit)
+    # 6.0s * 60 = 360 frames
+    SPAWN_INTERVAL_STEPS: int = struct.field(pytree_node=False, default=360)
+    # 9.0s * 60 = 540 frames
+    FALL_DURATION_STEPS: int = struct.field(pytree_node=False, default=540)
+    
+    SPEED_FACTOR: int = struct.field(pytree_node=False, default=10)
 
-    SPAWN_START_Y: int = 44
-    SHOOT_UP_Y: int = 62
-    DESPAWN_Y: int = 115
+    SPAWN_START_Y: int = struct.field(pytree_node=False, default=44)
+    SHOOT_UP_Y: int = struct.field(pytree_node=False, default=62)
+    DESPAWN_Y: int = struct.field(pytree_node=False, default=115)
 
-    BOARD_ROWS: int = 5
-    BOARD_COLS: int = 5
-    BOARD_BOTTOM_Y: int = 179
-    BOARD_GAP: int = 1
-    COLUMN_START_X: int = 60
-    COLUMN_STEP_X: int = 8
+    BOARD_ROWS: int = struct.field(pytree_node=False, default=5)
+    BOARD_COLS: int = struct.field(pytree_node=False, default=5)
+    BOARD_BOTTOM_Y: int = struct.field(pytree_node=False, default=179)
+    BOARD_GAP: int = struct.field(pytree_node=False, default=1)
+    COLUMN_START_X: int = struct.field(pytree_node=False, default=60)
+    COLUMN_STEP_X: int = struct.field(pytree_node=False, default=8)
 
     # Player
-    PLAYER_WIDTH: int = 7
-    PLAYER_HEIGHT: int = 4
-    PLAYER_Y: int = DESPAWN_Y + 6
-    RESPONSIVENESS: int = 1            # can be tuned; pixels per step when player moving left/right
-    PLAYER_BACKPACK_MAX: int = 5
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=4)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=None)
+    RESPONSIVENESS: int = struct.field(pytree_node=False, default=1)
+    PLAYER_BACKPACK_MAX: int = struct.field(pytree_node=False, default=5)
 
     # Waves
-    WAVES_COOLDOWN_SECONDS: int = 5
+    # 5.0s * 60 = 300 frames
+    WAVES_COOLDOWN_STEPS: int = struct.field(pytree_node=False, default=300)
+
     # Task for each wave: [task_id, amount]
-    klax_waves = [
+    klax_waves: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [0, 3],  # 1
         [0, 5],  # 2
         [1, 3],  # 3
@@ -164,7 +173,7 @@ class KlaxConstants(NamedTuple):
         [2, 50],  # 98
         [2, 6],  # 99
         [3, 250000],  # 100
-    ]
+    ]))
     # ID-Task-Mapping
     # 0 = KLAX → X Klaxes (any)
     # 1 = DIAGONAL → X diagonal Klaxes
@@ -172,32 +181,37 @@ class KlaxConstants(NamedTuple):
     # 3 = POINTS → Score X points
     # 4 = HORIZONTAL → X horizontal Klaxes
 
+    def compute_derived(self):
+        return {
+            "PLAYER_Y": self.DESPAWN_Y + 6
+        }
 
-class TilesObservation(NamedTuple):
+@struct.dataclass
+class TilesObservation:
     x: chex.Array
     y: chex.Array
     color: chex.Array
     active: chex.Array
 
 
-class KlaxObservation(NamedTuple):
-    player_x: chex.Array
-    tiles: TilesObservation
+@struct.dataclass
+class KlaxObservation:
+    player: ObjectObservation
+    tiles: ObjectObservation
+    backpack_items: ObjectObservation
     board: chex.Array
-
     score: chex.Array
     lives: chex.Array
     wave_task: chex.Array
 
-    backpack_count: chex.Array
-    backpack_colors: chex.Array
 
-
-class KlaxInfo(NamedTuple):
+@struct.dataclass
+class KlaxInfo:
     time: chex.Array
 
 
-class KlaxState(NamedTuple):
+@struct.dataclass
+class KlaxState:
     player_x: chex.Array
     player_col: chex.Array
     player_target_col: chex.Array
@@ -273,7 +287,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         self.renderer = KlaxRenderer(self.consts)
 
         # --- WAVES ---
-        self._waves = jnp.array(KlaxConstants.klax_waves, dtype=jnp.int32)
+        self._waves = jnp.array(self.consts.klax_waves, dtype=jnp.int32)
         self._n_waves = int(self._waves.shape[0])
 
         # Default: no reward functions (handled by wrapper)
@@ -525,7 +539,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         tiles_progress_accum = state.tiles_progress_accum
 
         dist = jnp.int32(self.consts.DESPAWN_Y - self.consts.SPAWN_START_Y)
-        den = jnp.int32(self.consts.FALL_DURATION_SECONDS * self.consts.STEPS_PER_SECOND)
+        # CHANGED: Use pre-calculated steps
+        den = jnp.int32(self.consts.FALL_DURATION_STEPS)
 
         # add "progress units" proportional to speed; convert to whole pixels
         add_units = speed_mul * dist * s_num
@@ -585,7 +600,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         new_lives = jnp.maximum(jnp.int32(0), state.lives - miss_count)  # lives update
 
         # ---- spawn ----
-        spawn_den = jnp.int32(self.consts.SPAWN_INTERVAL_SECONDS * self.consts.STEPS_PER_SECOND)
+        # CHANGED: Use pre-calculated steps
+        spawn_den = jnp.int32(self.consts.SPAWN_INTERVAL_STEPS)
         spawn_accum_prev = state.spawn_progress_accum
 
         spawn_accum_next = spawn_accum_prev + speed_mul * s_num
@@ -797,7 +813,8 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
             player_backpack_colors = jnp.zeros_like(player_backpack_colors)
             player_backpack_count = jnp.int32(0)
 
-            cooldown_steps = jnp.int32(self.consts.WAVES_COOLDOWN_SECONDS * self.consts.STEPS_PER_SECOND)
+            # CHANGED: Use pre-calculated steps
+            cooldown_steps = jnp.int32(self.consts.WAVES_COOLDOWN_STEPS)
 
             tiles_progress_accum_out = jnp.zeros_like(tiles_progress_accum_in)
             spawn_progress_accum_out = jnp.int32(0)
@@ -845,7 +862,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         wave_idx_final = wave_idx_after
         spawn_accum_final = jax.lax.select(wave_done_now, jnp.int32(0), spawn_accum_after)
 
-        return state._replace(
+        return state.replace(
             step_counter=step_counter, rng_key=k_after, tiles_x=tiles_x, tiles_y=tiles_y, tiles_color=tiles_color,
             tiles_active=tiles_active, tiles_col=tiles_col, player_x=px_next, player_col=player_col_next,
             player_target_col=target_col_new, player_backpack_colors=player_backpack_colors,
@@ -864,42 +881,56 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KlaxState) -> KlaxObservation:
-        tiles = TilesObservation(
-            x=state.tiles_x,
-            y=state.tiles_y,
-            color=state.tiles_color,
-            active=state.tiles_active,
+        # --- Player ---
+        # Calculate dynamic base Y based on backpack count (matching renderer logic)
+        tile_h = self.consts.TILE_SIZE[1]
+        base_y = self.consts.PLAYER_Y + state.player_backpack_count * (tile_h + 1)
+        
+        player = ObjectObservation.create(
+            x=jnp.array(state.player_x, dtype=jnp.int32),
+            y=jnp.array(base_y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
+
+        # --- Falling Tiles ---
+        tiles = ObjectObservation.create(
+            x=jnp.clip(state.tiles_x, 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.tiles_y, 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((self.consts.MAX_TILES,), self.consts.TILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((self.consts.MAX_TILES,), self.consts.TILE_SIZE[1], dtype=jnp.int32),
+            visual_id=state.tiles_color,
+            active=state.tiles_active
+        )
+
+        # --- Backpack Items ---
+        # Calculate positions for all potential backpack slots
+        k_indices = jnp.arange(self.consts.PLAYER_BACKPACK_MAX, dtype=jnp.int32)
+        
+        # Renderer logic: y = base_y - (k + 1) * (tile_h + gap)
+        gap = self.consts.BOARD_GAP
+        bp_y = base_y - (k_indices + 1) * (tile_h + gap)
+        
+        bp_active = (k_indices < state.player_backpack_count).astype(jnp.int32)
+        
+        backpack_items = ObjectObservation.create(
+            x=jnp.full((self.consts.PLAYER_BACKPACK_MAX,), state.player_x, dtype=jnp.int32),
+            y=jnp.clip(bp_y, 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((self.consts.PLAYER_BACKPACK_MAX,), self.consts.TILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((self.consts.PLAYER_BACKPACK_MAX,), self.consts.TILE_SIZE[1], dtype=jnp.int32),
+            visual_id=state.player_backpack_colors,
+            active=bp_active
+        )
+
         return KlaxObservation(
-            player_x=state.player_x,
+            player=player,
             tiles=tiles,
+            backpack_items=backpack_items,
             board=state.board,
             score=state.score,
             lives=state.lives,
             wave_task=jnp.array([state.wave_task_id, state.wave_target], dtype=jnp.int32),
-            backpack_count=state.player_backpack_count,
-            backpack_colors=state.player_backpack_colors,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: KlaxObservation) -> jnp.ndarray:
-        return jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-
-                obs.tiles.x.flatten(),
-                obs.tiles.y.flatten(),
-                obs.tiles.color.flatten(),
-                obs.tiles.active.flatten(),
-
-                obs.board.flatten(),
-                obs.score.flatten(),
-                obs.lives.flatten(),
-                obs.wave_task.flatten(),
-
-                obs.backpack_count.flatten(),
-                obs.backpack_colors.flatten(),
-            ]
         )
 
     def action_space(self) -> spaces.Discrete:
@@ -907,54 +938,27 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
     def observation_space(self) -> spaces.Dict:
         max_color = max(int(self.consts.N_TILE_TYPES), 1)
-        return spaces.Dict(
-            {
-                "player_x": spaces.Box(
-                    low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.int32
-                ),
-                "tiles": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0, high=self.consts.SCREEN_WIDTH,
-                            shape=(self.consts.MAX_TILES,), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=self.consts.SCREEN_HEIGHT,
-                            shape=(self.consts.MAX_TILES,), dtype=jnp.int32
-                        ),
-                        "color": spaces.Box(
-                            low=0, high=max_color,
-                            shape=(self.consts.MAX_TILES,), dtype=jnp.int32
-                        ),
-                        "active": spaces.Box(
-                            low=0, high=1,
-                            shape=(self.consts.MAX_TILES,), dtype=jnp.int32
-                        ),
-                    }
-                ),
-                "board": spaces.Box(
-                    low=0,
-                    high=max_color,
-                    shape=(self.consts.BOARD_ROWS, self.consts.BOARD_COLS),
-                    dtype=jnp.int32,
-                ),
-                "score": spaces.Box(low=0, high=9_999_999, shape=(), dtype=jnp.int32),
-                "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-                "wave_task": spaces.Box(
-                    low=-1,
-                    high = 300_000,
-                    shape = (2,),
-                    dtype = jnp.int32,
-                ),
-                "backpack_count": spaces.Box(
-                    low=0, high=self.consts.PLAYER_BACKPACK_MAX, shape=(), dtype=jnp.int32
-                ),
-                "backpack_colors": spaces.Box(
-                    low=0, high=max_color,
-                    shape=(self.consts.PLAYER_BACKPACK_MAX,), dtype=jnp.int32
-                ),
-            }
-        )
+        screen_size = (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)
+        
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=None, screen_size=screen_size),
+            "tiles": spaces.get_object_space(n=self.consts.MAX_TILES, screen_size=screen_size),
+            "backpack_items": spaces.get_object_space(n=self.consts.PLAYER_BACKPACK_MAX, screen_size=screen_size),
+            "board": spaces.Box(
+                low=0,
+                high=max_color,
+                shape=(self.consts.BOARD_ROWS, self.consts.BOARD_COLS),
+                dtype=jnp.int32,
+            ),
+            "score": spaces.Box(low=0, high=9_999_999, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "wave_task": spaces.Box(
+                low=-1,
+                high=300_000,
+                shape=(2,),
+                dtype=jnp.int32,
+            ),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -969,7 +973,7 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
         return KlaxInfo(time=state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: KlaxState, state: KlaxState) -> jnp.float32:
+    def _get_reward(self, previous_state: KlaxState, state: KlaxState) -> float:
         return (state.score - previous_state.score).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -982,16 +986,21 @@ class JaxKlax(JaxEnvironment[KlaxState, KlaxObservation, KlaxInfo, KlaxConstants
 
 
 class KlaxRenderer(JAXGameRenderer):
-    def __init__(self, consts: KlaxConstants = None):
-        super().__init__()
+    def __init__(self, consts: KlaxConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or KlaxConstants()
+        super().__init__(self.consts)
 
-        self.rendering_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and process all sprites
         (
@@ -1004,7 +1013,7 @@ class KlaxRenderer(JAXGameRenderer):
 
     def _load_sprites(self):
         """Defines the asset manifest for Klax and loads them via the utility function."""
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/klax"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "klax")
 
         # Define the game-specific asset manifest in a clear, declarative way.
         asset_config = [

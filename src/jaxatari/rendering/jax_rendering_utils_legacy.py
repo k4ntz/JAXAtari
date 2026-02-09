@@ -7,6 +7,8 @@ from functools import partial
 from jax import lax
 from typing import List, Tuple
 
+from platformdirs import user_data_dir
+
 BORDER = False
 
 class AgnosticPath(Path):
@@ -67,7 +69,8 @@ def loadFrame(fileName, transpose=False):
     Returns:
         JAX array of shape (Height, Width, 4).
     """
-    frame = jnp.load(fileName)
+    path = os.path.join(Path(user_data_dir("jaxatari")), fileName)
+    frame = jnp.load(path)
     if frame.ndim != 3 or frame.shape[2] != 4:
          raise ValueError(
             f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels."

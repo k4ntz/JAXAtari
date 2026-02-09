@@ -1,10 +1,11 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.freeway_mod_plugins import StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed, HallOfFameMod
+from jaxatari.games.mods.freeway.freeway_mod_plugins import StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed, HallOfFameMod
 
 class FreewayEnvMod(JaxAtariModController):
     """
     Game-specific Mod Controller for Freeway.
-    It simply inherits all logic from JaxAtariModController and defines the FREEWAY_MOD_REGISTRY.
+    It simply inherits all logic from JaxAtariModController and defines the REGISTRY.
     """
 
     REGISTRY = {
@@ -17,6 +18,8 @@ class FreewayEnvMod(JaxAtariModController):
         "hall_of_fame": ["_hall_of_fame_start", "static_cars"],
         "_hall_of_fame_start": HallOfFameMod,
     }
+
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "freeway", "sprites")
 
     def __init__(self,
                  env,

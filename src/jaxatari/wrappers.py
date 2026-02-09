@@ -1,6 +1,8 @@
 """Jaxatari Wrappers"""
 
 import functools
+import types
+import warnings
 from typing import Any, Dict, Tuple, Union, Optional, Callable
 from dataclasses import is_dataclass, asdict
 
@@ -9,9 +11,11 @@ from flax import struct
 import jax
 import jax.image as jim
 import jax.numpy as jnp
+from jax import flatten_util
 from jaxatari.environment import EnvState, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 import numpy as np
+from jaxatari.rendering.jax_rendering_utils import RendererConfig
 
 class JaxatariWrapper(object):
     """Base class for JAXAtark wrappers."""
@@ -225,7 +229,8 @@ class AtariWrapper(JaxatariWrapper):
         new_obs_stack = jax.tree.map(lambda stack, obs_leaf: jnp.concatenate([stack[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0), state.obs_stack, latest_obs)
 
         reward = jnp.sum(rewards)
-        done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        real_done = jnp.logical_or(dones.any(), state.step >= self.max_episode_length)
+        done = real_done
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
@@ -242,6 +247,9 @@ class AtariWrapper(JaxatariWrapper):
         if hasattr(infos, '_asdict'):
             # It's a namedtuple or similar, convert to dict
             info_items = infos._asdict().items()
+        elif is_dataclass(infos):
+            # It's a dataclass, convert to dict
+            info_items = asdict(infos).items()
         else:
             # It's already a dict
             info_items = infos.items()
@@ -252,14 +260,34 @@ class AtariWrapper(JaxatariWrapper):
         def _reset_fn(_):
             # When done, reset. The new state will contain the properly advanced next_state_key.
             return self.reset(next_state_key)
+        
+        def _softreset_fn(_):
+            # When just done (not real_done, episodic_life) we keep the env_state but reset the step counter
+            next_state = AtariState(new_env_state, next_state_key, 0, new_action, new_obs_stack)
+            return new_obs_stack, next_state
 
         def _step_fn(_):
             # When not done, create the next state, passing next_state_key for the *next* step.
             next_state = AtariState(new_env_state, next_state_key, state.step + 1, new_action, new_obs_stack)
             return new_obs_stack, next_state
 
-        new_obs, new_state = jax.lax.cond(done, _reset_fn, _step_fn, operand=None)
+        #Note: Using real_done here, since we don't want to reset the game if it's just a life lost. (only send done signal)
+        new_obs, new_state = jax.lax.cond(
+            real_done,
+            _reset_fn,
+            lambda _: jax.lax.cond(
+                done, # done, but not real_done
+                _softreset_fn,
+                _step_fn, # not done at all
+                operand=None
+            ),
+            operand=None)
 
+        # store actual done - not affected by episodic life
+        info_dict["env_done"] = real_done
+
+        # store actual reward in info dict before clipping
+        info_dict["env_reward"] = reward
         reward = jax.lax.cond(
             self.clip_reward,
             lambda reward: jnp.sign(reward),
@@ -281,26 +309,22 @@ class ObjectCentricWrapper(JaxatariWrapper):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "ObjectCentricWrapper must be applied after AtariWrapper"
 
-        # First, get the space for a SINGLE, UNSTACKED frame from the base env.
-        single_frame_space = self._env._env.observation_space()
-
-        # Calculate the bounds and size for a single flattened frame for all leaf spaces.
+        # Calculate exact bounds for the flattened observation based on the space structure.
+        # Get the stacked observation space from AtariWrapper.
+        stacked_space = self._env.observation_space()
         lows, highs = [], []
-        single_frame_flat_size = 0
-        for leaf_space in jax.tree.leaves(single_frame_space):
+        
+        # Iterate over leaves of the stacked space. Each leaf is a Box(stack_size, ...).
+        # We extract bounds for a single frame (index 0) and flatten them.
+        for leaf_space in jax.tree.leaves(stacked_space):
             if isinstance(leaf_space, spaces.Box):
-                # Flatten the bounds arrays for Box spaces
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                # Extract bounds from the first frame and flatten
+                low_arr = np.broadcast_to(leaf_space.low[0], leaf_space.shape[1:]).flatten()
+                high_arr = np.broadcast_to(leaf_space.high[0], leaf_space.shape[1:]).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
-                single_frame_flat_size += low_arr.size
-            elif isinstance(leaf_space, spaces.Discrete):
-                # A Discrete space flattens to a single value
-                lows.append(np.array([0], dtype=leaf_space.dtype))
-                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
-                single_frame_flat_size += 1
             else:
+                # Should not happen if stack_space works correctly (it converts Discrete to Box)
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
         if not lows:
@@ -313,8 +337,8 @@ class ObjectCentricWrapper(JaxatariWrapper):
         self._observation_space = spaces.Box(
             low=single_frame_lows,
             high=single_frame_highs,
-            shape=(self._env.frame_stack_size, int(single_frame_flat_size)),
-            dtype=single_frame_lows.dtype
+            shape=(self._env.frame_stack_size, int(single_frame_lows.shape[0])),
+            dtype=jnp.float32
         )
     
     def observation_space(self) -> spaces.Box:
@@ -322,12 +346,18 @@ class ObjectCentricWrapper(JaxatariWrapper):
         return self._observation_space
 
     @functools.partial(jax.jit, static_argnums=(0,))
+    def _flatten_obs(self, obs_stack):
+        """Flatten each frame in the observation stack using ravel_pytree."""
+        flattened = jax.vmap(lambda x: flatten_util.ravel_pytree(x)[0])(obs_stack)
+        return flattened.astype(jnp.float32)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
         obs, state = self._env.reset(key)
         # Flatten each frame in the stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs)
+        flat_obs = self._flatten_obs(obs)
         return flat_obs, state
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -338,7 +368,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
     ) -> Tuple[chex.Array, EnvState, float, bool, Any]:  # dict]:
         obs, state, reward, done, info = self._env.step(state, action)
         # Flatten each frame in the stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs)
+        flat_obs = self._flatten_obs(obs)
         return flat_obs, state, reward, done, info
 
 
@@ -353,25 +383,36 @@ class PixelObsWrapper(JaxatariWrapper):
     Wrapper for Atari environments that returns the flattened pixel observations.
     Apply this wrapper after the AtariWrapper!
     """
-
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False):
+    # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
 
-        self.do_pixel_resize = do_pixel_resize
-        self.pixel_resize_shape = pixel_resize_shape
-        self.grayscale = grayscale
+        # Access the Base Environment
+        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
+
+        if do_pixel_resize and use_native_downscaling:
+            # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
+            from jaxatari.modification import apply_native_downscaling
+            self.do_pixel_resize, self.grayscale = apply_native_downscaling(
+                base_env, pixel_resize_shape, grayscale
+            )
+            self.pixel_resize_shape = pixel_resize_shape
+        else:
+            self.do_pixel_resize = do_pixel_resize
+            self.pixel_resize_shape = pixel_resize_shape
+            self.grayscale = grayscale
 
         # Dynamically calculate the final observation space shape
-        base_shape = self._env.image_space().shape
-        height, width, channels = base_shape
-
+        # If we hot-swapped, image_space() will now return the correct small size automatically
+        final_shape = self._env.image_space().shape
+        
+        # If we are doing wrapper-side resizing (legacy), we still calculate manually
         if self.do_pixel_resize:
             height, width = self.pixel_resize_shape
-        if self.grayscale:
-            channels = 1
-        
-        final_shape = (height, width, channels)
+            channels = 1 if self.grayscale else final_shape[2]
+            final_shape = (height, width, channels)
+
         # Create the space for a single preprocessed frame
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         # Stack the single-frame space
@@ -439,41 +480,54 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelAndObjectCentricWrapper must be applied after AtariWrapper"
         
-        # Part 1: Define the stacked image space.
-        self.do_pixel_resize = do_pixel_resize
-        self.pixel_resize_shape = pixel_resize_shape
-        self.grayscale = grayscale
+        # Access the Base Environment
+        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
 
-        base_shape = self._env.image_space().shape
-        height, width, channels = base_shape
+        if do_pixel_resize and use_native_downscaling:
+            # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
+            from jaxatari.modification import apply_native_downscaling
+            self.do_pixel_resize, self.grayscale = apply_native_downscaling(
+                base_env, pixel_resize_shape, grayscale
+            )
+            self.pixel_resize_shape = pixel_resize_shape
+        else:
+            self.do_pixel_resize = do_pixel_resize
+            self.pixel_resize_shape = pixel_resize_shape
+            self.grayscale = grayscale
+
+        # Part 1: Define the stacked image space.
+        # If we hot-swapped, image_space() will now return the correct small size automatically
+        final_shape = self._env.image_space().shape
+        
+        # If we are doing wrapper-side resizing (legacy), we still calculate manually
         if self.do_pixel_resize:
             height, width = self.pixel_resize_shape
-        if self.grayscale:
-            channels = 1
-        final_shape = (height, width, channels)
+            channels = 1 if self.grayscale else final_shape[2]
+            final_shape = (height, width, channels)
+        
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         stacked_image_space = spaces.stack_space(image_space, self._env.frame_stack_size)
 
-        # Part 2: Define the FLATTENED object space (with the bug fix).
-        single_frame_space = self._env._env.observation_space()
+        # Part 2: Define the FLATTENED object space with exact bounds.
+        # Get the stacked observation space from AtariWrapper.
+        stacked_space = self._env.observation_space()
         lows, highs = [], []
-        single_frame_flat_size = 0
-        for leaf_space in jax.tree.leaves(single_frame_space):
+        
+        # Iterate over leaves of the stacked space. Each leaf is a Box(stack_size, ...).
+        # We extract bounds for a single frame (index 0) and flatten them.
+        for leaf_space in jax.tree.leaves(stacked_space):
             if isinstance(leaf_space, spaces.Box):
-                low_arr = np.broadcast_to(leaf_space.low, leaf_space.shape).flatten()
-                high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
+                # Extract bounds from the first frame and flatten
+                low_arr = np.broadcast_to(leaf_space.low[0], leaf_space.shape[1:]).flatten()
+                high_arr = np.broadcast_to(leaf_space.high[0], leaf_space.shape[1:]).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
-                single_frame_flat_size += low_arr.size
-            elif isinstance(leaf_space, spaces.Discrete):
-                lows.append(np.array([0], dtype=leaf_space.dtype))
-                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
-                single_frame_flat_size += 1
             else:
+                # Should not happen if stack_space works correctly (it converts Discrete to Box)
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
         if not lows:
@@ -485,8 +539,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         stacked_object_space_flat = spaces.Box(
             low=single_frame_lows,
             high=single_frame_highs,
-            shape=(self._env.frame_stack_size, int(single_frame_flat_size)),
-            dtype=single_frame_lows.dtype
+            shape=(self._env.frame_stack_size, int(single_frame_lows.shape[0])),
+            dtype=jnp.float32
         )
 
         # Part 3: Combine them into the final Tuple space.
@@ -515,6 +569,11 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         return image.astype(jnp.uint8)
     
     @functools.partial(jax.jit, static_argnums=(0,))
+    def _flatten_obs(self, obs_stack):
+        """Flatten each frame in the observation stack using ravel_pytree."""
+        return jax.vmap(lambda x: flatten_util.ravel_pytree(x)[0])(obs_stack).astype(jnp.float32)
+    
+    @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, EnvState]:
@@ -522,7 +581,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         obs_stack, atari_state = self._env.reset(key)
 
         # 2. Flatten the object-centric part
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs_stack)
+        flat_obs = self._flatten_obs(obs_stack)
 
         # 3. Render and preprocess the image
         image = self._env.render(atari_state.env_state)
@@ -543,7 +602,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         obs_stack, atari_state, reward, done, info = self._env.step(state.atari_state, action)
 
         # 2. Flatten the new object-centric observation stack
-        flat_obs = jax.vmap(self._env.obs_to_flat_array)(obs_stack)
+        flat_obs = self._flatten_obs(obs_stack)
 
         # 3. Render and preprocess the new image
         image = self._env.render(atari_state.env_state)
@@ -635,7 +694,11 @@ class FlattenObservationWrapper(JaxatariWrapper):
 
     def _process_obs(self, obs_tree: chex.ArrayTree) -> chex.ArrayTree:
         """Applies .flatten() to each leaf array in the pytree."""
-        return jax.tree.map(lambda leaf: leaf.flatten(), obs_tree)
+        def flatten_and_cast(leaf):
+            flattened = leaf.flatten()
+            # Cast to float32 to match space dtype
+            return flattened.astype(jnp.float32) if isinstance(leaf, jnp.ndarray) else flattened
+        return jax.tree.map(flatten_and_cast, obs_tree)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:
@@ -769,7 +832,9 @@ class LogState:
     returned_episode_lengths: int
 
 class LogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths."""
+    """Log episode returns and lengths. An episode ends when the wrapped env returns done=True.
+    Uses env_reward from info when present (unclipped); otherwise uses the step reward.
+    """
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(
@@ -786,16 +851,20 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return = state.episode_returns + reward
+        # use env_reward (unclipped) for logging when available
+        new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
+        done_ = jnp.bool_(done)
         state = LogState(
             atari_state=atari_state,
-            episode_returns=new_episode_return * (1 - done),
-            episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
+            episode_returns=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return)),
+            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
+            returned_episode_returns=jnp.where(
+                done_, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
+            ),
+            returned_episode_lengths=jnp.where(
+                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+            ),
         )
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
@@ -813,9 +882,9 @@ class MultiRewardLogState:
     returned_episode_lengths: int
 
 class MultiRewardLogWrapper(JaxatariWrapper):
-    """Log the episode returns and lengths for multiple rewards.
-    Make sure to apply MultiRewardWrapper to the core env when using this wrapper.
-    The final logs will be 'returned_episode_returns_0', ... for each reward function provided.
+    """Log episode returns and lengths for multiple rewards. An episode ends when the wrapped env returns done=True.
+    Apply MultiRewardWrapper to the core env when using this wrapper.
+    Final logs: 'returned_episode_returns_0', ... for each reward function; env reward in 'returned_episode_env_returns'.
     """
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -837,22 +906,25 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        new_episode_return_env = state.episode_returns_env + reward
-        # Safely get all_rewards, defaulting to a zero array that matches the shape of our tracker.
+        new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward)
         all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
         new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
+        done_ = jnp.bool_(done)
         state = MultiRewardLogState(
             atari_state=atari_state,
-            episode_returns_env=new_episode_return_env * (1 - done),
-            episode_returns=new_episode_return * (1 - done),
-            episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns_env=state.returned_episode_returns_env * (1 - done)
-            + new_episode_return_env * done,
-            returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
-            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
+            episode_returns_env=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return_env)),
+            episode_returns=jnp.where(done_, jnp.zeros_like(state.episode_returns), new_episode_return),
+            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
+            returned_episode_returns_env=jnp.where(
+                done_, jnp.float32(new_episode_return_env), jnp.float32(state.returned_episode_returns_env)
+            ),
+            returned_episode_returns=jnp.where(
+                done_, new_episode_return, state.returned_episode_returns
+            ),
+            returned_episode_lengths=jnp.where(
+                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+            ),
         )
         info["returned_episode_env_returns"] = state.returned_episode_returns_env
         for i, r in enumerate(new_episode_return):

@@ -97,7 +97,8 @@ def setup_jax_env(game_name: str, seed: int) -> Dict[str, Any]:
     """Initializes the JAXAtari environment using core.py."""
     print(f"Initializing JAXAtari env: '{game_name}'")
     try:
-        env, renderer = core.make(game_name), core.make_renderer(game_name)
+        env = core.make(game_name)
+        renderer = env.renderer
         if env is None or renderer is None:
             raise ImportError(f"Could not load game or renderer for '{game_name}' from core.")
         
@@ -138,6 +139,39 @@ def build_ale_action_map(env: gym.Env) -> Dict[str, int]:
     except Exception as e:
         print(f"Warning: Could not get ALE action meanings: {e}. Defaulting to NOOP.")
         return {"NOOP": 0}
+
+def map_action_to_index(env, action_input, verbose=True):
+    """
+    Maps an input (Index or Constant) to the specific index required by env.step().
+    Includes logging to verify NN-to-JAXAtari mapping.
+    """
+    # 1. Identify the Semantic Name of the Constant for debugging
+    # This maps the integer value (e.g., 4) back to "LEFT"
+    action_names = {
+        v: k for k, v in vars(JAXAtariAction).items() 
+        if not k.startswith("_") and isinstance(v, int)
+    }
+
+    if hasattr(env, 'ACTION_SET'):
+        action_set = np.array(env.ACTION_SET)
+        
+        # If the input is already a JAXAtariAction constant (like from get_human_action)
+        # we find its position in the ACTION_SET.
+        if action_input in action_set:
+            matches = np.where(action_set == action_input)[0]
+            idx = int(matches[0])
+            val = int(action_input)
+        else:
+            # If the input is an index (like from a Neural Network 0-5)
+            # we treat it as an index into the ACTION_SET.
+            idx = int(action_input)
+            val = int(action_set[idx])
+        
+        return jax.numpy.array(idx, dtype=jax.numpy.int32)
+    
+    else:
+        # Fallback for environments without a restricted ACTION_SET
+        return jax.numpy.array(action_input, dtype=jax.numpy.int32)
 
 def get_semantic_action_from_keys(pressed_keys: pygame.key.ScancodeWrapper) -> str:
     """
@@ -341,15 +375,22 @@ def run_parallel_mode(
             continue  # Skip the game step
 
         # --- Game Step Logic ---
+        # 1. Get the semantic intent from your keyboard
         pressed_keys = pygame.key.get_pressed()
         semantic_action = get_semantic_action_from_keys(pressed_keys)
 
-        # --- Map Actions ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
-        ale_action = ale_action_map.get(semantic_action, 0)  # 0 is NOOP
+        # 2. Map for ALE (Gymnasium)
+        # This looks up "LEFT" in the ALE meaning list (e.g., ALE index 3)
+        ale_action = ale_action_map.get(semantic_action, 0)
 
-        # --- Step Environments ---
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+        # 3. Map for JAXAtari
+        # First, get the JAX constant for "LEFT" (value 4)
+        jax_const = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        # Second, find where constant 4 is in your game's ACTION_SET (e.g., JAX index 3)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_const)
+
+        # 4. Execute (Both will now move Left simultaneously)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
         ale_done = ale_term or ale_trunc
 
@@ -456,8 +497,9 @@ def run_record_replay_mode(
         recorded_actions.append(semantic_action)
         
         # --- Map & Step JAX ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+        jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         
         # --- Render JAX ---
         jax_frame = np.array(jitted_render(jax_state))
@@ -543,14 +585,21 @@ def run_record_replay_mode(
             continue
              
         # --- Replay Step Logic ---
+        # 1. Get the semantic action from the recorded sequence
         semantic_action = recorded_actions[replay_idx]
          
-        # --- Map Actions ---
-        jax_action = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        # 2. Map for ALE (Gymnasium)
+        # This looks up "LEFT" in the ALE meaning list (e.g., ALE index 3)
         ale_action = ale_action_map.get(semantic_action, 0)
-         
-        # --- Step Environments ---
-        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action)
+
+        # 3. Map for JAXAtari
+        # First, get the JAX constant for "LEFT" (value 4)
+        jax_const = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        # Second, find where constant 4 is in your game's ACTION_SET (e.g., JAX index 3)
+        jax_action_index = map_action_to_index(jax_data["env"], jax_const)
+
+        # 4. Execute (Both will now move Left simultaneously)
+        jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
         # --- Render Frames ---
         jax_frame = np.array(jitted_render(jax_state))
