@@ -1,92 +1,84 @@
 from functools import partial
 import os
 from typing import NamedTuple, Tuple
+from flax import struct
 import jax
 import jax.numpy as jnp
 import numpy as np
 import chex
-import pygame
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 
-class BreakoutConstants(NamedTuple):
-    WINDOW_WIDTH: int = 160
-    WINDOW_HEIGHT: int = 210
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 0, 0)
-    PLAYER_COLOR: Tuple[int, int, int] = (200, 72, 72)
-    BALL_COLOR: Tuple[int, int, int] = (200, 72, 72)
-    WALL_COLOR: Tuple[int, int, int] = (142, 142, 142)
-    BLOCK_COLORS: list = [
+class BreakoutConstants(struct.PyTreeNode):
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 0))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (200, 72, 72))
+    BALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (200, 72, 72))
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (142, 142, 142))
+    BLOCK_COLORS: Tuple[Tuple[int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: tuple([
         (200, 72, 72),
         (198, 108, 58),
-        (180, 122, 48),
-        (162, 162, 42),
-        (72, 160, 72),
-        (66, 72, 200),
-    ]
-    PLAYER_SIZE: Tuple[int, int] = (16, 4)
-    PLAYER_SIZE_SMALL: Tuple[int, int] = (12, 4)
-    BALL_SIZE: Tuple[int, int] = (2, 4)
-    BLOCK_SIZE: Tuple[int, int] = (8, 6)
-    WALL_TOP_Y: int = 17
-    WALL_TOP_HEIGHT: int = 15
-    WALL_SIDE_WIDTH: int = 8
-    PLAYER_START_X: int = 99
-    PLAYER_START_Y: int = 189
-    BALL_START_X: chex.Array = jnp.array([16, 78, 80, 142])
-    BALL_START_Y: int = 122
-    PLAYER_X_MIN: int = 8
+        (180, 122, 48), (162, 162, 42), (72, 160, 72), (66, 72, 200),
+    ]))
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 4))
+    PLAYER_SIZE_SMALL: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (12, 4))
+    BALL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (2, 4))
+    BLOCK_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    WALL_TOP_Y: int = struct.field(pytree_node=False, default=17)
+    WALL_TOP_HEIGHT: int = struct.field(pytree_node=False, default=15)
+    WALL_SIDE_WIDTH: int = struct.field(pytree_node=False, default=8)
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=99)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=189)
+    BALL_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 78, 80, 142]))
+    BALL_START_Y: int = struct.field(pytree_node=False, default=122)
+    PLAYER_X_MIN: int = struct.field(pytree_node=False, default=8)
     # PLAYER_X_MAX is calculated dynamically based on paddle width to support mods
     # It will be computed as WINDOW_WIDTH - WALL_SIDE_WIDTH - max(PLAYER_SIZE[0], PLAYER_SIZE_SMALL[0])
-    PLAYER_MAX_SPEED: int = 6
-    PLAYER_ACCELERATION: chex.Array = jnp.array([3, 2, -1, 1, 1])
-    PLAYER_WALL_ACCELERATION: chex.Array = jnp.array([1, 2, 1, 1, 1])
-    BLOCKS_PER_ROW: int = 18
-    NUM_ROWS: int = 6
-    BLOCK_START_Y: int = 57
-    BLOCK_START_X: int = 8
-    NUM_LIVES: int = 5
-    BALL_VELOCITIES_ABS: chex.Array = jnp.array([
+    PLAYER_MAX_SPEED: int = struct.field(pytree_node=False, default=6)
+    PLAYER_ACCELERATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 2, -1, 1, 1]))
+    PLAYER_WALL_ACCELERATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2, 1, 1, 1]))
+    BLOCKS_PER_ROW: int = struct.field(pytree_node=False, default=18)
+    NUM_ROWS: int = struct.field(pytree_node=False, default=6)
+    BLOCK_START_Y: int = struct.field(pytree_node=False, default=57)
+    BLOCK_START_X: int = struct.field(pytree_node=False, default=8)
+    NUM_LIVES: int = struct.field(pytree_node=False, default=5)
+    BALL_VELOCITIES_ABS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [[1, 1], [1, 1]],
         [[2, 1], [1, 1]],
         [[1, 2], [1, 1]],
         [[2, 2], [2, 2]],
         [[2, 3], [2, 3]]
-    ])
-    BALL_DIRECTIONS: chex.Array = jnp.array([
+    ]))
+    BALL_DIRECTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [1, 1],
         [-1, 1],
         [1, -1],
         [-1, -1],
-    ])
-    REVERSE_X: chex.Array = jnp.array([1, 0, 3, 2])
-    REVERSE_Y: chex.Array = jnp.array([2, 3, 0, 1])
+    ]))
+    REVERSE_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 0, 3, 2]))
+    REVERSE_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([2, 3, 0, 1]))
 
+@struct.dataclass
+class BreakoutObservation:
+    player: ObjectObservation
+    ball: ObjectObservation
+    blocks: jnp.ndarray
+    lives: jnp.ndarray
+    score: jnp.ndarray
 
-class EntityPosition(NamedTuple):
-    x: chex.Array
-    y: chex.Array
-    width: chex.Array
-    height: chex.Array
-
-class BreakoutObservation(NamedTuple):
-    player: EntityPosition
-    ball: EntityPosition
-    blocks: chex.Array
-    # TODO: move this into info??
-    score: chex.Array
-    lives: chex.Array
-
-class BreakoutInfo(NamedTuple):
+@struct.dataclass
+class BreakoutInfo:
     time: chex.Array
     wall_resets: chex.Array
 
 
 # Game state container
-class BreakoutState(NamedTuple):
+@struct.dataclass
+class BreakoutState:
     player_x: chex.Array
     player_speed: chex.Array
     small_paddle: chex.Array
@@ -108,6 +100,12 @@ class BreakoutState(NamedTuple):
     all_blocks_cleared: chex.Array
 
 class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInfo, BreakoutConstants]):
+    # Minimal ALE action set for Breakout: 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: BreakoutConstants = None):
         consts = consts or BreakoutConstants()
         super().__init__(consts)
@@ -119,29 +117,17 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         max_paddle_width = max(self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE_SMALL[0])
         return self.consts.WINDOW_WIDTH - self.consts.WALL_SIDE_WIDTH - max_paddle_width 
 
-    def get_human_action(self) -> chex.Array:
-        """Records keyboard input and returns the corresponding action."""
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_a]:
-            return jnp.array(Action.LEFT)
-        elif keys[pygame.K_d]:
-            return jnp.array(Action.RIGHT)
-        elif keys[pygame.K_SPACE]:
-            return jnp.array(Action.FIRE)
-        else:
-            return jnp.array(Action.NOOP)
-
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(
         self,
         state_player_x: chex.Array,
         state_player_speed: chex.Array,
         acceleration_counter: chex.Array,
-        action: chex.Array,
+        atari_action: chex.Array,
     ) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """Updates the player position based on the action."""
-        left = action == Action.LEFT
-        right = action == Action.RIGHT
+        left = atari_action == Action.LEFT
+        right = atari_action == Action.RIGHT
 
         # Calculate the maximum X position based on paddle width
         # Use the maximum paddle width to ensure it works for both normal and small paddles
@@ -636,13 +622,15 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _step(self, state: BreakoutState, action: chex.Array) -> BreakoutState:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         # Update player position
         new_player_x, new_paddle_v, new_acceleration_counter = self._player_step(
-            state.player_x, state.player_speed, state.acceleration_counter, action
+            state.player_x, state.player_speed, state.acceleration_counter, atari_action
         )
         #TODO: this is a hack -> always fire
         game_started = jnp.logical_or(state.game_started, True)
-        # game_started = jnp.logical_or(state.game_started, action == Action.FIRE)
+        # game_started = jnp.logical_or(state.game_started, atari_action == Action.FIRE)
 
         # Update ball, check collisions, etc., as before, but now pass new_player_x
         (ball_x, ball_y, ball_vel_x, ball_vel_y, ball_speed_idx, ball_direction_idx,
@@ -656,7 +644,7 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         # Check for block collisions
         (new_blocks, new_score, ball_x, ball_y, ball_vel_x, ball_vel_y, ball_speed_idx,
          ball_direction_idx, consecutive_hits, blocks_hittable, all_blocks_cleared) = self._check_block_collision(
-            state._replace(blocks_hittable=blocks_hittable), ball_x, ball_y, ball_speed_idx, ball_direction_idx, consecutive_hits
+            state.replace(blocks_hittable=blocks_hittable), ball_x, ball_y, ball_speed_idx, ball_direction_idx, consecutive_hits
         )
 
         # Reset wall if paddle hit occurs after all blocks were cleared and we haven't reset the wall already
@@ -710,30 +698,50 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BreakoutState) -> BreakoutObservation:
+        # --- Player ---
         paddle_width = jnp.where(state.small_paddle, self.consts.PLAYER_SIZE_SMALL[0], self.consts.PLAYER_SIZE[0])
-
-        player = EntityPosition(
-            x=state.player_x,
-            y=jnp.array(self.consts.PLAYER_START_Y),
-            width=paddle_width,
-            height=jnp.array(self.consts.PLAYER_SIZE[1]),
+        
+        # Clip coordinates to screen bounds 
+        p_x = jnp.clip(state.player_x, 0, self.consts.WINDOW_WIDTH)
+        p_y = jnp.clip(jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32), 0, self.consts.WINDOW_HEIGHT)
+        
+        player = ObjectObservation.create(
+            x=p_x,
+            y=p_y,
+            width=paddle_width.astype(jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        ball = EntityPosition(
-            x=state.ball_x,
-            y=state.ball_y,
-            width=jnp.array(self.consts.BALL_SIZE[0]),
-            height=jnp.array(self.consts.BALL_SIZE[1]),
+        # --- Ball ---
+        # Calculate orientation from velocity vector (0-360 degrees)
+        ball_orientation = jnp.mod(jnp.degrees(jnp.arctan2(state.ball_vel_y, state.ball_vel_x)), 360.0)
+        
+        b_x = jnp.clip(state.ball_x, 0, self.consts.WINDOW_WIDTH)
+        b_y = jnp.clip(state.ball_y, 0, self.consts.WINDOW_HEIGHT)
+
+        ball = ObjectObservation.create(
+            x=b_x,
+            y=b_y,
+            width=jnp.array(self.consts.BALL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.BALL_SIZE[1], dtype=jnp.int32),
+            orientation=ball_orientation,
+            active=jnp.array(1, dtype=jnp.int32)
         )
+        
+        # --- Blocks ---
+        # Pass the grid directly as a dense array
+        blocks = state.blocks.astype(jnp.int32)
 
         return BreakoutObservation(
             player=player,
             ball=ball,
-            blocks=state.blocks,
-            score=state.score,
+            blocks=blocks,
             lives=state.lives,
+            score=state.score
         )
 
+    
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BreakoutState) -> BreakoutInfo:
         return BreakoutInfo(
@@ -747,47 +755,33 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BreakoutState) -> chex.Array:
-        return jnp.logical_or(state.lives <= 0, jnp.logical_or(state.all_blocks_cleared, state.step_counter >= 5000))
+        return jnp.logical_or(state.lives <= 0, state.all_blocks_cleared)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for Breakout.
         Actions are:
         0: NOOP
         1: FIRE
-        2: UP
-        3: RIGHT
-        4: LEFT
+        2: RIGHT
+        3: LEFT
         """
-        #TODO: in ALE, this is 4: NOOP, FIRE, RIGHT, LEFT
-        # But since actions are currently directly mapped from digits
-        # return Discrete(4) would lead to not being able to use the left action
-        return spaces.Discrete(5)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Breakout.
         The observation contains:
-        - player: EntityPosition (x, y, width, height)
-        - ball: EntityPosition (x, y, width, height)
-        - blocks: array of shape (6, 18) with 0/1 values for each block
-        - score: int (0-999999)
-        - lives: int (0-5)
+        - player: ObjectObservation (x, y, width, height)
+        - ball: ObjectObservation (x, y, width, height)
+        - blocks: jnp.ndarray (6, 18) with 0/1 values for each block
+        - lives: jnp.ndarray (1) with the number of lives
+        - score: jnp.ndarray (1) with the score
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)),
+            "ball": spaces.get_object_space(n=None, screen_size=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)),
             "blocks": spaces.Box(low=0, high=1, shape=(self.consts.NUM_ROWS, self.consts.BLOCKS_PER_ROW), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
-            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=self.consts.NUM_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -802,37 +796,26 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         )
 
 
-    def obs_to_flat_array(self, obs: BreakoutObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.width.flatten(),
-            obs.player.height.flatten(),
-            obs.ball.x.flatten(),
-            obs.ball.y.flatten(),
-            obs.ball.width.flatten(),
-            obs.ball.height.flatten(),
-            obs.blocks.flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten(),
-        ])
-
-
 class BreakoutRenderer(JAXGameRenderer):
-    def __init__(self, consts: BreakoutConstants = None):
-        super().__init__()
+    def __init__(self, consts: BreakoutConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or BreakoutConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Standard API setup from the new renderer
         procedural_sprites = self._create_procedural_sprites()
         asset_config = self._get_asset_config(procedural_sprites)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/breakout"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "breakout")
         
         # Add ball and player colors to palette as 1x1 procedural sprites if they differ from defaults
         # This ensures the colors are in the palette before we recolor

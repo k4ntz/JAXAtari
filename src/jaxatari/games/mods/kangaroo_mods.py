@@ -1,22 +1,61 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.kangaroo_mod_plugins import (
-    NoMonkeyMod, NoFallingCoconutMod, PinChildMod, RenderDebugInfo, 
-    ReplaceChildWithMonkeyMod, ReplaceBellWithFlameMod, LethalFlameMod, 
-    SpawnAtSecondLevelMod, NoLaddersMod, CenterLaddersMod
+from jaxatari.games.mods.kangaroo.kangaroo_mod_plugins import (
+    NoMonkeyMod, NoFallingCoconutMod, NoThrownCoconutMod, NoBellMod, NoFruitMod,
+    AlwaysHighCoconutMod, PinChildMod, RenderDebugInfo, ReplaceChildWithMonkeyMod, ReplaceBellWithCactusMod,
+    ReplaceBellWithFlameMod, ReplaceLadderWithRopeMod, ReplaceLadderWithChainMod, ReplaceMonkeyWithTankMod,
+    LethalFlameMod, SpawnOnSecondFloorMod, FlameTrapMod, CenterLaddersMod, InvertLaddersMod,
+    FirstLevelOnlyMod, SecondLevelOnlyMod, ThirdLevelOnlyMod, FourLaddersMod, ReplaceCoconutWithFireball,
+    ReplaceCoconutWithHoneyBee, ReplaceCoconutWithWasp, ReplaceMonkeyWithChickenMod, ReplaceMonkeyWithDragonMod,
+    ReplaceMonkeyWithDangerSignMod, ReplaceMonkeyWithPolarbearMod, ReplaceMonkeyWithSnakeMod, ReplaceBellWithDangerSignMod
 )
+
 # --- 3. The Registry ---
 KANGAROO_MOD_REGISTRY = {
+    "no_bell": NoBellMod,
+    "no_fruit": NoFruitMod,
     "no_monkey": NoMonkeyMod,
     "no_falling_coconut": NoFallingCoconutMod,
+    "no_thrown_coconut": NoThrownCoconutMod,
+    "high_thrown_coconuts": AlwaysHighCoconutMod,
+    "no_danger": ["no_monkey", "no_falling_coconut"], # bundle into a modpack
     "pin_child": PinChildMod,
     "render_debug_info": RenderDebugInfo,
     "replace_child_with_monkey": ReplaceChildWithMonkeyMod,
-    "lethal_flame": LethalFlameMod,
     "replace_bell_with_flame": ReplaceBellWithFlameMod,
-    "lethal_bell": ["lethal_flame", "replace_bell_with_flame"], # bundle into a modpack
-    "spawn_at_second_level": SpawnAtSecondLevelMod,
-    "no_ladders": NoLaddersMod,
+    "replace_bell_with_cactus": ReplaceBellWithCactusMod,
+    "replace_bell_with_danger_sign": ReplaceBellWithDangerSignMod,
+    "ropes": ReplaceLadderWithRopeMod,
+    "chains": ReplaceLadderWithChainMod,
+    "tanks": ReplaceMonkeyWithTankMod,
+    "replace_coconut_fireball": ReplaceCoconutWithFireball,
+    "replace_coconut_honey_bee": ReplaceCoconutWithHoneyBee,
+    "replace_coconut_wasp": ReplaceCoconutWithWasp,
+
+    "_chickens": ReplaceMonkeyWithChickenMod,
+    "_dragons": ReplaceMonkeyWithDragonMod,
+    # "_danger_signs": ReplaceMonkeyWithDangerSignMod,
+    "_polarbears": ReplaceMonkeyWithPolarbearMod,
+    "_snakes": ReplaceMonkeyWithSnakeMod,
+    "chickens": ["no_thrown_coconut", "_chickens"], # modpack
+    "dragons": ["replace_coconut_fireball", "_dragons"], # dragons throw fireballs
+    # "danger_signs": ["no_thrown_coconut", "_danger_signs"], # modpack
+    "polarbears": ["no_thrown_coconut", "_polarbears"], # modpack
+    "snakes": ["no_thrown_coconut", "_snakes"], # modpack
+    "_lethal_bell": LethalFlameMod,
+    "lethal_flame": ["_lethal_bell", "replace_bell_with_flame"], # bundle into a modpack
+    "spawn_on_second_floor": SpawnOnSecondFloorMod,
+    "_flame_trap": FlameTrapMod,
+    "flame_trap": ["_lethal_bell", "replace_bell_with_flame", "_flame_trap"], # modpack
+    "cactus_trap": ["_lethal_bell", "replace_bell_with_cactus", "_flame_trap"], # modpack
+    "danger_trap": ["_lethal_bell", "replace_bell_with_danger_sign", "_flame_trap"], # modpack
     "center_ladders": CenterLaddersMod,
+    "invert_ladders": InvertLaddersMod,
+    "four_ladders": FourLaddersMod,
+    "first_level_only": FirstLevelOnlyMod,
+    "second_level_only": SecondLevelOnlyMod,
+    "third_level_only": ThirdLevelOnlyMod,
+    
 }
 
 class KangarooEnvMod(JaxAtariModController):
@@ -28,12 +67,14 @@ class KangarooEnvMod(JaxAtariModController):
 
     REGISTRY = KANGAROO_MOD_REGISTRY
 
+    # Define the path relative to this file (mod sprites fallback)
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "kangaroo", "sprites")
+
     def __init__(self,
                  env,
                  mods_config: list = [],
-                 allow_conflicts: bool = False
+                 allow_conflicts: bool = True
                  ):
-
         super().__init__(
             env=env,
             mods_config=mods_config,

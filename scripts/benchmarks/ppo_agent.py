@@ -81,7 +81,7 @@ def make_train(config):
     mod_env = env
     if config.get("MOD_NAME", None) is not None:
         mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
-    renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
+    renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
@@ -89,7 +89,11 @@ def make_train(config):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
-            env = PixelObsWrapper(env)
+            grayscale = config.get("PIXEL_GRAYSCALE", False)
+            do_resize = config.get("PIXEL_RESIZE", True)
+            resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
+            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
+            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
         env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)
         return env

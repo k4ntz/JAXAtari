@@ -17,15 +17,16 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-import numpy as np  # Import numpy for precomputation
+import numpy as np
+from flax import struct
 
-from jaxatari.environment import JAXAtariAction as Action
+from jaxatari import spaces
+from jaxatari.environment import JAXAtariAction as Action, ObjectObservation
 from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
-# Import the new rendering utils
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.spaces import Space, Discrete, Box, Dict
-
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -87,14 +88,14 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class VideoCubeConstants(NamedTuple):
-    WIDTH = 160
-    HEIGHT = 210
-    SELECTED_CUBE = 1
+class VideoCubeConstants(AutoDerivedConstants):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    SELECTED_CUBE: int = struct.field(pytree_node=False, default=1)
     """ The selected cube. 1 - 50 are the standard cubes and 51 a random generated cube """
-    GAME_VARIATION = 0
+    GAME_VARIATION: int = struct.field(pytree_node=False, default=0)
     """ The selected game variation: 0 = normal game, 1 = all tiles are blacked out, 2 = only up and right are allowed """
-    CUBES = [
+    CUBES: list[list[int]] = struct.field(pytree_node=False, default_factory=lambda: [
         # Cube 1
         [2, 4, 1, 3, 5, 1, 0, 5, 4, 1, 4, 3, 0, 0, 1, 3, 0, 5, 4, 2, 1, 3, 1, 2, 3, 0, 1, 4, 2, 2, 5, 4, 0, 0, 5, 4, 5,
          4, 2, 2, 1, 0, 3, 3, 5, 5, 0, 3, 2, 3, 5, 4, 1, 2],
@@ -246,9 +247,9 @@ class VideoCubeConstants(NamedTuple):
         [2, 0, 1, 5, 3, 4, 0, 1, 4, 1, 3, 3, 0, 5, 1, 3, 3, 5, 4, 4, 1, 5, 5, 4, 5, 4, 2, 0, 1, 0, 1, 2, 3, 0, 1, 4, 5,
          0, 2, 2, 2, 0, 3, 1, 5, 5, 3, 3, 4, 0, 2, 4, 2, 2],
         # Cube 51 (randomly generated) in reset!
-    ]
+    ])
     """ The color values of the 50 standard cubes """
-    PLAYER_COLORS = [
+    PLAYER_COLORS: list[int] = struct.field(pytree_node=False, default_factory=lambda: [
         # Cube 1
         2,
         # Cube 2
@@ -350,36 +351,39 @@ class VideoCubeConstants(NamedTuple):
         # Cube 50
         1,
         # Cube 51 (randomly generated) in reset!
-    ]
+    ])
     """ The color of the player, depending on the selected cube """
-    INITIAL_PLAYER_POS = 49
+    INITIAL_PLAYER_POS: int = struct.field(pytree_node=False, default=49)
     """ The initial player position
     Important: the initial player position and the initial current side must fit together
     """
-    INITIAL_CURRENT_SIDE = 1
+    INITIAL_CURRENT_SIDE: int = struct.field(pytree_node=False, default=1)
     """ The initial side the player is starting on 
     Important: the initial player position and the initial current side must fit together
     """
-    INITIAL_ORIENTATION = 0
+    INITIAL_ORIENTATION: int = struct.field(pytree_node=False, default=0)
     """ The initial orientation of the player """
-    INITIAL_PLAYER_SCORE = 0
+    INITIAL_PLAYER_SCORE: int = struct.field(pytree_node=False, default=0)
     """ The initial score of the player """
-    INITIAL_PLAYER_LOOKING_DIRECTION = jnp.array(Action.RIGHT)
+    INITIAL_PLAYER_LOOKING_DIRECTION: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(Action.RIGHT))
     """ The initial looking direction of the player 
     Only up, down, right and left are possible
     """
-    CUBE_SIDES = jnp.array([
+    CUBE_SIDES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [24, 25, 26, 14, 2, 1, 0, 12, 13],
         [60, 61, 62, 50, 38, 37, 36, 48, 49],
         [63, 64, 65, 53, 41, 40, 39, 51, 52],
         [66, 67, 68, 56, 44, 43, 42, 54, 55],
         [69, 70, 71, 59, 47, 46, 45, 57, 58],
         [96, 97, 98, 86, 74, 73, 72, 84, 85]
-    ])
+    ]))
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple[dict, ...] = struct.field(pytree_node=False, default=_get_default_asset_config())
 
-class MovementState(NamedTuple):
+
+
+@struct.dataclass
+class MovementState:
     is_moving_on_one_side: chex.Numeric
     """ Tells if the player is moving on one side of the cube """
     is_moving_between_two_sides: chex.Numeric
@@ -388,7 +392,8 @@ class MovementState(NamedTuple):
     """ The counter for the animation of the player if he is moving """
 
 
-class VideoCubeState(NamedTuple):
+@struct.dataclass
+class VideoCubeState:
     player_pos: chex.Numeric
     """ The global position of the player """
     player_color: chex.Numeric
@@ -436,20 +441,20 @@ class VideoCubeState(NamedTuple):
     """ Contains a target tick count. The game will not continue until the tick count is reached """
 
 
-class VideoCubeObservation(NamedTuple):
+@struct.dataclass
+class VideoCubeObservation:
+    player: ObjectObservation
+    """ The player observation containing the position and color """
     cube_current_view: jnp.ndarray
     """ The current view on the cube """
     player_score: jnp.ndarray
     """ The score of the player """
     player_color: jnp.ndarray
     """ The color of the player """
-    player_x: jnp.ndarray
-    """ The x coordinate of the player """
-    player_y: jnp.ndarray
-    """ The y coordinate of the player """
 
 
-class VideoCubeInfo(NamedTuple):
+@struct.dataclass
+class VideoCubeInfo:
     time: jnp.ndarray
 
 
@@ -552,16 +557,9 @@ def movement_controller(state: VideoCubeState):
 
 
 class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCubeInfo, VideoCubeConstants]):
-    def __init__(self, consts: VideoCubeConstants = None):
-        """ Initialisation of VideoCube Game
-
-        :param consts: all constants needed for the game
-        """
-        consts = consts or VideoCubeConstants()
-        super().__init__(consts)
-        self.consts = consts
-        self.renderer = VideoCubeRenderer(self.consts)
-        self.action_set = [
+    # Minimal ALE action set for Video Cube (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -579,8 +577,20 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: VideoCubeConstants = None):
+        """ Initialisation of VideoCube Game
+
+        :param consts: all constants needed for the game
+        """
+        consts = consts or VideoCubeConstants()
+        super().__init__(consts)
+        self.consts = consts
+        self.renderer = VideoCubeRenderer(self.consts)
         self.obs_size = 5
 
     def reset(self, key=jax.random.PRNGKey(int.from_bytes(os.urandom(3), byteorder='big'))) -> Tuple[VideoCubeObservation, VideoCubeState]:
@@ -630,8 +640,34 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: VideoCubeState, action: chex.Array) -> Tuple[VideoCubeObservation, VideoCubeState, float, bool, VideoCubeInfo]:
-        action = jnp.array([Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.RIGHT, Action.LEFT, Action.RIGHT,
-                           Action.LEFT, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.RIGHT, Action.LEFT, Action.RIGHT, Action.LEFT])[action]
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        # Treat FIRE-combo actions as their base directions for movement/aiming.
+        # (Only plain FIRE triggers the color-change mechanic below.)
+        action = jnp.select(
+            condlist=[
+                atari_action == Action.UPFIRE,
+                atari_action == Action.RIGHTFIRE,
+                atari_action == Action.LEFTFIRE,
+                atari_action == Action.DOWNFIRE,
+                atari_action == Action.UPRIGHTFIRE,
+                atari_action == Action.UPLEFTFIRE,
+                atari_action == Action.DOWNRIGHTFIRE,
+                atari_action == Action.DOWNLEFTFIRE,
+            ],
+            choicelist=[
+                Action.UP,
+                Action.RIGHT,
+                Action.LEFT,
+                Action.DOWN,
+                Action.UPRIGHT,
+                Action.UPLEFT,
+                Action.DOWNRIGHT,
+                Action.DOWNLEFT,
+            ],
+            default=atari_action,
+        )
 
         # Set action to Noop if game_variation 2 (only up and right) is selected and something else was pressed
         condition = jnp.logical_or(self.consts.GAME_VARIATION != 2, jnp.logical_not(jnp.logical_or(jnp.logical_or(action == Action.NOOP, action == Action.FIRE), jnp.logical_or(action == Action.UP, action == Action.RIGHT))))
@@ -719,7 +755,17 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
             return dy * 12 + dx * 1
 
         # move_direction: up = 0, right = 1, down = 2, left = 3
-        move_direction = jnp.array([0, 1, 3, 2])[action - 2]
+        # Map diagonal actions to their primary axis direction.
+        move_direction = jnp.select(
+            condlist=[
+                jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT)),
+                jnp.logical_or(action == Action.RIGHT, jnp.logical_or(action == Action.UPRIGHT, action == Action.DOWNRIGHT)),
+                jnp.logical_or(action == Action.DOWN, jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT)),
+                jnp.logical_or(action == Action.LEFT, jnp.logical_or(action == Action.UPLEFT, action == Action.DOWNLEFT)),
+            ],
+            choicelist=[0, 1, 2, 3],
+            default=0,
+        ).astype(jnp.int32)
         new_step_value = get_step_value(state.cube_orientation, move_direction)
         new_pos = state.player_pos + new_step_value
 
@@ -851,38 +897,69 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
         return self.renderer.render(state)
 
     def action_space(self) -> Discrete:
-        return Discrete(len(self.action_set))
+        return Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> Box:
         return Box(0, 255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
-    def observation_space(self) -> Dict:
-        return Dict({
-            "cube_current_view": Box(0, 6, (3, 3), jnp.int32),
-            "player_score": Box(0, 100000, (), jnp.int32),
-            "player_color": Box(0, 6, (), jnp.int32),
-            "player_x": Box(0, 2, (), jnp.int32),
-            "player_y": Box(0, 2, (), jnp.int32)
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        # Use actual screen dimensions for ObjectObservation
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "player": single_obj,
+            "cube_current_view": spaces.Box(low=0, high=6, shape=(3, 3), dtype=jnp.int32),
+            "player_score": spaces.Box(low=0, high=100000, shape=(), dtype=jnp.int32),
+            "player_color": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: VideoCubeObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.cube_current_view.flatten(),
-            obs.player_score.flatten(),
-            obs.player_color.flatten(),
-            obs.player_x.flatten(),
-            obs.player_y.flatten()
-        ])
+    def _get_observation(self, state: VideoCubeState) -> VideoCubeObservation:
+        c = self.consts
+        w, h = int(c.WIDTH), int(c.HEIGHT)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: VideoCubeState):
+        # Calculate logical local coordinates (0..2, 0..2) on the current face
+        py, px = self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)
+        
+        # Map logical coordinates to Screen Pixels
+        # Use the state's last_action to determine the view type approximation
+        is_vertical_move = jnp.logical_or(state.last_action == Action.UP, state.last_action == Action.DOWN)
+        view_idx = jnp.where(is_vertical_move, 0, 1)
+        
+        pixel_pos = self.renderer.PLAYER_POSITIONS[view_idx, px, py]
+        pixel_x = pixel_pos[0]
+        pixel_y = pixel_pos[1]
+
+        # Orientation: cube_orientation 0..3 -> 0, 90, 180, 270
+        p_ori = (state.cube_orientation * 90.0).astype(jnp.float32)
+
+        # Player size depends on rotation (from constants)
+        # Use a safe default constant since dynamic sprite size lookup is complex here.
+        p_w = jnp.array(12, dtype=jnp.int32)
+        p_h = jnp.array(12, dtype=jnp.int32)
+
+        player = ObjectObservation.create(
+            x=jnp.clip(pixel_x, 0, w),
+            y=jnp.clip(pixel_y, 0, h),
+            width=p_w,
+            height=p_h,
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.player_color.astype(jnp.int32),
+            orientation=p_ori
+        )
+
+        view = get_view(state.cube, state.cube_current_side, state.cube_orientation, c.GAME_VARIATION, state.movement_state.is_moving_between_two_sides)
+
         return VideoCubeObservation(
-            cube_current_view=get_view(state.cube, state.cube_current_side, state.cube_orientation, self.consts.GAME_VARIATION, state.movement_state.is_moving_between_two_sides),
+            player=player,
+            cube_current_view=view,
             player_score=state.player_score.astype(jnp.int32),
-            player_color=state.player_color.astype(jnp.int32),
-            player_x=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[0],
-            player_y=self.get_player_position(state.cube_current_side, state.cube_orientation, state.player_pos)[1]
+            player_color=state.player_color.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -911,18 +988,21 @@ class JaxVideoCube(JaxEnvironment[VideoCubeState, VideoCubeObservation, VideoCub
 
 
 class VideoCubeRenderer(JAXGameRenderer):
-    def __init__(self, consts: VideoCubeConstants = None):
-        super().__init__()
+    def __init__(self, consts: VideoCubeConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or VideoCubeConstants()
+        super().__init__(self.consts)
         
-        # 1. Configure the new renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videocube"
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videocube")
         
         # 2. Asset manifest is now loaded from constants
         # The large local 'asset_config' list has been removed.

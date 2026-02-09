@@ -108,7 +108,7 @@
 | space_invaders               | 🥈       | 0 |
 | space_war                    | 🥈       | 0 |
 | superman                     | unsupported | 0 |
-| surround                     | 🥈       | 0 |
+| surround                     | 🥉       | 0 |
 | tetris                       | 🥈      | 0 |
 | tic_tac_toe_3d               | unsupported | 0 |
 | tron                         | 🥈       | 0 |

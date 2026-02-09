@@ -23,7 +23,6 @@ Controls
 """
 
 import os
-from dataclasses import dataclass, field
 from functools import partial
 from typing import Dict, Any, Optional, NamedTuple, Tuple
 
@@ -33,20 +32,42 @@ import jax
 import jax.numpy as jnp
 import jax.lax
 import chex
+from flax import struct
 
 import pygame
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action, EnvObs
 import jaxatari.spaces as spaces
-from typing import NamedTuple as _NamedTupleAlias
+from jaxatari.modification import AutoDerivedConstants
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 
-@dataclass(frozen=True)
-class NameThisGameConstants:
+
+def _get_default_asset_config() -> tuple:
+    """
+    Declarative asset manifest for NameThisGame.
+    Returned as an immutable tuple for safe use in defaults.
+    """
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'diver', 'type': 'single', 'file': 'diver.npy'},
+        {'name': 'shark', 'type': 'single', 'file': 'shark.npy'},
+        {'name': 'tentacle', 'type': 'single', 'file': 'tentacle.npy'},
+        {'name': 'oxygen_line', 'type': 'single', 'file': 'oxygen_line.npy'},
+        {'name': 'kraken', 'type': 'single', 'file': 'kraken.npy'},
+        {'name': 'boat', 'type': 'single', 'file': 'boat.npy'},
+        {'name': 'treasure1', 'type': 'single', 'file': 'treasure1.npy'},
+        {'name': 'treasure2', 'type': 'single', 'file': 'treasure2.npy'},
+        {'name': 'treasure3', 'type': 'single', 'file': 'treasure3.npy'},
+        # Digits: score sprites stored as "<digit>_sprite.npy" (0..9)
+        {'name': 'score_digits', 'type': 'digits', 'pattern': '{}_sprite.npy'},
+    )
+
+
+class NameThisGameConstants(AutoDerivedConstants):
     """All tunable parameters for *Name This Game*.
 
     Units & conventions
@@ -59,99 +80,92 @@ class NameThisGameConstants:
     dynamic arrays inside it.
     """
     # Screen & scaling
-    screen_width: int = 160
-    screen_height: int = 250
-    scaling_factor: int = 3
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=250)
+    scaling_factor: int = struct.field(pytree_node=False, default=3)
 
     # HUD bars (both centered at bottom)
-    hud_bar_initial_px: int = 128            # initial width in pixels
-    hud_bar_step_frames: int = 250           # shrink cadence (frames per step)
-    hud_bar_shrink_px_per_step_total: int = 8  # px removed per tick (4 each side visually)
-    bar_green_height: int = 4
-    bar_orange_height: int = 12
-    bars_gap_px: int = 0
-    bars_bottom_margin_px: int = 25
+    hud_bar_initial_px: int = struct.field(pytree_node=False, default=128)            # initial width in pixels
+    hud_bar_step_frames: int = struct.field(pytree_node=False, default=250)           # shrink cadence (frames per step)
+    hud_bar_shrink_px_per_step_total: int = struct.field(pytree_node=False, default=8)  # px removed per tick (4 each side visually)
+    bar_green_height: int = struct.field(pytree_node=False, default=4)
+    bar_orange_height: int = struct.field(pytree_node=False, default=12)
+    bars_gap_px: int = struct.field(pytree_node=False, default=0)
+    bars_bottom_margin_px: int = struct.field(pytree_node=False, default=25)
 
     # Kraken sprite (background deco)
-    kraken_x: int = 20
-    kraken_y: int = 63
+    kraken_x: int = struct.field(pytree_node=False, default=20)
+    kraken_y: int = struct.field(pytree_node=False, default=63)
 
     # Boat (surface)
-    boat_width: int = 16
-    boat_speed_px: int = 1
-    boat_move_every_n_frames: int = 4  # motion cadence
+    boat_width: int = struct.field(pytree_node=False, default=16)
+    boat_speed_px: int = struct.field(pytree_node=False, default=1)
+    boat_move_every_n_frames: int = struct.field(pytree_node=False, default=4)  # motion cadence
 
     # Diver (player)
-    diver_width: int = 16
-    diver_height: int = 13
-    diver_y_floor: int = 173
-    diver_speed_px: int = 1
+    diver_width: int = struct.field(pytree_node=False, default=16)
+    diver_height: int = struct.field(pytree_node=False, default=13)
+    diver_y_floor: int = struct.field(pytree_node=False, default=173)
+    diver_speed_px: int = struct.field(pytree_node=False, default=1)
 
     # Spear
-    spear_width: int = 1
-    spear_height: int = 1
-    spear_dy: int = -3
-    spear_ceiling_y: int = 63
+    spear_width: int = struct.field(pytree_node=False, default=1)
+    spear_height: int = struct.field(pytree_node=False, default=1)
+    spear_dy: int = struct.field(pytree_node=False, default=-3)
+    spear_ceiling_y: int = struct.field(pytree_node=False, default=63)
 
     # Shark
-    shark_lanes_y: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([69, 83, 97, 111, 123, 137, 151], dtype=jnp.int32)
-    )
-    shark_base_speed: int = 1
-    shark_width: int = 15
-    shark_height: int = 12
-    shark_points: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([10, 20, 30, 40, 50, 80, 100], dtype=jnp.int32)
-    )
+    shark_lanes_y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([69, 83, 97, 111, 123, 137, 151], dtype=jnp.int32))
+
+    shark_base_speed: int = struct.field(pytree_node=False, default=1)
+    shark_width: int = struct.field(pytree_node=False, default=15)
+    shark_height: int = struct.field(pytree_node=False, default=12)
+    shark_points: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([10, 20, 30, 40, 50, 80, 100], dtype=jnp.int32))
 
     # Tentacles (octopus arms)
-    max_tentacles: int = 8
-    tentacle_base_x: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([16, 32, 48, 64, 80, 96, 112, 128], dtype=jnp.int32)
-    )
-    tentacle_ys: jnp.ndarray = field(
-        default_factory=lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160], dtype=jnp.int32)
-    )
-    tentacle_num_cols: int = 4
-    tentacle_col_width: int = 4
-    tentacle_square_w: int = 4
-    tentacle_square_h: int = 6
-    tentacle_width: int = 4  # for obs space compatibility (narrow bboxes)
-    tentacle_base_growth_p: float = 0.015
-    tentacle_destroy_points: int = 50
+    max_tentacles: int = struct.field(pytree_node=False, default=8)
+    tentacle_base_x: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 32, 48, 64, 80, 96, 112, 128], dtype=jnp.int32))
+    tentacle_ys: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160], dtype=jnp.int32))
+    tentacle_num_cols: int = struct.field(pytree_node=False, default=4)
+    tentacle_col_width: int = struct.field(pytree_node=False, default=4)
+    tentacle_square_w: int = struct.field(pytree_node=False, default=4)
+    tentacle_square_h: int = struct.field(pytree_node=False, default=6)
+    tentacle_width: int = struct.field(pytree_node=False, default=4)  # for obs space compatibility (narrow bboxes)
+    tentacle_base_growth_p: float = struct.field(pytree_node=False, default=0.015)
+    tentacle_destroy_points: int = struct.field(pytree_node=False, default=50)
     # Asset config for render pipeline
-    ASSET_CONFIG: tuple = field(default_factory=lambda: _get_default_asset_config())
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
     # Oxygen line (drops from boat)
-    oxygen_full: int = 1200                     # kept for obs-space high
-    oxygen_pickup_radius: int = 4               # half-width tolerance
-    oxygen_drop_min_interval: int = 240
-    oxygen_drop_max_interval: int = 480
-    oxygen_line_width: int = 1
-    oxygen_y: int = 57
-    oxygen_line_ttl_frames: int = 100
-    oxygen_contact_every_n_frames: int = 8
-    oxygen_contact_points: int = 10
+    oxygen_full: int = struct.field(pytree_node=False, default=1200)                     # kept for obs-space high
+    oxygen_pickup_radius: int = struct.field(pytree_node=False, default=4)               # half-width tolerance
+    oxygen_drop_min_interval: int = struct.field(pytree_node=False, default=240)
+    oxygen_drop_max_interval: int = struct.field(pytree_node=False, default=480)
+    oxygen_line_width: int = struct.field(pytree_node=False, default=1)
+    oxygen_y: int = struct.field(pytree_node=False, default=57)
+    oxygen_line_ttl_frames: int = struct.field(pytree_node=False, default=100)
+    oxygen_contact_every_n_frames: int = struct.field(pytree_node=False, default=8)
+    oxygen_contact_points: int = struct.field(pytree_node=False, default=10)
 
     # Round progression & difficulty
-    speed_progression_start_lane_for_2: int = 4
-    round_clear_shark_resets: int = 3
-    oxy_frames_speedup_per_round: int = 30
-    oxy_min_shrink_interval: int = 20
-    tentacle_growth_round_coeff: float = 0.0005
+    speed_progression_start_lane_for_2: int = struct.field(pytree_node=False, default=4)
+    round_clear_shark_resets: int = struct.field(pytree_node=False, default=3)
+    oxy_frames_speedup_per_round: int = struct.field(pytree_node=False, default=30)
+    oxy_min_shrink_interval: int = struct.field(pytree_node=False, default=20)
+    tentacle_growth_round_coeff: float = struct.field(pytree_node=False, default=0.0005)
 
     # Lives & score UI
-    lives_max: int = 3
-    treasure_ui_x: int = 72
-    treasure_ui_y: int = 197
-    max_digits_for_score: int = 9
+    lives_max: int = struct.field(pytree_node=False, default=3)
+    treasure_ui_x: int = struct.field(pytree_node=False, default=72)
+    treasure_ui_y: int = struct.field(pytree_node=False, default=197)
+    max_digits_for_score: int = struct.field(pytree_node=False, default=9)
 
 
 # ------------------------------------------------------------
 # Small utility types
 # ------------------------------------------------------------
-
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     """Axis-aligned bounding boxes for N entities.
 
     All fields are `int32` arrays of shape `(n,)`.
@@ -164,7 +178,8 @@ class EntityPosition(NamedTuple):
     alive: jnp.ndarray
 
 
-class NameThisGameState(NamedTuple):
+@struct.dataclass
+class NameThisGameState:
     """Complete, immutable game state used by the environment and renderer.
 
     Notes
@@ -235,24 +250,25 @@ class NameThisGameState(NamedTuple):
     rng: chex.Array
 
 
-class NameThisGameObservation(NamedTuple):
+@struct.dataclass
+class NameThisGameObservation:
     """Object-centric observation returned to agents.
 
     Contains scalar score/round and per-entity AABBs (diver, shark, spear,
     tentacles) with narrow tentacle boxes for compatibility.
     """
+    player: ObjectObservation
+    shark: ObjectObservation
+    spear: ObjectObservation
+    tentacles: ObjectObservation
+    oxygen_line: ObjectObservation
     score: jnp.ndarray
-    diver: EntityPosition
-    shark: EntityPosition
-    spear: EntityPosition
-    tentacles: EntityPosition
     oxygen_frames_remaining: jnp.ndarray
-    oxygen_line_active: jnp.ndarray
-    oxygen_line_x: jnp.ndarray
     round_idx: jnp.ndarray
 
 
-class NameThisGameInfo(NamedTuple):
+@struct.dataclass
+class NameThisGameInfo:
     """Diagnostics and shaping hooks returned via the `info` dict.
     """
     score: jnp.ndarray
@@ -265,30 +281,6 @@ class NameThisGameInfo(NamedTuple):
     oxygen_line_active: jnp.ndarray
     diver_alive: jnp.ndarray
     lives_remaining: jnp.ndarray
-
-
-# Preferred constants alias: use config as constants container
-
-
-def _get_default_asset_config() -> tuple:
-    """
-    Declarative asset manifest for NameThisGame.
-    Returned as an immutable tuple for safe use in defaults.
-    """
-    return (
-        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'diver', 'type': 'single', 'file': 'diver.npy'},
-        {'name': 'shark', 'type': 'single', 'file': 'shark.npy'},
-        {'name': 'tentacle', 'type': 'single', 'file': 'tentacle.npy'},
-        {'name': 'oxygen_line', 'type': 'single', 'file': 'oxygen_line.npy'},
-        {'name': 'kraken', 'type': 'single', 'file': 'kraken.npy'},
-        {'name': 'boat', 'type': 'single', 'file': 'boat.npy'},
-        {'name': 'treasure1', 'type': 'single', 'file': 'treasure1.npy'},
-        {'name': 'treasure2', 'type': 'single', 'file': 'treasure2.npy'},
-        {'name': 'treasure3', 'type': 'single', 'file': 'treasure3.npy'},
-        # Digits: score sprites stored as "<digit>_sprite.npy" (0..9)
-        {'name': 'score_digits', 'type': 'digits', 'pattern': '{}_sprite.npy'},
-    )
 
 
 # ------------------------------------------------------------
@@ -313,40 +305,37 @@ class JaxNameThisGame(
         super().__init__()
         self.consts = consts or NameThisGameConstants()
         self.renderer = Renderer_NameThisGame(consts=self.consts)
-        self.action_set = [Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE]
+
+    # Minimal ALE action set for Name This Game:
+    # ['NOOP', 'FIRE', 'RIGHT', 'LEFT', 'RIGHTFIRE', 'LEFTFIRE']
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
 
     # -------------------------- Spaces -------------------------------------
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        cfg = self.consts
-
-        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
-            return spaces.Dict(
-                {
-                    "x": spaces.Box(low=-w_max, high=cfg.screen_width, shape=(n,), dtype=jnp.int32),
-                    "y": spaces.Box(low=-h_max, high=cfg.screen_height, shape=(n,), dtype=jnp.int32),
-                    "width": spaces.Box(low=0, high=w_max, shape=(n,), dtype=jnp.int32),
-                    "height": spaces.Box(low=0, high=h_max, shape=(n,), dtype=jnp.int32),
-                    "alive": spaces.Box(low=0, high=1, shape=(n,), dtype=jnp.int32),
-                }
-            )
-
-        tentacle_h_max = int(cfg.tentacle_ys[-1] - cfg.tentacle_ys[0] + cfg.tentacle_square_h)
-        return spaces.Dict(
-            {
-                "score": spaces.Box(low=0, high=(10 ** cfg.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
-                "diver": entity_space(1, cfg.diver_width, cfg.diver_height),
-                "shark": entity_space(1, cfg.shark_width, cfg.shark_height),
-                "spear": entity_space(1, cfg.spear_width, cfg.spear_height),
-                "tentacles": entity_space(cfg.max_tentacles, cfg.tentacle_width, tentacle_h_max),
-                "oxygen_frames_remaining": spaces.Box(low=0, high=cfg.oxygen_full, shape=(), dtype=jnp.int32),
-                "oxygen_line_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-                "oxygen_line_x": spaces.Box(low=-cfg.oxygen_line_width, high=cfg.screen_width, shape=(), dtype=jnp.int32),
-                "round_idx": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
-            }
-        )
+        # Cast constants to int to avoid TracerArrayConversionError during JIT compilation
+        h = int(self.consts.screen_height)
+        w = int(self.consts.screen_width)
+        screen_size = (h, w)
+        
+        # Helpers
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
+        return spaces.Dict({
+            "player": single_obj,
+            "shark": single_obj,
+            "spear": single_obj,
+            "tentacles": spaces.get_object_space(n=self.consts.max_tentacles, screen_size=screen_size),
+            "oxygen_line": single_obj,
+            "score": spaces.Box(low=0, high=(10 ** self.consts.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
+            "oxygen_frames_remaining": spaces.Box(low=0, high=int(self.consts.oxygen_full), shape=(), dtype=jnp.int32),
+            "round_idx": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+        })
 
     def image_space(self) -> spaces.Box:
         cfg = self.consts
@@ -456,103 +445,103 @@ class JaxNameThisGame(
     # -------------------------- Obs / Info ---------------------------------
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
-        """Flatten a structured observation into a single int32 vector.
-
-        Useful for simple agents or logging. Field order matches the concatenation
-        order below.
-        """
-        def _flat(ep: EntityPosition) -> jnp.ndarray:
-            return jnp.concatenate(
-                [
-                    jnp.ravel(ep.x).astype(jnp.int32),
-                    jnp.ravel(ep.y).astype(jnp.int32),
-                    jnp.ravel(ep.width).astype(jnp.int32),
-                    jnp.ravel(ep.height).astype(jnp.int32),
-                    jnp.ravel(ep.alive).astype(jnp.int32),
-                ],
-                axis=0,
-            )
-
-        return jnp.concatenate(
-            [
-                jnp.atleast_1d(obs.score).astype(jnp.int32),
-                _flat(obs.diver),
-                _flat(obs.shark),
-                _flat(obs.spear),
-                _flat(obs.tentacles),
-                jnp.atleast_1d(obs.oxygen_frames_remaining).astype(jnp.int32),
-                jnp.atleast_1d(obs.oxygen_line_active).astype(jnp.int32),
-                jnp.atleast_1d(obs.oxygen_line_x).astype(jnp.int32),
-                jnp.atleast_1d(obs.round_idx).astype(jnp.int32),
-            ],
-            axis=0,
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: NameThisGameState) -> NameThisGameObservation:
-        """Build the object-centric observation from the current state.
-
-        Tentacle boxes are narrow one-column rectangles that span from the top segment
-        to the current tip, for compatibility with older consumers.
-        """
-
+        """Build the object-centric observation from the current state."""
         cfg = self.consts
-        diver_pos = EntityPosition(
-            x=jnp.atleast_1d(state.diver_x),
-            y=jnp.atleast_1d(state.diver_y),
-            width=jnp.atleast_1d(jnp.array(cfg.diver_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.diver_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.diver_alive.astype(jnp.int32)),
-        )
-        shark_pos = EntityPosition(
-            x=jnp.atleast_1d(state.shark_x),
-            y=jnp.atleast_1d(state.shark_y),
-            width=jnp.atleast_1d(jnp.array(cfg.shark_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.shark_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.shark_alive.astype(jnp.int32)),
-        )
-        spear_pos = EntityPosition(
-            x=jnp.atleast_1d(state.spear[0]),
-            y=jnp.atleast_1d(state.spear[1]),
-            width=jnp.atleast_1d(jnp.array(cfg.spear_width, jnp.int32)),
-            height=jnp.atleast_1d(jnp.array(cfg.spear_height, jnp.int32)),
-            alive=jnp.atleast_1d(state.spear_alive.astype(jnp.int32)),
+        w = cfg.screen_width
+        h = cfg.screen_height
+
+        # --- Diver ---
+        # Orientation: 1 (Right) -> 90.0, -1 (Left) -> 270.0
+        diver_ori = jnp.select(
+            [state.diver_dir == 1, state.diver_dir == -1],
+            [90.0, 270.0],
+            0.0
+        ).astype(jnp.float32)
+
+        diver = ObjectObservation.create(
+            x=jnp.clip(state.diver_x, 0, w),
+            y=jnp.clip(state.diver_y, 0, h),
+            width=jnp.array(cfg.diver_width, jnp.int32),
+            height=jnp.array(cfg.diver_height, jnp.int32),
+            active=state.diver_alive.astype(jnp.int32),
+            orientation=diver_ori
         )
 
-        # Tentacle bboxes (narrow, one-column wide for obs compatibility)
+        # --- Shark ---
+        # Orientation: dx > 0 (Right) -> 90.0, dx < 0 (Left) -> 270.0
+        shark_ori = jnp.where(state.shark_dx > 0, 90.0, 270.0).astype(jnp.float32)
+        
+        shark = ObjectObservation.create(
+            x=jnp.clip(state.shark_x, 0, w),
+            y=jnp.clip(state.shark_y, 0, h),
+            width=jnp.array(cfg.shark_width, jnp.int32),
+            height=jnp.array(cfg.shark_height, jnp.int32),
+            active=state.shark_alive.astype(jnp.int32),
+            orientation=shark_ori
+        )
+
+        # --- Spear ---
+        # Orientation: 0.0 (Up)
+        spear_alive = state.spear_alive.astype(jnp.int32)
+        spear = ObjectObservation.create(
+            x=jnp.clip(state.spear[0], 0, w),
+            y=jnp.clip(state.spear[1], 0, h),
+            width=jnp.array(cfg.spear_width, jnp.int32),
+            height=jnp.array(cfg.spear_height, jnp.int32),
+            active=spear_alive,
+            orientation=jnp.array(0.0, jnp.float32)
+        )
+
+        # --- Tentacles ---
+        # Logic adapted from original _get_observation to calculate bounding boxes
         T = cfg.max_tentacles
         L = int(cfg.tentacle_ys.shape[0])
         len_vec = state.tentacle_len
         alive_vec = (len_vec > 0).astype(jnp.int32)
         top_cols = jnp.where(len_vec > 0, state.tentacle_cols[:, 0], jnp.array(0, jnp.int32))
+        
         tentacle_left_x = jnp.where(
-            len_vec > 0, state.tentacle_base_x + top_cols * cfg.tentacle_col_width, jnp.array(-1, jnp.int32)
+            len_vec > 0, state.tentacle_base_x + top_cols * cfg.tentacle_col_width, jnp.array(0, jnp.int32)
         )
-        tentacle_y_top = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_ys[0], jnp.int32), jnp.array(-1, jnp.int32))
+        tentacle_y_top = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_ys[0], jnp.int32), jnp.array(0, jnp.int32))
+        
         last_y = jnp.take_along_axis(
             cfg.tentacle_ys[None, :].repeat(T, axis=0), jnp.clip((len_vec - 1)[:, None], 0, L - 1), axis=1
         ).squeeze(1)
+        
         tentacle_height_px = jnp.where(len_vec > 0, last_y - cfg.tentacle_ys[0] + cfg.tentacle_square_h, jnp.array(0, jnp.int32))
         tentacle_width_px = jnp.where(len_vec > 0, jnp.full((T,), cfg.tentacle_width, jnp.int32), jnp.array(0, jnp.int32))
 
-        tentacle_pos = EntityPosition(
-            x=tentacle_left_x,
-            y=tentacle_y_top,
+        tentacles = ObjectObservation.create(
+            x=jnp.clip(tentacle_left_x, 0, w),
+            y=jnp.clip(tentacle_y_top, 0, h),
             width=tentacle_width_px,
             height=tentacle_height_px,
-            alive=alive_vec,
+            active=alive_vec,
+            orientation=jnp.zeros((T,), dtype=jnp.float32)
+        )
+
+        # --- Oxygen Line ---
+        # Represented as an object
+        oxy_active = state.oxygen_line_active.astype(jnp.int32)
+        oxygen_line = ObjectObservation.create(
+            x=jnp.clip(state.oxygen_line_x, 0, w),
+            y=jnp.clip(jnp.array(cfg.oxygen_y, jnp.int32), 0, h),
+            width=jnp.array(cfg.oxygen_line_width, jnp.int32),
+            height=jnp.array(1, jnp.int32), # Nominal height
+            active=oxy_active,
+            orientation=jnp.array(0.0, jnp.float32)
         )
 
         return NameThisGameObservation(
+            player=diver,
+            shark=shark,
+            spear=spear,
+            tentacles=tentacles,
+            oxygen_line=oxygen_line,
             score=state.score,
-            diver=diver_pos,
-            shark=shark_pos,
-            spear=spear_pos,
-            tentacles=tentacle_pos,
             oxygen_frames_remaining=state.oxygen_frames_remaining,
-            oxygen_line_active=state.oxygen_line_active.astype(jnp.int32),
-            oxygen_line_x=state.oxygen_line_x,
             round_idx=state.round,
         )
 
@@ -596,7 +585,7 @@ class JaxNameThisGame(
 
         # Exit REST on fire
         def _exit_rest(s: NameThisGameState) -> NameThisGameState:
-            return s._replace(
+            return s.replace(
                 resting=jnp.array(False, jnp.bool_),
                 wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
                 bar_frame_counter=jnp.array(0, jnp.int32),
@@ -623,7 +612,7 @@ class JaxNameThisGame(
             new_wave = jnp.maximum(s.wave_bar_px - jnp.where(wave_tick, dec, 0), 0)
             new_oxy = jnp.maximum(s.oxy_bar_px - jnp.where(oxy_tick, dec, 0), 0)
 
-            s2 = s._replace(
+            s2 = s.replace(
                 wave_bar_px=new_wave,
                 oxy_bar_px=new_oxy,
                 bar_frame_counter=jnp.where(wave_tick, jnp.array(0, jnp.int32), wave_cnt),
@@ -639,7 +628,7 @@ class JaxNameThisGame(
                 prev_sign = jnp.where(st.shark_dx < 0, jnp.int32(-1), jnp.int32(1))
                 rest_dx = prev_sign * speed_abs
 
-                return st._replace(
+                return st.replace(
                     resting=jnp.array(True, jnp.bool_),
                     round=new_round,
                     tentacle_len=zeros_T,
@@ -683,7 +672,7 @@ class JaxNameThisGame(
             spawn_x = s.diver_x + (cfg.diver_width // 2)
             spawn_y = s.diver_y
             new = jnp.array([spawn_x, spawn_y, 0, cfg.spear_dy], jnp.int32)
-            return s._replace(spear=new, spear_alive=jnp.array(True, jnp.bool_))
+            return s.replace(spear=new, spear_alive=jnp.array(True, jnp.bool_))
 
         return jax.lax.cond(~state.spear_alive, _spawn, lambda s: s, state)
 
@@ -694,7 +683,7 @@ class JaxNameThisGame(
         cfg = self.consts
         new_x = jnp.clip(state.diver_x + move_dir * cfg.diver_speed_px, 0, cfg.screen_width - cfg.diver_width)
         new_dir = jnp.where(move_dir != 0, move_dir.astype(jnp.int32), state.diver_dir)
-        return state._replace(diver_x=new_x, diver_dir=new_dir)
+        return state.replace(diver_x=new_x, diver_dir=new_dir)
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_spear(self, state: NameThisGameState) -> NameThisGameState:
@@ -704,7 +693,7 @@ class JaxNameThisGame(
         def _step(s):
             # Compute next position (x, y) and write it back.
             pos_xy = s.spear[:2] + s.spear[2:4]
-            s2 = s._replace(spear=s.spear.at[:2].set(pos_xy))
+            s2 = s.replace(spear=s.spear.at[:2].set(pos_xy))
             x, y = pos_xy[0], pos_xy[1]
 
             # Alive if on-screen and still below the ceiling line.
@@ -713,7 +702,7 @@ class JaxNameThisGame(
             below_ceiling = y > cfg.spear_ceiling_y   # despawn at/above the ceiling (<= becomes dead)
             alive_next = jnp.logical_and(s.spear_alive, in_x & in_y & below_ceiling)
 
-            return s2._replace(spear_alive=alive_next)
+            return s2.replace(spear_alive=alive_next)
 
         return jax.lax.cond(state.spear_alive, _step, lambda s: s, state)
 
@@ -735,7 +724,7 @@ class JaxNameThisGame(
             hit_edge = hit_left | hit_right
             new_dx = jnp.where(hit_edge, -s.shark_dx, s.shark_dx)
             clamped_x = jnp.where(hit_left, 0, jnp.where(hit_right, cfg.screen_width - cfg.shark_width, x_next))
-            return s._replace(shark_x=clamped_x, shark_dx=new_dx, shark_lane=jnp.array(0, jnp.int32), shark_y=cfg.shark_lanes_y[0], shark_alive=jnp.array(True, jnp.bool_))
+            return s.replace(shark_x=clamped_x, shark_dx=new_dx, shark_lane=jnp.array(0, jnp.int32), shark_y=cfg.shark_lanes_y[0], shark_alive=jnp.array(True, jnp.bool_))
 
         def _normal_move(s: NameThisGameState) -> NameThisGameState:
             new_x = x_next
@@ -754,15 +743,15 @@ class JaxNameThisGame(
                     speed_abs = self._shark_speed_for_lane(tt.round, safe_idx)
                     new_dx_val = jnp.where(going_left, speed_abs, -speed_abs)
                     new_x_val = jnp.where(going_left, -cfg.shark_width, cfg.screen_width)
-                    return tt._replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
+                    return tt.replace(shark_x=new_x_val, shark_y=new_y, shark_dx=new_dx_val, shark_lane=new_lane)
 
                 def _no_lane(tt: NameThisGameState) -> NameThisGameState:
-                    return tt._replace(shark_alive=jnp.array(False, jnp.bool_))
+                    return tt.replace(shark_alive=jnp.array(False, jnp.bool_))
 
                 has_lane = new_lane < (last_idx + 1)
                 return jax.lax.cond(has_lane, _lane_exists, _no_lane, st)
 
-            st = s._replace(shark_x=new_x)
+            st = s.replace(shark_x=new_x)
             st = jax.lax.cond(off_right, lambda u: _drop_lane(u, going_left=False), lambda u: u, st)
             st = jax.lax.cond(off_left, lambda u: _drop_lane(u, going_left=True), lambda u: u, st)
             return st
@@ -834,7 +823,7 @@ class JaxNameThisGame(
                     return new_cols, new_len
 
                 new_cols, new_len = jax.lax.cond(len_i == 0, _when_empty, _when_non_empty)
-                s = s._replace(
+                s = s.replace(
                     tentacle_cols=set_row2d(s0.tentacle_cols, new_cols),
                     tentacle_len=set_row(s0.tentacle_len, new_len),
                     tentacle_active=set_row(s0.tentacle_active, new_len > 0),
@@ -876,12 +865,12 @@ class JaxNameThisGame(
 
                     def _edge_logic(st2: NameThisGameState) -> NameThisGameState:
                         def _first_wait():
-                            return st2._replace(tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(1, jnp.int32)))
+                            return st2.replace(tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(1, jnp.int32)))
 
                         def _flip_and_move():
                             new_dir = -d
                             moved = _perform_move(cols, new_dir)
-                            return st2._replace(
+                            return st2.replace(
                                 tentacle_dir=set_row(s0.tentacle_dir, new_dir),
                                 tentacle_cols=set_row2d(s0.tentacle_cols, moved),
                                 tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(0, jnp.int32)),
@@ -891,7 +880,7 @@ class JaxNameThisGame(
 
                     def _normal_move(st2: NameThisGameState) -> NameThisGameState:
                         moved = _perform_move(cols, d)
-                        return st2._replace(
+                        return st2.replace(
                             tentacle_cols=set_row2d(s0.tentacle_cols, moved),
                             tentacle_edge_wait=set_row(s0.tentacle_edge_wait, jnp.array(0, jnp.int32)),
                         )
@@ -903,8 +892,8 @@ class JaxNameThisGame(
             s1 = jax.lax.cond(do_grow, _grow, _move, s0)
 
             next_turn = (s1.tentacle_turn + 1) % T
-            s1 = s1._replace(tentacle_turn=next_turn, rng=rng_after)
-            s1 = s1._replace(tentacle_active=(s1.tentacle_len > 0))
+            s1 = s1.replace(tentacle_turn=next_turn, rng=rng_after)
+            s1 = s1.replace(tentacle_active=(s1.tentacle_len > 0))
             return s1
 
         return jax.lax.cond(state.resting, _no_update, _active_update, state)
@@ -944,7 +933,7 @@ class JaxNameThisGame(
             reset_speed = self._shark_speed_for_lane(s.round, reset_lane)
             reset_dx = jnp.where(go_left, reset_speed, -reset_speed).astype(jnp.int32)
             reset_x = jnp.where(go_left, -cfg.shark_width, cfg.screen_width)
-            return s._replace(
+            return s.replace(
                 score=s.score + points,
                 shark_x=reset_x.astype(jnp.int32),
                 shark_y=jnp.array(reset_y, jnp.int32),
@@ -956,7 +945,7 @@ class JaxNameThisGame(
                 rng=rng_after,
             )
 
-        return jax.lax.cond(hit, _on_hit, lambda s: s._replace(rng=rng_after), state)
+        return jax.lax.cond(hit, _on_hit, lambda s: s.replace(rng=rng_after), state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_spear_tentacle_collision(self, state: NameThisGameState) -> NameThisGameState:
@@ -997,7 +986,7 @@ class JaxNameThisGame(
         new_wait = jnp.where(hits, jnp.array(0, jnp.int32), state.tentacle_edge_wait)
         spear_alive_next = jnp.logical_and(state.spear_alive, jnp.logical_not(jnp.any(hits)))
 
-        return state._replace(
+        return state.replace(
             score=state.score + gained,
             tentacle_len=new_len,
             tentacle_cols=state.tentacle_cols,
@@ -1013,7 +1002,7 @@ class JaxNameThisGame(
 
         L = int(self.consts.tentacle_ys.shape[0])
         reached = jnp.any(state.tentacle_len >= L)
-        return state._replace(diver_alive=jnp.where(reached, jnp.array(False, jnp.bool_), state.diver_alive))
+        return state.replace(diver_alive=jnp.where(reached, jnp.array(False, jnp.bool_), state.diver_alive))
 
     @partial(jax.jit, static_argnums=(0,))
     def _move_boat(self, state: NameThisGameState) -> NameThisGameState:
@@ -1030,10 +1019,10 @@ class JaxNameThisGame(
             hit_edge = hit_left | hit_right
             new_dx = jnp.where(hit_edge, -s.boat_dx, s.boat_dx)
             clamped_x = jnp.where(hit_left, 0, jnp.where(hit_right, cfg.screen_width - cfg.boat_width, new_x))
-            return s._replace(boat_x=clamped_x, boat_dx=new_dx, boat_move_counter=next_counter)
+            return s.replace(boat_x=clamped_x, boat_dx=new_dx, boat_move_counter=next_counter)
 
         # if not time to move, only update the counter
-        return jax.lax.cond(move_now, _do_move, lambda s: s._replace(boat_move_counter=next_counter), state)
+        return jax.lax.cond(move_now, _do_move, lambda s: s.replace(boat_move_counter=next_counter), state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _spawn_or_update_oxygen_line(self, state: NameThisGameState) -> NameThisGameState:
@@ -1059,7 +1048,7 @@ class JaxNameThisGame(
                 def _spawn_line(ss: NameThisGameState) -> NameThisGameState:
                     new_x = st.boat_x + (cfg.boat_width - cfg.oxygen_line_width) // 2
                     new_x = jnp.clip(new_x, 0, cfg.screen_width - cfg.oxygen_line_width).astype(jnp.int32)
-                    return ss._replace(
+                    return ss.replace(
                         oxygen_line_active=jnp.array(True, jnp.bool_),
                         oxygen_line_x=new_x,
                         oxygen_drop_timer=jnp.array(0, jnp.int32),
@@ -1068,7 +1057,7 @@ class JaxNameThisGame(
                     )
 
                 def _no_spawn(ss: NameThisGameState) -> NameThisGameState:
-                    return ss._replace(oxygen_drop_timer=new_timer)
+                    return ss.replace(oxygen_drop_timer=new_timer)
 
                 return jax.lax.cond(new_timer <= 0, _spawn_line, _no_spawn, st)
 
@@ -1081,7 +1070,7 @@ class JaxNameThisGame(
                     next_timer = jax.random.randint(
                         rng_interval, (), cfg.oxygen_drop_min_interval, cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32
                     )
-                    return ss._replace(
+                    return ss.replace(
                         oxygen_line_active=jnp.array(False, jnp.bool_),
                         oxygen_line_x=jnp.array(-1, jnp.int32),
                         oxygen_drop_timer=next_timer,
@@ -1090,12 +1079,12 @@ class JaxNameThisGame(
                     )
 
                 def _still(ss: NameThisGameState) -> NameThisGameState:
-                    return ss._replace(oxygen_line_x=new_x, oxygen_line_ttl=new_ttl)
+                    return ss.replace(oxygen_line_x=new_x, oxygen_line_ttl=new_ttl)
 
                 return jax.lax.cond(new_ttl <= 0, _expire, _still, st)
 
             out = jax.lax.cond(s.oxygen_line_active, _line_active, _no_line, s)
-            return out._replace(rng=rng_after)
+            return out.replace(rng=rng_after)
 
         return jax.lax.cond(state.resting, _rest, _active, state)
 
@@ -1112,7 +1101,7 @@ class JaxNameThisGame(
 
         def _rest(s: NameThisGameState) -> NameThisGameState:
             # keep the integer mirror coherent
-            return s._replace(oxygen_frames_remaining=s.oxy_bar_px)
+            return s.replace(oxygen_frames_remaining=s.oxy_bar_px)
 
         def _active(s: NameThisGameState) -> NameThisGameState:
             diver_center = s.diver_x + (cfg.diver_width // 2)
@@ -1133,7 +1122,7 @@ class JaxNameThisGame(
             add_points = jnp.where(tick & full_before, jnp.array(cfg.oxygen_contact_points, jnp.int32), 0)
             new_score = s.score + add_points
 
-            return s._replace(
+            return s.replace(
                 oxy_bar_px=new_bar,
                 oxygen_contact_counter=cnt_next,
                 oxygen_frames_remaining=new_bar,
@@ -1156,7 +1145,7 @@ class JaxNameThisGame(
         prev_sign = jnp.where(state.shark_dx < 0, jnp.int32(-1), jnp.int32(1))
         rest_dx = prev_sign * speed_abs
 
-        return state._replace(
+        return state.replace(
             resting=jnp.array(True, jnp.bool_),
             wave_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
             oxy_bar_px=jnp.array(cfg.hud_bar_initial_px, jnp.int32),
@@ -1206,11 +1195,11 @@ class JaxNameThisGame(
             remaining = s.lives_remaining - jnp.array(1, jnp.int32)
 
             def game_over(st):
-                return st._replace(lives_remaining=jnp.array(0, jnp.int32)), jnp.array(True, jnp.bool_)
+                return st.replace(lives_remaining=jnp.array(0, jnp.int32)), jnp.array(True, jnp.bool_)
 
             def lose_life(st):
                 st2 = self._life_loss_reset(st)
-                return st2._replace(lives_remaining=remaining), jnp.array(False, jnp.bool_)
+                return st2.replace(lives_remaining=remaining), jnp.array(False, jnp.bool_)
 
             return jax.lax.cond(remaining <= 0, game_over, lose_life, s)
 
@@ -1339,7 +1328,7 @@ class JaxNameThisGame(
 
         # Reward = score delta
         step_reward = (state.score - prev_state.score).astype(jnp.float32)
-        state = state._replace(reward=step_reward, fire_button_prev=fire_pressed)
+        state = state.replace(reward=step_reward, fire_button_prev=fire_pressed)
 
         # Outputs
         observation = self._get_observation(state)
@@ -1352,7 +1341,8 @@ class JaxNameThisGame(
         self, state: NameThisGameState, action: chex.Array
     ) -> Tuple[NameThisGameObservation, NameThisGameState, jnp.float32, jnp.bool_, NameThisGameInfo]:
         """Step function - frameskip is handled by the wrapper."""
-        return self._step_once(state, action)
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        return self._step_once(state, atari_action)
 
 
 # -------------------------- Human control (optional) -----------------------
@@ -1390,16 +1380,20 @@ class Renderer_NameThisGame(JAXGameRenderer):
 
     sprites: Dict[str, Any]
 
-    def __init__(self, consts: NameThisGameConstants = None):
-        super().__init__()
+    def __init__(self, consts: NameThisGameConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or NameThisGameConstants()
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/namethisgame"
-        # Configure render utils
-        self.ru_config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.ru_config)
+        super().__init__(self.consts)
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "namethisgame")
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         # Build asset config: copy defaults and add swatch for palette colors we need (orange, green, white, black)
         final_asset_config = list(self.consts.ASSET_CONFIG)
         swatch_rgba = jnp.array([
@@ -1438,10 +1432,10 @@ class Renderer_NameThisGame(JAXGameRenderer):
 
     def _draw_box_ids(self, raster: jnp.ndarray, x: chex.Array, y: chex.Array, w: int, h: int, color_id: int) -> jnp.ndarray:
         # Scale and build mask in render-utils space
-        sx = jnp.round(x * self.ru_config.width_scaling).astype(jnp.int32)
-        sy = jnp.round(y * self.ru_config.height_scaling).astype(jnp.int32)
-        sw = jnp.maximum(1, jnp.round(w * self.ru_config.width_scaling)).astype(jnp.int32)
-        sh = jnp.maximum(1, jnp.round(h * self.ru_config.height_scaling)).astype(jnp.int32)
+        sx = jnp.round(x * self.config.width_scaling).astype(jnp.int32)
+        sy = jnp.round(y * self.config.height_scaling).astype(jnp.int32)
+        sw = jnp.maximum(1, jnp.round(w * self.config.width_scaling)).astype(jnp.int32)
+        sh = jnp.maximum(1, jnp.round(h * self.config.height_scaling)).astype(jnp.int32)
         xx, yy = self.jr._xx, self.jr._yy
         mask = (xx >= sx) & (xx < sx + sw) & (yy >= sy) & (yy < sy + sh)
         return jnp.where(mask, jnp.asarray(color_id, raster.dtype), raster)

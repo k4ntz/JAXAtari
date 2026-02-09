@@ -1,5 +1,6 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.breakout_mod_plugins import (
+from jaxatari.games.mods.breakout.breakout_mod_plugins import (
     SpeedModeMod,
     SmallPaddleMod,
     BigPaddleMod,
@@ -13,7 +14,7 @@ from jaxatari.games.mods.breakout_mod_plugins import (
 class BreakoutEnvMod(JaxAtariModController):
     """
     Game-specific Mod Controller for Breakout.
-    It simply inherits all logic from JaxAtariModController and defines the BREAKOUT_MOD_REGISTRY.
+    It simply inherits all logic from JaxAtariModController and defines the REGISTRY.
     """
 
     REGISTRY = {
@@ -26,6 +27,8 @@ class BreakoutEnvMod(JaxAtariModController):
         "block_color": BlockColorMod,
         "player_color": PlayerColorMod,
     }
+
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "breakout", "sprites")
 
     def __init__(self,
                  env,

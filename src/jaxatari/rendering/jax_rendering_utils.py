@@ -1,18 +1,24 @@
 import os
+from flax import struct
 import jax.numpy as jnp
 import jax
 from functools import partial
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
+from platformdirs import user_data_dir
 
-class RendererConfig(NamedTuple):
+def get_base_sprite_dir() -> str:
+    """Returns the base directory for JAXAtari sprites: ~/.local/share/jaxatari/sprites"""
+    return os.path.join(user_data_dir("jaxatari"), "sprites")
+
+class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""
     # TODO: uses HWC since everything does right now, but might be counterintuitive during usage
     # Target dimensions
-    game_dimensions: Tuple[int, int] = (210, 160)  # (height, width) this is normally constant except for some games (sir lancelot for example)
-    channels: int = 3  # 1 for grayscale, 3 for RGB
-    downscale: Tuple[int, int] = None  # (height, width) to downscale to, or None for no downscaling
+    game_dimensions: Tuple[int, int] = struct.field(pytree_node=False, default=(210, 160))  # (height, width) this is normally constant except for some games (sir lancelot for example)
+    channels: int = struct.field(pytree_node=False, default=3)  # 1 for grayscale, 3 for RGB
+    downscale: Tuple[int, int] = struct.field(pytree_node=False, default=None)  # (height, width) to downscale to, or None for no downscaling
 
     @property
     def width_scaling(self) -> float:
@@ -158,8 +164,9 @@ class JaxRenderingUtils:
 
     def __init__(self, config: RendererConfig, transparent_id: int = 255):
         self.config = config
-        # A special ID to represent transparency. Must be an ID not used by any color (No Atari game should have more than 255 colors in the palette)
-        # there should never be a need to change this!
+        # A special ID to represent transparency. Must be an ID not used by any color.
+        # Default is 255, but will be automatically updated to max(color_id) + 1
+        # when the palette is created in load_and_setup_assets().
         self.TRANSPARENT_ID = transparent_id
 
         # Precompute full-raster coordinate grids for mask-based drawing.
@@ -219,9 +226,11 @@ class JaxRenderingUtils:
         """
         digits = []
         max_height, max_width = 0, 0
+        # base_path = Path(user_data_dir("jaxatari"))
 
         # Load digits assuming loadFrame returns (H, W, C)
         for i in range(num_chars):
+            # path = os.path.join(base_path, path_pattern.format(i))
             digit = self.loadFrame(path_pattern.format(i), transpose=False) # Ensure HWC
             max_height = max(max_height, digit.shape[0]) # Axis 0 is Height
             max_width = max(max_width, digit.shape[1])   # Axis 1 is Width
@@ -248,6 +257,31 @@ class JaxRenderingUtils:
 
         return jnp.array(padded_digits)
 
+    def _load_and_pad_digits_from_paths(self, path_list: List[str], num_chars: int = 10):
+        """Loads digit sprites from a list of paths, pads to max dimensions. Used when resolve_path is needed (e.g. mod_path)."""
+        digits = []
+        max_height, max_width = 0, 0
+        for i in range(min(num_chars, len(path_list))):
+            digit = self.loadFrame(path_list[i], transpose=False)
+            max_height = max(max_height, digit.shape[0])
+            max_width = max(max_width, digit.shape[1])
+            digits.append(digit)
+        padded_digits = []
+        for digit in digits:
+            pad_h = max_height - digit.shape[0]
+            pad_w = max_width - digit.shape[1]
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+            padded_digit = jnp.pad(
+                digit,
+                ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                mode="constant",
+                constant_values=0,
+            )
+            padded_digits.append(padded_digit)
+        return jnp.array(padded_digits)
 
     def _create_id_mask(self, sprite_data, color_to_id: Dict) -> np.ndarray:
         """Converts a single 3D RGBA sprite into a 2D integer ID mask."""
@@ -444,19 +478,45 @@ class JaxRenderingUtils:
                             palette_list.append(rgb)
                             next_id += 1
         
+        # Determine dtype based on palette size to avoid overflow
+        # uint8: 0-255 colors (IDs 0-254, TRANSPARENT_ID 255), 
+        # uint16: 256-65535 colors (IDs 0-65534, TRANSPARENT_ID 65535),
+        # uint32: 65536+ colors (TRANSPARENT_ID 65536+)
+        palette_size = len(palette_list)
+        if palette_size >= 65536:
+            dtype = jnp.uint32
+        elif palette_size >= 256:
+            dtype = jnp.uint16
+        else:
+            dtype = jnp.uint8
+
         # Create the final JAX array for the palette
         if self.config.channels == 1:
             gray_palette = [int(0.299*r + 0.587*g + 0.114*b) for r, g, b in palette_list]
-            PALETTE = jnp.array(gray_palette, dtype=jnp.uint8).reshape(-1, 1)
+            PALETTE = jnp.array(gray_palette, dtype=dtype).reshape(-1, 1)
         else:
-            PALETTE = jnp.array(palette_list, dtype=jnp.uint8)
+            PALETTE = jnp.array(palette_list, dtype=dtype)
             
         return PALETTE, color_to_id
 
     def _create_id_mask(self, rgba_sprite: jnp.ndarray, color_to_id: Dict) -> jnp.ndarray:
         """Converts a single RGBA sprite to a palette-ID mask."""
         h, w, _ = rgba_sprite.shape
-        id_mask = np.full((h, w), self.TRANSPARENT_ID, dtype=np.uint8)
+        
+        # Determine the appropriate dtype based on max color ID to avoid overflow
+        # TRANSPARENT_ID will be max_color_id + 1, so we need to account for that
+        # uint8: max_color_id 0-254 (TRANSPARENT_ID 1-255), 
+        # uint16: max_color_id 255-65534 (TRANSPARENT_ID 256-65535),
+        # uint32: max_color_id 65535+ (TRANSPARENT_ID 65536+)
+        max_color_id = max(color_to_id.values()) if color_to_id else 0
+        if max_color_id >= 65535:  # TRANSPARENT_ID would be 65536+, need uint32
+            dtype = np.uint32
+        elif max_color_id >= 255:  # TRANSPARENT_ID would be 256+, need uint16
+            dtype = np.uint16
+        else:
+            dtype = np.uint8
+        
+        id_mask = np.full((h, w), self.TRANSPARENT_ID, dtype=dtype)
 
         # Use numpy for faster iteration
         sprite_np = np.array(rgba_sprite)
@@ -552,14 +612,37 @@ class JaxRenderingUtils:
         FLIP_OFFSETS = {}
         background_rgba = None
 
-        # 1. Load all assets from the configuration manifest
+        # 1. Pre-scan for Mod Path Injection and allowed fallback filenames
+        mod_path = None
+        mod_path_filenames = None  # None = allow fallback for any file (legacy); set = only these may use mod_path
         for asset in asset_config:
-            name, asset_type = asset.get('name'), asset.get('type')
-            
+            if asset.get("type") == "mod_path":
+                mod_path = asset.get("path")
+            elif asset.get("type") == "mod_path_filenames":
+                mod_path_filenames = set(asset.get("filenames", ()))
+
+        def resolve_path(filename):
+            full_path = os.path.join(base_path, filename)
+            if os.path.exists(full_path):
+                return full_path
+            # Only fall back to mod path when env is modded and this file is from a mod override
+            if mod_path and (mod_path_filenames is None or filename in mod_path_filenames):
+                mod_full_path = os.path.join(mod_path, filename)
+                if os.path.exists(mod_full_path):
+                    return mod_full_path
+            return full_path
+
+        # 2. Load assets (standard loop)
+        for asset in asset_config:
+            asset_type = asset.get("type")
+            if asset_type in ("mod_path", "mod_path_filenames"):
+                continue  # Skip meta-tags
+            name = asset.get("name")
+
             # --- Background ---
             if asset_type == 'background':
                 if 'file' in asset:
-                    background_rgba = self.loadFrame(os.path.join(base_path, asset['file']))
+                    background_rgba = self.loadFrame(resolve_path(asset['file']))
                 elif 'data' in asset:
                     background_rgba = asset['data']
                 else:
@@ -572,13 +655,13 @@ class JaxRenderingUtils:
 
             if asset_type == 'single':
                 if 'file' in asset:
-                    base_data = self.loadFrame(os.path.join(base_path, asset['file']), transpose=asset.get('transpose', False))
+                    base_data = self.loadFrame(resolve_path(asset['file']), transpose=asset.get('transpose', False))
                 elif 'data' in asset:
                     base_data = asset['data']
                 
             elif asset_type == 'group':
                 if 'files' in asset:
-                    sprites = [self.loadFrame(os.path.join(base_path, f)) for f in asset['files']]
+                    sprites = [self.loadFrame(resolve_path(f)) for f in asset['files']]
                 elif 'data' in asset:
                     sprites = list(asset['data'])
                 padded, offsets = self.pad_to_match(sprites)
@@ -587,7 +670,8 @@ class JaxRenderingUtils:
 
             elif asset_type == 'digits':
                 if 'pattern' in asset:
-                    base_data = self.load_and_pad_digits(os.path.join(base_path, asset['pattern']))
+                    digit_paths = [resolve_path(asset['pattern'].format(i)) for i in range(10)]
+                    base_data = self._load_and_pad_digits_from_paths(digit_paths)
                 elif 'data' in asset:
                     base_data = asset['data']
 
@@ -623,6 +707,52 @@ class JaxRenderingUtils:
         # 2. Palette Generation
         all_scan_assets = [background_rgba] + list(raw_sprites_dict.values())
         PALETTE, COLOR_TO_ID = self._create_palette(all_scan_assets)
+        
+        # Update TRANSPARENT_ID to be one higher than the highest color ID
+        # This ensures it never conflicts with any actual color ID
+        if COLOR_TO_ID:
+            max_color_id = max(COLOR_TO_ID.values())
+            self.TRANSPARENT_ID = max_color_id + 1
+        # If no colors (shouldn't happen), keep the default TRANSPARENT_ID
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
 
         # 3. Mask Generation
         SHAPE_MASKS = self._create_shape_masks(raw_sprites_dict, COLOR_TO_ID)
@@ -1031,7 +1161,7 @@ class JaxRenderingUtils:
         pos_scaled = jnp.round(positions * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         size_scaled = jnp.round(sizes * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         rung_scaled = int(max(1, round(rung_height * height_scale)))
-        space_scaled = int(max(1, round(space_height * height_scale)))
+        space_scaled = int(max(0, round(space_height * height_scale)))
         
         def _create_single_ladder_mask(pos, size):
             should_draw = pos[0] != -1
