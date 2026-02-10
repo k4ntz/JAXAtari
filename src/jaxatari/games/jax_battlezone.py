@@ -1303,18 +1303,17 @@ class BattlezoneRenderer(JAXGameRenderer):
 
     def render_single_projectile(self, raster, projectile: Projectile):
         def projectile_active(projectile):
-            projectile_mask_index = jnp.where(projectile.distance <= 15,0,1)
+            projectile_mask_index = jnp.where(projectile.distance <= 15, 0, 1)
             projectile_mask = self.projectile_masks[projectile_mask_index]
             x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
 
-            # TODO: decide if centering is needed here or not
-            # rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != 255, axis=0),
-            #                                 jnp.arange(projectile_mask.shape[1]),
-            #                                 -1))
+            rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != 255, axis=0),
+                                            jnp.arange(projectile_mask.shape[1]),
+                                            -1))
             
-            # return self.jr.render_at_clipped(raster, x- (rightmost_col // 2), y, projectile_mask)
+            return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), y, projectile_mask)
             
-            return self.jr.render_at_clipped(raster, x+projectile_mask_index, y, projectile_mask)
+
         def projectile_inactive(_):
             return raster
 
