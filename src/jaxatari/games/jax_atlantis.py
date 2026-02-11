@@ -1338,12 +1338,8 @@ class AtlantisRenderer(JAXGameRenderer):
         
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # Create a dummy constants object to access ASSET_CONFIG
-        # Since Atlantis uses GameConfig instead of Constants, we'll use the default
-        dummy_consts = AtlantisConstants()
-        
         # 1. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(dummy_consts.ASSET_CONFIG)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 2. Create procedural assets that depend on dynamic values (config)
         def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:

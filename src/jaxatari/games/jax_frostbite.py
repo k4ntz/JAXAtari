@@ -13,8 +13,6 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 # Import the new rendering utils
 import jaxatari.rendering.jax_rendering_utils as render_utils
-# We need the legacy loader *only* for its .npy loading functions
-import jaxatari.rendering.jax_rendering_utils_legacy as jr_legacy
 
 
 def _create_static_procedural_sprites() -> dict:
@@ -2957,7 +2955,7 @@ class FrostbiteRenderer(JAXGameRenderer):
         else:
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        self.sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "frostbite")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "frostbite")
         # 2. Call the asset preparation helper
         self._load_and_prepare_assets()
     
@@ -3000,9 +2998,8 @@ class FrostbiteRenderer(JAXGameRenderer):
         igloo_door = self._load_frame_legacy("igloo_door.npy")
         degree_symbol = self._load_frame_legacy("degree_symbol.npy")
         
-        # Use legacy digit loader
         digit_path_pattern = os.path.join(self.sprite_path, "digit_{}.npy")
-        digits_array = jr_legacy.load_and_pad_digits(digit_path_pattern, num_chars=10)
+        digits_array = self.jr.load_and_pad_digits(digit_path_pattern, num_chars=10)
         digits_list = [digits_array[i] for i in range(10)]
         
         # --- Pre-generate Variations ---

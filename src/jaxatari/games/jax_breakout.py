@@ -62,6 +62,12 @@ class BreakoutConstants(struct.PyTreeNode):
     REVERSE_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 0, 3, 2]))
     REVERSE_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([2, 3, 0, 1]))
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+    ))
+
 @struct.dataclass
 class BreakoutObservation:
     player: ObjectObservation
@@ -812,7 +818,7 @@ class BreakoutRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # 1. Standard API setup from the new renderer
+        # 1. Start from (possibly modded) asset config from constants, then add procedural sprites
         procedural_sprites = self._create_procedural_sprites()
         asset_config = self._get_asset_config(procedural_sprites)
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "breakout")
@@ -992,23 +998,16 @@ class BreakoutRenderer(JAXGameRenderer):
         return result
 
     def _get_asset_config(self, procedural_sprites: dict) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-            
-            # Add the procedurally created sprites to the manifest
+        """Builds asset list from constants ASSET_CONFIG (for modding) plus procedural sprites."""
+        asset_config = list(self.consts.ASSET_CONFIG)
+        asset_config.extend([
             {'name': 'block_colors', 'type': 'procedural', 'data': procedural_sprites['block_colors']},
             {'name': 'bottom_bar', 'type': 'procedural', 'data': procedural_sprites['bottom_bar']},
-        ]
-        
-        # Use procedural player sprite if available (when PLAYER_SIZE differs from default), otherwise use file
+        ])
         if 'player' in procedural_sprites:
             asset_config.append({'name': 'player', 'type': 'procedural', 'data': procedural_sprites['player']})
         else:
             asset_config.append({'name': 'player', 'type': 'single', 'file': 'player.npy'})
-        
         return asset_config
 
     @partial(jax.jit, static_argnums=(0,))
