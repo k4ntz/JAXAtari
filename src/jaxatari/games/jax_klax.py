@@ -52,6 +52,23 @@ class KlaxConstants(AutoDerivedConstants):
     # 5.0s * 60 = 300 frames
     WAVES_COOLDOWN_STEPS: int = struct.field(pytree_node=False, default=300)
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        {'name': 'tile', 'type': 'group', 'files': [
+            'tile_blue.npy', 'tile_purple.npy', 'tile_yellow.npy', 'tile_white.npy',
+            'tile_green.npy', 'tile_pink.npy', 'tile_red.npy',
+        ]},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': '{}_score.npy'},
+        {'name': 'togo_digits', 'type': 'digits', 'pattern': '{}_to_go.npy'},
+        {'name': 'lives_remaining', 'type': 'group', 'files': [
+            '0_lives_remaining.npy', '1_lives_remaining.npy', '2_lives_remaining.npy', '3_lives_remaining.npy',
+        ]},
+        {'name': 'task_labels', 'type': 'group', 'files': [
+            'klaxs_to_go.npy', 'diagonals_to_go.npy', 'tiles_to_go.npy', 'points_to_go.npy', 'horizontal_to_go.npy',
+        ]},
+    ))
+
     # Task for each wave: [task_id, amount]
     klax_waves: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [0, 3],  # 1
@@ -1012,55 +1029,9 @@ class KlaxRenderer(JAXGameRenderer):
         ) = self._load_sprites()
 
     def _load_sprites(self):
-        """Defines the asset manifest for Klax and loads them via the utility function."""
+        """Loads assets using ASSET_CONFIG from constants (for modding)."""
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "klax")
-
-        # Define the game-specific asset manifest in a clear, declarative way.
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
-            {
-                'name': 'tile', 'type': 'group',
-                'files': [
-                    'tile_blue.npy',
-                    'tile_purple.npy',
-                    'tile_yellow.npy',
-                    'tile_white.npy',
-                    'tile_green.npy',
-                    'tile_pink.npy',
-                    'tile_red.npy',
-                ]
-            },
-            {
-                'name': 'score_digits', 'type': 'digits',
-                'pattern': '{}_score.npy'
-            },
-            {
-                'name': 'togo_digits', 'type': 'digits',
-                'pattern': '{}_to_go.npy'
-            },
-            {
-                'name': 'lives_remaining', 'type': 'group',
-                'files': [
-                    '0_lives_remaining.npy',
-                    '1_lives_remaining.npy',
-                    '2_lives_remaining.npy',
-                    '3_lives_remaining.npy',
-                ]
-            },
-            {
-                'name': 'task_labels', 'type': 'group',
-                'files': [
-                    'klaxs_to_go.npy',
-                    'diagonals_to_go.npy',
-                    'tiles_to_go.npy',
-                    'points_to_go.npy',
-                    'horizontal_to_go.npy',
-                ]
-            },
-        ]
-
-        # Make one call to the utility function. Done.
+        asset_config = list(self.consts.ASSET_CONFIG)
         return self.jr.load_and_setup_assets(asset_config, sprite_path)
 
     @partial(jax.jit, static_argnums=(0,))

@@ -11,7 +11,6 @@ import numpy as np
 import chex
 from flax import struct
 
-import jaxatari.rendering.jax_rendering_utils_legacy as jru
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import time
 from functools import partial

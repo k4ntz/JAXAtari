@@ -36,6 +36,15 @@ class HangmanConstants(AutoDerivedConstants):
     # Background Color
     BG_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (167, 26, 26))
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
+        {'name': 'letters', 'type': 'group', 'files': [os.path.join("letters", f"{chr(97 + i)}.npy") for i in range(26)]},
+        {'name': 'hangman', 'type': 'group', 'files': [os.path.join("hangman", f"hangman_{i}.npy") for i in range(1, 12)]},
+        {'name': 'underscore', 'type': 'single', 'file': 'underscore.npy'},
+        {'name': 'divider', 'type': 'single', 'file': 'letter_divider.npy'},
+        {'name': 'player_digits', 'type': 'digits', 'pattern': os.path.join('player_score', '{}.npy')},
+        {'name': 'cpu_digits', 'type': 'digits', 'pattern': os.path.join('cpu_score', '{}.npy')},
+    ))
+
     # Layout - Underscores & Letters
     UND_W: int = struct.field(pytree_node=False, default=20)
     UND_H: int = struct.field(pytree_node=False, default=8)
@@ -645,7 +654,7 @@ class HangmanRenderer(JAXGameRenderer):
         # 1. Create procedural background (Solid color only)
         background_sprite = self._create_background_sprite()
 
-        # 2. Define asset config
+        # 2. Build asset config from constants (for modding) with procedural background
         asset_config = self._get_asset_config(background_sprite)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "hangman")
@@ -670,26 +679,10 @@ class HangmanRenderer(JAXGameRenderer):
         return bg
 
     def _get_asset_config(self, background_sprite: jnp.ndarray) -> list:
-        letter_files = [os.path.join("letters", f"{chr(97 + i)}.npy") for i in range(26)]
-
-        hangman_files = [os.path.join("hangman", f"hangman_{i}.npy") for i in range(1, 12)]
-
-        return [
-            {'name': 'background', 'type': 'background', 'data': background_sprite},
-
-            # Group for letters A-Z (indices 0-25)
-            {'name': 'letters', 'type': 'group', 'files': letter_files},
-
-            # Group for hangman stages (indices 0-10 correspond to misses 1-11)
-            {'name': 'hangman', 'type': 'group', 'files': hangman_files},
-
-            {'name': 'underscore', 'type': 'single', 'file': 'underscore.npy'},
-            {'name': 'divider', 'type': 'single', 'file': 'letter_divider.npy'},
-
-            # Digits
-            {'name': 'player_digits', 'type': 'digits', 'pattern': os.path.join('player_score', '{}.npy')},
-            {'name': 'cpu_digits', 'type': 'digits', 'pattern': os.path.join('cpu_score', '{}.npy')},
-        ]
+        """Builds asset list from constants ASSET_CONFIG (for modding) with procedural background prepended."""
+        asset_config = [{'name': 'background', 'type': 'background', 'data': background_sprite}]
+        asset_config.extend(list(self.consts.ASSET_CONFIG))
+        return asset_config
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state) -> jnp.ndarray:

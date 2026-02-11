@@ -75,6 +75,13 @@ class FlagCaptureConstants(struct.PyTreeNode):
     ANIMATION_TYPE_EXPLOSION: int = struct.field(pytree_node=False, default=1)
     ANIMATION_TYPE_FLAG: int = struct.field(pytree_node=False, default=2)
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player_states', 'type': 'group', 'files': [f"player_states/player_{i}.npy" for i in range(19)]},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'green_digits/{}.npy'},
+        {'name': 'timer_digits', 'type': 'digits', 'pattern': 'red_digits/{}.npy'},
+    ))
+
 @struct.dataclass
 class FlagCaptureState:
     player_x: chex.Array
@@ -603,23 +610,9 @@ class FlagCaptureRenderer(JAXGameRenderer):
         ) = self._load_sprites()
 
     def _load_sprites(self):
-        """Defines the asset manifest for FlagCapture and loads them using the new utility."""
+        """Loads assets using ASSET_CONFIG from constants (for modding)."""
         sprite_base = os.path.join(render_utils.get_base_sprite_dir(), "flagcapture")
-
-        # Player states: player_0.npy (Normal) to player_18.npy (19 total)
-        player_files = [f"player_states/player_{i}.npy" for i in range(19)]
-
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            # The SPRITE_PLAYER array (19 states)
-            {'name': 'player_states', 'type': 'group', 'files': player_files},
-            # The SPRITE_SCORE digits (0-9)
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'green_digits/{}.npy'},
-            # The SPRITE_TIMER digits (0-9)
-            {'name': 'timer_digits', 'type': 'digits', 'pattern': 'red_digits/{}.npy'},
-        ]
-
-        return self.jr.load_and_setup_assets(asset_config, sprite_base)
+        return self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_base)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
