@@ -105,8 +105,8 @@ class DefenderConstants(NamedTuple):
     SPACE_SHIP_SCANNER_HEIGHT: int = 2
 
     # Enemy
-    ENEMY_WIDTH: int = 13
-    ENEMY_HEIGHT: int = 7
+    ENEMY_WIDTH: int = 7
+    ENEMY_HEIGHT: int = 8
     ENEMY_SPEED: float = 0.12
     SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
 
@@ -1096,7 +1096,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         new_enemy = enemy.at[2].set(new_type)
         new_enemy = new_enemy.at[3].set(color)
         return new_enemy, score
-    
+
     def _delete_enemy_index(self, state: DefenderState, index) -> DefenderState:
         enemy = state.enemy_states[index]
         new_enemy, score = self._delete_enemy(enemy)
@@ -1108,10 +1108,11 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
         mask = jnp.full(self.consts.ENEMY_MAX_IN_GAME, False)
 
         def check_on_screen(i):
-            x, y, _, _, _ = self._get_enemy(state, i)
+            x, y, t, _, _ = self._get_enemy(state, i)
             w = self.consts.ENEMY_WIDTH
             h = self.consts.ENEMY_HEIGHT
-            on_screen = self.dh._is_onscreen_from_game(state, x, y, w, h)
+            is_active = jnp.logical_and(t != self.consts.INACTIVE, t != self.consts.DEAD)
+            on_screen = jax.lax.cond(is_active, lambda: self.dh._is_onscreen_from_game(state, x, y, w, h), lambda: False)
             return on_screen
 
         mask = jax.vmap(check_on_screen)(jnp.arange(self.consts.ENEMY_MAX_IN_GAME))
@@ -1503,7 +1504,6 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                     state.enemy_states[:, 3] == self.consts.LANDER_STATE_DESCEND,
                     state.enemy_states[:, 3] == self.consts.LANDER_STATE_PICKUP,
                 ),
-                
             )
             lander_state = jax.lax.cond(
                 jnp.logical_and(is_near_human, jnp.logical_not(other_landers_descending)),
@@ -1613,13 +1613,12 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             )
 
             return new_lander
-        
+
         counter_id = lander[4]
         patrol_state = lander_patrol(state)
         descend_state = lander_descend()
         pickup_state = lander_pickup(current_counter, state)
         ascend_state = lander_ascend(counter_id, state)
-
 
         new_lander = jax.lax.switch(
             jnp.array(lander_state, int),
@@ -1823,12 +1822,11 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
         def _enemy_move_switch_wrapped(enemy: chex.Array) -> chex.Array:
             return _enemy_move_switch(enemy, state)
-        
+
         enemy_states_updated = jax.vmap(_enemy_move_switch_wrapped, in_axes=(0,))(state.enemy_states)
         state = state._replace(enemy_states=enemy_states_updated)
 
         return state
-
 
     def _human_step(self, state: DefenderState) -> DefenderState:
         def _human_falling(state: DefenderState, index: int) -> DefenderState:
@@ -2152,7 +2150,7 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
 
         return state
 
-    def _check_enemy_collisions(self, state: DefenderState) -> DefenderState:
+    def _check_enemy_collisions(self, state: DefenderState):
         game_over = False
 
         def collision(index, state: DefenderState) -> DefenderState:
@@ -2187,24 +2185,24 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
                 self.consts.SPACE_SHIP_HEIGHT,
             )
 
-            state = jax.lax.cond(space_ship_is_colliding, lambda: self._game_over(state), lambda: state)
-
             is_dead = jnp.logical_or(laser_is_colliding, space_ship_is_colliding)
+
             state = jax.lax.cond(is_dead, lambda: self._delete_enemy_index(state, index), lambda: state)
+
             state = jax.lax.cond(
                 laser_is_colliding,
                 lambda: state._replace(laser_active=False),
                 lambda: state,
             )
-            return state
+            return state, space_ship_is_colliding
 
         def check_for_inactive(index, state):
             enemy = self._get_enemy(state, index)
             is_active = jnp.logical_and(enemy[2] != self.consts.INACTIVE, enemy[2] != self.consts.DEAD)
-            state = jax.lax.cond(is_active, lambda: collision(index, state), lambda: state)
-            return state
+            state, game_over = jax.lax.cond(is_active, lambda: collision(index, state), lambda: (state, False))
+            return state, game_over
 
-        def merge_states(state, states):
+        def merge_states(state, states, game_overs):
             idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
 
             new_enemy = states.enemy_states[idx, idx]
@@ -2216,11 +2214,20 @@ class JaxDefender(JaxEnvironment[DefenderState, DefenderObservation, DefenderInf
             new_enemy_killed = state.enemy_killed + jnp.asarray([killed_l, killed_p, killed_b])
 
             new_laser_active = states.laser_active[jnp.argmin(states.laser_active)]
+            game_over = game_overs[jnp.argmax(game_overs)]
 
-            return state._replace(enemy_states=new_enemy, score=new_score, enemy_killed=new_enemy_killed, laser_active=new_laser_active)
+            return jax.lax.cond(
+                game_over,
+                lambda: self._game_over(
+                    state._replace(enemy_states=new_enemy, enemy_killed=new_enemy_killed, laser_active=new_laser_active)
+                ),
+                lambda: state._replace(
+                    enemy_states=new_enemy, score=new_score, enemy_killed=new_enemy_killed, laser_active=new_laser_active
+                ),
+            )
 
-        state = merge_states(state, jax.vmap(check_for_inactive, in_axes=(0, None))(jnp.arange(self.consts.ENEMY_MAX_IN_GAME), state))
-        state = jax.lax.cond(game_over, lambda: self._game_over(state), lambda: state)
+        states, game_overs = jax.vmap(check_for_inactive, in_axes=(0, None))(jnp.arange(self.consts.ENEMY_MAX_IN_GAME), state)
+        state = merge_states(state, states, game_overs)
 
         return state
 
