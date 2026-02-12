@@ -9,6 +9,7 @@ from jax import lax
 import jax.lax
 import jax
 from flax import struct
+from sympy import false
 
 import jaxatari.spaces as spaces
 
@@ -105,7 +106,7 @@ class RiverraidConstants(AutoDerivedConstants):
     MIN_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=3)
     MAX_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=10)
     ENTITY_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.2)  # includes fuel, only checked if constraints met (cant be higher than 0.33)
-    FUEL_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.1)  # percentage of spawned entity being fuel
+    FUEL_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.15)  # percentage of spawned entity being fuel
     PLAYER_ACCELERATION: float = struct.field(pytree_node=False, default=0.06)
     PLAYER_MAX_SPEED: float = struct.field(pytree_node=False, default=4.0)
     ENEMY_START_MOVING_PROP: float = struct.field(pytree_node=False, default=0.01)  # (cant be higher than 0.33)
@@ -889,6 +890,8 @@ class JaxRiverraid(JaxEnvironment):
 
         any_collision = collision_top_banks | collision_bottom_banks | \
                         collision_with_island_top | collision_with_island_bottom
+        any_collision = 0 # todo remove
+
 
         # kill player if collision
         new_player_state = jnp.where(any_collision, 1, state.player_state)
@@ -989,7 +992,7 @@ class JaxRiverraid(JaxEnvironment):
         )
         new_enemy_y = jax.lax.cond(
             free_enemy_idx >= 0,
-            lambda _: jnp.array(0, dtype=jnp.float32),
+            lambda _: jnp.array(-20, dtype=jnp.float32), # spawn enemies outside the window so they don't pop up suddenly
             lambda _: state.enemy_y[free_enemy_idx],
             operand=None
         )
@@ -1045,8 +1048,8 @@ class JaxRiverraid(JaxEnvironment):
         )
         new_fuel_y = jax.lax.cond(
             free_fuel_idx >= 0,
-            lambda _: jnp.array(0, dtype=jnp.float32),
-            lambda _: state.enemy_y[free_fuel_idx],
+            lambda _: jnp.array(-20, dtype=jnp.float32), # spawn fuels outside the window so they don't pop up suddenly
+            lambda _: state.fuel_y[free_fuel_idx],
             operand=None
         )
 
@@ -1245,7 +1248,7 @@ class JaxRiverraid(JaxEnvironment):
         # bullet collision
         bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 12) & (state.player_bullet_x + 0 > state.fuel_x)
         bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 24) & (state.player_bullet_y > state.fuel_y)
-        bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask
+        bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask & (state.player_bullet_y >= 0)
         bullet_collision_present = jnp.any(bullet_collision_mask)
         bullet_hit_index = jnp.argmax(bullet_collision_mask)
 
@@ -1406,7 +1409,7 @@ class JaxRiverraid(JaxEnvironment):
 
             # spawn the new housetree
             updated_x = state.housetree_x.at[free_idx].set(x_pos)
-            updated_y = state.housetree_y.at[free_idx].set(0)
+            updated_y = state.housetree_y.at[free_idx].set(-15)
             updated_state = state.housetree_state.at[free_idx].set(1)
             updated_side = state.housetree_side.at[free_idx].set(side)
             updated_direction = state.housetree_direction.at[free_idx].set(direction)
@@ -2224,6 +2227,3 @@ class RiverraidRenderer(JAXGameRenderer):
         
         # 9. Final Palette Lookup
         return self.jr.render_from_palette(raster, self.PALETTE)
-
-
-
