@@ -1117,9 +1117,9 @@ class JaxRiverraid(JaxEnvironment):
     def enemy_collision(self, state: RiverraidState) -> RiverraidState:
         def handle_bullet_collision(state: RiverraidState) -> RiverraidState:
             enemy_hitboxes = jnp.array([
-                13,  # boat
-                9,   # helicopter
-                6    # plane
+                16,  # boat
+                8,   # helicopter
+                8    # plane
             ])
             active_enemy_mask = state.enemy_state == 1
 
@@ -1128,18 +1128,9 @@ class JaxRiverraid(JaxEnvironment):
             hitbox_starts_x = state.enemy_x
             hitbox_ends_x = state.enemy_x + hitbox_widths
 
-            # specific hitbox for helicopter
-            is_helicopter_mask = state.enemy_type == 1
-            # Directions: 0/2 are left-facing, 1/3 are right-facing
-            is_facing_right_mask = (state.enemy_direction == 1) | (state.enemy_direction == 3)
-            should_offset_helicopter = is_helicopter_mask & is_facing_right_mask
-            helicopter_offset = 4.0
-            hitbox_starts_x = jnp.where(should_offset_helicopter, hitbox_starts_x + helicopter_offset, hitbox_starts_x)
-            hitbox_ends_x = jnp.where(should_offset_helicopter, hitbox_ends_x + helicopter_offset, hitbox_ends_x)
-
             # collision check
-            x_collision_mask = (state.player_bullet_x > hitbox_starts_x) & (state.player_bullet_x < hitbox_ends_x)
-            y_collision_mask = (state.player_bullet_y < state.enemy_y + 6) & (state.player_bullet_y + 1 > state.enemy_y)
+            x_collision_mask = (state.player_bullet_x < hitbox_ends_x) & (state.player_bullet_x + 1 > hitbox_starts_x)
+            y_collision_mask = (state.player_bullet_y < state.enemy_y + 6) & (state.player_bullet_y + 8 > state.enemy_y)
 
             collision_mask = active_enemy_mask & x_collision_mask & y_collision_mask
             collision_present = jnp.any(collision_mask)
@@ -1245,8 +1236,8 @@ class JaxRiverraid(JaxEnvironment):
         player_collision_present = jnp.any(player_collision_mask)
 
         # bullet collision
-        bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 12) & (state.player_bullet_x + 0 > state.fuel_x)
-        bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 24) & (state.player_bullet_y > state.fuel_y)
+        bullet_x_collision_mask = (state.player_bullet_x < state.fuel_x + 12) & (state.player_bullet_x + 1 > state.fuel_x)
+        bullet_y_collision_mask = (state.player_bullet_y < state.fuel_y + 24) & (state.player_bullet_y + 8 > state.fuel_y)
         bullet_collision_mask = active_fuel_mask & bullet_x_collision_mask & bullet_y_collision_mask & (state.player_bullet_y >= 0)
         bullet_collision_present = jnp.any(bullet_collision_mask)
         bullet_hit_index = jnp.argmax(bullet_collision_mask)
@@ -1518,7 +1509,7 @@ class JaxRiverraid(JaxEnvironment):
         e_dirs = state.enemy_direction
         e_ori = jnp.where((e_dirs == 1) | (e_dirs == 3), 90.0, 270.0).astype(jnp.float32)
         
-        enemy_widths = jnp.array([13, 9, 6])[state.enemy_type]
+        enemy_widths = jnp.array([16, 8, 8])[state.enemy_type]
 
         enemies = ObjectObservation.create(
             x=jnp.clip(state.enemy_x.astype(jnp.int32), 0, w),
@@ -1534,7 +1525,7 @@ class JaxRiverraid(JaxEnvironment):
         fuel_tanks = ObjectObservation.create(
             x=jnp.clip(state.fuel_x.astype(jnp.int32), 0, w),
             y=jnp.clip(state.fuel_y.astype(jnp.int32), 0, h),
-            width=jnp.full((c.MAX_ENEMIES,), 8, dtype=jnp.int32),
+            width=jnp.full((c.MAX_ENEMIES,), 7, dtype=jnp.int32),
             height=jnp.full((c.MAX_ENEMIES,), 12, dtype=jnp.int32),
             active=(state.fuel_state == 1).astype(jnp.int32)
         )
@@ -1544,8 +1535,8 @@ class JaxRiverraid(JaxEnvironment):
         player_projectile = ObjectObservation.create(
             x=jnp.clip(jnp.array(state.player_bullet_x, dtype=jnp.int32), 0, w),
             y=jnp.clip(jnp.array(state.player_bullet_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(2, dtype=jnp.int32),
-            height=jnp.array(4, dtype=jnp.int32),
+            width=jnp.array(1, dtype=jnp.int32),
+            height=jnp.array(8, dtype=jnp.int32),
             active=jnp.array(bullet_active, dtype=jnp.int32)
         )
 
