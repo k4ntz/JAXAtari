@@ -920,7 +920,7 @@ class JaxRiverraid(JaxEnvironment):
                 shooting,
                 state.player_bullet_y < 0),
             lambda state: ((state.player_x + 3).astype(jnp.float32), (state.player_y - 0).astype(jnp.float32)),
-            lambda state: (state.player_x.astype(jnp.float32), (state.player_bullet_y - 5).astype(jnp.float32)),
+            lambda state: (state.player_bullet_x, (state.player_bullet_y - 5).astype(jnp.float32)),
             operand=state
         )
 
