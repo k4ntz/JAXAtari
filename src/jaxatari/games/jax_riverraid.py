@@ -890,7 +890,6 @@ class JaxRiverraid(JaxEnvironment):
 
         any_collision = collision_top_banks | collision_bottom_banks | \
                         collision_with_island_top | collision_with_island_bottom
-        any_collision = 0 # todo remove
 
 
         # kill player if collision
