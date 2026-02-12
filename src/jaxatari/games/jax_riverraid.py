@@ -90,7 +90,7 @@ class RiverraidConstants(AutoDerivedConstants):
     MAX_RIVER_WIDTH: int = struct.field(pytree_node=False, default=160)
     MAX_ENEMIES: int = struct.field(pytree_node=False, default=10)
     MAX_HOUSE_TREES: int = struct.field(pytree_node=False, default=10)
-    MINIMUM_SPAWN_COOLDOWN: int = struct.field(pytree_node=False, default=20)
+    MINIMUM_SPAWN_COOLDOWN: int = struct.field(pytree_node=False, default=30)
     MAX_FUEL: int = struct.field(pytree_node=False, default=30)
     UI_HEIGHT: int = struct.field(pytree_node=False, default=35)
     SEGMENT_LENGTH: int = struct.field(pytree_node=False, default=400)
@@ -105,11 +105,11 @@ class RiverraidConstants(AutoDerivedConstants):
     SHRINK_PROP: float = struct.field(pytree_node=False, default=0.2)
     MIN_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=3)
     MAX_ALTERNATION_LENGTH: int = struct.field(pytree_node=False, default=10)
-    ENTITY_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.2)  # includes fuel, only checked if constraints met (cant be higher than 0.33)
+    ENTITY_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.15)  # includes fuel, only checked if constraints met (cant be higher than 0.33)
     FUEL_SPAWN_PROP: float = struct.field(pytree_node=False, default=0.15)  # percentage of spawned entity being fuel
     PLAYER_ACCELERATION: float = struct.field(pytree_node=False, default=0.06)
-    PLAYER_MAX_SPEED: float = struct.field(pytree_node=False, default=4.0)
-    ENEMY_START_MOVING_PROP: float = struct.field(pytree_node=False, default=0.01)  # (cant be higher than 0.33)
+    PLAYER_MAX_SPEED: float = struct.field(pytree_node=False, default=1.0)
+    ENEMY_START_MOVING_PROP: float = struct.field(pytree_node=False, default=0.05)  # (cant be higher than 0.33)
     # 0.33 limit due to prop * player_speed and player speed being <= 3 -> prop cant be higher than 1
     SPEED_CHANGE_COOLDOWN: int = struct.field(pytree_node=False, default=20)
     MAX_SCORE_DIGITS: int = struct.field(pytree_node=False, default=8)
@@ -953,6 +953,10 @@ class JaxRiverraid(JaxEnvironment):
 
         # 0 boat, 1 helicopter, 2 plane
         new_single_enemy_type = jax.random.randint(spawn_key, (), 0, 3)
+        # Determine width to calculate correct spawn margins (Boat=16, others=8)
+        spawn_width = jnp.array([16, 8, 8])[new_single_enemy_type]
+        margin = 10
+
         free_enemy_idx = jax.lax.cond(
             jnp.any(state.enemy_state == 0),
             lambda state: jnp.argmax(state.enemy_state == 0),
@@ -971,11 +975,11 @@ class JaxRiverraid(JaxEnvironment):
                     state.river_inner_left[0] >= 0,
                     lambda state: jax.lax.cond(
                         jax.random.bernoulli(x_key, 0.5),
-                                lambda state: jax.random.randint(x_key, (), state.river_left[0] + 4, state.river_inner_left[0] - 4),
-                                lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + 4, state.river_right[0] - 4),
+                                lambda state: jax.random.randint(x_key, (), state.river_left[0] + margin, state.river_inner_left[0] - margin - spawn_width),
+                                lambda state: jax.random.randint(x_key, (), state.river_inner_right[0] + margin, state.river_right[0] - margin - spawn_width),
                         operand=state
                     ),
-                    lambda state: jax.random.randint(x_key, (), state.river_left[0] + 8, state.river_right[0] - 8),
+                    lambda state: jax.random.randint(x_key, (), state.river_left[0] + margin, state.river_right[0] - margin - spawn_width),
                     operand=state
                 ),
                 lambda state: jax.lax.cond( # logic for plane (select a screenside)
@@ -1070,10 +1074,12 @@ class JaxRiverraid(JaxEnvironment):
                 operand=state
             )
         # only spawn if no dam in the top 10 rows
-        dam_at_top = jnp.any(state.dam_position[:50] >= 1)
+        dam_at_top = jnp.any(state.dam_position[:25] >= 1)
+        dam_coming = (state.segment_state == 1) | (state.segment_state == 3)
+
         spawn_new_entity = jnp.logical_and(
             jax.random.bernoulli(subkey1, self.consts.ENTITY_SPAWN_PROP * state.player_speed),
-            ~dam_at_top
+            ~(dam_at_top | dam_coming)
         )
 
         new_state = jax.lax.cond(
@@ -1327,17 +1333,17 @@ class JaxRiverraid(JaxEnvironment):
         new_enemy_x = jnp.where(move_right_mask, new_enemy_x + 0.5, new_enemy_x)
 
         enemy_y = state.enemy_y.astype(jnp.int32)
-        enemy_width = 8
+        enemy_widths = jnp.array([16, 8, 8])[state.enemy_type]
 
         # Collision with the outer river banks
         collides_with_outer_left = (new_enemy_x <= state.river_left[enemy_y]) & move_left_mask
-        collides_with_outer_right = (new_enemy_x + enemy_width >= state.river_right[enemy_y]) & move_right_mask
+        collides_with_outer_right = (new_enemy_x + enemy_widths >= state.river_right[enemy_y] + 1.0) & move_right_mask
 
         # Collision with the inner island shores
         island_present_at_y = state.river_inner_left[enemy_y] >= 0
-        was_left_of_island = state.enemy_x + enemy_width < state.river_inner_left[enemy_y]
+        was_left_of_island = state.enemy_x + enemy_widths < state.river_inner_left[enemy_y] + 1
         collides_with_inner_left_shore = island_present_at_y & was_left_of_island & \
-                                         (new_enemy_x + enemy_width >= state.river_inner_left[enemy_y]) & move_right_mask
+                                         (new_enemy_x + enemy_widths >= state.river_inner_left[enemy_y] + 1) & move_right_mask
 
         was_right_of_island = state.enemy_x > state.river_inner_right[enemy_y]
         collides_with_inner_right_shore = island_present_at_y & was_right_of_island & \
@@ -1360,8 +1366,8 @@ class JaxRiverraid(JaxEnvironment):
             right_side_collision & (state.enemy_type != 2),
             jnp.minimum(new_enemy_x - 1.0,
                         jnp.where(collides_with_inner_left_shore,
-                                  state.river_inner_left[enemy_y] - enemy_width - 1.0,
-                                  state.river_right[enemy_y] - enemy_width - 1.0)),
+                                  state.river_inner_left[enemy_y] - enemy_widths - 1.0,
+                                  state.river_right[enemy_y] - enemy_widths - 1.0)),
             new_enemy_x
         )
 
@@ -1414,9 +1420,11 @@ class JaxRiverraid(JaxEnvironment):
             )
 
         free_slot = jnp.any(new_state.housetree_state == 0) # free slot?
+        dam_at_top = jnp.any(state.dam_position[:25] >= 1)
+        dam_coming = (state.segment_state == 1) | (state.segment_state == 3)
         free_area = jnp.logical_and(
             state.river_right[0] - state.river_left[0] < self.consts.MAX_RIVER_WIDTH - 30,
-            ~jnp.any(state.dam_position[:50] >= 1)
+            ~(dam_at_top | dam_coming)
         )
         can_spawn = jnp.logical_and(free_slot, free_area)
         spawn_new_housetree = jax.random.bernoulli(spawn_key, p=0.05)
@@ -2032,7 +2040,7 @@ class RiverraidRenderer(JAXGameRenderer):
                         lambda r_in2: jax.lax.cond(
                             enemy_state == 4,
                             lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SPRITE_ENEMY_EXPLOSION_STACK[0], flip_horizontal=flip_h, flip_offset=self.FLIP_OFFSETS['enemy_explosion']),
-                            lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SHAPE_MASKS['enemy_boat'], flip_horizontal=flip_h, flip_offset=self.FLIP_OFFSETS['enemy_boat']),
+                            lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SHAPE_MASKS['enemy_boat'], flip_horizontal=jnp.logical_not(flip_h), flip_offset=self.FLIP_OFFSETS['enemy_boat']),
                             r_in2
                         ),
                         r_in
@@ -2074,7 +2082,7 @@ class RiverraidRenderer(JAXGameRenderer):
                         lambda r_in2: jax.lax.cond(
                             enemy_state == 4,
                             lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SPRITE_ENEMY_EXPLOSION_STACK[0], flip_horizontal=flip_h, flip_offset=self.FLIP_OFFSETS['enemy_explosion']),
-                            lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SHAPE_MASKS['enemy_airplane'], flip_horizontal=flip_h, flip_offset=self.FLIP_OFFSETS['enemy_airplane']),
+                            lambda r_in3: self.jr.render_at_clipped(r_in3, enemy_x, enemy_y, self.SHAPE_MASKS['enemy_airplane'], flip_horizontal=jnp.logical_not(flip_h), flip_offset=self.FLIP_OFFSETS['enemy_airplane']),
                             r_in2
                         ),
                         r_in
@@ -2142,20 +2150,17 @@ class RiverraidRenderer(JAXGameRenderer):
 
         # Clean up UI area (overwrite sprites that went too low)
         target_h = raster.shape[0]
-        y_coords = jnp.arange(target_h)
-        ui_height_scaled = jnp.round(self.consts.UI_HEIGHT * height_scale).astype(jnp.int32)
-        ui_mask = y_coords[:, None] >= (target_h - ui_height_scaled)
-        raster = jnp.where(ui_mask, self.UI_COLOR_ID, raster)
+        target_w = raster.shape[1]
+        ui_height_px = int(round(self.consts.UI_HEIGHT * self.config.height_scaling))
+        
+        if ui_height_px > 0:
+            ui_block = jnp.full((ui_height_px, target_w), self.UI_COLOR_ID, dtype=jnp.uint8)
+            raster = raster.at[target_h - ui_height_px:, :].set(ui_block)
 
         # Redraw black line
-
-        ui_line_y = target_h - ui_height_scaled - 1
-        raster = jax.lax.cond(
-            ui_line_y >= 0,
-            lambda r: r.at[ui_line_y].set(self.BLACK_ID),
-            lambda r: r,
-            raster
-        )
+        ui_line_y = target_h - ui_height_px - 1
+        if ui_line_y >= 0:
+            raster = raster.at[ui_line_y, :].set(self.BLACK_ID)
 
         # 8. UI elements (Fuel display, Score, Lives, Logo)
         
