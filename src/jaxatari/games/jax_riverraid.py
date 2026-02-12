@@ -1093,13 +1093,14 @@ class JaxRiverraid(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def scroll_entities(self, state: RiverraidState) -> RiverraidState:
+        limit = self.consts.SCREEN_HEIGHT - self.consts.UI_HEIGHT
         new_enemy_y = state.enemy_y + state.player_speed
-        new_enemy_state = jnp.where(new_enemy_y > self.consts.SCREEN_HEIGHT + 1, 0, state.enemy_state)
-        new_enemy_x = jnp.where(new_enemy_y > self.consts.SCREEN_HEIGHT + 1, -1, state.enemy_x)
+        new_enemy_state = jnp.where(new_enemy_y > limit, 0, state.enemy_state)
+        new_enemy_x = jnp.where(new_enemy_y > limit, -1, state.enemy_x)
 
         new_fuel_y = state.fuel_y + state.player_speed
-        new_fuel_state = jnp.where(new_fuel_y > self.consts.SCREEN_HEIGHT + 1, 0, state.fuel_state)
-        new_fuel_x = jnp.where(new_fuel_y > self.consts.SCREEN_HEIGHT + 1, -1, state.fuel_x)
+        new_fuel_state = jnp.where(new_fuel_y > limit, 0, state.fuel_state)
+        new_fuel_x = jnp.where(new_fuel_y > limit, -1, state.fuel_x)
 
         return state.replace(
             enemy_y=new_enemy_y,
@@ -1383,7 +1384,7 @@ class JaxRiverraid(JaxEnvironment):
         new_housetree_y = state.housetree_y + state.player_speed
 
         # remove off-screen housetrees
-        off_screen_mask = new_housetree_y > self.consts.SCREEN_HEIGHT
+        off_screen_mask = new_housetree_y > self.consts.SCREEN_HEIGHT - self.consts.UI_HEIGHT
         new_housetree_state = jnp.where(off_screen_mask, 0, state.housetree_state)
 
         new_state = state.replace(
@@ -2145,6 +2146,23 @@ class RiverraidRenderer(JAXGameRenderer):
             return jax.lax.cond(is_active, draw_it, lambda r: r, r_acc)
         
         raster = jax.lax.fori_loop(0, self.consts.MAX_HOUSE_TREES, render_single_housetree, raster)
+
+        # Clean up UI area (overwrite sprites that went too low)
+        target_h = raster.shape[0]
+        y_coords = jnp.arange(target_h)
+        ui_height_scaled = jnp.round(self.consts.UI_HEIGHT * height_scale).astype(jnp.int32)
+        ui_mask = y_coords[:, None] >= (target_h - ui_height_scaled)
+        raster = jnp.where(ui_mask, self.UI_COLOR_ID, raster)
+
+        # Redraw black line
+
+        ui_line_y = target_h - ui_height_scaled - 1
+        raster = jax.lax.cond(
+            ui_line_y >= 0,
+            lambda r: r.at[ui_line_y].set(self.BLACK_ID),
+            lambda r: r,
+            raster
+        )
 
         # 8. UI elements (Fuel display, Score, Lives, Logo)
         
