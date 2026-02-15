@@ -10,3 +10,7 @@ results/
 docs/build/
 .python-version
 
+# Reference material (not tracked)
+reference_material/*
+
+
